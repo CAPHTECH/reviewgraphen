@@ -1,0 +1,51 @@
+# ReviewGraphen local configuration example
+schema = "reviewgraphen.config.v1"
+profile = "code-review@1"
+store_dir = ".reviewgraphen/store"
+artifact_dir = ".reviewgraphen/artifacts"
+report_dir = ".reviewgraphen/reports"
+
+[repository]
+write_access = false
+follow_symlinks_outside_root = false
+include_untracked = false
+
+[security]
+network = "provider-only"
+redact_secrets = true
+source_upload = "selected-envelope-only"
+allow_arbitrary_shell = false
+max_source_bytes = 200000
+
+[ingestion]
+adapters = ["git@1", "rust-syn@1", "cargo-metadata@1", "test-map@1"]
+fail_on_parse_error = false
+unknown_capability_policy = "incomplete"
+
+[planning]
+mode = "risk-first"
+max_tokens = 200000
+max_cost_units = 50
+max_concurrency = 4
+
+[reviewer]
+adapter = "provider-model"
+prompt_version = "code-review@1"
+temperature = 0.0
+structured_output = true
+
+[verification]
+allowed_verifiers = ["static-fact@1", "allow-listed-test@1"]
+require_machine_evidence_for = ["critical"]
+
+[coverage]
+report_raw = true
+report_weighted = true
+fresh_only_for_gate = true
+
+[gate]
+policy = "default@1"
+minimum_fresh_verified_weight = 0.80
+block_on_critical_finding = true
+incomplete_on_critical_unknown = true
+incomplete_on_extraction_limitation = true

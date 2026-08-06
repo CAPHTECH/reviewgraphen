@@ -1,0 +1,697 @@
+{
+  "schema": "reviewgraphen.review.report.v1",
+  "report_type": "review",
+  "report_version": 1,
+  "metadata": {
+    "report_id": "report:double-submit-v1",
+    "run_id": "run:double-submit-v1",
+    "generated_at": "2026-08-07T00:05:00Z",
+    "tool_versions": {
+      "reviewgraphen": "0.1.0-draft",
+      "higher-graphen": "0.7.1",
+      "fixture-reviewer": "1"
+    },
+    "profile_id": "code-review@1",
+    "rule_set_hash": "sha256:3333333333333333",
+    "policy_version": "default@1",
+    "reviewer_descriptors": [
+      {
+        "kind": "deterministic_fixture",
+        "identity": "fixture-reviewer@1"
+      }
+    ]
+  },
+  "scenario": {
+    "repository_id": "repository:double-submit-payment",
+    "snapshot_id": "snapshot:double-submit-v1",
+    "base_revision": "fixture-safe-baseline",
+    "target_revision": "fixture-buggy-head",
+    "program_space_ref": "artifact:program-space-double-submit-v1",
+    "review_space_ref": "artifact:review-space-double-submit-v1",
+    "evidence_space_ref": "artifact:evidence-space-double-submit-v1",
+    "universe_id": "universe:double-submit-v1",
+    "extraction_limitation_ids": [
+      "limitation:bounded-concurrency"
+    ],
+    "budget": {
+      "max_tokens": 24000,
+      "used_tokens": 5,
+      "mode": "fixture"
+    }
+  },
+  "result": {
+    "status": "completed",
+    "obligation_ids": [
+      "obligation:checkout-submit-guard-order",
+      "obligation:tap-to-submit-reentry",
+      "obligation:payment-idempotency-contract",
+      "obligation:buy-to-external-charge-path",
+      "obligation:payment-at-most-once-invariant"
+    ],
+    "executions": [
+      {
+        "id": "execution:guard-order",
+        "obligation_ids": [
+          "obligation:checkout-submit-guard-order"
+        ],
+        "reviewer": {
+          "kind": "deterministic_fixture",
+          "identity": "fixture-reviewer@1"
+        },
+        "context_envelope_id": "context-envelope:guard-order",
+        "status": "completed",
+        "claim_ids": [
+          "claim:guard-set-after-await"
+        ],
+        "abstention_reason": null,
+        "raw_output_hash": "sha256:a1a1a1a1a1a1a1a1",
+        "usage": {
+          "input_units": 1,
+          "output_units": 1
+        }
+      },
+      {
+        "id": "execution:tap-reentry",
+        "obligation_ids": [
+          "obligation:tap-to-submit-reentry"
+        ],
+        "reviewer": {
+          "kind": "deterministic_fixture",
+          "identity": "fixture-reviewer@1"
+        },
+        "context_envelope_id": "context-envelope:tap-reentry",
+        "status": "completed",
+        "claim_ids": [
+          "claim:tap-can-reenter"
+        ],
+        "abstention_reason": null,
+        "raw_output_hash": "sha256:b2b2b2b2b2b2b2b2",
+        "usage": {
+          "input_units": 1,
+          "output_units": 1
+        }
+      },
+      {
+        "id": "execution:idempotency-contract",
+        "obligation_ids": [
+          "obligation:payment-idempotency-contract"
+        ],
+        "reviewer": {
+          "kind": "deterministic_fixture",
+          "identity": "fixture-reviewer@1"
+        },
+        "context_envelope_id": "context-envelope:idempotency-contract",
+        "status": "completed",
+        "claim_ids": [
+          "claim:no-idempotency-key"
+        ],
+        "abstention_reason": null,
+        "raw_output_hash": "sha256:c3c3c3c3c3c3c3c3",
+        "usage": {
+          "input_units": 1,
+          "output_units": 1
+        }
+      },
+      {
+        "id": "execution:side-effect-path",
+        "obligation_ids": [
+          "obligation:buy-to-external-charge-path"
+        ],
+        "reviewer": {
+          "kind": "deterministic_fixture",
+          "identity": "fixture-reviewer@1"
+        },
+        "context_envelope_id": "context-envelope:side-effect-path",
+        "status": "completed",
+        "claim_ids": [
+          "claim:path-can-charge-twice"
+        ],
+        "abstention_reason": null,
+        "raw_output_hash": "sha256:d4d4d4d4d4d4d4d4",
+        "usage": {
+          "input_units": 1,
+          "output_units": 1
+        }
+      },
+      {
+        "id": "execution:at-most-once-invariant",
+        "obligation_ids": [
+          "obligation:payment-at-most-once-invariant"
+        ],
+        "reviewer": {
+          "kind": "deterministic_fixture",
+          "identity": "fixture-reviewer@1"
+        },
+        "context_envelope_id": "context-envelope:at-most-once-invariant",
+        "status": "completed",
+        "claim_ids": [
+          "claim:at-most-once-violated"
+        ],
+        "abstention_reason": null,
+        "raw_output_hash": "sha256:e5e5e5e5e5e5e5e5",
+        "usage": {
+          "input_units": 1,
+          "output_units": 1
+        }
+      }
+    ],
+    "claims": [
+      {
+        "id": "claim:guard-set-after-await",
+        "execution_id": "execution:guard-order",
+        "obligation_ids": [
+          "obligation:checkout-submit-guard-order"
+        ],
+        "polarity": "issue_present",
+        "disposition": "supported",
+        "summary": "The loading guard is written after an await, so two submissions can pass the guard.",
+        "severity": "high",
+        "candidate_confidence": 0.97,
+        "source_ids": [
+          "function:checkout-submit",
+          "relation:submit-awaits-validation",
+          "relation:submit-writes-loading"
+        ],
+        "limitations": [
+          "The concurrency witness is bounded to two near-simultaneous submissions."
+        ],
+        "review_status": "human_reviewed"
+      },
+      {
+        "id": "claim:tap-can-reenter",
+        "execution_id": "execution:tap-reentry",
+        "obligation_ids": [
+          "obligation:tap-to-submit-reentry"
+        ],
+        "polarity": "issue_present",
+        "disposition": "supported",
+        "summary": "The repeatable UI event can enter submit concurrently before the loading state changes.",
+        "severity": "high",
+        "candidate_confidence": 0.97,
+        "source_ids": [
+          "event:buy-tap",
+          "relation:tap-handled-by-submit",
+          "function:checkout-submit"
+        ],
+        "limitations": [
+          "The concurrency witness is bounded to two near-simultaneous submissions."
+        ],
+        "review_status": "human_reviewed"
+      },
+      {
+        "id": "claim:no-idempotency-key",
+        "execution_id": "execution:idempotency-contract",
+        "obligation_ids": [
+          "obligation:payment-idempotency-contract"
+        ],
+        "polarity": "issue_present",
+        "disposition": "supported",
+        "summary": "PaymentRepository calls the external charge operation without an idempotency key.",
+        "severity": "critical",
+        "candidate_confidence": 0.97,
+        "source_ids": [
+          "relation:payment-calls-stripe",
+          "function:payment-charge",
+          "function:stripe-charge"
+        ],
+        "limitations": [
+          "The concurrency witness is bounded to two near-simultaneous submissions."
+        ],
+        "review_status": "human_reviewed"
+      },
+      {
+        "id": "claim:path-can-charge-twice",
+        "execution_id": "execution:side-effect-path",
+        "obligation_ids": [
+          "obligation:buy-to-external-charge-path"
+        ],
+        "polarity": "issue_present",
+        "disposition": "accepted",
+        "summary": "A two-tap trace reaches the external charge operation twice for the same order.",
+        "severity": "critical",
+        "candidate_confidence": 0.97,
+        "source_ids": [
+          "relation:tap-handled-by-submit",
+          "relation:submit-calls-payment",
+          "relation:payment-calls-stripe",
+          "test:double-submit"
+        ],
+        "limitations": [
+          "The concurrency witness is bounded to two near-simultaneous submissions."
+        ],
+        "review_status": "accepted"
+      },
+      {
+        "id": "claim:at-most-once-violated",
+        "execution_id": "execution:at-most-once-invariant",
+        "obligation_ids": [
+          "obligation:payment-at-most-once-invariant"
+        ],
+        "polarity": "issue_present",
+        "disposition": "supported",
+        "summary": "The payment at-most-once invariant is violated by the bounded counterexample trace.",
+        "severity": "critical",
+        "candidate_confidence": 0.97,
+        "source_ids": [
+          "invariant:payment-at-most-once",
+          "test:double-submit",
+          "requirement:payment-at-most-once"
+        ],
+        "limitations": [
+          "The concurrency witness is bounded to two near-simultaneous submissions."
+        ],
+        "review_status": "human_reviewed"
+      }
+    ],
+    "evidence_bindings": [
+      {
+        "id": "binding:guard-static",
+        "claim_id": "claim:guard-set-after-await",
+        "evidence_id": "evidence:static-guard-order",
+        "relation": "supports",
+        "scope": {
+          "property_id": "async.concurrent_reentry"
+        }
+      },
+      {
+        "id": "binding:reentry-test",
+        "claim_id": "claim:tap-can-reenter",
+        "evidence_id": "evidence:double-submit-trace",
+        "relation": "reproduces",
+        "scope": {
+          "property_id": "async.concurrent_reentry"
+        }
+      },
+      {
+        "id": "binding:idempotency-static",
+        "claim_id": "claim:no-idempotency-key",
+        "evidence_id": "evidence:missing-idempotency-key",
+        "relation": "supports",
+        "scope": {
+          "property_id": "payment.idempotency_contract"
+        }
+      },
+      {
+        "id": "binding:path-test",
+        "claim_id": "claim:path-can-charge-twice",
+        "evidence_id": "evidence:double-submit-trace",
+        "relation": "reproduces",
+        "scope": {
+          "property_id": "payment.at_most_once"
+        }
+      },
+      {
+        "id": "binding:invariant-test",
+        "claim_id": "claim:at-most-once-violated",
+        "evidence_id": "evidence:double-submit-trace",
+        "relation": "refutes",
+        "scope": {
+          "property_id": "payment.at_most_once"
+        }
+      }
+    ],
+    "verifications": [
+      {
+        "id": "verification:guard-order",
+        "claim_id": "claim:guard-set-after-await",
+        "result": "passed",
+        "verifier_id": "static-guard-order@1",
+        "evidence_ids": [
+          "evidence:static-guard-order"
+        ],
+        "limitations": [],
+        "freshness": "fresh"
+      },
+      {
+        "id": "verification:tap-reentry",
+        "claim_id": "claim:tap-can-reenter",
+        "result": "passed",
+        "verifier_id": "duplicate-submit-test@1",
+        "evidence_ids": [
+          "evidence:double-submit-trace"
+        ],
+        "limitations": [
+          "Two-task bounded schedule."
+        ],
+        "freshness": "fresh"
+      },
+      {
+        "id": "verification:idempotency-contract",
+        "claim_id": "claim:no-idempotency-key",
+        "result": "passed",
+        "verifier_id": "static-idempotency-key@1",
+        "evidence_ids": [
+          "evidence:missing-idempotency-key"
+        ],
+        "limitations": [
+          "Checks explicit key forwarding only."
+        ],
+        "freshness": "fresh"
+      },
+      {
+        "id": "verification:side-effect-path",
+        "claim_id": "claim:path-can-charge-twice",
+        "result": "passed",
+        "verifier_id": "duplicate-submit-test@1",
+        "evidence_ids": [
+          "evidence:double-submit-trace"
+        ],
+        "limitations": [
+          "Bounded counterexample is sufficient to refute at-most-once."
+        ],
+        "freshness": "fresh"
+      },
+      {
+        "id": "verification:at-most-once",
+        "claim_id": "claim:at-most-once-violated",
+        "result": "passed",
+        "verifier_id": "bounded-invariant-refutation@1",
+        "evidence_ids": [
+          "evidence:double-submit-trace"
+        ],
+        "limitations": [],
+        "freshness": "fresh"
+      }
+    ],
+    "decisions": [
+      {
+        "id": "decision:accept-double-charge-finding",
+        "target_id": "claim:path-can-charge-twice",
+        "outcome": "accept",
+        "authority": "fixture-human-reviewer",
+        "rationale": "The test trace reproduces two external charge calls for one order.",
+        "source_ids": [
+          "claim:path-can-charge-twice",
+          "evidence:double-submit-trace",
+          "verification:side-effect-path"
+        ]
+      }
+    ],
+    "findings": [
+      {
+        "id": "finding:duplicate-charge",
+        "claim_id": "claim:path-can-charge-twice",
+        "severity": "critical",
+        "title": "Duplicate submission can charge the same order twice",
+        "status": "accepted",
+        "evidence_ids": [
+          "evidence:double-submit-trace",
+          "evidence:missing-idempotency-key"
+        ],
+        "verification_ids": [
+          "verification:side-effect-path",
+          "verification:idempotency-contract"
+        ],
+        "decision_id": "decision:accept-double-charge-finding",
+        "location_refs": [
+          "function:checkout-submit",
+          "function:payment-charge"
+        ],
+        "remediation_candidate_ids": [
+          "candidate:move-guard-before-await",
+          "candidate:add-idempotency-key"
+        ]
+      }
+    ],
+    "obstructions": [
+      {
+        "id": "obstruction:ui-payment-assumption-conflict",
+        "kind": "gluing_conflict",
+        "severity": "critical",
+        "title": "UI and payment contexts delegate duplicate protection to each other",
+        "source_ids": [
+          "context:ui-event",
+          "context:payment",
+          "function:checkout-submit",
+          "function:payment-charge"
+        ],
+        "counterexample_refs": [
+          "evidence:double-submit-trace"
+        ],
+        "required_resolution": [
+          "Establish an effective pre-side-effect re-entry boundary.",
+          "Add a payment idempotency key or equivalent server-side deduplication."
+        ],
+        "blocks": [
+          "gate:default",
+          "global-claim:payment-flow-safe"
+        ],
+        "review_status": "human_reviewed"
+      }
+    ],
+    "completion_candidates": [
+      {
+        "id": "candidate:move-guard-before-await",
+        "kind": "code_change",
+        "review_status": "unreviewed",
+        "rationale": "Close the local re-entry window before the first await."
+      },
+      {
+        "id": "candidate:add-idempotency-key",
+        "kind": "contract_change",
+        "review_status": "unreviewed",
+        "rationale": "Make external charge retries safe at the payment boundary."
+      }
+    ],
+    "gluing_results": [
+      {
+        "id": "gluing:ui-payment-v1",
+        "context_ids": [
+          "context:ui-event",
+          "context:payment"
+        ],
+        "status": "failed",
+        "source_ids": [
+          "context:ui-event",
+          "context:payment",
+          "evidence:double-submit-trace"
+        ],
+        "obstruction_ids": [
+          "obstruction:ui-payment-assumption-conflict"
+        ]
+      }
+    ],
+    "stale_records": []
+  },
+  "coverage": {
+    "universe_id": "universe:double-submit-v1",
+    "extraction": {
+      "files_parsed": {
+        "numerator": 3,
+        "denominator": 3
+      },
+      "direct_call_resolution": {
+        "value": 1.0,
+        "qualification": "fixture direct calls"
+      },
+      "concurrency_model": {
+        "value": 0.5,
+        "qualification": "two-task bounded witness"
+      }
+    },
+    "stages": {
+      "generated": {
+        "numerator": 5,
+        "denominator": 5,
+        "weighted": 1.0
+      },
+      "visited": {
+        "numerator": 5,
+        "denominator": 5,
+        "weighted": 1.0
+      },
+      "completed": {
+        "numerator": 5,
+        "denominator": 5,
+        "weighted": 1.0
+      },
+      "evidence_supported": {
+        "numerator": 5,
+        "denominator": 5,
+        "weighted": 1.0
+      },
+      "verified": {
+        "numerator": 5,
+        "denominator": 5,
+        "weighted": 1.0
+      },
+      "fresh_verified": {
+        "numerator": 5,
+        "denominator": 5,
+        "weighted": 1.0
+      }
+    },
+    "limitations": [
+      {
+        "id": "limitation:bounded-concurrency",
+        "kind": "capability_missing",
+        "description": "The fixture represents two concurrent taps only; it is not an exhaustive scheduler proof.",
+        "severity": "medium",
+        "source_ids": [
+          "snapshot:double-submit-v1",
+          "invariant:payment-at-most-once"
+        ]
+      }
+    ],
+    "freshness": {
+      "fresh": 5,
+      "stale": 0,
+      "unknown": 0
+    }
+  },
+  "projection": {
+    "human_review": {
+      "source_ids": [
+        "report:double-submit-v1",
+        "finding:duplicate-charge",
+        "obstruction:ui-payment-assumption-conflict",
+        "universe:double-submit-v1"
+      ],
+      "information_loss": [
+        {
+          "kind": "omitted_structural_detail",
+          "source_count": 62,
+          "projected_count": 8,
+          "reason": "Human summary includes only critical findings, blockers and coverage.",
+          "recoverable": true,
+          "recoverable_via": "ai_view"
+        }
+      ],
+      "payload": {
+        "summary": "A bounded two-submit trace charges the same order twice. The local UI guard is late and the payment boundary lacks idempotency.",
+        "gate_status": "blocked",
+        "critical_findings": [
+          "finding:duplicate-charge"
+        ],
+        "blocking_obstructions": [
+          "obstruction:ui-payment-assumption-conflict"
+        ],
+        "decisions_required": [
+          "Review both remediation candidates before implementation."
+        ]
+      }
+    },
+    "ai_view": {
+      "source_ids": [
+        "report:double-submit-v1",
+        "universe:double-submit-v1",
+        "obligation:checkout-submit-guard-order",
+        "obligation:tap-to-submit-reentry",
+        "obligation:payment-idempotency-contract",
+        "obligation:buy-to-external-charge-path",
+        "obligation:payment-at-most-once-invariant",
+        "claim:guard-set-after-await",
+        "claim:tap-can-reenter",
+        "claim:no-idempotency-key",
+        "claim:path-can-charge-twice",
+        "claim:at-most-once-violated",
+        "finding:duplicate-charge",
+        "obstruction:ui-payment-assumption-conflict"
+      ],
+      "information_loss": [
+        {
+          "kind": "raw_artifacts_by_reference",
+          "source_count": 4,
+          "projected_count": 0,
+          "reason": "Raw outputs and traces are content-addressed artifacts.",
+          "recoverable": true,
+          "recoverable_via": "artifact store"
+        }
+      ],
+      "payload": {
+        "obligation_ids": [
+          "obligation:checkout-submit-guard-order",
+          "obligation:tap-to-submit-reentry",
+          "obligation:payment-idempotency-contract",
+          "obligation:buy-to-external-charge-path",
+          "obligation:payment-at-most-once-invariant"
+        ],
+        "claim_ids": [
+          "claim:guard-set-after-await",
+          "claim:tap-can-reenter",
+          "claim:no-idempotency-key",
+          "claim:path-can-charge-twice",
+          "claim:at-most-once-violated"
+        ],
+        "verification_ids": [
+          "verification:guard-order",
+          "verification:tap-reentry",
+          "verification:idempotency-contract",
+          "verification:side-effect-path",
+          "verification:at-most-once"
+        ],
+        "finding_ids": [
+          "finding:duplicate-charge"
+        ],
+        "obstruction_ids": [
+          "obstruction:ui-payment-assumption-conflict"
+        ],
+        "next_operations": [
+          "review_completion_candidates",
+          "apply_fix_in_separate_change",
+          "rerun_fresh_verification"
+        ]
+      }
+    },
+    "audit_trace": {
+      "source_ids": [
+        "report:double-submit-v1",
+        "run:double-submit-v1",
+        "snapshot:double-submit-v1",
+        "universe:double-submit-v1"
+      ],
+      "information_loss": [
+        {
+          "kind": "source_code_not_embedded",
+          "source_count": 3,
+          "projected_count": 0,
+          "reason": "Audit view records hashes and source IDs instead of full source.",
+          "recoverable": true,
+          "recoverable_via": "repository snapshot"
+        }
+      ],
+      "payload": {
+        "event_range": {
+          "first": 1,
+          "last": 41
+        },
+        "profile": "code-review@1",
+        "projection_hashes": [
+          "sha256:aaaaaaaaaaaaaaaa"
+        ],
+        "accepted_decision_ids": [
+          "decision:accept-double-charge-finding"
+        ]
+      }
+    },
+    "ci_gate": {
+      "source_ids": [
+        "gate:default",
+        "finding:duplicate-charge",
+        "obstruction:ui-payment-assumption-conflict",
+        "universe:double-submit-v1"
+      ],
+      "information_loss": [
+        {
+          "kind": "gate_collapses_detail",
+          "source_count": 5,
+          "projected_count": 2,
+          "reason": "CI consumes status and blocker IDs only.",
+          "recoverable": true,
+          "recoverable_via": "human_review"
+        }
+      ],
+      "payload": {
+        "status": "blocked",
+        "policy": "default@1",
+        "blocking_finding_ids": [
+          "finding:duplicate-charge"
+        ],
+        "blocking_obstruction_ids": [
+          "obstruction:ui-payment-assumption-conflict"
+        ],
+        "incomplete_reason_ids": []
+      }
+    }
+  }
+}

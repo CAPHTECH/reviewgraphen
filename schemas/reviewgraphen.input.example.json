@@ -1,0 +1,621 @@
+{
+  "schema": "reviewgraphen.program_space.input.v1",
+  "source": {
+    "kind": "fixture",
+    "locator": "examples/double-submit-payment",
+    "revision": "v1",
+    "content_hash": "sha256:1111111111111111"
+  },
+  "repository": {
+    "id": "repository:double-submit-payment",
+    "name": "double-submit-payment"
+  },
+  "snapshot": {
+    "id": "snapshot:double-submit-v1",
+    "base_revision": "fixture-safe-baseline",
+    "target_revision": "fixture-buggy-head",
+    "tree_hash": "sha256:2222222222222222",
+    "dirty": false,
+    "created_at": "2026-08-07T00:00:00Z"
+  },
+  "profile": {
+    "id": "code-review",
+    "version": "1",
+    "rule_set_hash": "sha256:3333333333333333",
+    "policy_version": "default@1"
+  },
+  "artifacts": [
+    {
+      "id": "file:checkout-controller",
+      "kind": "file",
+      "label": "src/checkout_controller.rs",
+      "language": "rust",
+      "location": {
+        "path": "src/checkout_controller.rs"
+      },
+      "content_hash": "sha256:4444444444444444",
+      "attributes": {
+        "changed": true
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "function:checkout-submit",
+      "kind": "function",
+      "label": "CheckoutController::submit",
+      "language": "rust",
+      "location": {
+        "path": "src/checkout_controller.rs",
+        "start_line": 14,
+        "end_line": 25
+      },
+      "content_hash": "sha256:4545454545454545",
+      "attributes": {
+        "async": true,
+        "public": true,
+        "guard_write_after_await": true
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "event:buy-tap",
+      "kind": "event",
+      "label": "Buy button tap",
+      "attributes": {
+        "may_repeat": true,
+        "source": "ui"
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "state:checkout-loading",
+      "kind": "state",
+      "label": "CheckoutState.loading",
+      "attributes": {
+        "initial": false
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "file:payment-repository",
+      "kind": "file",
+      "label": "src/payment_repository.rs",
+      "language": "rust",
+      "location": {
+        "path": "src/payment_repository.rs"
+      },
+      "content_hash": "sha256:5555555555555555",
+      "attributes": {
+        "changed": false
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "function:payment-charge",
+      "kind": "function",
+      "label": "PaymentRepository::charge",
+      "language": "rust",
+      "location": {
+        "path": "src/payment_repository.rs",
+        "start_line": 9,
+        "end_line": 13
+      },
+      "content_hash": "sha256:5656565656565656",
+      "attributes": {
+        "idempotency_key": false,
+        "external_side_effect": true
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "external-service:stripe",
+      "kind": "external_service",
+      "label": "Stripe-like payment gateway",
+      "attributes": {
+        "operation": "charge",
+        "supports_idempotency_key": true
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "function:stripe-charge",
+      "kind": "function",
+      "label": "StripeClient::charge",
+      "attributes": {
+        "external_side_effect": true
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "test:double-submit",
+      "kind": "test",
+      "label": "double_submit_can_charge_twice",
+      "language": "rust",
+      "location": {
+        "path": "tests/double_submit.rs",
+        "start_line": 8,
+        "end_line": 28
+      },
+      "content_hash": "sha256:6666666666666666",
+      "attributes": {
+        "kind": "integration",
+        "initial_status": "not_run"
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "requirement:payment-at-most-once",
+      "kind": "requirement",
+      "label": "One order must be charged at most once",
+      "attributes": {
+        "business_critical": true
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.requirement.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "id": "relation:file-contains-submit",
+      "kind": "contains",
+      "source_id": "file:checkout-controller",
+      "target_ids": [
+        "function:checkout-submit"
+      ],
+      "directed": true,
+      "attributes": {},
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "relation:tap-handled-by-submit",
+      "kind": "handled_by",
+      "source_id": "event:buy-tap",
+      "target_ids": [
+        "function:checkout-submit"
+      ],
+      "directed": true,
+      "attributes": {
+        "concurrency": "unbounded_reentry"
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "relation:submit-awaits-validation",
+      "kind": "awaits",
+      "source_id": "function:checkout-submit",
+      "target_ids": [
+        "function:checkout-submit"
+      ],
+      "directed": true,
+      "attributes": {
+        "phase": "before_loading_guard_write",
+        "self_phase_relation": true
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "relation:submit-writes-loading",
+      "kind": "writes",
+      "source_id": "function:checkout-submit",
+      "target_ids": [
+        "state:checkout-loading"
+      ],
+      "directed": true,
+      "attributes": {
+        "after_first_await": true
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "relation:submit-calls-payment",
+      "kind": "calls",
+      "source_id": "function:checkout-submit",
+      "target_ids": [
+        "function:payment-charge"
+      ],
+      "directed": true,
+      "attributes": {
+        "awaited": true
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "relation:payment-calls-stripe",
+      "kind": "calls",
+      "source_id": "function:payment-charge",
+      "target_ids": [
+        "function:stripe-charge"
+      ],
+      "directed": true,
+      "attributes": {
+        "idempotency_key_forwarded": false
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "relation:stripe-belongs-service",
+      "kind": "belongs_to",
+      "source_id": "function:stripe-charge",
+      "target_ids": [
+        "external-service:stripe"
+      ],
+      "directed": true,
+      "attributes": {},
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "relation:test-covers-path",
+      "kind": "covers",
+      "source_id": "test:double-submit",
+      "target_ids": [
+        "relation:tap-handled-by-submit",
+        "relation:submit-calls-payment",
+        "relation:payment-calls-stripe"
+      ],
+      "directed": true,
+      "attributes": {
+        "property_id": "payment.at_most_once"
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "relation:requirement-applies-payment",
+      "kind": "constrains",
+      "source_id": "requirement:payment-at-most-once",
+      "target_ids": [
+        "function:checkout-submit",
+        "function:payment-charge",
+        "function:stripe-charge"
+      ],
+      "directed": true,
+      "attributes": {},
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    }
+  ],
+  "contexts": [
+    {
+      "id": "context:ui-event",
+      "kind": "review_context",
+      "label": "UI event and local re-entry guard",
+      "member_ids": [
+        "event:buy-tap",
+        "function:checkout-submit",
+        "state:checkout-loading",
+        "relation:tap-handled-by-submit",
+        "relation:submit-writes-loading"
+      ],
+      "attributes": {
+        "local_assumption": "loading guard prevents duplicate submission"
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "context:payment",
+      "kind": "review_context",
+      "label": "Payment side effect and idempotency",
+      "member_ids": [
+        "function:checkout-submit",
+        "function:payment-charge",
+        "function:stripe-charge",
+        "external-service:stripe",
+        "requirement:payment-at-most-once",
+        "relation:submit-calls-payment",
+        "relation:payment-calls-stripe"
+      ],
+      "attributes": {
+        "local_assumption": "caller prevents duplicate charge attempts"
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "context:test",
+      "kind": "evidence_context",
+      "label": "Duplicate submit integration test",
+      "member_ids": [
+        "test:double-submit",
+        "relation:test-covers-path"
+      ],
+      "attributes": {},
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.manual.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    }
+  ],
+  "invariants": [
+    {
+      "id": "invariant:payment-at-most-once",
+      "property_id": "payment.at_most_once",
+      "description": "For one order, all reachable duplicate-submit traces produce at most one external charge.",
+      "scope_ids": [
+        "context:ui-event",
+        "context:payment",
+        "requirement:payment-at-most-once"
+      ],
+      "severity": "critical",
+      "verification_mode": "bounded_concurrent_test_and_path_witness",
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "examples/double-submit-payment",
+          "revision": "v1",
+          "content_hash": "sha256:1111111111111111"
+        },
+        "extraction_method": "fixture.invariant.v1",
+        "tool_version": "0.1.0-draft",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    }
+  ],
+  "evidence": [],
+  "extraction": {
+    "adapter_set_hash": "sha256:7777777777777777",
+    "adapters": [
+      {
+        "id": "manual-fixture",
+        "version": "1",
+        "status": "complete",
+        "parsed": 3,
+        "total": 3
+      }
+    ],
+    "capabilities": {
+      "ast": "complete",
+      "direct_calls": "complete",
+      "interprocedural_data_flow": "partial",
+      "concurrency_model": "partial",
+      "test_mapping": "complete"
+    },
+    "limitations": [
+      {
+        "id": "limitation:bounded-concurrency",
+        "kind": "capability_missing",
+        "description": "The fixture represents two concurrent taps only; it is not an exhaustive scheduler proof.",
+        "severity": "medium",
+        "source_ids": [
+          "snapshot:double-submit-v1",
+          "invariant:payment-at-most-once"
+        ]
+      }
+    ]
+  }
+}

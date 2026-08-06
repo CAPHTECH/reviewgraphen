@@ -1,0 +1,52 @@
+{
+  "schema": "reviewgraphen.review_plan.v1",
+  "id": "plan:double-submit-v1",
+  "universe_id": "universe:double-submit-v1",
+  "mode": "risk_first",
+  "budget": {
+    "max_tokens": 24000,
+    "max_cost_units": 10,
+    "max_concurrency": 2
+  },
+  "ordered_items": [
+    {
+      "obligation_id": "obligation:payment-at-most-once-invariant",
+      "priority": 1,
+      "reviewer": "fixture-reviewer@1",
+      "verifier": "duplicate-submit-test@1"
+    },
+    {
+      "obligation_id": "obligation:buy-to-external-charge-path",
+      "priority": 2,
+      "reviewer": "fixture-reviewer@1",
+      "verifier": "duplicate-submit-test@1"
+    },
+    {
+      "obligation_id": "obligation:payment-idempotency-contract",
+      "priority": 3,
+      "reviewer": "fixture-reviewer@1",
+      "verifier": "static-idempotency-key@1"
+    },
+    {
+      "obligation_id": "obligation:tap-to-submit-reentry",
+      "priority": 4,
+      "reviewer": "fixture-reviewer@1",
+      "verifier": "duplicate-submit-test@1"
+    },
+    {
+      "obligation_id": "obligation:checkout-submit-guard-order",
+      "priority": 5,
+      "reviewer": "fixture-reviewer@1",
+      "verifier": "static-guard-order@1"
+    }
+  ],
+  "selection": {
+    "selected_raw": 5,
+    "universe_raw": 5,
+    "selected_weight": 24.5,
+    "universe_weight": 24.5,
+    "limitations": []
+  },
+  "plan_hash": "sha256:9999999999999999",
+  "review_status": "accepted"
+}
