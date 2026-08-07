@@ -1,0 +1,11 @@
+# See https://nexte.st/docs/configuration/.
+# Keep retries at zero: the fixture is deterministic, and a failure must remain
+# observable rather than being hidden by a retry.
+[profile.default]
+fail-fast = false
+retries = 0
+
+[profile.ci]
+fail-fast = false
+retries = 0
+slow-timeout = { period = "60s", terminate-after = 2 }

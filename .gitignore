@@ -1,0 +1,35 @@
+# Rust build and coverage output
+/target/
+**/target/
+*.rs.bk
+*.profraw
+*.profdata
+
+# Python validation environment
+__pycache__/
+*.py[cod]
+/.venv/
+
+# Local, unmanifested semantic index from the design-bundle workspace
+/sem.db
+
+# Editor and operating-system state
+.DS_Store
+.idea/
+.vscode/
+
+# ReviewGraphen runtime state (canonical data is local to the reviewed repository)
+/.reviewgraphen/config.local.toml
+/.reviewgraphen/store/
+/.reviewgraphen/artifacts/
+/.reviewgraphen/indexes/
+/.reviewgraphen/runs/
+/.reviewgraphen/reports/
+
+# Future cargo-fuzz generated data. Harness sources and seed corpora are tracked.
+/fuzz/artifacts/
+/fuzz/coverage/
+/fuzz/target/
+
+# Proptest regression seeds and insta snapshots are executable test fixtures.
+# Do not add ignore rules for **/proptest-regressions/** or **/snapshots/**.

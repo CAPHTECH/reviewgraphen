@@ -1,0 +1,3 @@
+# Product crates use the workspace's Rust 2024 style.
+style_edition = "2024"
+max_width = 100

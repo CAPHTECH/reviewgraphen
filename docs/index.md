@@ -80,6 +80,7 @@
 | [`adr/0006-standalone-repository-over-highergraphen.md`](adr/0006-standalone-repository-over-highergraphen.md) | 独立repoとしてHigherGraphenへ依存する。 |
 | [`adr/0007-local-first-event-log-and-derived-index.md`](adr/0007-local-first-event-log-and-derived-index.md) | event logを永続記録、DBを派生indexとする。 |
 | [`adr/0008-language-neutral-core-profile-specific-extractors.md`](adr/0008-language-neutral-core-profile-specific-extractors.md) | coreを言語非依存、抽出器をadapter化する。 |
+| [`adr/0009-rust-development-harness.md`](adr/0009-rust-development-harness.md) | product crateより先にRust開発・検証基盤を固定する。 |
 
 ## 4. Schemaと参照シナリオ
 

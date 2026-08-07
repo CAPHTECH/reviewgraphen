@@ -166,6 +166,7 @@ ReviewGraphenの価値は「AIがレビューした」という文ではなく�
 
 - [`MANIFEST.md`](MANIFEST.md) — 文書・schema・example・skillの構成。
 - [`VALIDATION.md`](VALIDATION.md) — offline validation結果と未実行項目。
+- [`DEVELOPMENT.md`](DEVELOPMENT.md) — Rust toolchain、test、lint、coverage、CIの入口。
 - [`schemas/README.md`](schemas/README.md) — stable JSON contract。
 - [`examples/double-submit-payment/README.md`](examples/double-submit-payment/README.md) — reference scenario。
 - [`skills/reviewgraphen/SKILL.md`](skills/reviewgraphen/SKILL.md) — agent-facing workflow contract。

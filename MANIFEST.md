@@ -10,6 +10,7 @@
 - [`docs/index.md`](docs/index.md) — reading routes and normative order。
 - [`AGENTS.md`](AGENTS.md) — implementation rules for humans and coding agents。
 - [`VALIDATION.md`](VALIDATION.md) — offline validation result and known limitation。
+- [`DEVELOPMENT.md`](DEVELOPMENT.md) — Rust development harness and verification entry points。
 
 ## Design documents
 
@@ -31,7 +32,7 @@ Additional references:
 
 ## Architecture decisions
 
-Eight accepted-for-v0.1 ADRs live under [`docs/adr/`](docs/adr/):
+Nine accepted-for-v0.1 ADRs live under [`docs/adr/`](docs/adr/):
 
 1. ReviewGraphen is an Intermediate Tool。
 2. Artifact / Review / Evidence Space separation。
@@ -41,6 +42,7 @@ Eight accepted-for-v0.1 ADRs live under [`docs/adr/`](docs/adr/):
 6. Standalone repository over HigherGraphen。
 7. Local-first event log and derived index。
 8. Language-neutral core with profile-specific extractors。
+9. Minimal Rust development harness before product crates。
 
 ## Contracts
 

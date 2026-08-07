@@ -20,6 +20,13 @@ except ImportError as exc:  # pragma: no cover
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = ROOT / "schemas"
 EXAMPLE = ROOT / "examples" / "double-submit-payment"
+IGNORED_PATH_PARTS = {
+    ".git",
+    ".reviewgraphen",
+    ".venv",
+    "__pycache__",
+    "target",
+}
 
 
 def fail(message: str) -> None:
@@ -30,15 +37,26 @@ def load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def repository_files(pattern: str) -> list[Path]:
+    """Return source-controlled candidates without generated/local state."""
+    return [
+        path
+        for path in sorted(ROOT.rglob(pattern))
+        if not IGNORED_PATH_PARTS.intersection(path.relative_to(ROOT).parts)
+    ]
+
+
 def validate_json_and_toml() -> list[str]:
     notes: list[str] = []
-    for path in sorted(ROOT.rglob("*.json")):
+    json_files = repository_files("*.json")
+    for path in json_files:
         load_json(path)
-    notes.append(f"parsed JSON: {len(list(ROOT.rglob('*.json')))} files")
+    notes.append(f"parsed JSON: {len(json_files)} files")
 
-    for path in sorted(ROOT.rglob("*.toml")):
+    toml_files = repository_files("*.toml")
+    for path in toml_files:
         tomllib.loads(path.read_text(encoding="utf-8"))
-    notes.append(f"parsed TOML: {len(list(ROOT.rglob('*.toml')))} files")
+    notes.append(f"parsed TOML: {len(toml_files)} files")
     return notes
 
 
@@ -68,7 +86,8 @@ def validate_schemas() -> list[str]:
 def validate_markdown() -> list[str]:
     link_pattern = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
     relative_links = 0
-    for path in sorted(ROOT.rglob("*.md")):
+    markdown_files = repository_files("*.md")
+    for path in markdown_files:
         text = path.read_text(encoding="utf-8")
         if text.count("```") % 2 != 0:
             fail(f"unbalanced fenced code block: {path.relative_to(ROOT)}")
@@ -87,7 +106,7 @@ def validate_markdown() -> list[str]:
                     f"({resolved})"
                 )
     return [
-        f"checked Markdown: {len(list(ROOT.rglob('*.md')))} files",
+        f"checked Markdown: {len(markdown_files)} files",
         f"checked relative links: {relative_links}",
     ]
 
