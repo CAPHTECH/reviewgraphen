@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://capht.tech/schemas/reviewgraphen/review-obligations.v2.schema.json",
-  "title": "ReviewGraphen Review Obligation Bundle v2",
+  "$id": "https://capht.tech/schemas/reviewgraphen/review-obligations.v1.schema.json",
+  "title": "ReviewGraphen Review Obligation Bundle v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "reviewgraphen.review_obligations.v2"
+      "const": "reviewgraphen.review_obligations.v1"
     },
     "source": {
       "$ref": "#/$defs/sourceRef"
@@ -60,9 +60,7 @@
       "additionalProperties": false,
       "required": [
         "kind",
-        "locator",
-        "revision",
-        "content_hash"
+        "locator"
       ],
       "properties": {
         "kind": {
@@ -99,10 +97,7 @@
       "required": [
         "source",
         "extraction_method",
-        "tool_version",
-        "confidence",
-        "review_status",
-        "generator_ids"
+        "review_status"
       ],
       "properties": {
         "source": {
@@ -127,17 +122,6 @@
             "rejected",
             "superseded"
           ]
-        },
-        "generator_ids": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/identifier"
-          },
-          "uniqueItems": true
-        },
-        "origin_rule": {
-          "type": "string",
-          "minLength": 1
         }
       }
     },
@@ -266,8 +250,7 @@
         "extractor_set_hash",
         "policy_version",
         "obligation_ids",
-        "limitation_ids",
-        "exclusions"
+        "limitation_ids"
       ],
       "properties": {
         "id": {
@@ -303,45 +286,6 @@
             "$ref": "#/$defs/identifier"
           },
           "uniqueItems": true
-        },
-        "exclusions": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "id",
-              "candidate_key",
-              "reason",
-              "source_ids",
-              "excluded_weight"
-            ],
-            "properties": {
-              "id": {
-                "$ref": "#/$defs/identifier"
-              },
-              "candidate_key": {
-                "type": "string",
-                "minLength": 1
-              },
-              "reason": {
-                "type": "string",
-                "minLength": 1
-              },
-              "source_ids": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                  "$ref": "#/$defs/identifier"
-                },
-                "uniqueItems": true
-              },
-              "excluded_weight": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              }
-            }
-          }
         }
       }
     },
@@ -350,8 +294,7 @@
       "additionalProperties": false,
       "required": [
         "kind",
-        "refs",
-        "semantic_key"
+        "refs"
       ],
       "properties": {
         "kind": {
@@ -406,10 +349,7 @@
       "required": [
         "context_ids",
         "required_capabilities",
-        "include_relation_kinds",
-        "max_relation_depth",
-        "include_tests",
-        "include_existing_evidence"
+        "max_relation_depth"
       ],
       "properties": {
         "context_ids": {
@@ -451,9 +391,7 @@
       "additionalProperties": false,
       "required": [
         "required",
-        "accepted_modes",
-        "minimum_count",
-        "policy"
+        "accepted_modes"
       ],
       "properties": {
         "required": {
@@ -483,9 +421,7 @@
         "impact",
         "exposure",
         "uncertainty",
-        "structural_reach",
-        "weight",
-        "rationale"
+        "weight"
       ],
       "properties": {
         "impact": {
@@ -519,8 +455,7 @@
       "additionalProperties": false,
       "required": [
         "status",
-        "reasons",
-        "qualification_ids"
+        "reasons"
       ],
       "properties": {
         "status": {
@@ -587,7 +522,6 @@
         "version",
         "provenance",
         "lifecycle",
-        "depends_on_obligation_ids",
         "source_ids"
       ],
       "properties": {

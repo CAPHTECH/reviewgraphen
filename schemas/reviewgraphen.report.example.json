@@ -29,7 +29,7 @@
     "program_space_ref": "artifact:program-space-double-submit-v1",
     "review_space_ref": "artifact:review-space-double-submit-v1",
     "evidence_space_ref": "artifact:evidence-space-double-submit-v1",
-    "universe_id": "universe:double-submit-v1",
+    "universe_id": "universe:sha256:f7e629d22fa1a44d5f66d3e3ea21d8c17353cf432d46adf1afc46483d735f115",
     "extraction_limitation_ids": [
       "limitation:bounded-concurrency"
     ],
@@ -42,17 +42,17 @@
   "result": {
     "status": "completed",
     "obligation_ids": [
-      "obligation:checkout-submit-guard-order",
-      "obligation:tap-to-submit-reentry",
-      "obligation:payment-idempotency-contract",
-      "obligation:buy-to-external-charge-path",
-      "obligation:payment-at-most-once-invariant"
+      "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
+      "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
+      "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
+      "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+      "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
     ],
     "executions": [
       {
         "id": "execution:guard-order",
         "obligation_ids": [
-          "obligation:checkout-submit-guard-order"
+          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
         ],
         "reviewer": {
           "kind": "deterministic_fixture",
@@ -73,7 +73,7 @@
       {
         "id": "execution:tap-reentry",
         "obligation_ids": [
-          "obligation:tap-to-submit-reentry"
+          "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976"
         ],
         "reviewer": {
           "kind": "deterministic_fixture",
@@ -94,7 +94,7 @@
       {
         "id": "execution:idempotency-contract",
         "obligation_ids": [
-          "obligation:payment-idempotency-contract"
+          "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e"
         ],
         "reviewer": {
           "kind": "deterministic_fixture",
@@ -115,7 +115,7 @@
       {
         "id": "execution:side-effect-path",
         "obligation_ids": [
-          "obligation:buy-to-external-charge-path"
+          "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0"
         ],
         "reviewer": {
           "kind": "deterministic_fixture",
@@ -136,7 +136,7 @@
       {
         "id": "execution:at-most-once-invariant",
         "obligation_ids": [
-          "obligation:payment-at-most-once-invariant"
+          "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
         ],
         "reviewer": {
           "kind": "deterministic_fixture",
@@ -160,7 +160,7 @@
         "id": "claim:guard-set-after-await",
         "execution_id": "execution:guard-order",
         "obligation_ids": [
-          "obligation:checkout-submit-guard-order"
+          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
         ],
         "polarity": "issue_present",
         "disposition": "supported",
@@ -181,7 +181,7 @@
         "id": "claim:tap-can-reenter",
         "execution_id": "execution:tap-reentry",
         "obligation_ids": [
-          "obligation:tap-to-submit-reentry"
+          "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976"
         ],
         "polarity": "issue_present",
         "disposition": "supported",
@@ -202,7 +202,7 @@
         "id": "claim:no-idempotency-key",
         "execution_id": "execution:idempotency-contract",
         "obligation_ids": [
-          "obligation:payment-idempotency-contract"
+          "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e"
         ],
         "polarity": "issue_present",
         "disposition": "supported",
@@ -223,7 +223,7 @@
         "id": "claim:path-can-charge-twice",
         "execution_id": "execution:side-effect-path",
         "obligation_ids": [
-          "obligation:buy-to-external-charge-path"
+          "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0"
         ],
         "polarity": "issue_present",
         "disposition": "accepted",
@@ -245,7 +245,7 @@
         "id": "claim:at-most-once-violated",
         "execution_id": "execution:at-most-once-invariant",
         "obligation_ids": [
-          "obligation:payment-at-most-once-invariant"
+          "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
         ],
         "polarity": "issue_present",
         "disposition": "supported",
@@ -474,14 +474,14 @@
     "stale_records": []
   },
   "coverage": {
-    "universe_id": "universe:double-submit-v1",
+    "universe_id": "universe:sha256:f7e629d22fa1a44d5f66d3e3ea21d8c17353cf432d46adf1afc46483d735f115",
     "extraction": {
       "files_parsed": {
         "numerator": 3,
         "denominator": 3
       },
       "direct_call_resolution": {
-        "value": 1.0,
+        "value": 1,
         "qualification": "fixture direct calls"
       },
       "concurrency_model": {
@@ -493,32 +493,32 @@
       "generated": {
         "numerator": 5,
         "denominator": 5,
-        "weighted": 1.0
+        "weighted": 1
       },
       "visited": {
         "numerator": 5,
         "denominator": 5,
-        "weighted": 1.0
+        "weighted": 1
       },
       "completed": {
         "numerator": 5,
         "denominator": 5,
-        "weighted": 1.0
+        "weighted": 1
       },
       "evidence_supported": {
         "numerator": 5,
         "denominator": 5,
-        "weighted": 1.0
+        "weighted": 1
       },
       "verified": {
         "numerator": 5,
         "denominator": 5,
-        "weighted": 1.0
+        "weighted": 1
       },
       "fresh_verified": {
         "numerator": 5,
         "denominator": 5,
-        "weighted": 1.0
+        "weighted": 1
       }
     },
     "limitations": [
@@ -545,7 +545,7 @@
         "report:double-submit-v1",
         "finding:duplicate-charge",
         "obstruction:ui-payment-assumption-conflict",
-        "universe:double-submit-v1"
+        "universe:sha256:f7e629d22fa1a44d5f66d3e3ea21d8c17353cf432d46adf1afc46483d735f115"
       ],
       "information_loss": [
         {
@@ -574,12 +574,12 @@
     "ai_view": {
       "source_ids": [
         "report:double-submit-v1",
-        "universe:double-submit-v1",
-        "obligation:checkout-submit-guard-order",
-        "obligation:tap-to-submit-reentry",
-        "obligation:payment-idempotency-contract",
-        "obligation:buy-to-external-charge-path",
-        "obligation:payment-at-most-once-invariant",
+        "universe:sha256:f7e629d22fa1a44d5f66d3e3ea21d8c17353cf432d46adf1afc46483d735f115",
+        "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
+        "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
+        "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
+        "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+        "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564",
         "claim:guard-set-after-await",
         "claim:tap-can-reenter",
         "claim:no-idempotency-key",
@@ -600,11 +600,11 @@
       ],
       "payload": {
         "obligation_ids": [
-          "obligation:checkout-submit-guard-order",
-          "obligation:tap-to-submit-reentry",
-          "obligation:payment-idempotency-contract",
-          "obligation:buy-to-external-charge-path",
-          "obligation:payment-at-most-once-invariant"
+          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
+          "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
+          "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
+          "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+          "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
         ],
         "claim_ids": [
           "claim:guard-set-after-await",
@@ -638,7 +638,7 @@
         "report:double-submit-v1",
         "run:double-submit-v1",
         "snapshot:double-submit-v1",
-        "universe:double-submit-v1"
+        "universe:sha256:f7e629d22fa1a44d5f66d3e3ea21d8c17353cf432d46adf1afc46483d735f115"
       ],
       "information_loss": [
         {
@@ -669,7 +669,7 @@
         "gate:default",
         "finding:duplicate-charge",
         "obstruction:ui-payment-assumption-conflict",
-        "universe:double-submit-v1"
+        "universe:sha256:f7e629d22fa1a44d5f66d3e3ea21d8c17353cf432d46adf1afc46483d735f115"
       ],
       "information_loss": [
         {

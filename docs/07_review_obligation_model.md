@@ -99,6 +99,10 @@ begin transaction -> writes -> commit/rollback
 ```
 
 pathはsource/sink、required waypoint、forbidden edge、temporal orderを持ち得ます。
+したがってpathの`target.refs`は順序付きの意味論です。M1のobligation IDは
+通常のtarget/source/context集合を正規化しても、pathについてはこの順序列も
+identity inputとして保持します。`tap -> submit -> payment`と逆順のpathは
+同じ集合のrelationを参照していても同一obligationではありません。
 
 ### 3.5 Invariant obligation
 
@@ -168,6 +172,17 @@ ruleの種類:
 ```
 
 説明文、priority score、timestampはIDへ含めません。
+
+`normalized_target_refs`はnode/relation/invariant等の集合的targetを安定化する
+ための表現です。pathではこれに加えて順序付き`target.refs`をbindします。
+dependency IDs、extractor capabilityの列挙、表示用provenanceはID inputでは
+ありません。capability不足はidentityを変えずapplicability/limitationとして残します。
+
+capability不足そのものを分母から落とさないため、M1はconcrete target ruleとは別の
+versioned capability-gap ruleを使います。このruleはprofile/snapshot scopeとorigin
+ruleをbindしたconservativeなsubgraph obligationを生成します。missing capabilityの
+列挙はreasonであり、そのgap obligationのID inputではありません。したがって
+concrete relation/path/invariant ruleが別target kindのsubgraphを偽装することはありません。
 
 ## 6. Obligation candidate
 
@@ -322,6 +337,17 @@ rule packを無制限に有効化するとobligation explosionが起きます。
 ## 14. Completion criteria
 
 obligationの`completed`は、reviewerが構造化結果を返したことを意味します。
+
+M1のcoverageにおける`visited`は実際に着手した`in_progress`または`completed`
+obligationだけを数えます。`planned`は予定、`cancelled`は明示的な未実施であり、
+どちらもvisited、completed、evidence-supported、verified、fresh、human-acceptedを
+意味しません。
+
+`evidence_supported`はcurrent snapshotに束縛されたevidenceからだけを数える。
+snapshotが古いevidenceはbindingとverificationをaudit traceとして保持できるが、
+current claimを`Supported`へ遷移させず、evidence-supportedにも含めない。
+`verified`はこのような履歴を含むpassed verificationの軸であり、current snapshotの
+sign-offは`fresh_verified`だけで判定する。
 
 より強い状態:
 

@@ -8,10 +8,12 @@
 | File | Schema ID / purpose |
 | --- | --- |
 | `reviewgraphen.input.schema.json` | `reviewgraphen.program_space.input.v1` — language-neutral ProgramSpace ingestion input。 |
-| `reviewgraphen.obligation.schema.json` | `reviewgraphen.review_obligations.v1` — versioned obligation universe and obligations。 |
+| `reviewgraphen.obligation.schema.json` | `reviewgraphen.review_obligations.v2` — current versioned obligation universe and obligations; this stable generic path is used by the validation script。 |
+| `reviewgraphen.obligation.v1.schema.json` | Preserved `reviewgraphen.review_obligations.v1` legacy contract。 |
 | `reviewgraphen.report.schema.json` | `reviewgraphen.review.report.v1` — end-to-end review report。 |
 | `reviewgraphen.input.example.json` | Double-submit ProgramSpace fixture。 |
-| `reviewgraphen.obligation.example.json` | Five Node/Relation/Path/Invariant obligations。 |
+| `reviewgraphen.obligation.example.json` | Current v2 five Node/Relation/Path/Invariant obligations。 |
+| `reviewgraphen.obligation.v1.example.json` | Preserved reviewed v1 obligation fixture。 |
 | `reviewgraphen.report.example.json` | Claim、evidence binding、verification、decision、finding、gluing、coverageの参照report。 |
 | `reviewgraphen.config.example.toml` | CLI/local runtime configuration example。 |
 
@@ -65,6 +67,29 @@ PY
 - enum追加はconsumerのexhaustivenessを壊す可能性があるためminor扱いにしない場合がある。
 - old fixtureとmigration testを保持する。
 - canonical stateにschema-less JSONを保存しない。
+
+Obligation output is currently v2. It adds public generator provenance and explicit
+`universe.exclusions` records (reason, source trace, and positive JSON number
+weight). The v1 schema and reviewed fixture remain available under the explicit
+`.v1` names for compatibility tests. V1 did not preserve generator or exclusion
+trace, so a v1 bundle must be re-synthesized from its ProgramSpace; it cannot be
+losslessly migrated into v2 from JSON alone. Compatibility checks compare the
+retained snapshot and each obligation's semantic tuple (target kind, ordered
+path refs where applicable, property ID/version, normalized set-like context
+IDs/capabilities/relation kinds, and scalar relation-depth/test/evidence
+inclusion semantics), never the version-specific IDs. V2 then recovers generator, origin-rule when a
+capability gap exists, and exclusion traces from the retained ProgramSpace.
+
+Capability gaps are not exclusions. They remain denominator members with
+`applicability.status: unknown` and a dedicated versioned capability-gap rule;
+the generic current schema path continues to validate v2 output without changes
+to the repository validation script.
+
+The current v2 `universe.id` binds the explicit eligible obligation IDs and
+explicit exclusions, plus the canonical extractor capability, adapter
+completeness, and limitation inputs that qualify that denominator. Reordering
+those set-like inputs does not change the ID; changing the explicit denominator
+or a qualifying capability/completeness input does.
 
 ## Trust boundary
 

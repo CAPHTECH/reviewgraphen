@@ -1,8 +1,9 @@
 # Development Harness
 
 `scripts/ci.sh` is the single supported verification entry point. It does not
-implement ReviewGraphen product behavior; the only current Rust workspace member
-is the intentional double-submit counterexample fixture.
+implement ReviewGraphen product behavior; the Rust workspace includes the
+`reviewgraphen-core` M0/M1 domain crate and the intentional double-submit
+counterexample fixture.
 
 ## Prerequisites
 
@@ -47,9 +48,8 @@ counterexample, not that payment processing is safe.
 The checked-in fixture is source evidence and is deliberately excluded from the
 formatter because this harness must not rewrite existing evidence artifacts.
 Every future product source is formatted with Rust 2024 before linting.
-Coverage is explicitly skipped while the repository has no product Rust source.
-The first product crate activates the lcov report, and an empty report then fails
-the gate. The counterexample fixture is not used to manufacture a coverage score.
+The M0/M1 `reviewgraphen-core` crate is formatted and checked by the workspace
+gate. The counterexample fixture is not used to manufacture a coverage score.
 
 ## Adding a product crate
 

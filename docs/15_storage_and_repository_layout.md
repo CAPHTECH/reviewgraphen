@@ -59,20 +59,23 @@ Markdown、human report、AI summary、dashboard、YAML manifestはprojectionで
 
 ```json
 {
-  "schema": "reviewgraphen.event.v1",
-  "sequence": 1024,
-  "event_id": "event:...",
+  "schema": "reviewgraphen.review_event.v1",
+  "id": "event:...",
   "run_id": "run:...",
-  "occurred_at": "2026-08-07T06:00:00Z",
-  "kind": "claim_proposed",
-  "actor": {"kind": "llm", "id": "reviewer:..."},
-  "payload": {},
+  "genesis_hash": "sha256:...",
+  "sequence": 1024,
+  "actor": "reviewgraphen-core@1",
+  "logical_time": 1024,
+  "payload": {"type": "claim_proposed", "data": {}},
+  "payload_hash": "sha256:...",
   "previous_event_hash": "sha256:...",
   "event_hash": "sha256:..."
 }
 ```
 
-hash chainは改ざん防止の補助であり、署名やtrusted timestampを自動的に意味しません。
+M1では`genesis_hash`はsnapshot、universe、seeded ProgramSpace evidenceを含むpristine aggregateのcanonical hashです。空streamでも`run_id`とgenesisは必須です。最初の`previous_event_hash`は`run_id`と`genesis_hash`を入力にした`reviewgraphen.event_chain_genesis.v1` sentinelであり、以後は直前eventの`event_hash`です。replay/resumeはsequenceだけでなくこのchainを検証するため、同一sequenceのfork/spliceを受け入れません。
+
+hash chainは改ざん防止の補助であり、署名やtrusted timestampを自動的に意味しません。`logical_time`はM1で決定的replayに使うsequence同値の論理時刻で、wall clockや認証時刻の代替ではありません。authority-bearing evidence、evidence binding、verification、human decisionをJSONだけで再importすることはできず、hostが同一run/genesis/bodyへ発行したnonserializable admissionを必要とします。各admissionはmint時のchain tail hashと期待next sequenceにもbindされるため、同じrun/genesis/bodyでもforked streamや別positionへ再利用できません。decisionはこれに加えてacceptance closureとuniverseへbindされます。
 
 ## 4. Event streams
 
@@ -153,6 +156,15 @@ artifact_metadata
 ```
 
 indexはquery最適化のためのprojectionです。databaseだけを書き換えてcanonical stateを変更しません。
+
+### M1 report execution references
+
+M1 aggregateはclaimが参照する`execution_id`だけを保持し、reviewer、provider/model、
+context envelope、raw outputをcanonical stateとして保持しない。したがってreport adapterは
+schema必須fieldに`unknown`/`unresolved` sentinelを使い、executionを`abstained`として
+`abstention_reason`を出す。各placeholderにはprojection-loss limitationと、該当claim/
+obligationを`blocks`へ列挙する`execution_metadata_unavailable` obstructionを添える。
+これはexecutionが観測済みであるという主張でもM2 execution engineでもない。
 
 ## 8. Configuration
 
