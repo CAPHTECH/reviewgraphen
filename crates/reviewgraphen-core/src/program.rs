@@ -1,4 +1,5 @@
 use crate::{ContentHash, DomainError, Result, ReviewStatus, StableId};
+use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,6 +58,18 @@ impl SourceRef {
     #[must_use]
     pub fn locator(&self) -> &str {
         &self.locator
+    }
+
+    /// Optional content hash of the origin, when the adapter recorded one.
+    #[must_use]
+    pub fn content_hash(&self) -> Option<&ContentHash> {
+        self.content_hash.as_ref()
+    }
+
+    /// Optional origin-local identity, such as a repo-relative path.
+    #[must_use]
+    pub fn source_local_id(&self) -> Option<&str> {
+        self.source_local_id.as_deref()
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
@@ -153,6 +166,77 @@ impl Provenance {
     }
 }
 
+/// Shared descriptive severity for invariants and extraction limitations.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    /// Informational retained detail.
+    Info,
+    /// Low review impact.
+    Low,
+    /// Medium review impact.
+    Medium,
+    /// High review impact.
+    High,
+    /// Critical review impact.
+    Critical,
+}
+
+/// Completeness state for one named extraction capability.
+///
+/// `Complete` and `Partial` are deliberately distinct: only `Complete` fully
+/// satisfies a rule's capability requirement. `Partial` still lets already
+/// resolved facts produce grounded, targeted obligations, but it must not be
+/// silently treated as if the capability were fully available.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityState {
+    /// The adapter completely covered its declared input subset.
+    Complete,
+    /// The adapter returned facts while retaining explicit unknown regions.
+    Partial,
+    /// The adapter cannot provide this fact family for the snapshot.
+    Missing,
+    /// The adapter did not establish a completeness result.
+    Unknown,
+}
+
+/// Bounded completion state for one adapter run.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterStatus {
+    /// The adapter completed its declared bounded scope.
+    Complete,
+    /// The adapter completed with explicitly recorded losses.
+    Partial,
+    /// The adapter was attempted but could not return its declared facts.
+    Failed,
+    /// The adapter was deliberately not run because a safety precondition failed.
+    NotRun,
+}
+
+/// Typed category for an extraction limitation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitationKind {
+    /// A required capability is entirely unavailable for the snapshot.
+    CapabilityMissing,
+    /// A source region could not be parsed.
+    ParseFailure,
+    /// A syntactic or semantic relation could not be resolved.
+    UnresolvedRelation,
+    /// A repository entry or region was deliberately excluded by a bound.
+    ExcludedRegion,
+    /// A projection or extraction step lost information.
+    ProjectionLoss,
+    /// Policy restricted extraction of an otherwise available fact.
+    PolicyRestriction,
+    /// The input was outside the bounded extractor contract.
+    UnsupportedInput,
+    /// A deliberately conservative unknown that does not fit a stronger class.
+    Unknown,
+}
+
 /// A language-neutral accepted ProgramSpace artifact.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Artifact {
@@ -174,6 +258,85 @@ pub struct Artifact {
     pub provenance: Provenance,
 }
 
+const ARTIFACT_KINDS: &[&str] = &[
+    "repository",
+    "snapshot",
+    "file",
+    "module",
+    "package",
+    "class",
+    "type",
+    "function",
+    "method",
+    "field",
+    "route",
+    "event",
+    "state",
+    "api",
+    "database",
+    "config",
+    "permission",
+    "test",
+    "requirement",
+    "policy",
+    "owner",
+    "external_service",
+    "custom",
+];
+
+impl Artifact {
+    /// Constructs and validates one accepted ProgramSpace artifact. This is the
+    /// single validation boundary shared by the JSON adapter input path and any
+    /// typed `ProgramSpaceBuilder` caller.
+    pub fn new(
+        id: StableId,
+        kind: impl Into<String>,
+        label: impl Into<String>,
+        language: Option<String>,
+        location: Option<Location>,
+        content_hash: Option<ContentHash>,
+        attributes: BTreeMap<String, Value>,
+        provenance: Provenance,
+    ) -> Result<Self> {
+        let kind = kind.into();
+        require_enum(&kind, ARTIFACT_KINDS, "artifact.kind")?;
+        let label = label.into();
+        ensure_non_empty(&label, "artifact.label")?;
+        if let Some(location) = &location {
+            location.validate()?;
+        }
+        Ok(Self {
+            id,
+            kind,
+            label,
+            language,
+            location,
+            content_hash,
+            attributes,
+            provenance,
+        })
+    }
+
+    /// Re-validates an already-constructed artifact, including a nested
+    /// [`Location`]. This is the boundary [`ProgramSpaceBuilder::build`] uses
+    /// so an `Artifact` assembled via its public struct-literal fields
+    /// (bypassing [`Self::new`]) cannot smuggle an invalid `kind`, an empty
+    /// `label`, or a malformed `location` into a validated `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let _ = Self::new(
+            self.id.clone(),
+            self.kind.clone(),
+            self.label.clone(),
+            self.language.clone(),
+            self.location.clone(),
+            self.content_hash.clone(),
+            self.attributes.clone(),
+            self.provenance.clone(),
+        )?;
+        Ok(())
+    }
+}
+
 /// A source location that remains evidence, rather than an identifier by itself.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Location {
@@ -189,6 +352,153 @@ pub struct Location {
     pub end_column: Option<u64>,
     /// Optional referenced symbol.
     pub symbol_id: Option<StableId>,
+}
+
+impl Location {
+    /// Constructs and validates a source location: a normalized,
+    /// workspace-relative snapshot path and a 1-based, all-or-none, ordered
+    /// range.
+    pub fn new(
+        path: impl Into<String>,
+        start_line: Option<u64>,
+        end_line: Option<u64>,
+        start_column: Option<u64>,
+        end_column: Option<u64>,
+        symbol_id: Option<StableId>,
+    ) -> Result<Self> {
+        let path = path.into();
+        validate_snapshot_relative_path(&path)?;
+
+        for (field, value) in [
+            ("location.start_line", start_line),
+            ("location.end_line", end_line),
+            ("location.start_column", start_column),
+            ("location.end_column", end_column),
+        ] {
+            if value == Some(0) {
+                return Err(DomainError::Validation(format!(
+                    "{field} must be at least 1"
+                )));
+            }
+        }
+        if start_line.is_none() != end_line.is_none() {
+            return Err(DomainError::Validation(
+                "location.start_line and location.end_line must both be present or both be absent"
+                    .to_owned(),
+            ));
+        }
+        if start_column.is_none() != end_column.is_none() {
+            return Err(DomainError::Validation(
+                "location.start_column and location.end_column must both be present or both be absent"
+                    .to_owned(),
+            ));
+        }
+        if start_line.is_none() && start_column.is_some() {
+            return Err(DomainError::Validation(
+                "location column range requires a corresponding line range".to_owned(),
+            ));
+        }
+        if let (Some(start), Some(end)) = (start_line, end_line)
+            && end < start
+        {
+            return Err(DomainError::Validation(
+                "location.end_line must not precede location.start_line".to_owned(),
+            ));
+        }
+        if start_line.is_some()
+            && start_line == end_line
+            && let (Some(start), Some(end)) = (start_column, end_column)
+            && end < start
+        {
+            return Err(DomainError::Validation(
+                "location.end_column must not precede location.start_column on the same line"
+                    .to_owned(),
+            ));
+        }
+        Ok(Self {
+            path,
+            start_line,
+            end_line,
+            start_column,
+            end_column,
+            symbol_id,
+        })
+    }
+
+    /// Re-validates an already-constructed location. This is the boundary
+    /// used by [`ProgramSpaceBuilder::build`] so a `Location` assembled via
+    /// its public struct-literal fields (bypassing [`Self::new`]) cannot
+    /// smuggle an absolute path, a `..` segment, or a malformed range into a
+    /// validated `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let _ = Self::new(
+            self.path.clone(),
+            self.start_line,
+            self.end_line,
+            self.start_column,
+            self.end_column,
+            self.symbol_id.clone(),
+        )?;
+        Ok(())
+    }
+}
+
+/// Rejects a `location.path` that is not a normalized, workspace-relative
+/// snapshot path: empty, absolute (POSIX or Windows drive/UNC), or containing
+/// a `.` or `..` segment.
+fn validate_snapshot_relative_path(path: &str) -> Result<()> {
+    if path.is_empty() {
+        return Err(DomainError::EmptyField {
+            field: "location.path",
+        });
+    }
+    if path.contains('\0') {
+        return Err(DomainError::Validation(
+            "location.path must not contain a NUL character".to_owned(),
+        ));
+    }
+    // A relative `location.path` is a portable, `/`-delimited snapshot path.
+    // A literal `\` is rejected outright rather than normalized as an
+    // alternate separator: silently accepting it would let one snapshot path
+    // mean two different things depending on the platform that later resolves
+    // it against a workspace root.
+    if path.contains('\\') {
+        return Err(DomainError::Validation(
+            "location.path must not contain `\\`; use `/` as the only path separator".to_owned(),
+        ));
+    }
+    if path.starts_with('/') {
+        return Err(DomainError::Validation(
+            "location.path must be workspace-relative, not absolute".to_owned(),
+        ));
+    }
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return Err(DomainError::Validation(
+            "location.path must not use a Windows drive prefix".to_owned(),
+        ));
+    }
+    for segment in path.split('/') {
+        match segment {
+            "" => {
+                return Err(DomainError::Validation(
+                    "location.path must not contain empty segments".to_owned(),
+                ));
+            }
+            "." => {
+                return Err(DomainError::Validation(
+                    "location.path must not contain `.` segments".to_owned(),
+                ));
+            }
+            ".." => {
+                return Err(DomainError::Validation(
+                    "location.path must not contain `..` segments".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// A typed relation in ProgramSpace.
@@ -210,6 +520,54 @@ pub struct Relation {
     pub provenance: Provenance,
 }
 
+impl Relation {
+    /// Constructs and validates one accepted ProgramSpace relation.
+    pub fn new(
+        id: StableId,
+        kind: impl Into<String>,
+        source_id: StableId,
+        target_ids: BTreeSet<StableId>,
+        directed: bool,
+        attributes: BTreeMap<String, Value>,
+        provenance: Provenance,
+    ) -> Result<Self> {
+        let kind = kind.into();
+        ensure_non_empty(&kind, "relation.kind")?;
+        if target_ids.is_empty() {
+            return Err(DomainError::EmptyField {
+                field: "relation.target_ids",
+            });
+        }
+        Ok(Self {
+            id,
+            kind,
+            source_id,
+            target_ids,
+            directed,
+            attributes,
+            provenance,
+        })
+    }
+
+    /// Re-validates an already-constructed relation. This is the boundary
+    /// [`ProgramSpaceBuilder::build`] uses so a `Relation` assembled via its
+    /// public struct-literal fields (bypassing [`Self::new`]) cannot smuggle
+    /// an empty `kind` or an empty `target_ids` into a validated
+    /// `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let _ = Self::new(
+            self.id.clone(),
+            self.kind.clone(),
+            self.source_id.clone(),
+            self.target_ids.clone(),
+            self.directed,
+            self.attributes.clone(),
+            self.provenance.clone(),
+        )?;
+        Ok(())
+    }
+}
+
 /// A named local review context; it is not a claim or a decision.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ReviewContext {
@@ -227,6 +585,48 @@ pub struct ReviewContext {
     pub provenance: Provenance,
 }
 
+impl ReviewContext {
+    /// Constructs and validates one accepted ProgramSpace review context.
+    pub fn new(
+        id: StableId,
+        kind: impl Into<String>,
+        label: impl Into<String>,
+        member_ids: BTreeSet<StableId>,
+        attributes: BTreeMap<String, Value>,
+        provenance: Provenance,
+    ) -> Result<Self> {
+        let kind = kind.into();
+        ensure_non_empty(&kind, "context.kind")?;
+        let label = label.into();
+        ensure_non_empty(&label, "context.label")?;
+        Ok(Self {
+            id,
+            kind,
+            label,
+            member_ids,
+            attributes,
+            provenance,
+        })
+    }
+
+    /// Re-validates an already-constructed review context. This is the
+    /// boundary [`ProgramSpaceBuilder::build`] uses so a `ReviewContext`
+    /// assembled via its public struct-literal fields (bypassing
+    /// [`Self::new`]) cannot smuggle an empty `kind` or `label` into a
+    /// validated `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let _ = Self::new(
+            self.id.clone(),
+            self.kind.clone(),
+            self.label.clone(),
+            self.member_ids.clone(),
+            self.attributes.clone(),
+            self.provenance.clone(),
+        )?;
+        Ok(())
+    }
+}
+
 /// A declared property that applies over a program scope.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Invariant {
@@ -239,11 +639,61 @@ pub struct Invariant {
     /// Sorted scope IDs.
     pub scope_ids: BTreeSet<StableId>,
     /// Severity is descriptive and not an acceptance state.
-    pub severity: String,
+    pub severity: Severity,
     /// Optional expected verification approach.
     pub verification_mode: Option<String>,
     /// Deterministic provenance.
     pub provenance: Provenance,
+}
+
+impl Invariant {
+    /// Constructs and validates one accepted ProgramSpace invariant.
+    pub fn new(
+        id: StableId,
+        property_id: impl Into<String>,
+        description: impl Into<String>,
+        scope_ids: BTreeSet<StableId>,
+        severity: Severity,
+        verification_mode: Option<String>,
+        provenance: Provenance,
+    ) -> Result<Self> {
+        let property_id = property_id.into();
+        ensure_non_empty(&property_id, "invariant.property_id")?;
+        let description = description.into();
+        ensure_non_empty(&description, "invariant.description")?;
+        if scope_ids.is_empty() {
+            return Err(DomainError::EmptyField {
+                field: "invariant.scope_ids",
+            });
+        }
+        Ok(Self {
+            id,
+            property_id,
+            description,
+            scope_ids,
+            severity,
+            verification_mode,
+            provenance,
+        })
+    }
+
+    /// Re-validates an already-constructed invariant. This is the boundary
+    /// [`ProgramSpaceBuilder::build`] uses so an `Invariant` assembled via its
+    /// public struct-literal fields (bypassing [`Self::new`]) cannot smuggle
+    /// an empty `property_id`, `description`, or `scope_ids` into a validated
+    /// `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let _ = Self::new(
+            self.id.clone(),
+            self.property_id.clone(),
+            self.description.clone(),
+            self.scope_ids.clone(),
+            self.severity,
+            self.verification_mode.clone(),
+            self.provenance.clone(),
+        )?;
+        Ok(())
+    }
 }
 
 /// Existing evidence imported alongside ProgramSpace facts.
@@ -400,6 +850,53 @@ impl Evidence {
             provenance,
             snapshot_id: admission.snapshot_id,
         })
+    }
+
+    /// Constructs one imported ProgramSpace-input evidence fact. Unlike
+    /// [`Self::new`], an empty target set is allowed here: the legacy input
+    /// contract permits importing historical evidence without a current
+    /// target, but such a record still cannot enter a review event because
+    /// [`Self::new`] requires targets.
+    pub fn for_program_space(
+        id: StableId,
+        kind: impl Into<String>,
+        target_ids: BTreeSet<StableId>,
+        artifact_ref: Option<String>,
+        content_hash: Option<ContentHash>,
+        attributes: BTreeMap<String, Value>,
+        provenance: Provenance,
+        snapshot_id: StableId,
+    ) -> Result<Self> {
+        let kind = kind.into();
+        ensure_non_empty(&kind, "evidence.kind")?;
+        Ok(Self {
+            id,
+            kind,
+            target_ids,
+            artifact_ref,
+            content_hash,
+            attributes,
+            provenance,
+            snapshot_id,
+        })
+    }
+
+    /// Re-validates an already-constructed ProgramSpace evidence fact against
+    /// the [`Self::for_program_space`] contract. This is the boundary
+    /// [`ProgramSpaceBuilder::build`] uses so re-validation stays identical to
+    /// construction even if the internal shape changes.
+    pub(crate) fn validate_for_program_space(&self) -> Result<()> {
+        let _ = Self::for_program_space(
+            self.id.clone(),
+            self.kind.clone(),
+            self.target_ids.clone(),
+            self.artifact_ref.clone(),
+            self.content_hash.clone(),
+            self.attributes.clone(),
+            self.provenance.clone(),
+            self.snapshot_id.clone(),
+        )?;
+        Ok(())
     }
 
     /// Stable evidence ID.
@@ -561,13 +1058,97 @@ pub struct Limitation {
     /// Stable limitation ID.
     pub id: StableId,
     /// Limitation category.
-    pub kind: String,
+    pub kind: LimitationKind,
     /// Explanation of the capability boundary.
     pub description: String,
     /// Descriptive severity.
-    pub severity: String,
+    pub severity: Severity,
     /// Sorted affected IDs.
     pub source_ids: BTreeSet<StableId>,
+    /// Named `extraction.capabilities` entries this limitation qualifies.
+    /// Empty when the limitation is not tied to one named capability.
+    #[serde(default)]
+    pub related_capabilities: BTreeSet<String>,
+}
+
+impl Limitation {
+    /// Constructs and validates one extraction limitation record.
+    pub fn new(
+        id: StableId,
+        kind: LimitationKind,
+        description: impl Into<String>,
+        severity: Severity,
+        source_ids: BTreeSet<StableId>,
+        related_capabilities: BTreeSet<String>,
+    ) -> Result<Self> {
+        let description = description.into();
+        ensure_non_empty(&description, "limitation.description")?;
+        if source_ids.is_empty() {
+            return Err(DomainError::EmptyField {
+                field: "limitation.source_ids",
+            });
+        }
+        for capability in &related_capabilities {
+            ensure_non_empty(capability, "limitation.related_capabilities")?;
+        }
+        Ok(Self {
+            id,
+            kind,
+            description,
+            severity,
+            source_ids,
+            related_capabilities,
+        })
+    }
+
+    /// Re-validates an already-constructed limitation. This is the boundary
+    /// [`ProgramSpaceBuilder::build`] uses so a `Limitation` assembled via its
+    /// public struct-literal fields (bypassing [`Self::new`]) cannot smuggle
+    /// an empty `description` or an empty `related_capabilities` entry into a
+    /// validated `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let _ = Self::new(
+            self.id.clone(),
+            self.kind,
+            self.description.clone(),
+            self.severity,
+            self.source_ids.clone(),
+            self.related_capabilities.clone(),
+        )?;
+        Ok(())
+    }
+}
+
+/// Named extraction capability, together with the accepted facts it is
+/// grounded in.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CapabilityDeclaration {
+    /// Completeness state for this capability.
+    pub state: CapabilityState,
+    /// Non-empty set of IDs this declaration is grounded in.
+    pub source_ids: BTreeSet<StableId>,
+}
+
+impl CapabilityDeclaration {
+    /// Constructs and validates one capability declaration.
+    pub fn new(state: CapabilityState, source_ids: BTreeSet<StableId>) -> Result<Self> {
+        if source_ids.is_empty() {
+            return Err(DomainError::EmptyField {
+                field: "capability.source_ids",
+            });
+        }
+        Ok(Self { state, source_ids })
+    }
+
+    /// Re-validates an already-constructed capability declaration. This is
+    /// the boundary [`Extraction::revalidated`] uses so a
+    /// `CapabilityDeclaration` assembled via its public struct-literal
+    /// fields (bypassing [`Self::new`]) cannot smuggle an empty `source_ids`
+    /// into a validated `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let _ = Self::new(self.state, self.source_ids.clone())?;
+        Ok(())
+    }
 }
 
 /// Extractor descriptors and limits associated with accepted facts.
@@ -577,10 +1158,261 @@ pub struct Extraction {
     pub adapter_set_hash: ContentHash,
     /// Deterministically sorted adapter descriptors.
     pub adapters: Vec<AdapterDescriptor>,
-    /// Capability state by capability name.
-    pub capabilities: BTreeMap<String, String>,
+    /// Capability declaration by capability name.
+    pub capabilities: BTreeMap<String, CapabilityDeclaration>,
     /// Explicit limitations, never silently erased.
     pub limitations: Vec<Limitation>,
+}
+
+impl Extraction {
+    /// Constructs and validates the extraction declaration. This is the single
+    /// boundary that rejects duplicate adapter identities and completeness
+    /// contradictions between a capability's declared state and its related
+    /// limitations, instead of accepting them silently.
+    pub fn new(
+        adapter_set_hash: ContentHash,
+        mut adapters: Vec<AdapterDescriptor>,
+        capabilities: BTreeMap<String, CapabilityDeclaration>,
+        mut limitations: Vec<Limitation>,
+    ) -> Result<Self> {
+        if adapters.is_empty() {
+            return Err(DomainError::EmptyField {
+                field: "extraction.adapters",
+            });
+        }
+        adapters.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut seen_adapter_ids = BTreeSet::new();
+        for adapter in &adapters {
+            adapter.validate()?;
+            if !seen_adapter_ids.insert(adapter.id.clone()) {
+                return Err(DomainError::Validation(format!(
+                    "duplicate extraction adapter id `{}`",
+                    adapter.id
+                )));
+            }
+        }
+        limitations.sort_by(|left, right| left.id.cmp(&right.id));
+        for limitation in &limitations {
+            limitation.validate()?;
+            for capability in &limitation.related_capabilities {
+                if !capabilities.contains_key(capability) {
+                    return Err(DomainError::Validation(format!(
+                        "limitation `{}` relates to undeclared capability `{capability}`",
+                        limitation.id
+                    )));
+                }
+            }
+        }
+        for (capability, declaration) in &capabilities {
+            ensure_non_empty(capability, "extraction.capabilities key")?;
+            declaration.validate()?;
+            let related = limitations
+                .iter()
+                .filter(|item| item.related_capabilities.contains(capability))
+                .collect::<Vec<_>>();
+            match declaration.state {
+                CapabilityState::Complete => {
+                    if !related.is_empty() {
+                        return Err(DomainError::Validation(format!(
+                            "capability `{capability}` is declared complete but has a related unresolved limitation"
+                        )));
+                    }
+                }
+                CapabilityState::Partial => {
+                    if related.is_empty() {
+                        return Err(DomainError::Validation(format!(
+                            "capability `{capability}` is declared partial but has no related limitation"
+                        )));
+                    }
+                    if related
+                        .iter()
+                        .any(|item| item.kind == LimitationKind::CapabilityMissing)
+                    {
+                        return Err(DomainError::Validation(format!(
+                            "capability `{capability}` is declared partial but a related limitation claims it is entirely missing"
+                        )));
+                    }
+                }
+                CapabilityState::Missing => {
+                    if !related
+                        .iter()
+                        .any(|item| item.kind == LimitationKind::CapabilityMissing)
+                    {
+                        return Err(DomainError::Validation(format!(
+                            "capability `{capability}` is declared missing but has no related `capability_missing` limitation"
+                        )));
+                    }
+                }
+                CapabilityState::Unknown => {
+                    if related.is_empty() {
+                        return Err(DomainError::Validation(format!(
+                            "capability `{capability}` is declared unknown but has no related limitation"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            adapter_set_hash,
+            adapters,
+            capabilities,
+            limitations,
+        })
+    }
+
+    /// Re-validates an already-constructed extraction declaration, including
+    /// every nested adapter and limitation, and returns the same canonically
+    /// ordered form [`Self::new`] would have produced. This is the boundary
+    /// [`ProgramSpaceBuilder::new`] and [`ProgramSpaceBuilder::build`] both
+    /// use, so an `Extraction` assembled via its public struct-literal fields
+    /// (bypassing [`Self::new`], or holding out-of-order or struct-literal
+    /// adapters/limitations) cannot smuggle a per-item contradiction, a
+    /// cross-field contradiction, or an unsorted `adapters`/`limitations`
+    /// order into a validated `ProgramSpace`. Unlike a `&self` check, this
+    /// consumes `self` and returns the normalized replacement so the
+    /// re-validated (sorted) clone is never silently discarded.
+    pub(crate) fn revalidated(self) -> Result<Self> {
+        for adapter in &self.adapters {
+            adapter.validate()?;
+        }
+        for declaration in self.capabilities.values() {
+            declaration.validate()?;
+        }
+        for limitation in &self.limitations {
+            limitation.validate()?;
+        }
+        Self::new(
+            self.adapter_set_hash,
+            self.adapters,
+            self.capabilities,
+            self.limitations,
+        )
+    }
+}
+
+/// Declared, structured information loss from an explicit v1→v2
+/// `Extraction` migration (see ADR 0011 §7). This is never silently
+/// absorbed into an otherwise-normal v2 value; every entry names the exact
+/// capability or limitation it concerns and the replacement data assigned
+/// on its behalf.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MigrationLoss {
+    /// A v1 capability declared no source trace at all; migration
+    /// conservatively assigned it the snapshot as its only honest source.
+    CapabilitySourceBackfill {
+        /// Deterministic loss ID.
+        id: StableId,
+        /// Migrated capability name.
+        capability: String,
+        /// Migrated capability state.
+        state: CapabilityState,
+        /// `source_ids` assigned by migration.
+        assigned_source_ids: BTreeSet<StableId>,
+    },
+    /// A deterministic limitation was synthesized to satisfy the v2
+    /// non-`complete` cross-field contract for a migrated capability.
+    SynthesizedLimitation {
+        /// Deterministic loss ID.
+        id: StableId,
+        /// Migrated capability name.
+        capability: String,
+        /// Migrated capability state.
+        state: CapabilityState,
+        /// ID of the synthesized limitation.
+        limitation_id: StableId,
+        /// Kind of the synthesized limitation.
+        limitation_kind: LimitationKind,
+    },
+    /// Records the original v1 `source_ids` of every carried-over
+    /// limitation, whether empty or not, since migration never infers an
+    /// association the v1 record did not declare. An empty set here is
+    /// paired with a separate [`Self::LimitationSourceBackfill`] entry for
+    /// the same `limitation_id`; a nonempty set is carried through
+    /// unchanged and is not itself a loss beyond this declaration.
+    CarriedLimitationTrace {
+        /// Deterministic loss ID.
+        id: StableId,
+        /// ID of the carried-over limitation.
+        limitation_id: StableId,
+        /// The limitation's original v1 `source_ids`, possibly empty.
+        original_source_ids: BTreeSet<StableId>,
+    },
+    /// A carried-over v1 limitation's `source_ids` was conservatively
+    /// backfilled to the snapshot ID because the v1 record supplied none.
+    LimitationSourceBackfill {
+        /// Deterministic loss ID.
+        id: StableId,
+        /// ID of the carried-over limitation.
+        limitation_id: StableId,
+        /// `source_ids` assigned by migration.
+        assigned_source_ids: BTreeSet<StableId>,
+    },
+}
+
+impl MigrationLoss {
+    /// Deterministic loss ID, present on every variant.
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        match self {
+            Self::CapabilitySourceBackfill { id, .. }
+            | Self::SynthesizedLimitation { id, .. }
+            | Self::CarriedLimitationTrace { id, .. }
+            | Self::LimitationSourceBackfill { id, .. } => id,
+        }
+    }
+}
+
+/// Structured record of an explicit v1→v2 `Extraction` migration (see
+/// ADR 0011 §7). Returned alongside the migrated `Extraction` so every
+/// backfill and synthesized limitation stays visible to the caller instead
+/// of being silently folded into an otherwise-normal v2 value.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MigrationRecord {
+    schema: String,
+    id: StableId,
+    source_schema: String,
+    target_schema: String,
+    snapshot_id: StableId,
+    losses: Vec<MigrationLoss>,
+}
+
+impl MigrationRecord {
+    /// Fixed record schema discriminator.
+    #[must_use]
+    pub fn schema(&self) -> &str {
+        &self.schema
+    }
+
+    /// Deterministic migration record ID.
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+
+    /// Schema discriminator the migrated record originally declared.
+    #[must_use]
+    pub fn source_schema(&self) -> &str {
+        &self.source_schema
+    }
+
+    /// Schema discriminator the migrated `Extraction` now satisfies.
+    #[must_use]
+    pub fn target_schema(&self) -> &str {
+        &self.target_schema
+    }
+
+    /// Snapshot the migrated record belongs to.
+    #[must_use]
+    pub fn snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+
+    /// Ordered, structured information loss declared by this migration.
+    #[must_use]
+    pub fn losses(&self) -> &[MigrationLoss] {
+        &self.losses
+    }
 }
 
 /// One manual or tool adapter result.
@@ -590,12 +1422,619 @@ pub struct AdapterDescriptor {
     pub id: String,
     /// Adapter version.
     pub version: String,
-    /// `complete`, `partial`, `failed`, or `not_run`.
-    pub status: String,
+    /// Completion state for this snapshot.
+    pub status: AdapterStatus,
     /// Optional parsed count.
     pub parsed: Option<u64>,
     /// Optional total count.
     pub total: Option<u64>,
+}
+
+impl AdapterDescriptor {
+    /// Constructs and validates one adapter completeness declaration.
+    pub fn new(
+        id: impl Into<String>,
+        version: impl Into<String>,
+        status: AdapterStatus,
+        parsed: Option<u64>,
+        total: Option<u64>,
+    ) -> Result<Self> {
+        let id = id.into();
+        ensure_non_empty(&id, "adapter.id")?;
+        let version = version.into();
+        ensure_non_empty(&version, "adapter.version")?;
+        if parsed
+            .zip(total)
+            .is_some_and(|(parsed, total)| parsed > total)
+        {
+            return Err(DomainError::Validation(
+                "adapter parsed count must not exceed total".to_owned(),
+            ));
+        }
+        if status == AdapterStatus::Complete
+            && parsed
+                .zip(total)
+                .is_some_and(|(parsed, total)| parsed != total)
+        {
+            return Err(DomainError::Validation(
+                "an adapter reporting complete status must have parsed == total when both counts are present"
+                    .to_owned(),
+            ));
+        }
+        if status == AdapterStatus::NotRun && (parsed.is_some() || total.is_some()) {
+            return Err(DomainError::Validation(
+                "an adapter reporting not_run status must not report parsed/total counts"
+                    .to_owned(),
+            ));
+        }
+        Ok(Self {
+            id,
+            version,
+            status,
+            parsed,
+            total,
+        })
+    }
+
+    /// Re-validates an already-constructed adapter descriptor. This is the
+    /// boundary [`ProgramSpaceBuilder::build`] uses so an `AdapterDescriptor`
+    /// assembled via its public struct-literal fields (bypassing
+    /// [`Self::new`]) cannot smuggle an empty `id`/`version`, an inverted
+    /// `parsed`/`total` pair, or a status-inconsistent count into a validated
+    /// `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let _ = Self::new(
+            self.id.clone(),
+            self.version.clone(),
+            self.status,
+            self.parsed,
+            self.total,
+        )?;
+        Ok(())
+    }
+}
+
+/// Plain repository identity used by [`ProgramSpaceBuilder`]. The identity is
+/// explicit and stable; a local filesystem root is metadata only and is never
+/// part of canonical identity derivation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositoryDescriptor {
+    /// Stable repository ID.
+    pub id: StableId,
+    /// Human-readable repository name.
+    pub name: String,
+    /// Optional local root, retained as non-canonical metadata only.
+    pub root: Option<String>,
+    /// Optional stable repository URI (for example a remote clone URL).
+    pub uri: Option<String>,
+}
+
+impl RepositoryDescriptor {
+    /// Re-validates an already-constructed repository descriptor. This is the
+    /// single contract [`ProgramSpaceBuilder::new`] and
+    /// [`ProgramSpaceBuilder::build`] both enforce, so a `RepositoryDescriptor`
+    /// assembled via its public struct-literal fields cannot smuggle an empty
+    /// `name` into a validated `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        ensure_non_empty(&self.name, "repository.name")
+    }
+}
+
+/// Plain snapshot descriptor used by [`ProgramSpaceBuilder`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotDescriptor {
+    /// Stable snapshot ID.
+    pub id: StableId,
+    /// Base revision used only for deterministic changed-structure mapping.
+    pub base_revision: String,
+    /// Target revision whose tree is captured by this snapshot.
+    pub target_revision: String,
+    /// Tree hash of the target revision.
+    pub tree_hash: ContentHash,
+    /// Whether the workspace had uncommitted changes.
+    pub dirty: bool,
+    /// Optional input snapshot timestamp, retained without reinterpretation.
+    pub created_at: Option<String>,
+}
+
+impl SnapshotDescriptor {
+    /// Re-validates an already-constructed snapshot descriptor. This is the
+    /// single contract [`ProgramSpaceBuilder::new`] and
+    /// [`ProgramSpaceBuilder::build`] both enforce, so a `SnapshotDescriptor`
+    /// assembled via its public struct-literal fields cannot smuggle an empty
+    /// `base_revision`/`target_revision` into a validated `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        ensure_non_empty(&self.base_revision, "snapshot.base_revision")?;
+        ensure_non_empty(&self.target_revision, "snapshot.target_revision")?;
+        Ok(())
+    }
+}
+
+/// Plain profile descriptor used by [`ProgramSpaceBuilder`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileDescriptor {
+    /// Profile identity.
+    pub id: String,
+    /// Profile version.
+    pub version: String,
+    /// Hash of the selected rule pack.
+    pub rule_set_hash: ContentHash,
+    /// Versioned policy identity.
+    pub policy_version: String,
+}
+
+impl ProfileDescriptor {
+    /// Re-validates an already-constructed profile descriptor. This is the
+    /// single contract [`ProgramSpaceBuilder::new`] and
+    /// [`ProgramSpaceBuilder::build`] both enforce, so a `ProfileDescriptor`
+    /// assembled via its public struct-literal fields cannot smuggle an empty
+    /// `id`/`version`/`policy_version` into a validated `ProgramSpace`.
+    pub(crate) fn validate(&self) -> Result<()> {
+        ensure_non_empty(&self.id, "profile.id")?;
+        ensure_non_empty(&self.version, "profile.version")?;
+        ensure_non_empty(&self.policy_version, "profile.policy_version")?;
+        Ok(())
+    }
+}
+
+/// Typed lift boundary from adapter facts to a validated [`ProgramSpace`].
+///
+/// This is the single place that performs ID generation and dedup contracts
+/// (via the caller-supplied [`StableId`]s), canonical ordering, reference
+/// validation, provenance/completeness validation, and completeness
+/// contradiction checks. Both the legacy JSON adapter input path
+/// (`ProgramSpace::from_json_slice`) and any typed extractor funnel through
+/// this exact boundary; there is no second, ad-hoc construction path.
+pub struct ProgramSpaceBuilder {
+    source: SourceRef,
+    repository: RepositoryDescriptor,
+    snapshot: SnapshotDescriptor,
+    profile: ProfileDescriptor,
+    extraction: Extraction,
+    artifacts: Vec<Artifact>,
+    relations: Vec<Relation>,
+    contexts: Vec<ReviewContext>,
+    invariants: Vec<Invariant>,
+    evidence: Vec<Evidence>,
+}
+
+impl ProgramSpaceBuilder {
+    /// Starts a builder for exactly one ProgramSpace snapshot.
+    pub fn new(
+        source: SourceRef,
+        repository: RepositoryDescriptor,
+        snapshot: SnapshotDescriptor,
+        profile: ProfileDescriptor,
+        extraction: Extraction,
+    ) -> Result<Self> {
+        if source.kind() == "model" {
+            return Err(DomainError::Validation(
+                "ProgramSpace input source cannot be a model".to_owned(),
+            ));
+        }
+        repository.validate()?;
+        snapshot.validate()?;
+        profile.validate()?;
+        let extraction = extraction.revalidated()?;
+        Ok(Self {
+            source,
+            repository,
+            snapshot,
+            profile,
+            extraction,
+            artifacts: Vec::new(),
+            relations: Vec::new(),
+            contexts: Vec::new(),
+            invariants: Vec::new(),
+            evidence: Vec::new(),
+        })
+    }
+
+    /// Appends one accepted artifact.
+    #[must_use]
+    pub fn with_artifact(mut self, artifact: Artifact) -> Self {
+        self.artifacts.push(artifact);
+        self
+    }
+
+    /// Appends accepted artifacts.
+    #[must_use]
+    pub fn with_artifacts(mut self, artifacts: impl IntoIterator<Item = Artifact>) -> Self {
+        self.artifacts.extend(artifacts);
+        self
+    }
+
+    /// Appends one accepted relation.
+    #[must_use]
+    pub fn with_relation(mut self, relation: Relation) -> Self {
+        self.relations.push(relation);
+        self
+    }
+
+    /// Appends accepted relations.
+    #[must_use]
+    pub fn with_relations(mut self, relations: impl IntoIterator<Item = Relation>) -> Self {
+        self.relations.extend(relations);
+        self
+    }
+
+    /// Appends one accepted review context.
+    #[must_use]
+    pub fn with_context(mut self, context: ReviewContext) -> Self {
+        self.contexts.push(context);
+        self
+    }
+
+    /// Appends accepted review contexts.
+    #[must_use]
+    pub fn with_contexts(mut self, contexts: impl IntoIterator<Item = ReviewContext>) -> Self {
+        self.contexts.extend(contexts);
+        self
+    }
+
+    /// Appends one accepted invariant.
+    #[must_use]
+    pub fn with_invariant(mut self, invariant: Invariant) -> Self {
+        self.invariants.push(invariant);
+        self
+    }
+
+    /// Appends accepted invariants.
+    #[must_use]
+    pub fn with_invariants(mut self, invariants: impl IntoIterator<Item = Invariant>) -> Self {
+        self.invariants.extend(invariants);
+        self
+    }
+
+    /// Appends one imported evidence fact.
+    #[must_use]
+    pub fn with_evidence_item(mut self, evidence: Evidence) -> Self {
+        self.evidence.push(evidence);
+        self
+    }
+
+    /// Appends imported evidence facts.
+    #[must_use]
+    pub fn with_evidence(mut self, evidence: impl IntoIterator<Item = Evidence>) -> Self {
+        self.evidence.extend(evidence);
+        self
+    }
+
+    /// Validates and assembles the final `ProgramSpace`.
+    pub fn build(self) -> Result<ProgramSpace> {
+        let Self {
+            source,
+            repository,
+            snapshot,
+            profile,
+            extraction,
+            mut artifacts,
+            mut relations,
+            mut contexts,
+            mut invariants,
+            mut evidence,
+        } = self;
+
+        if artifacts.is_empty() {
+            return Err(DomainError::EmptyField { field: "artifacts" });
+        }
+
+        // `build` is the real validation boundary: a caller can assemble any
+        // of these records through their public struct-literal fields,
+        // bypassing the constructor that normally enforces the record's
+        // invariants. Re-run that exact same contract here so construction
+        // path never determines whether an invalid record is accepted, and
+        // replace `extraction` with the normalized clone `revalidated`
+        // returns instead of discarding it, so an out-of-order struct-literal
+        // `Extraction` still produces the same canonical `ProgramSpace` bytes
+        // as one built through `Extraction::new`.
+        repository.validate()?;
+        snapshot.validate()?;
+        profile.validate()?;
+        let extraction = extraction.revalidated()?;
+        for artifact in &artifacts {
+            artifact.validate()?;
+        }
+        for relation in &relations {
+            relation.validate()?;
+        }
+        for context in &contexts {
+            context.validate()?;
+        }
+        for invariant in &invariants {
+            invariant.validate()?;
+        }
+        for item in &evidence {
+            item.validate_for_program_space()?;
+        }
+
+        artifacts.sort_by(|left, right| left.id.cmp(&right.id));
+        relations.sort_by(|left, right| left.id.cmp(&right.id));
+        contexts.sort_by(|left, right| left.id.cmp(&right.id));
+        invariants.sort_by(|left, right| left.id.cmp(&right.id));
+        evidence.sort_by(|left, right| left.id.cmp(&right.id));
+
+        let mut ids = BTreeSet::from([repository.id.clone(), snapshot.id.clone()]);
+        for id in artifacts
+            .iter()
+            .map(|item| &item.id)
+            .chain(relations.iter().map(|item| &item.id))
+            .chain(contexts.iter().map(|item| &item.id))
+            .chain(invariants.iter().map(|item| &item.id))
+            .chain(evidence.iter().map(|item| &item.id))
+            .chain(extraction.limitations.iter().map(|item| &item.id))
+        {
+            if !ids.insert(id.clone()) {
+                return Err(DomainError::IdCollision { id: id.clone() });
+            }
+        }
+
+        let artifact_ids = artifacts
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<BTreeSet<_>>();
+        for artifact in &artifacts {
+            if let Some(symbol_id) = artifact
+                .location
+                .as_ref()
+                .and_then(|location| location.symbol_id.as_ref())
+            {
+                validate_reference("location", &artifact.id, &artifact_ids, symbol_id)?;
+                let symbol = artifacts
+                    .iter()
+                    .find(|candidate| candidate.id == *symbol_id)
+                    .ok_or_else(|| DomainError::DanglingReference {
+                        owner: "location",
+                        owner_id: artifact.id.clone(),
+                        reference: symbol_id.clone(),
+                    })?;
+                if !is_symbol_kind(&symbol.kind) {
+                    return Err(DomainError::Validation(
+                        "location.symbol_id must refer to a symbol artifact".to_owned(),
+                    ));
+                }
+            }
+        }
+        let relation_ids = relations
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<BTreeSet<_>>();
+        let relation_target_ids = artifact_ids
+            .union(&relation_ids)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for relation in &relations {
+            validate_reference("relation", &relation.id, &artifact_ids, &relation.source_id)?;
+            for target_id in &relation.target_ids {
+                validate_reference("relation", &relation.id, &relation_target_ids, target_id)?;
+            }
+        }
+        let context_ids = contexts
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<BTreeSet<_>>();
+        let context_member_ids = relation_target_ids.clone();
+        for context in &contexts {
+            for member_id in &context.member_ids {
+                validate_reference("context", &context.id, &context_member_ids, member_id)?;
+            }
+        }
+        let invariant_ids = invariants
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<BTreeSet<_>>();
+        let invariant_scope_artifacts = artifacts
+            .iter()
+            .filter(|artifact| matches!(artifact.kind.as_str(), "requirement" | "policy"))
+            .map(|artifact| artifact.id.clone())
+            .collect::<BTreeSet<_>>();
+        let invariant_scope_ids = context_ids
+            .union(&invariant_scope_artifacts)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for invariant in &invariants {
+            for scope_id in &invariant.scope_ids {
+                validate_reference("invariant", &invariant.id, &invariant_scope_ids, scope_id)?;
+            }
+        }
+        let evidence_target_ids = relation_target_ids
+            .union(&invariant_ids)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for item in &evidence {
+            for target_id in &item.target_ids {
+                validate_reference("evidence", &item.id, &evidence_target_ids, target_id)?;
+            }
+        }
+        validate_extraction_source_traces(&extraction, &ids)?;
+
+        validate_source_identity_consistency(&artifacts, &relations, &contexts, &invariants)?;
+        let _ = invariant_ids;
+
+        Ok(ProgramSpace {
+            schema: PROGRAM_SPACE_SCHEMA_V2.to_owned(),
+            source,
+            repository_id: repository.id,
+            repository_name: repository.name,
+            repository_root: repository.root,
+            repository_uri: repository.uri,
+            snapshot_id: snapshot.id,
+            base_revision: snapshot.base_revision,
+            target_revision: snapshot.target_revision,
+            tree_hash: snapshot.tree_hash,
+            dirty: snapshot.dirty,
+            snapshot_created_at: snapshot.created_at,
+            profile_id: profile.id,
+            profile_version: profile.version,
+            rule_set_hash: profile.rule_set_hash,
+            policy_version: profile.policy_version,
+            artifacts,
+            relations,
+            contexts,
+            invariants,
+            evidence,
+            extraction,
+        })
+    }
+}
+
+/// Validates every `extraction.limitations[].source_ids` and
+/// `extraction.capabilities[].source_ids` entry against the full known
+/// ProgramSpace ID set, and rejects a limitation whose source set contains
+/// its own ID.
+fn validate_extraction_source_traces(
+    extraction: &Extraction,
+    ids: &BTreeSet<StableId>,
+) -> Result<()> {
+    for limitation in &extraction.limitations {
+        for source_id in &limitation.source_ids {
+            validate_reference("limitation", &limitation.id, ids, source_id)?;
+        }
+    }
+    for (capability, declaration) in &extraction.capabilities {
+        for source_id in &declaration.source_ids {
+            if !ids.contains(source_id) {
+                return Err(DomainError::Validation(format!(
+                    "capability `{capability}` has dangling source `{source_id}`"
+                )));
+            }
+        }
+    }
+    for limitation in &extraction.limitations {
+        if limitation.source_ids.contains(&limitation.id) {
+            return Err(DomainError::Validation(format!(
+                "limitation `{}` has a self-referential source",
+                limitation.id
+            )));
+        }
+    }
+
+    let limitation_ids = extraction
+        .limitations
+        .iter()
+        .map(|limitation| limitation.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut depends_on = BTreeMap::<StableId, BTreeSet<StableId>>::new();
+    let mut dependents = BTreeMap::<StableId, BTreeSet<StableId>>::new();
+    for limitation in &extraction.limitations {
+        let deps = limitation
+            .source_ids
+            .iter()
+            .filter(|source_id| limitation_ids.contains(*source_id))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for dep in &deps {
+            dependents
+                .entry(dep.clone())
+                .or_default()
+                .insert(limitation.id.clone());
+        }
+        depends_on.insert(limitation.id.clone(), deps);
+    }
+
+    let mut remaining_out_degree = depends_on
+        .iter()
+        .map(|(id, deps)| (id.clone(), deps.len()))
+        .collect::<BTreeMap<_, _>>();
+    let mut ready = remaining_out_degree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(id, _)| id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut remaining = limitation_ids.clone();
+    while let Some(id) = ready.iter().next().cloned() {
+        ready.remove(&id);
+        remaining.remove(&id);
+        if let Some(affected) = dependents.get(&id) {
+            for dependent in affected {
+                if let Some(degree) = remaining_out_degree.get_mut(dependent) {
+                    *degree -= 1;
+                    if *degree == 0 {
+                        ready.insert(dependent.clone());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(cycle_id) = remaining.iter().next() {
+        return Err(DomainError::Validation(format!(
+            "limitation source cycle includes `{cycle_id}`"
+        )));
+    }
+
+    let mut grounded = extraction
+        .limitations
+        .iter()
+        .filter(|limitation| {
+            limitation
+                .source_ids
+                .iter()
+                .any(|source_id| !limitation_ids.contains(source_id))
+        })
+        .map(|limitation| limitation.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut frontier = grounded.clone();
+    while let Some(id) = frontier.iter().next().cloned() {
+        frontier.remove(&id);
+        if let Some(affected) = dependents.get(&id) {
+            for dependent in affected {
+                if grounded.insert(dependent.clone()) {
+                    frontier.insert(dependent.clone());
+                }
+            }
+        }
+    }
+    if let Some(ungrounded_id) = limitation_ids.iter().find(|id| !grounded.contains(*id)) {
+        return Err(DomainError::Validation(format!(
+            "limitation `{ungrounded_id}` is not grounded in a non-limitation fact"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Rejects facts that claim the same origin (source kind, locator, and
+/// origin-local identity) while disagreeing about that origin's content hash.
+/// A single source position cannot honestly produce two different byte
+/// observations within one snapshot.
+fn validate_source_identity_consistency(
+    artifacts: &[Artifact],
+    relations: &[Relation],
+    contexts: &[ReviewContext],
+    invariants: &[Invariant],
+) -> Result<()> {
+    let mut seen: BTreeMap<(String, String, Option<String>), ContentHash> = BTreeMap::new();
+    let sources = artifacts
+        .iter()
+        .map(|item| &item.provenance)
+        .chain(relations.iter().map(|item| &item.provenance))
+        .chain(contexts.iter().map(|item| &item.provenance))
+        .chain(invariants.iter().map(|item| &item.provenance))
+        .map(Provenance::source);
+    for source in sources {
+        let Some(content_hash) = source.content_hash.as_ref() else {
+            continue;
+        };
+        let key = (
+            source.kind.clone(),
+            source.locator.clone(),
+            source.source_local_id.clone(),
+        );
+        match seen.get(&key) {
+            Some(existing) if existing != content_hash => {
+                return Err(DomainError::Validation(format!(
+                    "source identity `{}` (`{}`) reports conflicting content hashes",
+                    key.1,
+                    key.2.as_deref().unwrap_or("")
+                )));
+            }
+            Some(_) => {}
+            None => {
+                seen.insert(key, content_hash.clone());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Accepted, language-neutral input facts for exactly one snapshot.
@@ -770,12 +2209,40 @@ fn omit_null_fields(object: &mut serde_json::Map<String, Value>, fields: &[&str]
     }
 }
 
+/// Current `ProgramSpace` manual JSON adapter input schema discriminator.
+const PROGRAM_SPACE_SCHEMA_V2: &str = "reviewgraphen.program_space.input.v2";
+
+/// Superseded `ProgramSpace` manual JSON adapter input schema discriminator;
+/// recognized only to return a typed [`DomainError::MigrationRequired`].
+const PROGRAM_SPACE_SCHEMA_V1: &str = "reviewgraphen.program_space.input.v1";
+
+/// Fixed [`MigrationRecord`] schema discriminator.
+const MIGRATION_RECORD_SCHEMA: &str = "reviewgraphen.program_space.migration.v1";
+
 impl ProgramSpace {
-    /// Parses the supported v1 manual JSON adapter input and validates references.
+    /// Parses the supported v2 manual JSON adapter input and validates
+    /// references. The top-level `schema` discriminator is probed first, so
+    /// a v1 document reports a typed migration requirement and an unknown
+    /// or malformed discriminator reports a typed unsupported-schema error,
+    /// instead of both falling through to a generic v2 shape-mismatch error.
     pub fn from_json_slice(input: &[u8]) -> Result<Self> {
-        let raw: RawProgramSpace =
+        let value: Value =
             serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))?;
-        Self::try_from(raw)
+        match value.get("schema").and_then(Value::as_str) {
+            Some(PROGRAM_SPACE_SCHEMA_V2) => {
+                let raw: RawProgramSpace = serde_json::from_slice(input)
+                    .map_err(|error| DomainError::Json(error.to_string()))?;
+                Self::try_from(raw)
+            }
+            Some(PROGRAM_SPACE_SCHEMA_V1) => Err(DomainError::MigrationRequired {
+                detected: PROGRAM_SPACE_SCHEMA_V1.to_owned(),
+                required: PROGRAM_SPACE_SCHEMA_V2.to_owned(),
+            }),
+            Some(other) => Err(DomainError::UnsupportedSchema {
+                detected: Some(other.to_owned()),
+            }),
+            None => Err(DomainError::UnsupportedSchema { detected: None }),
+        }
     }
 
     /// Stable snapshot ID bound to every generated obligation.
@@ -952,187 +2419,68 @@ impl TryFrom<RawProgramSpace> for ProgramSpace {
     type Error = DomainError;
 
     fn try_from(raw: RawProgramSpace) -> Result<Self> {
-        if raw.schema != "reviewgraphen.program_space.input.v1" {
-            return Err(DomainError::Validation(format!(
-                "unsupported ProgramSpace schema `{}`",
-                raw.schema
-            )));
+        if raw.schema != PROGRAM_SPACE_SCHEMA_V2 {
+            return Err(DomainError::UnsupportedSchema {
+                detected: Some(raw.schema),
+            });
         }
         let source: SourceRef = raw.source.try_into()?;
-        if source.kind() == "model" {
-            return Err(DomainError::Validation(
-                "ProgramSpace input source cannot be a model".to_owned(),
-            ));
-        }
-        let repository_id = StableId::parse(raw.repository.id)?;
-        let snapshot_id = StableId::parse(raw.snapshot.id)?;
-        let tree_hash = ContentHash::parse(raw.snapshot.tree_hash)?;
-        let rule_set_hash = ContentHash::parse(raw.profile.rule_set_hash)?;
+        let repository = RepositoryDescriptor {
+            id: StableId::parse(raw.repository.id)?,
+            name: raw.repository.name,
+            root: raw.repository.root,
+            uri: raw.repository.uri,
+        };
+        let snapshot = SnapshotDescriptor {
+            id: StableId::parse(raw.snapshot.id)?,
+            base_revision: raw.snapshot.base_revision,
+            target_revision: raw.snapshot.target_revision,
+            tree_hash: ContentHash::parse(raw.snapshot.tree_hash)?,
+            dirty: raw.snapshot.dirty,
+            created_at: raw.snapshot.created_at,
+        };
+        let profile = ProfileDescriptor {
+            id: raw.profile.id,
+            version: raw.profile.version,
+            rule_set_hash: ContentHash::parse(raw.profile.rule_set_hash)?,
+            policy_version: raw.profile.policy_version,
+        };
         let extraction: Extraction = raw.extraction.try_into()?;
-        ensure_non_empty(&raw.repository.name, "repository.name")?;
-        ensure_non_empty(&raw.snapshot.base_revision, "snapshot.base_revision")?;
-        ensure_non_empty(&raw.snapshot.target_revision, "snapshot.target_revision")?;
-        ensure_non_empty(&raw.profile.id, "profile.id")?;
-        ensure_non_empty(&raw.profile.version, "profile.version")?;
-        ensure_non_empty(&raw.profile.policy_version, "profile.policy_version")?;
 
-        let mut artifacts = raw
+        let artifacts = raw
             .artifacts
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<Artifact>>>()?;
-        if artifacts.is_empty() {
-            return Err(DomainError::EmptyField { field: "artifacts" });
-        }
-        let mut relations = raw
+        let relations = raw
             .relations
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<Relation>>>()?;
-        let mut contexts = raw
+        let contexts = raw
             .contexts
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<ReviewContext>>>()?;
-        let mut invariants = raw
+        let invariants = raw
             .invariants
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<Invariant>>>()?;
-        let mut evidence = raw
+        let snapshot_id = snapshot.id.clone();
+        let evidence = raw
             .evidence
             .into_iter()
             .map(|item| Evidence::from_input(item, snapshot_id.clone()))
             .collect::<Result<Vec<Evidence>>>()?;
 
-        artifacts.sort_by(|left, right| left.id.cmp(&right.id));
-        relations.sort_by(|left, right| left.id.cmp(&right.id));
-        contexts.sort_by(|left, right| left.id.cmp(&right.id));
-        invariants.sort_by(|left, right| left.id.cmp(&right.id));
-        evidence.sort_by(|left, right| left.id.cmp(&right.id));
-
-        let mut ids = BTreeSet::from([repository_id.clone(), snapshot_id.clone()]);
-        for id in artifacts
-            .iter()
-            .map(|item| &item.id)
-            .chain(relations.iter().map(|item| &item.id))
-            .chain(contexts.iter().map(|item| &item.id))
-            .chain(invariants.iter().map(|item| &item.id))
-            .chain(evidence.iter().map(|item| &item.id))
-            .chain(extraction.limitations.iter().map(|item| &item.id))
-        {
-            if !ids.insert(id.clone()) {
-                return Err(DomainError::IdCollision { id: id.clone() });
-            }
-        }
-
-        let artifact_ids = artifacts
-            .iter()
-            .map(|item| item.id.clone())
-            .collect::<BTreeSet<_>>();
-        for artifact in &artifacts {
-            if let Some(symbol_id) = artifact
-                .location
-                .as_ref()
-                .and_then(|location| location.symbol_id.as_ref())
-            {
-                validate_reference("location", &artifact.id, &artifact_ids, symbol_id)?;
-                let symbol = artifacts
-                    .iter()
-                    .find(|candidate| candidate.id == *symbol_id)
-                    .ok_or_else(|| DomainError::DanglingReference {
-                        owner: "location",
-                        owner_id: artifact.id.clone(),
-                        reference: symbol_id.clone(),
-                    })?;
-                if !is_symbol_kind(&symbol.kind) {
-                    return Err(DomainError::Validation(
-                        "location.symbol_id must refer to a symbol artifact".to_owned(),
-                    ));
-                }
-            }
-        }
-        let relation_ids = relations
-            .iter()
-            .map(|item| item.id.clone())
-            .collect::<BTreeSet<_>>();
-        let relation_target_ids = artifact_ids
-            .union(&relation_ids)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        for relation in &relations {
-            validate_reference("relation", &relation.id, &artifact_ids, &relation.source_id)?;
-            for target_id in &relation.target_ids {
-                validate_reference("relation", &relation.id, &relation_target_ids, target_id)?;
-            }
-        }
-        let context_ids = contexts
-            .iter()
-            .map(|item| item.id.clone())
-            .collect::<BTreeSet<_>>();
-        let context_member_ids = relation_target_ids.clone();
-        for context in &contexts {
-            for member_id in &context.member_ids {
-                validate_reference("context", &context.id, &context_member_ids, member_id)?;
-            }
-        }
-        let invariant_ids = invariants
-            .iter()
-            .map(|item| item.id.clone())
-            .collect::<BTreeSet<_>>();
-        let invariant_scope_artifacts = artifacts
-            .iter()
-            .filter(|artifact| matches!(artifact.kind.as_str(), "requirement" | "policy"))
-            .map(|artifact| artifact.id.clone())
-            .collect::<BTreeSet<_>>();
-        let invariant_scope_ids = context_ids
-            .union(&invariant_scope_artifacts)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        for invariant in &invariants {
-            for scope_id in &invariant.scope_ids {
-                validate_reference("invariant", &invariant.id, &invariant_scope_ids, scope_id)?;
-            }
-        }
-        let evidence_target_ids = relation_target_ids
-            .union(&invariant_ids)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        for item in &evidence {
-            for target_id in &item.target_ids {
-                validate_reference("evidence", &item.id, &evidence_target_ids, target_id)?;
-            }
-        }
-        for limitation in &extraction.limitations {
-            for source_id in &limitation.source_ids {
-                validate_reference("limitation", &limitation.id, &ids, source_id)?;
-            }
-        }
-
-        Ok(Self {
-            schema: raw.schema,
-            source,
-            repository_id,
-            repository_name: raw.repository.name,
-            repository_root: raw.repository.root,
-            repository_uri: raw.repository.uri,
-            snapshot_id,
-            base_revision: raw.snapshot.base_revision,
-            target_revision: raw.snapshot.target_revision,
-            tree_hash,
-            dirty: raw.snapshot.dirty,
-            snapshot_created_at: raw.snapshot.created_at,
-            profile_id: raw.profile.id,
-            profile_version: raw.profile.version,
-            rule_set_hash,
-            policy_version: raw.profile.policy_version,
-            artifacts,
-            relations,
-            contexts,
-            invariants,
-            evidence,
-            extraction,
-        })
+        ProgramSpaceBuilder::new(source, repository, snapshot, profile, extraction)?
+            .with_artifacts(artifacts)
+            .with_relations(relations)
+            .with_contexts(contexts)
+            .with_invariants(invariants)
+            .with_evidence(evidence)
+            .build()
     }
 }
 
@@ -1296,27 +2644,14 @@ impl TryFrom<RawLocation> for Location {
     type Error = DomainError;
 
     fn try_from(raw: RawLocation) -> Result<Self> {
-        ensure_non_empty(&raw.path, "location.path")?;
-        for (field, value) in [
-            ("location.start_line", raw.start_line),
-            ("location.end_line", raw.end_line),
-            ("location.start_column", raw.start_column),
-            ("location.end_column", raw.end_column),
-        ] {
-            if value == Some(0) {
-                return Err(DomainError::Validation(format!(
-                    "{field} must be at least 1"
-                )));
-            }
-        }
-        Ok(Self {
-            path: raw.path,
-            start_line: raw.start_line,
-            end_line: raw.end_line,
-            start_column: raw.start_column,
-            end_column: raw.end_column,
-            symbol_id: raw.symbol_id.map(StableId::parse).transpose()?,
-        })
+        Location::new(
+            raw.path,
+            raw.start_line,
+            raw.end_line,
+            raw.start_column,
+            raw.end_column,
+            raw.symbol_id.map(StableId::parse).transpose()?,
+        )
     }
 }
 
@@ -1338,47 +2673,16 @@ impl TryFrom<RawArtifact> for Artifact {
     type Error = DomainError;
 
     fn try_from(raw: RawArtifact) -> Result<Self> {
-        require_enum(
-            &raw.kind,
-            &[
-                "repository",
-                "snapshot",
-                "file",
-                "module",
-                "package",
-                "class",
-                "type",
-                "function",
-                "method",
-                "field",
-                "route",
-                "event",
-                "state",
-                "api",
-                "database",
-                "config",
-                "permission",
-                "test",
-                "requirement",
-                "policy",
-                "owner",
-                "external_service",
-                "custom",
-            ],
-            "artifact.kind",
-        )?;
-        ensure_non_empty(&raw.kind, "artifact.kind")?;
-        ensure_non_empty(&raw.label, "artifact.label")?;
-        Ok(Self {
-            id: StableId::parse(raw.id)?,
-            kind: raw.kind,
-            label: raw.label,
-            language: raw.language,
-            location: raw.location.map(TryInto::try_into).transpose()?,
-            content_hash: raw.content_hash.map(ContentHash::parse).transpose()?,
-            attributes: raw.attributes,
-            provenance: provenance(raw.provenance)?,
-        })
+        Artifact::new(
+            StableId::parse(raw.id)?,
+            raw.kind,
+            raw.label,
+            raw.language,
+            raw.location.map(TryInto::try_into).transpose()?,
+            raw.content_hash.map(ContentHash::parse).transpose()?,
+            raw.attributes,
+            provenance(raw.provenance)?,
+        )
     }
 }
 
@@ -1399,22 +2703,15 @@ impl TryFrom<RawRelation> for Relation {
     type Error = DomainError;
 
     fn try_from(raw: RawRelation) -> Result<Self> {
-        ensure_non_empty(&raw.kind, "relation.kind")?;
-        let target_ids = ids(raw.target_ids)?;
-        if target_ids.is_empty() {
-            return Err(DomainError::EmptyField {
-                field: "relation.target_ids",
-            });
-        }
-        Ok(Self {
-            id: StableId::parse(raw.id)?,
-            kind: raw.kind,
-            source_id: StableId::parse(raw.source_id)?,
-            target_ids,
-            directed: raw.directed,
-            attributes: raw.attributes,
-            provenance: provenance(raw.provenance)?,
-        })
+        Relation::new(
+            StableId::parse(raw.id)?,
+            raw.kind,
+            StableId::parse(raw.source_id)?,
+            ids(raw.target_ids)?,
+            raw.directed,
+            raw.attributes,
+            provenance(raw.provenance)?,
+        )
     }
 }
 
@@ -1434,16 +2731,14 @@ impl TryFrom<RawContext> for ReviewContext {
     type Error = DomainError;
 
     fn try_from(raw: RawContext) -> Result<Self> {
-        ensure_non_empty(&raw.kind, "context.kind")?;
-        ensure_non_empty(&raw.label, "context.label")?;
-        Ok(Self {
-            id: StableId::parse(raw.id)?,
-            kind: raw.kind,
-            label: raw.label,
-            member_ids: ids(raw.member_ids)?,
-            attributes: raw.attributes,
-            provenance: provenance(raw.provenance)?,
-        })
+        ReviewContext::new(
+            StableId::parse(raw.id)?,
+            raw.kind,
+            raw.label,
+            ids(raw.member_ids)?,
+            raw.attributes,
+            provenance(raw.provenance)?,
+        )
     }
 }
 
@@ -1454,7 +2749,7 @@ struct RawInvariant {
     property_id: String,
     description: String,
     scope_ids: Vec<String>,
-    severity: String,
+    severity: Severity,
     verification_mode: Option<String>,
     provenance: RawProvenance,
 }
@@ -1463,28 +2758,15 @@ impl TryFrom<RawInvariant> for Invariant {
     type Error = DomainError;
 
     fn try_from(raw: RawInvariant) -> Result<Self> {
-        ensure_non_empty(&raw.property_id, "invariant.property_id")?;
-        ensure_non_empty(&raw.description, "invariant.description")?;
-        let scope_ids = ids(raw.scope_ids)?;
-        if scope_ids.is_empty() {
-            return Err(DomainError::EmptyField {
-                field: "invariant.scope_ids",
-            });
-        }
-        require_enum(
-            &raw.severity,
-            &["info", "low", "medium", "high", "critical"],
-            "invariant.severity",
-        )?;
-        Ok(Self {
-            id: StableId::parse(raw.id)?,
-            property_id: raw.property_id,
-            description: raw.description,
-            scope_ids,
-            severity: raw.severity,
-            verification_mode: raw.verification_mode,
-            provenance: provenance(raw.provenance)?,
-        })
+        Invariant::new(
+            StableId::parse(raw.id)?,
+            raw.property_id,
+            raw.description,
+            ids(raw.scope_ids)?,
+            raw.severity,
+            raw.verification_mode,
+            provenance(raw.provenance)?,
+        )
     }
 }
 
@@ -1503,21 +2785,16 @@ struct RawEvidence {
 
 impl Evidence {
     fn from_input(raw: RawEvidence, snapshot_id: StableId) -> Result<Self> {
-        // The input schema allows an empty target set for imported historical
-        // evidence. Such a record remains a Program fact but cannot enter a
-        // review event because `Evidence::new` requires targets.
-        let kind = raw.kind;
-        ensure_non_empty(&kind, "evidence.kind")?;
-        Ok(Self {
-            id: StableId::parse(raw.id)?,
-            kind,
-            target_ids: ids(raw.target_ids)?,
-            artifact_ref: raw.artifact_ref,
-            content_hash: raw.content_hash.map(ContentHash::parse).transpose()?,
-            attributes: raw.attributes,
-            provenance: provenance(raw.provenance)?,
+        Evidence::for_program_space(
+            StableId::parse(raw.id)?,
+            raw.kind,
+            ids(raw.target_ids)?,
+            raw.artifact_ref,
+            raw.content_hash.map(ContentHash::parse).transpose()?,
+            raw.attributes,
+            provenance(raw.provenance)?,
             snapshot_id,
-        })
+        )
     }
 }
 
@@ -1526,8 +2803,65 @@ impl Evidence {
 struct RawExtraction {
     adapter_set_hash: String,
     adapters: Vec<RawAdapterDescriptor>,
-    capabilities: BTreeMap<String, String>,
+    capabilities: RawCapabilities,
     limitations: Vec<RawLimitation>,
+}
+
+/// Wraps `extraction.capabilities` so a repeated JSON object key is rejected
+/// instead of silently keeping the last occurrence, which is the default
+/// `serde_json` map-deserialization behavior.
+struct RawCapabilities(BTreeMap<String, RawCapabilityDeclaration>);
+
+impl<'de> Deserialize<'de> for RawCapabilities {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RawCapabilitiesVisitor;
+
+        impl<'de> Visitor<'de> for RawCapabilitiesVisitor {
+            type Value = RawCapabilities;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a map of capability name to capability declaration")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut capabilities = BTreeMap::new();
+                while let Some((key, value)) =
+                    map.next_entry::<String, RawCapabilityDeclaration>()?
+                {
+                    if capabilities.contains_key(&key) {
+                        return Err(serde::de::Error::custom(format!(
+                            "duplicate capability key `{key}`"
+                        )));
+                    }
+                    capabilities.insert(key, value);
+                }
+                Ok(RawCapabilities(capabilities))
+            }
+        }
+
+        deserializer.deserialize_map(RawCapabilitiesVisitor)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCapabilityDeclaration {
+    state: CapabilityState,
+    source_ids: Vec<String>,
+}
+
+impl TryFrom<RawCapabilityDeclaration> for CapabilityDeclaration {
+    type Error = DomainError;
+
+    fn try_from(raw: RawCapabilityDeclaration) -> Result<Self> {
+        CapabilityDeclaration::new(raw.state, ids(raw.source_ids)?)
+    }
 }
 
 #[derive(Deserialize)]
@@ -1535,110 +2869,534 @@ struct RawExtraction {
 struct RawAdapterDescriptor {
     id: String,
     version: String,
-    status: String,
+    status: AdapterStatus,
     parsed: Option<u64>,
     total: Option<u64>,
+}
+
+impl TryFrom<RawAdapterDescriptor> for AdapterDescriptor {
+    type Error = DomainError;
+
+    fn try_from(raw: RawAdapterDescriptor) -> Result<Self> {
+        AdapterDescriptor::new(raw.id, raw.version, raw.status, raw.parsed, raw.total)
+    }
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawLimitation {
     id: String,
-    kind: String,
+    kind: LimitationKind,
     description: String,
-    severity: String,
+    severity: Severity,
     #[serde(default)]
     source_ids: Vec<String>,
+    #[serde(default)]
+    related_capabilities: Vec<String>,
+}
+
+impl TryFrom<RawLimitation> for Limitation {
+    type Error = DomainError;
+
+    fn try_from(raw: RawLimitation) -> Result<Self> {
+        Limitation::new(
+            StableId::parse(raw.id)?,
+            raw.kind,
+            raw.description,
+            raw.severity,
+            ids(raw.source_ids)?,
+            raw.related_capabilities.into_iter().collect(),
+        )
+    }
 }
 
 impl TryFrom<RawExtraction> for Extraction {
     type Error = DomainError;
 
     fn try_from(raw: RawExtraction) -> Result<Self> {
-        if raw.adapters.is_empty() {
-            return Err(DomainError::EmptyField {
-                field: "extraction.adapters",
-            });
-        }
-        let mut adapters = raw
+        let adapters = raw
             .adapters
             .into_iter()
-            .map(|raw| {
-                ensure_non_empty(&raw.id, "adapter.id")?;
-                ensure_non_empty(&raw.version, "adapter.version")?;
-                require_enum(
-                    &raw.status,
-                    &["complete", "partial", "failed", "not_run"],
-                    "adapter.status",
-                )?;
-                if raw
-                    .parsed
-                    .zip(raw.total)
-                    .is_some_and(|(parsed, total)| parsed > total)
-                {
-                    return Err(DomainError::Validation(
-                        "adapter parsed count must not exceed total".to_owned(),
-                    ));
-                }
-                Ok(AdapterDescriptor {
-                    id: raw.id,
-                    version: raw.version,
-                    status: raw.status,
-                    parsed: raw.parsed,
-                    total: raw.total,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        for capability in raw.capabilities.values() {
-            require_enum(
-                capability,
-                &["complete", "partial", "missing", "unknown"],
-                "extraction.capabilities",
-            )?;
-        }
-        adapters.sort_by(|left, right| left.id.cmp(&right.id));
-        let mut limitations = raw
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<AdapterDescriptor>>>()?;
+        let limitations = raw
             .limitations
             .into_iter()
-            .map(|raw| {
-                ensure_non_empty(&raw.kind, "limitation.kind")?;
-                ensure_non_empty(&raw.description, "limitation.description")?;
-                require_enum(
-                    &raw.kind,
-                    &[
-                        "capability_missing",
-                        "parse_failure",
-                        "unresolved_relation",
-                        "excluded_region",
-                        "projection_loss",
-                        "policy_restriction",
-                        "unsupported_input",
-                        "unknown",
-                    ],
-                    "limitation.kind",
-                )?;
-                require_enum(
-                    &raw.severity,
-                    &["info", "low", "medium", "high", "critical"],
-                    "limitation.severity",
-                )?;
-                Ok(Limitation {
-                    id: StableId::parse(raw.id)?,
-                    kind: raw.kind,
-                    description: raw.description,
-                    severity: raw.severity,
-                    source_ids: ids(raw.source_ids)?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        limitations.sort_by(|left, right| left.id.cmp(&right.id));
-        Ok(Self {
-            adapter_set_hash: ContentHash::parse(raw.adapter_set_hash)?,
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<Limitation>>>()?;
+        let capabilities = raw
+            .capabilities
+            .0
+            .into_iter()
+            .map(|(name, declaration)| Ok((name, CapabilityDeclaration::try_from(declaration)?)))
+            .collect::<Result<BTreeMap<String, CapabilityDeclaration>>>()?;
+        Extraction::new(
+            ContentHash::parse(raw.adapter_set_hash)?,
             adapters,
-            capabilities: raw.capabilities,
+            capabilities,
             limitations,
-        })
+        )
     }
+}
+
+/// Preserved `reviewgraphen.program_space.input.v1` top-level shape (see
+/// ADR 0011 §1/§7). Parsed only by the explicit v1→v2 migration path, never
+/// by the normal v2 parse path. Reuses every top-level child type
+/// [`RawProgramSpace`] does except `extraction`, which the v1 and v2
+/// schemas disagree about.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawProgramSpaceV1 {
+    schema: String,
+    source: RawSourceRef,
+    repository: RawRepository,
+    snapshot: RawSnapshot,
+    profile: RawProfile,
+    artifacts: Vec<RawArtifact>,
+    relations: Vec<RawRelation>,
+    contexts: Vec<RawContext>,
+    invariants: Vec<RawInvariant>,
+    evidence: Vec<RawEvidence>,
+    extraction: RawExtractionV1,
+}
+
+/// Preserved v1 `extraction` shape: v1 adapters are schema-identical to v2
+/// ([`RawAdapterDescriptor`] is reused), but v1 `capabilities` values are a
+/// bare completeness-state string and v1 `limitations` carry no
+/// `related_capabilities`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawExtractionV1 {
+    adapter_set_hash: String,
+    adapters: Vec<RawAdapterDescriptor>,
+    capabilities: RawCapabilitiesV1,
+    limitations: Vec<RawLimitationV1>,
+}
+
+/// Wraps preserved-v1 `extraction.capabilities` so a repeated JSON object
+/// key is rejected instead of silently keeping the last occurrence, the
+/// same contract [`RawCapabilities`] enforces for v2.
+struct RawCapabilitiesV1(BTreeMap<String, CapabilityState>);
+
+impl<'de> Deserialize<'de> for RawCapabilitiesV1 {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RawCapabilitiesV1Visitor;
+
+        impl<'de> Visitor<'de> for RawCapabilitiesV1Visitor {
+            type Value = RawCapabilitiesV1;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a map of capability name to v1 capability state")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut capabilities = BTreeMap::new();
+                while let Some((key, value)) = map.next_entry::<String, CapabilityState>()? {
+                    if capabilities.contains_key(&key) {
+                        return Err(serde::de::Error::custom(format!(
+                            "duplicate capability key `{key}`"
+                        )));
+                    }
+                    capabilities.insert(key, value);
+                }
+                Ok(RawCapabilitiesV1(capabilities))
+            }
+        }
+
+        deserializer.deserialize_map(RawCapabilitiesV1Visitor)
+    }
+}
+
+/// Preserved v1 `limitation` shape. Unlike [`RawLimitation`], this must not
+/// accept `related_capabilities`: the preserved v1 schema never declared
+/// that property, so `deny_unknown_fields` correctly rejects it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLimitationV1 {
+    id: String,
+    kind: LimitationKind,
+    description: String,
+    severity: Severity,
+    #[serde(default)]
+    source_ids: Vec<String>,
+}
+
+/// Converts one deterministic binding value to canonical JSON for
+/// [`StableId::derived`]. Enum values serialize through their existing
+/// `Serialize` implementation rather than a hand-written string mapping.
+fn migration_binding(value: &impl Serialize) -> Result<Value> {
+    serde_json::to_value(value).map_err(|error| DomainError::CanonicalJson(error.to_string()))
+}
+
+/// Deterministic ID for one [`MigrationLoss`], derived from the fixed
+/// migration record schema, the loss kind, the snapshot, and every semantic
+/// field of that loss. `fields` keys must not collide with the three fixed
+/// keys this function adds.
+fn migration_loss_id(
+    kind: &str,
+    snapshot_id: &StableId,
+    mut fields: BTreeMap<String, Value>,
+) -> Result<StableId> {
+    fields.insert(
+        "migration_schema".to_owned(),
+        Value::String(MIGRATION_RECORD_SCHEMA.to_owned()),
+    );
+    fields.insert("loss_kind".to_owned(), Value::String(kind.to_owned()));
+    fields.insert(
+        "snapshot_id".to_owned(),
+        Value::String(snapshot_id.to_string()),
+    );
+    StableId::derived("migration_loss", &fields)
+}
+
+/// Deterministic ID for one limitation synthesized to justify a migrated
+/// non-`complete` capability, derived from the source schema, the capability
+/// name, and its declared state.
+fn synthesized_limitation_id(capability: &str, state: CapabilityState) -> Result<StableId> {
+    let bindings = BTreeMap::from([
+        (
+            "source_schema".to_owned(),
+            Value::String(PROGRAM_SPACE_SCHEMA_V1.to_owned()),
+        ),
+        (
+            "capability".to_owned(),
+            Value::String(capability.to_owned()),
+        ),
+        ("state".to_owned(), migration_binding(&state)?),
+    ]);
+    StableId::derived("limitation", &bindings)
+}
+
+/// The kind and deterministic description of the limitation synthesized to
+/// justify a migrated non-`complete` capability, or `None` for `complete`
+/// (which requires no related limitation).
+fn synthesized_limitation_shape(
+    capability: &str,
+    state: CapabilityState,
+) -> Option<(LimitationKind, String)> {
+    match state {
+        CapabilityState::Complete => None,
+        CapabilityState::Partial => Some((
+            LimitationKind::ProjectionLoss,
+            format!(
+                "Migrated `{capability}` capability declared `partial` in \
+                 {PROGRAM_SPACE_SCHEMA_V1}; its original source trace could not be \
+                 recovered from the v1 record."
+            ),
+        )),
+        CapabilityState::Missing => Some((
+            LimitationKind::CapabilityMissing,
+            format!(
+                "Migrated `{capability}` capability declared `missing` in \
+                 {PROGRAM_SPACE_SCHEMA_V1}; the v1 record carried no source trace for it."
+            ),
+        )),
+        CapabilityState::Unknown => Some((
+            LimitationKind::Unknown,
+            format!(
+                "Migrated `{capability}` capability declared `unknown` in \
+                 {PROGRAM_SPACE_SCHEMA_V1}; the v1 record never established a \
+                 completeness result for it."
+            ),
+        )),
+    }
+}
+
+/// Migrates a preserved v1 `extraction` declaration into a v2 [`Extraction`]
+/// plus its structured [`MigrationLoss`] entries (see ADR 0011 §7). Every
+/// migrated capability's `source_ids` is conservatively backfilled to
+/// `[snapshot_id]`; a non-`complete` capability additionally gets one
+/// deterministic synthesized limitation satisfying the v2 cross-field
+/// contract. Every carried-over v1 limitation keeps its original shape with
+/// no `related_capabilities`; an empty v1 `source_ids` is likewise
+/// backfilled to `[snapshot_id]`, while a nonempty one — dangling or not —
+/// is carried through unchanged and never repaired here.
+fn migrate_extraction_v1(
+    raw: RawExtractionV1,
+    snapshot_id: &StableId,
+) -> Result<(Extraction, Vec<MigrationLoss>)> {
+    let adapters = raw
+        .adapters
+        .into_iter()
+        .map(TryInto::try_into)
+        .collect::<Result<Vec<AdapterDescriptor>>>()?;
+
+    let mut losses = Vec::new();
+    let mut capabilities = BTreeMap::new();
+    let mut limitations = Vec::new();
+
+    for (capability, state) in raw.capabilities.0 {
+        let assigned_source_ids = BTreeSet::from([snapshot_id.clone()]);
+        let backfill_loss_id = migration_loss_id(
+            "capability_source_backfill",
+            snapshot_id,
+            BTreeMap::from([
+                ("capability".to_owned(), migration_binding(&capability)?),
+                ("state".to_owned(), migration_binding(&state)?),
+                (
+                    "assigned_source_ids".to_owned(),
+                    migration_binding(&assigned_source_ids)?,
+                ),
+            ]),
+        )?;
+        losses.push(MigrationLoss::CapabilitySourceBackfill {
+            id: backfill_loss_id,
+            capability: capability.clone(),
+            state,
+            assigned_source_ids: assigned_source_ids.clone(),
+        });
+
+        if let Some((limitation_kind, description)) =
+            synthesized_limitation_shape(&capability, state)
+        {
+            let limitation_id = synthesized_limitation_id(&capability, state)?;
+            limitations.push(Limitation::new(
+                limitation_id.clone(),
+                limitation_kind,
+                description,
+                Severity::Info,
+                BTreeSet::from([snapshot_id.clone()]),
+                BTreeSet::from([capability.clone()]),
+            )?);
+
+            let synthesized_loss_id = migration_loss_id(
+                "synthesized_limitation",
+                snapshot_id,
+                BTreeMap::from([
+                    ("capability".to_owned(), migration_binding(&capability)?),
+                    ("state".to_owned(), migration_binding(&state)?),
+                    (
+                        "limitation_id".to_owned(),
+                        migration_binding(&limitation_id)?,
+                    ),
+                    (
+                        "limitation_kind".to_owned(),
+                        migration_binding(&limitation_kind)?,
+                    ),
+                ]),
+            )?;
+            losses.push(MigrationLoss::SynthesizedLimitation {
+                id: synthesized_loss_id,
+                capability: capability.clone(),
+                state,
+                limitation_id,
+                limitation_kind,
+            });
+        }
+
+        capabilities.insert(
+            capability,
+            CapabilityDeclaration::new(state, assigned_source_ids)?,
+        );
+    }
+
+    for raw_limitation in raw.limitations {
+        let limitation_id = StableId::parse(raw_limitation.id)?;
+        let original_source_ids = ids(raw_limitation.source_ids)?;
+
+        let trace_loss_id = migration_loss_id(
+            "carried_limitation_trace",
+            snapshot_id,
+            BTreeMap::from([
+                (
+                    "limitation_id".to_owned(),
+                    migration_binding(&limitation_id)?,
+                ),
+                (
+                    "original_source_ids".to_owned(),
+                    migration_binding(&original_source_ids)?,
+                ),
+            ]),
+        )?;
+        losses.push(MigrationLoss::CarriedLimitationTrace {
+            id: trace_loss_id,
+            limitation_id: limitation_id.clone(),
+            original_source_ids: original_source_ids.clone(),
+        });
+
+        let source_ids = if original_source_ids.is_empty() {
+            let assigned_source_ids = BTreeSet::from([snapshot_id.clone()]);
+            let backfill_loss_id = migration_loss_id(
+                "limitation_source_backfill",
+                snapshot_id,
+                BTreeMap::from([
+                    (
+                        "limitation_id".to_owned(),
+                        migration_binding(&limitation_id)?,
+                    ),
+                    (
+                        "assigned_source_ids".to_owned(),
+                        migration_binding(&assigned_source_ids)?,
+                    ),
+                ]),
+            )?;
+            losses.push(MigrationLoss::LimitationSourceBackfill {
+                id: backfill_loss_id,
+                limitation_id: limitation_id.clone(),
+                assigned_source_ids: assigned_source_ids.clone(),
+            });
+            assigned_source_ids
+        } else {
+            original_source_ids
+        };
+
+        limitations.push(Limitation::new(
+            limitation_id,
+            raw_limitation.kind,
+            raw_limitation.description,
+            raw_limitation.severity,
+            source_ids,
+            BTreeSet::new(),
+        )?);
+    }
+
+    losses.sort_by(|left, right| left.id().cmp(right.id()));
+
+    let extraction = Extraction::new(
+        ContentHash::parse(raw.adapter_set_hash)?,
+        adapters,
+        capabilities,
+        limitations,
+    )?;
+
+    Ok((extraction, losses))
+}
+
+/// Deterministic [`MigrationRecord`] ID, derived from the fixed record
+/// schema, the source and target schema discriminators, the snapshot, and
+/// the ID-ordered set of loss IDs it carries.
+fn migration_record_id(snapshot_id: &StableId, losses: &[MigrationLoss]) -> Result<StableId> {
+    let loss_ids = losses.iter().map(MigrationLoss::id).collect::<Vec<_>>();
+    let bindings = BTreeMap::from([
+        (
+            "record_schema".to_owned(),
+            Value::String(MIGRATION_RECORD_SCHEMA.to_owned()),
+        ),
+        (
+            "source_schema".to_owned(),
+            Value::String(PROGRAM_SPACE_SCHEMA_V1.to_owned()),
+        ),
+        (
+            "target_schema".to_owned(),
+            Value::String(PROGRAM_SPACE_SCHEMA_V2.to_owned()),
+        ),
+        (
+            "snapshot_id".to_owned(),
+            Value::String(snapshot_id.to_string()),
+        ),
+        ("loss_ids".to_owned(), migration_binding(&loss_ids)?),
+    ]);
+    StableId::derived("migration", &bindings)
+}
+
+/// Explicit v1→v2 `ProgramSpace` migration entry point (ADR 0011 §7). Never
+/// invoked by the normal parse path: [`ProgramSpace::from_json_slice`]
+/// returns a typed [`DomainError::MigrationRequired`] for v1 input instead
+/// of migrating it implicitly. The migrated facts and `Extraction` still
+/// pass through the same [`ProgramSpaceBuilder::build`] contract every
+/// other construction path uses, so a v1 record that is dangling, cyclic,
+/// or otherwise invalid beyond what migration repairs fails closed; no
+/// `MigrationRecord` is returned on failure.
+pub fn migrate_program_space_v1_to_v2(input: &[u8]) -> Result<(ProgramSpace, MigrationRecord)> {
+    let probe: Value =
+        serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))?;
+    match probe.get("schema").and_then(Value::as_str) {
+        Some(PROGRAM_SPACE_SCHEMA_V1) => {}
+        Some(other) => {
+            return Err(DomainError::UnsupportedSchema {
+                detected: Some(other.to_owned()),
+            });
+        }
+        None => return Err(DomainError::UnsupportedSchema { detected: None }),
+    }
+
+    let raw: RawProgramSpaceV1 =
+        serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))?;
+    // Defensive re-check: the schema probe above already rejected anything
+    // but a v1 discriminator before this strict v1-shaped deserialize ran,
+    // so this is unreachable in practice, not the primary guard.
+    if raw.schema != PROGRAM_SPACE_SCHEMA_V1 {
+        return Err(DomainError::UnsupportedSchema {
+            detected: Some(raw.schema),
+        });
+    }
+
+    let source: SourceRef = raw.source.try_into()?;
+    let repository = RepositoryDescriptor {
+        id: StableId::parse(raw.repository.id)?,
+        name: raw.repository.name,
+        root: raw.repository.root,
+        uri: raw.repository.uri,
+    };
+    let snapshot = SnapshotDescriptor {
+        id: StableId::parse(raw.snapshot.id)?,
+        base_revision: raw.snapshot.base_revision,
+        target_revision: raw.snapshot.target_revision,
+        tree_hash: ContentHash::parse(raw.snapshot.tree_hash)?,
+        dirty: raw.snapshot.dirty,
+        created_at: raw.snapshot.created_at,
+    };
+    let profile = ProfileDescriptor {
+        id: raw.profile.id,
+        version: raw.profile.version,
+        rule_set_hash: ContentHash::parse(raw.profile.rule_set_hash)?,
+        policy_version: raw.profile.policy_version,
+    };
+    let snapshot_id = snapshot.id.clone();
+    let (extraction, mut losses) = migrate_extraction_v1(raw.extraction, &snapshot_id)?;
+
+    let artifacts = raw
+        .artifacts
+        .into_iter()
+        .map(TryInto::try_into)
+        .collect::<Result<Vec<Artifact>>>()?;
+    let relations = raw
+        .relations
+        .into_iter()
+        .map(TryInto::try_into)
+        .collect::<Result<Vec<Relation>>>()?;
+    let contexts = raw
+        .contexts
+        .into_iter()
+        .map(TryInto::try_into)
+        .collect::<Result<Vec<ReviewContext>>>()?;
+    let invariants = raw
+        .invariants
+        .into_iter()
+        .map(TryInto::try_into)
+        .collect::<Result<Vec<Invariant>>>()?;
+    let evidence = raw
+        .evidence
+        .into_iter()
+        .map(|item| Evidence::from_input(item, snapshot_id.clone()))
+        .collect::<Result<Vec<Evidence>>>()?;
+
+    let program_space =
+        ProgramSpaceBuilder::new(source, repository, snapshot, profile, extraction)?
+            .with_artifacts(artifacts)
+            .with_relations(relations)
+            .with_contexts(contexts)
+            .with_invariants(invariants)
+            .with_evidence(evidence)
+            .build()?;
+
+    losses.sort_by(|left, right| left.id().cmp(right.id()));
+    let record = MigrationRecord {
+        schema: MIGRATION_RECORD_SCHEMA.to_owned(),
+        id: migration_record_id(&snapshot_id, &losses)?,
+        source_schema: PROGRAM_SPACE_SCHEMA_V1.to_owned(),
+        target_schema: PROGRAM_SPACE_SCHEMA_V2.to_owned(),
+        snapshot_id,
+        losses,
+    };
+
+    Ok((program_space, record))
 }
 
 pub(crate) fn attribute_bool(attributes: &BTreeMap<String, Value>, key: &str) -> bool {

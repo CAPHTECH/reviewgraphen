@@ -7,14 +7,19 @@
 
 | File | Schema ID / purpose |
 | --- | --- |
-| `reviewgraphen.input.schema.json` | `reviewgraphen.program_space.input.v1` — language-neutral ProgramSpace ingestion input。 |
+| `reviewgraphen.input.schema.json` | `reviewgraphen.program_space.input.v2` — current language-neutral ProgramSpace ingestion input; this stable generic path is used by the validation script。 |
+| `reviewgraphen.input.v1.schema.json` | Preserved `reviewgraphen.program_space.input.v1` legacy contract。 |
 | `reviewgraphen.obligation.schema.json` | `reviewgraphen.review_obligations.v2` — current versioned obligation universe and obligations; this stable generic path is used by the validation script。 |
 | `reviewgraphen.obligation.v1.schema.json` | Preserved `reviewgraphen.review_obligations.v1` legacy contract。 |
 | `reviewgraphen.report.schema.json` | `reviewgraphen.review.report.v1` — end-to-end review report。 |
-| `reviewgraphen.input.example.json` | Double-submit ProgramSpace fixture。 |
-| `reviewgraphen.obligation.example.json` | Current v2 five Node/Relation/Path/Invariant obligations。 |
+| `reviewgraphen.migration.schema.json` | `reviewgraphen.program_space.migration.v1` — explicit v1→v2 `MigrationRecord` output of `migrate_program_space_v1_to_v2`。 |
+| `reviewgraphen.input.example.json` | Current v2 double-submit ProgramSpace fixture, with source-traced `CapabilityDeclaration` capabilities。 |
+| `reviewgraphen.input.v1.example.json` | Preserved `reviewgraphen.program_space.input.v1` double-submit ProgramSpace fixture。 |
+| `reviewgraphen.obligation.example.json` | Current v2 nine obligations: five concrete Node/Relation/Path/Invariant obligations plus four `capability_gap.origin_rule@1` obligations (one per rule requiring the fixture's `partial` `concurrency_model`)。 |
 | `reviewgraphen.obligation.v1.example.json` | Preserved reviewed v1 obligation fixture。 |
 | `reviewgraphen.report.example.json` | Claim、evidence binding、verification、decision、finding、gluing、coverageの参照report。 |
+| `reviewgraphen.migration.example.json` | The exact canonical `migrate_program_space_v1_to_v2` output for `reviewgraphen.input.v1.example.json`: 5 `capability_source_backfill` losses, 2 `synthesized_limitation` losses (the fixture's two `partial` capabilities), and 1 `carried_limitation_trace` loss for its one nonempty-source v1 limitation。 |
+| `reviewgraphen.migration.example.sha256` | SHA-256 of `reviewgraphen.migration.example.json`'s canonical bytes, checked byte-for-byte against a real `migrate_program_space_v1_to_v2` run in `tests/m1.rs`。 |
 | `reviewgraphen.config.example.toml` | CLI/local runtime configuration example。 |
 
 ## Validation layers
@@ -49,6 +54,7 @@ pairs = [
     ("reviewgraphen.input.schema.json", "reviewgraphen.input.example.json"),
     ("reviewgraphen.obligation.schema.json", "reviewgraphen.obligation.example.json"),
     ("reviewgraphen.report.schema.json", "reviewgraphen.report.example.json"),
+    ("reviewgraphen.migration.schema.json", "reviewgraphen.migration.example.json"),
 ]
 
 for schema_name, example_name in pairs:
@@ -90,6 +96,58 @@ explicit exclusions, plus the canonical extractor capability, adapter
 completeness, and limitation inputs that qualify that denominator. Reordering
 those set-like inputs does not change the ID; changing the explicit denominator
 or a qualifying capability/completeness input does.
+
+ProgramSpace input is currently `reviewgraphen.program_space.input.v2`. Each
+`extraction.capabilities` value is a `CapabilityDeclaration` object
+(`state` plus non-empty, unique `source_ids`) instead of a bare completeness
+state string, and `extraction.limitations[].source_ids` is now required and
+non-empty; `related_capabilities` is an explicitly allowed limitation
+property. The v1 schema and fixture remain available under the explicit
+`.v1` names for compatibility tests. See
+[ADR 0011](../docs/adr/0011-program-space-v2-capability-trace.md) for the
+full cross-field completeness contract, the resolvable `source_ids` ID set,
+and the explicit v1→v2 migration path.
+
+`reviewgraphen.program_space.migration.v1` is the `MigrationRecord` that
+`migrate_program_space_v1_to_v2` returns alongside the migrated
+`ProgramSpace`. `source_schema`/`target_schema` are pinned `const` values
+(`reviewgraphen.program_space.input.v1`/`.v2`), not free-form strings. Its
+`losses` array is a closed, internally-tagged union of exactly four
+`MigrationLoss` kinds (`capability_source_backfill`,
+`synthesized_limitation`, `carried_limitation_trace`,
+`limitation_source_backfill`); each variant schema uses
+`additionalProperties: false` and a `const` discriminator so an unknown
+kind, a field from a different variant, or an empty `assigned_source_ids`
+on a backfill loss all fail validation rather than being silently accepted.
+A `synthesized_limitation` loss additionally constrains `state`/
+`limitation_kind` to exactly the three valid pairs (`partial`/
+`projection_loss`, `missing`/`capability_missing`, `unknown`/`unknown`) via
+a nested `oneOf`, rejecting `complete` and any mismatched pairing. See
+ADR 0011 §7 for what each loss kind records and when it is emitted.
+
+`reviewgraphen.migration.example.json` is not a hand-authored shape
+illustration: it is the literal, byte-exact canonical output of
+`migrate_program_space_v1_to_v2` run on the checked-in
+`reviewgraphen.input.v1.example.json`, including its real content-derived
+`migration:`/`migration_loss:`/`limitation:` IDs. The
+`migration_record_matches_the_checked_in_canonical_fixture_byte_for_byte`
+test in `tests/m1.rs` re-runs that same migration and asserts the canonical
+bytes — and the paired `reviewgraphen.migration.example.sha256` hash —
+match exactly, so an ID-derivation, ordering, or field change in the
+migration implementation fails this test instead of passing silently
+against a schema-only or self-consistency check. `migration_record_schema_validates_actual_migration_output`
+separately re-validates that same real output against the schema (shape,
+not exact bytes). Because the source v1 fixture's only limitation has a
+nonempty `source_ids`, this example does not exercise a
+`limitation_source_backfill` loss; that shape (and every state/kind
+pairing) is instead covered by the schema's dedicated positive/negative
+tests, which mutate a copy of this fixture rather than relying on the
+example to contain every case. Cross-field semantics this schema cannot
+express — for example that every `assigned_source_ids` equals exactly
+`[snapshot_id]`, that `limitation_id`/`capability` values resolve within
+the migrated `ProgramSpace`, or that `losses` is actually ID-ordered — are
+Rust contract guarantees enforced by `migrate_program_space_v1_to_v2`
+itself (ADR 0011 §7), not by this JSON Schema.
 
 ## Trust boundary
 

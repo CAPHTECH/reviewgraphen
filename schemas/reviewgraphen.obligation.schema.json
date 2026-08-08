@@ -50,6 +50,17 @@
         "critical"
       ]
     },
+    "riskImpact": {
+      "type": "string",
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical",
+        "unknown"
+      ]
+    },
     "confidence": {
       "type": "number",
       "minimum": 0.0,
@@ -489,7 +500,7 @@
       ],
       "properties": {
         "impact": {
-          "$ref": "#/$defs/severity"
+          "$ref": "#/$defs/riskImpact"
         },
         "exposure": {
           "type": "number",

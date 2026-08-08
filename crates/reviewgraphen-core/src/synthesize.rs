@@ -1,8 +1,8 @@
 use crate::program::{attribute_bool, attribute_string};
 use crate::review::ObligationParts;
 use crate::{
-    CanonicalJson, ContentHash, DomainError, IdRegistry, Obligation, ProgramSpace, Result,
-    StableId, VersionTuple,
+    CanonicalJson, CapabilityState, ContentHash, DomainError, IdRegistry, Obligation, ProgramSpace,
+    Result, StableId, VersionTuple,
 };
 use serde::{Serialize, Serializer};
 use serde_json::Value;
@@ -765,7 +765,7 @@ impl MvpRulePack {
             let missing = rule
                 .required_capabilities
                 .iter()
-                .filter(|capability| !capability_available(program, capability))
+                .filter(|capability| !capability_fully_available(program, capability))
                 .cloned()
                 .collect::<BTreeSet<_>>();
             if missing.is_empty() {
@@ -773,9 +773,14 @@ impl MvpRulePack {
             }
             let mut reasons = missing
                 .iter()
-                .map(|capability| format!("capability_missing:{capability}"))
+                .map(|capability| capability_gap_reason(program, capability))
                 .collect::<BTreeSet<_>>();
             reasons.insert(format!("origin_rule:{}", descriptor.id));
+            let missing_owned = missing
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<Vec<_>>();
+            let qualification_ids = capability_qualification_ids(program, &missing_owned);
             let fallback = obligation(
                 program,
                 ObligationSpec {
@@ -785,7 +790,7 @@ impl MvpRulePack {
                     target_refs: vec![program.snapshot_id().clone()],
                     property_id: CAPABILITY_GAP_PROPERTY,
                     context_ids: Vec::new(),
-                    required_capabilities: missing.iter().map(|item| (*item).to_owned()).collect(),
+                    required_capabilities: missing_owned.iter().cloned().collect(),
                     weight: fallback_weight(descriptor.id)?,
                     depends_on: Vec::new(),
                     generator_ids: BTreeSet::from([
@@ -796,7 +801,7 @@ impl MvpRulePack {
                 },
                 "unknown".to_owned(),
                 reasons,
-                BTreeSet::new(),
+                qualification_ids,
             )?;
             obligations.push(fallback);
         }
@@ -1007,7 +1012,7 @@ fn materialize(program: &ProgramSpace, spec: ObligationSpec) -> Result<Obligatio
     let missing = spec
         .required_capabilities
         .iter()
-        .filter(|capability| !capability_available(program, capability))
+        .filter(|capability| !capability_fully_available(program, capability))
         .cloned()
         .collect::<Vec<_>>();
     let (applicability_status, applicability_reasons, qualification_ids) = if missing.is_empty() {
@@ -1017,9 +1022,9 @@ fn materialize(program: &ProgramSpace, spec: ObligationSpec) -> Result<Obligatio
             "unknown".to_owned(),
             missing
                 .iter()
-                .map(|capability| format!("capability_missing:{capability}"))
+                .map(|capability| capability_gap_reason(program, capability))
                 .collect(),
-            BTreeSet::new(),
+            capability_qualification_ids(program, &missing),
         )
     };
     obligation(
@@ -1031,15 +1036,62 @@ fn materialize(program: &ProgramSpace, spec: ObligationSpec) -> Result<Obligatio
     )
 }
 
-fn capability_available(program: &ProgramSpace, capability: &str) -> bool {
+/// Only a `complete` capability fully satisfies a rule's completeness
+/// requirement. `partial`, `missing`, and `unknown` must all leave a targeted
+/// unknown obligation or a rule-level capability-gap obstruction rather than
+/// being silently treated as if the capability were fully available; already
+/// resolved facts still produce their (now `unknown`) obligation instead of
+/// being dropped.
+fn capability_fully_available(program: &ProgramSpace, capability: &str) -> bool {
     matches!(
         program
             .extraction()
             .capabilities
             .get(capability)
-            .map(String::as_str),
-        Some("complete" | "partial")
+            .map(|declaration| declaration.state),
+        Some(CapabilityState::Complete)
     )
+}
+
+/// A capability's gap reason distinguishes exactly why it did not satisfy a
+/// rule's completeness requirement: `partial` (some facts resolved, some
+/// not), `missing` (the adapter declared it entirely unavailable), `unknown`
+/// (the adapter never established a completeness result), and undeclared
+/// (no rule input ever named this capability at all). Collapsing any of
+/// these into a shared tag would hide which of those four distinct
+/// situations a reviewer is looking at.
+fn capability_gap_reason(program: &ProgramSpace, capability: &str) -> String {
+    let tag = match program
+        .extraction()
+        .capabilities
+        .get(capability)
+        .map(|declaration| declaration.state)
+    {
+        Some(CapabilityState::Partial) => "capability_partial",
+        Some(CapabilityState::Missing) => "capability_missing",
+        Some(CapabilityState::Unknown) => "capability_unknown",
+        None => "capability_undeclared",
+        // `capability_fully_available` already filters `Complete` out of the
+        // `missing` set this function is called against.
+        Some(CapabilityState::Complete) => "capability_missing",
+    };
+    format!("{tag}:{capability}")
+}
+
+/// Links an obligation targeted by an incomplete capability to the extraction
+/// limitations that explain the incompleteness, when the adapter tagged them.
+fn capability_qualification_ids(program: &ProgramSpace, missing: &[String]) -> BTreeSet<StableId> {
+    program
+        .extraction()
+        .limitations
+        .iter()
+        .filter(|limitation| {
+            missing
+                .iter()
+                .any(|capability| limitation.related_capabilities.contains(capability))
+        })
+        .map(|limitation| limitation.id.clone())
+        .collect()
 }
 
 fn obligation(
@@ -1119,6 +1171,25 @@ fn obligation(
         bindings.insert(
             "origin_rule".to_owned(),
             Value::String(origin_rule.to_owned()),
+        );
+    }
+    if spec.rule == CAPABILITY_GAP_RULE {
+        // A capability-gap obligation is explicitly versioned by the exact
+        // capability-state reasons it is grounded in (ADR 0011 §9): unlike a
+        // concrete rule obligation's ID, which is stable across a capability
+        // state change, a gap obligation's identity must change when the
+        // gap it represents changes (for example `partial` becoming
+        // `missing`), so a stale gap can never silently keep the same ID as
+        // a materially different one.
+        let capability_gap_reasons = applicability_reasons
+            .iter()
+            .filter(|reason| !reason.starts_with("origin_rule:"))
+            .cloned()
+            .map(Value::String)
+            .collect::<Vec<_>>();
+        bindings.insert(
+            "capability_gap_reasons".to_owned(),
+            Value::Array(capability_gap_reasons),
         );
     }
     let mut source_ids = spec.target_refs.clone();

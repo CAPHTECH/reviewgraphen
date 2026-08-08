@@ -48,6 +48,16 @@ pub enum DomainError {
     #[error("JSON adapter failure: {0}")]
     Json(String),
 
+    /// A ProgramSpace input declared the superseded v1 schema; normal
+    /// parsing requires an explicit migration to the current schema instead.
+    #[error("ProgramSpace input schema `{detected}` requires migration to `{required}`")]
+    MigrationRequired { detected: String, required: String },
+
+    /// A ProgramSpace input declared an unknown, missing, or non-string
+    /// schema discriminator.
+    #[error("unsupported ProgramSpace input schema (detected: {detected:?})")]
+    UnsupportedSchema { detected: Option<String> },
+
     /// Canonical JSON serialization failed.
     #[error("canonical JSON serialization failed: {0}")]
     CanonicalJson(String),

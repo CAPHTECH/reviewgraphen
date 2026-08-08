@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capht.tech/schemas/reviewgraphen/program-space-migration.v1.schema.json",
+  "title": "ReviewGraphen ProgramSpace v1→v2 Migration Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "source_schema",
+    "target_schema",
+    "snapshot_id",
+    "losses"
+  ],
+  "properties": {
+    "schema": {
+      "const": "reviewgraphen.program_space.migration.v1"
+    },
+    "id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "source_schema": {
+      "const": "reviewgraphen.program_space.input.v1"
+    },
+    "target_schema": {
+      "const": "reviewgraphen.program_space.input.v2"
+    },
+    "snapshot_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "losses": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/migrationLoss"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9_.:@/+-]*$"
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capabilityState": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "missing",
+        "unknown"
+      ]
+    },
+    "idSet": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/identifier"
+      },
+      "uniqueItems": true
+    },
+    "nonEmptyIdSet": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/identifier"
+      },
+      "uniqueItems": true
+    },
+    "migrationLoss": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/capabilitySourceBackfillLoss"
+        },
+        {
+          "$ref": "#/$defs/synthesizedLimitationLoss"
+        },
+        {
+          "$ref": "#/$defs/carriedLimitationTraceLoss"
+        },
+        {
+          "$ref": "#/$defs/limitationSourceBackfillLoss"
+        }
+      ]
+    },
+    "capabilitySourceBackfillLoss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "capability",
+        "state",
+        "assigned_source_ids"
+      ],
+      "properties": {
+        "kind": {
+          "const": "capability_source_backfill"
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "capability": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "state": {
+          "$ref": "#/$defs/capabilityState"
+        },
+        "assigned_source_ids": {
+          "$ref": "#/$defs/nonEmptyIdSet"
+        }
+      }
+    },
+    "synthesizedLimitationLoss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "capability",
+        "state",
+        "limitation_id",
+        "limitation_kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "synthesized_limitation"
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "capability": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "state": {
+          "type": "string"
+        },
+        "limitation_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "limitation_kind": {
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "state": {
+              "const": "partial"
+            },
+            "limitation_kind": {
+              "const": "projection_loss"
+            }
+          }
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "missing"
+            },
+            "limitation_kind": {
+              "const": "capability_missing"
+            }
+          }
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "unknown"
+            },
+            "limitation_kind": {
+              "const": "unknown"
+            }
+          }
+        }
+      ]
+    },
+    "carriedLimitationTraceLoss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "limitation_id",
+        "original_source_ids"
+      ],
+      "properties": {
+        "kind": {
+          "const": "carried_limitation_trace"
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "limitation_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "original_source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "limitationSourceBackfillLoss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "limitation_id",
+        "assigned_source_ids"
+      ],
+      "properties": {
+        "kind": {
+          "const": "limitation_source_backfill"
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "limitation_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "assigned_source_ids": {
+          "$ref": "#/$defs/nonEmptyIdSet"
+        }
+      }
+    }
+  }
+}

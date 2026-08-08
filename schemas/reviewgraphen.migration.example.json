@@ -1,0 +1,79 @@
+{
+  "id": "migration:sha256:d2e52ebe6a719f40bec1758186eef48703d2765ed7e1b58abc9a6124569d191c",
+  "losses": [
+    {
+      "capability": "concurrency_model",
+      "id": "migration_loss:sha256:05d7c9668be9f41f6b4a196c7082597457293b2852507c166c6b5f1518e74e21",
+      "kind": "synthesized_limitation",
+      "limitation_id": "limitation:sha256:d53a1ef43892c1941c2546fda1fd58db60b0fdaae48d43ecbc91b54272a5bfb5",
+      "limitation_kind": "projection_loss",
+      "state": "partial"
+    },
+    {
+      "assigned_source_ids": [
+        "snapshot:double-submit-v1"
+      ],
+      "capability": "interprocedural_data_flow",
+      "id": "migration_loss:sha256:0e0bf2afd3bbf16d18c1e7fc71d67399ec9194df78ce3ce4016186bc5b3ca0f8",
+      "kind": "capability_source_backfill",
+      "state": "partial"
+    },
+    {
+      "capability": "interprocedural_data_flow",
+      "id": "migration_loss:sha256:1a00097a1cabec532cee36f8f3b955d6f11c98dd274cccb8711e79abac0ca52c",
+      "kind": "synthesized_limitation",
+      "limitation_id": "limitation:sha256:e413033d6187c64812f9009c05d89c92deedde7b4bd7ec0b01f3ea82a3673f0a",
+      "limitation_kind": "projection_loss",
+      "state": "partial"
+    },
+    {
+      "id": "migration_loss:sha256:45fe762da217cd9ab5d81a43cbe0b10bd47e11d8b057dee6f9bc68966e66ec0d",
+      "kind": "carried_limitation_trace",
+      "limitation_id": "limitation:bounded-concurrency",
+      "original_source_ids": [
+        "invariant:payment-at-most-once",
+        "snapshot:double-submit-v1"
+      ]
+    },
+    {
+      "assigned_source_ids": [
+        "snapshot:double-submit-v1"
+      ],
+      "capability": "concurrency_model",
+      "id": "migration_loss:sha256:6ff9844eeb3a0d61adaf021b24de930db49b43fb8043ab1edd481e78978ec1b7",
+      "kind": "capability_source_backfill",
+      "state": "partial"
+    },
+    {
+      "assigned_source_ids": [
+        "snapshot:double-submit-v1"
+      ],
+      "capability": "direct_calls",
+      "id": "migration_loss:sha256:8d9a5f28f61fdaa901ed8bd8ea30bf40c9f1c40753a0ede1b0fdcf3b222d95ca",
+      "kind": "capability_source_backfill",
+      "state": "complete"
+    },
+    {
+      "assigned_source_ids": [
+        "snapshot:double-submit-v1"
+      ],
+      "capability": "ast",
+      "id": "migration_loss:sha256:c01d3a3e0e72b327b965d969c56f88944c09a43b1538502fa8a5753fe746b903",
+      "kind": "capability_source_backfill",
+      "state": "complete"
+    },
+    {
+      "assigned_source_ids": [
+        "snapshot:double-submit-v1"
+      ],
+      "capability": "test_mapping",
+      "id": "migration_loss:sha256:e55cefd31f66e035a46b7aa5235fc0c35f7cde14421ff39c21bde88d144579c0",
+      "kind": "capability_source_backfill",
+      "state": "complete"
+    }
+  ],
+  "schema": "reviewgraphen.program_space.migration.v1",
+  "snapshot_id": "snapshot:double-submit-v1",
+  "source_schema": "reviewgraphen.program_space.input.v1",
+  "target_schema": "reviewgraphen.program_space.input.v2"
+}

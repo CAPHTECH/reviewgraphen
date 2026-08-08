@@ -187,20 +187,29 @@ impl ReviewReport {
         let mut obstructions = aggregate
             .obligations()
             .filter(|obligation| obligation.applicability_status() == "unknown")
-            .map(|obligation| {
+            .flat_map(|obligation| {
+                obligation
+                    .applicability_reasons()
+                    .iter()
+                    .filter_map(move |reason| {
+                        capability_gap_kind(reason).map(|kind| (obligation, reason, kind))
+                    })
+            })
+            .map(|(obligation, reason, kind)| {
                 Ok(json!({
                     "id": StableId::derived(
                         "obstruction",
                         &BTreeMap::from([
                             ("obligation".to_owned(), Value::String(obligation.id().to_string())),
+                            ("reason".to_owned(), Value::String(reason.clone())),
                             ("universe".to_owned(), Value::String(aggregate.universe().id().to_string())),
                         ]),
                     )?,
-                    "kind": "capability_missing",
+                    "kind": kind,
                     "severity": "medium",
-                    "title": "Required extraction capability is unavailable",
+                    "title": capability_gap_obstruction_title(kind),
                     "source_ids": obligation.source_ids(),
-                    "required_resolution": obligation.applicability_reasons(),
+                    "required_resolution": [reason.clone()],
                     "blocks": [obligation.id().to_string()],
                     "review_status": "unreviewed",
                 }))
@@ -213,6 +222,17 @@ impl ReviewReport {
                 .collect::<Result<Vec<_>>>()?,
         );
         obstructions.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+        // Every capability-gap reason on an "unknown" obligation is already
+        // conveyed above as its own typed obstruction, and the qualifying
+        // limitation it points back to (when one exists) is a real
+        // `Extraction.limitations` entry included below. Re-emitting a
+        // second limitation keyed by the same `qualification_id` would
+        // duplicate that real record's ID with fabricated generic
+        // kind/description/severity, silently overwriting its actual
+        // classification (for example turning a `partial` capability's real
+        // `projection_loss` limitation into a fake `capability_missing`
+        // one). So this loop never invents a limitation from an obligation;
+        // it only lists the limitations the ProgramSpace actually declared.
         let mut report_limitations = aggregate
             .program()
             .extraction()
@@ -228,20 +248,6 @@ impl ReviewReport {
                 })
             })
             .collect::<Vec<_>>();
-        for obligation in aggregate
-            .obligations()
-            .filter(|obligation| obligation.applicability_status() == "unknown")
-        {
-            for qualification_id in obligation.qualification_ids() {
-                report_limitations.push(json!({
-                    "id": qualification_id,
-                    "kind": "capability_missing",
-                    "description": obligation.applicability_reasons().iter().cloned().collect::<Vec<_>>().join(", "),
-                    "severity": "medium",
-                    "source_ids": obligation.source_ids(),
-                }));
-            }
-        }
         report_limitations.extend(
             unresolved_executions
                 .iter()
@@ -442,6 +448,30 @@ fn report_executions(executions: &[UnresolvedExecution]) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// Classifies a `synthesize::capability_gap_reason` tag into its typed
+/// obstruction `kind`, or `None` for a reason this is not one of (for
+/// example `origin_rule:*`). Keeps the four capability-gap reason kinds
+/// (`partial`/`missing`/`unknown`/undeclared) distinguishable at the
+/// obstruction level instead of collapsing them into one kind.
+fn capability_gap_kind(reason: &str) -> Option<&'static str> {
+    match reason.split_once(':')?.0 {
+        "capability_partial" => Some("capability_partial"),
+        "capability_missing" => Some("capability_missing"),
+        "capability_unknown" => Some("capability_unknown"),
+        "capability_undeclared" => Some("capability_undeclared"),
+        _ => None,
+    }
+}
+
+fn capability_gap_obstruction_title(kind: &str) -> &'static str {
+    match kind {
+        "capability_partial" => "Required extraction capability is only partially available",
+        "capability_unknown" => "Required extraction capability completeness is unknown",
+        "capability_undeclared" => "Required extraction capability was never declared",
+        _ => "Required extraction capability is unavailable",
+    }
 }
 
 fn report_ratio(numerator: usize, denominator: usize, weighted: f64) -> Value {

@@ -1,5 +1,5 @@
 {
-  "schema": "reviewgraphen.program_space.input.v2",
+  "schema": "reviewgraphen.program_space.input.v1",
   "source": {
     "kind": "fixture",
     "locator": "examples/double-submit-payment",
@@ -599,68 +599,21 @@
       }
     ],
     "capabilities": {
-      "ast": {
-        "state": "complete",
-        "source_ids": [
-          "file:checkout-controller",
-          "file:payment-repository"
-        ]
-      },
-      "direct_calls": {
-        "state": "complete",
-        "source_ids": [
-          "relation:submit-calls-payment",
-          "relation:payment-calls-stripe"
-        ]
-      },
-      "interprocedural_data_flow": {
-        "state": "partial",
-        "source_ids": [
-          "relation:submit-calls-payment",
-          "relation:payment-calls-stripe"
-        ]
-      },
-      "concurrency_model": {
-        "state": "partial",
-        "source_ids": [
-          "event:buy-tap",
-          "relation:tap-handled-by-submit",
-          "relation:submit-writes-loading"
-        ]
-      },
-      "test_mapping": {
-        "state": "complete",
-        "source_ids": [
-          "relation:test-covers-path",
-          "test:double-submit"
-        ]
-      }
+      "ast": "complete",
+      "direct_calls": "complete",
+      "interprocedural_data_flow": "partial",
+      "concurrency_model": "partial",
+      "test_mapping": "complete"
     },
     "limitations": [
       {
         "id": "limitation:bounded-concurrency",
-        "kind": "projection_loss",
+        "kind": "capability_missing",
         "description": "The fixture represents two concurrent taps only; it is not an exhaustive scheduler proof.",
         "severity": "medium",
         "source_ids": [
           "snapshot:double-submit-v1",
           "invariant:payment-at-most-once"
-        ],
-        "related_capabilities": [
-          "concurrency_model"
-        ]
-      },
-      {
-        "id": "limitation:interprocedural-data-flow",
-        "kind": "projection_loss",
-        "description": "Data flow is manually traced through the submit-to-charge call chain only; it does not cover StripeClient's internal implementation or any indirect or dynamic call paths.",
-        "severity": "medium",
-        "source_ids": [
-          "snapshot:double-submit-v1",
-          "relation:payment-calls-stripe"
-        ],
-        "related_capabilities": [
-          "interprocedural_data_flow"
         ]
       }
     ]

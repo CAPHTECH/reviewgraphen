@@ -1,11 +1,15 @@
 use proptest::prelude::*;
 use reviewgraphen_core::{
+    AdapterDescriptor, AdapterStatus, Artifact, CapabilityDeclaration, CapabilityState,
     ClaimDisposition, ClaimPolarity, ContentHash, Coverage, Decision, DecisionOutcome, DomainError,
     EventAdmissions, EventCommand, EventEnvelope, EventLog, Evidence, EvidenceBinding,
-    EvidenceDetails, EvidenceRelation, Finding, FindingStatus, FindingTrace, IdRegistry,
-    MvpRulePack, ObligationLifecycle, ProgramSpace, Projection, Provenance, ReviewAggregate,
-    ReviewClaim, ReviewReport, SourceRef, StableId, TrustedHumanAdmission, Verification,
-    VerificationOutcome, VersionTuple, canonical_json,
+    EvidenceDetails, EvidenceRelation, Extraction, Finding, FindingStatus, FindingTrace,
+    IdRegistry, Invariant, Limitation, LimitationKind, Location, MigrationLoss, MigrationRecord,
+    MvpRulePack, ObligationLifecycle, ProfileDescriptor, ProgramSpace, ProgramSpaceBuilder,
+    Projection, Provenance, Relation, RepositoryDescriptor, ReviewAggregate, ReviewClaim,
+    ReviewContext, ReviewReport, Severity, SnapshotDescriptor, SourceRef, StableId,
+    TrustedHumanAdmission, Verification, VerificationOutcome, VersionTuple, canonical_json,
+    migrate_program_space_v1_to_v2,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +23,14 @@ const LEGACY_OBLIGATION_SCHEMA: &[u8] =
     include_bytes!("../../../schemas/reviewgraphen.obligation.v1.schema.json");
 const LEGACY_OBLIGATION_EXAMPLE: &[u8] =
     include_bytes!("../../../schemas/reviewgraphen.obligation.v1.example.json");
+const LEGACY_INPUT_EXAMPLE: &[u8] =
+    include_bytes!("../../../schemas/reviewgraphen.input.v1.example.json");
+const MIGRATION_SCHEMA: &[u8] =
+    include_bytes!("../../../schemas/reviewgraphen.migration.schema.json");
+const MIGRATION_EXAMPLE: &[u8] =
+    include_bytes!("../../../schemas/reviewgraphen.migration.example.json");
+const MIGRATION_RECORD_HASH: &str =
+    include_str!("../../../schemas/reviewgraphen.migration.example.sha256");
 const REPORT_SCHEMA: &[u8] = include_bytes!("../../../schemas/reviewgraphen.report.schema.json");
 const EMPTY_REPORT_FIXTURE: &[u8] = include_bytes!("fixtures/m1-empty-report.json");
 const POPULATED_REPORT_FIXTURE: &[u8] = include_bytes!("fixtures/m1-populated-report.json");
@@ -44,6 +56,12 @@ struct ObligationSemanticTuple {
     max_relation_depth: u64,
     include_tests: bool,
     include_existing_evidence: bool,
+    // `None` for a concrete rule obligation. A capability-gap obligation's
+    // rule/property/context/capability shape is identical across every
+    // origin rule that shares the same missing-capability set, so without
+    // this field distinct gap obligations for different origin rules would
+    // collide into the same tuple.
+    origin_rule: Option<String>,
 }
 
 fn required_string(value: &Value, pointer: &str) -> std::result::Result<String, String> {
@@ -131,6 +149,10 @@ fn obligation_semantics(
                 obligation,
                 "/context_requirement/include_existing_evidence",
             )?,
+            origin_rule: obligation
+                .pointer("/provenance/origin_rule")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
         };
         if !semantics.insert(semantic) {
             return Err("duplicate obligation semantic tuple".to_owned());
@@ -156,8 +178,28 @@ fn assert_legacy_v1_corresponds_to_resynthesis(
     if current_snapshot != legacy_snapshot {
         return Err("v2 re-synthesis snapshot does not match the legacy fixture".to_owned());
     }
+    // v1 never synthesized capability-gap obligations at all, so the legacy
+    // fixture's semantics can only correspond to the *concrete* subset of
+    // the v2 re-synthesis (`origin_rule` absent); v2's capability-gap
+    // obligations are an explicit extra the legacy fixture never claimed.
+    let concrete_only = {
+        let mut filtered = resynthesized.clone();
+        filtered["obligations"] = Value::Array(
+            resynthesized["obligations"]
+                .as_array()
+                .ok_or_else(|| "missing obligations array".to_owned())?
+                .iter()
+                .filter(|item| {
+                    item.pointer("/provenance/origin_rule")
+                        .is_none_or(Value::is_null)
+                })
+                .cloned()
+                .collect(),
+        );
+        filtered
+    };
     let legacy_semantics = obligation_semantics(legacy)?;
-    let current_semantics = obligation_semantics(&resynthesized)?;
+    let current_semantics = obligation_semantics(&concrete_only)?;
     if legacy_semantics != current_semantics {
         return Err("legacy obligation semantics do not match v2 re-synthesis".to_owned());
     }
@@ -601,12 +643,20 @@ fn populated_report_log() -> EventLog {
 }
 
 #[test]
-fn reference_obligation_semantics_are_an_independent_five_item_oracle() {
+fn reference_obligation_semantics_are_a_nine_item_oracle_of_five_concrete_and_four_gaps() {
     let bundle = MvpRulePack::synthesize(&program()).expect("synthesis");
     let value: Value = serde_json::from_slice(bundle.contract().canonical().bytes()).expect("JSON");
     let obligations = value["obligations"].as_array().expect("obligations array");
-    let semantics = obligations
+    // 5 concrete rule obligations plus one origin-rule capability-gap
+    // obligation for every rule that requires the base fixture's `partial`
+    // concurrency_model (node/reentry/path/invariant;
+    // relation.changed_call_contract@1 needs only direct_calls, which is
+    // `complete` here, so it never gaps).
+    assert_eq!(obligations.len(), 9);
+
+    let concrete_semantics = obligations
         .iter()
+        .filter(|item| item["target"]["kind"] != "subgraph")
         .map(|item| {
             (
                 item["target"]["kind"].as_str().unwrap(),
@@ -627,7 +677,7 @@ fn reference_obligation_semantics_are_an_independent_five_item_oracle() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        semantics,
+        concrete_semantics,
         vec![
             (
                 "node",
@@ -664,6 +714,42 @@ fn reference_obligation_semantics_are_an_independent_five_item_oracle() {
                 vec!["context:payment", "context:test", "context:ui-event"]
             ),
         ]
+    );
+
+    let gap_semantics = obligations
+        .iter()
+        .filter(|item| item["target"]["kind"] == "subgraph")
+        .map(|item| {
+            (
+                item["version"]["rule"].as_str().unwrap(),
+                item["provenance"]["origin_rule"].as_str().unwrap(),
+                item["applicability"]["reasons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_str().unwrap())
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(gap_semantics.len(), 4);
+    for (rule, origin_rule, reasons) in &gap_semantics {
+        assert_eq!(*rule, "capability_gap.origin_rule@1");
+        assert!(reasons.contains("capability_partial:concurrency_model"));
+        assert!(reasons.contains(format!("origin_rule:{origin_rule}").as_str()));
+    }
+    let origin_rules = gap_semantics
+        .iter()
+        .map(|(_, origin_rule, _)| *origin_rule)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        origin_rules,
+        BTreeSet::from([
+            "node.changed_public_symbol@1",
+            "relation.concurrent_reentry@1",
+            "path.external_side_effect@1",
+            "invariant.payment_at_most_once@1",
+        ])
     );
 }
 
@@ -761,13 +847,30 @@ fn obligation_contract_and_report_adapter_validate_checked_in_schemas() {
         json!([]),
         "the retained reference ProgramSpace has no declared policy exclusions"
     );
+    // The retained fixture's `concurrency_model` capability is `partial`, so
+    // the v2 re-synthesis legitimately carries capability-gap extras beyond
+    // what the legacy v1 fixture ever represented; only the concrete
+    // (non-gap) obligations correspond 1:1 with the legacy semantics above.
+    let (gap_obligations, concrete_obligations): (Vec<_>, Vec<_>) = resynthesized["obligations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .partition(|item| {
+            item["provenance"]
+                .get("origin_rule")
+                .is_some_and(|v| !v.is_null())
+        });
     assert!(
-        resynthesized["obligations"]
-            .as_array()
-            .unwrap()
+        concrete_obligations
             .iter()
             .all(|item| item["provenance"].get("origin_rule").is_none()),
-        "the retained complete ProgramSpace has no capability-gap origin trace to recover"
+        "a concrete obligation never carries a capability-gap origin trace"
+    );
+    assert_eq!(
+        gap_obligations.len(),
+        4,
+        "the partial concurrency_model capability produces exactly the v2 capability-gap extras \
+         the legacy v1 fixture never represented"
     );
     let mut unrelated_legacy = legacy_fixture.clone();
     unrelated_legacy["obligations"][0]["property"]["id"] = json!("unrelated.property");
@@ -955,9 +1058,9 @@ fn deterministic_reorder_and_fixed_fixture_bytes_are_stable() {
     assert_eq!(original.universe().id(), reordered.universe().id());
     assert_eq!(
         original.contract().canonical().hash().to_string(),
-        "sha256:ddfec2ef04bef43ea2c69ad1c3d7307da22a3974cdaa0b6eafb28b92d706edce"
+        "sha256:84c8a874511624775d140baed272b651599e92cb44db1cb512f8f17bdb3a4de8"
     );
-    assert_eq!(original.contract().canonical().bytes().len(), 9753);
+    assert_eq!(original.contract().canonical().bytes().len(), 17352);
 }
 
 #[test]
@@ -1346,14 +1449,19 @@ fn capability_gaps_remain_unknown_obligations_in_the_coverage_denominator() {
     let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&input).unwrap()).unwrap();
     let bundle = MvpRulePack::synthesize(&program).unwrap();
     assert!(bundle.universe().exclusions().is_empty());
-    assert_eq!(bundle.universe().raw_denominator(), 9);
+    // 5 concrete rule obligations, unaffected by capability state, plus one
+    // origin-rule capability-gap obligation for every rule with a missing
+    // capability: node/reentry/path/invariant already gap on `partial`
+    // concurrency_model, and removing `direct_calls` now also gaps
+    // relation.changed_call_contract@1 (complete in the base fixture).
+    assert_eq!(bundle.universe().raw_denominator(), 10);
     assert_eq!(
         bundle
             .obligations()
             .iter()
             .filter(|obligation| obligation.version().rule() == "capability_gap.origin_rule@1")
             .count(),
-        4,
+        5,
         "concrete candidates do not hide origin-rule capability gaps"
     );
     assert!(bundle.obligations().iter().all(|obligation| {
@@ -1382,6 +1490,9 @@ fn capability_gaps_remain_unknown_obligations_in_the_coverage_denominator() {
                     || item["applicability"]["status"] == "applicable"
             })
     );
+    // `concurrency_model` is declared `partial`; `direct_calls` is now
+    // entirely undeclared. These are two distinct reason kinds and must not
+    // collapse into the same tag.
     assert!(
         contract["obligations"]
             .as_array()
@@ -1392,8 +1503,37 @@ fn capability_gaps_remain_unknown_obligations_in_the_coverage_denominator() {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|reason| reason.as_str().unwrap().starts_with("capability_missing:"))
-            })
+                    .any(|reason| reason == "capability_partial:concurrency_model")
+            }),
+        "a partial capability keeps its own distinct reason tag"
+    );
+    assert!(
+        contract["obligations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| {
+                item["applicability"]["reasons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|reason| reason == "capability_undeclared:direct_calls")
+            }),
+        "an undeclared capability is never reported as capability_missing"
+    );
+    assert!(
+        contract["obligations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| {
+                item["applicability"]["reasons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|reason| reason.as_str().unwrap() != "capability_missing:direct_calls")
+            }),
+        "direct_calls is undeclared here, not declared `missing`"
     );
 }
 
@@ -1472,6 +1612,66 @@ fn schema_and_domain_rejection_corpus_keeps_the_boundary_explicit() {
             ProgramSpace::from_json_slice(&serde_json::to_vec(domain_rejected).unwrap()).is_err()
         );
     }
+}
+
+#[test]
+fn v2_program_space_roundtrips_with_current_schema() {
+    let original = program();
+    let bytes = serde_json::to_vec(&original).unwrap();
+    let roundtripped = ProgramSpace::from_json_slice(&bytes).unwrap();
+    assert_eq!(original, roundtripped);
+    let serialized: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        serialized["schema"],
+        json!("reviewgraphen.program_space.input.v2")
+    );
+}
+
+#[test]
+fn v1_program_space_requires_explicit_migration() {
+    let error = ProgramSpace::from_json_slice(LEGACY_INPUT_EXAMPLE).unwrap_err();
+    assert_eq!(
+        error,
+        DomainError::MigrationRequired {
+            detected: "reviewgraphen.program_space.input.v1".to_owned(),
+            required: "reviewgraphen.program_space.input.v2".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn unsupported_program_space_schema_is_typed() {
+    let mut unknown_schema: Value = serde_json::from_slice(FIXTURE).unwrap();
+    unknown_schema["schema"] = json!("reviewgraphen.program_space.input.v3");
+    assert_eq!(
+        ProgramSpace::from_json_slice(&serde_json::to_vec(&unknown_schema).unwrap()).unwrap_err(),
+        DomainError::UnsupportedSchema {
+            detected: Some("reviewgraphen.program_space.input.v3".to_owned())
+        }
+    );
+
+    let mut missing_schema: Value = serde_json::from_slice(FIXTURE).unwrap();
+    missing_schema.as_object_mut().unwrap().remove("schema");
+    assert_eq!(
+        ProgramSpace::from_json_slice(&serde_json::to_vec(&missing_schema).unwrap()).unwrap_err(),
+        DomainError::UnsupportedSchema { detected: None }
+    );
+
+    let mut non_string_schema: Value = serde_json::from_slice(FIXTURE).unwrap();
+    non_string_schema["schema"] = json!(2);
+    assert_eq!(
+        ProgramSpace::from_json_slice(&serde_json::to_vec(&non_string_schema).unwrap())
+            .unwrap_err(),
+        DomainError::UnsupportedSchema { detected: None }
+    );
+}
+
+#[test]
+fn malformed_program_space_json_remains_json_error() {
+    assert!(matches!(
+        ProgramSpace::from_json_slice(b"{"),
+        Err(DomainError::Json(_))
+    ));
 }
 
 #[test]
@@ -2286,6 +2486,13 @@ fn capability_missing_without_concrete_targets_retains_a_conservative_unknown_de
         .as_object_mut()
         .unwrap()
         .remove("direct_calls");
+    // `concurrency_model`'s source_ids names this relation directly; it must
+    // be dropped alongside the relation itself or the capability's own
+    // source trace becomes dangling.
+    input["extraction"]["capabilities"]["concurrency_model"]["source_ids"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|source_id| source_id != "relation:tap-handled-by-submit");
     input["relations"]
         .as_array_mut()
         .unwrap()
@@ -2327,7 +2534,8 @@ fn capability_missing_without_concrete_targets_retains_a_conservative_unknown_de
     assert!(
         fallback
             .applicability_reasons()
-            .contains("capability_missing:direct_calls")
+            .contains("capability_undeclared:direct_calls"),
+        "direct_calls was removed from the declarations, not declared `missing`"
     );
     assert!(fallback.source_ids().contains(program.repository_id()));
     assert!(fallback.source_ids().contains(program.snapshot_id()));
@@ -2429,11 +2637,45 @@ fn missing_and_unknown_capabilities_are_obstructions_not_exclusions() {
         .map(|item| item.id().clone())
         .collect::<BTreeSet<_>>();
     let mut capability_universes = BTreeSet::new();
-    for state in [None, Some("unknown")] {
+    // `None` undeclares `test_mapping` entirely (removed from the map);
+    // `Some("unknown")` declares it explicitly `unknown`, which requires its
+    // own source-backed related limitation under the v2 cross-field
+    // contract. These are two distinct reason kinds
+    // (`capability_undeclared:test_mapping` vs
+    // `capability_unknown:test_mapping`), never collapsed into one tag.
+    for (state, expected_obstruction_kind, expected_reason) in [
+        (
+            None,
+            "capability_undeclared",
+            "capability_undeclared:test_mapping",
+        ),
+        (
+            Some("unknown"),
+            "capability_unknown",
+            "capability_unknown:test_mapping",
+        ),
+    ] {
         let mut input: Value = serde_json::from_slice(FIXTURE).unwrap();
         let capabilities = input["extraction"]["capabilities"].as_object_mut().unwrap();
         if let Some(state) = state {
-            capabilities.insert("test_mapping".to_owned(), json!(state));
+            capabilities.insert(
+                "test_mapping".to_owned(),
+                json!({
+                    "state": state,
+                    "source_ids": ["snapshot:double-submit-v1"],
+                }),
+            );
+            input["extraction"]["limitations"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "id": "limitation:test-mapping-unknown",
+                    "kind": "unknown",
+                    "description": "Test-to-target mapping completeness could not be established for this snapshot.",
+                    "severity": "medium",
+                    "source_ids": ["snapshot:double-submit-v1"],
+                    "related_capabilities": ["test_mapping"],
+                }));
         } else {
             capabilities.remove("test_mapping");
         }
@@ -2448,8 +2690,10 @@ fn missing_and_unknown_capabilities_are_obstructions_not_exclusions() {
             .map(|item| item.id().clone())
             .collect::<BTreeSet<_>>();
         assert!(!gap_ids.is_empty());
-        assert_ne!(gap_ids, complete_gap_ids);
-        assert_eq!(bundle.universe().raw_denominator(), 7);
+        assert_ne!(
+            gap_ids, complete_gap_ids,
+            "a capability-gap obligation is versioned by its exact capability reasons"
+        );
         assert!(bundle.universe().exclusions().is_empty());
         assert!(
             bundle
@@ -2460,18 +2704,18 @@ fn missing_and_unknown_capabilities_are_obstructions_not_exclusions() {
         let (universe, obligations) = bundle.into_parts();
         let aggregate = ReviewAggregate::new(program, universe, obligations).unwrap();
         let report = ReviewReport::from_aggregate(id("run:capability"), &aggregate).unwrap();
+        let obstructions = report.body()["result"]["obstructions"].as_array().unwrap();
+        assert!(!obstructions.is_empty());
         assert!(
-            !report.body()["result"]["obstructions"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            report.body()["coverage"]["limitations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|item| item["kind"] == "capability_missing")
+            obstructions.iter().any(|item| {
+                item["kind"] == expected_obstruction_kind
+                    && item["required_resolution"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|reason| reason == expected_reason)
+            }),
+            "expected a `{expected_obstruction_kind}` obstruction for `{expected_reason}`"
         );
     }
     assert_eq!(
@@ -2493,7 +2737,13 @@ fn explicit_policy_exclusions_retain_exact_floating_weight() {
         .unwrap()["attributes"]["reviewgraphen_excluded"] = json!("policy:fixture-only");
     let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&input).unwrap()).unwrap();
     let bundle = MvpRulePack::synthesize(&program).unwrap();
-    assert_eq!(bundle.universe().raw_denominator(), 4);
+    // Excluding the node candidate drops it from 5 to 4 concrete
+    // obligations, but capability-gap generation is unconditional of
+    // exclusion: the base fixture's 4 origin-rule gaps (node/reentry/path/
+    // invariant, all `partial` on concurrency_model) remain in the
+    // denominator regardless of whether node's own concrete candidate was
+    // excluded.
+    assert_eq!(bundle.universe().raw_denominator(), 8);
     assert_ne!(bundle.universe().id(), original.universe().id());
     assert_eq!(bundle.universe().exclusions().len(), 1);
     assert_eq!(bundle.universe().excluded_weight(), 3.0);
@@ -2641,7 +2891,7 @@ fn report_visited_and_weighted_stage_values_follow_lifecycle_and_weights() {
     let in_progress = ReviewReport::from_aggregate(log.run_id().clone(), log.aggregate()).unwrap();
     assert_eq!(
         in_progress.body()["coverage"]["stages"]["visited"]["weighted"],
-        json!(3.0 / 24.5)
+        json!(3.0 / 44.0)
     );
     log.append(EventCommand::obligation_transition(
         obligation,
@@ -2651,7 +2901,7 @@ fn report_visited_and_weighted_stage_values_follow_lifecycle_and_weights() {
     let completed = ReviewReport::from_aggregate(log.run_id().clone(), log.aggregate()).unwrap();
     assert_eq!(
         completed.body()["coverage"]["stages"]["completed"]["weighted"],
-        json!(3.0 / 24.5)
+        json!(3.0 / 44.0)
     );
 }
 
@@ -2755,4 +3005,1422 @@ proptest! {
             changed.contract().canonical().bytes(),
         );
     }
+}
+
+fn location_test_provenance() -> Provenance {
+    Provenance::accepted_deterministic(
+        SourceRef::new("fixture", "location-test-fixture", None, None, None).unwrap(),
+        "manual.location_test@1",
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+fn location_test_extraction() -> Extraction {
+    Extraction::new(
+        ContentHash::parse("sha256:1111111111111111").unwrap(),
+        vec![
+            AdapterDescriptor::new(
+                "location-test-adapter",
+                "1",
+                AdapterStatus::Complete,
+                Some(1),
+                Some(1),
+            )
+            .unwrap(),
+        ],
+        BTreeMap::new(),
+        Vec::new(),
+    )
+    .unwrap()
+}
+
+fn boundary_test_repository() -> RepositoryDescriptor {
+    RepositoryDescriptor {
+        id: id("repository:location-test"),
+        name: "location-test-repo".to_owned(),
+        root: None,
+        uri: None,
+    }
+}
+
+fn boundary_test_snapshot() -> SnapshotDescriptor {
+    SnapshotDescriptor {
+        id: id("snapshot:location-test"),
+        base_revision: "base".to_owned(),
+        target_revision: "target".to_owned(),
+        tree_hash: ContentHash::parse("sha256:2222222222222222").unwrap(),
+        dirty: false,
+        created_at: None,
+    }
+}
+
+fn boundary_test_profile() -> ProfileDescriptor {
+    ProfileDescriptor {
+        id: "code-review".to_owned(),
+        version: "1".to_owned(),
+        rule_set_hash: ContentHash::parse("sha256:3333333333333333").unwrap(),
+        policy_version: "policy@1".to_owned(),
+    }
+}
+
+fn location_test_builder() -> ProgramSpaceBuilder {
+    ProgramSpaceBuilder::new(
+        SourceRef::new("fixture", "location-test-fixture", None, None, None).unwrap(),
+        boundary_test_repository(),
+        boundary_test_snapshot(),
+        boundary_test_profile(),
+        location_test_extraction(),
+    )
+    .unwrap()
+}
+
+fn location_test_artifact(artifact_id: &str, location: Option<Location>) -> Artifact {
+    Artifact::new(
+        id(artifact_id),
+        "function",
+        "Test::function",
+        None,
+        location,
+        None,
+        BTreeMap::new(),
+        location_test_provenance(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn location_rejects_absolute_dot_and_windows_paths() {
+    for bad_path in [
+        "/etc/passwd",
+        "\\etc\\passwd",
+        "C:\\Users\\evil",
+        "C:/Users/evil",
+        ".",
+        "src/../etc/passwd",
+        "src/./main.rs",
+        "src//main.rs",
+        "",
+    ] {
+        assert!(
+            Location::new(bad_path, None, None, None, None, None).is_err(),
+            "expected `{bad_path}` to be rejected as a non-normalized or non-relative path"
+        );
+    }
+}
+
+#[test]
+fn location_accepts_a_normalized_workspace_relative_path() {
+    assert!(
+        Location::new(
+            "src/checkout_controller.rs",
+            Some(14),
+            Some(25),
+            None,
+            None,
+            None
+        )
+        .is_ok()
+    );
+    assert!(Location::new("src/checkout_controller.rs", None, None, None, None, None).is_ok());
+}
+
+#[test]
+fn location_range_requires_line_pair_and_forbids_orphan_columns() {
+    assert!(Location::new("src/main.rs", Some(1), None, None, None, None).is_err());
+    assert!(Location::new("src/main.rs", None, Some(1), None, None, None).is_err());
+    assert!(Location::new("src/main.rs", None, None, Some(1), None, None).is_err());
+    assert!(Location::new("src/main.rs", None, None, None, Some(1), None).is_err());
+    assert!(Location::new("src/main.rs", Some(1), Some(1), Some(1), None, None).is_err());
+    assert!(Location::new("src/main.rs", None, None, Some(1), Some(2), None).is_err());
+    assert!(Location::new("src/main.rs", Some(1), Some(1), Some(1), Some(2), None).is_ok());
+}
+
+#[test]
+fn location_range_must_be_one_based_and_ordered_start_at_most_end() {
+    assert!(Location::new("src/main.rs", Some(0), Some(1), None, None, None).is_err());
+    assert!(Location::new("src/main.rs", Some(1), Some(1), Some(0), Some(1), None).is_err());
+    assert!(Location::new("src/main.rs", Some(5), Some(3), None, None, None).is_err());
+    assert!(Location::new("src/main.rs", Some(3), Some(3), Some(5), Some(2), None).is_err());
+    assert!(Location::new("src/main.rs", Some(3), Some(3), Some(2), Some(5), None).is_ok());
+    assert!(Location::new("src/main.rs", Some(3), Some(3), Some(3), Some(3), None).is_ok());
+    // Column order is only constrained on the same line; a multi-line range
+    // does not compare start/end columns against each other.
+    assert!(Location::new("src/main.rs", Some(3), Some(4), Some(9), Some(1), None).is_ok());
+}
+
+#[test]
+fn program_space_builder_revalidates_a_struct_literal_location_with_a_traversal_path() {
+    let bad_location = Location {
+        path: "../etc/passwd".to_owned(),
+        start_line: None,
+        end_line: None,
+        start_column: None,
+        end_column: None,
+        symbol_id: None,
+    };
+    let bad_artifact = Artifact {
+        id: id("function:bad-location"),
+        kind: "function".to_owned(),
+        label: "Bad::location".to_owned(),
+        language: None,
+        location: Some(bad_location),
+        content_hash: None,
+        attributes: BTreeMap::new(),
+        provenance: location_test_provenance(),
+    };
+    let result = location_test_builder().with_artifact(bad_artifact).build();
+    assert!(matches!(result, Err(DomainError::Validation(_))));
+}
+
+#[test]
+fn program_space_builder_revalidates_a_struct_literal_location_with_an_orphan_line() {
+    let bad_location = Location {
+        path: "src/main.rs".to_owned(),
+        start_line: Some(1),
+        end_line: None,
+        start_column: None,
+        end_column: None,
+        symbol_id: None,
+    };
+    let bad_artifact = Artifact {
+        id: id("function:bad-range"),
+        kind: "function".to_owned(),
+        label: "Bad::range".to_owned(),
+        language: None,
+        location: Some(bad_location),
+        content_hash: None,
+        attributes: BTreeMap::new(),
+        provenance: location_test_provenance(),
+    };
+    let result = location_test_builder().with_artifact(bad_artifact).build();
+    assert!(matches!(result, Err(DomainError::Validation(_))));
+}
+
+#[test]
+fn program_space_builder_accepts_a_valid_typed_artifact_with_a_location() {
+    let good_location = Location::new("src/main.rs", Some(1), Some(2), None, None, None).unwrap();
+    let artifact = location_test_artifact("function:good-location", Some(good_location));
+    let program = location_test_builder()
+        .with_artifact(artifact)
+        .build()
+        .unwrap();
+    assert_eq!(program.artifacts().len(), 1);
+}
+
+#[test]
+fn program_space_builder_revalidates_a_struct_literal_artifact_with_an_invalid_kind() {
+    let bad_artifact = Artifact {
+        id: id("function:bad-kind"),
+        kind: "not_a_kind".to_owned(),
+        label: "Bad::kind".to_owned(),
+        language: None,
+        location: None,
+        content_hash: None,
+        attributes: BTreeMap::new(),
+        provenance: location_test_provenance(),
+    };
+    let result = location_test_builder().with_artifact(bad_artifact).build();
+    assert!(matches!(result, Err(DomainError::Validation(_))));
+}
+
+#[test]
+fn program_space_builder_new_revalidates_a_struct_literal_repository_with_an_empty_name() {
+    let bad_repository = RepositoryDescriptor {
+        id: id("repository:location-test"),
+        name: String::new(),
+        root: None,
+        uri: None,
+    };
+    let result = ProgramSpaceBuilder::new(
+        SourceRef::new("fixture", "location-test-fixture", None, None, None).unwrap(),
+        bad_repository,
+        boundary_test_snapshot(),
+        boundary_test_profile(),
+        location_test_extraction(),
+    );
+    assert!(matches!(result, Err(DomainError::EmptyField { .. })));
+}
+
+#[test]
+fn program_space_builder_new_revalidates_a_struct_literal_snapshot_with_an_empty_revision() {
+    let bad_snapshot = SnapshotDescriptor {
+        id: id("snapshot:location-test"),
+        base_revision: String::new(),
+        target_revision: "target".to_owned(),
+        tree_hash: ContentHash::parse("sha256:2222222222222222").unwrap(),
+        dirty: false,
+        created_at: None,
+    };
+    let result = ProgramSpaceBuilder::new(
+        SourceRef::new("fixture", "location-test-fixture", None, None, None).unwrap(),
+        boundary_test_repository(),
+        bad_snapshot,
+        boundary_test_profile(),
+        location_test_extraction(),
+    );
+    assert!(matches!(result, Err(DomainError::EmptyField { .. })));
+}
+
+#[test]
+fn program_space_builder_new_revalidates_a_struct_literal_profile_with_an_empty_id() {
+    let bad_profile = ProfileDescriptor {
+        id: String::new(),
+        version: "1".to_owned(),
+        rule_set_hash: ContentHash::parse("sha256:3333333333333333").unwrap(),
+        policy_version: "policy@1".to_owned(),
+    };
+    let result = ProgramSpaceBuilder::new(
+        SourceRef::new("fixture", "location-test-fixture", None, None, None).unwrap(),
+        boundary_test_repository(),
+        boundary_test_snapshot(),
+        bad_profile,
+        location_test_extraction(),
+    );
+    assert!(matches!(result, Err(DomainError::EmptyField { .. })));
+}
+
+#[test]
+fn program_space_builder_revalidates_a_struct_literal_relation_with_an_empty_kind() {
+    let bad_relation = Relation {
+        id: id("relation:bad-kind"),
+        kind: String::new(),
+        source_id: id("function:does-not-matter"),
+        target_ids: BTreeSet::from([id("function:does-not-matter-either")]),
+        directed: true,
+        attributes: BTreeMap::new(),
+        provenance: location_test_provenance(),
+    };
+    let artifact = location_test_artifact("function:relation-host", None);
+    let result = location_test_builder()
+        .with_artifact(artifact)
+        .with_relation(bad_relation)
+        .build();
+    assert!(matches!(result, Err(DomainError::EmptyField { .. })));
+}
+
+#[test]
+fn program_space_builder_revalidates_a_struct_literal_context_with_an_empty_label() {
+    let bad_context = ReviewContext {
+        id: id("context:bad-label"),
+        kind: "ui".to_owned(),
+        label: String::new(),
+        member_ids: BTreeSet::from([id("function:does-not-matter")]),
+        attributes: BTreeMap::new(),
+        provenance: location_test_provenance(),
+    };
+    let artifact = location_test_artifact("function:context-host", None);
+    let result = location_test_builder()
+        .with_artifact(artifact)
+        .with_context(bad_context)
+        .build();
+    assert!(matches!(result, Err(DomainError::EmptyField { .. })));
+}
+
+#[test]
+fn program_space_builder_revalidates_a_struct_literal_invariant_with_an_empty_description() {
+    let bad_invariant = Invariant {
+        id: id("invariant:bad-description"),
+        property_id: "payment.at_most_once".to_owned(),
+        description: String::new(),
+        scope_ids: BTreeSet::from([id("function:does-not-matter")]),
+        severity: Severity::High,
+        verification_mode: None,
+        provenance: location_test_provenance(),
+    };
+    let artifact = location_test_artifact("function:invariant-host", None);
+    let result = location_test_builder()
+        .with_artifact(artifact)
+        .with_invariant(bad_invariant)
+        .build();
+    assert!(matches!(result, Err(DomainError::EmptyField { .. })));
+}
+
+#[test]
+fn program_space_builder_new_revalidates_a_struct_literal_limitation_with_an_empty_description() {
+    let bad_limitation = Limitation {
+        id: id("limitation:bad-description"),
+        kind: LimitationKind::Unknown,
+        description: String::new(),
+        severity: Severity::Info,
+        source_ids: BTreeSet::new(),
+        related_capabilities: BTreeSet::new(),
+    };
+    let bad_extraction = Extraction {
+        adapter_set_hash: ContentHash::parse("sha256:1111111111111111").unwrap(),
+        adapters: vec![
+            AdapterDescriptor::new(
+                "location-test-adapter",
+                "1",
+                AdapterStatus::Complete,
+                Some(1),
+                Some(1),
+            )
+            .unwrap(),
+        ],
+        capabilities: BTreeMap::new(),
+        limitations: vec![bad_limitation],
+    };
+    let result = ProgramSpaceBuilder::new(
+        SourceRef::new("fixture", "location-test-fixture", None, None, None).unwrap(),
+        boundary_test_repository(),
+        boundary_test_snapshot(),
+        boundary_test_profile(),
+        bad_extraction,
+    );
+    assert!(matches!(result, Err(DomainError::EmptyField { .. })));
+}
+
+#[test]
+fn program_space_builder_new_revalidates_a_struct_literal_adapter_with_parsed_over_total() {
+    let bad_adapter = AdapterDescriptor {
+        id: "location-test-adapter".to_owned(),
+        version: "1".to_owned(),
+        status: AdapterStatus::Partial,
+        parsed: Some(5),
+        total: Some(1),
+    };
+    let bad_extraction = Extraction {
+        adapter_set_hash: ContentHash::parse("sha256:1111111111111111").unwrap(),
+        adapters: vec![bad_adapter],
+        capabilities: BTreeMap::new(),
+        limitations: Vec::new(),
+    };
+    let result = ProgramSpaceBuilder::new(
+        SourceRef::new("fixture", "location-test-fixture", None, None, None).unwrap(),
+        boundary_test_repository(),
+        boundary_test_snapshot(),
+        boundary_test_profile(),
+        bad_extraction,
+    );
+    assert!(matches!(result, Err(DomainError::Validation(_))));
+}
+
+#[test]
+fn location_constructor_rejects_backslash_and_nul_in_a_relative_path() {
+    for bad_path in [
+        "src\\main.rs",
+        "src\\..\\etc\\passwd",
+        "src/ma\0in.rs",
+        "\0",
+        "src/main.rs\\",
+    ] {
+        assert!(
+            Location::new(bad_path, None, None, None, None, None).is_err(),
+            "expected `{bad_path:?}` to be rejected as an unportable or unsafe path"
+        );
+    }
+}
+
+#[test]
+fn location_constructor_still_accepts_a_plain_forward_slash_relative_path() {
+    assert!(Location::new("src/main.rs", None, None, None, None, None).is_ok());
+}
+
+#[test]
+fn program_space_builder_revalidates_a_struct_literal_location_with_a_backslash_path() {
+    let bad_location = Location {
+        path: "src\\main.rs".to_owned(),
+        start_line: None,
+        end_line: None,
+        start_column: None,
+        end_column: None,
+        symbol_id: None,
+    };
+    let bad_artifact = Artifact {
+        id: id("function:bad-backslash-path"),
+        kind: "function".to_owned(),
+        label: "Bad::backslash".to_owned(),
+        language: None,
+        location: Some(bad_location),
+        content_hash: None,
+        attributes: BTreeMap::new(),
+        provenance: location_test_provenance(),
+    };
+    let result = location_test_builder().with_artifact(bad_artifact).build();
+    assert!(matches!(result, Err(DomainError::Validation(_))));
+}
+
+#[test]
+fn program_space_builder_revalidates_a_struct_literal_location_with_a_nul_path() {
+    let bad_location = Location {
+        path: "src/ma\0in.rs".to_owned(),
+        start_line: None,
+        end_line: None,
+        start_column: None,
+        end_column: None,
+        symbol_id: None,
+    };
+    let bad_artifact = Artifact {
+        id: id("function:bad-nul-path"),
+        kind: "function".to_owned(),
+        label: "Bad::nul".to_owned(),
+        language: None,
+        location: Some(bad_location),
+        content_hash: None,
+        attributes: BTreeMap::new(),
+        provenance: location_test_provenance(),
+    };
+    let result = location_test_builder().with_artifact(bad_artifact).build();
+    assert!(matches!(result, Err(DomainError::Validation(_))));
+}
+
+#[test]
+fn program_space_builder_new_revalidates_a_struct_literal_extraction_with_duplicate_adapter_ids() {
+    let duplicate_adapter = AdapterDescriptor::new(
+        "location-test-adapter",
+        "1",
+        AdapterStatus::Complete,
+        Some(1),
+        Some(1),
+    )
+    .unwrap();
+    let bad_extraction = Extraction {
+        adapter_set_hash: ContentHash::parse("sha256:1111111111111111").unwrap(),
+        adapters: vec![duplicate_adapter.clone(), duplicate_adapter],
+        capabilities: BTreeMap::new(),
+        limitations: Vec::new(),
+    };
+    let result = ProgramSpaceBuilder::new(
+        SourceRef::new("fixture", "location-test-fixture", None, None, None).unwrap(),
+        boundary_test_repository(),
+        boundary_test_snapshot(),
+        boundary_test_profile(),
+        bad_extraction,
+    );
+    assert!(matches!(result, Err(DomainError::Validation(_))));
+}
+
+fn boundary_test_adapter(name: &str) -> AdapterDescriptor {
+    AdapterDescriptor::new(name, "1", AdapterStatus::Complete, Some(1), Some(1)).unwrap()
+}
+
+fn boundary_test_limitation(name: &str) -> Limitation {
+    Limitation::new(
+        id(name),
+        LimitationKind::Unknown,
+        "boundary test limitation",
+        Severity::Info,
+        BTreeSet::from([id("snapshot:location-test")]),
+        BTreeSet::new(),
+    )
+    .unwrap()
+}
+
+fn program_space_builder_with_extraction(extraction: Extraction) -> ProgramSpaceBuilder {
+    ProgramSpaceBuilder::new(
+        SourceRef::new("fixture", "location-test-fixture", None, None, None).unwrap(),
+        boundary_test_repository(),
+        boundary_test_snapshot(),
+        boundary_test_profile(),
+        extraction,
+    )
+    .unwrap()
+}
+
+#[test]
+fn program_space_builder_normalizes_an_out_of_order_struct_literal_extraction_to_constructor_order()
+{
+    let adapter_a = boundary_test_adapter("adapter-a");
+    let adapter_b = boundary_test_adapter("adapter-b");
+    let limitation_a = boundary_test_limitation("limitation:aaa-boundary");
+    let limitation_b = boundary_test_limitation("limitation:bbb-boundary");
+
+    let constructor_extraction = Extraction::new(
+        ContentHash::parse("sha256:1111111111111111").unwrap(),
+        vec![adapter_a.clone(), adapter_b.clone()],
+        BTreeMap::new(),
+        vec![limitation_a.clone(), limitation_b.clone()],
+    )
+    .unwrap();
+
+    // Bypasses `Extraction::new` entirely via the struct's public fields,
+    // with both `adapters` and `limitations` in reverse (non-canonical)
+    // order.
+    let reversed_struct_literal_extraction = Extraction {
+        adapter_set_hash: ContentHash::parse("sha256:1111111111111111").unwrap(),
+        adapters: vec![adapter_b, adapter_a],
+        capabilities: BTreeMap::new(),
+        limitations: vec![limitation_b, limitation_a],
+    };
+
+    let artifact_id = "function:extraction-order-host";
+    let via_constructor = program_space_builder_with_extraction(constructor_extraction)
+        .with_artifact(location_test_artifact(artifact_id, None))
+        .build()
+        .unwrap();
+    let via_reversed_struct_literal =
+        program_space_builder_with_extraction(reversed_struct_literal_extraction)
+            .with_artifact(location_test_artifact(artifact_id, None))
+            .build()
+            .unwrap();
+
+    assert_eq!(
+        via_reversed_struct_literal
+            .extraction()
+            .adapters
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["adapter-a", "adapter-b"],
+        "build must normalize struct-literal adapters into constructor order"
+    );
+    assert_eq!(
+        via_reversed_struct_literal
+            .extraction()
+            .limitations
+            .iter()
+            .map(|item| item.id.to_string())
+            .collect::<Vec<_>>(),
+        vec![
+            "limitation:aaa-boundary".to_owned(),
+            "limitation:bbb-boundary".to_owned()
+        ],
+        "build must normalize struct-literal limitations into constructor order"
+    );
+    assert_eq!(
+        canonical_json(&via_constructor).unwrap(),
+        canonical_json(&via_reversed_struct_literal).unwrap(),
+        "an out-of-order struct-literal Extraction must produce the same canonical \
+         ProgramSpace bytes as one built through Extraction::new"
+    );
+}
+
+fn source_trace_extraction(
+    capabilities: BTreeMap<String, CapabilityDeclaration>,
+    limitations: Vec<Limitation>,
+) -> Extraction {
+    Extraction::new(
+        ContentHash::parse("sha256:1111111111111111").unwrap(),
+        vec![boundary_test_adapter("source-trace-adapter")],
+        capabilities,
+        limitations,
+    )
+    .unwrap()
+}
+
+fn source_trace_build_result(extraction: Extraction) -> Result<ProgramSpace, DomainError> {
+    program_space_builder_with_extraction(extraction)
+        .with_artifact(location_test_artifact("function:source-trace-host", None))
+        .build()
+}
+
+#[test]
+fn limitation_with_dangling_source_is_rejected() {
+    let limitation_id = id("limitation:source-trace-dangling");
+    let dangling_source = id("artifact:source-trace-missing");
+    let limitation = Limitation::new(
+        limitation_id.clone(),
+        LimitationKind::Unknown,
+        "dangling source limitation",
+        Severity::Info,
+        BTreeSet::from([dangling_source.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let extraction = source_trace_extraction(BTreeMap::new(), vec![limitation]);
+    let error =
+        source_trace_build_result(extraction).expect_err("dangling limitation source must fail");
+    assert_eq!(
+        error,
+        DomainError::DanglingReference {
+            owner: "limitation",
+            owner_id: limitation_id,
+            reference: dangling_source,
+        }
+    );
+}
+
+#[test]
+fn capability_with_dangling_source_is_rejected() {
+    let dangling_source = id("artifact:source-trace-missing");
+    let capabilities = BTreeMap::from([(
+        "source_trace_dangling_capability".to_owned(),
+        CapabilityDeclaration::new(
+            CapabilityState::Complete,
+            BTreeSet::from([dangling_source.clone()]),
+        )
+        .unwrap(),
+    )]);
+    let extraction = source_trace_extraction(capabilities, Vec::new());
+    let error =
+        source_trace_build_result(extraction).expect_err("dangling capability source must fail");
+    assert_eq!(
+        error,
+        DomainError::Validation(format!(
+            "capability `source_trace_dangling_capability` has dangling source `{dangling_source}`"
+        ))
+    );
+}
+
+#[test]
+fn limitation_cannot_reference_itself() {
+    let limitation_id = id("limitation:source-trace-self");
+    let limitation = Limitation::new(
+        limitation_id.clone(),
+        LimitationKind::Unknown,
+        "self-referential limitation",
+        Severity::Info,
+        BTreeSet::from([limitation_id.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let extraction = source_trace_extraction(BTreeMap::new(), vec![limitation]);
+    let error = source_trace_build_result(extraction)
+        .expect_err("self-referential limitation source must fail");
+    assert_eq!(
+        error,
+        DomainError::Validation(format!(
+            "limitation `{limitation_id}` has a self-referential source"
+        ))
+    );
+}
+
+#[test]
+fn limitation_two_node_source_cycle_is_rejected() {
+    let limitation_a_id = id("limitation:source-trace-cycle-a");
+    let limitation_b_id = id("limitation:source-trace-cycle-b");
+    let limitation_a = Limitation::new(
+        limitation_a_id.clone(),
+        LimitationKind::Unknown,
+        "cycle participant a",
+        Severity::Info,
+        BTreeSet::from([limitation_b_id.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let limitation_b = Limitation::new(
+        limitation_b_id.clone(),
+        LimitationKind::Unknown,
+        "cycle participant b",
+        Severity::Info,
+        BTreeSet::from([limitation_a_id.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let extraction = source_trace_extraction(BTreeMap::new(), vec![limitation_a, limitation_b]);
+    let error = source_trace_build_result(extraction)
+        .expect_err("two-node limitation source cycle must fail");
+    assert_eq!(
+        error,
+        DomainError::Validation(format!(
+            "limitation source cycle includes `{limitation_a_id}`"
+        ))
+    );
+}
+
+#[test]
+fn grounded_branch_does_not_excuse_limitation_cycle() {
+    let limitation_a_id = id("limitation:source-trace-grounded-cycle-a");
+    let limitation_b_id = id("limitation:source-trace-grounded-cycle-b");
+    let limitation_a = Limitation::new(
+        limitation_a_id.clone(),
+        LimitationKind::Unknown,
+        "cycle participant a with an additional grounded source",
+        Severity::Info,
+        BTreeSet::from([limitation_b_id.clone(), id("snapshot:location-test")]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let limitation_b = Limitation::new(
+        limitation_b_id.clone(),
+        LimitationKind::Unknown,
+        "cycle participant b",
+        Severity::Info,
+        BTreeSet::from([limitation_a_id.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let extraction = source_trace_extraction(BTreeMap::new(), vec![limitation_a, limitation_b]);
+    let error = source_trace_build_result(extraction)
+        .expect_err("a grounded non-limitation source must not excuse a limitation source cycle");
+    assert_eq!(
+        error,
+        DomainError::Validation(format!(
+            "limitation source cycle includes `{limitation_a_id}`"
+        ))
+    );
+}
+
+#[test]
+fn directly_grounded_limitation_is_accepted() {
+    let limitation_a_id = id("limitation:source-trace-positive-direct");
+    let limitation_a = Limitation::new(
+        limitation_a_id,
+        LimitationKind::Unknown,
+        "directly grounded limitation",
+        Severity::Info,
+        BTreeSet::from([id("snapshot:location-test")]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let extraction = source_trace_extraction(BTreeMap::new(), vec![limitation_a]);
+    source_trace_build_result(extraction).expect("directly grounded limitation must build");
+}
+
+#[test]
+fn grounded_limitation_chain_is_accepted() {
+    let limitation_a_id = id("limitation:source-trace-positive-chain-a");
+    let limitation_b_id = id("limitation:source-trace-positive-chain-b");
+    let limitation_a = Limitation::new(
+        limitation_a_id.clone(),
+        LimitationKind::Unknown,
+        "chain participant a, directly grounded",
+        Severity::Info,
+        BTreeSet::from([id("snapshot:location-test")]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let limitation_b = Limitation::new(
+        limitation_b_id,
+        LimitationKind::Unknown,
+        "chain participant b, grounded through a",
+        Severity::Info,
+        BTreeSet::from([limitation_a_id]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let extraction = source_trace_extraction(BTreeMap::new(), vec![limitation_a, limitation_b]);
+    source_trace_build_result(extraction).expect("grounded limitation chain must build");
+}
+
+#[test]
+fn capability_may_be_grounded_through_limitation_chain() {
+    let limitation_a_id = id("limitation:source-trace-positive-capability-chain-a");
+    let limitation_b_id = id("limitation:source-trace-positive-capability-chain-b");
+    let capability_name = "source_trace_chain_capability".to_owned();
+    let limitation_a = Limitation::new(
+        limitation_a_id.clone(),
+        LimitationKind::Unknown,
+        "chain participant a, directly grounded",
+        Severity::Info,
+        BTreeSet::from([id("snapshot:location-test")]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let limitation_b = Limitation::new(
+        limitation_b_id.clone(),
+        LimitationKind::Unknown,
+        "chain participant b, grounded through a and justifying the capability",
+        Severity::Info,
+        BTreeSet::from([limitation_a_id]),
+        BTreeSet::from([capability_name.clone()]),
+    )
+    .unwrap();
+    let capabilities = BTreeMap::from([(
+        capability_name,
+        CapabilityDeclaration::new(CapabilityState::Partial, BTreeSet::from([limitation_b_id]))
+            .unwrap(),
+    )]);
+    let extraction = source_trace_extraction(capabilities, vec![limitation_a, limitation_b]);
+    source_trace_build_result(extraction)
+        .expect("capability grounded through a limitation chain must build");
+}
+
+#[test]
+fn cycle_error_order_is_deterministic() {
+    let limitation_a_id = id("limitation:source-trace-order-cycle-a");
+    let limitation_b_id = id("limitation:source-trace-order-cycle-b");
+    let expected = DomainError::Validation(format!(
+        "limitation source cycle includes `{limitation_a_id}`"
+    ));
+
+    let limitation_a_forward = Limitation::new(
+        limitation_a_id.clone(),
+        LimitationKind::Unknown,
+        "cycle participant a",
+        Severity::Info,
+        BTreeSet::from([limitation_b_id.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let limitation_b_forward = Limitation::new(
+        limitation_b_id.clone(),
+        LimitationKind::Unknown,
+        "cycle participant b",
+        Severity::Info,
+        BTreeSet::from([limitation_a_id.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let forward = source_trace_extraction(
+        BTreeMap::new(),
+        vec![limitation_a_forward, limitation_b_forward],
+    );
+    let forward_error =
+        source_trace_build_result(forward).expect_err("A-then-B order cycle must fail");
+    assert_eq!(forward_error, expected);
+
+    let limitation_b_reversed = Limitation::new(
+        limitation_b_id.clone(),
+        LimitationKind::Unknown,
+        "cycle participant b",
+        Severity::Info,
+        BTreeSet::from([limitation_a_id.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let limitation_a_reversed = Limitation::new(
+        limitation_a_id,
+        LimitationKind::Unknown,
+        "cycle participant a",
+        Severity::Info,
+        BTreeSet::from([limitation_b_id]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let reversed = source_trace_extraction(
+        BTreeMap::new(),
+        vec![limitation_b_reversed, limitation_a_reversed],
+    );
+    let reversed_error =
+        source_trace_build_result(reversed).expect_err("B-then-A order cycle must fail");
+    assert_eq!(reversed_error, expected);
+}
+
+#[test]
+fn dangling_limitation_error_order_is_deterministic() {
+    let limitation_a_id = id("limitation:source-trace-order-dangling-a");
+    let limitation_b_id = id("limitation:source-trace-order-dangling-b");
+    let dangling_a_1 = id("artifact:source-trace-order-dangling-a1");
+    let dangling_a_2 = id("artifact:source-trace-order-dangling-a2");
+    let dangling_b_1 = id("artifact:source-trace-order-dangling-b1");
+    let dangling_b_2 = id("artifact:source-trace-order-dangling-b2");
+    let expected = DomainError::DanglingReference {
+        owner: "limitation",
+        owner_id: limitation_a_id.clone(),
+        reference: dangling_a_1.clone(),
+    };
+
+    let limitation_a_forward = Limitation::new(
+        limitation_a_id.clone(),
+        LimitationKind::Unknown,
+        "owner a with two dangling sources",
+        Severity::Info,
+        BTreeSet::from([dangling_a_2.clone(), dangling_a_1.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let limitation_b_forward = Limitation::new(
+        limitation_b_id.clone(),
+        LimitationKind::Unknown,
+        "owner b with two dangling sources",
+        Severity::Info,
+        BTreeSet::from([dangling_b_2.clone(), dangling_b_1.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let forward = source_trace_extraction(
+        BTreeMap::new(),
+        vec![limitation_a_forward, limitation_b_forward],
+    );
+    let forward_error =
+        source_trace_build_result(forward).expect_err("A-then-B dangling owners must fail");
+    assert_eq!(forward_error, expected);
+
+    let limitation_b_reversed = Limitation::new(
+        limitation_b_id.clone(),
+        LimitationKind::Unknown,
+        "owner b with two dangling sources",
+        Severity::Info,
+        BTreeSet::from([dangling_b_1.clone(), dangling_b_2.clone()]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let limitation_a_reversed = Limitation::new(
+        limitation_a_id,
+        LimitationKind::Unknown,
+        "owner a with two dangling sources",
+        Severity::Info,
+        BTreeSet::from([dangling_a_1, dangling_a_2]),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let reversed = source_trace_extraction(
+        BTreeMap::new(),
+        vec![limitation_b_reversed, limitation_a_reversed],
+    );
+    let reversed_error =
+        source_trace_build_result(reversed).expect_err("B-then-A dangling owners must fail");
+    assert_eq!(reversed_error, expected);
+}
+
+#[test]
+fn dangling_capability_error_order_is_deterministic() {
+    let alpha_dangling_1 = id("artifact:source-trace-order-alpha1");
+    let alpha_dangling_2 = id("artifact:source-trace-order-alpha2");
+    let beta_dangling_1 = id("artifact:source-trace-order-beta1");
+    let beta_dangling_2 = id("artifact:source-trace-order-beta2");
+    let expected = DomainError::Validation(format!(
+        "capability `source_trace_order_alpha` has dangling source `{alpha_dangling_1}`"
+    ));
+
+    let capabilities = BTreeMap::from([
+        (
+            "source_trace_order_beta".to_owned(),
+            CapabilityDeclaration::new(
+                CapabilityState::Complete,
+                BTreeSet::from([beta_dangling_2, beta_dangling_1]),
+            )
+            .unwrap(),
+        ),
+        (
+            "source_trace_order_alpha".to_owned(),
+            CapabilityDeclaration::new(
+                CapabilityState::Complete,
+                BTreeSet::from([alpha_dangling_2, alpha_dangling_1]),
+            )
+            .unwrap(),
+        ),
+    ]);
+    let extraction = source_trace_extraction(capabilities, Vec::new());
+    let error = source_trace_build_result(extraction)
+        .expect_err("dangling alpha/beta capability sources must fail");
+    assert_eq!(error, expected);
+}
+
+#[test]
+fn duplicate_capability_json_key_is_rejected_before_map_overwrite() {
+    let fixture = std::str::from_utf8(FIXTURE).unwrap();
+    let ast_member = r#"      "ast": {
+        "state": "complete",
+        "source_ids": [
+          "file:checkout-controller",
+          "file:payment-repository"
+        ]
+      },
+"#;
+    assert_eq!(fixture.matches(ast_member).count(), 1);
+    let duplicated = fixture.replacen(ast_member, &format!("{ast_member}{ast_member}"), 1);
+    let error = ProgramSpace::from_json_slice(duplicated.as_bytes())
+        .expect_err("duplicate capability JSON key must be rejected");
+    match error {
+        DomainError::Json(message) => {
+            assert!(
+                message.contains("duplicate capability key `ast`"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected DomainError::Json, got {other:?}"),
+    }
+}
+
+fn v1_fixture_value() -> Value {
+    serde_json::from_slice(LEGACY_INPUT_EXAMPLE).expect("legacy v1 input example parses")
+}
+
+fn migrate_v1_ok(bytes: &[u8]) -> (ProgramSpace, MigrationRecord) {
+    migrate_program_space_v1_to_v2(bytes).expect("v1 record must migrate")
+}
+
+#[test]
+fn migration_of_checked_in_v1_fixture_is_deterministic_and_v2_parseable() {
+    assert_eq!(
+        ProgramSpace::from_json_slice(LEGACY_INPUT_EXAMPLE).unwrap_err(),
+        DomainError::MigrationRequired {
+            detected: "reviewgraphen.program_space.input.v1".to_owned(),
+            required: "reviewgraphen.program_space.input.v2".to_owned(),
+        }
+    );
+
+    let (program_a, record_a) = migrate_v1_ok(LEGACY_INPUT_EXAMPLE);
+    let (program_b, record_b) = migrate_v1_ok(LEGACY_INPUT_EXAMPLE);
+
+    assert_eq!(
+        canonical_json(&program_a).unwrap(),
+        canonical_json(&program_b).unwrap(),
+        "migrating the same v1 fixture twice must produce identical canonical ProgramSpace bytes"
+    );
+    assert_eq!(record_a.id(), record_b.id());
+    assert_eq!(
+        record_a
+            .losses()
+            .iter()
+            .map(MigrationLoss::id)
+            .collect::<Vec<_>>(),
+        record_b
+            .losses()
+            .iter()
+            .map(MigrationLoss::id)
+            .collect::<Vec<_>>(),
+        "migration loss order must be deterministic"
+    );
+    assert_eq!(
+        canonical_json(&record_a).unwrap(),
+        canonical_json(&record_b).unwrap()
+    );
+
+    let program_bytes = canonical_json(&program_a).unwrap();
+    let reparsed = ProgramSpace::from_json_slice(&program_bytes)
+        .expect("migrated ProgramSpace canonical bytes must parse as normal v2 input");
+    assert_eq!(program_bytes, canonical_json(&reparsed).unwrap());
+}
+
+#[test]
+fn migration_synthesizes_state_specific_limitations_per_capability() {
+    let mut input = v1_fixture_value();
+    input["extraction"]["capabilities"] = json!({
+        "ast": "complete",
+        "partial_case": "partial",
+        "missing_case": "missing",
+        "unknown_case": "unknown",
+    });
+    input["extraction"]["limitations"] = json!([]);
+
+    let (program_space, record) = migrate_v1_ok(&serde_json::to_vec(&input).unwrap());
+    let snapshot_id = program_space.snapshot_id().clone();
+    let extraction = program_space.extraction();
+
+    let expected_states = [
+        ("ast", CapabilityState::Complete),
+        ("partial_case", CapabilityState::Partial),
+        ("missing_case", CapabilityState::Missing),
+        ("unknown_case", CapabilityState::Unknown),
+    ];
+    for (capability, expected_state) in expected_states {
+        let declaration = extraction
+            .capabilities
+            .get(capability)
+            .unwrap_or_else(|| panic!("{capability} must be present"));
+        assert_eq!(declaration.state, expected_state);
+        assert_eq!(
+            declaration.source_ids,
+            BTreeSet::from([snapshot_id.clone()]),
+            "{capability} source_ids must be backfilled to the snapshot"
+        );
+    }
+
+    let related = |capability: &str| -> Vec<&Limitation> {
+        extraction
+            .limitations
+            .iter()
+            .filter(|item| item.related_capabilities.contains(capability))
+            .collect()
+    };
+
+    assert!(
+        related("ast").is_empty(),
+        "a complete capability must get no synthesized limitation"
+    );
+
+    for (capability, expected_kind) in [
+        ("partial_case", LimitationKind::ProjectionLoss),
+        ("missing_case", LimitationKind::CapabilityMissing),
+        ("unknown_case", LimitationKind::Unknown),
+    ] {
+        let matches = related(capability);
+        assert_eq!(
+            matches.len(),
+            1,
+            "{capability} must have exactly one related limitation"
+        );
+        let limitation = matches[0];
+        assert_eq!(limitation.kind, expected_kind);
+        assert_eq!(limitation.severity, Severity::Info);
+        assert_eq!(
+            limitation.related_capabilities,
+            BTreeSet::from([capability.to_owned()])
+        );
+        assert_eq!(limitation.source_ids, BTreeSet::from([snapshot_id.clone()]));
+    }
+
+    for capability in ["ast", "partial_case", "missing_case", "unknown_case"] {
+        assert!(
+            record.losses().iter().any(|loss| matches!(
+                loss,
+                MigrationLoss::CapabilitySourceBackfill { capability: name, .. }
+                    if name.as_str() == capability
+            )),
+            "missing CapabilitySourceBackfill loss for {capability}"
+        );
+    }
+
+    for (capability, expected_kind) in [
+        ("partial_case", LimitationKind::ProjectionLoss),
+        ("missing_case", LimitationKind::CapabilityMissing),
+        ("unknown_case", LimitationKind::Unknown),
+    ] {
+        assert!(
+            record.losses().iter().any(|loss| matches!(
+                loss,
+                MigrationLoss::SynthesizedLimitation { capability: name, limitation_kind, .. }
+                    if name.as_str() == capability && *limitation_kind == expected_kind
+            )),
+            "missing SynthesizedLimitation loss for {capability}"
+        );
+    }
+    assert!(
+        !record.losses().iter().any(|loss| matches!(
+            loss,
+            MigrationLoss::SynthesizedLimitation { capability: name, .. }
+                if name == "ast"
+        )),
+        "a complete capability must not get a SynthesizedLimitation loss"
+    );
+}
+
+#[test]
+fn migration_carries_over_existing_v1_limitation_with_nonempty_source_trace() {
+    let (program_space, record) = migrate_v1_ok(LEGACY_INPUT_EXAMPLE);
+    let limitation_id = id("limitation:bounded-concurrency");
+    let carried = program_space
+        .extraction()
+        .limitations
+        .iter()
+        .find(|item| item.id == limitation_id)
+        .expect("bounded-concurrency limitation must be carried over");
+    assert_eq!(carried.kind, LimitationKind::CapabilityMissing);
+    assert_eq!(
+        carried.description,
+        "The fixture represents two concurrent taps only; it is not an exhaustive scheduler proof."
+    );
+    assert_eq!(carried.severity, Severity::Medium);
+    let expected_sources = BTreeSet::from([
+        id("snapshot:double-submit-v1"),
+        id("invariant:payment-at-most-once"),
+    ]);
+    assert_eq!(carried.source_ids, expected_sources);
+    assert!(carried.related_capabilities.is_empty());
+
+    assert!(
+        record.losses().iter().any(|loss| matches!(
+            loss,
+            MigrationLoss::CarriedLimitationTrace { limitation_id: lid, original_source_ids, .. }
+                if *lid == limitation_id && *original_source_ids == expected_sources
+        )),
+        "CarriedLimitationTrace with the nonempty original source set must be recorded"
+    );
+}
+
+#[test]
+fn migration_backfills_an_empty_v1_limitation_source_to_the_snapshot() {
+    let mut input = v1_fixture_value();
+    input["extraction"]["limitations"][0]["source_ids"] = json!([]);
+    let (program_space, record) = migrate_v1_ok(&serde_json::to_vec(&input).unwrap());
+    let snapshot_id = program_space.snapshot_id().clone();
+    let limitation_id = id("limitation:bounded-concurrency");
+    let carried = program_space
+        .extraction()
+        .limitations
+        .iter()
+        .find(|item| item.id == limitation_id)
+        .expect("bounded-concurrency limitation must still be carried over");
+    assert_eq!(carried.source_ids, BTreeSet::from([snapshot_id.clone()]));
+
+    assert!(
+        record.losses().iter().any(|loss| matches!(
+            loss,
+            MigrationLoss::CarriedLimitationTrace { limitation_id: lid, original_source_ids, .. }
+                if *lid == limitation_id && original_source_ids.is_empty()
+        )),
+        "an empty original source set must still be recorded as a CarriedLimitationTrace"
+    );
+    assert!(
+        record.losses().iter().any(|loss| matches!(
+            loss,
+            MigrationLoss::LimitationSourceBackfill { limitation_id: lid, assigned_source_ids, .. }
+                if *lid == limitation_id
+                    && *assigned_source_ids == BTreeSet::from([snapshot_id.clone()])
+        )),
+        "an empty original source must additionally get a LimitationSourceBackfill"
+    );
+}
+
+#[test]
+fn duplicate_v1_capability_json_key_is_rejected_before_migration_map_overwrite() {
+    let fixture = std::str::from_utf8(LEGACY_INPUT_EXAMPLE).unwrap();
+    let ast_member = "      \"ast\": \"complete\",\n";
+    assert_eq!(fixture.matches(ast_member).count(), 1);
+    let duplicated = fixture.replacen(ast_member, &format!("{ast_member}{ast_member}"), 1);
+    let error = migrate_program_space_v1_to_v2(duplicated.as_bytes())
+        .expect_err("duplicate v1 capability JSON key must be rejected");
+    match error {
+        DomainError::Json(message) => {
+            assert!(
+                message.contains("duplicate capability key `ast`"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected DomainError::Json, got {other:?}"),
+    }
+}
+
+#[test]
+fn migration_entry_point_rejects_unsupported_or_missing_schema() {
+    let mut wrong_schema = v1_fixture_value();
+    wrong_schema["schema"] = json!("reviewgraphen.program_space.input.v2");
+    assert_eq!(
+        migrate_program_space_v1_to_v2(&serde_json::to_vec(&wrong_schema).unwrap()).unwrap_err(),
+        DomainError::UnsupportedSchema {
+            detected: Some("reviewgraphen.program_space.input.v2".to_owned())
+        }
+    );
+
+    let mut missing_schema = v1_fixture_value();
+    missing_schema.as_object_mut().unwrap().remove("schema");
+    assert_eq!(
+        migrate_program_space_v1_to_v2(&serde_json::to_vec(&missing_schema).unwrap()).unwrap_err(),
+        DomainError::UnsupportedSchema { detected: None }
+    );
+}
+
+#[test]
+fn migration_fails_closed_on_a_dangling_nonempty_v1_limitation_source() {
+    let mut input = v1_fixture_value();
+    input["extraction"]["limitations"][0]["source_ids"] = json!(["artifact:source-trace-missing"]);
+    let error = migrate_program_space_v1_to_v2(&serde_json::to_vec(&input).unwrap())
+        .expect_err("a dangling nonempty limitation source must not be silently repaired");
+    assert_eq!(
+        error,
+        DomainError::DanglingReference {
+            owner: "limitation",
+            owner_id: id("limitation:bounded-concurrency"),
+            reference: id("artifact:source-trace-missing"),
+        }
+    );
+}
+
+#[test]
+fn migration_record_schema_validates_the_checked_in_example() {
+    let schema: Value = serde_json::from_slice(MIGRATION_SCHEMA).unwrap();
+    let example: Value = serde_json::from_slice(MIGRATION_EXAMPLE).unwrap();
+    jsonschema::validator_for(&schema)
+        .unwrap()
+        .validate(&example)
+        .expect("checked-in migration record example must be schema valid");
+}
+
+#[test]
+fn migration_record_schema_validates_actual_migration_output() {
+    let schema: Value = serde_json::from_slice(MIGRATION_SCHEMA).unwrap();
+    let (_, record) = migrate_v1_ok(LEGACY_INPUT_EXAMPLE);
+    let serialized = serde_json::to_value(&record).unwrap();
+    jsonschema::validator_for(&schema)
+        .unwrap()
+        .validate(&serialized)
+        .expect("actual migrate_program_space_v1_to_v2 output must be schema valid");
+}
+
+#[test]
+fn migration_record_schema_rejects_invalid_discriminator_extra_field_and_empty_assigned_sources() {
+    let schema: Value = serde_json::from_slice(MIGRATION_SCHEMA).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let base: Value = serde_json::from_slice(MIGRATION_EXAMPLE).unwrap();
+    validator
+        .validate(&base)
+        .expect("base fixture must itself be schema valid before mutation");
+
+    let mut invalid_discriminator = base.clone();
+    invalid_discriminator["losses"][0]["kind"] = json!("not_a_real_kind");
+    assert!(
+        validator.validate(&invalid_discriminator).is_err(),
+        "an unknown loss kind discriminator must be rejected"
+    );
+
+    let mut extra_field = base.clone();
+    extra_field["losses"][0]["unexpected"] = json!(true);
+    assert!(
+        validator.validate(&extra_field).is_err(),
+        "an extra field on a loss variant must be rejected"
+    );
+
+    let backfill_index = base["losses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|loss| loss["kind"] == "capability_source_backfill")
+        .expect("checked-in example must contain a capability_source_backfill loss");
+    let mut empty_assigned_sources = base.clone();
+    empty_assigned_sources["losses"][backfill_index]["assigned_source_ids"] = json!([]);
+    assert!(
+        validator.validate(&empty_assigned_sources).is_err(),
+        "an empty assigned_source_ids on a backfill loss must be rejected"
+    );
+}
+
+#[test]
+fn migration_record_schema_rejects_synthesized_limitation_state_kind_mismatches() {
+    let schema: Value = serde_json::from_slice(MIGRATION_SCHEMA).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let base: Value = serde_json::from_slice(MIGRATION_EXAMPLE).unwrap();
+    let synthesized_index = base["losses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|loss| loss["kind"] == "synthesized_limitation")
+        .expect("checked-in example must contain a synthesized_limitation loss");
+
+    for (state, limitation_kind) in [
+        ("partial", "capability_missing"),
+        ("partial", "unknown"),
+        ("missing", "projection_loss"),
+        ("missing", "unknown"),
+        ("unknown", "projection_loss"),
+        ("unknown", "capability_missing"),
+        ("complete", "projection_loss"),
+    ] {
+        let mut mismatched = base.clone();
+        mismatched["losses"][synthesized_index]["state"] = json!(state);
+        mismatched["losses"][synthesized_index]["limitation_kind"] = json!(limitation_kind);
+        assert!(
+            validator.validate(&mismatched).is_err(),
+            "state `{state}` paired with limitation_kind `{limitation_kind}` must be rejected"
+        );
+    }
+
+    for (state, limitation_kind) in [
+        ("partial", "projection_loss"),
+        ("missing", "capability_missing"),
+        ("unknown", "unknown"),
+    ] {
+        let mut matched = base.clone();
+        matched["losses"][synthesized_index]["state"] = json!(state);
+        matched["losses"][synthesized_index]["limitation_kind"] = json!(limitation_kind);
+        assert!(
+            validator.validate(&matched).is_ok(),
+            "state `{state}` paired with limitation_kind `{limitation_kind}` must be accepted"
+        );
+    }
+}
+
+#[test]
+fn migration_record_schema_rejects_wrong_source_or_target_schema_discriminators() {
+    let schema: Value = serde_json::from_slice(MIGRATION_SCHEMA).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let base: Value = serde_json::from_slice(MIGRATION_EXAMPLE).unwrap();
+
+    let mut wrong_source = base.clone();
+    wrong_source["source_schema"] = json!("reviewgraphen.program_space.input.v2");
+    assert!(
+        validator.validate(&wrong_source).is_err(),
+        "source_schema must be pinned to the v1 discriminator"
+    );
+
+    let mut wrong_target = base.clone();
+    wrong_target["target_schema"] = json!("reviewgraphen.program_space.input.v1");
+    assert!(
+        validator.validate(&wrong_target).is_err(),
+        "target_schema must be pinned to the v2 discriminator"
+    );
+}
+
+#[test]
+fn migration_record_matches_the_checked_in_canonical_fixture_byte_for_byte() {
+    let (_, record) = migrate_v1_ok(LEGACY_INPUT_EXAMPLE);
+    let actual_bytes = canonical_json(&record).unwrap();
+    let fixture: Value = serde_json::from_slice(MIGRATION_EXAMPLE).unwrap();
+    let fixture_bytes = canonical_json(&fixture).unwrap();
+    assert_eq!(
+        actual_bytes, fixture_bytes,
+        "reviewgraphen.migration.example.json must be the exact canonical \
+         migrate_program_space_v1_to_v2 output for the checked-in v1 fixture \
+         (schemas/reviewgraphen.input.v1.example.json), not a hand-authored shape \
+         placeholder; any ID derivation, ordering, or field drift must fail this \
+         byte comparison"
+    );
+    assert_eq!(
+        ContentHash::sha256(&actual_bytes).to_string(),
+        MIGRATION_RECORD_HASH.trim()
+    );
 }

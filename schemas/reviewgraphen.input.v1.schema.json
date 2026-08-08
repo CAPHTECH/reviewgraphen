@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://capht.tech/schemas/reviewgraphen/program-space-input.v2.schema.json",
-  "title": "ReviewGraphen ProgramSpace Input v2",
+  "$id": "https://capht.tech/schemas/reviewgraphen/program-space-input.v1.schema.json",
+  "title": "ReviewGraphen ProgramSpace Input v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "reviewgraphen.program_space.input.v2"
+      "const": "reviewgraphen.program_space.input.v1"
     },
     "source": {
       "$ref": "#/$defs/sourceRef"
@@ -274,33 +274,6 @@
         }
       }
     },
-    "capabilityDeclaration": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "state",
-        "source_ids"
-      ],
-      "properties": {
-        "state": {
-          "type": "string",
-          "enum": [
-            "complete",
-            "partial",
-            "missing",
-            "unknown"
-          ]
-        },
-        "source_ids": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/identifier"
-          },
-          "uniqueItems": true
-        }
-      }
-    },
     "limitation": {
       "type": "object",
       "additionalProperties": false,
@@ -308,8 +281,7 @@
         "id",
         "kind",
         "description",
-        "severity",
-        "source_ids"
+        "severity"
       ],
       "properties": {
         "id": {
@@ -337,17 +309,8 @@
         },
         "source_ids": {
           "type": "array",
-          "minItems": 1,
           "items": {
             "$ref": "#/$defs/identifier"
-          },
-          "uniqueItems": true
-        },
-        "related_capabilities": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
           },
           "uniqueItems": true
         }
@@ -669,7 +632,13 @@
         "capabilities": {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/$defs/capabilityDeclaration"
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial",
+              "missing",
+              "unknown"
+            ]
           }
         },
         "limitations": {

@@ -24,8 +24,12 @@ pub use event::{
 };
 pub use id::{ContentHash, IdRegistry, StableId, VersionTuple};
 pub use program::{
-    Artifact, Evidence, EvidenceAdmission, EvidenceDetails, EvidenceSnapshotAdmission, Extraction,
-    InformationLoss, Invariant, ProgramSpace, Provenance, Relation, ReviewContext, SourceRef,
+    AdapterDescriptor, AdapterStatus, Artifact, CapabilityDeclaration, CapabilityState, Evidence,
+    EvidenceAdmission, EvidenceDetails, EvidenceSnapshotAdmission, Extraction, InformationLoss,
+    Invariant, Limitation, LimitationKind, Location, MigrationLoss, MigrationRecord,
+    ProfileDescriptor, ProgramSpace, ProgramSpaceBuilder, Provenance, Relation,
+    RepositoryDescriptor, ReviewContext, Severity, SnapshotDescriptor, SourceRef,
+    migrate_program_space_v1_to_v2,
 };
 pub use projection::{AuditProjection, HumanProjection, Projection, ProjectionKind, ReviewReport};
 pub use review::{

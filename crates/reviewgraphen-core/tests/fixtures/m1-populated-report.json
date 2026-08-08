@@ -1,1 +1,697 @@
-{"coverage":{"extraction":{"adapter_set_hash":"sha256:7777777777777777","adapters":[{"id":"manual-fixture","parsed":3,"status":"complete","total":3,"version":"1"}],"capabilities":{"ast":"complete","concurrency_model":"partial","direct_calls":"complete","interprocedural_data_flow":"partial"},"limitations":[{"description":"The fixture represents two concurrent taps only; it is not an exhaustive scheduler proof.","id":"limitation:bounded-concurrency","kind":"capability_missing","severity":"medium","source_ids":["invariant:payment-at-most-once","snapshot:double-submit-v1"]}]},"freshness":{"fresh":1,"stale":0,"unknown":0},"limitations":[{"description":"The fixture represents two concurrent taps only; it is not an exhaustive scheduler proof.","id":"limitation:bounded-concurrency","kind":"capability_missing","severity":"medium","source_ids":["invariant:payment-at-most-once","snapshot:double-submit-v1"]},{"description":"M1 retains the claim execution reference but does not retain reviewer or context metadata.","id":"limitation:sha256:a8aaaa2d3ed451654fc03ffb2321767a6def99d222c68d65ca6437ea91d40915","kind":"projection_loss","severity":"info","source_ids":["claim:populated-report"]}],"stages":{"completed":{"denominator":7,"numerator":0,"weighted":0.0},"evidence_supported":{"denominator":7,"numerator":1,"weighted":0.08},"fresh_verified":{"denominator":7,"numerator":1,"weighted":0.08},"generated":{"denominator":7,"numerator":7,"weighted":1.0},"verified":{"denominator":7,"numerator":1,"weighted":0.08},"visited":{"denominator":7,"numerator":0,"weighted":-0.0}},"universe_id":"universe:sha256:90e7cbc2566f7e6bd95b6953fcb092b253170b20c02aeb0dd8850c30dfb32187"},"metadata":{"generated_at":"1970-01-01T00:00:00Z","policy_version":"default@1","profile_id":"code-review@1","report_id":"report:sha256:d0cdc0e329257826ac3d7fe801fa0929bc49477e92c64e2faf80efd40f0ceaef","rule_set_hash":"sha256:3333333333333333","run_id":"run:populated-report","tool_versions":{"reviewgraphen-core":"0.1.0-m1"}},"projection":{"ai_view":{"information_loss":[{"kind":"raw_artifacts_by_reference","reason":"Raw model and tool artifacts are deliberately absent from M1 canonical state.","recoverable":false,"source_ids":[]}],"payload":{"claim_ids":["claim:populated-report"],"obligation_ids":["obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0","obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976","obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3","obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e","obligation:sha256:8850a6c3ffab096b872c863438fe647988953139288acc4f55fc591ed4301c58","obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564","obligation:sha256:f1dff8c93678f012051161d849395c79ea65fe64b2059c0304d4ec3505ba15a9"]},"source_ids":["binding:populated-report","claim:populated-report","context:payment","context:test","context:ui-event","decision:populated-report","event:buy-tap","evidence:populated-report","external-service:stripe","file:checkout-controller","file:payment-repository","finding:populated-report","function:checkout-submit","function:payment-charge","function:stripe-charge","invariant:payment-at-most-once","limitation:bounded-concurrency","obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0","obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976","obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3","obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e","obligation:sha256:8850a6c3ffab096b872c863438fe647988953139288acc4f55fc591ed4301c58","obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564","obligation:sha256:f1dff8c93678f012051161d849395c79ea65fe64b2059c0304d4ec3505ba15a9","relation:file-contains-submit","relation:payment-calls-stripe","relation:requirement-applies-payment","relation:stripe-belongs-service","relation:submit-awaits-validation","relation:submit-calls-payment","relation:submit-writes-loading","relation:tap-handled-by-submit","relation:test-covers-path","repository:double-submit-payment","requirement:payment-at-most-once","snapshot:double-submit-v1","state:checkout-loading","test:double-submit","universe:sha256:90e7cbc2566f7e6bd95b6953fcb092b253170b20c02aeb0dd8850c30dfb32187","verification:populated-report"]},"audit_trace":{"information_loss":[{"kind":"source_code_not_embedded","reason":"Audit stores source IDs and hashes rather than source bytes.","recoverable":true,"recoverable_via":"fixed ProgramSpace snapshot","source_ids":["snapshot:double-submit-v1"]}],"payload":{"snapshot_id":"snapshot:double-submit-v1","universe_id":"universe:sha256:90e7cbc2566f7e6bd95b6953fcb092b253170b20c02aeb0dd8850c30dfb32187","verification_ids":["verification:populated-report"]},"source_ids":["binding:populated-report","claim:populated-report","context:payment","context:test","context:ui-event","decision:populated-report","event:buy-tap","evidence:populated-report","external-service:stripe","file:checkout-controller","file:payment-repository","finding:populated-report","function:checkout-submit","function:payment-charge","function:stripe-charge","invariant:payment-at-most-once","limitation:bounded-concurrency","obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0","obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976","obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3","obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e","obligation:sha256:8850a6c3ffab096b872c863438fe647988953139288acc4f55fc591ed4301c58","obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564","obligation:sha256:f1dff8c93678f012051161d849395c79ea65fe64b2059c0304d4ec3505ba15a9","relation:file-contains-submit","relation:payment-calls-stripe","relation:requirement-applies-payment","relation:stripe-belongs-service","relation:submit-awaits-validation","relation:submit-calls-payment","relation:submit-writes-loading","relation:tap-handled-by-submit","relation:test-covers-path","repository:double-submit-payment","requirement:payment-at-most-once","snapshot:double-submit-v1","state:checkout-loading","test:double-submit","universe:sha256:90e7cbc2566f7e6bd95b6953fcb092b253170b20c02aeb0dd8850c30dfb32187","verification:populated-report"]},"ci_gate":{"information_loss":[{"kind":"m1_no_gluing","reason":"M1 does not perform cross-context gluing; CI status remains partial.","recoverable":false,"source_ids":["universe:sha256:90e7cbc2566f7e6bd95b6953fcb092b253170b20c02aeb0dd8850c30dfb32187"]}],"payload":{"status":"partial"},"source_ids":["universe:sha256:90e7cbc2566f7e6bd95b6953fcb092b253170b20c02aeb0dd8850c30dfb32187"]},"human_review":{"information_loss":[{"kind":"omitted_structural_detail","reason":"Human view omits detailed program structure, event history, and raw artifacts.","recoverable":true,"recoverable_via":"audit projection","source_ids":[]}],"payload":{"claim_count":1,"obligation_count":7,"universe_id":"universe:sha256:90e7cbc2566f7e6bd95b6953fcb092b253170b20c02aeb0dd8850c30dfb32187"},"source_ids":["claim:populated-report","universe:sha256:90e7cbc2566f7e6bd95b6953fcb092b253170b20c02aeb0dd8850c30dfb32187"]}},"report_type":"review","report_version":1,"result":{"claims":[{"candidate_confidence":0.7,"disposition":"accepted","execution_id":"execution:fixture","id":"claim:populated-report","limitations":["execution_metadata_unavailable"],"obligation_ids":["obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"],"polarity":"issue_present","review_status":"accepted","source_ids":["state:checkout-loading"],"summary":"The changed submit function has a connected review witness."}],"completion_candidates":[],"decisions":[{"authority":"reviewer:fixture","id":"decision:populated-report","outcome":"accept","rationale":"A trusted human accepted this exact joined trace.","source_ids":["claim:populated-report","evidence:populated-report","verification:populated-report"],"target_id":"claim:populated-report"}],"evidence_bindings":[{"claim_id":"claim:populated-report","evidence_id":"evidence:populated-report","id":"binding:populated-report","relation":"supports","scope":{"property_id":"async.concurrent_reentry"}}],"executions":[{"abstention_reason":"M1 retains the claim execution reference but does not retain reviewer or context metadata.","claim_ids":["claim:populated-report"],"context_envelope_id":"context:unresolved","id":"execution:fixture","obligation_ids":["obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"],"reviewer":{"identity":"unresolved","kind":"unknown"},"status":"abstained"}],"findings":[{"claim_id":"claim:populated-report","decision_id":"decision:populated-report","evidence_ids":["evidence:populated-report"],"id":"finding:populated-report","location_refs":["state:checkout-loading"],"severity":"medium","status":"accepted","title":"The changed submit function has a connected review witness.","verification_ids":["verification:populated-report"]}],"gluing_results":[],"obligation_ids":["obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0","obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976","obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3","obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e","obligation:sha256:8850a6c3ffab096b872c863438fe647988953139288acc4f55fc591ed4301c58","obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564","obligation:sha256:f1dff8c93678f012051161d849395c79ea65fe64b2059c0304d4ec3505ba15a9"],"obstructions":[{"blocks":["obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0"],"id":"obstruction:sha256:30ba488b3a8df0fc6db72b8f033e6a089041deee04a56aafbf67c7a6e7fbaa09","kind":"capability_missing","required_resolution":["capability_missing:test_mapping"],"review_status":"unreviewed","severity":"medium","source_ids":["context:payment","context:test","context:ui-event","relation:payment-calls-stripe","relation:submit-calls-payment","relation:tap-handled-by-submit"],"title":"Required extraction capability is unavailable"},{"blocks":["obligation:sha256:8850a6c3ffab096b872c863438fe647988953139288acc4f55fc591ed4301c58"],"id":"obstruction:sha256:59761352cf281449e73428dc9305797d4f86bc85bb71b78d6f0e67b29640481f","kind":"capability_missing","required_resolution":["capability_missing:test_mapping","origin_rule:path.external_side_effect@1"],"review_status":"unreviewed","severity":"medium","source_ids":["repository:double-submit-payment","snapshot:double-submit-v1"],"title":"Required extraction capability is unavailable"},{"blocks":["claim:populated-report","obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"],"id":"obstruction:sha256:6cbb69b76398abedf268d52909d5b0fc532fc09c27841b34bd001d7c19e9a4dd","kind":"execution_metadata_unavailable","required_resolution":["Record reviewer and context-envelope metadata in an execution-capable milestone."],"review_status":"unreviewed","severity":"info","source_ids":["claim:populated-report"],"title":"Execution metadata is unavailable in M1"},{"blocks":["obligation:sha256:f1dff8c93678f012051161d849395c79ea65fe64b2059c0304d4ec3505ba15a9"],"id":"obstruction:sha256:e43cb0c48dd7a50a6e4076917d7191a6b421d5449e6badfa2e188b51ecaa707c","kind":"capability_missing","required_resolution":["capability_missing:test_mapping","origin_rule:invariant.payment_at_most_once@1"],"review_status":"unreviewed","severity":"medium","source_ids":["repository:double-submit-payment","snapshot:double-submit-v1"],"title":"Required extraction capability is unavailable"},{"blocks":["obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"],"id":"obstruction:sha256:ee0d974a2f82c0b7461009140d220b2bf2edf97026ccbf76e2b5f8e53935d8ce","kind":"capability_missing","required_resolution":["capability_missing:test_mapping"],"review_status":"unreviewed","severity":"medium","source_ids":["context:payment","context:test","context:ui-event","invariant:payment-at-most-once","requirement:payment-at-most-once"],"title":"Required extraction capability is unavailable"}],"stale_records":[],"status":"partial","verifications":[{"claim_id":"claim:populated-report","evidence_ids":["evidence:populated-report"],"freshness":"fresh","id":"verification:populated-report","limitations":[],"result":"passed","verifier_id":"fixture-verifier@1"}]},"scenario":{"base_revision":"fixture-safe-baseline","evidence_space_ref":"evidence-space:snapshot:double-submit-v1","extraction_limitation_ids":["limitation:bounded-concurrency"],"program_space_ref":"program-space:snapshot:double-submit-v1","repository_id":"repository:double-submit-payment","review_space_ref":"review-space:universe:sha256:90e7cbc2566f7e6bd95b6953fcb092b253170b20c02aeb0dd8850c30dfb32187","snapshot_id":"snapshot:double-submit-v1","target_revision":"fixture-buggy-head","universe_id":"universe:sha256:90e7cbc2566f7e6bd95b6953fcb092b253170b20c02aeb0dd8850c30dfb32187"},"schema":"reviewgraphen.review.report.v1"}
+{
+  "coverage": {
+    "extraction": {
+      "adapter_set_hash": "sha256:7777777777777777",
+      "adapters": [
+        {
+          "id": "manual-fixture",
+          "parsed": 3,
+          "status": "complete",
+          "total": 3,
+          "version": "1"
+        }
+      ],
+      "capabilities": {
+        "ast": {
+          "source_ids": [
+            "file:checkout-controller",
+            "file:payment-repository"
+          ],
+          "state": "complete"
+        },
+        "concurrency_model": {
+          "source_ids": [
+            "event:buy-tap",
+            "relation:submit-writes-loading",
+            "relation:tap-handled-by-submit"
+          ],
+          "state": "partial"
+        },
+        "direct_calls": {
+          "source_ids": [
+            "relation:payment-calls-stripe",
+            "relation:submit-calls-payment"
+          ],
+          "state": "complete"
+        },
+        "interprocedural_data_flow": {
+          "source_ids": [
+            "relation:payment-calls-stripe",
+            "relation:submit-calls-payment"
+          ],
+          "state": "partial"
+        }
+      },
+      "limitations": [
+        {
+          "description": "The fixture represents two concurrent taps only; it is not an exhaustive scheduler proof.",
+          "id": "limitation:bounded-concurrency",
+          "kind": "projection_loss",
+          "related_capabilities": [
+            "concurrency_model"
+          ],
+          "severity": "medium",
+          "source_ids": [
+            "invariant:payment-at-most-once",
+            "snapshot:double-submit-v1"
+          ]
+        },
+        {
+          "description": "Data flow is manually traced through the submit-to-charge call chain only; it does not cover StripeClient's internal implementation or any indirect or dynamic call paths.",
+          "id": "limitation:interprocedural-data-flow",
+          "kind": "projection_loss",
+          "related_capabilities": [
+            "interprocedural_data_flow"
+          ],
+          "severity": "medium",
+          "source_ids": [
+            "relation:payment-calls-stripe",
+            "snapshot:double-submit-v1"
+          ]
+        }
+      ]
+    },
+    "freshness": {
+      "fresh": 1,
+      "stale": 0,
+      "unknown": 0
+    },
+    "limitations": [
+      {
+        "description": "The fixture represents two concurrent taps only; it is not an exhaustive scheduler proof.",
+        "id": "limitation:bounded-concurrency",
+        "kind": "projection_loss",
+        "severity": "medium",
+        "source_ids": [
+          "invariant:payment-at-most-once",
+          "snapshot:double-submit-v1"
+        ]
+      },
+      {
+        "description": "Data flow is manually traced through the submit-to-charge call chain only; it does not cover StripeClient's internal implementation or any indirect or dynamic call paths.",
+        "id": "limitation:interprocedural-data-flow",
+        "kind": "projection_loss",
+        "severity": "medium",
+        "source_ids": [
+          "relation:payment-calls-stripe",
+          "snapshot:double-submit-v1"
+        ]
+      },
+      {
+        "description": "M1 retains the claim execution reference but does not retain reviewer or context metadata.",
+        "id": "limitation:sha256:a8aaaa2d3ed451654fc03ffb2321767a6def99d222c68d65ca6437ea91d40915",
+        "kind": "projection_loss",
+        "severity": "info",
+        "source_ids": [
+          "claim:populated-report"
+        ]
+      }
+    ],
+    "stages": {
+      "completed": {
+        "denominator": 9,
+        "numerator": 0,
+        "weighted": 0.0
+      },
+      "evidence_supported": {
+        "denominator": 9,
+        "numerator": 1,
+        "weighted": 0.06818181818181818
+      },
+      "fresh_verified": {
+        "denominator": 9,
+        "numerator": 1,
+        "weighted": 0.06818181818181818
+      },
+      "generated": {
+        "denominator": 9,
+        "numerator": 9,
+        "weighted": 1.0
+      },
+      "verified": {
+        "denominator": 9,
+        "numerator": 1,
+        "weighted": 0.06818181818181818
+      },
+      "visited": {
+        "denominator": 9,
+        "numerator": 0,
+        "weighted": -0.0
+      }
+    },
+    "universe_id": "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+  },
+  "metadata": {
+    "generated_at": "1970-01-01T00:00:00Z",
+    "policy_version": "default@1",
+    "profile_id": "code-review@1",
+    "report_id": "report:sha256:ef5d78b00b35488dc96ace4817a1b4d2c43f2885c135f7d36649814e2fade36a",
+    "rule_set_hash": "sha256:3333333333333333",
+    "run_id": "run:populated-report",
+    "tool_versions": {
+      "reviewgraphen-core": "0.1.0-m1"
+    }
+  },
+  "projection": {
+    "ai_view": {
+      "information_loss": [
+        {
+          "kind": "raw_artifacts_by_reference",
+          "reason": "Raw model and tool artifacts are deliberately absent from M1 canonical state.",
+          "recoverable": false,
+          "source_ids": []
+        }
+      ],
+      "payload": {
+        "claim_ids": [
+          "claim:populated-report"
+        ],
+        "obligation_ids": [
+          "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+          "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
+          "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
+          "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427",
+          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
+          "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+          "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
+          "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184",
+          "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
+        ]
+      },
+      "source_ids": [
+        "binding:populated-report",
+        "claim:populated-report",
+        "context:payment",
+        "context:test",
+        "context:ui-event",
+        "decision:populated-report",
+        "event:buy-tap",
+        "evidence:populated-report",
+        "external-service:stripe",
+        "file:checkout-controller",
+        "file:payment-repository",
+        "finding:populated-report",
+        "function:checkout-submit",
+        "function:payment-charge",
+        "function:stripe-charge",
+        "invariant:payment-at-most-once",
+        "limitation:bounded-concurrency",
+        "limitation:interprocedural-data-flow",
+        "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+        "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
+        "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
+        "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427",
+        "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
+        "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+        "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
+        "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184",
+        "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564",
+        "relation:file-contains-submit",
+        "relation:payment-calls-stripe",
+        "relation:requirement-applies-payment",
+        "relation:stripe-belongs-service",
+        "relation:submit-awaits-validation",
+        "relation:submit-calls-payment",
+        "relation:submit-writes-loading",
+        "relation:tap-handled-by-submit",
+        "relation:test-covers-path",
+        "repository:double-submit-payment",
+        "requirement:payment-at-most-once",
+        "snapshot:double-submit-v1",
+        "state:checkout-loading",
+        "test:double-submit",
+        "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4",
+        "verification:populated-report"
+      ]
+    },
+    "audit_trace": {
+      "information_loss": [
+        {
+          "kind": "source_code_not_embedded",
+          "reason": "Audit stores source IDs and hashes rather than source bytes.",
+          "recoverable": true,
+          "recoverable_via": "fixed ProgramSpace snapshot",
+          "source_ids": [
+            "snapshot:double-submit-v1"
+          ]
+        }
+      ],
+      "payload": {
+        "snapshot_id": "snapshot:double-submit-v1",
+        "universe_id": "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4",
+        "verification_ids": [
+          "verification:populated-report"
+        ]
+      },
+      "source_ids": [
+        "binding:populated-report",
+        "claim:populated-report",
+        "context:payment",
+        "context:test",
+        "context:ui-event",
+        "decision:populated-report",
+        "event:buy-tap",
+        "evidence:populated-report",
+        "external-service:stripe",
+        "file:checkout-controller",
+        "file:payment-repository",
+        "finding:populated-report",
+        "function:checkout-submit",
+        "function:payment-charge",
+        "function:stripe-charge",
+        "invariant:payment-at-most-once",
+        "limitation:bounded-concurrency",
+        "limitation:interprocedural-data-flow",
+        "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+        "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
+        "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
+        "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427",
+        "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
+        "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+        "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
+        "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184",
+        "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564",
+        "relation:file-contains-submit",
+        "relation:payment-calls-stripe",
+        "relation:requirement-applies-payment",
+        "relation:stripe-belongs-service",
+        "relation:submit-awaits-validation",
+        "relation:submit-calls-payment",
+        "relation:submit-writes-loading",
+        "relation:tap-handled-by-submit",
+        "relation:test-covers-path",
+        "repository:double-submit-payment",
+        "requirement:payment-at-most-once",
+        "snapshot:double-submit-v1",
+        "state:checkout-loading",
+        "test:double-submit",
+        "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4",
+        "verification:populated-report"
+      ]
+    },
+    "ci_gate": {
+      "information_loss": [
+        {
+          "kind": "m1_no_gluing",
+          "reason": "M1 does not perform cross-context gluing; CI status remains partial.",
+          "recoverable": false,
+          "source_ids": [
+            "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+          ]
+        }
+      ],
+      "payload": {
+        "status": "partial"
+      },
+      "source_ids": [
+        "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+      ]
+    },
+    "human_review": {
+      "information_loss": [
+        {
+          "kind": "omitted_structural_detail",
+          "reason": "Human view omits detailed program structure, event history, and raw artifacts.",
+          "recoverable": true,
+          "recoverable_via": "audit projection",
+          "source_ids": []
+        }
+      ],
+      "payload": {
+        "claim_count": 1,
+        "obligation_count": 9,
+        "universe_id": "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+      },
+      "source_ids": [
+        "claim:populated-report",
+        "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+      ]
+    }
+  },
+  "report_type": "review",
+  "report_version": 1,
+  "result": {
+    "claims": [
+      {
+        "candidate_confidence": 0.7,
+        "disposition": "accepted",
+        "execution_id": "execution:fixture",
+        "id": "claim:populated-report",
+        "limitations": [
+          "execution_metadata_unavailable"
+        ],
+        "obligation_ids": [
+          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
+        ],
+        "polarity": "issue_present",
+        "review_status": "accepted",
+        "source_ids": [
+          "state:checkout-loading"
+        ],
+        "summary": "The changed submit function has a connected review witness."
+      }
+    ],
+    "completion_candidates": [],
+    "decisions": [
+      {
+        "authority": "reviewer:fixture",
+        "id": "decision:populated-report",
+        "outcome": "accept",
+        "rationale": "A trusted human accepted this exact joined trace.",
+        "source_ids": [
+          "claim:populated-report",
+          "evidence:populated-report",
+          "verification:populated-report"
+        ],
+        "target_id": "claim:populated-report"
+      }
+    ],
+    "evidence_bindings": [
+      {
+        "claim_id": "claim:populated-report",
+        "evidence_id": "evidence:populated-report",
+        "id": "binding:populated-report",
+        "relation": "supports",
+        "scope": {
+          "property_id": "async.concurrent_reentry"
+        }
+      }
+    ],
+    "executions": [
+      {
+        "abstention_reason": "M1 retains the claim execution reference but does not retain reviewer or context metadata.",
+        "claim_ids": [
+          "claim:populated-report"
+        ],
+        "context_envelope_id": "context:unresolved",
+        "id": "execution:fixture",
+        "obligation_ids": [
+          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
+        ],
+        "reviewer": {
+          "identity": "unresolved",
+          "kind": "unknown"
+        },
+        "status": "abstained"
+      }
+    ],
+    "findings": [
+      {
+        "claim_id": "claim:populated-report",
+        "decision_id": "decision:populated-report",
+        "evidence_ids": [
+          "evidence:populated-report"
+        ],
+        "id": "finding:populated-report",
+        "location_refs": [
+          "state:checkout-loading"
+        ],
+        "severity": "medium",
+        "status": "accepted",
+        "title": "The changed submit function has a connected review witness.",
+        "verification_ids": [
+          "verification:populated-report"
+        ]
+      }
+    ],
+    "gluing_results": [],
+    "obligation_ids": [
+      "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+      "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
+      "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
+      "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427",
+      "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
+      "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+      "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
+      "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184",
+      "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
+    ],
+    "obstructions": [
+      {
+        "blocks": [
+          "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
+        ],
+        "id": "obstruction:sha256:1408cf6caa31ac30503124cdfc6b9e9bd17b37b30572bd503c84e71341785908",
+        "kind": "capability_undeclared",
+        "required_resolution": [
+          "capability_undeclared:test_mapping"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:payment",
+          "context:test",
+          "context:ui-event",
+          "invariant:payment-at-most-once",
+          "requirement:payment-at-most-once"
+        ],
+        "title": "Required extraction capability was never declared"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
+        ],
+        "id": "obstruction:sha256:1a85ebc1bf9092a1ee3faee84b797e2d6a5bb6a4d1a69558c816821264580801",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:ui-event",
+          "function:checkout-submit"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427"
+        ],
+        "id": "obstruction:sha256:3970987ebd15abbd05a0355c1f7671b37b0721b51a2a795ae3f5bbbee19effc7",
+        "kind": "capability_undeclared",
+        "required_resolution": [
+          "capability_undeclared:test_mapping"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability was never declared"
+      },
+      {
+        "blocks": [
+          "claim:populated-report",
+          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
+        ],
+        "id": "obstruction:sha256:42b02c040316eeb51b9d5aba25f06d2db4fcf30ab06776e14f702d7112f58e17",
+        "kind": "execution_metadata_unavailable",
+        "required_resolution": [
+          "Record reviewer and context-envelope metadata in an execution-capable milestone."
+        ],
+        "review_status": "unreviewed",
+        "severity": "info",
+        "source_ids": [
+          "claim:populated-report"
+        ],
+        "title": "Execution metadata is unavailable in M1"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
+        ],
+        "id": "obstruction:sha256:59d25c23125e17ba7ec47919d6ba911828e9086fd39ddd5f08578250ac5f27a9",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:payment",
+          "context:test",
+          "context:ui-event",
+          "invariant:payment-at-most-once",
+          "requirement:payment-at-most-once"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184"
+        ],
+        "id": "obstruction:sha256:888c09a993280863e053f2959f04278adc138f53e5d8c439821a49348bdd20d3",
+        "kind": "capability_undeclared",
+        "required_resolution": [
+          "capability_undeclared:test_mapping"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability was never declared"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89"
+        ],
+        "id": "obstruction:sha256:ab070b18a4d6e0ed6519f9c774628b457b24a4f7358a0701fea1b6e1256c5843",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0"
+        ],
+        "id": "obstruction:sha256:bc4f201d56b6a76b0b84bed57dc2423217a19582012efd5c137746de25eae504",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:payment",
+          "context:test",
+          "context:ui-event",
+          "relation:payment-calls-stripe",
+          "relation:submit-calls-payment",
+          "relation:tap-handled-by-submit"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427"
+        ],
+        "id": "obstruction:sha256:ccf0e7ffc4b84a97b9bd475847cc6d6e44c2e9b84874942315ae3fe866bc8ea7",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0"
+        ],
+        "id": "obstruction:sha256:dfbcd45697c488771f5fd2f2190bfeec76a9afb61464eccd0aaa48345e99d531",
+        "kind": "capability_undeclared",
+        "required_resolution": [
+          "capability_undeclared:test_mapping"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:payment",
+          "context:test",
+          "context:ui-event",
+          "relation:payment-calls-stripe",
+          "relation:submit-calls-payment",
+          "relation:tap-handled-by-submit"
+        ],
+        "title": "Required extraction capability was never declared"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088"
+        ],
+        "id": "obstruction:sha256:f4d1f8ead6d2d9d1333b124664e331835c034b35bca80b8971dd4efd7046f695",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976"
+        ],
+        "id": "obstruction:sha256:fa08f310b0a0ee8d21810d28a1251f217c9a3289c478cbedfe59d2399f1d951f",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:ui-event",
+          "relation:tap-handled-by-submit"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184"
+        ],
+        "id": "obstruction:sha256:fed43db2a6ebe29f7d6ed6a05093aa7ebd43094a4b79eb47c5a35ea911c5cc92",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability is only partially available"
+      }
+    ],
+    "stale_records": [],
+    "status": "partial",
+    "verifications": [
+      {
+        "claim_id": "claim:populated-report",
+        "evidence_ids": [
+          "evidence:populated-report"
+        ],
+        "freshness": "fresh",
+        "id": "verification:populated-report",
+        "limitations": [],
+        "result": "passed",
+        "verifier_id": "fixture-verifier@1"
+      }
+    ]
+  },
+  "scenario": {
+    "base_revision": "fixture-safe-baseline",
+    "evidence_space_ref": "evidence-space:snapshot:double-submit-v1",
+    "extraction_limitation_ids": [
+      "limitation:bounded-concurrency",
+      "limitation:interprocedural-data-flow"
+    ],
+    "program_space_ref": "program-space:snapshot:double-submit-v1",
+    "repository_id": "repository:double-submit-payment",
+    "review_space_ref": "review-space:universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4",
+    "snapshot_id": "snapshot:double-submit-v1",
+    "target_revision": "fixture-buggy-head",
+    "universe_id": "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+  },
+  "schema": "reviewgraphen.review.report.v1"
+}
