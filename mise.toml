@@ -1,0 +1,41 @@
+# External Cargo admission harness configuration -- see
+# `docs/adr/0012-mise-host-admitted-cargo-toolchain.md` and docs/20's "Cargo
+# tool admission" section. This file governs only this harness, never
+# `reviewgraphen-ingest`'s own runtime, which never reads mise/rustup/PATH.
+#
+# Setup is always an explicit, documented step (`mise install`, see
+# DEVELOPMENT.md); nothing here or in `scripts/resolve-trusted-cargo.sh`
+# installs or downloads anything on its own.
+
+[settings]
+auto_install = false
+exec_auto_install = false
+not_found_auto_install = false
+task_run_auto_install = false
+
+[tools]
+# Version pin, explicit here and matching rust-toolchain.toml's `channel`
+# exactly. Host mise 2026.1.1 rejects the extended `{ version, profile,
+# components }` table form for the rust tool as an invalid value type, so
+# `profile`/`components` are not repeated here: mise's Rust backend reads
+# them from rust-toolchain.toml itself (already pinned to the same 1.95.0,
+# `profile = "minimal"`, `components = ["clippy", "rustfmt"]`) via its
+# rust-toolchain.toml support. mise's Rust backend is rustup-managed --
+# `mise install` invokes rustup to install this exact version/profile and
+# add these components -- it is not a standalone Rust distribution mise
+# builds itself.
+rust = "1.95.0"
+
+[tasks.trusted-cargo-path]
+description = "Print the absolute, mise-admitted cargo executable for rust@1.95.0 (see scripts/resolve-trusted-cargo.sh, ADR 0012). Never installs; fails if rust@1.95.0 is not already installed via `mise install`."
+run = "scripts/resolve-trusted-cargo.sh"
+
+[tasks.test-ingest]
+description = "Run reviewgraphen-ingest's tests through the mise-admitted trusted cargo (ADR 0012), exporting REVIEWGRAPHEN_TRUSTED_CARGO for tests/m2.rs's external caller helper. Never installs; fails if rust@1.95.0 is not already installed via `mise install`."
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+trusted_cargo="$(scripts/resolve-trusted-cargo.sh)"
+export REVIEWGRAPHEN_TRUSTED_CARGO="$trusted_cargo"
+exec "$trusted_cargo" test -p reviewgraphen-ingest
+'''

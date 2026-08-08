@@ -1,0 +1,111 @@
+{
+  "adapter_set_hash": "sha256:b159a277fabc66da6ad59f36d11cc1995f73de2d0600f08eebfbdfcf80131188",
+  "adapters": [
+    {
+      "excluded": null,
+      "failed": null,
+      "id": "reviewgraphen.ingest.cargo_metadata",
+      "parsed": 1,
+      "status": "complete",
+      "total": 1,
+      "version": "1"
+    },
+    {
+      "excluded": 0,
+      "failed": 0,
+      "id": "reviewgraphen.ingest.git",
+      "parsed": 3,
+      "status": "complete",
+      "total": 3,
+      "version": "1"
+    },
+    {
+      "excluded": 0,
+      "failed": 0,
+      "id": "reviewgraphen.ingest.rust_syn",
+      "parsed": 2,
+      "status": "partial",
+      "total": 2,
+      "version": "1"
+    }
+  ],
+  "capabilities": {
+    "ast": "complete",
+    "cargo_metadata": "complete",
+    "changed_structure": "complete",
+    "containment": "complete",
+    "direct_calls": "partial",
+    "git_snapshot": "complete",
+    "imports": "partial",
+    "module_dependencies": "partial",
+    "state_writes": "partial",
+    "test_mapping": "partial"
+  },
+  "obstructions": [
+    {
+      "description": "macro invocation `retained_macro!` was not expanded at line 11",
+      "id": "limitation:sha256:71adeee954da6960ac4e3fb0a1026da686fc369823e156112533352a299b731c",
+      "kind": "macro_expansion_unresolved",
+      "paths": [
+        "src/lib.rs"
+      ],
+      "severity": "medium",
+      "source_ids": [
+        "function:sha256:aafd346eeed8c48e6aeb53b4301be47ac4f5a96f9d4faeff8c1d39faea02fcc7"
+      ]
+    },
+    {
+      "description": "M2 direct-call, import, module-dependency, test-coverage, and state-write extraction is bounded to unique local syntactic targets; cross-crate resolution and dynamic dispatch remain unresolved regardless of whether this snapshot happens to exercise only resolved examples",
+      "id": "limitation:sha256:abf3856017457aa1cc76949b5d9e504b0553314fb8d497446a5b7bac228c13c0",
+      "kind": "relation_unresolved",
+      "paths": [
+        "src/api.rs",
+        "src/lib.rs"
+      ],
+      "severity": "info",
+      "source_ids": [
+        "file:sha256:2875eea53951082f7efb4f9edba7f06698d98621de2d374dcf5fc77e7fc89466",
+        "file:sha256:53871d14af3cb89086458410d3268eac5fc9eb3ba1c7b628a2ead51bd18fef88"
+      ]
+    },
+    {
+      "description": "macro invocation `macro_rules!` was retained as an unresolved expansion at line 5",
+      "id": "limitation:sha256:ba2926076de91784e1b4e7fe515f420d89096ff3c7a1d499eb080de699965245",
+      "kind": "macro_expansion_unresolved",
+      "paths": [
+        "src/lib.rs"
+      ],
+      "severity": "medium",
+      "source_ids": [
+        "module:sha256:0deceea368140b00ae56cf7e404a9b2c52138f038414fb653ab73a0b3c2192c7"
+      ]
+    },
+    {
+      "description": "method call `run` was not resolved beyond syntactic dispatch at line 17",
+      "id": "limitation:sha256:cc6579a7d2e97c8f8730acc6c5ffd52c06ae9892a4a064f9bf992f954e1e4bb3",
+      "kind": "dynamic_dispatch_unresolved",
+      "paths": [
+        "src/lib.rs"
+      ],
+      "severity": "medium",
+      "source_ids": [
+        "function:sha256:7101cc0dcd6c165275793871b46d50ce8f21a9f08b491732319a90e0aa8eb75d"
+      ]
+    },
+    {
+      "description": "out-of-line module `api` was retained as containment but its file/module correspondence was not resolved",
+      "id": "limitation:sha256:eb87da8c0bc5ad29440580f1d2776efa77e613b923c3e822c110f9b38cca2581",
+      "kind": "relation_unresolved",
+      "paths": [
+        "src/lib.rs"
+      ],
+      "severity": "low",
+      "source_ids": [
+        "module:sha256:9f074aabb8c7086e84d5f82cb582df3cf68f92c40b61ee194238a5434d45d84a"
+      ]
+    }
+  ],
+  "schema": "reviewgraphen.extraction_report.v1",
+  "snapshot_id": "snapshot:sha256:341d1b180f0cbbcd2f8b2077de13248f9e1e02e7274ef8fa4e1413a968ddea2f",
+  "target_revision": "baa4e79e804b0d3fd8da0635444d74d5e2f2578c"
+}

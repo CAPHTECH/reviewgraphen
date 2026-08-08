@@ -20,6 +20,9 @@
 | `reviewgraphen.report.example.json` | Claim、evidence binding、verification、decision、finding、gluing、coverageの参照report。 |
 | `reviewgraphen.migration.example.json` | The exact canonical `migrate_program_space_v1_to_v2` output for `reviewgraphen.input.v1.example.json`: 5 `capability_source_backfill` losses, 2 `synthesized_limitation` losses (the fixture's two `partial` capabilities), and 1 `carried_limitation_trace` loss for its one nonempty-source v1 limitation。 |
 | `reviewgraphen.migration.example.sha256` | SHA-256 of `reviewgraphen.migration.example.json`'s canonical bytes, checked byte-for-byte against a real `migrate_program_space_v1_to_v2` run in `tests/m1.rs`。 |
+| `reviewgraphen.extraction_report.v1.schema.json` | `reviewgraphen.extraction_report.v1` — `reviewgraphen-ingest`'s public M2 adapter completeness/obstruction report shape (`ExtractionReport`)。 |
+| `reviewgraphen.extraction_report.v1.example.json` | A frozen, self-consistent `ExtractionReport` instance from a real M2 fixture ingest。 |
+| `reviewgraphen.extraction_report.v1.example.sha256` | SHA-256 of the example's own canonical bytes (self-consistency only — see below, this is not byte-compared against a fresh ingest run)。 |
 | `reviewgraphen.config.example.toml` | CLI/local runtime configuration example。 |
 
 ## Validation layers
@@ -148,6 +151,36 @@ express — for example that every `assigned_source_ids` equals exactly
 the migrated `ProgramSpace`, or that `losses` is actually ID-ordered — are
 Rust contract guarantees enforced by `migrate_program_space_v1_to_v2`
 itself (ADR 0011 §7), not by this JSON Schema.
+
+`reviewgraphen.extraction_report.v1` is `reviewgraphen-ingest`'s own public
+report type (`ExtractionReport`), separate from the `reviewgraphen.program_
+space.input.v2` document it accompanies. Each `adapters[]` entry reports an
+explicit discovered/accepted/excluded/failed denominator: `total` is every
+discovered input, `parsed` is the accepted subset, `excluded` is the subset a
+declared bound deliberately excluded (for example a symlink or a Git
+submodule entry — every excluded input is retained as a typed `obstructions[]`
+entry, never silently dropped), and `failed` is the subset the adapter
+attempted but could not handle (for example a Rust parse failure).
+`parsed + excluded + failed == total` whenever all four are present; a `null`
+value means the concept is not meaningful for that adapter (Cargo package
+metadata has no per-item exclude/fail concept). Every `obstructions[]` entry's
+`source_ids` is required non-empty, mirroring the same non-empty source-trace
+contract ADR 0011 requires of a `ProgramSpace` `Limitation`.
+
+Unlike `reviewgraphen.migration.example.json` (derived from a fixed,
+timestamp-free v1 JSON fixture and therefore byte-reproducible),
+`reviewgraphen.extraction_report.v1.example.json` is derived from a real
+local `git commit`, whose hash embeds a wall-clock timestamp — it cannot be
+byte-reproduced across runs. The checked-in example is instead a frozen,
+self-consistent instance: its own sha256 is checked against its own
+canonical bytes (catching an accidental hand-edit), and a *separate* test
+(`a_real_ingest_run_extraction_report_validates_against_the_public_schema` in
+`crates/reviewgraphen-ingest/tests/m2.rs`) validates a fresh, live `ingest()`
+run's report against this same schema, without a byte comparison to the
+frozen example. `crates/reviewgraphen-ingest/tests/extraction_report_schema.rs`
+covers the schema's own validity, the example's schema/hash self-consistency,
+and negative cases (missing required field, wrong `schema` discriminator,
+empty `source_ids`, unknown top-level field, invalid enum value).
 
 ## Trust boundary
 

@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capht.tech/schemas/reviewgraphen/extraction-report.v1.schema.json",
+  "title": "ReviewGraphen M2 Extraction Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "snapshot_id",
+    "target_revision",
+    "adapter_set_hash",
+    "adapters",
+    "capabilities",
+    "obstructions"
+  ],
+  "properties": {
+    "schema": {
+      "const": "reviewgraphen.extraction_report.v1"
+    },
+    "snapshot_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "target_revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "adapter_set_hash": {
+      "$ref": "#/$defs/hash"
+    },
+    "adapters": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/adapterReport"
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/capabilityState"
+      }
+    },
+    "obstructions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/obstruction"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9_.:@/+-]*$"
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^(sha256|git|blake3):[A-Fa-f0-9]{8,}$"
+    },
+    "idSet": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/identifier"
+      },
+      "uniqueItems": true
+    },
+    "nonEmptyIdSet": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/identifier"
+      },
+      "uniqueItems": true
+    },
+    "nonNegativeIntegerOrNull": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "capabilityState": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "missing",
+        "unknown"
+      ]
+    },
+    "adapterStatus": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "failed",
+        "not_run"
+      ]
+    },
+    "obstructionKind": {
+      "type": "string",
+      "enum": [
+        "parse_failure",
+        "macro_expansion_unresolved",
+        "dynamic_dispatch_unresolved",
+        "relation_unresolved",
+        "region_excluded",
+        "cargo_metadata_unavailable",
+        "unsupported_input",
+        "unknown"
+      ]
+    },
+    "obstructionSeverity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "adapterReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "status",
+        "parsed",
+        "total",
+        "excluded",
+        "failed"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "version": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "status": {
+          "$ref": "#/$defs/adapterStatus"
+        },
+        "parsed": {
+          "$ref": "#/$defs/nonNegativeIntegerOrNull"
+        },
+        "total": {
+          "$ref": "#/$defs/nonNegativeIntegerOrNull"
+        },
+        "excluded": {
+          "$ref": "#/$defs/nonNegativeIntegerOrNull"
+        },
+        "failed": {
+          "$ref": "#/$defs/nonNegativeIntegerOrNull"
+        }
+      }
+    },
+    "obstruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "severity",
+        "description",
+        "source_ids",
+        "paths"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "kind": {
+          "$ref": "#/$defs/obstructionKind"
+        },
+        "severity": {
+          "$ref": "#/$defs/obstructionSeverity"
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/nonEmptyIdSet"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}
