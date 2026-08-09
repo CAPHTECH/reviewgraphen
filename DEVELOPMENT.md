@@ -118,7 +118,7 @@ Neither `mise run trusted-cargo-path` nor `mise run test-ingest` ever
 installs `rust@1.95.0`: both fail with an explicit error directing you back
 to `mise install` if it is not already present. `mise.toml`'s
 `[settings]` (`auto_install`, `exec_auto_install`, `not_found_auto_install`,
-`task_run_auto_install`, all `false`) and `scripts/resolve-trusted-cargo.sh`'s own exported
+`task.run_auto_install`, all `false`) and `scripts/resolve-trusted-cargo.sh`'s own exported
 `MISE_*_AUTO_INSTALL=false`/`MISE_OFFLINE=true` environment together keep
 every `mise`-mediated command in this harness from auto-installing, whether
 invoked through a mise task or the script standalone. `mise.toml`'s

@@ -11,7 +11,7 @@
 auto_install = false
 exec_auto_install = false
 not_found_auto_install = false
-task_run_auto_install = false
+task.run_auto_install = false
 
 [tools]
 # Version pin, explicit here and matching rust-toolchain.toml's `channel`

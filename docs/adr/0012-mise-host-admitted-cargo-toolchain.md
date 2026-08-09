@@ -59,7 +59,7 @@ executable for this repository's own test suite:
 
 - **`mise.toml` disables every mise auto-install path**: `[settings]`
   `auto_install = false`, `exec_auto_install = false`,
-  `not_found_auto_install = false`, and `task_run_auto_install = false` --
+  `not_found_auto_install = false`, and `task.run_auto_install = false` --
   the last of these because mise's task-activation resolver script exports
   `MISE_TASK_RUN_AUTO_INSTALL=false` only after task activation itself has
   already begun, so setup must remain a separate, explicit `mise install`
@@ -139,7 +139,7 @@ executable for this repository's own test suite:
   path for `reviewgraphen-ingest`'s Cargo-metadata tests, independent of
   whatever `cargo` a developer's shell happens to default to.
 - Every mise-mediated auto-install path -- including task activation, via
-  `task_run_auto_install = false` -- is disabled at both the project
+  `task.run_auto_install = false` -- is disabled at both the project
   (`mise.toml`) and script (`MISE_*_AUTO_INSTALL`/`MISE_OFFLINE`) level, so
   this harness cannot silently install or touch the toolchain the way the
   crate's own now-rejected automatic `rustup`/`mise` resolution could have.

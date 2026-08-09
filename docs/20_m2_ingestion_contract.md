@@ -454,7 +454,7 @@ metadata result (a `package` artifact, a `depends_on` relation, or a
 `request_with_trusted_cargo()` helper, which requires
 `REVIEWGRAPHEN_TRUSTED_CARGO`. Every mise-mediated auto-install path is
 disabled (`mise.toml`'s `[settings]` -- `auto_install`, `exec_auto_install`,
-`not_found_auto_install`, and `task_run_auto_install`, all `false` -- and the
+`not_found_auto_install`, and `task.run_auto_install`, all `false` -- and the
 resolver script's own exported
 `MISE_*_AUTO_INSTALL=false`/`MISE_OFFLINE=true`), so neither `mise run
 trusted-cargo-path` nor `mise run test-ingest` ever installs the toolchain
