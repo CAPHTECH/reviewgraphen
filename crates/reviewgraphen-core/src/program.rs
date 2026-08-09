@@ -288,6 +288,10 @@ impl Artifact {
     /// Constructs and validates one accepted ProgramSpace artifact. This is the
     /// single validation boundary shared by the JSON adapter input path and any
     /// typed `ProgramSpaceBuilder` caller.
+    // Each parameter is a distinct field of the accepted, schema-shaped
+    // artifact contract validated here; grouping them into a struct would
+    // change this stable public boundary rather than reduce arity.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: StableId,
         kind: impl Into<String>,
@@ -857,6 +861,10 @@ impl Evidence {
     /// contract permits importing historical evidence without a current
     /// target, but such a record still cannot enter a review event because
     /// [`Self::new`] requires targets.
+    // Each parameter is a distinct field of the legacy ProgramSpace-input
+    // evidence contract validated here; grouping them into a struct would
+    // change this stable public boundary rather than reduce arity.
+    #[allow(clippy::too_many_arguments)]
     pub fn for_program_space(
         id: StableId,
         kind: impl Into<String>,
