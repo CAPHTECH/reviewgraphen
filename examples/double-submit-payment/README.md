@@ -57,7 +57,9 @@ testは「安全性を満たした」ことではなく、**同じorderに対し
 
 ## 5. Obligation universe
 
-このfixtureは五つのobligationを生成します。
+このfixtureは、五つの具体的なreview obligationと、部分的な
+`concurrency_model` capabilityを明示する四つのcapability-gap obligation、計九つの
+obligationを生成します。後者は分母から除外せず、未解決として残ります。
 
 | Obligation | Kind | Property |
 | --- | --- | --- |
@@ -103,14 +105,16 @@ overlap上では、UI guardは実効的でなく、payment boundaryにもidempot
 ## 8. Expected gate
 
 ```text
-report status: completed
+report status: partial
 CI gate: blocked
 critical finding: duplicate charge
 blocking obstruction: cross-context duplicate-protection gap
-fresh verified coverage: 5 / 5 for this bounded universe
+fresh verified coverage: 5 / 9 for this bounded universe
 ```
 
-5/5はこのfixtureとrule setに対するcoverageです。アプリ全体の安全性や無制限concurrencyの形式証明ではありません。`limitation:bounded-concurrency`がその境界を宣言します。
+5/9はこのfixtureとrule setに対するcoverageです。残る4件は
+`concurrency_model`の部分性に由来するcapability-gap obligationであり、passや
+verifiedには変換されません。アプリ全体の安全性や無制限concurrencyの形式証明ではありません。`limitation:bounded-concurrency`がその境界を宣言します。
 
 ## 9. Candidate repairs
 
