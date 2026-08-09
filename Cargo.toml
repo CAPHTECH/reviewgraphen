@@ -2,6 +2,7 @@
 members = [
     "crates/reviewgraphen-core",
     "crates/reviewgraphen-ingest",
+    "crates/reviewgraphen-store",
     "examples/double-submit-payment/fixture",
 ]
 resolver = "3"
@@ -24,6 +25,7 @@ proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
 syn = { version = "=2.0.119", features = ["full", "visit"] }
 tempfile = "=3.27.0"
 toml = { version = "=0.8.23", default-features = false, features = ["parse"] }
+rustix = { version = "=1.1.4", features = ["fs", "process"] }
 
 # New workspace members must opt in with `lints.workspace = true`. The checked-in
 # reference fixture intentionally remains unmodified; CI separately denies all

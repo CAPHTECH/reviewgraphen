@@ -1,0 +1,19 @@
+[package]
+name = "reviewgraphen-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Linux-only durable store boundary for ReviewGraphen"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reviewgraphen-core = { path = "../reviewgraphen-core" }
+rustix.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

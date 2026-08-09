@@ -152,6 +152,9 @@ metadata boundary; validate and review the combined diff before treating this un
 
 Create `reviewgraphen-store` as a new workspace crate depending on core only.
 
+Status: C-1a StoreRoot admission is implemented pending commit/review; CAS, journal, and index work
+remain separate subunits.
+
 - Exact SQLite dependency required by ADR 0014:
 
   ```toml

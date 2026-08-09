@@ -276,6 +276,19 @@ and refuses to run degraded; there is no path-based fallback. Every on-disk file
 creates is the object's own hash or a fixed literal name — never a caller-supplied string — so no
 `SnapshotSourceEntry.path` can participate in a store-relative filesystem path.
 
+The initial store-root implementation is Linux-only and uses the safe `rustix = "=1.1.4"` `fs` and
+`process` APIs directly for descriptor-relative operations and current UID/GID checks; the crate
+depends on `reviewgraphen-core` only. CAS and journal layers must receive this admitted root rather
+than reopen the workspace by path.
+
+The supplied workspace itself must not be a symlink. After canonicalization, the single anchor open
+uses Linux `openat2` with `RESOLVE_NO_SYMLINKS`, so a symlink in the canonical absolute traversal is
+refused rather than followed. This establishes the anchor before any store-relative operation; the
+implementation makes no claim to protect callers that hand it a path after another principal has
+already replaced that caller-visible name, so callers must retain their own workspace admission.
+An older Linux kernel that reports `ENOSYS` for `openat2` is a typed `UnsupportedPlatform` refusal,
+not a fallback to a weaker open path.
+
 ## 5. CAS protocol
 
 `CasHash` (`reviewgraphen-store`) is a dedicated, narrower grammar than `ContentHash::parse`'s

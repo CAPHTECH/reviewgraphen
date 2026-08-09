@@ -812,6 +812,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "reviewgraphen-store"
+version = "0.1.0"
+dependencies = [
+ "reviewgraphen-core",
+ "rustix",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "rustix"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
