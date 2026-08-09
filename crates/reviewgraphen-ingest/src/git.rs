@@ -368,7 +368,10 @@ impl GitSnapshot {
 }
 
 /// Resolves and reads a Git tree without consulting the target working tree.
-pub(crate) fn load_snapshot(request: &IngestRequest) -> Result<GitSnapshot, IngestError> {
+pub(crate) fn load_snapshot(
+    request: &IngestRequest,
+    max_total_source_bytes: Option<u64>,
+) -> Result<GitSnapshot, IngestError> {
     if request.repository_identity.trim().is_empty() {
         return Err(IngestError::InvalidRequest(
             "repository_identity must not be empty".to_owned(),
@@ -504,6 +507,7 @@ pub(crate) fn load_snapshot(request: &IngestRequest) -> Result<GitSnapshot, Inge
         .cloned()
         .collect::<BTreeSet<_>>();
     let mut files = Vec::new();
+    let mut total_source_bytes = 0_u64;
     for path in &regular_paths {
         // Precheck against the size `ls-tree -l` already reported, so a
         // grossly oversized blob is rejected without spending a `git show`
@@ -530,6 +534,24 @@ pub(crate) fn load_snapshot(request: &IngestRequest) -> Result<GitSnapshot, Inge
                 actual_bytes: content.len(),
                 max_bytes: request.config.limits.max_file_bytes,
             });
+        }
+        if let Some(max_total_source_bytes) = max_total_source_bytes {
+            total_source_bytes = total_source_bytes
+                .checked_add(u64::try_from(content.len()).map_err(|_| {
+                    IngestError::AdapterOutput(
+                        "Git blob length does not fit source bundle byte counter".to_owned(),
+                    )
+                })?)
+                .ok_or(IngestError::SourceBundleTooLarge {
+                    max_total_source_bytes,
+                    actual_total_source_bytes: u64::MAX,
+                })?;
+            if total_source_bytes > max_total_source_bytes {
+                return Err(IngestError::SourceBundleTooLarge {
+                    max_total_source_bytes,
+                    actual_total_source_bytes: total_source_bytes,
+                });
+            }
         }
         let changed_lines = if changed_paths.contains(path) {
             changed_lines(&git_root, &base_revision, &target_revision, path)?
@@ -1399,6 +1421,8 @@ fn git_command(root: &Path) -> Command {
 }
 
 fn run_git(root: &Path, command: GitCommand<'_>) -> Result<Vec<u8>, IngestError> {
+    #[cfg(test)]
+    record_show_file_call(&command);
     let child = build_git_command(root, command);
     checked_output(
         "git",
@@ -1409,6 +1433,31 @@ fn run_git(root: &Path, command: GitCommand<'_>) -> Result<Vec<u8>, IngestError>
             SUBPROCESS_MAX_OUTPUT_BYTES,
         ),
     )
+}
+
+// The counter is test-only and thread-local so parallel unit tests cannot
+// observe one another's commands. It proves the aggregate source bound stops
+// before attempting the next `git show` without changing production behavior.
+#[cfg(test)]
+std::thread_local! {
+    static SHOW_FILE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_show_file_call(command: &GitCommand<'_>) {
+    if matches!(command, GitCommand::ShowFile { .. }) {
+        SHOW_FILE_CALLS.with(|calls| calls.set(calls.get() + 1));
+    }
+}
+
+#[cfg(test)]
+fn reset_show_file_calls() {
+    SHOW_FILE_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+fn show_file_calls() -> usize {
+    SHOW_FILE_CALLS.with(std::cell::Cell::get)
 }
 
 /// Applies one `GitCommand`'s specific arguments on top of the shared
@@ -2061,6 +2110,75 @@ fn relative_staged_path(staging_root: &Path, path: &str) -> Option<String> {
         .ok()
         .and_then(|value| value.to_str())
         .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod source_bundle_limit_tests {
+    use super::{
+        Command, IngestError, IngestRequest, Path, fs, load_snapshot, reset_show_file_calls,
+        show_file_calls,
+    };
+
+    fn git(root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .status()
+            .expect("start test Git command");
+        assert!(status.success(), "test Git command must succeed");
+    }
+
+    fn git_stdout(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .expect("start test Git command");
+        assert!(output.status.success(), "test Git command must succeed");
+        String::from_utf8(output.stdout)
+            .expect("UTF-8 Git output")
+            .trim()
+            .to_owned()
+    }
+
+    #[test]
+    fn aggregate_source_limit_stops_before_the_next_git_show() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let repository = workspace.path().join("snapshot");
+        fs::create_dir(&repository).expect("repository directory");
+        git(&repository, &["init", "--quiet"]);
+        git(
+            &repository,
+            &["config", "user.email", "reviewgraphen@example.test"],
+        );
+        git(&repository, &["config", "user.name", "ReviewGraphen test"]);
+        fs::write(repository.join("a-first.rs"), "first").expect("first source");
+        fs::write(repository.join("b-never-read.rs"), "second").expect("second source");
+        git(&repository, &["add", "."]);
+        git(&repository, &["commit", "--quiet", "-m", "snapshot"]);
+        let revision = git_stdout(&repository, &["rev-parse", "HEAD"]);
+        let request = IngestRequest::new(
+            workspace.path(),
+            &repository,
+            "reviewgraphen.test/source-limit",
+            &revision,
+            &revision,
+        );
+
+        reset_show_file_calls();
+        assert!(matches!(
+            load_snapshot(&request, Some(0)),
+            Err(IngestError::SourceBundleTooLarge {
+                max_total_source_bytes: 0,
+                actual_total_source_bytes: 5,
+            })
+        ));
+        assert_eq!(
+            show_file_calls(),
+            1,
+            "after a-first.rs exceeds the aggregate limit, b-never-read.rs must not be shown"
+        );
+    }
 }
 
 #[cfg(test)]

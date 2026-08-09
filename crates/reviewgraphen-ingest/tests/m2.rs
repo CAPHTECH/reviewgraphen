@@ -2,7 +2,7 @@ use proptest::prelude::*;
 use reviewgraphen_core::MvpRulePack;
 use reviewgraphen_ingest::{
     CapabilityState, CargoToolAdmission, IngestConfig, IngestError, IngestLimits, IngestRequest,
-    IngestResult, IngestionObstructionKind, ingest,
+    IngestResult, IngestionObstructionKind, ingest, ingest_with_sources,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -109,6 +109,32 @@ fn fixture_repository() -> TempGitRepository {
     fixture_repository_with_identity(FIXTURE_IDENTITY)
 }
 
+fn zero_byte_repository() -> TempGitRepository {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let repository = workspace.path().join("zero-byte-fixture");
+    fs::create_dir(&repository).expect("repository directory");
+    git(&repository, ["init", "--quiet"]);
+    git(
+        &repository,
+        ["config", "user.email", "reviewgraphen@example.test"],
+    );
+    git(&repository, ["config", "user.name", "ReviewGraphen test"]);
+    write(&repository, "src/empty.rs", "");
+    git(&repository, ["add", "."]);
+    git(
+        &repository,
+        ["commit", "--quiet", "-m", "zero-byte snapshot"],
+    );
+    let revision = git_stdout(&repository, ["rev-parse", "HEAD"]);
+    TempGitRepository {
+        workspace,
+        repository,
+        identity: "reviewgraphen.test/zero-byte-fixture".to_owned(),
+        base: revision.clone(),
+        target: revision,
+    }
+}
+
 fn fixture_repository_with_identity(identity: &str) -> TempGitRepository {
     let workspace = tempfile::tempdir().expect("temporary workspace");
     let repository = workspace.path().join("fixture");
@@ -154,6 +180,16 @@ fn write(root: &Path, path: &str, content: &str) {
     let path = root.join(path);
     fs::create_dir_all(path.parent().expect("parent")).expect("source directory");
     fs::write(path, content).expect("source file");
+}
+
+fn commit_target_file(repository: &mut TempGitRepository, path: &str, content: &str) {
+    write(&repository.repository, path, content);
+    git(&repository.repository, ["add", "."]);
+    git(
+        &repository.repository,
+        ["commit", "--quiet", "-m", "source bundle target"],
+    );
+    repository.target = git_stdout(&repository.repository, ["rev-parse", "HEAD"]);
 }
 
 fn copy_dir_recursive(source: &Path, destination: &Path) {
@@ -240,6 +276,93 @@ fn ingests_a_bounded_git_snapshot_with_rust_facts_and_changed_structure() {
             .iter()
             .filter(|artifact| artifact.kind == "function")
             .all(|artifact| artifact.location.is_some() && artifact.content_hash.is_some())
+    );
+}
+
+#[test]
+fn source_handoff_is_exact_bounded_deterministic_and_reuses_accepted_file_bytes() {
+    let mut repository = fixture_repository();
+    commit_target_file(&mut repository, "src/empty.rs", "");
+    let request = repository.request();
+
+    let ordinary = ingest(&request).expect("ordinary ingest remains available");
+    let unbounded = ingest_with_sources(&request, u64::MAX).expect("source ingest succeeds");
+    assert_eq!(unbounded.program_space, ordinary.program_space);
+    assert_eq!(unbounded.extraction_report, ordinary.extraction_report);
+    assert!(
+        unbounded
+            .source_bundle
+            .entries()
+            .iter()
+            .any(|entry| entry.path() == "src/empty.rs" && entry.bytes().is_empty()),
+        "zero-byte tracked regular files are retained"
+    );
+
+    let total = unbounded.source_bundle.total_bytes();
+    let exact = ingest_with_sources(&request, total).expect("exact aggregate limit succeeds");
+    assert_eq!(exact.source_bundle, unbounded.source_bundle);
+    assert_eq!(
+        exact
+            .source_bundle
+            .canonical_bytes()
+            .expect("canonical source bytes"),
+        ingest_with_sources(&request, total)
+            .expect("repeat source ingest")
+            .source_bundle
+            .canonical_bytes()
+            .expect("canonical source bytes"),
+        "the same snapshot has byte-stable source handoff output"
+    );
+    assert!(
+        exact
+            .source_bundle
+            .entries()
+            .windows(2)
+            .all(|pair| pair[0].path() < pair[1].path()),
+        "entries are canonically ordered by path"
+    );
+
+    assert!(matches!(
+        ingest_with_sources(&request, total - 1),
+        Err(IngestError::SourceBundleTooLarge {
+            max_total_source_bytes,
+            actual_total_source_bytes,
+        }) if max_total_source_bytes == total - 1 && actual_total_source_bytes > max_total_source_bytes
+    ));
+    assert!(
+        ingest(&request).is_ok(),
+        "a source-limit failure returns no partial result and does not alter ordinary ingestion"
+    );
+
+    for entry in exact.source_bundle.entries() {
+        let artifact = exact
+            .program_space
+            .artifact(entry.artifact_id())
+            .expect("source entry names an accepted artifact");
+        assert_eq!(artifact.kind, "file");
+        assert_eq!(
+            artifact.content_hash.as_ref(),
+            Some(entry.content_hash()),
+            "the bundle uses the same already-read bytes whose hash the file artifact retained"
+        );
+    }
+}
+
+#[test]
+fn source_handoff_accepts_an_all_zero_byte_snapshot_at_a_zero_byte_limit() {
+    let repository = zero_byte_repository();
+    let result = ingest_with_sources(&repository.request(), 0)
+        .expect("zero-byte regular files fit a zero-byte aggregate limit");
+
+    assert!(!result.source_bundle.entries().is_empty());
+    assert_eq!(result.source_bundle.total_bytes(), 0);
+    assert!(
+        result
+            .source_bundle
+            .entries()
+            .iter()
+            .all(|entry| entry.bytes().is_empty()),
+        "every tracked regular file in this snapshot is zero-byte"
     );
 }
 

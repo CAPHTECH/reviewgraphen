@@ -13,6 +13,7 @@ mod id;
 mod program;
 mod projection;
 mod review;
+mod source;
 mod synthesize;
 
 pub use canonical::{CanonicalJson, canonical_hash, canonical_json, canonical_json_value};
@@ -38,6 +39,7 @@ pub use review::{
     Freshness, Obligation, ObligationLifecycle, ReviewAggregate, ReviewClaim, ReviewStatus,
     TrustedHumanAdmission, Verification, VerificationOutcome,
 };
+pub use source::{SnapshotSourceBundle, SnapshotSourceEntry};
 pub use synthesize::{
     ExclusionRecord, MvpRulePack, ObligationBundle, ObligationContract, RuleDescriptor,
     UniverseDescriptor,

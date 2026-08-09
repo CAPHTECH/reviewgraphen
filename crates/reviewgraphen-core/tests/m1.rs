@@ -7,9 +7,9 @@ use reviewgraphen_core::{
     IdRegistry, Invariant, Limitation, LimitationKind, Location, MigrationLoss, MigrationRecord,
     MvpRulePack, ObligationLifecycle, ProfileDescriptor, ProgramSpace, ProgramSpaceBuilder,
     Projection, Provenance, Relation, RepositoryDescriptor, ReviewAggregate, ReviewClaim,
-    ReviewContext, ReviewReport, Severity, SnapshotDescriptor, SourceRef, StableId,
-    TrustedHumanAdmission, Verification, VerificationOutcome, VersionTuple, canonical_json,
-    migrate_program_space_v1_to_v2,
+    ReviewContext, ReviewReport, Severity, SnapshotDescriptor, SnapshotSourceBundle,
+    SnapshotSourceEntry, SourceRef, StableId, TrustedHumanAdmission, Verification,
+    VerificationOutcome, VersionTuple, canonical_json, migrate_program_space_v1_to_v2,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,6 +42,125 @@ fn id(value: &str) -> StableId {
 
 fn program() -> ProgramSpace {
     ProgramSpace::from_json_slice(FIXTURE).expect("reference fixture parses")
+}
+
+fn source_bundle_program() -> (ProgramSpace, Vec<SnapshotSourceEntry>) {
+    let mut input: Value = serde_json::from_slice(FIXTURE).expect("fixture JSON");
+    let file_bytes = [
+        ("src/checkout_controller.rs", Vec::new()),
+        ("src/payment_repository.rs", b"payment source\n".to_vec()),
+    ];
+    let bytes_by_path = file_bytes.into_iter().collect::<BTreeMap<_, _>>();
+    for artifact in input["artifacts"].as_array_mut().expect("artifacts") {
+        if artifact["kind"] != "file" {
+            continue;
+        }
+        let path = artifact["location"]["path"].as_str().expect("file path");
+        let bytes = bytes_by_path.get(path).expect("fixture file bytes");
+        artifact["content_hash"] = json!(ContentHash::sha256(bytes).to_string());
+    }
+    let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&input).expect("JSON"))
+        .expect("source bundle program");
+    let entries = program
+        .artifacts()
+        .iter()
+        .filter(|artifact| artifact.kind == "file")
+        .map(|artifact| {
+            let path = artifact
+                .location
+                .as_ref()
+                .expect("file location")
+                .path
+                .clone();
+            let bytes = bytes_by_path
+                .get(path.as_str())
+                .expect("fixture bytes")
+                .clone();
+            let hash = ContentHash::sha256(&bytes);
+            SnapshotSourceEntry::new(artifact.id.clone(), path, hash.clone(), hash, bytes)
+        })
+        .collect::<Vec<_>>();
+    (program, entries)
+}
+
+#[test]
+fn snapshot_source_bundle_is_exact_hash_checked_and_byte_stable() {
+    let (program, entries) = source_bundle_program();
+    let mut reverse_entries = entries.clone();
+    reverse_entries.reverse();
+    let bundle = SnapshotSourceBundle::new(&program, reverse_entries).expect("valid bundle");
+
+    assert_eq!(bundle.snapshot_id(), program.snapshot_id());
+    assert_eq!(bundle.total_bytes(), 15);
+    assert_eq!(bundle.entries()[0].path(), "src/checkout_controller.rs");
+    assert!(
+        bundle.entries()[0].bytes().is_empty(),
+        "zero-byte files are retained"
+    );
+    assert_eq!(
+        bundle.canonical_bytes().expect("canonical bytes"),
+        SnapshotSourceBundle::new(&program, entries)
+            .expect("same bundle")
+            .canonical_bytes()
+            .expect("canonical bytes"),
+    );
+}
+
+#[test]
+fn snapshot_source_bundle_rejects_missing_extra_duplicate_and_mismatched_entries() {
+    let (program, entries) = source_bundle_program();
+    assert!(SnapshotSourceBundle::new(&program, vec![entries[0].clone()]).is_err());
+
+    let extra_bytes = b"extra".to_vec();
+    let extra_hash = ContentHash::sha256(&extra_bytes);
+    let extra = SnapshotSourceEntry::new(
+        id("file:extra-source"),
+        "extra.rs",
+        extra_hash.clone(),
+        extra_hash,
+        extra_bytes,
+    );
+    let mut with_extra = entries.clone();
+    with_extra.push(extra);
+    assert!(SnapshotSourceBundle::new(&program, with_extra).is_err());
+
+    assert!(
+        SnapshotSourceBundle::new(
+            &program,
+            vec![entries[0].clone(), entries[0].clone(), entries[1].clone()],
+        )
+        .is_err()
+    );
+
+    let wrong_path = SnapshotSourceEntry::new(
+        entries[0].artifact_id().clone(),
+        "wrong.rs",
+        entries[0].content_hash().clone(),
+        entries[0].cas_hash().clone(),
+        entries[0].bytes().to_vec(),
+    );
+    assert!(SnapshotSourceBundle::new(&program, vec![wrong_path, entries[1].clone()]).is_err());
+
+    let wrong_hash = SnapshotSourceEntry::new(
+        entries[0].artifact_id().clone(),
+        entries[0].path(),
+        ContentHash::sha256(b"wrong"),
+        entries[0].cas_hash().clone(),
+        entries[0].bytes().to_vec(),
+    );
+    assert!(SnapshotSourceBundle::new(&program, vec![wrong_hash, entries[1].clone()]).is_err());
+
+    let wrong_cas_hash = SnapshotSourceEntry::new(
+        entries[0].artifact_id().clone(),
+        entries[0].path(),
+        entries[0].content_hash().clone(),
+        ContentHash::sha256(b"wrong-cas"),
+        entries[0].bytes().to_vec(),
+    );
+    assert!(
+        SnapshotSourceBundle::new(&program, vec![wrong_cas_hash, entries[1].clone()]).is_err(),
+        "CAS hash is independently required to match the retained bytes"
+    );
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]

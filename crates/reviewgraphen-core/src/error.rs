@@ -44,6 +44,14 @@ pub enum DomainError {
     #[error("validation failure: {0}")]
     Validation(String),
 
+    /// A durable snapshot-source entry does not match the accepted file
+    /// artifact it claims to retain.
+    #[error("invalid snapshot source bundle entry `{artifact_id}`: {reason}")]
+    InvalidSnapshotSourceBundle {
+        artifact_id: StableId,
+        reason: String,
+    },
+
     /// JSON was malformed or did not match the supported manual adapter shape.
     #[error("JSON adapter failure: {0}")]
     Json(String),

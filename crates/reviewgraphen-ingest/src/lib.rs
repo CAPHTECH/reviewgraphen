@@ -8,7 +8,8 @@ mod git;
 mod rust;
 
 use reviewgraphen_core::{
-    self as rg_core, ContentHash, DomainError, ProgramSpace, StableId, canonical_json,
+    self as rg_core, ContentHash, DomainError, ProgramSpace, SnapshotSourceBundle,
+    SnapshotSourceEntry, StableId, canonical_json,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -348,6 +349,18 @@ pub struct IngestResult {
     pub extraction_report: ExtractionReport,
 }
 
+/// Successful source-retaining ingest result. Source bytes are a validated
+/// snapshot handoff, separate from accepted ProgramSpace facts and evidence.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IngestWithSourcesResult {
+    /// Parsed and core-validated ProgramSpace facts.
+    pub program_space: ProgramSpace,
+    /// Adapter completeness and unknown regions for the same snapshot.
+    pub extraction_report: ExtractionReport,
+    /// Exact source bytes for every accepted file artifact in this snapshot.
+    pub source_bundle: SnapshotSourceBundle,
+}
+
 impl IngestResult {
     /// Returns byte-stable JSON for the ProgramSpace plus its M2 report.
     pub fn canonical_output(&self) -> Result<Vec<u8>, IngestError> {
@@ -424,6 +437,21 @@ pub enum IngestError {
     /// The configured file limit was reached before all tracked regular files could be read.
     #[error("Git tree contains more than the configured {max_files} regular-file bound")]
     FileLimitExceeded { max_files: usize },
+    /// The aggregate source handoff exceeded its caller-provided byte limit.
+    #[error(
+        "snapshot source bytes total {actual_total_source_bytes}, above the {max_total_source_bytes} byte bound"
+    )]
+    SourceBundleTooLarge {
+        max_total_source_bytes: u64,
+        actual_total_source_bytes: u64,
+    },
+    /// Source bytes do not exactly match the ProgramSpace file artifact they
+    /// claim to retain. The whole ingest fails; no partial bundle is exposed.
+    #[error("invalid snapshot source bundle entry `{artifact_id}`: {reason}")]
+    InvalidSourceBundle {
+        artifact_id: StableId,
+        reason: String,
+    },
     /// Core validation rejected data that an adapter attempted to lift.
     #[error(transparent)]
     Core(#[from] DomainError),
@@ -438,8 +466,39 @@ pub enum IngestError {
 /// fixed `cargo metadata --offline --no-deps` invocation. Target repository
 /// bytes are read through Git; target files are never written or executed.
 pub fn ingest(request: &IngestRequest) -> Result<IngestResult, IngestError> {
+    let result = ingest_pipeline(request, None)?;
+    Ok(result.ingest)
+}
+
+/// Ingests one immutable snapshot and retains the exact already-read source
+/// bytes, subject to an aggregate caller-owned source budget.
+pub fn ingest_with_sources(
+    request: &IngestRequest,
+    max_total_source_bytes: u64,
+) -> Result<IngestWithSourcesResult, IngestError> {
+    let result = ingest_pipeline(request, Some(max_total_source_bytes))?;
+    let source_bundle = result
+        .source_bundle
+        .expect("source-retaining pipeline always produces a source bundle");
+    Ok(IngestWithSourcesResult {
+        program_space: result.ingest.program_space,
+        extraction_report: result.ingest.extraction_report,
+        source_bundle,
+    })
+}
+
+struct IngestPipelineResult {
+    ingest: IngestResult,
+    source_bundle: Option<SnapshotSourceBundle>,
+}
+
+/// Shared private pipeline for source-retaining and ordinary ingestion.
+fn ingest_pipeline(
+    request: &IngestRequest,
+    max_total_source_bytes: Option<u64>,
+) -> Result<IngestPipelineResult, IngestError> {
     validate_config(&request.config)?;
-    let snapshot = git::load_snapshot(request)?;
+    let snapshot = git::load_snapshot(request, max_total_source_bytes)?;
     let identities = SnapshotIdentities::new(
         &snapshot,
         &request.config,
@@ -575,7 +634,62 @@ pub fn ingest(request: &IngestRequest) -> Result<IngestResult, IngestError> {
             capability_sources,
         },
     )?;
-    Ok(lifted)
+    let source_bundle = max_total_source_bytes
+        .map(|_| source_bundle_from_snapshot(&snapshot, &lifted.program_space))
+        .transpose()?;
+    Ok(IngestPipelineResult {
+        ingest: lifted,
+        source_bundle,
+    })
+}
+
+fn source_bundle_from_snapshot(
+    snapshot: &git::GitSnapshot,
+    program_space: &ProgramSpace,
+) -> Result<SnapshotSourceBundle, IngestError> {
+    let file_artifacts = program_space
+        .artifacts()
+        .iter()
+        .filter(|artifact| artifact.kind == "file")
+        .filter_map(|artifact| {
+            artifact
+                .location
+                .as_ref()
+                .map(|location| (location.path.as_str(), artifact))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let entries = snapshot
+        .files
+        .iter()
+        .map(|file| {
+            let artifact = file_artifacts.get(file.path.as_str()).ok_or_else(|| {
+                IngestError::InvalidSourceBundle {
+                    artifact_id: program_space.snapshot_id().clone(),
+                    reason: format!(
+                        "accepted ProgramSpace has no file artifact for `{}`",
+                        file.path
+                    ),
+                }
+            })?;
+            Ok(SnapshotSourceEntry::new(
+                artifact.id.clone(),
+                file.path.clone(),
+                file.content_hash.clone(),
+                ContentHash::sha256(&file.content),
+                file.content.clone(),
+            ))
+        })
+        .collect::<Result<Vec<_>, IngestError>>()?;
+    SnapshotSourceBundle::new(program_space, entries).map_err(|error| match error {
+        DomainError::InvalidSnapshotSourceBundle {
+            artifact_id,
+            reason,
+        } => IngestError::InvalidSourceBundle {
+            artifact_id,
+            reason,
+        },
+        other => IngestError::Core(other),
+    })
 }
 
 fn validate_config(config: &IngestConfig) -> Result<(), IngestError> {
