@@ -354,21 +354,42 @@ truncated success). Three distinct outcomes at the tail:
 3. **Invalid interior line** — any non-last line fails to parse or breaks the chain.
    `CorruptNeedsRecovery`; `store recover` reports the offending offset and never truncates.
 
-**Recovery** (`store recover`, exclusive lock, only for case 1) uses one `recovery_id` and atomic,
-create-only files under `recovery/intents/` and `recovery/completions/`, not another append log that
+**Recovery** (`store recover`, exclusive lock, only for case 1) uses one fresh, kernel-nonce-bound
+`recovery_id` and atomic, create-only files under the same run's
+`runs/<sha256(canonical-run-id)-full-hex>/recovery/intents/` and
+`runs/<sha256(canonical-run-id)-full-hex>/recovery/completions/`, not another append log that
 could itself acquire a torn tail:
 
 1. Compute `good_offset` and `discarded_hash` (sha256 over exactly the bytes from `good_offset` to
-   EOF).
+   EOF), binding the run ID, genesis hash, and OS nonce into both receipt and derived recovery ID.
 2. Write an **intent** record — recovery ID, `good_offset`, `discarded_hash`, pre-tail hash, actor,
    tool version, timestamp — through temp+fsync+atomic-create-only-publish+parent-fsync.
 3. Truncate the main log to `good_offset`, then `fsync`/`sync_data` the truncated file.
-4. Publish a completion record (same recovery ID plus post-tail hash) with the same atomic protocol.
+4. Verify the retained post-recovery tail against the intent's `pre_tail_hash`, then publish a
+   completion record (same recovery ID plus `post_file_hash`, the hash of the entire confirmed
+   prefix) with the same atomic protocol. The former binds the recovered chain boundary; the
+   latter binds all confirmed bytes through that boundary.
 
 A crash between steps resumes deterministically on next open: an intent record with no matching
 completion, and the main log already at `good_offset`, means only step 4 is missing; otherwise step
 3 is redone before step 4. Invalid/torn intent or completion files are corruption, never ignored;
 case 2/3 never gains an auto-repair path, including via `store recover`.
+
+Receipt directories are audited before the main log is trusted: names, count, apparent scan bytes,
+regular-file kind, owner/mode, no-follow identity, canonical bytes, and actor/tool lengths are
+bounded. A FIFO, symlink, oversized/noncanonical receipt, orphan completion, or malformed pending
+record is a typed refusal. Pending recovery re-reads the actual suffix at `good_offset`; a shorter
+or hash-mismatched suffix is never silently completed.
+
+Before an append can write any log byte, it must publish and sync a fixed, create-only
+`append.pending` marker in the run directory. Readers and writers acquire the log flock first and
+then refuse that marker; only `store recover` may remove it. A successful append or a successful
+durable rollback removes the marker and fsyncs the run directory. If rollback intent publication,
+truncate, or rollback `sync_data` fails, the marker is retained rather than relying on a best-effort
+poison file. Recovery handles a complete valid log by publishing an empty-discard receipt before it
+clears the marker; for an unterminated suffix it follows steps 1--4. This makes a marker-publication
+failure necessarily pre-mutation and records durability uncertainty without extending automatic
+truncation to a complete-invalid/interior line.
 
 **Append** (writer, lock held): build the canonical-JSON line plus `\n` in memory, bounded by
 `max_event_line_bytes` (§8); `write_all`/`flush`/`sync_data` at the current confirmed EOF. Only
@@ -432,7 +453,9 @@ bounds any single CAS write. Temporary-GC scans also declare `max_tmp_gc_entries
 operations, while the age floor is only a courtesy policy and never substitutes for a lease check.
 `reviewgraphen-store` additionally enforces `max_event_line_bytes`
 (one JSONL line), `max_events` (replay/rebuild event count), `max_replay_bytes` (bytes read while
-validating/replaying a chain), `max_index_rows` (rows per rebuilt table), and `max_index_temp_bytes`
+replay/recovery), `max_receipt_files` (intent and completion directory entries),
+`max_receipt_scan_bytes` (aggregate apparent receipt bytes), and
+`max_receipt_bytes` (one canonical receipt), `max_index_rows` (rows per rebuilt table), and `max_index_temp_bytes`
 (rebuild temp-file size) — §6/§7. Exceeding any of these is always a typed `Incomplete`-shaped
 failure: `store rebuild-index`/`store verify`/log open never complete as a truncated silent success
 (docs/16 §11: "limit到達をpass扱いしません").

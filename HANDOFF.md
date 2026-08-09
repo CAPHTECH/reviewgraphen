@@ -152,8 +152,21 @@ metadata boundary; validate and review the combined diff before treating this un
 
 Create `reviewgraphen-store` as a new workspace crate depending on core only.
 
-Status: C-1a StoreRoot admission and C-1b CAS hardening are implemented pending independent
-review/commit; journal and index work remain separate subunits. C-1b keeps admitted descriptors for
+Status: C-1a StoreRoot admission, C-1b CAS hardening, and C-2 durable JSONL admission are
+implemented pending independent review/commit; SQLite indexing remains a separate subunit. C-2
+holds `flock` shared/exclusive locks for the full reader/append/recovery critical sections, admits
+only canonical newline-delimited core-validated prefixes, bounds every append/replay operation,
+and uses create-only, parent-fsynced intent/completion receipts. Its recovery audit rejects
+orphan, noncanonical, duplicate-pending, mismatched-suffix, and short-log receipts before touching
+the log; only a physical unterminated suffix is truncated. An append whose rollback cannot be
+durably confirmed is poisoned and leaves the same receipted recovery gate for an explicit recovery.
+C-2 scopes every log and receipt set to `.reviewgraphen/runs/<sha256(run_id canonical text) full hex>/logs.jsonl` and
+`runs/<sha256(run_id canonical text) full hex>/recovery/{intents,completions}`. `initialize_v2` is the sole production create
+path: it validates and syncs the non-empty sequence-one genesis manifest before publication.
+Generic reader/recover paths never create missing components, and V1 stays read-only. Receipt IDs
+bind run, genesis hash, exact suffix, and an OS nonce; a bounded no-follow receipt audit runs before
+reader or writer journal trust.
+C-1b keeps admitted descriptors for
 `.reviewgraphen/artifacts`, `artifacts/sha256`, and `artifacts/tmp`; every component is created/opened with
 FD-relative `mkdirat`/`openat(O_NOFOLLOW|O_DIRECTORY|O_CLOEXEC)` and exact owner/mode/type checks.
 Objects use the ADR-fixed `artifacts/sha256/<first2>/<full64>` layout and are published from a

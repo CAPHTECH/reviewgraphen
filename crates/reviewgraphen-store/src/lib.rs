@@ -5,6 +5,16 @@
 //! reconstructing paths from ambient state.
 
 #[cfg(target_os = "linux")]
+mod journal;
+
+#[cfg(target_os = "linux")]
+pub use journal::{
+    EventJournal, JournalAppendReceipt, JournalError, JournalGenesis, JournalIdentity,
+    JournalLimits, JournalReader, JournalRecoveryReceipt, JournalWriter, RecoveryCompletion,
+    RecoveryIntent,
+};
+
+#[cfg(target_os = "linux")]
 use rustix::{
     fd::OwnedFd,
     fs::{
@@ -35,6 +45,12 @@ pub struct StoreLimits {
     pub max_tmp_gc_scan_bytes: u64,
     /// Courtesy age floor; leases remain the correctness boundary.
     pub min_tmp_gc_age: Duration,
+    /// Maximum canonical JSONL event line accepted by the durable journal.
+    pub max_event_line_bytes: u64,
+    /// Maximum events a single journal validation/replay may admit.
+    pub max_events: u64,
+    /// Maximum actual bytes a single journal validation/replay may read.
+    pub max_replay_bytes: u64,
 }
 
 impl Default for StoreLimits {
@@ -44,6 +60,9 @@ impl Default for StoreLimits {
             max_tmp_gc_entries: 10_000,
             max_tmp_gc_scan_bytes: 1024 * 1024 * 1024,
             min_tmp_gc_age: Duration::from_secs(300),
+            max_event_line_bytes: 1024 * 1024,
+            max_events: 1_000_000,
+            max_replay_bytes: 1024 * 1024 * 1024,
         }
     }
 }

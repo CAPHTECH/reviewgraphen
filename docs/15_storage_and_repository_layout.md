@@ -41,10 +41,11 @@ Markdown、human report、AI summary、dashboard、YAML manifestはprojectionで
     reviewgraphen.sqlite
 
   runs/
-    <run-id>/
-      manifest.json
-      state.json
+    <sha256(canonical-run-id)-full-hex>/
       logs.jsonl
+      recovery/
+        intents/
+        completions/
 
   reports/
     <run-id>/
@@ -55,7 +56,16 @@ Markdown、human report、AI summary、dashboard、YAML manifestはprojectionで
 
 ## 3. Event log
 
-一event一行JSONL。
+各 run の `logs.jsonl` は一 event 一行の JSONL。V2 は空ファイルを
+永続状態として認めず、sequence 1 の `RunGenesisManifest` を原子的に書いた
+`initialize_v2` が唯一の作成経路である。reader/recover は既存の各 component を
+`O_NOFOLLOW` で開くだけで、欠落を作成してはならない。
+
+ファイルシステム上の run directory は `run_id` をそのまま使わず、canonical
+StableId text の SHA-256 full hex を component とする。これにより StableId が許す
+`/` を含む payload も traversal にならない。run identity は path 名ではなく、V2
+manifest と全 event の `run_id` により検証する。初期 log は `O_TMPFILE` に書き
+`sync_all` 後、create-only `linkat(AT_EMPTY_PATH)` と run-dir `fsync` で公開する。
 
 ```json
 {
