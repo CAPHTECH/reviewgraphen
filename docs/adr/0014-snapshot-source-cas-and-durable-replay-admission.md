@@ -399,9 +399,8 @@ back to the pre-write offset and `sync_data`s the rollback, or transitions to
 
 ## 7. SQLite derived index
 
-```toml
-rusqlite = { version = "=0.40.1", features = ["bundled"] }
-```
+The exact SQLite persistence boundary is ADR 0015: it uses
+`rusqlite = { version = "=0.40.1", default-features = false, features = ["bundled", "serialize", "limits"] }`.
 
 The exact pin is deliberate: `bundled` removes host-SQLite drift, and `=0.40.1` (not `^0.40.1`)
 removes patch-version drift too.
@@ -409,9 +408,9 @@ removes patch-version drift too.
 Rebuild acquires a dedicated rebuild lock, distinct from the JSONL locks in §6 (it reads the log
 under a shared lock as an ordinary reader, and separately holds this lock so two concurrent
 `store rebuild-index` invocations serialize instead of racing the same temp-file-and-swap sequence).
-It always targets a fresh temporary file, never the live `index.sqlite` in place, with
-`PRAGMA journal_mode = DELETE` (never WAL/TRUNCATE/MEMORY — DELETE leaves no `-wal`/`-shm` sidecar
-that would complicate an atomic single-file swap): create the full schema, set `PRAGMA user_version`,
+It always targets a fresh anonymous descriptor-relative candidate, never the live `index.sqlite` in place.
+SQLite receives only an in-memory database: it serializes a verified image for FD-relative candidate
+publication and queries use bounded FD reads followed by read-only in-memory deserialization. It sets the full schema and `PRAGMA user_version`,
 write a policy/config row, a genesis marker row, and a tail marker row. For v2, rebuild reads event
 #1's genesis registration from CAS under the log's shared lock, re-verifies its hash, asks core to
 decode/validate `RunGenesisSnapshot`, and seeds objects, relations, obligations, universe, and other

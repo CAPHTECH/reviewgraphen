@@ -146,26 +146,18 @@ metadata:
 
 ## 7. Derived index
 
-SQLite初期schema候補:
+SQLiteの実装schemaはADR 0015に固定される。`index_meta` と `events` を共通に、V2では
+`program_objects`、`program_relations`、`universe`、`obligations`、lifecycle history、claims、
+artifact registration/source rowsを別表として保持する。authority recordsとfindingsもそれぞれ
+`unreconciled_authority_records` / `projected_findings` の shadow-only projectionであり、
+Program fact、review claim、evidenceを一表へ混在させない。V1はevents metadata-onlyである。
 
-```text
-objects
-relations
-obligations
-executions
-claims
-evidence
-bindings
-verifications
-decisions
-obstructions
-coverage
-staleness
-events
-artifact_metadata
-```
-
-indexはquery最適化のためのprojectionです。databaseだけを書き換えてcanonical stateを変更しません。
+indexはquery最適化のためのderived-only projectionです。index databaseだけを書き換えてcanonical
+stateを変更せず、canonical JSONL/CASをauthorityとして置き換えません。
+実装はSQLiteへfilesystem pathnameを渡さず、in-memory build → serialize bytes →
+FD-relative candidate publish、およびbounded FD read → read-only deserializeで扱います。
+active imageはjournalのrun/genesis/confirmed offset/tail/event countとlock-heldで照合し、
+stale imageをcurrent queryとして返しません。
 
 ### M1 report execution references
 

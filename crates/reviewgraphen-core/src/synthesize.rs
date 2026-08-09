@@ -101,6 +101,13 @@ impl UniverseDescriptor {
         &self.policy_version
     }
 
+    /// Version of the deterministic rule-pack implementation that synthesized
+    /// this explicit coverage denominator.
+    #[must_use]
+    pub fn rule_pack_version(&self) -> &str {
+        &self.rule_pack_version
+    }
+
     /// Explicit records excluded from the eligible denominator.
     #[must_use]
     pub fn exclusions(&self) -> &[ExclusionRecord] {

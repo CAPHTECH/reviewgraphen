@@ -5,8 +5,17 @@
 //! reconstructing paths from ambient state.
 
 #[cfg(target_os = "linux")]
+mod index;
+#[cfg(target_os = "linux")]
 mod journal;
 
+#[cfg(target_os = "linux")]
+pub use index::{
+    DerivedIndex, IndexArtifactRegistration, IndexClaim, IndexContextEnvelope, IndexError,
+    IndexEvent, IndexExecution, IndexFinding, IndexLimits, IndexMarker, IndexObligation,
+    IndexObligationLifecycle, IndexProgramObject, IndexProgramRelation, IndexRebuildReceipt,
+    IndexReviewPlan, IndexShadow, IndexSnapshot, IndexSnapshotSource, IndexUniverse,
+};
 #[cfg(target_os = "linux")]
 pub use journal::{
     EventJournal, JournalAppendReceipt, JournalError, JournalGenesis, JournalIdentity,
@@ -51,6 +60,16 @@ pub struct StoreLimits {
     pub max_events: u64,
     /// Maximum actual bytes a single journal validation/replay may read.
     pub max_replay_bytes: u64,
+    /// Aggregate physical rows admitted into one derived SQLite index.
+    pub max_index_rows: u64,
+    /// Maximum serialized active SQLite image size.
+    pub max_index_serialized_bytes: u64,
+    /// Maximum simultaneous store-owned index buffers.
+    pub max_index_working_bytes: u64,
+    /// Maximum typed index snapshot returned by one query.
+    pub max_index_query_bytes: u64,
+    /// Maximum UTF-8 bytes in a prepared index statement.
+    pub max_index_statement_bytes: u64,
 }
 
 impl Default for StoreLimits {
@@ -63,6 +82,15 @@ impl Default for StoreLimits {
             max_event_line_bytes: 1024 * 1024,
             max_events: 1_000_000,
             max_replay_bytes: 1024 * 1024 * 1024,
+            max_index_rows: 1_000_000,
+            max_index_serialized_bytes: 64 * 1024 * 1024,
+            // A maximum-size rebuild can temporarily own the main database,
+            // SQLite's serialized view, the returned image, and its bounded
+            // cache.  The descriptor publication phase starts only after the
+            // connection is dropped.
+            max_index_working_bytes: 256 * 1024 * 1024,
+            max_index_query_bytes: 16 * 1024 * 1024,
+            max_index_statement_bytes: 64 * 1024,
         }
     }
 }

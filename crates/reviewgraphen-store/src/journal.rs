@@ -96,6 +96,10 @@ impl JournalIdentity {
     pub fn genesis_hash(&self) -> ContentHash {
         self.genesis.hash()
     }
+    #[allow(dead_code)] // Consumed by the following derived-index C-3 unit.
+    pub(crate) fn core_genesis(&self) -> EventStreamGenesis<'_> {
+        self.genesis.core_genesis()
+    }
 }
 
 /// Independent bounds for the journal protocol.
@@ -343,6 +347,59 @@ impl<'a> EventJournal<'a> {
         publish_initial_log(&run, &line, &identity, limits)?;
         Self::open_with_limits(root, identity, limits)
     }
+
+    /// Constructs a validated immutable V1 fixture only for store contract
+    /// tests. Production V1 streams are imported/read-only; this helper never
+    /// exposes an append path and validates the complete supplied prefix
+    /// before publishing the fixed JSONL bytes.
+    #[cfg(test)]
+    pub(crate) fn initialize_v1_for_test(
+        root: &'a StoreRoot,
+        identity: JournalIdentity,
+        events: &[EventEnvelope],
+    ) -> Result<Self, JournalError> {
+        if identity.version() != EventContractVersion::V1 {
+            return Err(JournalError::V1ReadOnly);
+        }
+        let limits = JournalLimits::from_store(root.limits());
+        validate_limits(limits)?;
+        validate_prefix(&identity, events)?;
+        let mut bytes = Vec::new();
+        for event in events {
+            let mut line = canonical_json(event)?;
+            line.push(b'\n');
+            limit(
+                u64::try_from(line.len()).map_err(|_| JournalError::Incomplete {
+                    limit: limits.max_event_line_bytes,
+                    observed: u64::MAX,
+                })?,
+                limits.max_event_line_bytes,
+            )?;
+            bytes.extend_from_slice(&line);
+        }
+        limit(
+            u64::try_from(events.len()).map_err(|_| JournalError::Incomplete {
+                limit: limits.max_events,
+                observed: u64::MAX,
+            })?,
+            limits.max_events,
+        )?;
+        limit(
+            u64::try_from(bytes.len()).map_err(|_| JournalError::Incomplete {
+                limit: limits.max_replay_bytes,
+                observed: u64::MAX,
+            })?,
+            limits.max_replay_bytes,
+        )?;
+        let runs = open_or_create_dir(root.fd(), RUNS_DIR, "runs directory")?;
+        let run = open_or_create_dir(&runs, &run_dir_name(&identity.run_id), "run directory")?;
+        let recovery = open_or_create_dir(&run, RECOVERY_DIR, "run recovery directory")?;
+        let _ = open_or_create_dir(&recovery, INTENTS_DIR, "recovery intent directory")?;
+        let _ = open_or_create_dir(&recovery, COMPLETIONS_DIR, "recovery completion directory")?;
+        publish_initial_log(&run, &bytes, &identity, limits)?;
+        Self::open_with_limits(root, identity, limits)
+    }
+
     pub fn reader(&self) -> Result<JournalReader, JournalError> {
         let fd = self.open_file(false)?;
         fs::flock(&fd, FlockOperation::LockShared).map_err(StoreError::Io)?;

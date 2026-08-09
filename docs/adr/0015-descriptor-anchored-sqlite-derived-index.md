@@ -143,6 +143,10 @@ own locks.
 Callers must not hold a journal reader, writer, or recovery operation across
 `rebuild` or `snapshot_current`. The API intentionally does not accept such a
 guard: otherwise a caller could invert the mandatory order and deadlock. The
+Rust type system cannot prove that an independently acquired guard is absent,
+and `flock` is blocking, so this is an explicit caller precondition rather
+than a best-effort runtime diagnostic. Callers must `drop` a writer/reader
+before calling either index operation.
 operation lock order is always:
 
 ```text
@@ -227,14 +231,24 @@ the corresponding store bounds. Each static DDL/DML/query statement is
 checked against `max_index_statement_bytes` before prepare; dynamically
 constructed SQL is forbidden.
 
-`max_index_working_bytes` is enforced on the store-owned peak budget before
-allocation and again as buffers become materialized. The checked budget
-includes the possible in-memory main image, an owned serialized copy, a
-bounded file-read buffer, and accumulated `IndexSnapshot` return data. SQLite
-allocator/header overhead is not represented as persisted bytes; page count,
-cache configuration, SQLite limits, statement bounds, and returned-data bounds
-independently constrain its inputs. `PRAGMA cache_size` is set to a checked
-negative-KiB value derived from the remaining working budget. `temp_store =
+`max_index_working_bytes` is enforced on explicit ownership stages, before
+allocation and again as buffers become materialized. During serialize, the
+build connection's main image/cache, SQLite's serialized view, and the owned
+publication `Vec` are charged as `3 * image + configured build cache`. The
+connection is dropped before publication takes ownership of that `Vec`.
+During deserialize, the owned read `Vec`, reconstructed main image, and query
+cache are charged together; `deserialize_read_exact` consumes the `Vec`, which
+is dropped before marker/table queries materialize an `IndexSnapshot`.
+Candidate validation and current-query admission then charge the main image,
+configured cache, and preflight result without retaining a second input buffer.
+SQLite allocator/header overhead is not represented as persisted bytes; page
+count, cache configuration, SQLite limits, statement bounds, and returned-data
+bounds independently constrain its inputs. `PRAGMA cache_size` is set to a
+checked negative-KiB value derived from the remaining working budget: rebuild
+reserves three maximum serialized images before assigning cache; query/candidate
+deserialize reserves two maximum images plus the complete query budget. Query
+admission checks the actual peak `main DB + configured cache + preflight
+result`. `temp_store =
 MEMORY` is mandatory, so a sort or temporary table cannot create an ambient
 file. Exceeding any bound is a typed incomplete operation, never a truncated
 successful index or query.
@@ -480,8 +494,10 @@ unconditional DDL and projection invariant for every v0.1 rebuild.
 
 After validation, rebuild commits the in-memory transaction, verifies
 autocommit state, and calls `Connection::serialize(DatabaseName::Main)`. It
-checks the returned image length before copying or writing it, accounts any
-owned copy against `max_index_working_bytes`, and requires length to be
+checks the returned image length before copying or writing it, accounts the
+serialize-stage main/cache/view/owned-copy peak against
+`max_index_working_bytes`, drops the connection, and only then moves the owned
+image into publication. It requires length to be
 nonzero, at most `max_index_serialized_bytes`, page-aligned, and consistent
 with the checked SQLite page count.
 
@@ -565,10 +581,14 @@ calls:
 deserialize_read_exact(DatabaseName::Main, reader, exact_size, read_only = true)
 ```
 
-The operation must verify that main is read-only, set and read back
-`PRAGMA query_only = ON`, set/read back `temp_store = MEMORY`, set SQLite
-statement/value/result limits, and reject any non-query-only prepared
-statement. Before reading the marker or another table, it also reads
+SQLite's `sqlite3_db_readonly(main)` reports `false` for this in-memory
+deserialize destination even when `read_only = true`; it is therefore not a
+usable enforcement signal for this design. The derived-query read-only
+guarantee is instead: the `Connection` is never public, `read_only = true` is
+always supplied to deserialize, `PRAGMA query_only = ON` is set and read back,
+and a mutation attempt is required to fail without sidecar files. The query
+path also sets/read backs `temp_store = MEMORY` and the SQLite
+statement/value/result limits. Before reading the marker or another table, it also reads
 `PRAGMA user_version`, requires exactly 1, and requires equality with
 `index_meta.index_schema_version`; an unknown/future value is
 `CorruptIndex`/rebuild-required, never migrated or queried. A mutation attempt
@@ -738,6 +758,17 @@ contract. Complete ordered `IndexSnapshot` equality is.
     `Incomplete` and no partial successful result.
 
 ## Acceptance tests
+
+### Current dependency boundary
+
+The exhaustive projection match already covers every `DecodedPayload` variant
+known to the current core. However, the current V2 event log rejects a legacy
+`ClaimProposed` before ADR 0013's Unit D atomic execution admission is
+implemented; therefore a single legal V2 stream cannot yet contain the
+claim/binding/verification/decision/finding subset. This is a deferred core
+dependency, not permission to relax the index boundary: those arms remain
+fail-closed, and the all-payload V2 fixture in item 1 must be added when Unit D
+lands.
 
 1. A V2 fixture containing every current payload kind builds, serializes,
    publishes, reads, deserializes, and yields an equal complete

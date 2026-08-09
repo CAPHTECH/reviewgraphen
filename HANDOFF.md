@@ -152,8 +152,14 @@ metadata boundary; validate and review the combined diff before treating this un
 
 Create `reviewgraphen-store` as a new workspace crate depending on core only.
 
-Status: C-1a StoreRoot admission, C-1b CAS hardening, and C-2 durable JSONL admission are
-implemented pending independent review/commit; SQLite indexing remains a separate subunit. C-2
+Status: C-1a StoreRoot admission, C-1b CAS hardening, C-2 durable JSONL admission, and C-3
+descriptor-anchored SQLite derived indexing are implemented pending independent review/commit.
+C-3 builds/querys SQLite only in memory, publishes serialized bytes FD-relatively, binds a
+complete typed `IndexSnapshot` to a lock-held journal tail, projects V2 program/obligation/claim/
+artifact/source records separately from authority/finding shadows, and retains V1 as event-metadata-only.
+The current V2 core rejects legacy claims until ADR 0013's Unit D atomic execution admission exists,
+so C-3 keeps exhaustive fail-closed arms but defers an all-payload V2 E2E fixture to that dependency.
+C-2
 holds `flock` shared/exclusive locks for the full reader/append/recovery critical sections, admits
 only canonical newline-delimited core-validated prefixes, bounds every append/replay operation,
 and uses create-only, parent-fsynced intent/completion receipts. Its recovery audit rejects
