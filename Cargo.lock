@@ -817,6 +817,7 @@ version = "0.1.0"
 dependencies = [
  "reviewgraphen-core",
  "rustix",
+ "sha2",
  "tempfile",
  "thiserror",
 ]

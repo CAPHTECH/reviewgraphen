@@ -303,9 +303,11 @@ before any filesystem operation.
 Layout: `artifacts/sha256/<2-hex>/<64-hex>` for objects, `artifacts/tmp/<random>` for write staging.
 Directories `0700`, objects `0600`, owner-only.
 
-**Write**: reject up front if a declared length exceeds `max_object_bytes` (§8). Create the temp file
-with `O_CREAT|O_EXCL` (collision is a hard error) and immediately acquire a non-blocking exclusive
-lease lock on it, held until rename or abort. Stream bytes to disk while incrementally hashing in the
+**Write**: reject up front if a declared length exceeds `max_object_bytes` (§8). Create the temp inode
+anonymously with `O_TMPFILE`, verify it, and immediately acquire a non-blocking exclusive lease lock
+before linking it once into `artifacts/tmp/<random>` with an OS-random name; an unavailable anonymous
+temp/link capability is `UnsupportedPlatform`, never a weaker named-before-lock fallback. The lease is
+held until the temporary name is unlinked after publish or abort. Stream bytes to disk while incrementally hashing in the
 same pass; the bound is enforced against the **actual** running byte count as written, not the
 declared length — the write aborts mid-stream the instant actual bytes exceed `max_object_bytes`,
 even if the declared length under-reported it. `fsync` the temp file. Publish is atomic, create-only,
@@ -425,7 +427,10 @@ guarantee across rebuilds (free-list layout and page ordering are unspecified).
 
 `IngestLimits::max_file_bytes`/`max_files` bound ingestion; `max_total_source_bytes` (§2)
 independently bounds `SnapshotSourceBundle`'s aggregate size; `max_object_bytes` (§5) independently
-bounds any single CAS write. `reviewgraphen-store` additionally enforces `max_event_line_bytes`
+bounds any single CAS write. Temporary-GC scans also declare `max_tmp_gc_entries`,
+`max_tmp_gc_scan_bytes`, and `min_tmp_gc_age`: entry and apparent-byte limits are typed bounded
+operations, while the age floor is only a courtesy policy and never substitutes for a lease check.
+`reviewgraphen-store` additionally enforces `max_event_line_bytes`
 (one JSONL line), `max_events` (replay/rebuild event count), `max_replay_bytes` (bytes read while
 validating/replaying a chain), `max_index_rows` (rows per rebuilt table), and `max_index_temp_bytes`
 (rebuild temp-file size) — §6/§7. Exceeding any of these is always a typed `Incomplete`-shaped

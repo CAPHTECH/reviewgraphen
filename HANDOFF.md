@@ -152,8 +152,16 @@ metadata boundary; validate and review the combined diff before treating this un
 
 Create `reviewgraphen-store` as a new workspace crate depending on core only.
 
-Status: C-1a StoreRoot admission is implemented pending commit/review; CAS, journal, and index work
-remain separate subunits.
+Status: C-1a StoreRoot admission and C-1b CAS hardening are implemented pending independent
+review/commit; journal and index work remain separate subunits. C-1b keeps admitted descriptors for
+`.reviewgraphen/artifacts`, `artifacts/sha256`, and `artifacts/tmp`; every component is created/opened with
+FD-relative `mkdirat`/`openat(O_NOFOLLOW|O_DIRECTORY|O_CLOEXEC)` and exact owner/mode/type checks.
+Objects use the ADR-fixed `artifacts/sha256/<first2>/<full64>` layout and are published from a
+leased temporary regular file using create-only `linkat` (with `renameat2(NOREPLACE)` fallback)
+into a prefix-directory descriptor and a parent `fsync`; existing objects are rehashed before
+idempotent success. `gc_tmp` has entry/byte/age bounds and only deletes an eligible regular
+temporary file after acquiring its non-blocking exclusive lease; it skips held, symlinked, and
+non-regular entries.
 
 - Exact SQLite dependency required by ADR 0014:
 
