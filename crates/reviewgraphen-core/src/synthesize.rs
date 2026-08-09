@@ -4,7 +4,7 @@ use crate::{
     CanonicalJson, CapabilityState, ContentHash, DomainError, IdRegistry, Obligation, ProgramSpace,
     Result, StableId, VersionTuple,
 };
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,7 +23,8 @@ pub struct RuleDescriptor {
 }
 
 /// A transparent, retained reason a candidate target is outside the denominator.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExclusionRecord {
     /// Stable exclusion record ID.
     pub id: StableId,
@@ -38,7 +39,8 @@ pub struct ExclusionRecord {
 }
 
 /// Versioned, explicit coverage denominator for one synthesized universe.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UniverseDescriptor {
     /// Deterministic universe ID.
     id: StableId,
@@ -53,7 +55,7 @@ pub struct UniverseDescriptor {
     /// Policy version supplied by ProgramSpace.
     policy_version: String,
     /// M1 rule pack implementation version.
-    rule_pack_version: &'static str,
+    rule_pack_version: String,
     /// Eligible obligation IDs: the sole raw coverage denominator.
     pub(crate) obligation_ids: BTreeSet<StableId>,
     /// Explicit records excluded from that denominator.
@@ -870,7 +872,7 @@ fn universe(
         rule_set_hash: program.rule_set_hash().clone(),
         extractor_set_hash: program.extractor_set_hash().clone(),
         policy_version: program.policy_version().to_owned(),
-        rule_pack_version: "m1.fixture@1",
+        rule_pack_version: "m1.fixture@1".to_owned(),
         obligation_ids,
         exclusions,
         limitation_ids,

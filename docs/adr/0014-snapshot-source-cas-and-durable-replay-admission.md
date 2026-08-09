@@ -119,6 +119,7 @@ Invariant 14) rejects a stream mixing the two tags.
   may name the same `cas_hash` under different context.
   ```rust
   ArtifactRegistered {
+      run_id: StableId,            // must equal the enclosing EventEnvelope.run_id
       registration_id: StableId,   // kind "registration"; derived from (run_id, cas_hash,
                                     // media_type, sensitivity, source) — never from cas_hash alone
       cas_hash: ContentHash,       // re-validated by CasHash (§5) before any CAS path is touched
@@ -128,9 +129,14 @@ Invariant 14) rejects a stream mixing the two tags.
       source: ArtifactSource,      // producing adapter/run
   }
   ```
-  `ArtifactSource` is a closed, canonically serialized enum so registration IDs are stable:
-  `RunGenesis { run_id }`, `SnapshotIngest { snapshot_id, adapter_id }`, or
-  `ReviewerExecution { execution_id, reviewer_id }`. The nested genesis registration has
+  `registration_id` is derived from the exact canonical tuple `(run_id, cas_hash, media_type,
+  sensitivity, source)`. `ArtifactSource` is a closed, canonically serialized enum so registration
+  IDs are stable: `RunGenesis { run_id }`, `SnapshotIngest { run_id, snapshot_id, adapter_id }`, or
+  `ReviewerExecution { run_id, execution_id, reviewer_id }`. Every source variant's explicit
+  `run_id`, the registration's `run_id`, and the enclosing envelope's `run_id` must be identical.
+  This redundancy prevents a valid registration for run B from being replayed or indexed under run
+  A; neither `snapshot_id` nor `execution_id` is a substitute for that ownership binding. The nested
+  genesis registration has
   `CanonicalState` sensitivity; snapshot bytes use `WorkspaceSource`; raw reviewer bytes use
   `Sensitive`. None has a default.
   This durably replaces a CAS-adjacent metadata sidecar: the CAS blob (§5) carries no metadata
@@ -224,11 +230,15 @@ for indexing or replay — every consumer goes through this view, which by const
 an event past a broken or unconfirmed chain position.
 
 `ValidatedEventView` proves chain and typed shape, not aggregate acceptance. Offline indexing must
-additionally pass events in order through core's `OfflineProjectionState`, seeded from the validated
-genesis snapshot. It enforces all reference, plan/wave, source-registration, lifecycle, and atomic
-execution/claim invariants available without authority tokens before exposing a row. Authority-
-bearing payloads retain metadata only and are separately marked unreconciled; a rehashed but
-semantically dangling event never becomes an index row.
+additionally pass the exact bound view events in order through core's `OfflineProjectionState`,
+seeded from the validated genesis snapshot. Its `apply()` returns `true` only when an authority-free
+payload is applied to the accepted aggregate. It returns `false` for an authority-bearing payload
+after validating it against the private unreconciled authority shadow, and for the authority-free
+`FindingRecorded` after validating its references against that shadow and retaining separate
+authority-free projected-finding metadata. Findings are never classified as authority-bearing and
+never receive `authority_reconciled`. It enforces all reference, plan/wave, source-registration,
+lifecycle, and atomic execution/claim invariants available without authority tokens before exposing
+a row; a rehashed or semantically dangling event never becomes an index row.
 
 **Authority-bearing** kinds (need `event.rs`'s admission mechanism to reconstruct *accepted*
 state): `EvidenceRecorded` (gated by `EvidenceAdmission`, not `EvidenceBindingAdmission` — that
@@ -240,6 +250,10 @@ runtime-only, non-serialized capability type with no constructor outside the tru
 **no v0.1 caller of `store rebuild-index` can ever supply one**, so every rebuild is offline by
 construction and every row derived from an authority-bearing event is written with
 `authority_reconciled: false`, unconditionally (§7).
+
+`reviewgraphen-store` must reject an empty v2 durable log: a durable v2 run has the mandatory
+sequence-one genesis manifest and cannot be represented as an empty stream. This is a Unit C store
+admission/recovery requirement, not permission for core to synthesize a missing manifest.
 
 ## 4. `StoreRoot` admission and security
 

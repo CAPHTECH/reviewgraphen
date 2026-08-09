@@ -2,14 +2,15 @@ use proptest::prelude::*;
 use reviewgraphen_core::{
     AdapterDescriptor, AdapterStatus, Artifact, CapabilityDeclaration, CapabilityState,
     ClaimDisposition, ClaimPolarity, ContentHash, Coverage, Decision, DecisionOutcome, DomainError,
-    EventAdmissions, EventCommand, EventEnvelope, EventLog, Evidence, EvidenceBinding,
-    EvidenceDetails, EvidenceRelation, Extraction, Finding, FindingStatus, FindingTrace,
-    IdRegistry, Invariant, Limitation, LimitationKind, Location, MigrationLoss, MigrationRecord,
-    MvpRulePack, ObligationLifecycle, ProfileDescriptor, ProgramSpace, ProgramSpaceBuilder,
-    Projection, Provenance, Relation, RepositoryDescriptor, ReviewAggregate, ReviewClaim,
-    ReviewContext, ReviewReport, Severity, SnapshotDescriptor, SnapshotSourceBundle,
-    SnapshotSourceEntry, SourceRef, StableId, TrustedHumanAdmission, Verification,
-    VerificationOutcome, VersionTuple, canonical_json, migrate_program_space_v1_to_v2,
+    EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
+    EventStreamGenesis, Evidence, EvidenceBinding, EvidenceDetails, EvidenceRelation, Extraction,
+    Finding, FindingStatus, FindingTrace, IdRegistry, Invariant, Limitation, LimitationKind,
+    Location, MigrationLoss, MigrationRecord, MvpRulePack, ObligationLifecycle, ProfileDescriptor,
+    ProgramSpace, ProgramSpaceBuilder, Projection, Provenance, Relation, RepositoryDescriptor,
+    ReviewAggregate, ReviewClaim, ReviewContext, ReviewReport, Severity, SnapshotDescriptor,
+    SnapshotSourceBundle, SnapshotSourceEntry, SourceRef, StableId, TrustedHumanAdmission,
+    Verification, VerificationOutcome, VersionTuple, canonical_json,
+    migrate_program_space_v1_to_v2,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -336,7 +337,86 @@ fn aggregate_for(program: ProgramSpace) -> ReviewAggregate {
 }
 
 fn log(run: &str) -> EventLog {
-    EventLog::new(id(run), aggregate()).expect("valid run")
+    EventLog::new_v1_for_test(id(run), aggregate()).expect("valid legacy run")
+}
+
+#[test]
+fn public_v1_import_boundary_is_read_only_for_events_and_admissions() {
+    let observed = program();
+    let mut imported =
+        EventLog::new_v1_for_import(id("run:v1-import-only"), aggregate_for(observed.clone()))
+            .expect("valid v1 import boundary");
+    let obligation = node_obligation(&imported);
+    assert!(
+        imported
+            .append(EventCommand::obligation_transition(
+                obligation,
+                ObligationLifecycle::Planned,
+            ))
+            .is_err()
+    );
+    let evidence = evidence_with("evidence:v1-import-only", &observed);
+    assert!(
+        imported
+            .admit_evidence(&observed.evidence_snapshot_admission(), &evidence)
+            .is_err()
+    );
+}
+
+#[test]
+fn empty_replay_requires_an_explicit_contract_version() {
+    let mut v1 = EventLog::replay_envelopes(
+        EventContractVersion::V1,
+        id("run:empty-v1"),
+        aggregate(),
+        &[],
+        &EventAdmissions::default(),
+    )
+    .expect("explicit empty v1 replay");
+    assert_eq!(v1.event_contract_version(), EventContractVersion::V1);
+    assert!(
+        v1.append(EventCommand::obligation_transition(
+            node_obligation(&v1),
+            ObligationLifecycle::Planned,
+        ))
+        .is_err()
+    );
+
+    let mut v2 = EventLog::replay_envelopes(
+        EventContractVersion::V2,
+        id("run:empty-v2"),
+        aggregate(),
+        &[],
+        &EventAdmissions::default(),
+    )
+    .expect("explicit empty v2 replay");
+    assert_eq!(v2.event_contract_version(), EventContractVersion::V2);
+    assert!(
+        v2.append(EventCommand::obligation_transition(
+            node_obligation(&v2),
+            ObligationLifecycle::Planned,
+        ))
+        .is_err()
+    );
+
+    let mut legacy = log("run:explicit-version");
+    legacy
+        .append(EventCommand::obligation_transition(
+            node_obligation(&legacy),
+            ObligationLifecycle::Planned,
+        ))
+        .unwrap();
+    let legacy_envelopes = legacy.envelopes().cloned().collect::<Vec<_>>();
+    assert!(
+        EventLog::replay_envelopes(
+            EventContractVersion::V2,
+            id("run:explicit-version"),
+            aggregate(),
+            &legacy_envelopes,
+            &EventAdmissions::default(),
+        )
+        .is_err()
+    );
 }
 
 fn human() -> TrustedHumanAdmission {
@@ -660,7 +740,7 @@ fn populated_report_log() -> EventLog {
         .remove("test_mapping");
     let populated_program =
         ProgramSpace::from_json_slice(&serde_json::to_vec(&input).expect("JSON")).expect("program");
-    let mut log = EventLog::new(
+    let mut log = EventLog::new_v1_for_test(
         id("run:populated-report"),
         aggregate_for(populated_program.clone()),
     )
@@ -1335,7 +1415,7 @@ fn stale_deleted_targets_remain_auditable_but_never_ground_current_support() {
     }
     let current_program =
         ProgramSpace::from_json_slice(&serde_json::to_vec(&current_input).unwrap()).unwrap();
-    let mut log = EventLog::new(
+    let mut log = EventLog::new_v1_for_test(
         id("run:stale-deleted-target"),
         aggregate_for(current_program.clone()),
     )
@@ -1438,7 +1518,8 @@ fn finding_statuses_and_traces_cannot_conflate_claim_trust() {
     log.append(EventCommand::finding_recorded(rejected))
         .expect("supported verified candidate is valid");
 
-    let mut rejected_log = EventLog::new(id("run:rejected-finding"), aggregate()).unwrap();
+    let mut rejected_log =
+        EventLog::new_v1_for_test(id("run:rejected-finding"), aggregate()).unwrap();
     let obligation = node_obligation(&rejected_log);
     let (claim, evidence, verification) =
         append_supported_claim(&mut rejected_log, BTreeSet::from([obligation]), &program());
@@ -1510,12 +1591,18 @@ fn event_json_requires_known_payload_hash_genesis_and_exact_decision_admission()
         .map(|envelope| EventEnvelope::from_json_slice(&serde_json::to_vec(envelope).unwrap()))
         .collect::<Result<Vec<_>, _>>()
         .expect("envelopes deserialize");
-    let replayed =
-        EventLog::replay_envelopes(id("run:accepted"), aggregate(), &imported, &admissions)
-            .expect("admitted serialized prefix replays");
+    let replayed = EventLog::replay_envelopes(
+        EventContractVersion::V1,
+        id("run:accepted"),
+        aggregate(),
+        &imported,
+        &admissions,
+    )
+    .expect("admitted serialized prefix replays");
     assert_eq!(replayed.events().len(), imported.len());
     assert!(
         EventLog::replay_envelopes(
+            EventContractVersion::V1,
             id("run:accepted"),
             aggregate(),
             &imported,
@@ -1523,13 +1610,20 @@ fn event_json_requires_known_payload_hash_genesis_and_exact_decision_admission()
         )
         .is_err()
     );
-    let mut resumed =
-        EventLog::replay_envelopes(id("run:accepted"), aggregate(), &imported[..2], &admissions)
-            .expect("prefix replays");
-    resumed
-        .resume_envelopes(&imported[2..], &admissions)
-        .expect("suffix resumes the prefix");
-    assert_eq!(resumed.events().len(), imported.len());
+    let mut resumed = EventLog::replay_envelopes(
+        EventContractVersion::V1,
+        id("run:accepted"),
+        aggregate(),
+        &imported[..2],
+        &admissions,
+    )
+    .expect("prefix replays");
+    assert!(
+        resumed
+            .resume_envelopes(&imported[2..], &admissions)
+            .is_err()
+    );
+    assert_eq!(resumed.events().len(), 2);
 
     let mut unknown: Value = serde_json::to_value(&imported[0]).unwrap();
     unknown["payload"]["type"] = json!("future_payload");
@@ -1539,6 +1633,7 @@ fn event_json_requires_known_payload_hash_genesis_and_exact_decision_admission()
     assert!(EventEnvelope::from_json_slice(&serde_json::to_vec(&tampered).unwrap()).is_err());
     assert!(
         EventLog::replay_envelopes(
+            EventContractVersion::V1,
             id("run:other"),
             aggregate(),
             &imported,
@@ -1548,6 +1643,7 @@ fn event_json_requires_known_payload_hash_genesis_and_exact_decision_admission()
     );
     assert!(
         EventLog::replay_envelopes(
+            EventContractVersion::V1,
             id("run:accepted"),
             aggregate(),
             &[imported[0].clone(), imported[0].clone()],
@@ -1555,7 +1651,50 @@ fn event_json_requires_known_payload_hash_genesis_and_exact_decision_admission()
         )
         .is_err()
     );
-    assert!(EventLog::new(id("not-a-run:empty"), aggregate()).is_err());
+    assert!(EventLog::new_v1_for_test(id("not-a-run:empty"), aggregate()).is_err());
+}
+
+#[test]
+fn v2_genesis_is_canonical_and_rejects_legacy_claims_until_unit_d() {
+    let mut log = EventLog::new(id("run:v2-genesis"), aggregate()).expect("v2 run");
+    assert_eq!(
+        log.event_contract_version(),
+        reviewgraphen_core::EventContractVersion::V2
+    );
+    assert_eq!(log.events().len(), 1, "v2 mints its sole genesis manifest");
+    let snapshot = log.run_genesis_snapshot().expect("typed genesis");
+    let bytes = snapshot.canonical_bytes().expect("canonical genesis");
+    let decoded = reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes(&bytes)
+        .expect("canonical genesis decodes");
+    assert_eq!(decoded.canonical_bytes().unwrap(), bytes);
+    let envelopes = log.envelopes().cloned().collect::<Vec<_>>();
+    let view = EventEnvelope::validated_view(
+        EventContractVersion::V2,
+        log.run_id(),
+        EventStreamGenesis::V2(&bytes),
+        &envelopes,
+    )
+    .expect("validated v2 view");
+    assert_eq!(view.events().len(), 1);
+
+    let claim = ReviewClaim::propose_ai(
+        id("claim:v2-legacy"),
+        id("execution:fixture"),
+        BTreeSet::from([node_obligation(&log)]),
+        ClaimPolarity::IssuePresent,
+        "must wait for atomic execution",
+        BTreeSet::from([id("function:checkout-submit")]),
+        None,
+    )
+    .expect("claim shape");
+    assert!(log.append(EventCommand::claim_proposed(claim)).is_err());
+    assert!(
+        log.append(EventCommand::obligation_transition(
+            node_obligation(&log),
+            ObligationLifecycle::Completed,
+        ))
+        .is_err()
+    );
 }
 
 #[test]
@@ -1822,7 +1961,7 @@ fn evidence_admission_is_exactly_bound_to_run_snapshot_and_body() {
     let mut log = log("run:evidence-admission");
     let current = program();
     let evidence = evidence_with("evidence:exact-admission", &current);
-    let wrong_run = EventLog::new(id("run:other"), aggregate())
+    let wrong_run = EventLog::new_v1_for_test(id("run:other"), aggregate())
         .unwrap()
         .admit_evidence(&current.evidence_snapshot_admission(), &evidence)
         .unwrap();
@@ -2020,9 +2159,12 @@ fn every_authority_admission_is_bound_to_its_exact_stream_position() {
 fn event_genesis_rejects_preaccepted_or_nonpristine_aggregates() {
     let mut active = log("run:genesis-source");
     append_fully_connected_multi_claim(&mut active);
-    assert!(EventLog::new(id("run:genesis-reject"), active.aggregate().clone()).is_err());
+    assert!(
+        EventLog::new_v1_for_test(id("run:genesis-reject"), active.aggregate().clone()).is_err()
+    );
     assert!(
         EventLog::replay_envelopes(
+            EventContractVersion::V1,
             id("run:genesis-reject"),
             active.aggregate().clone(),
             &[],
@@ -2246,7 +2388,7 @@ fn decision_admission_is_exactly_bound_to_run_actor_outcome_and_body() {
         BTreeSet::from([claim.clone(), evidence.clone(), verification.clone()]),
     )
     .unwrap();
-    let mut other_log = EventLog::new(id("run:other"), aggregate()).unwrap();
+    let mut other_log = EventLog::new_v1_for_test(id("run:other"), aggregate()).unwrap();
     let other_obligation = node_obligation(&other_log);
     let (other_claim, other_evidence, other_verification) = append_supported_claim(
         &mut other_log,
@@ -2360,7 +2502,7 @@ fn decision_and_evidence_admissions_bind_the_exact_closure_and_genesis() {
     let altered_program =
         ProgramSpace::from_json_slice(&serde_json::to_vec(&altered_input).unwrap()).unwrap();
     let mut changed_genesis =
-        EventLog::new(id("run:closure-bound"), aggregate_for(altered_program)).unwrap();
+        EventLog::new_v1_for_test(id("run:closure-bound"), aggregate_for(altered_program)).unwrap();
     assert_ne!(original.genesis_hash(), changed_genesis.genesis_hash());
     assert!(matches!(
         changed_genesis.append(EventCommand::evidence_recorded(
@@ -2410,6 +2552,7 @@ fn imported_binding_and_verification_require_retained_exact_admissions() {
         .with_trace_admissions(bindings.clone(), verifications.clone());
     assert!(
         EventLog::replay_envelopes(
+            EventContractVersion::V1,
             id("run:trace-admissions"),
             aggregate(),
             &envelopes,
@@ -2421,6 +2564,7 @@ fn imported_binding_and_verification_require_retained_exact_admissions() {
         .with_trace_admissions(Vec::new(), verifications.clone());
     assert!(
         EventLog::replay_envelopes(
+            EventContractVersion::V1,
             id("run:trace-admissions"),
             aggregate(),
             &envelopes,
@@ -2432,6 +2576,7 @@ fn imported_binding_and_verification_require_retained_exact_admissions() {
         EventAdmissions::new(evidence, Vec::new()).with_trace_admissions(bindings, Vec::new());
     assert!(
         EventLog::replay_envelopes(
+            EventContractVersion::V1,
             id("run:trace-admissions"),
             aggregate(),
             &envelopes,
@@ -2443,7 +2588,7 @@ fn imported_binding_and_verification_require_retained_exact_admissions() {
 
 #[test]
 fn event_hash_chain_rejects_a_fork_splice_and_allows_a_split_resume() {
-    let mut left = log("run:hash-chain");
+    let mut left = EventLog::new(id("run:hash-chain"), aggregate()).unwrap();
     let left_id = node_obligation(&left);
     left.append(EventCommand::obligation_transition(
         left_id.clone(),
@@ -2455,7 +2600,7 @@ fn event_hash_chain_rejects_a_fork_splice_and_allows_a_split_resume() {
         ObligationLifecycle::InProgress,
     ))
     .unwrap();
-    let mut right = log("run:hash-chain");
+    let mut right = EventLog::new(id("run:hash-chain"), aggregate()).unwrap();
     let right_id = right
         .aggregate()
         .obligations()
@@ -2476,11 +2621,12 @@ fn event_hash_chain_rejects_a_fork_splice_and_allows_a_split_resume() {
         ))
         .unwrap();
     let fork_splice = vec![
-        left.envelopes().next().unwrap().clone(),
-        right.envelopes().nth(1).unwrap().clone(),
+        left.envelopes().nth(1).unwrap().clone(),
+        right.envelopes().nth(2).unwrap().clone(),
     ];
     assert!(
         EventLog::replay_envelopes(
+            EventContractVersion::V2,
             id("run:hash-chain"),
             aggregate(),
             &fork_splice,
@@ -2490,16 +2636,61 @@ fn event_hash_chain_rejects_a_fork_splice_and_allows_a_split_resume() {
     );
     let valid = left.envelopes().cloned().collect::<Vec<_>>();
     let mut replayed = EventLog::replay_envelopes(
+        EventContractVersion::V2,
         id("run:hash-chain"),
         aggregate(),
-        &valid[..1],
+        &valid[..2],
         &EventAdmissions::default(),
     )
     .unwrap();
     replayed
-        .resume_envelopes(&valid[1..], &EventAdmissions::default())
+        .resume_envelopes(&valid[2..], &EventAdmissions::default())
         .unwrap();
     assert_eq!(replayed.tail_hash(), valid.last().unwrap().event_hash());
+}
+
+#[test]
+fn resume_envelopes_is_batch_atomic_when_a_later_suffix_event_is_invalid() {
+    let mut source = EventLog::new(id("run:atomic-resume"), aggregate()).unwrap();
+    let obligation = node_obligation(&source);
+    source
+        .append(EventCommand::obligation_transition(
+            obligation.clone(),
+            ObligationLifecycle::Planned,
+        ))
+        .unwrap();
+    source
+        .append(EventCommand::obligation_transition(
+            obligation,
+            ObligationLifecycle::InProgress,
+        ))
+        .unwrap();
+    let envelopes = source.envelopes().cloned().collect::<Vec<_>>();
+    let mut target = EventLog::replay_envelopes(
+        EventContractVersion::V2,
+        id("run:atomic-resume"),
+        aggregate(),
+        &envelopes[..2],
+        &EventAdmissions::default(),
+    )
+    .expect("valid prefix");
+    let before_tail = target.tail_hash().clone();
+    let before_events = target.events().len();
+    let before_aggregate = canonical_json(target.aggregate()).unwrap();
+    assert!(
+        target
+            .resume_envelopes(
+                &[envelopes[2].clone(), envelopes[1].clone()],
+                &EventAdmissions::default(),
+            )
+            .is_err()
+    );
+    assert_eq!(target.events().len(), before_events);
+    assert_eq!(target.tail_hash(), &before_tail);
+    assert_eq!(
+        canonical_json(target.aggregate()).unwrap(),
+        before_aggregate
+    );
 }
 
 #[test]

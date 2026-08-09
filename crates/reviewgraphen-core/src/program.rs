@@ -2310,6 +2310,26 @@ impl ProgramSpace {
         format!("{}@{}", self.profile_id, self.profile_version)
     }
 
+    /// Profile identity retained by this immutable snapshot.
+    #[must_use]
+    pub fn profile_id(&self) -> &str {
+        &self.profile_id
+    }
+
+    /// Profile version retained by this immutable snapshot.
+    #[must_use]
+    pub fn profile_version(&self) -> &str {
+        &self.profile_version
+    }
+
+    /// Canonical repository identity retained in snapshot provenance.
+    #[must_use]
+    pub fn repository_identity(&self) -> &str {
+        self.repository_uri
+            .as_deref()
+            .unwrap_or_else(|| self.source.locator())
+    }
+
     /// Hash of the selected rule pack.
     #[must_use]
     pub fn rule_set_hash(&self) -> &ContentHash {

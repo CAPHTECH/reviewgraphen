@@ -1,14 +1,673 @@
 use crate::{
     ContentHash, Decision, DecisionAdmission, DomainError, Evidence, EvidenceAdmission,
-    EvidenceBinding, EvidenceSnapshotAdmission, Finding, ObligationLifecycle, Result,
-    ReviewAggregate, ReviewClaim, StableId, TrustedHumanAdmission, Verification, canonical_json,
+    EvidenceBinding, EvidenceSnapshotAdmission, Finding, MvpRulePack, Obligation,
+    ObligationLifecycle, ProgramSpace, Result, ReviewAggregate, ReviewClaim, StableId,
+    TrustedHumanAdmission, UniverseDescriptor, Verification, canonical_json,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-const EVENT_SCHEMA: &str = "reviewgraphen.review_event.v1";
+/// The immutable wire contract carried by every envelope in a stream.
+///
+/// V1 remains import-only so its historical hashes can be replayed exactly;
+/// all newly-created logs use V2.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum EventContractVersion {
+    /// Pre-M3 event vocabulary and legacy aggregate genesis hash.
+    V1,
+    /// M3 contract with typed genesis and source registration payloads.
+    V2,
+}
+
+impl EventContractVersion {
+    /// Exact persisted schema tag.
+    #[must_use]
+    pub const fn schema(self) -> &'static str {
+        match self {
+            Self::V1 => "reviewgraphen.review_event.v1",
+            Self::V2 => "reviewgraphen.review_event.v2",
+        }
+    }
+
+    fn parse(schema: &str) -> Result<Self> {
+        match schema {
+            "reviewgraphen.review_event.v1" => Ok(Self::V1),
+            "reviewgraphen.review_event.v2" => Ok(Self::V2),
+            _ => Err(DomainError::EventSequence(
+                "unsupported event schema".to_owned(),
+            )),
+        }
+    }
+}
+
+/// Explicit genesis material required to validate a durable event stream.
+/// V2 must receive the exact canonical snapshot bytes whose CAS is named by
+/// the first manifest; V1 retains only its historical aggregate hash.
+#[derive(Clone, Copy, Debug)]
+pub enum EventStreamGenesis<'a> {
+    V1(&'a ContentHash),
+    V2(&'a [u8]),
+}
+
 const SYSTEM_ACTOR: &str = "reviewgraphen-core@1";
+const RUN_GENESIS_SCHEMA: &str = "reviewgraphen.run_genesis.v1";
+
+/// Typed, canonical state from which a v2 run begins. It is deliberately not
+/// `ReviewAggregate` serialization: only a pristine baseline belongs here.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunGenesisSnapshot {
+    schema: String,
+    program_space: ProgramSpace,
+    universe: UniverseDescriptor,
+    obligations: Vec<Obligation>,
+}
+
+impl RunGenesisSnapshot {
+    fn from_aggregate(aggregate: &ReviewAggregate) -> Result<Self> {
+        aggregate.validate_pristine_for_event_log()?;
+        Ok(Self {
+            schema: RUN_GENESIS_SCHEMA.to_owned(),
+            program_space: aggregate.program().clone(),
+            universe: aggregate.universe().clone(),
+            obligations: aggregate.obligations().cloned().collect(),
+        })
+    }
+
+    /// Canonical CAS bytes for the v2 genesis object.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        canonical_json(self)
+    }
+
+    /// The SHA-256 CAS identity of the canonical genesis bytes.
+    pub fn canonical_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&self.canonical_bytes()?))
+    }
+
+    /// Strictly decodes canonical v2 genesis bytes and rebuilds the aggregate
+    /// through its normal validation boundary. This rejects unknown fields,
+    /// noncanonical encodings, malformed ProgramSpace records, and any
+    /// inconsistent universe/obligation tuple.
+    pub fn from_canonical_bytes(input: &[u8]) -> Result<Self> {
+        let snapshot: Self =
+            serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))?;
+        if snapshot.schema != RUN_GENESIS_SCHEMA || snapshot.canonical_bytes()? != input {
+            return Err(DomainError::Validation(
+                "run genesis snapshot must use the supported canonical schema".to_owned(),
+            ));
+        }
+        let aggregate = snapshot.rebuild_aggregate()?;
+        aggregate.validate_pristine_for_event_log()?;
+        Ok(snapshot)
+    }
+
+    /// Reconstructs exactly the pristine aggregate represented by this DTO.
+    pub fn rebuild_aggregate(&self) -> Result<ReviewAggregate> {
+        if self.schema != RUN_GENESIS_SCHEMA {
+            return Err(DomainError::Validation(
+                "unsupported run genesis snapshot schema".to_owned(),
+            ));
+        }
+        let mut previous = None;
+        for obligation in &self.obligations {
+            obligation.validate_full()?;
+            if previous
+                .as_ref()
+                .is_some_and(|id: &StableId| id >= obligation.id())
+            {
+                return Err(DomainError::Validation(
+                    "run genesis obligations must be strictly ordered and unique by StableId"
+                        .to_owned(),
+                ));
+            }
+            previous = Some(obligation.id().clone());
+        }
+        let (expected_universe, mut expected_obligations) =
+            MvpRulePack::synthesize(&self.program_space)?.into_parts();
+        expected_obligations.sort_by(|left, right| left.id().cmp(right.id()));
+        if expected_universe != self.universe || expected_obligations != self.obligations {
+            return Err(DomainError::Validation(
+                "run genesis obligations and universe must equal deterministic MVP re-synthesis"
+                    .to_owned(),
+            ));
+        }
+        let aggregate = ReviewAggregate::new(
+            self.program_space.clone(),
+            self.universe.clone(),
+            self.obligations.clone(),
+        )?;
+        aggregate.validate_pristine_for_event_log()?;
+        Ok(aggregate)
+    }
+
+    /// Program facts committed by this baseline.
+    #[must_use]
+    pub fn program_space(&self) -> &ProgramSpace {
+        &self.program_space
+    }
+
+    /// Versioned obligation denominator committed by this baseline.
+    #[must_use]
+    pub fn universe(&self) -> &UniverseDescriptor {
+        &self.universe
+    }
+
+    /// Obligations in canonical StableId order.
+    #[must_use]
+    pub fn obligations(&self) -> &[Obligation] {
+        &self.obligations
+    }
+}
+
+/// Required handling class for a registered immutable artifact.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactSensitivity {
+    CanonicalState,
+    WorkspaceSource,
+    Sensitive,
+}
+
+/// Closed provenance for an artifact registration.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ArtifactSource {
+    RunGenesis {
+        run_id: StableId,
+    },
+    SnapshotIngest {
+        run_id: StableId,
+        snapshot_id: StableId,
+        adapter_id: String,
+    },
+    ReviewerExecution {
+        run_id: StableId,
+        execution_id: StableId,
+        reviewer_id: String,
+    },
+}
+
+/// Contextual registration of one content-addressed artifact.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactRegistered {
+    run_id: StableId,
+    registration_id: StableId,
+    cas_hash: ContentHash,
+    media_type: String,
+    size: u64,
+    sensitivity: ArtifactSensitivity,
+    source: ArtifactSource,
+}
+
+impl ArtifactRegistered {
+    /// Constructs a registration after requiring its explicit sensitivity and
+    /// stable registration namespace.
+    pub fn new(
+        run_id: StableId,
+        registration_id: StableId,
+        cas_hash: ContentHash,
+        media_type: impl Into<String>,
+        size: u64,
+        sensitivity: ArtifactSensitivity,
+        source: ArtifactSource,
+    ) -> Result<Self> {
+        let media_type = media_type.into();
+        if run_id.kind() != "run"
+            || registration_id.kind() != "registration"
+            || media_type.trim().is_empty()
+        {
+            return Err(DomainError::Validation(
+                "artifact registration requires a registration ID and non-empty media type"
+                    .to_owned(),
+            ));
+        }
+        if registration_id
+            != Self::derived_id(&run_id, &cas_hash, &media_type, sensitivity, &source)?
+        {
+            return Err(DomainError::Validation(
+                "artifact registration ID must bind CAS metadata and source".to_owned(),
+            ));
+        }
+        if !valid_artifact_source_sensitivity(&source, sensitivity) {
+            return Err(DomainError::Validation(
+                "artifact registration source and sensitivity must form a closed pair".to_owned(),
+            ));
+        }
+        if !artifact_source_matches_run(&source, &run_id) {
+            return Err(DomainError::Validation(
+                "artifact registration source must bind the enclosing run".to_owned(),
+            ));
+        }
+        Ok(Self {
+            run_id,
+            registration_id,
+            cas_hash,
+            media_type,
+            size,
+            sensitivity,
+            source,
+        })
+    }
+
+    fn derived_id(
+        run_id: &StableId,
+        cas_hash: &ContentHash,
+        media_type: &str,
+        sensitivity: ArtifactSensitivity,
+        source: &ArtifactSource,
+    ) -> Result<StableId> {
+        let source =
+            serde_json::to_value(source).map_err(|error| DomainError::Json(error.to_string()))?;
+        StableId::derived(
+            "registration",
+            &BTreeMap::from([
+                ("run_id".to_owned(), Value::String(run_id.to_string())),
+                ("cas_hash".to_owned(), Value::String(cas_hash.to_string())),
+                (
+                    "media_type".to_owned(),
+                    Value::String(media_type.to_owned()),
+                ),
+                (
+                    "sensitivity".to_owned(),
+                    Value::String(
+                        match sensitivity {
+                            ArtifactSensitivity::CanonicalState => "canonical_state",
+                            ArtifactSensitivity::WorkspaceSource => "workspace_source",
+                            ArtifactSensitivity::Sensitive => "sensitive",
+                        }
+                        .to_owned(),
+                    ),
+                ),
+                ("source".to_owned(), source),
+            ]),
+        )
+    }
+
+    #[must_use]
+    pub fn registration_id(&self) -> &StableId {
+        &self.registration_id
+    }
+    #[must_use]
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+    #[must_use]
+    pub fn cas_hash(&self) -> &ContentHash {
+        &self.cas_hash
+    }
+    #[must_use]
+    pub const fn sensitivity(&self) -> ArtifactSensitivity {
+        self.sensitivity
+    }
+    #[must_use]
+    pub fn source(&self) -> &ArtifactSource {
+        &self.source
+    }
+    #[must_use]
+    pub fn media_type(&self) -> &str {
+        &self.media_type
+    }
+    #[must_use]
+    pub const fn size(&self) -> u64 {
+        self.size
+    }
+
+    fn validate(&self) -> Result<()> {
+        let rebuilt = Self::new(
+            self.run_id.clone(),
+            self.registration_id.clone(),
+            self.cas_hash.clone(),
+            self.media_type.clone(),
+            self.size,
+            self.sensitivity,
+            self.source.clone(),
+        )?;
+        let valid_source = valid_artifact_source_sensitivity(&self.source, self.sensitivity)
+            && artifact_source_matches_run(&self.source, &self.run_id);
+        if rebuilt != *self || !is_cas_hash(&self.cas_hash) || !valid_source {
+            return Err(DomainError::Validation(
+                "artifact registration requires an exact CAS hash and closed source/sensitivity pair"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn valid_artifact_source_sensitivity(
+    source: &ArtifactSource,
+    sensitivity: ArtifactSensitivity,
+) -> bool {
+    match (source, sensitivity) {
+        (ArtifactSource::RunGenesis { run_id }, ArtifactSensitivity::CanonicalState) => {
+            run_id.kind() == "run"
+        }
+        (
+            ArtifactSource::SnapshotIngest {
+                run_id,
+                snapshot_id,
+                adapter_id,
+            },
+            ArtifactSensitivity::WorkspaceSource,
+        ) => {
+            run_id.kind() == "run"
+                && snapshot_id.kind() == "snapshot"
+                && !adapter_id.trim().is_empty()
+        }
+        (
+            ArtifactSource::ReviewerExecution {
+                run_id,
+                execution_id,
+                reviewer_id,
+            },
+            ArtifactSensitivity::Sensitive,
+        ) => {
+            run_id.kind() == "run"
+                && execution_id.kind() == "execution"
+                && !reviewer_id.trim().is_empty()
+        }
+        _ => false,
+    }
+}
+
+fn artifact_source_matches_run(source: &ArtifactSource, run_id: &StableId) -> bool {
+    match source {
+        ArtifactSource::RunGenesis {
+            run_id: source_run_id,
+        }
+        | ArtifactSource::SnapshotIngest {
+            run_id: source_run_id,
+            ..
+        }
+        | ArtifactSource::ReviewerExecution {
+            run_id: source_run_id,
+            ..
+        } => source_run_id == run_id,
+    }
+}
+
+/// The mandatory first v2 event, binding a run to its typed baseline CAS
+/// artifact and snapshot/profile provenance.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunGenesisManifest {
+    run_id: StableId,
+    event_contract_version: String,
+    genesis_artifact: ArtifactRegistered,
+    repository_identity: String,
+    snapshot_id: StableId,
+    profile_id: String,
+    profile_version: String,
+}
+
+impl RunGenesisManifest {
+    /// Builds the sole v2 run-genesis manifest.
+    pub fn new(
+        run_id: StableId,
+        genesis_artifact: ArtifactRegistered,
+        repository_identity: impl Into<String>,
+        snapshot_id: StableId,
+        profile_id: impl Into<String>,
+        profile_version: impl Into<String>,
+    ) -> Result<Self> {
+        let manifest = Self {
+            run_id,
+            event_contract_version: EventContractVersion::V2.schema().to_owned(),
+            genesis_artifact,
+            repository_identity: repository_identity.into(),
+            snapshot_id,
+            profile_id: profile_id.into(),
+            profile_version: profile_version.into(),
+        };
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.run_id.kind() != "run"
+            || self.event_contract_version != EventContractVersion::V2.schema()
+            || self.repository_identity.trim().is_empty()
+            || self.profile_id.trim().is_empty()
+            || self.profile_version.trim().is_empty()
+            || self.genesis_artifact.media_type != "application/json"
+            || !matches!(
+                &self.genesis_artifact.source,
+                ArtifactSource::RunGenesis { run_id } if run_id == &self.run_id
+            )
+        {
+            return Err(DomainError::Validation(
+                "invalid v2 run genesis manifest".to_owned(),
+            ));
+        }
+        self.genesis_artifact.validate()
+    }
+
+    fn validate_against_genesis(
+        &self,
+        run_id: &StableId,
+        snapshot: &RunGenesisSnapshot,
+        bytes: &[u8],
+    ) -> Result<()> {
+        self.validate()?;
+        let size = u64::try_from(bytes.len())
+            .map_err(|_| DomainError::Validation("genesis bytes do not fit u64".to_owned()))?;
+        if self.run_id != *run_id
+            || self.genesis_artifact.run_id != *run_id
+            || self.genesis_artifact.cas_hash != ContentHash::sha256(bytes)
+            || self.genesis_artifact.size != size
+            || self.repository_identity != snapshot.program_space.repository_identity()
+            || self.snapshot_id != *snapshot.program_space.snapshot_id()
+            || self.profile_id != snapshot.program_space.profile_id()
+            || self.profile_version != snapshot.program_space.profile_version()
+            || !matches!(
+                &self.genesis_artifact.source,
+                ArtifactSource::RunGenesis { run_id: source_run_id } if source_run_id == run_id
+            )
+        {
+            return Err(DomainError::Validation(
+                "run genesis manifest must exactly bind verified genesis bytes and provenance"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn genesis_artifact(&self) -> &ArtifactRegistered {
+        &self.genesis_artifact
+    }
+    #[must_use]
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+}
+
+fn validate_v2_genesis_contract(
+    run_id: &StableId,
+    initial: &ReviewAggregate,
+    bytes: &[u8],
+    manifest: &RunGenesisManifest,
+) -> Result<RunGenesisSnapshot> {
+    let snapshot = RunGenesisSnapshot::from_canonical_bytes(bytes)?;
+    let rebuilt = snapshot.rebuild_aggregate()?;
+    if canonical_json(&rebuilt)? != canonical_json(initial)? {
+        return Err(DomainError::Validation(
+            "verified run genesis bytes do not reconstruct the supplied initial aggregate"
+                .to_owned(),
+        ));
+    }
+    manifest.validate_against_genesis(run_id, &snapshot, bytes)?;
+    Ok(snapshot)
+}
+
+fn validate_v2_genesis_envelope(
+    run_id: &StableId,
+    initial: &ReviewAggregate,
+    bytes: &[u8],
+    envelope: &EventEnvelope,
+) -> Result<RunGenesisSnapshot> {
+    if envelope.genesis_hash != ContentHash::sha256(bytes) {
+        return Err(DomainError::EventSequence(
+            "v2 genesis envelope hash must equal the verified canonical genesis CAS".to_owned(),
+        ));
+    }
+    let payload = decode_canonical_payload(envelope.payload.clone())?;
+    let PersistedPayload::RunGenesisManifest(manifest) = payload else {
+        return Err(DomainError::EventSequence(
+            "v2 sequence one must carry RunGenesisManifest".to_owned(),
+        ));
+    };
+    validate_v2_genesis_contract(run_id, initial, bytes, &manifest)
+}
+
+/// One persisted source entry, referring to a prior registration rather than
+/// embedding workspace bytes in the event stream.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotSourceRecordEntry {
+    artifact_id: StableId,
+    path: String,
+    content_hash: ContentHash,
+    registration_id: StableId,
+    cas_hash: ContentHash,
+    line_count: u64,
+}
+
+impl SnapshotSourceRecordEntry {
+    /// Creates one immutable source-registration reference.
+    pub fn new(
+        artifact_id: StableId,
+        path: impl Into<String>,
+        content_hash: ContentHash,
+        registration_id: StableId,
+        cas_hash: ContentHash,
+        line_count: u64,
+    ) -> Result<Self> {
+        let entry = Self {
+            artifact_id,
+            path: path.into(),
+            content_hash,
+            registration_id,
+            cas_hash,
+            line_count,
+        };
+        if entry.path.is_empty()
+            || entry.registration_id.kind() != "registration"
+            || !is_cas_hash(&entry.content_hash)
+            || !is_cas_hash(&entry.cas_hash)
+            || entry.content_hash != entry.cas_hash
+            || entry.line_count == 0
+        {
+            return Err(DomainError::Validation(
+                "invalid snapshot source registration entry".to_owned(),
+            ));
+        }
+        Ok(entry)
+    }
+}
+
+/// Exact source-registration projection for one accepted snapshot.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotSourcesRecorded {
+    snapshot_id: StableId,
+    entries: Vec<SnapshotSourceRecordEntry>,
+}
+
+impl SnapshotSourcesRecorded {
+    /// Constructs a path-ordered exact source record set.
+    pub fn new(snapshot_id: StableId, entries: Vec<SnapshotSourceRecordEntry>) -> Result<Self> {
+        let sources = Self {
+            snapshot_id,
+            entries,
+        };
+        sources.validate_shape()?;
+        Ok(sources)
+    }
+
+    fn validate_shape(&self) -> Result<()> {
+        let mut paths = BTreeMap::new();
+        let mut artifacts = BTreeMap::new();
+        let mut previous = None;
+        for entry in &self.entries {
+            if entry.path.is_empty()
+                || !is_cas_hash(&entry.content_hash)
+                || !is_cas_hash(&entry.cas_hash)
+                || entry.content_hash != entry.cas_hash
+                || entry.line_count == 0
+            {
+                return Err(DomainError::Validation(
+                    "snapshot source entries require non-empty paths and SHA-256 CAS hashes"
+                        .to_owned(),
+                ));
+            }
+            if previous
+                .as_ref()
+                .is_some_and(|path: &String| path >= &entry.path)
+                || paths.insert(entry.path.clone(), ()).is_some()
+                || artifacts.insert(entry.artifact_id.clone(), ()).is_some()
+            {
+                return Err(DomainError::Validation(
+                    "snapshot source entries must be uniquely ordered by path".to_owned(),
+                ));
+            }
+            previous = Some(entry.path.clone());
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+
+    #[must_use]
+    pub fn entries(&self) -> &[SnapshotSourceRecordEntry] {
+        &self.entries
+    }
+}
+
+impl SnapshotSourceRecordEntry {
+    #[must_use]
+    pub fn artifact_id(&self) -> &StableId {
+        &self.artifact_id
+    }
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+    #[must_use]
+    pub fn content_hash(&self) -> &ContentHash {
+        &self.content_hash
+    }
+    #[must_use]
+    pub fn registration_id(&self) -> &StableId {
+        &self.registration_id
+    }
+    #[must_use]
+    pub fn cas_hash(&self) -> &ContentHash {
+        &self.cas_hash
+    }
+    #[must_use]
+    pub const fn line_count(&self) -> u64 {
+        self.line_count
+    }
+}
+
+fn is_cas_hash(hash: &ContentHash) -> bool {
+    let value = hash.to_string();
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 /// Internal exact append point for non-serializable event admissions.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -318,6 +977,24 @@ impl EventCommand {
             admission: CommandAdmission::None,
         }
     }
+
+    /// Registers a persisted artifact in a v2 stream.
+    #[must_use]
+    pub fn artifact_registered(registration: ArtifactRegistered) -> Self {
+        Self {
+            payload: PersistedPayload::ArtifactRegistered(registration),
+            admission: CommandAdmission::None,
+        }
+    }
+
+    /// Records source registrations for one accepted snapshot in a v2 stream.
+    #[must_use]
+    pub fn snapshot_sources_recorded(sources: SnapshotSourcesRecorded) -> Self {
+        Self {
+            payload: PersistedPayload::SnapshotSourcesRecorded(sources),
+            admission: CommandAdmission::None,
+        }
+    }
 }
 
 /// The closed persisted event vocabulary. It is private so it can never be
@@ -335,9 +1012,35 @@ enum PersistedPayload {
     VerificationRecorded(Verification),
     DecisionRecorded(Decision),
     FindingRecorded(Finding),
+    RunGenesisManifest(RunGenesisManifest),
+    ArtifactRegistered(ArtifactRegistered),
+    SnapshotSourcesRecorded(SnapshotSourcesRecorded),
 }
 
 impl PersistedPayload {
+    fn unreconciled_kind_and_id(&self) -> Option<(UnreconciledRecordKind, &StableId)> {
+        match self {
+            Self::EvidenceRecorded(value) => Some((UnreconciledRecordKind::Evidence, value.id())),
+            Self::EvidenceBound(value) => {
+                Some((UnreconciledRecordKind::EvidenceBinding, value.id()))
+            }
+            Self::VerificationRecorded(value) => {
+                Some((UnreconciledRecordKind::Verification, value.id()))
+            }
+            Self::DecisionRecorded(value) => Some((UnreconciledRecordKind::Decision, value.id())),
+            _ => None,
+        }
+    }
+
+    fn is_v2_only(&self) -> bool {
+        matches!(
+            self,
+            Self::RunGenesisManifest(_)
+                | Self::ArtifactRegistered(_)
+                | Self::SnapshotSourcesRecorded(_)
+        )
+    }
+
     fn actor(&self) -> &str {
         match self {
             Self::DecisionRecorded(decision) => decision.actor(),
@@ -365,8 +1068,68 @@ impl PersistedPayload {
             Self::VerificationRecorded(verification) => verification.validate_event_shape(),
             Self::DecisionRecorded(decision) => decision.validate_event_admission(),
             Self::FindingRecorded(_) => Ok(()),
+            Self::RunGenesisManifest(manifest) => manifest.validate(),
+            Self::ArtifactRegistered(registration) => registration.validate(),
+            Self::SnapshotSourcesRecorded(sources) => sources.validate_shape(),
         }
     }
+
+    fn validate_for_enclosing_run(&self, run_id: &StableId) -> Result<()> {
+        match self {
+            Self::ArtifactRegistered(registration) if registration.run_id() != run_id => {
+                Err(DomainError::Validation(
+                    "artifact registration must bind the enclosing event run".to_owned(),
+                ))
+            }
+            Self::RunGenesisManifest(manifest)
+                if manifest.run_id() != run_id
+                    || manifest.genesis_artifact().run_id() != run_id =>
+            {
+                Err(DomainError::Validation(
+                    "genesis manifest and nested artifact must bind the enclosing event run"
+                        .to_owned(),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+fn validate_stream_payload_position(
+    version: EventContractVersion,
+    sequence: u64,
+    payload: &PersistedPayload,
+) -> Result<()> {
+    if version == EventContractVersion::V2
+        && (sequence == 1) != matches!(payload, PersistedPayload::RunGenesisManifest(_))
+    {
+        return Err(DomainError::EventSequence(
+            "v2 streams require RunGenesisManifest exactly at sequence one".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn reject_v2_legacy_execution_payload(
+    version: EventContractVersion,
+    payload: &PersistedPayload,
+) -> Result<()> {
+    if version == EventContractVersion::V2
+        && matches!(
+            payload,
+            PersistedPayload::ClaimProposed(_)
+                | PersistedPayload::ObligationTransition {
+                    next: ObligationLifecycle::Completed,
+                    ..
+                }
+        )
+    {
+        return Err(DomainError::Validation(
+            "v2 requires the Unit D atomic execution record before claims or completed obligations"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// A validated event envelope binding a closed persisted payload to one logical
@@ -387,7 +1150,11 @@ pub struct EventEnvelope {
 }
 
 impl EventEnvelope {
+    // Each field is independently hash-bound. Grouping them would obscure
+    // the selected schema input at call sites and risks a mismatched tuple.
+    #[allow(clippy::too_many_arguments)]
     fn new(
+        version: EventContractVersion,
         run_id: StableId,
         genesis_hash: ContentHash,
         sequence: u64,
@@ -402,6 +1169,7 @@ impl EventEnvelope {
             serde_json::to_value(payload).map_err(|error| DomainError::Json(error.to_string()))?;
         let payload_hash = ContentHash::sha256(&canonical_json(&payload)?);
         let id = event_id(
+            version.schema(),
             &run_id,
             &genesis_hash,
             sequence,
@@ -411,6 +1179,7 @@ impl EventEnvelope {
             &previous_event_hash,
         )?;
         let event_hash = envelope_hash(EventHashInput {
+            schema: version.schema(),
             id: &id,
             run_id: &run_id,
             genesis_hash: &genesis_hash,
@@ -421,7 +1190,7 @@ impl EventEnvelope {
             previous_event_hash: &previous_event_hash,
         })?;
         let envelope = Self {
-            schema: EVENT_SCHEMA.to_owned(),
+            schema: version.schema().to_owned(),
             id,
             run_id,
             genesis_hash,
@@ -446,11 +1215,7 @@ impl EventEnvelope {
     /// Validates deterministic envelope bindings and every nested untrusted
     /// DTO before the record can enter a replay stream.
     pub fn validate(&self) -> Result<()> {
-        if self.schema != EVENT_SCHEMA {
-            return Err(DomainError::EventSequence(
-                "unsupported event schema".to_owned(),
-            ));
-        }
+        let version = EventContractVersion::parse(&self.schema)?;
         if self.run_id.kind() != "run" || self.sequence == 0 || self.logical_time != self.sequence {
             return Err(DomainError::EventSequence(
                 "event requires a run ID, one-based sequence, and matching logical time".to_owned(),
@@ -462,6 +1227,20 @@ impl EventEnvelope {
             ));
         }
         let payload = decode_canonical_payload(self.payload.clone())?;
+        if version == EventContractVersion::V1 && payload.is_v2_only() {
+            return Err(DomainError::EventSequence(
+                "v1 stream cannot contain v2-only payloads".to_owned(),
+            ));
+        }
+        validate_stream_payload_position(version, self.sequence, &payload)?;
+        if let PersistedPayload::RunGenesisManifest(manifest) = &payload
+            && (manifest.run_id != self.run_id
+                || manifest.genesis_artifact.cas_hash != self.genesis_hash)
+        {
+            return Err(DomainError::EventSequence(
+                "v2 genesis manifest must bind its envelope run ID and genesis hash".to_owned(),
+            ));
+        }
         if self.actor != payload.actor() {
             return Err(DomainError::EventSequence(
                 "event actor must match the typed payload authority".to_owned(),
@@ -474,6 +1253,7 @@ impl EventEnvelope {
             ));
         }
         let expected_id = event_id(
+            version.schema(),
             &self.run_id,
             &self.genesis_hash,
             self.sequence,
@@ -488,6 +1268,7 @@ impl EventEnvelope {
             ));
         }
         let expected_event_hash = envelope_hash(EventHashInput {
+            schema: version.schema(),
             id: &self.id,
             run_id: &self.run_id,
             genesis_hash: &self.genesis_hash,
@@ -508,6 +1289,7 @@ impl EventEnvelope {
     /// Validates a contiguous prefix, including the requested run even for an
     /// empty stream and the exact initial aggregate hash for every event.
     pub fn validate_sequence(
+        version: EventContractVersion,
         run_id: &StableId,
         genesis_hash: &ContentHash,
         events: &[EventEnvelope],
@@ -523,6 +1305,12 @@ impl EventEnvelope {
                 DomainError::EventSequence("event count does not fit u64".to_owned())
             })? + 1;
             event.validate()?;
+            let event_version = EventContractVersion::parse(&event.schema)?;
+            if event_version != version {
+                return Err(DomainError::EventSequence(
+                    "event stream schema must match its explicit contract version".to_owned(),
+                ));
+            }
             if &event.run_id != run_id
                 || &event.genesis_hash != genesis_hash
                 || event.sequence != expected
@@ -530,7 +1318,7 @@ impl EventEnvelope {
             {
                 return Err(DomainError::EventSequence(
                     "event run IDs, genesis hashes, sequences, and hashes must form one contiguous prefix"
-                        .to_owned(),
+                    .to_owned(),
                 ));
             }
             previous_event_hash = event.event_hash.clone();
@@ -585,6 +1373,541 @@ impl EventEnvelope {
     #[must_use]
     pub fn event_hash(&self) -> &ContentHash {
         &self.event_hash
+    }
+
+    /// Validates one complete, confirmed stream prefix and exposes only
+    /// typed payloads. Store code must not inspect the private JSON payload.
+    pub fn validated_view<'a>(
+        version: EventContractVersion,
+        run_id: &StableId,
+        genesis: EventStreamGenesis<'_>,
+        events: &'a [EventEnvelope],
+    ) -> Result<ValidatedEventView<'a>> {
+        let (genesis_hash, snapshot) = match (version, genesis) {
+            (EventContractVersion::V1, EventStreamGenesis::V1(hash)) => (hash.clone(), None),
+            (EventContractVersion::V2, EventStreamGenesis::V2(bytes)) => {
+                let snapshot = RunGenesisSnapshot::from_canonical_bytes(bytes)?;
+                (ContentHash::sha256(bytes), Some(snapshot))
+            }
+            _ => {
+                return Err(DomainError::EventSequence(
+                    "event stream genesis material must match its explicit contract version"
+                        .to_owned(),
+                ));
+            }
+        };
+        Self::validate_sequence(version, run_id, &genesis_hash, events)?;
+        if let (EventContractVersion::V2, Some(first), Some(snapshot)) =
+            (version, events.first(), snapshot.as_ref())
+        {
+            let initial = snapshot.rebuild_aggregate()?;
+            let bytes = snapshot.canonical_bytes()?;
+            validate_v2_genesis_envelope(run_id, &initial, &bytes, first)?;
+        }
+        let events = events
+            .iter()
+            .map(|envelope| {
+                Ok(ValidatedEvent {
+                    envelope,
+                    payload: decoded_payload(decode_canonical_payload(envelope.payload.clone())?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ValidatedEventView {
+            version,
+            run_id: run_id.clone(),
+            genesis_hash,
+            snapshot,
+            events,
+        })
+    }
+}
+
+/// Typed, hash-chain-validated event prefix for durable projections.
+#[derive(Clone, Debug)]
+pub struct ValidatedEventView<'a> {
+    version: EventContractVersion,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    snapshot: Option<RunGenesisSnapshot>,
+    events: Vec<ValidatedEvent<'a>>,
+}
+
+impl<'a> ValidatedEventView<'a> {
+    #[must_use]
+    pub const fn event_contract_version(&self) -> EventContractVersion {
+        self.version
+    }
+    #[must_use]
+    pub fn events(&self) -> &[ValidatedEvent<'a>] {
+        &self.events
+    }
+
+    #[must_use]
+    pub fn genesis_hash(&self) -> &ContentHash {
+        &self.genesis_hash
+    }
+    #[must_use]
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+
+    fn validate_initial(&self, initial: &ReviewAggregate) -> Result<()> {
+        initial.validate_pristine_for_event_log()?;
+        match (self.version, &self.snapshot) {
+            (EventContractVersion::V1, None) => {
+                if self.genesis_hash != ContentHash::sha256(&canonical_json(initial)?) {
+                    return Err(DomainError::Validation(
+                        "offline v1 projection initial aggregate does not match its genesis hash"
+                            .to_owned(),
+                    ));
+                }
+            }
+            (EventContractVersion::V2, Some(snapshot)) => {
+                let bytes = snapshot.canonical_bytes()?;
+                let rebuilt = snapshot.rebuild_aggregate()?;
+                if self.genesis_hash != ContentHash::sha256(&bytes)
+                    || canonical_json(&rebuilt)? != canonical_json(initial)?
+                {
+                    return Err(DomainError::Validation(
+                        "offline v2 projection initial aggregate does not match verified genesis bytes"
+                            .to_owned(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(DomainError::Validation(
+                    "validated event view has inconsistent genesis material".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A validated envelope paired with its decoded closed payload.
+#[derive(Clone, Debug)]
+pub struct ValidatedEvent<'a> {
+    envelope: &'a EventEnvelope,
+    payload: DecodedPayload,
+}
+
+impl<'a> ValidatedEvent<'a> {
+    #[must_use]
+    pub fn envelope(&self) -> &'a EventEnvelope {
+        self.envelope
+    }
+    #[must_use]
+    pub fn payload(&self) -> &DecodedPayload {
+        &self.payload
+    }
+}
+
+/// Store-facing typed metadata. It intentionally excludes raw JSON.
+#[derive(Clone, Debug)]
+pub enum DecodedPayload {
+    ObligationTransition {
+        obligation_id: StableId,
+        next: ObligationLifecycle,
+    },
+    ClaimProposed(ReviewClaim),
+    EvidenceRecorded(Evidence),
+    EvidenceBound(EvidenceBinding),
+    VerificationRecorded(Verification),
+    DecisionRecorded(Decision),
+    FindingRecorded(Finding),
+    RunGenesisManifest(RunGenesisManifest),
+    ArtifactRegistered(ArtifactRegistered),
+    SnapshotSourcesRecorded(SnapshotSourcesRecorded),
+}
+
+fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
+    match payload {
+        PersistedPayload::ObligationTransition {
+            obligation_id,
+            next,
+        } => DecodedPayload::ObligationTransition {
+            obligation_id,
+            next,
+        },
+        PersistedPayload::ClaimProposed(value) => DecodedPayload::ClaimProposed(value),
+        PersistedPayload::EvidenceRecorded(value) => DecodedPayload::EvidenceRecorded(*value),
+        PersistedPayload::EvidenceBound(value) => DecodedPayload::EvidenceBound(value),
+        PersistedPayload::VerificationRecorded(value) => {
+            DecodedPayload::VerificationRecorded(value)
+        }
+        PersistedPayload::DecisionRecorded(value) => DecodedPayload::DecisionRecorded(value),
+        PersistedPayload::FindingRecorded(value) => DecodedPayload::FindingRecorded(value),
+        PersistedPayload::RunGenesisManifest(value) => DecodedPayload::RunGenesisManifest(value),
+        PersistedPayload::ArtifactRegistered(value) => DecodedPayload::ArtifactRegistered(value),
+        PersistedPayload::SnapshotSourcesRecorded(value) => {
+            DecodedPayload::SnapshotSourcesRecorded(value)
+        }
+    }
+}
+
+/// The kind of a record retained by an offline projection without making it
+/// part of the accepted aggregate.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum UnreconciledRecordKind {
+    /// Separately stored evidence.
+    Evidence,
+    /// A claim-to-evidence link.
+    EvidenceBinding,
+    /// A verifier outcome.
+    Verification,
+    /// A human authority decision.
+    Decision,
+}
+
+/// Safe, typed index metadata for a record which has not been reconciled into
+/// accepted aggregate state.  The record body remains private to the
+/// projection so callers cannot mistake it for an accepted review fact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnreconciledRecordMetadata {
+    kind: UnreconciledRecordKind,
+    id: StableId,
+    body_hash: ContentHash,
+    authority_reconciled: bool,
+}
+
+impl UnreconciledRecordMetadata {
+    /// Persisted record kind.
+    #[must_use]
+    pub fn kind(&self) -> UnreconciledRecordKind {
+        self.kind
+    }
+
+    /// Stable record identifier.
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+
+    /// Hash of the canonical persisted payload body.
+    #[must_use]
+    pub fn body_hash(&self) -> &ContentHash {
+        &self.body_hash
+    }
+
+    /// Always false until an explicit reconciliation path is added.
+    #[must_use]
+    pub const fn authority_reconciled(&self) -> bool {
+        self.authority_reconciled
+    }
+}
+
+/// Authority-free finding metadata projected against the private authority
+/// shadow. It is intentionally distinct from unreconciled authority records.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectedFindingMetadata {
+    id: StableId,
+    body_hash: ContentHash,
+}
+
+impl ProjectedFindingMetadata {
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn body_hash(&self) -> &ContentHash {
+        &self.body_hash
+    }
+}
+
+/// Semantic projection state for offline indexing. Authority-bearing records
+/// are validated against a private shadow overlay, never replayed into the
+/// accepted aggregate because an offline store cannot mint their admissions.
+#[derive(Clone, Debug)]
+pub struct OfflineProjectionState {
+    version: EventContractVersion,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    next_sequence: u64,
+    previous_event_hash: ContentHash,
+    expected_events: Vec<OfflineExpectedEvent>,
+    aggregate: ReviewAggregate,
+    unreconciled_records: BTreeMap<StableId, PersistedPayload>,
+    unreconciled_metadata: BTreeMap<StableId, UnreconciledRecordMetadata>,
+    projected_findings: BTreeMap<StableId, Finding>,
+    projected_finding_metadata: BTreeMap<StableId, ProjectedFindingMetadata>,
+    unreconciled_order: Vec<StableId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OfflineExpectedEvent {
+    id: StableId,
+    event_hash: ContentHash,
+}
+
+impl OfflineProjectionState {
+    /// Seeds offline semantic validation only from a view whose immutable
+    /// genesis has already been verified at the durable boundary.
+    pub fn new(view: &ValidatedEventView<'_>, initial: ReviewAggregate) -> Result<Self> {
+        view.validate_initial(&initial)?;
+        Ok(Self {
+            version: view.version,
+            run_id: view.run_id.clone(),
+            genesis_hash: view.genesis_hash.clone(),
+            next_sequence: 1,
+            previous_event_hash: event_chain_genesis_hash(&view.run_id, &view.genesis_hash)?,
+            expected_events: view
+                .events
+                .iter()
+                .map(|event| OfflineExpectedEvent {
+                    id: event.envelope.id.clone(),
+                    event_hash: event.envelope.event_hash.clone(),
+                })
+                .collect(),
+            aggregate: initial,
+            unreconciled_records: BTreeMap::new(),
+            unreconciled_metadata: BTreeMap::new(),
+            projected_findings: BTreeMap::new(),
+            projected_finding_metadata: BTreeMap::new(),
+            unreconciled_order: Vec::new(),
+        })
+    }
+
+    /// Applies the next exact validated-view event atomically. Returns `true`
+    /// only when an authority-free event is applied to the accepted aggregate.
+    /// Returns `false` when either an authority-bearing event is retained as
+    /// unreconciled shadow metadata, or an authority-free `FindingRecorded`
+    /// is validated against that shadow and retained as projected-finding
+    /// metadata. Neither `false` case promotes state into the accepted
+    /// aggregate.
+    pub fn apply(&mut self, event: &ValidatedEvent<'_>) -> Result<bool> {
+        let envelope = event.envelope();
+        let expected = self
+            .expected_events
+            .get(usize::try_from(self.next_sequence - 1).map_err(|_| {
+                DomainError::EventSequence(
+                    "offline projection sequence does not fit usize".to_owned(),
+                )
+            })?)
+            .ok_or_else(|| {
+                DomainError::EventSequence(
+                    "offline projection cannot apply an event beyond its validated view".to_owned(),
+                )
+            })?;
+        if envelope.id != expected.id || envelope.event_hash != expected.event_hash {
+            return Err(DomainError::EventSequence(
+                "offline projection event is not the expected validated-view event".to_owned(),
+            ));
+        }
+        if envelope.run_id != self.run_id
+            || envelope.genesis_hash != self.genesis_hash
+            || envelope.sequence != self.next_sequence
+            || envelope.previous_event_hash != self.previous_event_hash
+        {
+            return Err(DomainError::EventSequence(
+                "offline projection event does not continue its validated view cursor".to_owned(),
+            ));
+        }
+        if EventContractVersion::parse(&event.envelope().schema)? != self.version {
+            return Err(DomainError::EventSequence(
+                "offline projection event schema does not match its validated view contract"
+                    .to_owned(),
+            ));
+        }
+        let payload = match event.payload() {
+            DecodedPayload::EvidenceRecorded(value) => {
+                return self.apply_unreconciled(
+                    PersistedPayload::EvidenceRecorded(Box::new(value.clone())),
+                    envelope,
+                    event.envelope().actor(),
+                );
+            }
+            DecodedPayload::EvidenceBound(value) => {
+                return self.apply_unreconciled(
+                    PersistedPayload::EvidenceBound(value.clone()),
+                    envelope,
+                    event.envelope().actor(),
+                );
+            }
+            DecodedPayload::VerificationRecorded(value) => {
+                return self.apply_unreconciled(
+                    PersistedPayload::VerificationRecorded(value.clone()),
+                    envelope,
+                    event.envelope().actor(),
+                );
+            }
+            DecodedPayload::DecisionRecorded(value) => {
+                return self.apply_unreconciled(
+                    PersistedPayload::DecisionRecorded(value.clone()),
+                    envelope,
+                    event.envelope().actor(),
+                );
+            }
+            DecodedPayload::ObligationTransition {
+                obligation_id,
+                next,
+            } => PersistedPayload::ObligationTransition {
+                obligation_id: obligation_id.clone(),
+                next: *next,
+            },
+            DecodedPayload::ClaimProposed(value) => PersistedPayload::ClaimProposed(value.clone()),
+            DecodedPayload::FindingRecorded(value) => {
+                return self.apply_projected_finding(
+                    value.clone(),
+                    envelope,
+                    event.envelope().actor(),
+                );
+            }
+            DecodedPayload::RunGenesisManifest(value) => {
+                PersistedPayload::RunGenesisManifest(value.clone())
+            }
+            DecodedPayload::ArtifactRegistered(value) => {
+                PersistedPayload::ArtifactRegistered(value.clone())
+            }
+            DecodedPayload::SnapshotSourcesRecorded(value) => {
+                PersistedPayload::SnapshotSourcesRecorded(value.clone())
+            }
+        };
+        reject_v2_legacy_execution_payload(self.version, &payload)?;
+        payload.validate_for_enclosing_run(&self.run_id)?;
+        let mut next = self.aggregate.clone();
+        apply(&mut next, &payload, event.envelope().actor(), &self.run_id)?;
+        next.validate()?;
+        self.aggregate = next;
+        self.advance_offline_cursor(envelope)?;
+        Ok(true)
+    }
+
+    fn advance_offline_cursor(&mut self, envelope: &EventEnvelope) -> Result<()> {
+        self.previous_event_hash = envelope.event_hash.clone();
+        self.next_sequence = self.next_sequence.checked_add(1).ok_or_else(|| {
+            DomainError::EventSequence("offline projection sequence overflow".to_owned())
+        })?;
+        Ok(())
+    }
+
+    fn apply_unreconciled(
+        &mut self,
+        payload: PersistedPayload,
+        envelope: &EventEnvelope,
+        actor: &str,
+    ) -> Result<bool> {
+        reject_v2_legacy_execution_payload(self.version, &payload)?;
+        payload.validate_shape()?;
+        payload.validate_for_enclosing_run(&self.run_id)?;
+        let (kind, id) = payload
+            .unreconciled_kind_and_id()
+            .map(|(kind, id)| (kind, id.clone()))
+            .ok_or_else(|| {
+                DomainError::Validation("offline shadow received a non-shadow payload".to_owned())
+            })?;
+        if self.unreconciled_records.contains_key(&id) || self.projected_findings.contains_key(&id)
+        {
+            return Err(DomainError::Validation(format!(
+                "offline shadow record ID collision: {id}"
+            )));
+        }
+        let mut candidate = self.shadow_candidate()?;
+        apply(&mut candidate, &payload, actor, &self.run_id)?;
+        candidate.validate()?;
+        let metadata = UnreconciledRecordMetadata {
+            kind,
+            id: id.clone(),
+            body_hash: ContentHash::sha256(&canonical_json(&payload)?),
+            authority_reconciled: false,
+        };
+        self.unreconciled_records.insert(id.clone(), payload);
+        self.unreconciled_metadata.insert(id.clone(), metadata);
+        self.unreconciled_order.push(id.clone());
+        self.advance_offline_cursor(envelope)?;
+        Ok(false)
+    }
+
+    fn apply_projected_finding(
+        &mut self,
+        finding: Finding,
+        envelope: &EventEnvelope,
+        actor: &str,
+    ) -> Result<bool> {
+        let id = finding.id().clone();
+        if self.unreconciled_records.contains_key(&id) || self.projected_findings.contains_key(&id)
+        {
+            return Err(DomainError::Validation(format!(
+                "offline shadow record ID collision: {id}"
+            )));
+        }
+        let payload = PersistedPayload::FindingRecorded(finding.clone());
+        let mut candidate = self.shadow_candidate()?;
+        apply(&mut candidate, &payload, actor, &self.run_id)?;
+        candidate.validate()?;
+        self.projected_finding_metadata.insert(
+            id.clone(),
+            ProjectedFindingMetadata {
+                id: id.clone(),
+                body_hash: ContentHash::sha256(&canonical_json(&payload)?),
+            },
+        );
+        self.projected_findings.insert(id.clone(), finding);
+        self.unreconciled_order.push(id);
+        self.advance_offline_cursor(envelope)?;
+        Ok(false)
+    }
+
+    fn shadow_candidate(&self) -> Result<ReviewAggregate> {
+        let mut candidate = self.aggregate.clone();
+        for id in &self.unreconciled_order {
+            if let Some(payload) = self.unreconciled_records.get(id) {
+                apply(&mut candidate, payload, payload.actor(), &self.run_id)?;
+            } else if let Some(finding) = self.projected_findings.get(id) {
+                apply(
+                    &mut candidate,
+                    &PersistedPayload::FindingRecorded(finding.clone()),
+                    SYSTEM_ACTOR,
+                    &self.run_id,
+                )?;
+            } else {
+                return Err(DomainError::Validation(
+                    "offline shadow order references a missing record".to_owned(),
+                ));
+            }
+        }
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
+    #[must_use]
+    pub fn aggregate(&self) -> &ReviewAggregate {
+        &self.aggregate
+    }
+
+    /// Returns metadata only; no unreconciled authority record is exposed as
+    /// accepted aggregate state.
+    #[must_use]
+    pub fn unreconciled_records(&self) -> Vec<&UnreconciledRecordMetadata> {
+        self.unreconciled_order
+            .iter()
+            .filter_map(|id| self.unreconciled_metadata.get(id))
+            .collect()
+    }
+
+    /// Returns authority-free findings validated against the private shadow.
+    #[must_use]
+    pub fn projected_findings(&self) -> Vec<&ProjectedFindingMetadata> {
+        self.unreconciled_order
+            .iter()
+            .filter_map(|id| self.projected_finding_metadata.get(id))
+            .collect()
+    }
+
+    /// Whether every event in the bound validated view has been applied.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        usize::try_from(self.next_sequence - 1)
+            .is_ok_and(|count| count == self.expected_events.len())
+    }
+
+    /// The hash at the projection cursor; on completion this equals the
+    /// validated view's tail event hash (or its chain-genesis hash when empty).
+    #[must_use]
+    pub fn tail_hash(&self) -> &ContentHash {
+        &self.previous_event_hash
     }
 }
 
@@ -672,6 +1995,18 @@ fn decode_payload(value: Value) -> Result<PersistedPayload> {
         "finding_recorded" => Ok(PersistedPayload::FindingRecorded(
             Finding::from_event_value(raw.data)?,
         )),
+        "run_genesis_manifest" => Ok(PersistedPayload::RunGenesisManifest(
+            serde_json::from_value(raw.data)
+                .map_err(|error| DomainError::Json(error.to_string()))?,
+        )),
+        "artifact_registered" => Ok(PersistedPayload::ArtifactRegistered(
+            serde_json::from_value(raw.data)
+                .map_err(|error| DomainError::Json(error.to_string()))?,
+        )),
+        "snapshot_sources_recorded" => Ok(PersistedPayload::SnapshotSourcesRecorded(
+            serde_json::from_value(raw.data)
+                .map_err(|error| DomainError::Json(error.to_string()))?,
+        )),
         _ => Err(DomainError::EventSequence(
             "unknown persisted event payload type".to_owned(),
         )),
@@ -737,6 +2072,8 @@ impl Event {
 /// only when it shares the canonical initial aggregate/genesis hash.
 #[derive(Clone, Debug)]
 pub struct EventLog {
+    version: EventContractVersion,
+    read_only: bool,
     run_id: StableId,
     genesis_hash: ContentHash,
     initial: ReviewAggregate,
@@ -748,6 +2085,38 @@ pub struct EventLog {
 impl EventLog {
     /// Starts an empty log from a validated initial aggregate.
     pub fn new(run_id: StableId, initial: ReviewAggregate) -> Result<Self> {
+        Self::new_v2(run_id, initial)
+    }
+
+    /// Starts a newly minted v2 stream with its mandatory genesis manifest.
+    pub fn new_v2(run_id: StableId, initial: ReviewAggregate) -> Result<Self> {
+        let mut log = Self::new_with_version(EventContractVersion::V2, run_id, initial)?;
+        log.append_v2_genesis_manifest()?;
+        Ok(log)
+    }
+
+    /// Initializes the legacy hash boundary used only while importing a
+    /// pre-existing v1 prefix. The returned log is read-only: v1 event minting
+    /// is available only to crate-local test scaffolding. New callers must use
+    /// [`Self::new_v2`].
+    pub fn new_v1_for_import(run_id: StableId, initial: ReviewAggregate) -> Result<Self> {
+        let mut log = Self::new_with_version(EventContractVersion::V1, run_id, initial)?;
+        log.read_only = true;
+        Ok(log)
+    }
+
+    /// Builds an editable v1 log exclusively for crate-local compatibility
+    /// tests. This cannot be reached through the public library API.
+    #[cfg(test)]
+    pub(crate) fn new_v1_for_test(run_id: StableId, initial: ReviewAggregate) -> Result<Self> {
+        Self::new_with_version(EventContractVersion::V1, run_id, initial)
+    }
+
+    fn new_with_version(
+        version: EventContractVersion,
+        run_id: StableId,
+        initial: ReviewAggregate,
+    ) -> Result<Self> {
         if run_id.kind() != "run" {
             return Err(DomainError::EventSequence(
                 "event stream requires a run ID even when empty".to_owned(),
@@ -755,9 +2124,26 @@ impl EventLog {
         }
         initial.validate()?;
         initial.validate_pristine_for_event_log()?;
-        let genesis_hash = ContentHash::sha256(&canonical_json(&initial)?);
+        if version == EventContractVersion::V2 {
+            let snapshot = RunGenesisSnapshot::from_aggregate(&initial)?;
+            let bytes = snapshot.canonical_bytes()?;
+            let rebuilt = RunGenesisSnapshot::from_canonical_bytes(&bytes)?.rebuild_aggregate()?;
+            if canonical_json(&rebuilt)? != canonical_json(&initial)? {
+                return Err(DomainError::Validation(
+                    "v2 genesis snapshot does not reconstruct the supplied aggregate".to_owned(),
+                ));
+            }
+        }
+        let genesis_hash = match version {
+            EventContractVersion::V1 => ContentHash::sha256(&canonical_json(&initial)?),
+            EventContractVersion::V2 => {
+                RunGenesisSnapshot::from_aggregate(&initial)?.canonical_hash()?
+            }
+        };
         let tail_hash = event_chain_genesis_hash(&run_id, &genesis_hash)?;
         Ok(Self {
+            version,
+            read_only: false,
             run_id,
             genesis_hash,
             aggregate: initial.clone(),
@@ -775,6 +2161,7 @@ impl EventLog {
         snapshot_admission: &EvidenceSnapshotAdmission,
         evidence: &Evidence,
     ) -> Result<EvidenceAdmission> {
+        self.require_writable()?;
         if evidence.snapshot_id() == self.aggregate.program().snapshot_id()
             && evidence
                 .target_ids()
@@ -807,6 +2194,7 @@ impl EventLog {
         &self,
         binding: &EvidenceBinding,
     ) -> Result<EvidenceBindingAdmission> {
+        self.require_writable()?;
         self.aggregate.validate_binding_for_event(binding)?;
         EvidenceBindingAdmission::new(
             self.run_id.clone(),
@@ -820,6 +2208,7 @@ impl EventLog {
     /// Mints exact authority for a canonical passed/failed verification after
     /// deriving freshness from the aggregate's evidence records.
     pub fn admit_verification(&self, verification: Verification) -> Result<VerificationAdmission> {
+        self.require_writable()?;
         let verification = self.aggregate.normalize_verification(verification)?;
         self.aggregate
             .validate_verification_for_event(&verification)?;
@@ -839,6 +2228,7 @@ impl EventLog {
         human: &TrustedHumanAdmission,
         decision: &Decision,
     ) -> Result<DecisionAdmission> {
+        self.require_writable()?;
         let closure_digest = self
             .aggregate
             .decision_closure_digest(&self.genesis_hash, decision)?;
@@ -852,8 +2242,12 @@ impl EventLog {
 
     /// Appends one locally admitted command atomically.
     pub fn append(&mut self, command: EventCommand) -> Result<&Event> {
+        self.require_writable()?;
         let (payload, admission) = self.normalized_payload(command)?;
         let sequence = self.next_sequence()?;
+        validate_stream_payload_position(self.version, sequence, &payload)?;
+        reject_v2_legacy_execution_payload(self.version, &payload)?;
+        payload.validate_for_enclosing_run(&self.run_id)?;
         match (&payload, &admission) {
             (
                 PersistedPayload::EvidenceRecorded(evidence),
@@ -913,6 +2307,7 @@ impl EventLog {
         }
         let actor = payload.actor().to_owned();
         let envelope = EventEnvelope::new(
+            self.version,
             self.run_id.clone(),
             self.genesis_hash.clone(),
             sequence,
@@ -939,7 +2334,12 @@ impl EventLog {
     }
 
     /// Replays exact in-process events from the same initial aggregate.
-    pub fn replay(run_id: StableId, initial: ReviewAggregate, events: &[Event]) -> Result<Self> {
+    pub fn replay(
+        version: EventContractVersion,
+        run_id: StableId,
+        initial: ReviewAggregate,
+        events: &[Event],
+    ) -> Result<Self> {
         let envelopes = events
             .iter()
             .map(|event| event.envelope.clone())
@@ -961,6 +2361,7 @@ impl EventLog {
             .filter_map(|event| event.decision_admission.clone())
             .collect::<Vec<_>>();
         Self::replay_envelopes(
+            version,
             run_id,
             initial,
             &envelopes,
@@ -971,13 +2372,20 @@ impl EventLog {
 
     /// Replays JSON-imported envelopes only with matching exact host admissions.
     pub fn replay_envelopes(
+        version: EventContractVersion,
         run_id: StableId,
         initial: ReviewAggregate,
         envelopes: &[EventEnvelope],
         admissions: &EventAdmissions,
     ) -> Result<Self> {
-        let mut log = Self::new(run_id, initial)?;
-        EventEnvelope::validate_sequence(&log.run_id, &log.genesis_hash, envelopes)?;
+        let mut log = Self::new_with_version(version, run_id, initial)?;
+        EventEnvelope::validate_sequence(version, &log.run_id, &log.genesis_hash, envelopes)?;
+        if version == EventContractVersion::V2
+            && let Some(first) = envelopes.first()
+        {
+            let bytes = RunGenesisSnapshot::from_aggregate(&log.initial)?.canonical_bytes()?;
+            validate_v2_genesis_envelope(&log.run_id, &log.initial, &bytes, first)?;
+        }
         for envelope in envelopes {
             let payload = decode_canonical_payload(envelope.payload.clone())?;
             let admissions = log.admissions_for(&payload, admissions)?;
@@ -989,6 +2397,9 @@ impl EventLog {
                 admissions.decision,
             )?;
         }
+        if version == EventContractVersion::V1 {
+            log.read_only = true;
+        }
         Ok(log)
     }
 
@@ -999,10 +2410,19 @@ impl EventLog {
         envelopes: &[EventEnvelope],
         admissions: &EventAdmissions,
     ) -> Result<()> {
+        self.require_writable()?;
+        let mut next = self.clone();
+        if next.version == EventContractVersion::V2
+            && next.events.is_empty()
+            && let Some(first) = envelopes.first()
+        {
+            let bytes = RunGenesisSnapshot::from_aggregate(&next.initial)?.canonical_bytes()?;
+            validate_v2_genesis_envelope(&next.run_id, &next.initial, &bytes, first)?;
+        }
         for envelope in envelopes {
             let payload = decode_canonical_payload(envelope.payload.clone())?;
-            let admissions = self.admissions_for(&payload, admissions)?;
-            self.append_envelope(
+            let admissions = next.admissions_for(&payload, admissions)?;
+            next.append_envelope(
                 envelope.clone(),
                 admissions.evidence,
                 admissions.binding,
@@ -1010,6 +2430,7 @@ impl EventLog {
                 admissions.decision,
             )?;
         }
+        *self = next;
         Ok(())
     }
 
@@ -1021,9 +2442,11 @@ impl EventLog {
         verification_admission: Option<VerificationAdmission>,
         decision_admission: Option<DecisionAdmission>,
     ) -> Result<&Event> {
+        self.require_writable()?;
         let expected_sequence = self.next_sequence()?;
         envelope.validate()?;
-        if envelope.run_id != self.run_id
+        if EventContractVersion::parse(&envelope.schema)? != self.version
+            || envelope.run_id != self.run_id
             || envelope.genesis_hash != self.genesis_hash
             || envelope.sequence != expected_sequence
             || envelope.previous_event_hash != self.tail_hash
@@ -1033,6 +2456,9 @@ impl EventLog {
             ));
         }
         let payload = decode_canonical_payload(envelope.payload.clone())?;
+        validate_stream_payload_position(self.version, expected_sequence, &payload)?;
+        reject_v2_legacy_execution_payload(self.version, &payload)?;
+        payload.validate_for_enclosing_run(&self.run_id)?;
         if let PersistedPayload::EvidenceRecorded(evidence) = &payload
             && !evidence_admission.as_ref().is_some_and(|admission| {
                 admission.matches(
@@ -1089,7 +2515,7 @@ impl EventLog {
             ));
         }
         let mut next = self.aggregate.clone();
-        apply(&mut next, &payload, envelope.actor())?;
+        apply(&mut next, &payload, envelope.actor(), &self.run_id)?;
         self.aggregate = next;
         self.events.push(Event {
             envelope,
@@ -1123,6 +2549,16 @@ impl EventLog {
             payload => payload,
         };
         Ok((payload, command.admission))
+    }
+
+    fn require_writable(&self) -> Result<()> {
+        if self.read_only {
+            return Err(DomainError::Validation(
+                "legacy v1 event logs are import/replay-only and cannot mint or append events"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     fn admissions_for(
@@ -1239,10 +2675,26 @@ impl EventLog {
         &self.initial
     }
 
+    /// The canonical typed baseline committed by this v2 stream.
+    pub fn run_genesis_snapshot(&self) -> Result<RunGenesisSnapshot> {
+        if self.version != EventContractVersion::V2 {
+            return Err(DomainError::Validation(
+                "legacy v1 streams do not carry a typed run genesis snapshot".to_owned(),
+            ));
+        }
+        RunGenesisSnapshot::from_aggregate(&self.initial)
+    }
+
     /// Stable run binding required when minting exact replay admissions.
     #[must_use]
     pub fn run_id(&self) -> &StableId {
         &self.run_id
+    }
+
+    /// The one schema contract governing this entire stream.
+    #[must_use]
+    pub const fn event_contract_version(&self) -> EventContractVersion {
+        self.version
     }
 
     #[must_use]
@@ -1281,9 +2733,67 @@ impl EventLog {
             sequence: self.next_sequence()?,
         })
     }
+
+    fn append_v2_genesis_manifest(&mut self) -> Result<()> {
+        let snapshot = RunGenesisSnapshot::from_aggregate(&self.initial)?;
+        let bytes = snapshot.canonical_bytes()?;
+        let source = ArtifactSource::RunGenesis {
+            run_id: self.run_id.clone(),
+        };
+        let registration_id = ArtifactRegistered::derived_id(
+            &self.run_id,
+            &self.genesis_hash,
+            "application/json",
+            ArtifactSensitivity::CanonicalState,
+            &source,
+        )?;
+        let registration = ArtifactRegistered::new(
+            self.run_id.clone(),
+            registration_id,
+            self.genesis_hash.clone(),
+            "application/json",
+            u64::try_from(bytes.len()).map_err(|_| {
+                DomainError::EventSequence("genesis bytes do not fit u64".to_owned())
+            })?,
+            ArtifactSensitivity::CanonicalState,
+            source,
+        )?;
+        let manifest = RunGenesisManifest::new(
+            self.run_id.clone(),
+            registration,
+            self.initial.program().repository_identity(),
+            self.initial.program().snapshot_id().clone(),
+            self.initial.program().profile_id(),
+            self.initial.program().profile_version(),
+        )?;
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V2,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            1,
+            SYSTEM_ACTOR,
+            1,
+            self.tail_hash.clone(),
+            PersistedPayload::RunGenesisManifest(manifest),
+        )?;
+        self.append_envelope(envelope, None, None, None, None)?;
+        let envelope = self
+            .events
+            .first()
+            .ok_or_else(|| {
+                DomainError::EventSequence("missing appended v2 genesis event".to_owned())
+            })?
+            .envelope();
+        validate_v2_genesis_envelope(&self.run_id, &self.initial, &bytes, envelope)?;
+        Ok(())
+    }
 }
 
+// The event identity intentionally binds every envelope component, including
+// its selected schema, so legacy v1 and minted v2 IDs cannot alias.
+#[allow(clippy::too_many_arguments)]
 fn event_id(
+    schema: &str,
     run_id: &StableId,
     genesis_hash: &ContentHash,
     sequence: u64,
@@ -1311,7 +2821,7 @@ fn event_id(
             Value::String(previous_event_hash.to_string()),
         ),
         ("run".to_owned(), Value::String(run_id.to_string())),
-        ("schema".to_owned(), Value::String(EVENT_SCHEMA.to_owned())),
+        ("schema".to_owned(), Value::String(schema.to_owned())),
         (
             "sequence".to_owned(),
             Value::Number(serde_json::Number::from(sequence)),
@@ -1321,6 +2831,7 @@ fn event_id(
 }
 
 struct EventHashInput<'a> {
+    schema: &'a str,
     id: &'a StableId,
     run_id: &'a StableId,
     genesis_hash: &'a ContentHash,
@@ -1352,7 +2863,7 @@ fn envelope_hash(input: EventHashInput<'_>) -> Result<ContentHash> {
             Value::String(input.previous_event_hash.to_string()),
         ),
         ("run".to_owned(), Value::String(input.run_id.to_string())),
-        ("schema".to_owned(), Value::String(EVENT_SCHEMA.to_owned())),
+        ("schema".to_owned(), Value::String(input.schema.to_owned())),
         (
             "sequence".to_owned(),
             Value::Number(serde_json::Number::from(input.sequence)),
@@ -1376,7 +2887,12 @@ fn event_chain_genesis_hash(run_id: &StableId, genesis_hash: &ContentHash) -> Re
     Ok(ContentHash::sha256(&canonical_json(&sentinel)?))
 }
 
-fn apply(aggregate: &mut ReviewAggregate, payload: &PersistedPayload, actor: &str) -> Result<()> {
+fn apply(
+    aggregate: &mut ReviewAggregate,
+    payload: &PersistedPayload,
+    actor: &str,
+    expected_run_id: &StableId,
+) -> Result<()> {
     match payload {
         PersistedPayload::ObligationTransition {
             obligation_id,
@@ -1394,5 +2910,1001 @@ fn apply(aggregate: &mut ReviewAggregate, payload: &PersistedPayload, actor: &st
             aggregate.record_decision(decision.clone(), actor)
         }
         PersistedPayload::FindingRecorded(finding) => aggregate.add_finding(finding.clone()),
+        PersistedPayload::RunGenesisManifest(manifest) => {
+            aggregate.record_genesis_manifest(expected_run_id, manifest.clone())
+        }
+        PersistedPayload::ArtifactRegistered(registration) => {
+            aggregate.register_artifact(expected_run_id, registration.clone())
+        }
+        PersistedPayload::SnapshotSourcesRecorded(sources) => {
+            aggregate.record_snapshot_sources(sources.clone())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        ClaimPolarity, DecisionOutcome, EvidenceDetails, EvidenceRelation, FindingStatus,
+        FindingTrace, MvpRulePack, ProgramSpace, Provenance, SourceRef, VerificationOutcome,
+        canonical_json,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    const FIXTURE: &[u8] =
+        include_bytes!("../../../examples/double-submit-payment/program-space.json");
+
+    fn id(value: &str) -> StableId {
+        StableId::parse(value).expect("test identifier")
+    }
+
+    fn aggregate() -> ReviewAggregate {
+        let program = ProgramSpace::from_json_slice(FIXTURE).expect("fixture program");
+        let (universe, obligations) = MvpRulePack::synthesize(&program)
+            .expect("fixture synthesis")
+            .into_parts();
+        ReviewAggregate::new(program, universe, obligations).expect("fixture aggregate")
+    }
+
+    fn forged_envelope(
+        version: EventContractVersion,
+        run_id: StableId,
+        genesis_hash: ContentHash,
+        sequence: u64,
+        previous_event_hash: ContentHash,
+        payload: PersistedPayload,
+    ) -> EventEnvelope {
+        let actor = payload.actor().to_owned();
+        let payload = serde_json::to_value(payload).expect("payload JSON");
+        let payload_hash = ContentHash::sha256(&canonical_json(&payload).expect("canonical JSON"));
+        let id = event_id(
+            version.schema(),
+            &run_id,
+            &genesis_hash,
+            sequence,
+            &actor,
+            sequence,
+            &payload_hash,
+            &previous_event_hash,
+        )
+        .expect("event ID");
+        let event_hash = envelope_hash(EventHashInput {
+            schema: version.schema(),
+            id: &id,
+            run_id: &run_id,
+            genesis_hash: &genesis_hash,
+            sequence,
+            actor: &actor,
+            logical_time: sequence,
+            payload_hash: &payload_hash,
+            previous_event_hash: &previous_event_hash,
+        })
+        .expect("event hash");
+        EventEnvelope {
+            schema: version.schema().to_owned(),
+            id,
+            run_id,
+            genesis_hash,
+            sequence,
+            actor,
+            logical_time: sequence,
+            payload,
+            payload_hash,
+            previous_event_hash,
+            event_hash,
+        }
+    }
+
+    fn v2_log(run: &str) -> EventLog {
+        EventLog::new(id(run), aggregate()).expect("v2 log")
+    }
+
+    fn planned_payload(log: &EventLog) -> PersistedPayload {
+        PersistedPayload::ObligationTransition {
+            obligation_id: log
+                .aggregate()
+                .obligations()
+                .next()
+                .expect("obligation")
+                .id()
+                .clone(),
+            next: ObligationLifecycle::Planned,
+        }
+    }
+
+    #[test]
+    fn v2_manifest_is_required_once_at_sequence_one_and_schema_cannot_mix() {
+        let log = v2_log("run:v2-manifest-contract");
+        let manifest = log.events[0].envelope.clone();
+        let missing = forged_envelope(
+            EventContractVersion::V2,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            1,
+            manifest.previous_event_hash.clone(),
+            planned_payload(&log),
+        );
+        assert!(missing.validate().is_err(), "v2 sequence one needs genesis");
+        assert!(
+            EventEnvelope::validate_sequence(
+                EventContractVersion::V2,
+                &log.run_id,
+                &log.genesis_hash,
+                &[missing],
+            )
+            .is_err()
+        );
+
+        let manifest_payload = decode_canonical_payload(manifest.payload.clone()).unwrap();
+        let duplicate = forged_envelope(
+            EventContractVersion::V2,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            2,
+            manifest.event_hash.clone(),
+            manifest_payload,
+        );
+        assert!(
+            duplicate.validate().is_err(),
+            "manifest cannot be non-first"
+        );
+        assert!(
+            EventEnvelope::validate_sequence(
+                EventContractVersion::V2,
+                &log.run_id,
+                &log.genesis_hash,
+                &[manifest.clone(), duplicate],
+            )
+            .is_err()
+        );
+
+        let mixed = forged_envelope(
+            EventContractVersion::V1,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            2,
+            manifest.event_hash.clone(),
+            planned_payload(&log),
+        );
+        assert!(mixed.validate().is_ok());
+        assert!(
+            EventEnvelope::validate_sequence(
+                EventContractVersion::V2,
+                &log.run_id,
+                &log.genesis_hash,
+                &[manifest, mixed],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn verified_genesis_bytes_reject_tampered_tuple_and_noncanonical_obligations() {
+        let log = v2_log("run:verified-genesis");
+        let snapshot = log.run_genesis_snapshot().unwrap();
+        let (expected_universe, mut expected_obligations) =
+            MvpRulePack::synthesize(snapshot.program_space())
+                .unwrap()
+                .into_parts();
+        expected_obligations.sort_by(|left, right| left.id().cmp(right.id()));
+        assert_eq!(snapshot.universe(), &expected_universe);
+        assert_eq!(snapshot.obligations(), expected_obligations.as_slice());
+        let bytes = snapshot.canonical_bytes().unwrap();
+        let manifest =
+            match decode_canonical_payload(log.events[0].envelope.payload.clone()).unwrap() {
+                PersistedPayload::RunGenesisManifest(value) => value,
+                _ => unreachable!("v2 first event is manifest"),
+            };
+        for pointer in [
+            "/run_id",
+            "/repository_identity",
+            "/snapshot_id",
+            "/profile_id",
+            "/profile_version",
+            "/event_contract_version",
+            "/genesis_artifact/cas_hash",
+            "/genesis_artifact/media_type",
+            "/genesis_artifact/size",
+            "/genesis_artifact/sensitivity",
+            "/genesis_artifact/registration_id",
+            "/genesis_artifact/source/run_id",
+        ] {
+            let mut value = serde_json::to_value(&manifest).unwrap();
+            let replacement = match pointer {
+                "/run_id" | "/genesis_artifact/source/run_id" => {
+                    Value::String("run:other".to_owned())
+                }
+                "/repository_identity" | "/profile_id" | "/profile_version" => {
+                    Value::String("other".to_owned())
+                }
+                "/snapshot_id" => Value::String("snapshot:other".to_owned()),
+                "/event_contract_version" => {
+                    Value::String("reviewgraphen.review_event.v1".to_owned())
+                }
+                "/genesis_artifact/cas_hash" => {
+                    Value::String(ContentHash::sha256(b"other").to_string())
+                }
+                "/genesis_artifact/media_type" => Value::String("text/plain".to_owned()),
+                "/genesis_artifact/size" => Value::Number(serde_json::Number::from(0)),
+                "/genesis_artifact/sensitivity" => Value::String("sensitive".to_owned()),
+                "/genesis_artifact/registration_id" => {
+                    Value::String("registration:other".to_owned())
+                }
+                _ => unreachable!(),
+            };
+            *value.pointer_mut(pointer).unwrap() = replacement;
+            let tampered: RunGenesisManifest = serde_json::from_value(value).unwrap();
+            assert!(
+                tampered
+                    .validate_against_genesis(log.run_id(), &snapshot, &bytes)
+                    .is_err()
+            );
+        }
+
+        let mut unknown = serde_json::from_slice::<Value>(&bytes).unwrap();
+        unknown["unknown"] = Value::Bool(true);
+        assert!(
+            RunGenesisSnapshot::from_canonical_bytes(&canonical_json(&unknown).unwrap()).is_err()
+        );
+        let mut misordered = serde_json::from_slice::<Value>(&bytes).unwrap();
+        misordered["obligations"].as_array_mut().unwrap().swap(0, 1);
+        assert!(
+            RunGenesisSnapshot::from_canonical_bytes(&canonical_json(&misordered).unwrap())
+                .is_err()
+        );
+        let mut duplicate = serde_json::from_slice::<Value>(&bytes).unwrap();
+        let first = duplicate["obligations"][0].clone();
+        duplicate["obligations"].as_array_mut().unwrap().push(first);
+        assert!(
+            RunGenesisSnapshot::from_canonical_bytes(&canonical_json(&duplicate).unwrap()).is_err()
+        );
+        let mut malformed = serde_json::from_slice::<Value>(&bytes).unwrap();
+        malformed["obligations"][0]["id"] = Value::String("not-an-id".to_owned());
+        assert!(
+            RunGenesisSnapshot::from_canonical_bytes(&canonical_json(&malformed).unwrap()).is_err()
+        );
+        let mut noncanonical = bytes.clone();
+        noncanonical.insert(0, b' ');
+        assert!(RunGenesisSnapshot::from_canonical_bytes(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn source_record_shapes_and_artifact_source_pairs_fail_closed() {
+        let cas = ContentHash::sha256(b"source");
+        assert!(
+            SnapshotSourceRecordEntry::new(
+                id("file:one"),
+                "src/one.rs",
+                cas.clone(),
+                id("registration:one"),
+                cas.clone(),
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            SnapshotSourceRecordEntry::new(
+                id("file:one"),
+                "src/one.rs",
+                cas.clone(),
+                id("registration:one"),
+                ContentHash::sha256(b"other"),
+                1,
+            )
+            .is_err()
+        );
+        let wrong_source = ArtifactSource::SnapshotIngest {
+            run_id: id("run:fixture"),
+            snapshot_id: id("snapshot:fixture"),
+            adapter_id: "adapter".to_owned(),
+        };
+        let registration_id = ArtifactRegistered::derived_id(
+            &id("run:fixture"),
+            &cas,
+            "text/plain",
+            ArtifactSensitivity::CanonicalState,
+            &wrong_source,
+        )
+        .unwrap();
+        assert!(
+            ArtifactRegistered::new(
+                id("run:fixture"),
+                registration_id,
+                cas,
+                "text/plain",
+                6,
+                ArtifactSensitivity::CanonicalState,
+                wrong_source,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v1_event_hash_remains_a_historical_golden() {
+        let mut log = EventLog::new_v1_for_test(id("run:v1-golden"), aggregate()).unwrap();
+        let obligation = log.aggregate().obligations().next().unwrap().id().clone();
+        log.append(EventCommand::obligation_transition(
+            obligation,
+            ObligationLifecycle::Planned,
+        ))
+        .unwrap();
+        let envelope = log.events[0].envelope();
+        assert_eq!(envelope.schema, EventContractVersion::V1.schema());
+        assert_eq!(
+            envelope.event_hash.to_string(),
+            "sha256:088674a66c49436fe9b654ea3d47a434b511c31a635357d947bafb87f41bb021"
+        );
+    }
+
+    #[test]
+    fn snapshot_source_records_require_exact_registered_snapshot_files_and_are_idempotent() {
+        let mut input: Value = serde_json::from_slice(FIXTURE).unwrap();
+        let bytes_by_path = BTreeMap::from([
+            ("src/checkout_controller.rs", b"checkout\n".to_vec()),
+            ("src/payment_repository.rs", b"repository\n".to_vec()),
+        ]);
+        for artifact in input["artifacts"].as_array_mut().unwrap() {
+            if artifact["kind"] == "file" {
+                let path = artifact["location"]["path"].as_str().unwrap();
+                artifact["content_hash"] = Value::String(
+                    ContentHash::sha256(bytes_by_path.get(path).unwrap()).to_string(),
+                );
+            }
+        }
+        let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&input).unwrap()).unwrap();
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let mut aggregate = ReviewAggregate::new(program, universe, obligations).unwrap();
+        let snapshot_id = aggregate.program().snapshot_id().clone();
+        let mut entries = Vec::new();
+        let file_artifacts = aggregate
+            .program()
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+            .cloned()
+            .collect::<Vec<_>>();
+        for artifact in file_artifacts {
+            let path = artifact.location.as_ref().unwrap().path.clone();
+            let hash = artifact.content_hash.clone().unwrap();
+            let source = ArtifactSource::SnapshotIngest {
+                run_id: id("run:source-records"),
+                snapshot_id: snapshot_id.clone(),
+                adapter_id: "fixture-adapter".to_owned(),
+            };
+            let registration = ArtifactRegistered::new(
+                id("run:source-records"),
+                ArtifactRegistered::derived_id(
+                    &id("run:source-records"),
+                    &hash,
+                    "text/plain",
+                    ArtifactSensitivity::WorkspaceSource,
+                    &source,
+                )
+                .unwrap(),
+                hash.clone(),
+                "text/plain",
+                1,
+                ArtifactSensitivity::WorkspaceSource,
+                source,
+            )
+            .unwrap();
+            let registration_id = registration.registration_id().clone();
+            aggregate
+                .register_artifact(&id("run:source-records"), registration)
+                .unwrap();
+            entries.push(
+                SnapshotSourceRecordEntry::new(
+                    artifact.id,
+                    path,
+                    hash.clone(),
+                    registration_id,
+                    hash,
+                    1,
+                )
+                .unwrap(),
+            );
+        }
+        entries.sort_by(|left, right| left.path().cmp(right.path()));
+        let sources = SnapshotSourcesRecorded::new(snapshot_id.clone(), entries.clone()).unwrap();
+        aggregate.record_snapshot_sources(sources.clone()).unwrap();
+        aggregate.record_snapshot_sources(sources).unwrap();
+
+        let mut changed_line = entries.clone();
+        let changed = changed_line[0].clone();
+        changed_line[0] = SnapshotSourceRecordEntry::new(
+            changed.artifact_id().clone(),
+            changed.path(),
+            changed.content_hash().clone(),
+            changed.registration_id().clone(),
+            changed.cas_hash().clone(),
+            2,
+        )
+        .unwrap();
+        assert!(matches!(
+            aggregate.record_snapshot_sources(
+                SnapshotSourcesRecorded::new(snapshot_id.clone(), changed_line).unwrap()
+            ),
+            Err(DomainError::IdCollision { .. })
+        ));
+
+        let mut missing = entries.clone();
+        missing.pop();
+        assert!(
+            aggregate
+                .record_snapshot_sources(
+                    SnapshotSourcesRecorded::new(snapshot_id.clone(), missing).unwrap()
+                )
+                .is_err()
+        );
+        let mut extra = entries.clone();
+        extra.push(
+            SnapshotSourceRecordEntry::new(
+                id("file:extra"),
+                "src/z.rs",
+                ContentHash::sha256(b"z"),
+                entries[0].registration_id().clone(),
+                ContentHash::sha256(b"z"),
+                1,
+            )
+            .unwrap(),
+        );
+        assert!(
+            aggregate
+                .record_snapshot_sources(
+                    SnapshotSourcesRecorded::new(snapshot_id.clone(), extra).unwrap()
+                )
+                .is_err()
+        );
+        let mut duplicate_path = entries.clone();
+        duplicate_path.push(entries[0].clone());
+        assert!(SnapshotSourcesRecorded::new(snapshot_id.clone(), duplicate_path).is_err());
+
+        let dangling = SnapshotSourceRecordEntry::new(
+            entries[0].artifact_id().clone(),
+            entries[0].path(),
+            entries[0].content_hash().clone(),
+            id("registration:missing"),
+            entries[0].cas_hash().clone(),
+            1,
+        )
+        .unwrap();
+        let mut dangling_entries = entries.clone();
+        dangling_entries[0] = dangling;
+        assert!(
+            aggregate
+                .record_snapshot_sources(
+                    SnapshotSourcesRecorded::new(snapshot_id, dangling_entries).unwrap()
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn offline_v2_rejects_legacy_claims_and_completed_transitions() {
+        let log = v2_log("run:offline-v2-legacy");
+        let manifest = log.events[0].envelope.clone();
+        let obligation = log.aggregate().obligations().next().unwrap().id().clone();
+        let claim = ReviewClaim::propose_ai(
+            id("claim:offline-v2-legacy"),
+            id("execution:fixture"),
+            BTreeSet::from([obligation.clone()]),
+            crate::ClaimPolarity::IssuePresent,
+            "v2 must reject legacy claim records",
+            BTreeSet::from([id("function:checkout-submit")]),
+            None,
+        )
+        .unwrap();
+        let claim_event = forged_envelope(
+            EventContractVersion::V2,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            2,
+            manifest.event_hash.clone(),
+            PersistedPayload::ClaimProposed(claim),
+        );
+        let claim_envelopes = [manifest.clone(), claim_event];
+        let genesis_bytes = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let claim_view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            &log.run_id,
+            EventStreamGenesis::V2(&genesis_bytes),
+            &claim_envelopes,
+        )
+        .expect("structurally valid view");
+        let mut claim_projection = OfflineProjectionState::new(&claim_view, aggregate()).unwrap();
+        assert!(claim_projection.apply(&claim_view.events()[0]).unwrap());
+        assert!(claim_projection.apply(&claim_view.events()[1]).is_err());
+
+        let completed_event = forged_envelope(
+            EventContractVersion::V2,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            2,
+            manifest.event_hash.clone(),
+            PersistedPayload::ObligationTransition {
+                obligation_id: obligation,
+                next: ObligationLifecycle::Completed,
+            },
+        );
+        let completed_envelopes = [manifest, completed_event];
+        let completed_view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            &log.run_id,
+            EventStreamGenesis::V2(&genesis_bytes),
+            &completed_envelopes,
+        )
+        .expect("structurally valid view");
+        let mut completed_projection =
+            OfflineProjectionState::new(&completed_view, aggregate()).unwrap();
+        assert!(
+            completed_projection
+                .apply(&completed_view.events()[0])
+                .unwrap()
+        );
+        assert!(
+            completed_projection
+                .apply(&completed_view.events()[1])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn artifact_registration_must_bind_the_enclosing_event_run() {
+        let log = v2_log("run:artifact-owner-a");
+        let manifest = log.events[0].envelope.clone();
+        let source = ArtifactSource::ReviewerExecution {
+            run_id: id("run:artifact-owner-b"),
+            execution_id: id("execution:fixture"),
+            reviewer_id: "fixture-reviewer".to_owned(),
+        };
+        let cas = ContentHash::sha256(b"foreign artifact");
+        let foreign = ArtifactRegistered::new(
+            id("run:artifact-owner-b"),
+            ArtifactRegistered::derived_id(
+                &id("run:artifact-owner-b"),
+                &cas,
+                "text/plain",
+                ArtifactSensitivity::Sensitive,
+                &source,
+            )
+            .unwrap(),
+            cas,
+            "text/plain",
+            16,
+            ArtifactSensitivity::Sensitive,
+            source,
+        )
+        .unwrap();
+        let foreign_event = forged_envelope(
+            EventContractVersion::V2,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            2,
+            manifest.event_hash.clone(),
+            PersistedPayload::ArtifactRegistered(foreign),
+        );
+        let envelopes = [manifest, foreign_event];
+        let bytes = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            log.run_id(),
+            EventStreamGenesis::V2(&bytes),
+            &envelopes,
+        )
+        .unwrap();
+        assert!(
+            EventLog::replay_envelopes(
+                EventContractVersion::V2,
+                log.run_id.clone(),
+                aggregate(),
+                &envelopes,
+                &EventAdmissions::default(),
+            )
+            .is_err()
+        );
+        let mut projection = OfflineProjectionState::new(&view, aggregate()).unwrap();
+        assert!(projection.apply(&view.events()[0]).unwrap());
+        assert!(projection.apply(&view.events()[1]).is_err());
+        assert_eq!(projection.tail_hash(), &envelopes[0].event_hash);
+        assert!(!projection.is_complete());
+    }
+
+    #[test]
+    fn offline_projection_is_bound_to_the_exact_validated_view_events() {
+        let mut log = EventLog::new_v1_for_test(id("run:offline-exact-view"), aggregate()).unwrap();
+        let obligation = log.aggregate().obligations().next().unwrap().id().clone();
+        log.append(EventCommand::obligation_transition(
+            obligation.clone(),
+            ObligationLifecycle::Planned,
+        ))
+        .unwrap();
+        let expected_envelopes = log.envelopes().cloned().collect::<Vec<_>>();
+        let expected_view = EventEnvelope::validated_view(
+            EventContractVersion::V1,
+            log.run_id(),
+            EventStreamGenesis::V1(log.genesis_hash()),
+            &expected_envelopes,
+        )
+        .unwrap();
+        let fork = forged_envelope(
+            EventContractVersion::V1,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            1,
+            expected_envelopes[0].previous_event_hash.clone(),
+            PersistedPayload::ObligationTransition {
+                obligation_id: obligation,
+                next: ObligationLifecycle::InProgress,
+            },
+        );
+        let fork_envelopes = [fork];
+        let fork_view = EventEnvelope::validated_view(
+            EventContractVersion::V1,
+            log.run_id(),
+            EventStreamGenesis::V1(log.genesis_hash()),
+            &fork_envelopes,
+        )
+        .unwrap();
+        let mut projection = OfflineProjectionState::new(&expected_view, aggregate()).unwrap();
+        assert!(projection.apply(&fork_view.events()[0]).is_err());
+        assert_eq!(
+            projection.tail_hash(),
+            &expected_envelopes[0].previous_event_hash
+        );
+        assert!(!projection.is_complete());
+        assert!(projection.apply(&expected_view.events()[0]).unwrap());
+        assert!(projection.is_complete());
+        assert_eq!(projection.tail_hash(), &expected_envelopes[0].event_hash);
+        assert!(projection.apply(&expected_view.events()[0]).is_err());
+    }
+
+    #[test]
+    fn offline_authority_metadata_must_validate_before_it_is_unreconciled() {
+        let initial = aggregate();
+        let run_id = id("run:offline-dangling-authority");
+        let legacy =
+            EventLog::new_with_version(EventContractVersion::V1, run_id.clone(), initial.clone())
+                .unwrap();
+        let source = SourceRef::new(
+            "tool",
+            "fixture-verifier@1",
+            Some("1".to_owned()),
+            None,
+            None,
+        )
+        .unwrap();
+        let provenance = Provenance::accepted_deterministic(
+            source,
+            "fixture.verifier.v1",
+            Some("1".to_owned()),
+            Some(1.0),
+        )
+        .unwrap();
+        let evidence = Evidence::new(
+            id("evidence:offline-dangling"),
+            "static_fact",
+            BTreeSet::from([id("function:missing")]),
+            EvidenceDetails::new(None, None, BTreeMap::new()),
+            provenance.clone(),
+            initial.program().evidence_snapshot_admission(),
+        )
+        .unwrap();
+        let envelope = forged_envelope(
+            EventContractVersion::V1,
+            run_id,
+            legacy.genesis_hash.clone(),
+            1,
+            legacy.tail_hash.clone(),
+            PersistedPayload::EvidenceRecorded(Box::new(evidence)),
+        );
+        let envelopes = [envelope];
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V1,
+            legacy.run_id(),
+            EventStreamGenesis::V1(legacy.genesis_hash()),
+            &envelopes,
+        )
+        .expect("shape-valid envelope view");
+        let mut projection = OfflineProjectionState::new(&view, initial.clone()).unwrap();
+        assert!(projection.apply(&view.events()[0]).is_err());
+        assert_eq!(projection.aggregate().claims().count(), 0);
+
+        let accepted_target = Evidence::new(
+            id("evidence:offline-shadow"),
+            "static_fact",
+            BTreeSet::from([id("function:checkout-submit")]),
+            EvidenceDetails::new(None, None, BTreeMap::new()),
+            provenance,
+            projection
+                .aggregate()
+                .program()
+                .evidence_snapshot_admission(),
+        )
+        .unwrap();
+        let accepted_envelope = forged_envelope(
+            EventContractVersion::V1,
+            legacy.run_id.clone(),
+            legacy.genesis_hash.clone(),
+            1,
+            legacy.tail_hash.clone(),
+            PersistedPayload::EvidenceRecorded(Box::new(accepted_target)),
+        );
+        let accepted_envelopes = [accepted_envelope];
+        let accepted_view = EventEnvelope::validated_view(
+            EventContractVersion::V1,
+            legacy.run_id(),
+            EventStreamGenesis::V1(legacy.genesis_hash()),
+            &accepted_envelopes,
+        )
+        .unwrap();
+        let mut accepted_projection = OfflineProjectionState::new(&accepted_view, initial).unwrap();
+        assert!(
+            !accepted_projection
+                .apply(&accepted_view.events()[0])
+                .unwrap()
+        );
+        let metadata = accepted_projection.unreconciled_records();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata[0].kind(), UnreconciledRecordKind::Evidence);
+        assert_eq!(metadata[0].id(), &id("evidence:offline-shadow"));
+        assert!(!metadata[0].authority_reconciled());
+        assert_eq!(accepted_projection.aggregate().claims().count(), 0);
+    }
+
+    #[test]
+    fn offline_shadow_replays_the_complete_authority_chain_without_accepting_it() {
+        let initial = aggregate();
+        let observed = initial.program().clone();
+        let mut log =
+            EventLog::new_v1_for_test(id("run:offline-shadow-chain"), initial.clone()).unwrap();
+        let obligation = log
+            .aggregate()
+            .obligations()
+            .find(|item| item.target_kind() == "node")
+            .unwrap()
+            .id()
+            .clone();
+        let claim = ReviewClaim::propose_ai(
+            id("claim:offline-shadow-chain"),
+            id("execution:fixture"),
+            BTreeSet::from([obligation]),
+            ClaimPolarity::IssuePresent,
+            "offline shadow chain",
+            BTreeSet::from([id("state:checkout-loading")]),
+            Some(1.0),
+        )
+        .unwrap();
+        let claim_id = claim.id().clone();
+        log.append(EventCommand::claim_proposed(claim)).unwrap();
+        let evidence = Evidence::new(
+            id("evidence:offline-shadow-chain"),
+            "static_fact",
+            BTreeSet::from([id("function:checkout-submit")]),
+            EvidenceDetails::new(None, None, BTreeMap::new()),
+            Provenance::accepted_deterministic(
+                SourceRef::new(
+                    "tool",
+                    "fixture-verifier@1",
+                    Some("1".to_owned()),
+                    None,
+                    None,
+                )
+                .unwrap(),
+                "fixture.verifier.v1",
+                Some("1".to_owned()),
+                Some(1.0),
+            )
+            .unwrap(),
+            observed.evidence_snapshot_admission(),
+        )
+        .unwrap();
+        let evidence_id = evidence.id().clone();
+        let evidence_admission = log
+            .admit_evidence(&observed.evidence_snapshot_admission(), &evidence)
+            .unwrap();
+        log.append(EventCommand::evidence_recorded(
+            evidence,
+            evidence_admission,
+        ))
+        .unwrap();
+        let binding = EvidenceBinding::new(
+            id("binding:offline-shadow-chain"),
+            claim_id.clone(),
+            evidence_id.clone(),
+            EvidenceRelation::Reproduces,
+            BTreeMap::from([(
+                "property_id".to_owned(),
+                "async.concurrent_reentry".to_owned(),
+            )]),
+        )
+        .unwrap();
+        let binding_admission = log.admit_evidence_binding(&binding).unwrap();
+        log.append(EventCommand::evidence_bound(binding, binding_admission))
+            .unwrap();
+        let verification = Verification::new(
+            id("verification:offline-shadow-chain"),
+            claim_id.clone(),
+            VerificationOutcome::Passed,
+            "fixture-verifier@1",
+            BTreeSet::from([evidence_id.clone()]),
+        )
+        .unwrap();
+        let verification_id = verification.id().clone();
+        let verification_admission = log.admit_verification(verification.clone()).unwrap();
+        log.append(EventCommand::verification_recorded(
+            verification,
+            verification_admission,
+        ))
+        .unwrap();
+        let human =
+            TrustedHumanAdmission::from_trusted_host("human:reviewer", "reviewer:fixture").unwrap();
+        let decision = Decision::human(
+            id("decision:offline-shadow-chain"),
+            claim_id.clone(),
+            DecisionOutcome::Accept,
+            human.clone(),
+            "joined trace is accepted",
+            BTreeSet::from([
+                claim_id.clone(),
+                evidence_id.clone(),
+                verification_id.clone(),
+            ]),
+        )
+        .unwrap();
+        let decision_admission = log.admit_decision(&human, &decision).unwrap();
+        log.append(EventCommand::decision_recorded(
+            decision,
+            decision_admission,
+        ))
+        .unwrap();
+        log.append(EventCommand::finding_recorded(Finding::new(
+            id("finding:offline-shadow-chain"),
+            claim_id.clone(),
+            FindingStatus::Accepted,
+            FindingTrace::new(
+                BTreeSet::from([evidence_id.clone()]),
+                BTreeSet::from([verification_id.clone()]),
+                Some(id("decision:offline-shadow-chain")),
+                BTreeSet::from([id("state:checkout-loading")]),
+            ),
+        )))
+        .unwrap();
+
+        let envelopes = log.envelopes().cloned().collect::<Vec<_>>();
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V1,
+            log.run_id(),
+            EventStreamGenesis::V1(log.genesis_hash()),
+            &envelopes,
+        )
+        .unwrap();
+        let mut projection = OfflineProjectionState::new(&view, initial.clone()).unwrap();
+        assert!(projection.apply(&view.events()[0]).unwrap());
+        for event in &view.events()[1..] {
+            assert!(!projection.apply(event).unwrap());
+        }
+        let metadata = projection.unreconciled_records();
+        assert_eq!(
+            metadata.iter().map(|item| item.kind()).collect::<Vec<_>>(),
+            vec![
+                UnreconciledRecordKind::Evidence,
+                UnreconciledRecordKind::EvidenceBinding,
+                UnreconciledRecordKind::Verification,
+                UnreconciledRecordKind::Decision,
+            ]
+        );
+        assert_eq!(
+            metadata
+                .iter()
+                .map(|item| item.id().clone())
+                .collect::<Vec<_>>(),
+            vec![
+                id("evidence:offline-shadow-chain"),
+                id("binding:offline-shadow-chain"),
+                id("verification:offline-shadow-chain"),
+                id("decision:offline-shadow-chain"),
+            ]
+        );
+        for (item, event) in metadata.iter().zip(&view.events()[1..5]) {
+            assert_eq!(item.body_hash(), &event.envelope().payload_hash);
+            assert!(!item.authority_reconciled());
+        }
+        let findings = projection.projected_findings();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].id(), &id("finding:offline-shadow-chain"));
+        assert_eq!(
+            findings[0].body_hash(),
+            &view.events()[5].envelope().payload_hash
+        );
+        assert_eq!(projection.aggregate().claims().count(), 1);
+        assert_eq!(projection.aggregate().bindings().count(), 0);
+        assert_eq!(projection.aggregate().verifications().count(), 0);
+        assert_eq!(projection.aggregate().decisions().count(), 0);
+        assert_eq!(projection.aggregate().findings().count(), 0);
+
+        let claim_envelope = envelopes[0].clone();
+        let bad_payloads = vec![
+            PersistedPayload::EvidenceBound(
+                EvidenceBinding::new(
+                    id("binding:offline-dangling"),
+                    claim_id.clone(),
+                    id("evidence:missing"),
+                    EvidenceRelation::Supports,
+                    BTreeMap::from([(
+                        "property_id".to_owned(),
+                        "async.concurrent_reentry".to_owned(),
+                    )]),
+                )
+                .unwrap(),
+            ),
+            PersistedPayload::VerificationRecorded(
+                Verification::new(
+                    id("verification:offline-dangling"),
+                    claim_id.clone(),
+                    VerificationOutcome::Passed,
+                    "fixture-verifier@1",
+                    BTreeSet::from([id("evidence:missing")]),
+                )
+                .unwrap(),
+            ),
+            PersistedPayload::DecisionRecorded(
+                Decision::human(
+                    id("decision:offline-dangling"),
+                    claim_id.clone(),
+                    DecisionOutcome::Accept,
+                    human,
+                    "missing joined trace",
+                    BTreeSet::from([claim_id.clone(), id("evidence:missing")]),
+                )
+                .unwrap(),
+            ),
+            PersistedPayload::FindingRecorded(Finding::new(
+                id("finding:offline-dangling"),
+                claim_id,
+                FindingStatus::Accepted,
+                FindingTrace::new(
+                    BTreeSet::from([id("evidence:missing")]),
+                    BTreeSet::from([id("verification:missing")]),
+                    Some(id("decision:missing")),
+                    BTreeSet::from([id("state:checkout-loading")]),
+                ),
+            )),
+        ];
+        for payload in bad_payloads {
+            let invalid = forged_envelope(
+                EventContractVersion::V1,
+                log.run_id.clone(),
+                log.genesis_hash.clone(),
+                2,
+                claim_envelope.event_hash.clone(),
+                payload,
+            );
+            let invalid_envelopes = [claim_envelope.clone(), invalid];
+            let invalid_view = EventEnvelope::validated_view(
+                EventContractVersion::V1,
+                log.run_id(),
+                EventStreamGenesis::V1(log.genesis_hash()),
+                &invalid_envelopes,
+            )
+            .unwrap();
+            let mut invalid_projection =
+                OfflineProjectionState::new(&invalid_view, initial.clone()).unwrap();
+            assert!(invalid_projection.apply(&invalid_view.events()[0]).unwrap());
+            assert!(invalid_projection.apply(&invalid_view.events()[1]).is_err());
+            assert!(invalid_projection.unreconciled_records().is_empty());
+            assert_eq!(invalid_projection.aggregate().claims().count(), 1);
+            assert_eq!(invalid_projection.tail_hash(), &claim_envelope.event_hash);
+            assert!(!invalid_projection.is_complete());
+        }
     }
 }

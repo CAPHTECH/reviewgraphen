@@ -16,11 +16,23 @@ mod review;
 mod source;
 mod synthesize;
 
+// M1 exercises crate-private legacy replay scaffolding. Keeping it inside the
+// crate prevents that compatibility builder from becoming a public API.
+#[cfg(test)]
+extern crate self as reviewgraphen_core;
+#[cfg(test)]
+#[path = "../tests/m1.rs"]
+mod m1_tests;
+
 pub use canonical::{CanonicalJson, canonical_hash, canonical_json, canonical_json_value};
 pub use coverage::{Coverage, CoverageMeasure, Ratio};
 pub use error::{DomainError, Result};
 pub use event::{
-    Event, EventAdmissions, EventCommand, EventEnvelope, EventLog, EvidenceBindingAdmission,
+    ArtifactRegistered, ArtifactSensitivity, ArtifactSource, DecodedPayload, Event,
+    EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
+    EventStreamGenesis, EvidenceBindingAdmission, OfflineProjectionState, ProjectedFindingMetadata,
+    RunGenesisManifest, RunGenesisSnapshot, SnapshotSourceRecordEntry, SnapshotSourcesRecorded,
+    UnreconciledRecordKind, UnreconciledRecordMetadata, ValidatedEvent, ValidatedEventView,
     VerificationAdmission,
 };
 pub use id::{ContentHash, IdRegistry, StableId, VersionTuple};

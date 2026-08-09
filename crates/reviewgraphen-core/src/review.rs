@@ -1,5 +1,6 @@
 use crate::{
-    DomainError, Evidence, ProgramSpace, Result, StableId, UniverseDescriptor, VersionTuple,
+    ArtifactRegistered, DomainError, Evidence, ProgramSpace, Result, RunGenesisManifest,
+    SnapshotSourcesRecorded, StableId, UniverseDescriptor, VersionTuple,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -193,7 +194,8 @@ pub enum FindingStatus {
 }
 
 /// A deterministic, version-bound obligation. It is not a reviewer conclusion.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Obligation {
     id: StableId,
     target_kind: String,
@@ -330,6 +332,44 @@ impl Obligation {
             source_ids: parts.source_ids,
             normalized_source_ids: parts.normalized_source_ids,
         })
+    }
+
+    /// Re-runs every constructor invariant after deserializing a durable DTO.
+    /// Lifecycle is event-owned mutable state, so it is checked separately
+    /// from the immutable obligation definition reconstructed here.
+    pub(crate) fn validate_full(&self) -> Result<()> {
+        let rebuilt = Self::new(ObligationParts {
+            id: self.id.clone(),
+            target_kind: self.target_kind.clone(),
+            target_refs: self.target_refs.clone(),
+            normalized_target_refs: self.normalized_target_refs.clone(),
+            semantic_key: self.semantic_key.clone(),
+            property_id: self.property_id.clone(),
+            property_version: self.property_version.clone(),
+            context_ids: self.context_ids.clone(),
+            normalized_context_ids: self.normalized_context_ids.clone(),
+            required_capabilities: self.required_capabilities.clone(),
+            evidence_required: self.evidence_required,
+            accepted_evidence_modes: self.accepted_evidence_modes.clone(),
+            applicability_status: self.applicability_status.clone(),
+            applicability_reasons: self.applicability_reasons.clone(),
+            qualification_ids: self.qualification_ids.clone(),
+            weight: self.weight,
+            version: self.version.clone(),
+            depends_on: self.depends_on.clone(),
+            normalized_depends_on: self.normalized_depends_on.clone(),
+            generator_ids: self.generator_ids.clone(),
+            source_ids: self.source_ids.clone(),
+            normalized_source_ids: self.normalized_source_ids.clone(),
+        })?;
+        let mut expected = self.clone();
+        expected.lifecycle = ObligationLifecycle::Generated;
+        if rebuilt != expected {
+            return Err(DomainError::Validation(
+                "obligations must retain their constructor-valid definition".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     /// Stable obligation ID.
@@ -1421,6 +1461,12 @@ pub struct ReviewAggregate {
     verifications: BTreeMap<StableId, Verification>,
     decisions: BTreeMap<StableId, Decision>,
     findings: BTreeMap<StableId, Finding>,
+    #[serde(skip)]
+    genesis_manifest: Option<RunGenesisManifest>,
+    #[serde(skip)]
+    registered_artifacts: BTreeMap<StableId, ArtifactRegistered>,
+    #[serde(skip)]
+    snapshot_sources: BTreeMap<StableId, SnapshotSourcesRecorded>,
 }
 
 impl ReviewAggregate {
@@ -1458,6 +1504,9 @@ impl ReviewAggregate {
             verifications: BTreeMap::new(),
             decisions: BTreeMap::new(),
             findings: BTreeMap::new(),
+            genesis_manifest: None,
+            registered_artifacts: BTreeMap::new(),
+            snapshot_sources: BTreeMap::new(),
         };
         aggregate.validate()?;
         Ok(aggregate)
@@ -1479,6 +1528,7 @@ impl ReviewAggregate {
             insert_unique(&mut all_ids, id)?;
         }
         for obligation in self.obligations.values() {
+            obligation.validate_full()?;
             if obligation.version.snapshot() != self.program.snapshot_id() {
                 return Err(DomainError::Validation(
                     "obligation version tuple must bind the current snapshot".to_owned(),
@@ -1713,6 +1763,137 @@ impl ReviewAggregate {
                     .to_owned(),
             ));
         }
+        Ok(())
+    }
+
+    pub(crate) fn record_genesis_manifest(
+        &mut self,
+        expected_run_id: &StableId,
+        manifest: RunGenesisManifest,
+    ) -> Result<()> {
+        if manifest.run_id() != expected_run_id
+            || manifest.genesis_artifact().run_id() != expected_run_id
+        {
+            return Err(DomainError::Validation(
+                "genesis manifest artifacts must bind the enclosing event run".to_owned(),
+            ));
+        }
+        if self.genesis_manifest.is_some() {
+            return Err(DomainError::IdCollision {
+                id: manifest.run_id().clone(),
+            });
+        }
+        if manifest.snapshot_id() != self.program.snapshot_id() {
+            return Err(DomainError::Validation(
+                "genesis manifest snapshot must match the aggregate snapshot".to_owned(),
+            ));
+        }
+        self.register_artifact(expected_run_id, manifest.genesis_artifact().clone())?;
+        self.genesis_manifest = Some(manifest);
+        Ok(())
+    }
+
+    pub(crate) fn register_artifact(
+        &mut self,
+        expected_run_id: &StableId,
+        registration: ArtifactRegistered,
+    ) -> Result<()> {
+        if registration.run_id() != expected_run_id {
+            return Err(DomainError::Validation(
+                "artifact registration must bind the enclosing event run".to_owned(),
+            ));
+        }
+        let id = registration.registration_id().clone();
+        if let Some(existing) = self.registered_artifacts.get(&id) {
+            if existing != &registration {
+                return Err(DomainError::IdCollision { id });
+            }
+            return Ok(());
+        }
+        self.registered_artifacts.insert(id, registration);
+        Ok(())
+    }
+
+    pub(crate) fn record_snapshot_sources(
+        &mut self,
+        sources: SnapshotSourcesRecorded,
+    ) -> Result<()> {
+        if sources.snapshot_id() != self.program.snapshot_id() {
+            return Err(DomainError::Validation(
+                "snapshot source record must name the aggregate snapshot".to_owned(),
+            ));
+        }
+        let expected = self
+            .program
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+            .map(|artifact| {
+                let location = artifact.location.as_ref().ok_or_else(|| {
+                    DomainError::Validation("accepted file artifact has no location".to_owned())
+                })?;
+                let content_hash = artifact.content_hash.as_ref().ok_or_else(|| {
+                    DomainError::Validation("accepted file artifact has no content hash".to_owned())
+                })?;
+                Ok((
+                    artifact.id.clone(),
+                    (location.path.clone(), content_hash.clone()),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let actual = sources
+            .entries()
+            .iter()
+            .map(|entry| {
+                let registration = self
+                    .registered_artifacts
+                    .get(entry.registration_id())
+                    .ok_or_else(|| DomainError::DanglingReference {
+                        owner: "snapshot source",
+                        owner_id: entry.artifact_id().clone(),
+                        reference: entry.registration_id().clone(),
+                    })?;
+                if registration.cas_hash() != entry.cas_hash() {
+                    return Err(DomainError::DanglingReference {
+                        owner: "snapshot source",
+                        owner_id: entry.artifact_id().clone(),
+                        reference: entry.registration_id().clone(),
+                    });
+                }
+                if registration.sensitivity() != crate::ArtifactSensitivity::WorkspaceSource
+                    || !matches!(
+                        registration.source(),
+                        crate::ArtifactSource::SnapshotIngest {
+                            run_id: _,
+                            snapshot_id,
+                            adapter_id,
+                        } if snapshot_id == sources.snapshot_id() && !adapter_id.trim().is_empty()
+                    )
+                {
+                    return Err(DomainError::Validation(
+                        "snapshot source registrations must be workspace-source snapshot-ingest artifacts"
+                            .to_owned(),
+                    ));
+                }
+                Ok((
+                    entry.artifact_id().clone(),
+                    (entry.path().to_owned(), entry.content_hash().clone()),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        if actual != expected {
+            return Err(DomainError::Validation(
+                "snapshot source records must exactly match accepted file artifacts".to_owned(),
+            ));
+        }
+        let snapshot = sources.snapshot_id().clone();
+        if let Some(existing) = self.snapshot_sources.get(&snapshot) {
+            if existing != &sources {
+                return Err(DomainError::IdCollision { id: snapshot });
+            }
+            return Ok(());
+        }
+        self.snapshot_sources.insert(snapshot, sources);
         Ok(())
     }
 

@@ -123,6 +123,10 @@ Implement this first and commit it independently.
 
 Implement and commit separately from Unit A.
 
+Status: implemented pending commit/review. The working tree includes the v2 event/genesis/source
+contract, exact-view offline projection, run-bound artifact registrations, and authority-shadow
+metadata boundary; validate and review the combined diff before treating this unit as complete.
+
 - Introduce `EventContractVersion::{V1, V2}` and store it in `EventLog`.
 - New logs mint v2; imported v1 remains read-only. One stream cannot mix schema tags.
 - Pass the selected schema into `event_id`/`envelope_hash`; do not replace the global constant in a
@@ -140,6 +144,9 @@ Implement and commit separately from Unit A.
   reading CAS bytes.
 - Preserve authority boundaries. `EvidenceRecorded` is gated by `EvidenceAdmission`; store code may
   not mint any admission.
+- `OfflineProjectionState::apply` returns `true` only for authority-free aggregate application;
+  authority events are unreconciled shadow metadata, while authority-free `FindingRecorded` is
+  separate projected metadata validated against that shadow.
 
 ### Unit C: durable store
 
@@ -164,6 +171,8 @@ Create `reviewgraphen-store` as a new workspace crate depending on core only.
 - Hold the log shared lock from tail comparison through a current-state query to close the append
   TOCTOU.
 - V1 supports event-metadata-only rebuild; full domain rebuild requires a fresh v2 import.
+- Reject an empty durable v2 log during store admission/recovery: v2 requires the sequence-one
+  `RunGenesisManifest`; do not synthesize one during rebuild.
 
 ### Unit D: deterministic planning/context/reviewer
 
