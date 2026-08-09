@@ -112,6 +112,17 @@ executable for this repository's own test suite:
   canonicalized and checked to have the literal basename `cargo`, matching
   `admit_cargo_executable`'s own posture in
   `crates/reviewgraphen-ingest/src/git.rs`.
+- **The repository fast gate uses the same external handoff.**
+  `scripts/ci.sh fast` validates an already-supplied
+  `REVIEWGRAPHEN_TRUSTED_CARGO` as a single-line absolute, executable regular
+  file named exactly `cargo`; local invocations without it may obtain it only
+  through `mise run trusted-cargo-path`. The workflow performs the equivalent
+  host action after explicitly installing Rust 1.95.0 with `rustup`, then
+  exports the validated path through `GITHUB_ENV`. Thus neither a CI checkout
+  nor the crate runtime can select Cargo from ambient `PATH`, and the local
+  fallback remains a resolver, not an installer. A small shell regression
+  test covers the supplied-path branch, the mise fallback, and rejection of a
+  newline-bearing value before it can enter an environment-file handoff.
 - **`reviewgraphen-ingest`'s own code is untouched.** It still never reads
   `mise.toml`, never spawns `mise`, and never reads `REVIEWGRAPHEN_TRUSTED_CARGO`
   itself -- only the test harness above does, and only to build an ordinary
@@ -138,6 +149,8 @@ executable for this repository's own test suite:
 - `mise run test-ingest` gives a reproducible, explicitly-installed toolchain
   path for `reviewgraphen-ingest`'s Cargo-metadata tests, independent of
   whatever `cargo` a developer's shell happens to default to.
+- The ordinary fast CI command exercises the same admission contract instead
+  of relying on a separately documented, optional test command.
 - Every mise-mediated auto-install path -- including task activation, via
   `task.run_auto_install = false` -- is disabled at both the project
   (`mise.toml`) and script (`MISE_*_AUTO_INSTALL`/`MISE_OFFLINE`) level, so

@@ -22,6 +22,31 @@ require_cargo_subcommand() {
   fi
 }
 
+admit_ingest_test_cargo() {
+  local trusted_cargo="${REVIEWGRAPHEN_TRUSTED_CARGO:-}"
+
+  # `reviewgraphen-ingest` must never discover Cargo itself. The fast gate is
+  # its external test harness, so CI supplies an already-admitted absolute
+  # path and local runs use the explicit mise harness only when one was not
+  # supplied. The mise task has auto-install disabled and fails closed if the
+  # pinned toolchain was not installed explicitly beforehand.
+  if [[ -z "$trusted_cargo" ]]; then
+    if ! command -v mise >/dev/null 2>&1; then
+      printf '%s\n' \
+        'missing REVIEWGRAPHEN_TRUSTED_CARGO; export a host-admitted absolute Cargo path, or run `mise install` once and retry (see DEVELOPMENT.md)' >&2
+      exit 127
+    fi
+    trusted_cargo="$(mise run trusted-cargo-path)"
+  fi
+
+  if [[ "$trusted_cargo" == *$'\r'* || "$trusted_cargo" == *$'\n'* || "$trusted_cargo" != /* || ! -f "$trusted_cargo" || ! -x "$trusted_cargo" || "$(basename -- "$trusted_cargo")" != "cargo" ]]; then
+    printf 'invalid REVIEWGRAPHEN_TRUSTED_CARGO: %s\n' "$trusted_cargo" >&2
+    exit 64
+  fi
+
+  export REVIEWGRAPHEN_TRUSTED_CARGO="$trusted_cargo"
+}
+
 check_reviewed_test_artifacts() {
   local changes
 
@@ -66,6 +91,8 @@ run_rustfmt() {
 
 run_fast() {
   python3 scripts/validate_bundle.py
+  bash scripts/test-ci-admission.sh
+  admit_ingest_test_cargo
   run_rustfmt
   cargo clippy --workspace --all-targets --all-features -- \
     -D warnings \
@@ -107,27 +134,29 @@ run_deny() {
   cargo deny check --config deny.toml
 }
 
-case "$MODE" in
-  fast)
-    run_fast
-    ;;
-  coverage)
-    run_coverage
-    ;;
-  deny)
-    run_deny
-    ;;
-  heavy)
-    run_deny
-    run_coverage
-    ;;
-  scheduled)
-    run_fast
-    run_deny
-    run_coverage
-    ;;
-  *)
-    printf 'usage: %s [fast|coverage|deny|heavy|scheduled]\n' "$0" >&2
-    exit 64
-    ;;
-esac
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  case "$MODE" in
+    fast)
+      run_fast
+      ;;
+    coverage)
+      run_coverage
+      ;;
+    deny)
+      run_deny
+      ;;
+    heavy)
+      run_deny
+      run_coverage
+      ;;
+    scheduled)
+      run_fast
+      run_deny
+      run_coverage
+      ;;
+    *)
+      printf 'usage: %s [fast|coverage|deny|heavy|scheduled]\n' "$0" >&2
+      exit 64
+      ;;
+  esac
+fi

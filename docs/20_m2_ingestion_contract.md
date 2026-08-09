@@ -452,7 +452,12 @@ without mise at all; only tests whose own assertions depend on a Cargo
 metadata result (a `package` artifact, a `depends_on` relation, or a
 `cargo_metadata` capability other than `missing`) call the separate
 `request_with_trusted_cargo()` helper, which requires
-`REVIEWGRAPHEN_TRUSTED_CARGO`. Every mise-mediated auto-install path is
+`REVIEWGRAPHEN_TRUSTED_CARGO`. `scripts/ci.sh fast` carries the same
+admission into its workspace test run: local fast runs resolve it through
+`mise run trusted-cargo-path` when the variable is absent, while CI exports a
+host-resolved absolute path after explicit toolchain setup. Both are external
+to `reviewgraphen-ingest`; neither creates a runtime discovery path. Every
+mise-mediated auto-install path is
 disabled (`mise.toml`'s `[settings]` -- `auto_install`, `exec_auto_install`,
 `not_found_auto_install`, and `task.run_auto_install`, all `false` -- and the
 resolver script's own exported

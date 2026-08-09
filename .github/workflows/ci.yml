@@ -49,6 +49,16 @@ jobs:
           rustup toolchain install 1.95.0 --profile minimal
           rustup component add --toolchain 1.95.0 rustfmt clippy
 
+      - name: Admit pinned Cargo for ingestion E2E tests
+        run: |
+          trusted_cargo="$(rustup which --toolchain 1.95.0 cargo)"
+          test "${trusted_cargo#/}" != "$trusted_cargo"
+          test -f "$trusted_cargo"
+          test -x "$trusted_cargo"
+          test "$(basename -- "$trusted_cargo")" = cargo
+          test "$trusted_cargo" = "$(printf '%s' "$trusted_cargo" | tr -d '\r\n')"
+          printf 'REVIEWGRAPHEN_TRUSTED_CARGO=%s\n' "$trusted_cargo" >> "$GITHUB_ENV"
+
       - name: Install nextest
         run: cargo +1.95.0 install cargo-nextest --locked --version 0.9.137
 
@@ -81,6 +91,16 @@ jobs:
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup component add --toolchain 1.95.0 rustfmt clippy llvm-tools-preview
+
+      - name: Admit pinned Cargo for ingestion E2E tests
+        run: |
+          trusted_cargo="$(rustup which --toolchain 1.95.0 cargo)"
+          test "${trusted_cargo#/}" != "$trusted_cargo"
+          test -f "$trusted_cargo"
+          test -x "$trusted_cargo"
+          test "$(basename -- "$trusted_cargo")" = cargo
+          test "$trusted_cargo" = "$(printf '%s' "$trusted_cargo" | tr -d '\r\n')"
+          printf 'REVIEWGRAPHEN_TRUSTED_CARGO=%s\n' "$trusted_cargo" >> "$GITHUB_ENV"
 
       - name: Install scheduled check tools
         run: |

@@ -114,6 +114,19 @@ runs every test that does not itself assert on a Cargo-metadata-derived
 fact. `mise run test-ingest` is required only for the tests that call the
 separate `request_with_trusted_cargo()` helper.
 
+`scripts/ci.sh fast` runs this same Cargo-metadata E2E coverage through its
+workspace suite. If `REVIEWGRAPHEN_TRUSTED_CARGO` is absent locally, the
+development harness calls `mise run trusted-cargo-path` to obtain the one
+already-installed, host-admitted path; this is resolution only and fails
+closed rather than installing a toolchain. CI resolves and exports its own
+absolute path after explicit toolchain setup. That host action is outside
+`reviewgraphen-ingest`; the ingestion runtime still never discovers a Cargo
+executable. To make the local admission explicit instead, run:
+
+```bash
+REVIEWGRAPHEN_TRUSTED_CARGO="$(mise run trusted-cargo-path)" scripts/ci.sh fast
+```
+
 Neither `mise run trusted-cargo-path` nor `mise run test-ingest` ever
 installs `rust@1.95.0`: both fail with an explicit error directing you back
 to `mise install` if it is not already present. `mise.toml`'s
