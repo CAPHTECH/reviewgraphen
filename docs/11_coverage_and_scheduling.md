@@ -51,7 +51,11 @@ reviewerへ実際に渡したobligation。
 
 ### 3.4 Completion coverage
 
-structured resultまたはvalid abstentionを得たobligation。
+structured resultを得たobligationのみ。有効なabstention、malformed output、provider failureは
+`visited`のまま残り、`completed`には含めない
+（[ADR 0013](adr/0013-m3-plan-context-and-reviewer-contract.md)）。これは`docs/09`
+§9「abstentionはcoverageを`visited`まで進めても`completed`や`verified`へ進めません」、および
+`docs/07`§14「obligationの`completed`は、reviewerが構造化結果を返したことを意味します」と一致する。
 
 ### 3.5 Evidence coverage
 
