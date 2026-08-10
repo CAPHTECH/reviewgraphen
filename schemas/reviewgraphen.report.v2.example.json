@@ -1,0 +1,161 @@
+{
+  "schema": "reviewgraphen.review.report.v2",
+  "report_type": "review",
+  "report_version": 2,
+  "metadata": {
+    "report_id": "report:d2-abstention-example",
+    "run_id": "run:d2-abstention-example",
+    "profile_id": "code-review@1",
+    "rule_set_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "extractor_set_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "policy_version": "d2.fake@1",
+    "event_contract_version": "reviewgraphen.review_event.v2",
+    "index_projection_version": "reviewgraphen.index_projection.v3",
+    "genesis_hash": "sha256:1842950329a453413b7b4019c14dd18e56ae56292071845b2bdd2aa5819424bc",
+    "confirmed_offset": 6761,
+    "confirmed_tail_hash": "sha256:f060f5a430d33575bc2a093b652af8d1132cc38e65d477461baa09f2fbbebed9",
+    "confirmed_event_count": 7,
+    "tool_versions": { "reviewgraphen.fake-reviewer": "1" }
+  },
+  "scenario": {
+    "repository_id": "repository:d2-abstention-example",
+    "snapshot_id": "snapshot:d2-abstention-example",
+    "program_space_ref": "artifact:d2-program-space-example",
+    "universe_id": "universe:d2-abstention-example",
+    "plan_id": "plan:d2-abstention-example",
+    "selected_obligation_ids": ["obligation:d2-abstention-example"],
+    "artifact_registration_ids": ["registration:sha256:6b97f0c8774546dbdc3a033945f1e52af9bf276ec5997632645ed28ab5e479af"]
+  },
+  "result": {
+    "status": "partial",
+    "artifact_registrations": [
+      {
+        "event_sequence": 6,
+        "event_id": "event:sha256:48b24ed9be3a4e28324943a74ebbb10c50ce0a56f4741b055df900a11bd69f9c",
+        "run_id": "run:d2-abstention-example",
+        "registration_id": "registration:sha256:6b97f0c8774546dbdc3a033945f1e52af9bf276ec5997632645ed28ab5e479af",
+        "cas_hash": "sha256:27d5941642c432f2d0b588a4aa7761005af04da7d8062ac2be23a27d95331a30",
+        "media_type": "application/json",
+        "size": 281,
+        "sensitivity": "sensitive",
+        "source": {
+          "kind": "reviewer_execution",
+          "run_id": "run:d2-abstention-example",
+          "execution_id": "execution:sha256:cdf45e445e0931d64f219ab75fc0241df6bd597303cef4949437ab6d298b94d8",
+          "reviewer_id": "reviewgraphen.fake_reviewer@1"
+        }
+      }
+    ],
+    "executions": [
+      {
+        "event_sequence": 7,
+        "event_id": "event:sha256:2faa430754debeaea9219dfa283439c0f93d437d5abb746924756f7e68836edd",
+        "id": "execution:sha256:cdf45e445e0931d64f219ab75fc0241df6bd597303cef4949437ab6d298b94d8",
+        "plan_id": "plan:d2-abstention-example",
+        "wave_id": "schedule-wave:d2-abstention-example",
+        "obligation_ids": ["obligation:d2-abstention-example"],
+        "envelope_id": "context-envelope:d2-abstention-example",
+        "snapshot_id": "snapshot:d2-abstention-example",
+        "reviewer_kind": "fake",
+        "reviewer_id": "reviewgraphen.fake_reviewer@1",
+        "provider": null,
+        "model": null,
+        "model_revision": null,
+        "system_prompt_version": "reviewgraphen.system.no_tools@1",
+        "prompt_template_version": "fixture@1",
+        "inference_settings": {},
+        "tool_policy_version": "reviewgraphen.tool_policy.none@1",
+        "tool_calls": [],
+        "attempt": 1,
+        "raw_artifact_registration_id": "registration:sha256:6b97f0c8774546dbdc3a033945f1e52af9bf276ec5997632645ed28ab5e479af",
+        "raw_artifact_hash": "sha256:27d5941642c432f2d0b588a4aa7761005af04da7d8062ac2be23a27d95331a30",
+        "parsed_claim_ids": [],
+        "outcome": {
+          "kind": "abstained",
+          "reason": "insufficient_context",
+          "detail": "The deterministic fixture declares insufficient projected context."
+        },
+        "identity_body_hash": "sha256:cdf45e445e0931d64f219ab75fc0241df6bd597303cef4949437ab6d298b94d8",
+        "body_hash": "sha256:fd1323a675ee57767db60fbb7538d4e3e9a7b65ae374a9312c788c1f150b9543"
+      }
+    ],
+    "claims": [],
+    "obstructions": [
+      {
+        "kind": "reviewer_abstained",
+        "message": "The selected obligation remains in progress after an explicit abstention.",
+        "source_ids": ["execution:sha256:cdf45e445e0931d64f219ab75fc0241df6bd597303cef4949437ab6d298b94d8"],
+        "blocks": ["obligation:d2-abstention-example"]
+      }
+    ],
+    "authority_records": {
+      "evidence_ids": [],
+      "verification_ids": [],
+      "decision_ids": [],
+      "finding_ids": [],
+      "authority_reconciled": false
+    }
+  },
+  "coverage": {
+    "universe_id": "universe:d2-abstention-example",
+    "denominator_obligation_ids": ["obligation:d2-abstention-example"],
+    "visited_obligation_ids": ["obligation:d2-abstention-example"],
+    "completed_obligation_ids": [],
+    "selected": 1,
+    "visited": 1,
+    "completed": 0,
+    "verified": 0,
+    "accepted": 0
+  },
+  "projection": {
+    "views": [
+      {
+        "kind": "machine",
+        "source_ids": ["execution:sha256:cdf45e445e0931d64f219ab75fc0241df6bd597303cef4949437ab6d298b94d8", "obligation:d2-abstention-example"],
+        "information_loss": [
+          {
+            "kind": "coverage_detail_omitted",
+            "reason": "The machine payload retains status but omits denominator and lifecycle-derived coverage detail.",
+            "source_ids": ["obligation:d2-abstention-example"],
+            "affected_properties": ["review.coverage_detail"],
+            "meaningful": true,
+            "recoverable": true,
+            "recovery_ref": "report:d2-abstention-example"
+          },
+          {
+            "kind": "execution_trace_omitted",
+            "reason": "The machine payload retains the execution ID but omits its model, prompt, tool, outcome, and raw-artifact trace.",
+            "source_ids": ["execution:sha256:cdf45e445e0931d64f219ab75fc0241df6bd597303cef4949437ab6d298b94d8"],
+            "affected_properties": ["review.execution_trace"],
+            "meaningful": true,
+            "recoverable": true,
+            "recovery_ref": "execution:sha256:cdf45e445e0931d64f219ab75fc0241df6bd597303cef4949437ab6d298b94d8"
+          },
+          {
+            "kind": "obstruction_detail_omitted",
+            "reason": "The machine payload retains the obstruction kind but omits its message, source trace, and blocked obligations.",
+            "source_ids": ["execution:sha256:cdf45e445e0931d64f219ab75fc0241df6bd597303cef4949437ab6d298b94d8", "obligation:d2-abstention-example"],
+            "affected_properties": ["review.obstruction_detail"],
+            "meaningful": true,
+            "recoverable": true,
+            "recovery_ref": "report:d2-abstention-example"
+          },
+          {
+            "kind": "source_context_ordering_omitted",
+            "reason": "The projection does not retain the original source-context ordering, and this local-only report has no canonical source from which to recover it.",
+            "source_ids": ["obligation:d2-abstention-example"],
+            "affected_properties": ["review.source_context_ordering"],
+            "meaningful": true,
+            "recoverable": false
+          }
+        ],
+        "payload": {
+          "status": "partial",
+          "execution_ids": ["execution:sha256:cdf45e445e0931d64f219ab75fc0241df6bd597303cef4949437ab6d298b94d8"],
+          "claim_ids": [],
+          "obstruction_kinds": ["reviewer_abstained"]
+        }
+      }
+    ]
+  }
+}

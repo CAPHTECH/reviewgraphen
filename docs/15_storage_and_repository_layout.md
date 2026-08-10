@@ -153,7 +153,10 @@ D1 schema version 2の正確なprojection/preimage/rebuild契約は
 artifact registration/source rows、`review_plans`、`context_envelopes`を別表として保持する。
 `review_plans`は完全なbounded canonical plan projectionとbudget preimage/hashを、
 `context_envelopes`はloss IDを捏造せずcanonical loss bodiesとsource traceを保持する。
-review executionはD1 schema v2へ先行予約せず、後続schema versionの対象とする。
+review executionはD1 schema v2へ先行予約しない。
+[ADR 0018](adr/0018-d2-execution-claim-report-and-index-v3.md)が定義するD2 schema version 3で、
+完全なexecutionとatomic D2 claim projectionを初めて追加する。schema version 1/2 imageは
+in-place migrateせず、confirmed canonical JSONL/CASからversion 3へrebuild-requiredである。
 authority recordsとfindingsもそれぞれ
 `unreconciled_authority_records` / `projected_findings` の shadow-only projectionであり、
 Program fact、review claim、evidenceを一表へ混在させない。V1はevents metadata-onlyである。
@@ -177,6 +180,8 @@ schema必須fieldに`unknown`/`unresolved` sentinelを使い、executionを`abst
 `abstention_reason`を出す。各placeholderにはprojection-loss limitationと、該当claim/
 obligationを`blocks`へ列挙する`execution_metadata_unavailable` obstructionを添える。
 これはexecutionが観測済みであるという主張でもM2 execution engineでもない。
+D2 report v2にはこのsentinel経路を持ち上げない。完全なexecution metadataをcanonical
+event/CASから再生成できないv1 reportはv1のまま保持する。
 
 ## 8. Configuration
 

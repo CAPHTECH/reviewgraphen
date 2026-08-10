@@ -12,6 +12,8 @@
 | `reviewgraphen.obligation.schema.json` | `reviewgraphen.review_obligations.v2` — current versioned obligation universe and obligations; this stable generic path is used by the validation script。 |
 | `reviewgraphen.obligation.v1.schema.json` | Preserved `reviewgraphen.review_obligations.v1` legacy contract。 |
 | `reviewgraphen.report.schema.json` | `reviewgraphen.review.report.v1` — end-to-end review report。 |
+| `reviewgraphen.report.v2.schema.json` | Accepted authority-free `reviewgraphen.review.report.v2` D2 design contract (ADR 0018); it requires declared tail metadata, fixed proposed/unreviewed claims, and zero verified/accepted coverage, while source confirmation remains outside JSON Schema and v1 stays frozen。 |
+| `reviewgraphen.report.v2.example.json` | Local-only, claim-free fake-reviewer abstention example; it demonstrates explicit null model fields, no-tools trace, honest partial coverage, recoverable and nonrecoverable per-view losses, and no fabricated review claim。 |
 | `reviewgraphen.migration.schema.json` | `reviewgraphen.program_space.migration.v1` — explicit v1→v2 `MigrationRecord` output of `migrate_program_space_v1_to_v2`。 |
 | `reviewgraphen.input.example.json` | Current v2 double-submit ProgramSpace fixture, with source-traced `CapabilityDeclaration` capabilities。 |
 | `reviewgraphen.input.v1.example.json` | Preserved `reviewgraphen.program_space.input.v1` double-submit ProgramSpace fixture。 |
@@ -42,6 +44,32 @@ JSON Schemaはshape、required field、enum、basic rangeを確認します。�
 
 Schema validation成功だけをsemantic validityとみなしません。
 
+`reviewgraphen.report.v2.example.json` is intentionally claim-free: it records
+one fake-reviewer abstention and therefore cannot be mistaken for a normative
+review conclusion. Its execution identity, raw-artifact registration, raw
+hash/size, and execution body hash are self-consistent under the bundle's
+float-free local reference encoding. That is not proof that the core emitted
+canonical bytes; runtime must still perform the cross-record checks that JSON
+Schema and this example cannot express.
+
+The report-only gate cannot confirm its own tail or source closure. No
+source-bound fixture is checked in yet: it must eventually be generated from
+the actual core canonical event/CAS output and actual v3 index rebuild, not
+authored as arbitrary JSON. The current example and validator deliberately
+make no source-proof, confirmed-tail, CAS-presence, denominator, or lifecycle
+claim.
+
+`python3 scripts/validate_bundle.py` includes the v2 schema/example pair in its
+actual gate. It additionally checks canonical preimages/order, exact internal
+claim/raw-registration sets, authority/status/coverage constraints, nonempty
+losses, omission/duplicate/reorder mutations, a valid zero-attempt
+`unsupported_input`, rejection of unsupported-with-attempt and reserved
+`failed`, actual UTF-8 byte and canonical-body caps, strict non-standard JSON
+constant rejection, finite `[0,1]` D2 floats, per-view loss rules, and checked
+`u64` add/multiply reference arithmetic. It does not model Rust allocator
+capacity or claim the normative runtime `J+I+Rr` / `J+I+R+S+O` proof; those
+exact/+1 tests remain implementation Definition of Done.
+
 ## Example validation
 
 Python `jsonschema`を利用する場合:
@@ -57,6 +85,7 @@ pairs = [
     ("reviewgraphen.input.schema.json", "reviewgraphen.input.example.json"),
     ("reviewgraphen.obligation.schema.json", "reviewgraphen.obligation.example.json"),
     ("reviewgraphen.report.schema.json", "reviewgraphen.report.example.json"),
+    ("reviewgraphen.report.v2.schema.json", "reviewgraphen.report.v2.example.json"),
     ("reviewgraphen.migration.schema.json", "reviewgraphen.migration.example.json"),
 ]
 

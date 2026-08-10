@@ -496,3 +496,10 @@ For D1 schema version 2, this ADR supersedes:
 ADR 0015's filesystem, lock, SQLite serialization, bounds, publication,
 authority-separation, and tail-freshness decisions remain unchanged. ADR 0016's
 planner/context canonical bodies and identities remain authoritative.
+
+## Accepted D2 follow-up
+
+[ADR 0018](0018-d2-execution-claim-report-and-index-v3.md) defines the first
+complete execution projection as index schema version 3. It preserves this
+ADR's D1 schema-v2 contract and classifies existing schema-v2 images as
+rebuild-required rather than migrating them in place.

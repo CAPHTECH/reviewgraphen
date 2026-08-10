@@ -20,6 +20,14 @@
   content. The two ADRs share
   one event-schema migration (§2) and must not be read independently of each other for that reason.
 
+> Execution-contract note (2026-08-10):
+> [ADR 0018](0018-d2-execution-claim-report-and-index-v3.md) is the accepted
+> design closure for this ADR's reserved v2 execution payload. It
+> supplies the missing system-prompt/tool-call trace, full D2 claim DTO,
+> bounds, canonical identities, CAS ordering, report v2, and index schema v3.
+> ADR 0018's explicitly listed superseded text governs those execution
+> details; its implementation Definition of Done remains separate.
+
 ## Context
 
 M1 (`crates/reviewgraphen-core`) already implements a deterministic `ReviewAggregate` over

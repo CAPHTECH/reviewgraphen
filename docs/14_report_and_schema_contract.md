@@ -1,7 +1,23 @@
 # 14. Report and Schema Contract
 
 > Status: Draft v0.1  
-> Primary schema: `reviewgraphen.review.report.v1`
+> Current implemented schema: `reviewgraphen.review.report.v1`<br>
+> Accepted D2 design schema: `reviewgraphen.review.report.v2` (ADR 0018)
+
+`reviewgraphen.review.report.v1` remains the implemented M1 report and keeps
+its unresolved execution projection. [ADR 0018](adr/0018-d2-execution-claim-report-and-index-v3.md)
+defines the additive D2 report contract in
+[`reviewgraphen.report.v2.schema.json`](../schemas/reviewgraphen.report.v2.schema.json).
+V1 is not silently repointed or filled with guessed D2 metadata; a v2 report
+must be regenerated from confirmed v2 event/CAS data.
+
+The checked-in [v2 report example](../schemas/reviewgraphen.report.v2.example.json)
+is local-only. It proves shape and report-local self-consistency, not the tail,
+CAS bytes, index, denominator, plan/envelope closure, or lifecycle. No
+source-bound fixture is checked in until it can be generated from actual core
+canonical output and rebuilt through the actual v3 index implementation; the
+bundle validator never reconstructs or fabricates those sources from report
+assertions.
 
 ## 1. Report-first principle
 

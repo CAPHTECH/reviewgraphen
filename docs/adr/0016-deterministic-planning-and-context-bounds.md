@@ -350,6 +350,10 @@ amendment. Rejected alternatives are numeric weighted scores, full-repository
 default context, CAS I/O in core, lossy text excerpts, optional reason details,
 and turning cycles/dangling dependencies into ordinary deferrals.
 
+[ADR 0018](0018-d2-execution-claim-report-and-index-v3.md) is the accepted D2
+execution/report design amendment. It reuses this ADR's exact 8 MiB
+resolved-source bound and does not change D1 planning/context identities.
+
 ## Golden policy record
 
 The exact §1 canonical JSON is 3,392 UTF-8 bytes and has SHA-256:

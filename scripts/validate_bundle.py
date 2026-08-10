@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from copy import deepcopy
 import re
@@ -35,8 +36,28 @@ def fail(message: str) -> None:
     raise AssertionError(message)
 
 
+def reject_json_constant(value: str) -> None:
+    fail(f"non-standard JSON numeric constant: {value}")
+
+
+def reject_nonfinite_numbers(value: Any, path: str = "json") -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        fail(f"nonfinite JSON number: {path}")
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            reject_nonfinite_numbers(item, f"{path}[{index}]")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            reject_nonfinite_numbers(item, f"{path}.{key}")
+
+
 def load_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(
+        path.read_text(encoding="utf-8"),
+        parse_constant=reject_json_constant,
+    )
+    reject_nonfinite_numbers(value, str(path.relative_to(ROOT)))
+    return value
 
 
 def repository_files(pattern: str) -> list[Path]:
@@ -67,6 +88,7 @@ def validate_schemas() -> list[str]:
         ("reviewgraphen.input.schema.json", "reviewgraphen.input.example.json"),
         ("reviewgraphen.obligation.schema.json", "reviewgraphen.obligation.example.json"),
         ("reviewgraphen.report.schema.json", "reviewgraphen.report.example.json"),
+        ("reviewgraphen.report.v2.schema.json", "reviewgraphen.report.v2.example.json"),
     ]
     for schema_name, example_name in pairs:
         schema = load_json(SCHEMAS / schema_name)
@@ -83,6 +105,657 @@ def validate_schemas() -> list[str]:
             )
             fail(rendered)
     return [f"validated JSON Schema examples: {len(pairs)}"]
+
+
+D2_REPORT_MAX_ROWS = 200_000
+D2_REPORT_MAX_CANONICAL_BYTES = 67_108_864
+D2_REPORT_MAX_LOSSES = 4_096
+D2_REPORT_MAX_STRING_BYTES = 16_384
+D2_EXECUTION_MAX_CANONICAL_BYTES = 131_072
+D2_CLAIM_MAX_CANONICAL_BYTES = 32_768
+U64_MAX = (1 << 64) - 1
+
+
+def canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def validate_d2_float_domain(value: Any, path: str = "report") -> None:
+    if isinstance(value, float):
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            fail(f"report v2 float outside finite [0,1] domain: {path}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            validate_d2_float_domain(item, f"{path}[{index}]")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            validate_d2_float_domain(item, f"{path}.{key}")
+
+
+def sha256_id(value: Any) -> str:
+    return f"sha256:{hashlib.sha256(canonical_json_bytes(value)).hexdigest()}"
+
+
+def assert_canonical_order(values: list[Any], key: Any, label: str) -> None:
+    observed = [key(value) for value in values]
+    if observed != sorted(observed) or len(observed) != len(set(observed)):
+        fail(f"report v2 noncanonical/duplicate array: {label}")
+
+
+def check_report_v2_local_limits(rows: int, canonical_bytes: int) -> None:
+    for operation, observed, limit in (
+        ("report rows", rows, D2_REPORT_MAX_ROWS),
+        ("report canonical bytes", canonical_bytes, D2_REPORT_MAX_CANONICAL_BYTES),
+    ):
+        if observed < 0 or observed > limit:
+            fail(f"Incomplete: {operation}: limit={limit}, observed={observed}")
+
+
+def checked_u64_add(left: int, right: int, operation: str) -> int:
+    if left < 0 or right < 0 or left > U64_MAX - right:
+        fail(f"Incomplete: {operation}: observed={U64_MAX}")
+    return left + right
+
+
+def checked_u64_mul(left: int, right: int, operation: str) -> int:
+    if left < 0 or right < 0 or (right != 0 and left > U64_MAX // right):
+        fail(f"Incomplete: {operation}: observed={U64_MAX}")
+    return left * right
+
+
+def checked_u64_sum(values: Iterable[int], operation: str) -> int:
+    total = 0
+    for value in values:
+        total = checked_u64_add(total, value, operation)
+    return total
+
+
+def require_utf8_bytes(value: str, limit: int, operation: str) -> None:
+    observed = len(value.encode("utf-8"))
+    if observed > limit:
+        fail(f"Incomplete: {operation}: limit={limit}, observed={observed}")
+
+
+def validate_all_string_bytes(value: Any, path: str = "report") -> None:
+    if isinstance(value, str):
+        require_utf8_bytes(value, D2_REPORT_MAX_STRING_BYTES, path)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            validate_all_string_bytes(item, f"{path}[{index}]")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            require_utf8_bytes(key, D2_REPORT_MAX_STRING_BYTES, f"{path}.key")
+            validate_all_string_bytes(item, f"{path}.{key}")
+
+
+def reference_owned_charge(value: Any, operation: str = "report reference charge") -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return 1
+    if isinstance(value, (int, float)):
+        return 8
+    if isinstance(value, str):
+        return len(value.encode("utf-8"))
+    if isinstance(value, list):
+        total = checked_u64_mul(len(value), 8, operation)
+        for item in value:
+            total = checked_u64_add(total, reference_owned_charge(item, operation), operation)
+        return total
+    if isinstance(value, dict):
+        total = checked_u64_mul(len(value), 16, operation)
+        for key, item in value.items():
+            total = checked_u64_add(total, len(key.encode("utf-8")), operation)
+            total = checked_u64_add(total, reference_owned_charge(item, operation), operation)
+        return total
+    fail(f"unsupported capacity value: {type(value).__name__}")
+    return 0
+
+
+def validate_report_v2_contract(
+    report: dict[str, Any] | None = None,
+    *,
+    run_mutations: bool = True,
+) -> list[str]:
+    if report is None:
+        report = load_json(SCHEMAS / "reviewgraphen.report.v2.example.json")
+    result = report["result"]
+    metadata = report["metadata"]
+    scenario = report["scenario"]
+    coverage = report["coverage"]
+    views = report["projection"]["views"]
+
+    registrations = result["artifact_registrations"]
+    executions = result["executions"]
+    claims = result["claims"]
+    obstructions = result["obstructions"]
+    validate_all_string_bytes(report)
+    validate_d2_float_domain(report)
+
+    assert_canonical_order(
+        registrations,
+        lambda row: (row["event_sequence"], row["registration_id"]),
+        "artifact_registrations",
+    )
+    assert_canonical_order(
+        executions,
+        lambda row: (row["event_sequence"], row["id"]),
+        "executions",
+    )
+    assert_canonical_order(
+        claims,
+        lambda row: (row["event_sequence"], row["id"]),
+        "claims",
+    )
+    assert_canonical_order(
+        obstructions,
+        lambda row: canonical_json_bytes(row),
+        "obstructions",
+    )
+    view_order = {"human": 0, "ci": 1, "machine": 2}
+    assert_canonical_order(views, lambda row: view_order[row["kind"]], "projection.views")
+
+    id_sets: list[tuple[list[str], str]] = [
+        (scenario["selected_obligation_ids"], "scenario.selected_obligation_ids"),
+        (scenario["artifact_registration_ids"], "scenario.artifact_registration_ids"),
+        (coverage["denominator_obligation_ids"], "coverage.denominator_obligation_ids"),
+        (coverage["visited_obligation_ids"], "coverage.visited_obligation_ids"),
+        (coverage["completed_obligation_ids"], "coverage.completed_obligation_ids"),
+    ]
+    for execution in executions:
+        id_sets.extend(
+            [
+                (execution["obligation_ids"], f"{execution['id']}.obligation_ids"),
+                (execution["parsed_claim_ids"], f"{execution['id']}.parsed_claim_ids"),
+            ]
+        )
+    for claim in claims:
+        id_sets.extend(
+            [
+                (claim["obligation_ids"], f"{claim['id']}.obligation_ids"),
+                (claim["target_refs"], f"{claim['id']}.target_refs"),
+                (claim["source_ids"], f"{claim['id']}.source_ids"),
+            ]
+        )
+        assert_canonical_order(claim["assumptions"], lambda value: value, f"{claim['id']}.assumptions")
+        assert_canonical_order(
+            claim["requested_evidence"],
+            lambda value: value,
+            f"{claim['id']}.requested_evidence",
+        )
+        require_utf8_bytes(claim["summary"], 8_192, f"{claim['id']}.summary")
+        for value in claim["assumptions"]:
+            require_utf8_bytes(value, 2_048, f"{claim['id']}.assumptions")
+        for value in claim["requested_evidence"]:
+            require_utf8_bytes(value, 2_048, f"{claim['id']}.requested_evidence")
+        claim_identity = {
+            key: claim[key]
+            for key in (
+                "assumptions", "execution_id", "obligation_ids", "polarity", "property_id",
+                "requested_evidence", "source_ids", "summary", "target_refs",
+            )
+        }
+        if claim["identity_body_hash"] != sha256_id(claim_identity) or claim["id"] != f"claim:{sha256_id(claim_identity)}":
+            fail(f"report v2 claim identity mismatch: {claim['id']}")
+        claim_body = {
+            key: value
+            for key, value in claim.items()
+            if key not in {"event_sequence", "event_id", "identity_body_hash", "body_hash"}
+        }
+        claim_bytes = canonical_json_bytes(claim_body)
+        if len(claim_bytes) > D2_CLAIM_MAX_CANONICAL_BYTES:
+            fail(
+                f"Incomplete: claim canonical bytes: limit={D2_CLAIM_MAX_CANONICAL_BYTES}, "
+                f"observed={len(claim_bytes)}"
+            )
+        if claim["body_hash"] != sha256_id(claim_body):
+            fail(f"report v2 claim body hash mismatch: {claim['id']}")
+    for index, obstruction in enumerate(obstructions):
+        id_sets.extend(
+            [
+                (obstruction["source_ids"], f"obstructions[{index}].source_ids"),
+                (obstruction["blocks"], f"obstructions[{index}].blocks"),
+            ]
+        )
+    known_recovery_refs = {
+        metadata["report_id"],
+        scenario["program_space_ref"],
+        scenario["universe_id"],
+        scenario["plan_id"],
+        *scenario["selected_obligation_ids"],
+        *(row["registration_id"] for row in registrations),
+        *(row["id"] for row in executions),
+        *(row["id"] for row in claims),
+    }
+    for view in views:
+        id_sets.extend(
+            [
+                (view["source_ids"], f"{view['kind']}.source_ids"),
+                (view["payload"]["execution_ids"], f"{view['kind']}.payload.execution_ids"),
+                (view["payload"]["claim_ids"], f"{view['kind']}.payload.claim_ids"),
+            ]
+        )
+        assert_canonical_order(
+            view["payload"]["obstruction_kinds"],
+            lambda value: value,
+            f"{view['kind']}.payload.obstruction_kinds",
+        )
+        if not view["information_loss"]:
+            fail(f"report v2 view has empty information loss: {view['kind']}")
+        assert_canonical_order(
+            view["information_loss"],
+            lambda loss: (
+                loss["kind"],
+                loss["reason"],
+                tuple(loss["source_ids"]),
+                tuple(loss["affected_properties"]),
+            ),
+            f"{view['kind']}.information_loss",
+        )
+        for loss in view["information_loss"]:
+            id_sets.append((loss["source_ids"], f"{view['kind']}.{loss['kind']}.source_ids"))
+            assert_canonical_order(
+                loss["affected_properties"],
+                lambda value: value,
+                f"{view['kind']}.{loss['kind']}.affected_properties",
+            )
+            if loss["meaningful"] is not True:
+                fail("report v2 information loss must be meaningful")
+            if loss["recoverable"]:
+                if loss.get("recovery_ref") not in known_recovery_refs:
+                    fail("report v2 recoverable loss has an unresolved recovery_ref")
+            elif "recovery_ref" in loss:
+                fail("report v2 nonrecoverable loss must omit recovery_ref")
+    for values, label in id_sets:
+        assert_canonical_order(values, lambda value: value, label)
+
+    authority = result["authority_records"]
+    if authority["authority_reconciled"] is not False or any(
+        authority[field]
+        for field in ("evidence_ids", "verification_ids", "decision_ids", "finding_ids")
+    ):
+        fail("report v2 must remain authority-free")
+    if coverage["verified"] != 0 or coverage["accepted"] != 0:
+        fail("report v2 verified/accepted coverage must be zero")
+    if any(
+        claim["disposition"] != "proposed" or claim["review_status"] != "unreviewed"
+        for claim in claims
+    ):
+        fail("report v2 claims must remain proposed/unreviewed")
+
+    execution_ids = {execution["id"] for execution in executions}
+    executions_by_id = {execution["id"]: execution for execution in executions}
+    claim_ids = {claim["id"] for claim in claims}
+    parsed_claim_ids = {
+        claim_id for execution in executions for claim_id in execution["parsed_claim_ids"]
+    }
+    if claim_ids != parsed_claim_ids:
+        fail("report v2 claims are not the complete execution claim union")
+    claims_by_execution: dict[str, set[str]] = {}
+    for claim in claims:
+        if claim["execution_id"] not in execution_ids:
+            fail(f"report v2 dangling claim execution: {claim['id']}")
+        claims_by_execution.setdefault(claim["execution_id"], set()).add(claim["id"])
+        execution = executions_by_id[claim["execution_id"]]
+        if claim["event_sequence"] != execution["event_sequence"] or claim["event_id"] != execution["event_id"]:
+            fail(f"report v2 claim/execution atomic event mismatch: {claim['id']}")
+    for execution in executions:
+        exact_claims = claims_by_execution.get(execution["id"], set())
+        if set(execution["parsed_claim_ids"]) != exact_claims:
+            fail(f"report v2 per-execution claim set mismatch: {execution['id']}")
+        if (execution["outcome"]["kind"] == "structured") != bool(exact_claims):
+            fail(f"report v2 outcome/claim cardinality mismatch: {execution['id']}")
+
+    registration_ids = {row["registration_id"] for row in registrations}
+    referenced_registrations = {
+        execution["raw_artifact_registration_id"] for execution in executions
+    }
+    if registration_ids != referenced_registrations or scenario["artifact_registration_ids"] != sorted(registration_ids):
+        fail("report v2 raw registration set is not exact")
+    registrations_by_id = {row["registration_id"]: row for row in registrations}
+    for execution in executions:
+        registration = registrations_by_id[execution["raw_artifact_registration_id"]]
+        if (
+            registration["run_id"] != metadata["run_id"]
+            or registration["source"]["run_id"] != metadata["run_id"]
+            or registration["cas_hash"] != execution["raw_artifact_hash"]
+            or registration["source"]["execution_id"] != execution["id"]
+            or registration["source"]["reviewer_id"] != execution["reviewer_id"]
+            or registration["source"]["run_id"] != metadata["run_id"]
+            or registration["event_sequence"] >= execution["event_sequence"]
+        ):
+            fail(f"report v2 raw registration closure mismatch: {execution['id']}")
+
+        identity = {
+            key: execution[key]
+            for key in (
+                "attempt", "envelope_id", "inference_settings", "model", "model_revision",
+                "obligation_ids", "plan_id", "prompt_template_version", "provider",
+                "reviewer_id", "reviewer_kind", "snapshot_id", "system_prompt_version",
+                "tool_policy_version", "wave_id",
+            )
+        }
+        if execution["identity_body_hash"] != sha256_id(identity) or execution["id"] != f"execution:{sha256_id(identity)}":
+            fail(f"report v2 execution identity mismatch: {execution['id']}")
+        body = {
+            key: value
+            for key, value in execution.items()
+            if key not in {"event_sequence", "event_id", "identity_body_hash", "body_hash"}
+        }
+        outcome = execution["outcome"]
+        for field in ("detail", "diagnostic"):
+            if field in outcome:
+                require_utf8_bytes(outcome[field], 4_096, f"{execution['id']}.outcome.{field}")
+        for field in (
+            "reviewer_kind", "reviewer_id", "system_prompt_version",
+            "prompt_template_version", "tool_policy_version",
+        ):
+            require_utf8_bytes(execution[field], 256, f"{execution['id']}.{field}")
+        body_bytes = canonical_json_bytes(body)
+        if len(body_bytes) > D2_EXECUTION_MAX_CANONICAL_BYTES:
+            fail(
+                f"Incomplete: execution canonical bytes: limit={D2_EXECUTION_MAX_CANONICAL_BYTES}, "
+                f"observed={len(body_bytes)}"
+            )
+        if execution["body_hash"] != sha256_id(body):
+            fail(f"report v2 execution body hash mismatch: {execution['id']}")
+
+        registration_identity = {
+            key: registration[key]
+            for key in ("run_id", "cas_hash", "media_type", "sensitivity", "source")
+        }
+        if registration["registration_id"] != f"registration:{sha256_id(registration_identity)}":
+            fail(f"report v2 registration identity mismatch: {registration['registration_id']}")
+
+        if execution["outcome"]["kind"] == "abstained":
+            raw = {
+                "abstention": {
+                    "detail": execution["outcome"]["detail"],
+                    "reason": execution["outcome"]["reason"],
+                },
+                "claims": [],
+                "execution_id": execution["id"],
+                "schema": "reviewgraphen.reviewer_output.v1",
+            }
+            if registration["size"] != len(canonical_json_bytes(raw)) or registration["cas_hash"] != sha256_id(raw):
+                fail(f"report v2 raw artifact hash/size mismatch: {execution['id']}")
+
+    event_sequences = [row["event_sequence"] for row in [*registrations, *executions, *claims]]
+    if event_sequences and max(event_sequences) > metadata["confirmed_event_count"]:
+        fail("report v2 record sequence exceeds its declared event count")
+
+    selected = set(scenario["selected_obligation_ids"])
+    denominator = set(coverage["denominator_obligation_ids"])
+    visited = {oid for execution in executions for oid in execution["obligation_ids"]} & selected
+    completed = set(coverage["completed_obligation_ids"])
+    structured = {
+        oid
+        for execution in executions
+        if execution["outcome"]["kind"] == "structured"
+        for oid in execution["obligation_ids"]
+    }
+    if (
+        coverage["universe_id"] != scenario["universe_id"]
+        or not selected <= denominator
+        or set(coverage["visited_obligation_ids"]) != visited
+        or not completed <= structured
+        or not completed <= visited
+    ):
+        fail("report v2 coverage ID sets do not match execution outcomes")
+    if (
+        coverage["selected"] != len(selected)
+        or coverage["visited"] != len(visited)
+        or coverage["completed"] != len(completed)
+    ):
+        fail("report v2 coverage counts do not match exact ID sets")
+    status = result["status"]
+    if not selected:
+        fail("report v2 requires a nonempty selected obligation set")
+    if status == "failed":
+        fail("report v2 failed status is reserved and has no D2 generation condition")
+    if status == "completed":
+        if not executions or not claims or completed != selected:
+            fail("report v2 completed status lacks exact structured/claim/lifecycle coverage")
+    elif status == "partial":
+        if not executions or not visited or completed >= selected:
+            fail("report v2 partial status requires attempts and incomplete lifecycle coverage")
+    elif status == "unsupported_input":
+        unsupported_blocks = {
+            block for obstruction in obstructions for block in obstruction["blocks"]
+        }
+        if (
+            executions
+            or claims
+            or registrations
+            or scenario["artifact_registration_ids"]
+            or visited
+            or completed
+            or not obstructions
+            or any(
+                obstruction["kind"] != "pre_review_unsupported_input"
+                or not obstruction["source_ids"]
+                for obstruction in obstructions
+            )
+            or unsupported_blocks != selected
+        ):
+            fail("report v2 unsupported_input lacks its exact pre-review obstruction basis")
+    else:
+        fail(f"report v2 unknown status: {status}")
+    for view in views:
+        if view["payload"]["status"] != result["status"]:
+            fail("report v2 view status differs from result status")
+        if set(view["payload"]["execution_ids"]) != execution_ids:
+            fail("report v2 view execution IDs are incomplete")
+        if set(view["payload"]["claim_ids"]) != claim_ids:
+            fail("report v2 view claim IDs are incomplete")
+        if set(view["payload"]["obstruction_kinds"]) != {
+            obstruction["kind"] for obstruction in obstructions
+        }:
+            fail("report v2 view obstruction kinds are incomplete")
+
+    loss_count = checked_u64_sum(
+        (len(view["information_loss"]) for view in views),
+        "report information-loss rows",
+    )
+    if loss_count > D2_REPORT_MAX_LOSSES:
+        fail(
+            f"Incomplete: report information losses: limit={D2_REPORT_MAX_LOSSES}, "
+            f"observed={loss_count}"
+        )
+    rows = checked_u64_sum(
+        (
+            len(registrations),
+            len(executions),
+            len(claims),
+            len(obstructions),
+            len(views),
+            loss_count,
+        ),
+        "report rows",
+    )
+    # Post-serialization fixture check only. Runtime must enforce the same
+    # bound with its bounded writer before allocating the complete output.
+    encoded = canonical_json_bytes(report)
+    check_report_v2_local_limits(rows, len(encoded))
+
+    if not run_mutations:
+        return ["report v2 local ordering/cross-record checks: PASS"]
+
+    schema = load_json(SCHEMAS / "reviewgraphen.report.v2.schema.json")
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+
+    def schema_must_fail(name: str, mutated: dict[str, Any]) -> None:
+        if not list(validator.iter_errors(mutated)):
+            fail(f"report v2 schema mutation unexpectedly passed: {name}")
+
+    def contract_must_fail(name: str, mutated: dict[str, Any]) -> None:
+        if list(validator.iter_errors(mutated)):
+            fail(f"report v2 contract mutation is not schema-valid: {name}")
+        try:
+            validate_report_v2_contract(mutated, run_mutations=False)
+        except AssertionError:
+            return
+        fail(f"report v2 contract mutation unexpectedly passed: {name}")
+
+    empty_loss = deepcopy(report)
+    empty_loss["projection"]["views"][0]["information_loss"] = []
+    schema_must_fail("empty information loss", empty_loss)
+
+    duplicate_execution = deepcopy(report)
+    duplicate_execution["result"]["executions"].append(deepcopy(executions[0]))
+    schema_must_fail("duplicate execution", duplicate_execution)
+
+    authority_nonzero = deepcopy(report)
+    authority_nonzero["coverage"]["verified"] = 1
+    schema_must_fail("nonzero verified coverage", authority_nonzero)
+
+    omitted_execution = deepcopy(report)
+    omitted_execution["result"]["executions"] = []
+    schema_must_fail("omitted declared execution", omitted_execution)
+
+    reordered_sources = deepcopy(report)
+    reordered_sources["projection"]["views"][0]["source_ids"].reverse()
+    contract_must_fail("reordered source IDs", reordered_sources)
+
+    status_mismatch = deepcopy(report)
+    status_mismatch["projection"]["views"][0]["payload"]["status"] = "failed"
+    contract_must_fail("view/result status mismatch", status_mismatch)
+
+    raw_set_omission = deepcopy(report)
+    raw_set_omission["scenario"]["artifact_registration_ids"] = []
+    contract_must_fail("raw registration omission", raw_set_omission)
+
+    unsupported = deepcopy(report)
+    unsupported["result"]["status"] = "unsupported_input"
+    unsupported["result"]["artifact_registrations"] = []
+    unsupported["result"]["executions"] = []
+    unsupported["result"]["claims"] = []
+    unsupported["scenario"]["artifact_registration_ids"] = []
+    unsupported["coverage"]["visited_obligation_ids"] = []
+    unsupported["coverage"]["completed_obligation_ids"] = []
+    unsupported["coverage"]["visited"] = 0
+    unsupported["coverage"]["completed"] = 0
+    unsupported["result"]["obstructions"] = [
+        {
+            "kind": "pre_review_unsupported_input",
+            "message": "Deterministic context construction refused the selected input before review.",
+            "source_ids": [unsupported["scenario"]["program_space_ref"]],
+            "blocks": list(unsupported["scenario"]["selected_obligation_ids"]),
+        }
+    ]
+    unsupported_view = unsupported["projection"]["views"][0]
+    unsupported_view["source_ids"] = sorted(
+        [
+            unsupported["scenario"]["program_space_ref"],
+            *unsupported["scenario"]["selected_obligation_ids"],
+        ]
+    )
+    unsupported_view["information_loss"] = [
+        {
+            "kind": "unsupported_input_detail_omitted",
+            "reason": "The machine payload retains the typed obstruction kind but omits its full source and block trace.",
+            "source_ids": list(unsupported_view["source_ids"]),
+            "affected_properties": ["review.unsupported_input_basis"],
+            "meaningful": True,
+            "recoverable": True,
+            "recovery_ref": unsupported["metadata"]["report_id"],
+        }
+    ]
+    unsupported_view["payload"] = {
+        "status": "unsupported_input",
+        "execution_ids": [],
+        "claim_ids": [],
+        "obstruction_kinds": ["pre_review_unsupported_input"],
+    }
+    unsupported_errors = list(validator.iter_errors(unsupported))
+    if unsupported_errors:
+        fail(f"report v2 valid unsupported_input fixture failed schema: {unsupported_errors[0].message}")
+    validate_report_v2_contract(unsupported, run_mutations=False)
+
+    unsupported_with_attempt = deepcopy(unsupported)
+    unsupported_with_attempt["result"]["artifact_registrations"] = deepcopy(registrations)
+    unsupported_with_attempt["result"]["executions"] = deepcopy(executions)
+    unsupported_with_attempt["scenario"]["artifact_registration_ids"] = list(
+        scenario["artifact_registration_ids"]
+    )
+    schema_must_fail("unsupported_input with reviewer attempt", unsupported_with_attempt)
+
+    unsupported_without_basis = deepcopy(unsupported)
+    unsupported_without_basis["result"]["obstructions"][0]["kind"] = "reviewer_abstained"
+    schema_must_fail("unsupported_input without typed pre-review basis", unsupported_without_basis)
+
+    reserved_failed = deepcopy(report)
+    reserved_failed["result"]["status"] = "failed"
+    reserved_failed["projection"]["views"][0]["payload"]["status"] = "failed"
+    contract_must_fail("reserved failed status", reserved_failed)
+
+    false_completed = deepcopy(report)
+    false_completed["result"]["status"] = "completed"
+    false_completed["projection"]["views"][0]["payload"]["status"] = "completed"
+    schema_must_fail("completed without structured claims/lifecycle", false_completed)
+
+    multibyte_detail = deepcopy(report)
+    multibyte_detail["result"]["executions"][0]["outcome"]["detail"] = "界" * 4_096
+    contract_must_fail("4096 multibyte characters exceed outcome byte cap", multibyte_detail)
+
+    # This Python gate is an arithmetic/reference oracle only. It does not
+    # model Rust allocator capacity and therefore does not claim runtime
+    # pre-allocation or the normative J+I+Rr / J+I+R+S+O peaks.
+    reference_owned_charge(report)
+    if checked_u64_add(U64_MAX - 1, 1, "report reference add") != U64_MAX:
+        fail("report v2 checked-add exact boundary failed")
+    try:
+        checked_u64_add(U64_MAX, 1, "report reference add")
+    except AssertionError:
+        pass
+    else:
+        fail("report v2 checked-add overflow unexpectedly passed")
+    if checked_u64_mul(U64_MAX, 1, "report reference multiply") != U64_MAX:
+        fail("report v2 checked-multiply exact boundary failed")
+    try:
+        checked_u64_mul(U64_MAX, 2, "report reference multiply")
+    except AssertionError:
+        pass
+    else:
+        fail("report v2 checked-multiply overflow unexpectedly passed")
+
+    for constant in ("NaN", "Infinity", "-Infinity"):
+        try:
+            json.loads(
+                f'{{"value":{constant}}}',
+                parse_constant=reject_json_constant,
+            )
+        except AssertionError:
+            pass
+        else:
+            fail(f"report v2 parser accepted non-standard {constant}")
+    for nonfinite in (math.nan, math.inf, -math.inf):
+        try:
+            canonical_json_bytes({"value": nonfinite})
+        except ValueError:
+            pass
+        else:
+            fail("report v2 canonical serializer accepted a nonfinite float")
+    try:
+        reject_nonfinite_numbers(json.loads('{"value":1e400}'))
+    except AssertionError:
+        pass
+    else:
+        fail("report v2 parser admitted an overflowing exponent as infinity")
+    try:
+        validate_d2_float_domain({"value": 1.0000001})
+    except AssertionError:
+        pass
+    else:
+        fail("report v2 float domain accepted a value above one")
+
+    return ["report v2 local ordering/status/reference-oracle mutations: PASS"]
 
 
 def validate_markdown() -> list[str]:
@@ -656,6 +1329,7 @@ def main() -> int:
     for check in (
         validate_json_and_toml,
         validate_schemas,
+        validate_report_v2_contract,
         validate_markdown,
         validate_semantics,
         validate_semantic_mutations,
