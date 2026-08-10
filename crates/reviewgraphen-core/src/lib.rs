@@ -38,11 +38,11 @@ pub use error::{DomainError, PlanningError, Result};
 pub use event::{
     ArtifactRegistered, ArtifactSensitivity, ArtifactSource, DecodedPayload, Event,
     EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
-    EventStreamGenesis, EventViewAccounting, EvidenceBindingAdmission, OfflineProjectionState,
-    ProjectedContextEnvelopeMetadata, ProjectedFindingMetadata, RunGenesisManifest,
-    RunGenesisSnapshot, SnapshotSourceRecordEntry, SnapshotSourcesRecorded, UnreconciledRecordKind,
-    UnreconciledRecordMetadata, ValidatedEvent, ValidatedEventView, VerificationAdmission,
-    VerifiedV2Genesis, preflight_index_genesis_json_structure,
+    EventReplayLimits, EventStreamGenesis, EventViewAccounting, EvidenceBindingAdmission,
+    OfflineProjectionState, ProjectedContextEnvelopeMetadata, ProjectedFindingMetadata,
+    RunGenesisManifest, RunGenesisSnapshot, SnapshotSourceRecordEntry, SnapshotSourcesRecorded,
+    UnreconciledRecordKind, UnreconciledRecordMetadata, ValidatedEvent, ValidatedEventView,
+    VerificationAdmission, VerifiedV2Genesis, preflight_index_genesis_json_structure,
 };
 pub use execution::{
     AbstentionReason, ExecutionClaimInputV2, ExecutionClaimV2, ExecutionOutcome, ExecutionRecord,

@@ -6,7 +6,8 @@
 
 use super::{StoreError, StoreRoot, open_or_create_dir, verify_fd_kind_mode};
 use reviewgraphen_core::{
-    ContentHash, EventContractVersion, EventEnvelope, EventStreamGenesis, StableId, canonical_json,
+    ContentHash, EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
+    EventReplayLimits, EventStreamGenesis, StableId, canonical_json,
 };
 use rustix::{
     fd::OwnedFd,
@@ -228,6 +229,10 @@ pub enum JournalError {
     V2GenesisRequired,
     #[error("journal writer is poisoned after failed durable rollback")]
     Poisoned,
+    #[error(
+        "replayed V2 session cannot expose state after uncertain durable append acknowledgement"
+    )]
+    SessionUncertain,
     #[error("journal receipt collision or invalid receipt at {name}")]
     ReceiptCorruption { name: String },
     #[error("journal operation exceeded {limit} bytes/events after observing {observed}")]
@@ -329,6 +334,70 @@ pub(crate) enum IndexReplayError<E> {
     Journal(JournalError),
     Visitor(E),
 }
+pub struct ReplayedV2RunSession {
+    writer: JournalWriter,
+    log: EventLog,
+    state: ReplayedV2RunSessionState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplayedV2RunSessionState {
+    Healthy,
+    Uncertain,
+}
+
+impl ReplayedV2RunSession {
+    pub fn aggregate(&self) -> Result<&reviewgraphen_core::ReviewAggregate, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.aggregate())
+    }
+    pub fn tail_hash(&self) -> Result<&ContentHash, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.tail_hash())
+    }
+
+    /// Stages core validation first, appends the exact staged envelope while
+    /// the journal lock remains held, then commits the staged in-memory log.
+    pub fn append_command(
+        &mut self,
+        command: EventCommand,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.require_healthy()?;
+        let mut staged = self.log.clone();
+        staged.append(command)?;
+        let envelope = staged
+            .events()
+            .last()
+            .ok_or(JournalError::Identity("staged command produced no event"))?
+            .envelope()
+            .clone();
+        let receipt = match self.writer.append(envelope) {
+            Ok(receipt) => receipt,
+            Err(error) if self.writer.append_durability == AppendDurability::Uncertain => {
+                let _ = error;
+                self.state = ReplayedV2RunSessionState::Uncertain;
+                return Err(JournalError::SessionUncertain);
+            }
+            Err(error) => return Err(error),
+        };
+        self.log = staged;
+        Ok(receipt)
+    }
+
+    fn require_healthy(&self) -> Result<(), JournalError> {
+        match self.state {
+            ReplayedV2RunSessionState::Healthy => Ok(()),
+            ReplayedV2RunSessionState::Uncertain => Err(JournalError::SessionUncertain),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppendDurability {
+    Confirmed,
+    Uncertain,
+}
+
 pub struct JournalWriter {
     file: File,
     identity: JournalIdentity,
@@ -338,6 +407,7 @@ pub struct JournalWriter {
     completions: OwnedFd,
     run: OwnedFd,
     poisoned: bool,
+    append_durability: AppendDurability,
     #[cfg(test)]
     faults: std::collections::VecDeque<AppendFault>,
 }
@@ -387,6 +457,29 @@ struct RecoveryAudit {
 }
 
 impl<'a> EventJournal<'a> {
+    /// Acquires the exclusive writer lock and returns a narrow, staged V2
+    /// command session. No mutable EventLog or unchecked envelope escapes.
+    pub fn replayed_v2_session(
+        &self,
+        admissions: &EventAdmissions,
+    ) -> Result<ReplayedV2RunSession, JournalError> {
+        let writer = self.writer()?;
+        let JournalGenesis::V2Shared(genesis) = &writer.identity.genesis else {
+            return Err(JournalError::V1ReadOnly);
+        };
+        let log = EventLog::replay_validated_v2_prefix(
+            writer.identity.run_id.clone(),
+            genesis,
+            &writer.state.events,
+            admissions,
+            EventReplayLimits::new(writer.limits.max_events, writer.limits.max_replay_bytes),
+        )?;
+        Ok(ReplayedV2RunSession {
+            writer,
+            log,
+            state: ReplayedV2RunSessionState::Healthy,
+        })
+    }
     pub fn open(root: &'a StoreRoot, identity: JournalIdentity) -> Result<Self, JournalError> {
         Self::open_with_limits(root, identity, JournalLimits::from_store(root.limits()))
     }
@@ -687,6 +780,7 @@ impl<'a> EventJournal<'a> {
             completions,
             run: dup(&self.run).map_err(StoreError::Io)?,
             poisoned: false,
+            append_durability: AppendDurability::Confirmed,
             #[cfg(test)]
             faults: std::collections::VecDeque::new(),
         })
@@ -1147,6 +1241,9 @@ impl JournalWriter {
         if self.poisoned {
             return Err(JournalError::Poisoned);
         }
+        if self.append_durability == AppendDurability::Uncertain {
+            return Err(JournalError::Poisoned);
+        }
         let mut line = envelope.canonical_bytes()?;
         line.push(b'\n');
         limit(line.len() as u64, self.limits.max_event_line_bytes)?;
@@ -1199,18 +1296,25 @@ impl JournalWriter {
                 Ok(intent) => intent,
                 Err(_) => {
                     self.poisoned = true;
+                    self.append_durability = AppendDurability::Uncertain;
                     return Err(JournalError::Poisoned);
                 }
             };
             if self.rollback(pre).is_err() {
                 self.poisoned = true;
+                self.append_durability = AppendDurability::Uncertain;
                 return Err(JournalError::Poisoned);
             }
             if self.complete_rollback_intent(&intent).is_err() {
                 self.poisoned = true;
+                self.append_durability = AppendDurability::Uncertain;
                 return Err(JournalError::Poisoned);
             }
-            self.clear_append_marker()?;
+            if let Err(error) = self.clear_append_marker() {
+                self.poisoned = true;
+                self.append_durability = AppendDurability::Uncertain;
+                return Err(error);
+            }
             return Err(JournalError::Io(error));
         }
         self.state.confirmed_offset = pre
@@ -1230,6 +1334,7 @@ impl JournalWriter {
             // The event reached sync_data. Never leave this writer pointing
             // at the old offset if marker cleanup durability is unknown.
             self.poisoned = true;
+            self.append_durability = AppendDurability::Uncertain;
             return Err(error);
         }
         Ok(JournalAppendReceipt {
@@ -3803,6 +3908,179 @@ mod tests {
         let reader = journal.reader().unwrap();
         assert_eq!(reader.events().len(), 2);
         assert_eq!(reader.confirmed_offset(), receipt.tail_offset);
+    }
+
+    #[test]
+    fn replayed_v2_session_appends_one_validated_command_and_retains_writer_lock() {
+        let (_workspace, root) = root();
+        let (identity, _event) = fixture_event();
+        let journal = open_fixture(&root, identity);
+        let mut session = journal
+            .replayed_v2_session(&EventAdmissions::default())
+            .unwrap();
+        let obligation = session
+            .aggregate()
+            .unwrap()
+            .obligations()
+            .next()
+            .unwrap()
+            .id()
+            .clone();
+        let receipt = session
+            .append_command(EventCommand::obligation_transition(
+                obligation,
+                ObligationLifecycle::Planned,
+            ))
+            .unwrap();
+        assert_eq!(receipt.sequence, 2);
+
+        let blocked_reader = journal.open_file(false).unwrap();
+        assert!(fs::flock(&blocked_reader, FlockOperation::NonBlockingLockShared).is_err());
+        drop(blocked_reader);
+        drop(session);
+        assert_eq!(journal.reader().unwrap().events().len(), 2);
+    }
+
+    #[test]
+    fn replayed_v2_session_never_advances_memory_after_durable_append_failure() {
+        let (_workspace, root) = root();
+        let (identity, _event) = fixture_event();
+        let journal = open_fixture(&root, identity);
+        let mut session = journal
+            .replayed_v2_session(&EventAdmissions::default())
+            .unwrap();
+        let obligation = session
+            .aggregate()
+            .unwrap()
+            .obligations()
+            .next()
+            .unwrap()
+            .id()
+            .clone();
+        let tail = session.tail_hash().unwrap().clone();
+        session.writer.inject_faults([AppendFault::PartialWrite]);
+        assert!(matches!(
+            session.append_command(EventCommand::obligation_transition(
+                obligation.clone(),
+                ObligationLifecycle::Planned,
+            )),
+            Err(JournalError::Io(_))
+        ));
+        assert_eq!(session.tail_hash().unwrap(), &tail);
+        assert_eq!(session.writer.events().len(), 1);
+        assert_eq!(
+            session
+                .aggregate()
+                .unwrap()
+                .obligations()
+                .find(|candidate| candidate.id() == &obligation)
+                .unwrap()
+                .lifecycle(),
+            ObligationLifecycle::Generated
+        );
+        assert_eq!(
+            session
+                .append_command(EventCommand::obligation_transition(
+                    obligation,
+                    ObligationLifecycle::Planned,
+                ))
+                .unwrap()
+                .sequence,
+            2
+        );
+    }
+
+    #[test]
+    fn replayed_v2_session_refuses_reads_and_retries_after_post_sync_uncertainty() {
+        let (_workspace, root) = root();
+        let (identity, _event) = fixture_event();
+        let journal = open_fixture(&root, identity);
+        let mut session = journal
+            .replayed_v2_session(&EventAdmissions::default())
+            .unwrap();
+        let obligation = session
+            .aggregate()
+            .unwrap()
+            .obligations()
+            .next()
+            .unwrap()
+            .id()
+            .clone();
+        session
+            .writer
+            .inject_faults([AppendFault::ClearMarkerDirectorySync]);
+        assert!(matches!(
+            session.append_command(EventCommand::obligation_transition(
+                obligation.clone(),
+                ObligationLifecycle::Planned,
+            )),
+            Err(JournalError::SessionUncertain)
+        ));
+        assert!(matches!(
+            session.aggregate(),
+            Err(JournalError::SessionUncertain)
+        ));
+        assert!(matches!(
+            session.tail_hash(),
+            Err(JournalError::SessionUncertain)
+        ));
+        assert!(matches!(
+            session.append_command(EventCommand::obligation_transition(
+                obligation.clone(),
+                ObligationLifecycle::Planned,
+            )),
+            Err(JournalError::SessionUncertain)
+        ));
+        drop(session);
+
+        let recovered = journal.recover("test", "reviewgraphen-store@1").unwrap();
+        assert_eq!(recovered.intent.discarded_hash, ContentHash::sha256(b""));
+        assert_eq!(journal.reader().unwrap().events().len(), 2);
+        let reopened = journal
+            .replayed_v2_session(&EventAdmissions::default())
+            .unwrap();
+        assert_eq!(
+            reopened
+                .aggregate()
+                .unwrap()
+                .obligations()
+                .find(|candidate| candidate.id() == &obligation)
+                .unwrap()
+                .lifecycle(),
+            ObligationLifecycle::Planned
+        );
+    }
+
+    #[test]
+    fn replayed_v2_session_refuses_v1_and_invalid_or_stale_durable_prefixes() {
+        let (_workspace, root) = root();
+        let v1_identity = JournalIdentity::new(
+            StableId::parse("run:journal-v1-session").unwrap(),
+            JournalGenesis::V1(ContentHash::sha256(b"v1 genesis")),
+        )
+        .unwrap();
+        let v1 = EventJournal::initialize_v1_for_test(&root, v1_identity, &[]).unwrap();
+        assert!(matches!(
+            v1.replayed_v2_session(&EventAdmissions::default()),
+            Err(JournalError::V1ReadOnly)
+        ));
+
+        let (identity, event) = fixture_event();
+        let journal = open_fixture(&root, identity);
+        journal.writer().unwrap().append(event.clone()).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(log_path(&root))
+            .unwrap();
+        file.write_all(&event_line(&event)).unwrap();
+        file.sync_data().unwrap();
+        assert!(matches!(
+            journal.replayed_v2_session(&EventAdmissions::default()),
+            Err(JournalError::CorruptNeedsRecovery {
+                auto_recoverable: false,
+                ..
+            })
+        ));
     }
 
     #[test]

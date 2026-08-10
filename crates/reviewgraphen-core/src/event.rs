@@ -3539,7 +3539,57 @@ pub struct EventLog {
     tail_hash: ContentHash,
 }
 
+/// Explicit resource bounds for replaying an imported V2 event prefix.
+///
+/// The caller owns the retained input prefix; these limits bound the replay
+/// operation's event count and canonical envelope bytes before an editable
+/// log is returned. It intentionally makes no heap or RSS promise.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EventReplayLimits {
+    pub max_events: u64,
+    pub max_canonical_bytes: u64,
+}
+
+impl EventReplayLimits {
+    #[must_use]
+    pub const fn new(max_events: u64, max_canonical_bytes: u64) -> Self {
+        Self {
+            max_events,
+            max_canonical_bytes,
+        }
+    }
+}
+
 impl EventLog {
+    /// Rebuilds an editable V2 log only from canonical genesis bytes, a fully
+    /// validated homogeneous prefix, and caller-supplied exact admissions.
+    /// This method never derives authority admissions from persisted metadata.
+    pub fn replay_validated_v2_prefix(
+        run_id: StableId,
+        genesis_bytes: &[u8],
+        envelopes: &[EventEnvelope],
+        admissions: &EventAdmissions,
+        limits: EventReplayLimits,
+    ) -> Result<Self> {
+        preflight_v2_replay_limits(envelopes, limits)?;
+        let verified = VerifiedV2Genesis::from_canonical_bytes(&run_id, genesis_bytes)?;
+        if verified.genesis_hash != ContentHash::sha256(genesis_bytes) {
+            return Err(DomainError::Validation(
+                "verified genesis hash mismatch".to_owned(),
+            ));
+        }
+        let initial =
+            RunGenesisSnapshot::from_canonical_bytes(genesis_bytes)?.rebuild_aggregate()?;
+        Self::replay_envelopes_with_event_capacity(
+            EventContractVersion::V2,
+            run_id,
+            initial,
+            envelopes,
+            admissions,
+            envelopes.len(),
+        )
+    }
+
     /// Starts an empty log from a validated initial aggregate.
     pub fn new(run_id: StableId, initial: ReviewAggregate) -> Result<Self> {
         Self::new_v2(run_id, initial)
@@ -3892,7 +3942,29 @@ impl EventLog {
         envelopes: &[EventEnvelope],
         admissions: &EventAdmissions,
     ) -> Result<Self> {
+        Self::replay_envelopes_with_event_capacity(
+            version, run_id, initial, envelopes, admissions, 0,
+        )
+    }
+
+    fn replay_envelopes_with_event_capacity(
+        version: EventContractVersion,
+        run_id: StableId,
+        initial: ReviewAggregate,
+        envelopes: &[EventEnvelope],
+        admissions: &EventAdmissions,
+        event_capacity: usize,
+    ) -> Result<Self> {
         let mut log = Self::new_with_version(version, run_id, initial)?;
+        if event_capacity != 0 {
+            log.events
+                .try_reserve_exact(event_capacity)
+                .map_err(|_| DomainError::Incomplete {
+                    operation: "V2 replay event output capacity",
+                    limit: event_capacity,
+                    observed: event_capacity,
+                })?;
+        }
         EventEnvelope::validate_sequence(version, &log.run_id, &log.genesis_hash, envelopes)?;
         if version == EventContractVersion::V2
             && let Some(first) = envelopes.first()
@@ -4390,6 +4462,69 @@ impl EventLog {
     }
 }
 
+fn replay_incomplete(operation: &'static str, limit: u64, observed: u64) -> DomainError {
+    DomainError::Incomplete {
+        operation,
+        limit: usize::try_from(limit).unwrap_or(usize::MAX),
+        observed: usize::try_from(observed).unwrap_or(usize::MAX),
+    }
+}
+
+fn replay_add(operation: &'static str, limit: u64, total: u64, next: u64) -> Result<u64> {
+    let observed = total
+        .checked_add(next)
+        .ok_or_else(|| replay_incomplete(operation, limit, u64::MAX))?;
+    if observed > limit {
+        return Err(replay_incomplete(operation, limit, observed));
+    }
+    Ok(observed)
+}
+
+fn preflight_v2_replay_limits(
+    envelopes: &[EventEnvelope],
+    limits: EventReplayLimits,
+) -> Result<()> {
+    if envelopes.is_empty() {
+        return Err(DomainError::EventSequence(
+            "V2 replay requires the sequence-one genesis manifest".to_owned(),
+        ));
+    }
+    let count = u64::try_from(envelopes.len())
+        .map_err(|_| replay_incomplete("V2 replay event count", limits.max_events, u64::MAX))?;
+    if count > limits.max_events {
+        return Err(replay_incomplete(
+            "V2 replay event count",
+            limits.max_events,
+            count,
+        ));
+    }
+    let mut canonical = 0_u64;
+    for envelope in envelopes {
+        if envelope.contract_version()? != EventContractVersion::V2 {
+            return Err(DomainError::Validation(
+                "V2 replay refuses a non-V2 envelope".to_owned(),
+            ));
+        }
+        // Exact canonical serialization is performed before any output-log
+        // clone. `max_canonical_bytes` is a byte-stream contract, not a heap
+        // or RSS assertion.
+        let bytes = envelope.canonical_bytes()?;
+        canonical = replay_add(
+            "V2 replay canonical bytes",
+            limits.max_canonical_bytes,
+            canonical,
+            u64::try_from(bytes.len()).map_err(|_| {
+                replay_incomplete(
+                    "V2 replay canonical bytes",
+                    limits.max_canonical_bytes,
+                    u64::MAX,
+                )
+            })?,
+        )?;
+    }
+    Ok(())
+}
+
 // The event identity intentionally binds every envelope component, including
 // its selected schema, so legacy v1 and minted v2 IDs cannot alias.
 #[allow(clippy::too_many_arguments)]
@@ -4768,6 +4903,231 @@ mod tests {
             envelope,
             source_by_id,
         )
+    }
+
+    #[test]
+    fn replay_validated_v2_prefix_requires_exact_host_admissions() {
+        let (log, _initial, _plan, _obligation, _envelope, _sources) = d2_log();
+        let genesis = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let envelopes = log
+            .events()
+            .iter()
+            .map(|event| event.envelope().clone())
+            .collect::<Vec<_>>();
+
+        assert!(
+            EventLog::replay_validated_v2_prefix(
+                log.run_id().clone(),
+                &genesis,
+                &envelopes,
+                &EventAdmissions::default(),
+                EventReplayLimits::new(u64::MAX, u64::MAX),
+            )
+            .is_err()
+        );
+
+        let context_admissions = log
+            .events()
+            .iter()
+            .filter_map(|event| event.context_projection_admission.clone())
+            .collect::<Vec<_>>();
+        let replayed = EventLog::replay_validated_v2_prefix(
+            log.run_id().clone(),
+            &genesis,
+            &envelopes,
+            &EventAdmissions::default().with_context_admissions(context_admissions.clone()),
+            EventReplayLimits::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+        assert_eq!(replayed.tail_hash(), log.tail_hash());
+        assert_eq!(replayed.events().len(), log.events().len());
+
+        let mut wrong = context_admissions;
+        wrong[0].sequence += 1;
+        assert!(
+            EventLog::replay_validated_v2_prefix(
+                log.run_id().clone(),
+                &genesis,
+                &envelopes,
+                &EventAdmissions::default().with_context_admissions(wrong),
+                EventReplayLimits::new(u64::MAX, u64::MAX),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn replay_validated_v2_prefix_limits_are_exact_atomic_and_refuse_v1() {
+        let log = v2_log("run:replay-limits");
+        let genesis = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let envelopes = log
+            .events()
+            .iter()
+            .map(|event| event.envelope().clone())
+            .collect::<Vec<_>>();
+        let canonical = envelopes
+            .iter()
+            .try_fold(0_u64, |total, envelope| {
+                total
+                    .checked_add(u64::try_from(envelope.canonical_bytes()?.len()).unwrap())
+                    .ok_or_else(|| {
+                        replay_incomplete("V2 replay canonical bytes", u64::MAX, u64::MAX)
+                    })
+            })
+            .unwrap();
+
+        assert!(
+            EventLog::replay_validated_v2_prefix(
+                log.run_id().clone(),
+                &genesis,
+                &envelopes,
+                &EventAdmissions::default(),
+                EventReplayLimits::new(1, canonical),
+            )
+            .is_ok()
+        );
+        for limits in [
+            EventReplayLimits::new(0, canonical),
+            EventReplayLimits::new(1, canonical - 1),
+        ] {
+            assert!(
+                EventLog::replay_validated_v2_prefix(
+                    log.run_id().clone(),
+                    &genesis,
+                    &envelopes,
+                    &EventAdmissions::default(),
+                    limits,
+                )
+                .is_err(),
+                "limits unexpectedly admitted: {limits:?}"
+            );
+            assert_eq!(log.events().len(), 1);
+            assert_eq!(
+                log.aggregate().obligations().count(),
+                log.initial.obligations().count()
+            );
+        }
+        assert!(replay_add("V2 replay canonical bytes", u64::MAX, u64::MAX, 1).is_err());
+        assert!(matches!(
+            EventLog::replay_validated_v2_prefix(
+                log.run_id().clone(),
+                &genesis,
+                &[],
+                &EventAdmissions::default(),
+                EventReplayLimits::new(1, canonical),
+            ),
+            Err(DomainError::EventSequence(_))
+        ));
+
+        let mut v1_source = v2_log("run:replay-v1-refusal");
+        let obligation = v1_source
+            .aggregate()
+            .obligations()
+            .next()
+            .unwrap()
+            .id()
+            .clone();
+        v1_source
+            .append(EventCommand::obligation_transition(
+                obligation,
+                ObligationLifecycle::Planned,
+            ))
+            .unwrap();
+        let transition = v1_source.events()[1].envelope();
+        let payload = decode_canonical_payload(transition.payload.get()).unwrap();
+        let v1 = EventEnvelope::new(
+            EventContractVersion::V1,
+            v1_source.run_id().clone(),
+            v1_source.genesis_hash().clone(),
+            1,
+            SYSTEM_ACTOR,
+            1,
+            event_chain_genesis_hash(v1_source.run_id(), v1_source.genesis_hash()).unwrap(),
+            payload,
+        )
+        .unwrap();
+        assert!(
+            EventLog::replay_validated_v2_prefix(
+                v1_source.run_id().clone(),
+                &genesis,
+                &[v1],
+                &EventAdmissions::default(),
+                EventReplayLimits::new(1, canonical),
+            )
+            .is_err(),
+            "V1 envelope must be refused"
+        );
+    }
+
+    #[test]
+    fn replay_limits_apply_exact_canonical_sum_to_multi_event_prefix() {
+        let (log, _initial, _plan, _obligation, _envelope, _sources) = d2_log();
+        let genesis = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let envelopes = log
+            .events()
+            .iter()
+            .map(|event| event.envelope().clone())
+            .collect::<Vec<_>>();
+        assert!(envelopes.len() >= 5);
+        assert!(
+            envelopes
+                .iter()
+                .any(|event| { event.payload.get().contains("review_plan_recorded") })
+        );
+        assert!(
+            envelopes
+                .iter()
+                .any(|event| { event.payload.get().contains("context_envelope_projected") })
+        );
+        let admissions = EventAdmissions::default().with_context_admissions(
+            log.events()
+                .iter()
+                .filter_map(|event| event.context_projection_admission.clone())
+                .collect(),
+        );
+        let canonical = envelopes
+            .iter()
+            .try_fold(0_u64, |total, envelope| {
+                total
+                    .checked_add(u64::try_from(envelope.canonical_bytes()?.len()).unwrap())
+                    .ok_or_else(|| {
+                        replay_incomplete("V2 replay canonical bytes", u64::MAX, u64::MAX)
+                    })
+            })
+            .unwrap();
+        let exact = EventReplayLimits::new(u64::try_from(envelopes.len()).unwrap(), canonical);
+        assert!(
+            EventLog::replay_validated_v2_prefix(
+                log.run_id().clone(),
+                &genesis,
+                &envelopes,
+                &admissions,
+                exact,
+            )
+            .is_ok()
+        );
+        assert!(
+            EventLog::replay_validated_v2_prefix(
+                log.run_id().clone(),
+                &genesis,
+                &envelopes,
+                &admissions,
+                EventReplayLimits::new(u64::try_from(envelopes.len()).unwrap(), canonical - 1),
+            )
+            .is_err()
+        );
     }
 
     fn append_d2_attempt(

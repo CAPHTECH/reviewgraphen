@@ -82,6 +82,7 @@
 | [`adr/0008-language-neutral-core-profile-specific-extractors.md`](adr/0008-language-neutral-core-profile-specific-extractors.md) | coreを言語非依存、抽出器をadapter化する。 |
 | [`adr/0009-rust-development-harness.md`](adr/0009-rust-development-harness.md) | product crateより先にRust開発・検証基盤を固定する。 |
 | [`adr/0018-d2-execution-claim-report-and-index-v3.md`](adr/0018-d2-execution-claim-report-and-index-v3.md) | D2 execution/claim atomicity、report v2、derived-index schema v3のAccepted設計契約。 |
+| [`adr/0019-replayed-v2-run-session.md`](adr/0019-replayed-v2-run-session.md) | admission-bound V2 replay session、durability uncertainty、exact replay count/byte limits。 |
 
 ## 4. Schemaと参照シナリオ
 

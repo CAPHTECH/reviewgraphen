@@ -20,7 +20,7 @@ pub use index::{
 pub use journal::{
     EventJournal, JournalAppendReceipt, JournalError, JournalGenesis, JournalIdentity,
     JournalLimits, JournalReader, JournalRecoveryReceipt, JournalWriter, RecoveryCompletion,
-    RecoveryIntent,
+    RecoveryIntent, ReplayedV2RunSession,
 };
 
 #[cfg(target_os = "linux")]
