@@ -927,6 +927,20 @@ pub(crate) struct AdmittedSource {
 }
 
 impl ContextProjectionAdmission {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.manifest_digest.allocated_bytes()
+            + self.envelope_id.allocated_bytes()
+            + self.projection_hash.allocated_bytes()
+            + self.sources.capacity() * std::mem::size_of::<AdmittedSource>()
+            + self
+                .sources
+                .iter()
+                .map(|source| {
+                    source.registration_id.allocated_bytes() + source.excerpt_hash.allocated_bytes()
+                })
+                .sum::<usize>()
+    }
+
     pub(crate) fn matches_projection(&self, envelope: &ReviewContextEnvelope) -> bool {
         let expected_sources = envelope
             .included_sources

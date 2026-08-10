@@ -1042,6 +1042,22 @@ pub(crate) struct ReviewExecutionRecorded {
 }
 
 impl ReviewExecutionRecorded {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.execution
+            .allocated_bytes()
+            .saturating_add(
+                self.claims
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<ExecutionClaimV2>()),
+            )
+            .saturating_add(
+                self.claims
+                    .iter()
+                    .map(ExecutionClaimV2::allocated_bytes)
+                    .sum::<usize>(),
+            )
+    }
+
     pub(crate) fn validate_shape(&self) -> Result<()> {
         self.execution.validate_shape()?;
         let expected_count = if self.execution.outcome.is_structured() {
@@ -1544,7 +1560,7 @@ pub(crate) struct ReviewerRawClosure {
 }
 
 impl ReviewerRawClosure {
-    fn allocated_bytes(&self) -> usize {
+    pub(crate) fn allocated_bytes(&self) -> usize {
         self.execution_id
             .allocated_bytes()
             .saturating_add(self.raw_artifact_hash.allocated_bytes())

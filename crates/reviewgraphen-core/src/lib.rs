@@ -38,13 +38,17 @@ pub use coverage::{Coverage, CoverageMeasure, Ratio};
 pub use error::{DomainError, PlanningError, Result};
 pub use event::{
     ArtifactRegistered, ArtifactRegisteredV3, ArtifactSensitivity, ArtifactSource,
-    ArtifactSourceV3, DecodedPayload, Event, EventAdmissions, EventCommand, EventContractVersion,
+    ArtifactSourceV3, AuthorityArtifactResolverV3, AuthorityReplayBasisV3, AuthorityTrustRootsV3,
+    DecisionInputV3, DecodedPayload, Event, EventAdmissions, EventCommand, EventContractVersion,
     EventEnvelope, EventLog, EventReplayLimits, EventStreamGenesis, EventViewAccounting,
-    EvidenceBindingAdmission, OfflineProjectionState, ProjectedContextEnvelopeMetadata,
+    EvidenceBindingAdmission, HarnessTrustRootInputV3, HumanAuthorityCapabilityV3,
+    HumanTrustGrantInputV3, OfflineProjectionState, ProjectedContextEnvelopeMetadata,
     ProjectedFindingMetadata, RunGenesisManifest, RunGenesisManifestV3, RunGenesisSnapshot,
     SnapshotSourceRecordEntry, SnapshotSourcesRecorded, UnreconciledRecordKind,
-    UnreconciledRecordMetadata, ValidatedEvent, ValidatedEventView, VerificationAdmission,
-    VerifiedV2Genesis, VerifierArtifactRoleV3, preflight_index_genesis_json_structure,
+    UnreconciledRecordMetadata, ValidatedArtifactRegistrationV3, ValidatedDecisionV3,
+    ValidatedEvent, ValidatedEventView, ValidatedFindingV3, ValidatedVerificationBundleV3,
+    VerificationAdmission, VerificationBundleReceiptV3, VerifiedV2Genesis, VerifierArtifactRoleV3,
+    preflight_index_genesis_json_structure,
 };
 pub use execution::{
     AbstentionReason, ExecutionClaimInputV2, ExecutionClaimV2, ExecutionOutcome, ExecutionRecord,

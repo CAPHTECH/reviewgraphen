@@ -109,4 +109,36 @@ pub enum DomainError {
     /// Event-v3 authority state was routed through a legacy replay surface.
     #[error("event-v3 authority replay is required for {operation}")]
     EventV3AuthorityReplayRequired { operation: &'static str },
+
+    /// A canonical v3 prefix failed authority validation at one exact event.
+    #[error("event-v3 authority replay refused at sequence {event_sequence}: {reason}")]
+    AuthorityReplayRefused { event_sequence: u64, reason: String },
+
+    /// A fresh or replayed authority object was bound to another policy.
+    #[error("event-v3 authority policy revision mismatch")]
+    AuthorityPolicyMismatch,
+
+    /// A caller-retained replay basis no longer names the exact log tail.
+    #[error("event-v3 authority replay basis does not match the current stream tail")]
+    AuthorityReplayBasisMismatch,
+
+    /// Fixture authority had no exact claim-bound harness trust root.
+    #[error("event-v3 harness trust root is missing")]
+    HarnessTrustRootMissing,
+
+    /// Human authority had no exact scoped and valid trust grant.
+    #[error("event-v3 human trust root is missing")]
+    HumanTrustRootMissing,
+
+    /// A sealed verifier bundle was changed or used at another position.
+    #[error("event-v3 verification bundle does not match its sealed scope")]
+    VerificationBundleMismatch,
+
+    /// A witness admission was changed, reused, or moved to another position.
+    #[error("event-v3 external witness admission does not match its sealed scope")]
+    WitnessAdmissionMismatch,
+
+    /// A human decision admission was changed or moved to another position.
+    #[error("event-v3 decision admission does not match its sealed scope")]
+    DecisionAdmissionMismatch,
 }

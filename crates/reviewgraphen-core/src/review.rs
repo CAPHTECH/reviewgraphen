@@ -258,6 +258,48 @@ pub(crate) struct ObligationParts {
 }
 
 impl Obligation {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        fn id_vec(values: &Vec<StableId>) -> usize {
+            values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<StableId>())
+                .saturating_add(values.iter().map(StableId::allocated_bytes).sum::<usize>())
+        }
+        fn id_set(values: &BTreeSet<StableId>) -> usize {
+            values
+                .len()
+                .saturating_mul(std::mem::size_of::<StableId>())
+                .saturating_add(values.iter().map(StableId::allocated_bytes).sum::<usize>())
+        }
+        fn string_set(values: &BTreeSet<String>) -> usize {
+            values
+                .len()
+                .saturating_mul(std::mem::size_of::<String>())
+                .saturating_add(values.iter().map(String::capacity).sum::<usize>())
+        }
+        self.id
+            .allocated_bytes()
+            .saturating_add(self.target_kind.capacity())
+            .saturating_add(id_vec(&self.target_refs))
+            .saturating_add(id_set(&self.normalized_target_refs))
+            .saturating_add(self.semantic_key.capacity())
+            .saturating_add(self.property_id.capacity())
+            .saturating_add(self.property_version.capacity())
+            .saturating_add(id_vec(&self.context_ids))
+            .saturating_add(id_set(&self.normalized_context_ids))
+            .saturating_add(string_set(&self.required_capabilities))
+            .saturating_add(string_set(&self.accepted_evidence_modes))
+            .saturating_add(self.applicability_status.capacity())
+            .saturating_add(string_set(&self.applicability_reasons))
+            .saturating_add(id_set(&self.qualification_ids))
+            .saturating_add(self.version.allocated_bytes())
+            .saturating_add(id_vec(&self.depends_on))
+            .saturating_add(id_set(&self.normalized_depends_on))
+            .saturating_add(id_set(&self.generator_ids))
+            .saturating_add(id_vec(&self.source_ids))
+            .saturating_add(id_set(&self.normalized_source_ids))
+    }
+
     pub(crate) fn new(parts: ObligationParts) -> Result<Self> {
         if parts.target_kind.is_empty()
             || parts.semantic_key.is_empty()
@@ -1020,6 +1062,20 @@ pub struct DecisionAdmission {
     digest: crate::ContentHash,
 }
 
+impl DecisionAdmission {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.run_id.allocated_bytes()
+            + self.genesis_hash.allocated_bytes()
+            + self.tail_hash.allocated_bytes()
+            + self.universe_id.allocated_bytes()
+            + self.closure_digest.allocated_bytes()
+            + self.decision_id.allocated_bytes()
+            + self.actor.capacity()
+            + self.authority.capacity()
+            + self.digest.allocated_bytes()
+    }
+}
+
 impl TrustedHumanAdmission {
     /// Admits an already-authenticated human identity into the M1 in-memory run.
     pub fn from_trusted_host(
@@ -1713,6 +1769,96 @@ pub enum FakeAttemptState {
 }
 
 impl ReviewAggregate {
+    /// Observable retained ownership used by the fixed event-v3 working-set
+    /// contract. This charges inline map slots and every owned backing buffer;
+    /// allocator-private B-tree node headers are intentionally outside the
+    /// portable accounting contract.
+    pub(crate) fn retained_bytes_v3(&self) -> Result<u64> {
+        fn add(total: &mut u64, bytes: usize) -> Result<()> {
+            *total = total
+                .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "event-v3 ReviewAggregate retained bytes",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+            Ok(())
+        }
+        fn add_map<T>(
+            total: &mut u64,
+            values: &BTreeMap<StableId, T>,
+            allocated: impl Fn(&T) -> usize,
+        ) -> Result<()> {
+            for (id, value) in values {
+                add(total, std::mem::size_of::<(StableId, T)>())?;
+                add(total, id.allocated_bytes())?;
+                add(total, allocated(value))?;
+            }
+            Ok(())
+        }
+
+        let mut total = u64::try_from(std::mem::size_of::<Self>()).unwrap_or(u64::MAX);
+        add(&mut total, self.program.allocated_bytes())?;
+        add(&mut total, self.universe.allocated_bytes())?;
+        add_map(&mut total, &self.obligations, Obligation::allocated_bytes)?;
+        add_map(&mut total, &self.claims, ReviewClaim::allocated_bytes)?;
+        add_map(&mut total, &self.evidence, Evidence::allocated_bytes)?;
+        add_map(&mut total, &self.bindings, EvidenceBinding::allocated_bytes)?;
+        add_map(
+            &mut total,
+            &self.verifications,
+            Verification::allocated_bytes,
+        )?;
+        add_map(&mut total, &self.decisions, Decision::allocated_bytes)?;
+        add_map(&mut total, &self.findings, Finding::allocated_bytes)?;
+        if let Some(value) = &self.genesis_manifest {
+            add(&mut total, value.allocated_bytes())?;
+        }
+        add_map(
+            &mut total,
+            &self.registered_artifacts,
+            ArtifactRegistered::allocated_bytes,
+        )?;
+        add_map(
+            &mut total,
+            &self.registered_artifacts_v3,
+            ArtifactRegisteredV3::allocated_bytes,
+        )?;
+        add_map(
+            &mut total,
+            &self.snapshot_sources,
+            SnapshotSourcesRecorded::allocated_bytes,
+        )?;
+        add_map(&mut total, &self.plans, ReviewPlan::allocated_bytes)?;
+        add_map(
+            &mut total,
+            &self.envelopes,
+            ReviewContextEnvelope::allocated_bytes,
+        )?;
+        add_map(
+            &mut total,
+            &self.offline_execution_envelopes,
+            ReviewContextEnvelope::allocated_bytes,
+        )?;
+        add_map(
+            &mut total,
+            &self.executions,
+            ExecutionRecord::allocated_bytes,
+        )?;
+        add_map(
+            &mut total,
+            &self.execution_claims,
+            ExecutionClaimV2::allocated_bytes,
+        )?;
+        for id in self.execution_raw_sizes.keys() {
+            add(
+                &mut total,
+                std::mem::size_of::<(StableId, u64)>() + id.allocated_bytes(),
+            )?;
+        }
+        Ok(total)
+    }
+
     /// Starts a run from a validated ProgramSpace and deterministic universe.
     pub fn new(
         program: ProgramSpace,

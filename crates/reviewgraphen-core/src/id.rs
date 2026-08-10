@@ -153,6 +153,14 @@ pub struct VersionTuple {
 }
 
 impl VersionTuple {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.profile
+            .capacity()
+            .saturating_add(self.rule.capacity())
+            .saturating_add(self.extractor_set.allocated_bytes())
+            .saturating_add(self.snapshot.allocated_bytes())
+    }
+
     /// Versioned profile identity.
     #[must_use]
     pub fn profile(&self) -> &str {

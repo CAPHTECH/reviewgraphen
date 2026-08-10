@@ -1207,7 +1207,12 @@ impl<'a> DerivedIndex<'a> {
                         )?;
                     }
                     DecodedPayload::RunGenesisManifestV3(_)
-                    | DecodedPayload::ArtifactRegisteredV3(_) => {
+                    | DecodedPayload::ArtifactRegisteredV3(_)
+                    | DecodedPayload::EvidenceRecordedV3(_)
+                    | DecodedPayload::EvidenceBoundV3(_)
+                    | DecodedPayload::VerificationRecordedV3(_)
+                    | DecodedPayload::DecisionRecordedV3(_)
+                    | DecodedPayload::FindingRecordedV3(_) => {
                         return Err(IndexError::ProjectionContractViolation);
                     }
                     }
@@ -2672,6 +2677,13 @@ fn payload_kind_decoded(payload: &DecodedPayload) -> Result<&'static str, IndexE
         }
         DecodedPayload::ArtifactRegistered(_) => "artifact_registered",
         DecodedPayload::ArtifactRegisteredV3(_) => {
+            return Err(IndexError::ProjectionContractViolation);
+        }
+        DecodedPayload::EvidenceRecordedV3(_)
+        | DecodedPayload::EvidenceBoundV3(_)
+        | DecodedPayload::VerificationRecordedV3(_)
+        | DecodedPayload::DecisionRecordedV3(_)
+        | DecodedPayload::FindingRecordedV3(_) => {
             return Err(IndexError::ProjectionContractViolation);
         }
         DecodedPayload::SnapshotSourcesRecorded(_) => "snapshot_sources_recorded",

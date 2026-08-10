@@ -1,6 +1,8 @@
 use crate::{ContentHash, DomainError, Result};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
+use std::io::{self, Write};
 
 /// A byte-stable JSON payload together with its SHA-256 hash.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,6 +17,85 @@ pub fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>> {
         .map_err(|error| DomainError::CanonicalJson(error.to_string()))?;
     serde_json::to_vec(&canonical_json_value(value))
         .map_err(|error| DomainError::CanonicalJson(error.to_string()))
+}
+
+struct CountingWriter {
+    count: usize,
+    limit: usize,
+    overflow: bool,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let Some(next) = self.count.checked_add(bytes.len()) else {
+            self.overflow = true;
+            return Err(io::Error::other("canonical JSON byte count overflow"));
+        };
+        if next > self.limit {
+            self.overflow = true;
+            return Err(io::Error::other("canonical JSON byte count exceeds limit"));
+        }
+        self.count = next;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Counts the exact compact JSON wire length, including UTF-8 escaping,
+/// without retaining an output buffer. Object ordering cannot change length;
+/// canonical key ordering is still enforced by [`canonical_json`] after the
+/// caller admits this count against its working-set limit.
+pub(crate) fn canonical_json_count_bounded<T: Serialize>(
+    value: &T,
+    limit: usize,
+    operation: &'static str,
+) -> Result<u64> {
+    let mut writer = CountingWriter {
+        count: 0,
+        limit,
+        overflow: false,
+    };
+    if let Err(error) = serde_json::to_writer(&mut writer, value) {
+        if writer.overflow {
+            return Err(DomainError::Incomplete {
+                operation,
+                limit,
+                observed: writer.count.saturating_add(1),
+            });
+        }
+        return Err(DomainError::CanonicalJson(error.to_string()));
+    }
+    u64::try_from(writer.count).map_err(|_| DomainError::Incomplete {
+        operation,
+        limit,
+        observed: usize::MAX,
+    })
+}
+
+struct Sha256Writer(Sha256);
+
+impl Write for Sha256Writer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Hashes a compact JSON stream without retaining canonical bytes. Callers
+/// must provide a wrapper whose struct/map fields are already emitted in
+/// canonical lexical order.
+pub(crate) fn compact_json_sha256_streaming<T: Serialize>(value: &T) -> Result<ContentHash> {
+    let mut writer = Sha256Writer(Sha256::new());
+    serde_json::to_writer(&mut writer, value)
+        .map_err(|error| DomainError::CanonicalJson(error.to_string()))?;
+    ContentHash::parse(format!("sha256:{:x}", writer.0.finalize()))
 }
 
 /// Canonicalizes a JSON value. Set-like collections must be sorted by their
@@ -65,7 +146,7 @@ impl CanonicalJson {
 
 #[cfg(test)]
 mod tests {
-    use super::canonical_json;
+    use super::{canonical_json, canonical_json_count_bounded};
     use serde_json::json;
 
     #[test]
@@ -75,5 +156,16 @@ mod tests {
             canonical_json(&value).unwrap(),
             br#"{"a":[2,1],"z":{"a":2,"b":1}}"#
         );
+    }
+
+    #[test]
+    fn counting_writer_matches_exact_escaped_wire_length_and_cap() {
+        let value = json!({"escaped": "line\nquote\"slash\\tab\t雪"});
+        let bytes = canonical_json(&value).unwrap();
+        assert_eq!(
+            canonical_json_count_bounded(&value, bytes.len(), "counting test").unwrap(),
+            bytes.len() as u64
+        );
+        assert!(canonical_json_count_bounded(&value, bytes.len() - 1, "counting test").is_err());
     }
 }

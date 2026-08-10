@@ -65,6 +65,38 @@ pub struct UniverseDescriptor {
 }
 
 impl UniverseDescriptor {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        fn id_set(values: &BTreeSet<StableId>) -> usize {
+            values
+                .len()
+                .saturating_mul(std::mem::size_of::<StableId>())
+                .saturating_add(values.iter().map(StableId::allocated_bytes).sum::<usize>())
+        }
+        let exclusions = self.exclusions.iter().fold(
+            self.exclusions
+                .capacity()
+                .saturating_mul(std::mem::size_of::<ExclusionRecord>()),
+            |total, value| {
+                total
+                    .saturating_add(value.id.allocated_bytes())
+                    .saturating_add(value.candidate_key.capacity())
+                    .saturating_add(value.reason.capacity())
+                    .saturating_add(id_set(&value.source_ids))
+            },
+        );
+        self.id
+            .allocated_bytes()
+            .saturating_add(self.snapshot_id.allocated_bytes())
+            .saturating_add(self.profile_id.capacity())
+            .saturating_add(self.rule_set_hash.allocated_bytes())
+            .saturating_add(self.extractor_set_hash.allocated_bytes())
+            .saturating_add(self.policy_version.capacity())
+            .saturating_add(self.rule_pack_version.capacity())
+            .saturating_add(id_set(&self.obligation_ids))
+            .saturating_add(exclusions)
+            .saturating_add(id_set(&self.limitation_ids))
+    }
+
     /// Deterministic universe identity.
     #[must_use]
     pub fn id(&self) -> &StableId {

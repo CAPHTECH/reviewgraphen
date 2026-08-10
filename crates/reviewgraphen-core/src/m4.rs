@@ -145,7 +145,7 @@ pub const FIXTURE_MEDIA_TYPE: &str = "application/vnd.reviewgraphen.test-witness
 pub const FIXTURE_WITNESS_HASH: &str =
     "sha256:8d673f965d089dfc08fb3e9c85453f4654894de71e0bd331a9f3cf97bcea5355";
 
-const MAX_RECORD_BYTES: usize = 65_536;
+pub(crate) const MAX_RECORD_BYTES: usize = 65_536;
 const MAX_SET: usize = 64;
 const MAX_EVIDENCE_SUBJECTS: usize = 128;
 const MAX_VERIFICATION_EVIDENCE: usize = 128;
@@ -154,7 +154,7 @@ const MAX_LIMITATIONS: usize = 32;
 const MAX_LIMITATION_BYTES: usize = 2_048;
 const MAX_TRACE_BYTES: usize = 256;
 const MAX_RATIONALE_BYTES: usize = 8_192;
-const MAX_RETAINED_WORKING_BYTES: u64 = 16_777_216;
+pub(crate) const MAX_RETAINED_WORKING_BYTES: u64 = 16_777_216;
 const MAX_M4_OBJECT_MEMBERS: usize = 64;
 
 #[cfg(test)]
@@ -793,7 +793,7 @@ fn require_text(value: &str, limit: usize, field: &'static str) -> Result<()> {
     Ok(())
 }
 
-fn validate_utc_seconds(value: &str, field: &'static str) -> Result<()> {
+pub(crate) fn validate_utc_seconds(value: &str, field: &'static str) -> Result<()> {
     let bytes = value.as_bytes();
     let structural = bytes.len() == 20
         && bytes[4] == b'-'
@@ -1485,7 +1485,7 @@ impl AuthorityScopeV3 {
     pub fn policy_revision_hash(&self) -> &ContentHash {
         &self.policy_revision_hash
     }
-    fn allocated_bytes(&self) -> Result<u64> {
+    pub(crate) fn allocated_bytes(&self) -> Result<u64> {
         let mut total = id_vec_allocated_bytes(&self.target_refs)?
             .checked_add(id_vec_allocated_bytes(&self.source_ids)?)
             .ok_or(M4Error::Incomplete {
@@ -1664,6 +1664,9 @@ impl StaticFactInputV1 {
         value.validate()?;
         Ok(value)
     }
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        bounded_bytes(self, "static fact input")
+    }
 }
 
 impl StaticFactInputV1 {
@@ -1718,6 +1721,18 @@ pub struct StaticRecordProposalV1 {
     evidence: Option<EvidenceV3>,
     scope: StaticScopeV3,
     verification: VerificationV3,
+}
+
+impl StaticRecordProposalV1 {
+    pub(crate) fn evidence(&self) -> Option<&EvidenceV3> {
+        self.evidence.as_ref()
+    }
+    pub(crate) fn binding(&self) -> Option<&EvidenceBindingV3> {
+        self.binding.as_ref()
+    }
+    pub(crate) fn verification(&self) -> &VerificationV3 {
+        &self.verification
+    }
 }
 
 impl StaticFactEvaluationV1 {
@@ -2091,6 +2106,21 @@ impl FixedFixtureResultV1 {
     pub fn subject_ids(&self) -> &[StableId] {
         &self.subject_ids
     }
+    pub(crate) fn claim_id(&self) -> &StableId {
+        &self.claim_id
+    }
+    pub(crate) fn property_id(&self) -> &str {
+        &self.property_id
+    }
+    pub(crate) const fn descriptor(&self) -> VerifierDescriptorV3 {
+        self.descriptor
+    }
+    pub(crate) const fn procedure(&self) -> VerifierProcedureV3 {
+        self.procedure
+    }
+    pub(crate) const fn outcome(&self) -> VerificationOutcomeV3 {
+        self.outcome
+    }
     pub fn witness_hash(&self) -> &ContentHash {
         &self.witness_hash
     }
@@ -2359,7 +2389,7 @@ impl EvidenceV3 {
     pub fn body_hash(&self) -> Result<ContentHash> {
         body_hash(self)
     }
-    fn allocated_bytes(&self) -> Result<u64> {
+    pub(crate) fn allocated_bytes(&self) -> Result<u64> {
         let mut total = id_vec_allocated_bytes(&self.subject_ids)?;
         for bytes in [
             self.schema.capacity(),
@@ -2383,6 +2413,18 @@ impl EvidenceV3 {
     }
     pub const fn descriptor(&self) -> VerifierDescriptorV3 {
         self.descriptor
+    }
+    pub const fn procedure(&self) -> VerifierProcedureV3 {
+        self.procedure
+    }
+    pub fn input_registration_id(&self) -> &StableId {
+        &self.input_registration_id
+    }
+    pub fn output_registration_id(&self) -> &StableId {
+        &self.output_registration_id
+    }
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        bounded_bytes(self, "EvidenceV3")
     }
 }
 
@@ -2544,7 +2586,7 @@ impl EvidenceBindingV3 {
     pub fn body_hash(&self) -> Result<ContentHash> {
         body_hash(self)
     }
-    fn allocated_bytes(&self) -> Result<u64> {
+    pub(crate) fn allocated_bytes(&self) -> Result<u64> {
         let mut total = 0;
         for bytes in [
             self.schema.capacity(),
@@ -2565,6 +2607,15 @@ impl EvidenceBindingV3 {
     }
     pub const fn relation(&self) -> EvidenceRelationV3 {
         self.relation
+    }
+    pub fn claim_id(&self) -> &StableId {
+        &self.claim_id
+    }
+    pub fn property_id(&self) -> &str {
+        &self.property_id
+    }
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        bounded_bytes(self, "EvidenceBindingV3")
     }
 }
 #[derive(Deserialize)]
@@ -2816,7 +2867,7 @@ impl VerificationV3 {
     pub fn body_hash(&self) -> Result<ContentHash> {
         body_hash(self)
     }
-    fn allocated_bytes(&self) -> Result<u64> {
+    pub(crate) fn allocated_bytes(&self) -> Result<u64> {
         let mut total = id_vec_allocated_bytes(&self.evidence_ids)?
             .checked_add(string_vec_allocated_bytes(&self.limitations)?)
             .ok_or(M4Error::Incomplete {
@@ -2843,6 +2894,24 @@ impl VerificationV3 {
     }
     pub const fn outcome(&self) -> VerificationOutcomeV3 {
         self.outcome
+    }
+    pub fn claim_id(&self) -> &StableId {
+        &self.claim_id
+    }
+    pub const fn descriptor(&self) -> VerifierDescriptorV3 {
+        self.descriptor
+    }
+    pub const fn procedure(&self) -> VerifierProcedureV3 {
+        self.procedure
+    }
+    pub fn input_registration_id(&self) -> &StableId {
+        &self.input_registration_id
+    }
+    pub fn output_registration_id(&self) -> &StableId {
+        &self.output_registration_id
+    }
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        bounded_bytes(self, "VerificationV3")
     }
 }
 #[derive(Deserialize)]
@@ -2883,6 +2952,103 @@ impl VerificationV3 {
         v.validate()?;
         Ok(v)
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FixtureRecordProposalV1 {
+    pub(crate) evidence: EvidenceV3,
+    pub(crate) binding: EvidenceBindingV3,
+    pub(crate) verification: VerificationV3,
+}
+
+pub(crate) fn materialize_fixture_replay_v1(
+    scope: &ClaimAssessmentScopeV3,
+    result: &FixedFixtureResultV1,
+    input_registration_id: StableId,
+    output_registration_id: StableId,
+) -> Result<FixtureRecordProposalV1> {
+    let mut subject_ids = scope.target_refs.clone();
+    subject_ids.push(StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?);
+    subject_ids.sort_unstable();
+    if scope.property_id != M4_PROPERTY_ID
+        || scope.polarity != ClaimPolarity::IssuePresent
+        || result.claim_id != scope.claim_id
+        || result.property_id != scope.property_id
+        || result.subject_ids != subject_ids
+        || result.descriptor != VerifierDescriptorV3::FixedFixtureV1
+        || result.procedure != VerifierProcedureV3::DuplicateSubmitV1
+        || result.outcome != VerificationOutcomeV3::Passed
+    {
+        return Err(M4Error::AuthorityScopeMismatch);
+    }
+    let evidence_identity = EvidenceIdentity {
+        descriptor_id: VerifierDescriptorV3::FixedFixtureV1,
+        input_registration_id: &input_registration_id,
+        kind: EvidenceKindV3::TestWitness,
+        observation: EvidenceObservationV3::Witnessed,
+        output_registration_id: &output_registration_id,
+        procedure_version: VerifierProcedureV3::DuplicateSubmitV1,
+        snapshot_id: &scope.snapshot_id,
+        subject_ids: &subject_ids,
+    };
+    let evidence = EvidenceV3 {
+        schema: "reviewgraphen.evidence.v3".to_owned(),
+        id: derived_id("evidence", &evidence_identity)?,
+        kind: EvidenceKindV3::TestWitness,
+        snapshot_id: scope.snapshot_id.clone(),
+        subject_ids,
+        descriptor: VerifierDescriptorV3::FixedFixtureV1,
+        procedure: VerifierProcedureV3::DuplicateSubmitV1,
+        input_registration_id: input_registration_id.clone(),
+        output_registration_id: output_registration_id.clone(),
+        observation: EvidenceObservationV3::Witnessed,
+    };
+    evidence.validate()?;
+    let binding_identity = BindingIdentity {
+        claim_id: &scope.claim_id,
+        evidence_id: &evidence.id,
+        property_id: &scope.property_id,
+        relation: EvidenceRelationV3::Reproduces,
+    };
+    let binding = EvidenceBindingV3 {
+        schema: "reviewgraphen.evidence_binding.v3".to_owned(),
+        id: derived_id("binding", &binding_identity)?,
+        claim_id: scope.claim_id.clone(),
+        evidence_id: evidence.id.clone(),
+        relation: EvidenceRelationV3::Reproduces,
+        property_id: scope.property_id.clone(),
+    };
+    binding.validate()?;
+    let evidence_ids = vec![evidence.id.clone()];
+    let limitations = Vec::new();
+    let verification_identity = VerificationIdentity {
+        claim_id: &scope.claim_id,
+        descriptor_id: VerifierDescriptorV3::FixedFixtureV1,
+        evidence_ids: &evidence_ids,
+        input_registration_id: &input_registration_id,
+        limitations: &limitations,
+        outcome: VerificationOutcomeV3::Passed,
+        output_registration_id: &output_registration_id,
+        procedure_version: VerifierProcedureV3::DuplicateSubmitV1,
+    };
+    let verification = VerificationV3 {
+        schema: "reviewgraphen.verification.v3".to_owned(),
+        id: derived_id("verification", &verification_identity)?,
+        claim_id: scope.claim_id.clone(),
+        descriptor: VerifierDescriptorV3::FixedFixtureV1,
+        procedure: VerifierProcedureV3::DuplicateSubmitV1,
+        input_registration_id,
+        output_registration_id,
+        evidence_ids,
+        outcome: VerificationOutcomeV3::Passed,
+        limitations,
+    };
+    verification.validate()?;
+    Ok(FixtureRecordProposalV1 {
+        evidence,
+        binding,
+        verification,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -2928,6 +3094,54 @@ struct DecisionIdentity<'a> {
     universe_id: &'a StableId,
 }
 impl DecisionV3 {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_from_claim_scope(
+        scope: &ClaimAssessmentScopeV3,
+        policy_revision_hash: ContentHash,
+        outcome: DecisionOutcomeV3,
+        actor: String,
+        authority_id: String,
+        source_ids: BTreeSet<StableId>,
+        rationale: String,
+        issued_at: String,
+        expires_at: Option<String>,
+    ) -> Result<Self> {
+        let source_ids = source_ids.into_iter().collect::<Vec<_>>();
+        let identity = DecisionIdentity {
+            actor: &actor,
+            authority_id: &authority_id,
+            claim_id: &scope.claim_id,
+            expires_at: &expires_at,
+            issued_at: &issued_at,
+            outcome,
+            policy_revision_hash: &policy_revision_hash,
+            property_id: &scope.property_id,
+            rationale: &rationale,
+            run_id: &scope.run_id,
+            snapshot_id: &scope.snapshot_id,
+            source_ids: &source_ids,
+            universe_id: &scope.universe_id,
+        };
+        let value = Self {
+            schema: "reviewgraphen.human_decision.v3".to_owned(),
+            id: derived_id("decision", &identity)?,
+            policy_revision_hash,
+            run_id: scope.run_id.clone(),
+            universe_id: scope.universe_id.clone(),
+            claim_id: scope.claim_id.clone(),
+            property_id: scope.property_id.clone(),
+            outcome,
+            actor,
+            authority_id,
+            snapshot_id: scope.snapshot_id.clone(),
+            source_ids,
+            rationale,
+            issued_at,
+            expires_at,
+        };
+        value.validate()?;
+        Ok(value)
+    }
     #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn new_admitted(
         scope: &AuthorityScopeV3,
@@ -3066,7 +3280,7 @@ impl DecisionV3 {
     pub fn body_hash(&self) -> Result<ContentHash> {
         body_hash(self)
     }
-    fn allocated_bytes(&self) -> Result<u64> {
+    pub(crate) fn allocated_bytes(&self) -> Result<u64> {
         let mut total = id_vec_allocated_bytes(&self.source_ids)?;
         for bytes in [
             self.schema.capacity(),
@@ -3095,6 +3309,39 @@ impl DecisionV3 {
     }
     pub const fn outcome(&self) -> DecisionOutcomeV3 {
         self.outcome
+    }
+    pub fn actor(&self) -> &str {
+        &self.actor
+    }
+    pub fn claim_id(&self) -> &StableId {
+        &self.claim_id
+    }
+    pub fn policy_revision_hash(&self) -> &ContentHash {
+        &self.policy_revision_hash
+    }
+    pub fn issued_at(&self) -> &str {
+        &self.issued_at
+    }
+    pub fn expires_at(&self) -> Option<&str> {
+        self.expires_at.as_deref()
+    }
+    pub fn authority_id(&self) -> &str {
+        &self.authority_id
+    }
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+    pub fn snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+    pub fn universe_id(&self) -> &StableId {
+        &self.universe_id
+    }
+    pub fn property_id(&self) -> &str {
+        &self.property_id
+    }
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        bounded_bytes(self, "DecisionV3")
     }
 }
 #[derive(Deserialize)]
@@ -3424,7 +3671,7 @@ impl FindingV3 {
     pub fn body_hash(&self) -> Result<ContentHash> {
         body_hash(self)
     }
-    fn allocated_bytes(&self) -> Result<u64> {
+    pub(crate) fn allocated_bytes(&self) -> Result<u64> {
         let mut total = id_vec_allocated_bytes(&self.evidence_ids)?
             .checked_add(id_vec_allocated_bytes(&self.verification_ids)?)
             .ok_or(M4Error::Incomplete {
@@ -3456,6 +3703,21 @@ impl FindingV3 {
     }
     pub fn decision_id(&self) -> Option<&StableId> {
         self.decision_id.as_ref()
+    }
+    pub fn claim_id(&self) -> &StableId {
+        &self.claim_id
+    }
+    pub fn evidence_ids(&self) -> &[StableId] {
+        &self.evidence_ids
+    }
+    pub fn verification_ids(&self) -> &[StableId] {
+        &self.verification_ids
+    }
+    pub fn supersedes_finding_id(&self) -> Option<&StableId> {
+        self.supersedes_finding_id.as_ref()
+    }
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        bounded_bytes(self, "FindingV3")
     }
 }
 #[derive(Deserialize)]
@@ -3511,6 +3773,104 @@ pub enum AssessmentReviewStatusV3 {
     Rejected,
 }
 
+/// Internal claim/run scope shared by static, fixture, human, and replay
+/// assessment paths. Unlike `AuthorityScopeV3`, it carries no fixture harness
+/// tuple, so pure static verification never depends on unrelated harness
+/// authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ClaimAssessmentScopeV3 {
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    snapshot_id: StableId,
+    universe_id: StableId,
+    claim_id: StableId,
+    claim_body_hash: ContentHash,
+    property_id: String,
+    polarity: ClaimPolarity,
+    target_refs: Vec<StableId>,
+    source_ids: Vec<StableId>,
+}
+
+impl ClaimAssessmentScopeV3 {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        run_id: StableId,
+        genesis_hash: ContentHash,
+        snapshot_id: StableId,
+        universe_id: StableId,
+        claim: &ExecutionClaimV2,
+    ) -> Result<Self> {
+        let value = Self {
+            run_id,
+            genesis_hash,
+            snapshot_id,
+            universe_id,
+            claim_id: claim.id().clone(),
+            claim_body_hash: claim.body_hash()?,
+            property_id: claim.property_id().to_owned(),
+            polarity: claim.polarity(),
+            target_refs: claim.target_refs().iter().cloned().collect(),
+            source_ids: claim.source_ids().iter().cloned().collect(),
+        };
+        value.validate(claim)?;
+        Ok(value)
+    }
+
+    fn from_authority(scope: &AuthorityScopeV3) -> Self {
+        Self {
+            run_id: scope.run_id.clone(),
+            genesis_hash: scope.genesis_hash.clone(),
+            snapshot_id: scope.snapshot_id.clone(),
+            universe_id: scope.universe_id.clone(),
+            claim_id: scope.claim_id.clone(),
+            claim_body_hash: scope.claim_body_hash.clone(),
+            property_id: scope.property_id.clone(),
+            polarity: scope.polarity,
+            target_refs: scope.target_refs.clone(),
+            source_ids: scope.source_ids.clone(),
+        }
+    }
+
+    fn validate(&self, claim: &ExecutionClaimV2) -> Result<()> {
+        require_kind(&self.run_id, "run", "assessment run")?;
+        require_kind(&self.snapshot_id, "snapshot", "assessment snapshot")?;
+        require_kind(&self.universe_id, "universe", "assessment universe")?;
+        require_kind(&self.claim_id, "claim", "assessment claim")?;
+        if self.claim_id != *claim.id()
+            || self.claim_body_hash != claim.body_hash()?
+            || self.property_id != claim.property_id()
+            || self.polarity != claim.polarity()
+            || self.target_refs != claim.target_refs().iter().cloned().collect::<Vec<_>>()
+            || self.source_ids != claim.source_ids().iter().cloned().collect::<Vec<_>>()
+        {
+            return Err(M4Error::ClaimBodyMismatch);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn allocated_bytes(&self) -> Result<u64> {
+        let mut total = id_vec_allocated_bytes(&self.target_refs)?
+            .checked_add(id_vec_allocated_bytes(&self.source_ids)?)
+            .ok_or(M4Error::Incomplete {
+                operation: "M4 assessment scope bytes",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?;
+        for bytes in [
+            self.run_id.allocated_bytes(),
+            self.genesis_hash.allocated_bytes(),
+            self.snapshot_id.allocated_bytes(),
+            self.universe_id.allocated_bytes(),
+            self.claim_id.allocated_bytes(),
+            self.claim_body_hash.allocated_bytes(),
+            self.property_id.capacity(),
+        ] {
+            checked_memory_add(&mut total, bytes)?;
+        }
+        Ok(total)
+    }
+}
+
 /// Claim-local reducer state. Mutable retained collections are canonical
 /// sorted vectors. The 16 MiB contract charges the exact requested element
 /// slots and owned string capacities before `try_reserve_exact`; an allocator
@@ -3518,7 +3878,7 @@ pub enum AssessmentReviewStatusV3 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ClaimAssessmentV3 {
     #[serde(skip)]
-    scope: AuthorityScopeV3,
+    scope: ClaimAssessmentScopeV3,
     active_decision_id: Option<StableId>,
     binding_ids: Vec<StableId>,
     claim_id: StableId,
@@ -3546,9 +3906,13 @@ pub struct ClaimAssessmentV3 {
 #[allow(dead_code)]
 impl ClaimAssessmentV3 {
     pub(crate) fn new(scope: &AuthorityScopeV3) -> Self {
+        Self::new_from_scope(ClaimAssessmentScopeV3::from_authority(scope))
+    }
+
+    pub(crate) fn new_from_scope(scope: ClaimAssessmentScopeV3) -> Self {
         Self {
-            scope: scope.clone(),
             claim_id: scope.claim_id.clone(),
+            scope,
             disposition: AssessmentDispositionV3::Proposed,
             review_status: AssessmentReviewStatusV3::Unreviewed,
             binding_ids: Vec::new(),
@@ -3578,6 +3942,148 @@ impl ClaimAssessmentV3 {
             AssessmentDispositionV3::Proposed
         }
     }
+
+    fn validate_claim_scope(&self, scope: &ClaimAssessmentScopeV3) -> Result<()> {
+        if &self.scope != scope {
+            return Err(M4Error::AuthorityScopeMismatch);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record_binding_replayed(
+        &mut self,
+        scope: &ClaimAssessmentScopeV3,
+        evidence: EvidenceV3,
+        binding: EvidenceBindingV3,
+    ) -> Result<()> {
+        self.validate_claim_scope(scope)?;
+        if find_sorted_record(&self.bindings, &binding.id, |value| &value.id).is_some() {
+            return Err(M4Error::IdCollision {
+                id: binding.id.clone(),
+            });
+        }
+        if binding.claim_id != scope.claim_id || binding.property_id != scope.property_id {
+            return Err(M4Error::AuthorityScopeMismatch);
+        }
+        if binding.evidence_id != evidence.id || evidence.snapshot_id != scope.snapshot_id {
+            return Err(M4Error::AuthorityScopeMismatch);
+        }
+        let exact = matches!(
+            (binding.relation, evidence.descriptor),
+            (
+                EvidenceRelationV3::Qualifies,
+                VerifierDescriptorV3::StaticFactV1
+            ) | (
+                EvidenceRelationV3::Reproduces,
+                VerifierDescriptorV3::FixedFixtureV1
+            )
+        );
+        if !exact
+            || !evidence
+                .subject_ids
+                .iter()
+                .any(|id| scope.target_refs.contains(id) || scope.source_ids.contains(id))
+        {
+            return Err(M4Error::AuthorityScopeMismatch);
+        }
+        if self.bindings.len() >= MAX_SET || self.evidence.len() >= MAX_SET {
+            return Err(M4Error::Incomplete {
+                operation: "assessment bindings",
+                limit: MAX_SET,
+                observed: MAX_SET + 1,
+            });
+        }
+        self.ensure_working_additions(&[
+            record_addition_bytes(
+                &evidence.id,
+                size_of::<EvidenceV3>(),
+                evidence.allocated_bytes()?,
+                canonical_len(&evidence, "assessment replay evidence scratch")?,
+            )?,
+            record_addition_bytes(
+                &binding.id,
+                size_of::<EvidenceBindingV3>(),
+                binding.allocated_bytes()?,
+                canonical_len(&binding, "assessment replay binding scratch")?,
+            )?,
+        ])?;
+        reserve_one(&mut self.evidence, "assessment evidence reservation")?;
+        reserve_one(&mut self.evidence_ids, "assessment evidence ID reservation")?;
+        reserve_one(&mut self.bindings, "assessment binding reservation")?;
+        reserve_one(&mut self.binding_ids, "assessment binding ID reservation")?;
+        self.invalidate_trace();
+        insert_id_sorted_reserved(&mut self.evidence_ids, evidence.id.clone());
+        insert_sorted_reserved(&mut self.evidence, evidence, |value| &value.id);
+        insert_id_sorted_reserved(&mut self.binding_ids, binding.id.clone());
+        insert_sorted_reserved(&mut self.bindings, binding, |value| &value.id);
+        self.disposition = self.baseline();
+        Ok(())
+    }
+
+    pub(crate) fn record_verification_replayed(
+        &mut self,
+        scope: &ClaimAssessmentScopeV3,
+        verification: VerificationV3,
+    ) -> Result<()> {
+        self.validate_claim_scope(scope)?;
+        if find_sorted_record(&self.verifications, &verification.id, |value| &value.id).is_some() {
+            return Err(M4Error::IdCollision {
+                id: verification.id.clone(),
+            });
+        }
+        if verification.claim_id != scope.claim_id {
+            return Err(M4Error::ClaimMismatch {
+                expected: scope.claim_id.clone(),
+                actual: verification.claim_id.clone(),
+            });
+        }
+        for id in &verification.evidence_ids {
+            let evidence =
+                find_sorted_record(&self.evidence, id, |value| &value.id).ok_or_else(|| {
+                    M4Error::DanglingReference {
+                        owner: "verification",
+                        reference: id.clone(),
+                    }
+                })?;
+            if evidence.descriptor != verification.descriptor
+                || evidence.input_registration_id != verification.input_registration_id
+                || evidence.output_registration_id != verification.output_registration_id
+                || (verification.outcome == VerificationOutcomeV3::Passed
+                    && !self.bindings.iter().any(|binding| {
+                        binding.evidence_id == *id
+                            && binding.claim_id == scope.claim_id
+                            && binding.relation == EvidenceRelationV3::Reproduces
+                    }))
+            {
+                return Err(M4Error::AuthorityScopeMismatch);
+            }
+        }
+        if self.verifications.len() >= MAX_SET {
+            return Err(M4Error::Incomplete {
+                operation: "assessment verifications",
+                limit: MAX_SET,
+                observed: MAX_SET + 1,
+            });
+        }
+        self.ensure_working_additions(&[record_addition_bytes(
+            &verification.id,
+            size_of::<VerificationV3>(),
+            verification.allocated_bytes()?,
+            canonical_len(&verification, "assessment replay verification scratch")?,
+        )?])?;
+        reserve_one(
+            &mut self.verifications,
+            "assessment verification reservation",
+        )?;
+        reserve_one(
+            &mut self.verification_ids,
+            "assessment verification ID reservation",
+        )?;
+        self.invalidate_trace();
+        insert_id_sorted_reserved(&mut self.verification_ids, verification.id.clone());
+        insert_sorted_reserved(&mut self.verifications, verification, |value| &value.id);
+        Ok(())
+    }
     fn invalidate_trace(&mut self) {
         self.current_finding_id = None;
         if self.active_decision_id.take().is_some() {
@@ -3586,7 +4092,7 @@ impl ClaimAssessmentV3 {
             self.decision_conflict = true;
         }
     }
-    fn retained_bytes(&self) -> Result<u64> {
+    pub(crate) fn retained_bytes(&self) -> Result<u64> {
         // Requested-capacity accounting is intentionally derived from logical
         // sorted-vector slots. No BTree node-layout estimate or allocator-
         // specific spare capacity participates in domain validity.
@@ -4210,18 +4716,25 @@ impl ClaimAssessmentV3 {
         decision: DecisionV3,
     ) -> Result<()> {
         admission.validate(scope)?;
+        self.record_decision_replayed(&ClaimAssessmentScopeV3::from_authority(scope), decision)
+    }
+
+    pub(crate) fn record_decision_replayed(
+        &mut self,
+        scope: &ClaimAssessmentScopeV3,
+        decision: DecisionV3,
+    ) -> Result<()> {
         if find_sorted_record(&self.decisions, &decision.id, |value| &value.id).is_some() {
             return Err(M4Error::IdCollision {
                 id: decision.id.clone(),
             });
         }
-        self.validate_scope(scope)?;
+        self.validate_claim_scope(scope)?;
         if decision.run_id != scope.run_id
             || decision.snapshot_id != scope.snapshot_id
             || decision.universe_id != scope.universe_id
             || decision.claim_id != scope.claim_id
             || decision.property_id != scope.property_id
-            || decision.policy_revision_hash != scope.policy_revision_hash
         {
             if decision.run_id != scope.run_id {
                 return Err(M4Error::RunMismatch {
@@ -4253,9 +4766,7 @@ impl ClaimAssessmentV3 {
                     actual: decision.property_id.clone(),
                 });
             }
-            return Err(M4Error::InvalidRecord {
-                reason: "decision policy revision mismatch".to_owned(),
-            });
+            return Err(M4Error::AuthorityScopeMismatch);
         }
         self.validate_decision_sources(decision.outcome, &decision.source_ids)?;
         if self.decisions.len() >= MAX_SET {
@@ -4320,19 +4831,56 @@ impl ClaimAssessmentV3 {
     ) -> Result<BTreeSet<StableId>> {
         self.exact_sources(outcome)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mint_decision_from_scope(
+        &self,
+        scope: &ClaimAssessmentScopeV3,
+        policy_revision_hash: ContentHash,
+        outcome: DecisionOutcomeV3,
+        actor: String,
+        authority_id: String,
+        rationale: String,
+        issued_at: String,
+        expires_at: Option<String>,
+    ) -> Result<DecisionV3> {
+        self.validate_claim_scope(scope)?;
+        let sources = self.expected_decision_sources(outcome)?;
+        let decision = DecisionV3::build_from_claim_scope(
+            scope,
+            policy_revision_hash,
+            outcome,
+            actor,
+            authority_id,
+            sources,
+            rationale,
+            issued_at,
+            expires_at,
+        )?;
+        let mut candidate = self.clone();
+        candidate.record_decision_replayed(scope, decision.clone())?;
+        Ok(decision)
+    }
     pub(crate) fn project_finding_admitted(
         &mut self,
         scope: &AuthorityScopeV3,
         admission: &LockedVerificationProofV3,
     ) -> Result<FindingV3> {
+        admission.validate(scope)?;
+        self.project_finding_from_scope(&ClaimAssessmentScopeV3::from_authority(scope))
+    }
+
+    pub(crate) fn project_finding_from_scope(
+        &mut self,
+        scope: &ClaimAssessmentScopeV3,
+    ) -> Result<FindingV3> {
         if scope.property_id != M4_PROPERTY_ID || scope.polarity != ClaimPolarity::IssuePresent {
             return Err(M4Error::FindingNotProjectable);
         }
-        admission.validate(scope)?;
         if self.current_finding_id.is_some() {
             return Err(M4Error::RedundantFinding);
         }
-        self.validate_scope(scope)?;
+        self.validate_claim_scope(scope)?;
         let mut projection_request = 0;
         let mut charge_id = |id: &StableId| -> Result<()> {
             checked_memory_add(
@@ -4617,13 +5165,27 @@ impl ClaimAssessmentV3 {
         insert_sorted_reserved(&mut self.findings, finding.clone(), |value| &value.id);
         Ok(finding)
     }
+
+    pub(crate) fn record_finding_replayed(
+        &mut self,
+        scope: &ClaimAssessmentScopeV3,
+        finding: FindingV3,
+    ) -> Result<()> {
+        let mut next = self.clone();
+        let expected = next.project_finding_from_scope(scope)?;
+        if expected != finding {
+            return Err(M4Error::AuthorityScopeMismatch);
+        }
+        *self = next;
+        Ok(())
+    }
     #[cfg(test)]
     fn project_finding(&mut self, scope: &AuthorityScopeV3) -> Result<FindingV3> {
         self.project_finding_admitted(scope, &LockedVerificationProofV3::for_test(scope)?)
     }
     fn validate_scope(&self, scope: &AuthorityScopeV3) -> Result<()> {
         scope.validate()?;
-        if self.scope != *scope {
+        if self.scope != ClaimAssessmentScopeV3::from_authority(scope) {
             return Err(M4Error::AuthorityScopeMismatch);
         }
         Ok(())
@@ -4645,6 +5207,21 @@ impl ClaimAssessmentV3 {
     }
     pub fn evidence_count(&self) -> usize {
         self.evidence.len()
+    }
+    pub fn binding_ids(&self) -> &[StableId] {
+        &self.binding_ids
+    }
+    pub fn evidence_ids(&self) -> &[StableId] {
+        &self.evidence_ids
+    }
+    pub fn verification_ids(&self) -> &[StableId] {
+        &self.verification_ids
+    }
+    pub fn decision_ids(&self) -> &[StableId] {
+        &self.decision_ids
+    }
+    pub fn finding_ids(&self) -> &[StableId] {
+        &self.finding_ids
     }
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
         bounded_bytes(self, "ClaimAssessmentV3")

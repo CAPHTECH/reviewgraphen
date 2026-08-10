@@ -1,8 +1,26 @@
 use crate::{ContentHash, DomainError, Result, ReviewStatus, StableId};
 use serde::de::{MapAccess, Visitor};
+use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
+
+#[cfg(test)]
+thread_local! {
+    static PROGRAM_SPACE_GENERIC_SERIALIZE_CALLS: Cell<u64> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_program_space_generic_serialize_calls() {
+    PROGRAM_SPACE_GENERIC_SERIALIZE_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn program_space_generic_serialize_calls() -> u64 {
+    PROGRAM_SPACE_GENERIC_SERIALIZE_CALLS.with(Cell::get)
+}
 
 /// Provenance for a deterministic fact or evidence record.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -760,6 +778,17 @@ pub struct EvidenceAdmission {
     snapshot_id: StableId,
     evidence_id: StableId,
     digest: ContentHash,
+}
+
+impl EvidenceAdmission {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.run_id.allocated_bytes()
+            + self.genesis_hash.allocated_bytes()
+            + self.tail_hash.allocated_bytes()
+            + self.snapshot_id.allocated_bytes()
+            + self.evidence_id.allocated_bytes()
+            + self.digest.allocated_bytes()
+    }
 }
 
 impl EvidenceSnapshotAdmission {
@@ -2145,6 +2174,448 @@ pub struct ProgramSpace {
     extraction: Extraction,
 }
 
+pub(crate) struct ProgramSpaceStreamingRef<'a>(&'a ProgramSpace);
+
+struct SourceRefStreamingRef<'a>(&'a SourceRef);
+
+impl Serialize for SourceRefStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("SourceRef", 5)?;
+        if let Some(content_hash) = &value.content_hash {
+            state.serialize_field("content_hash", content_hash)?;
+        }
+        state.serialize_field("kind", &value.kind)?;
+        state.serialize_field("locator", &value.locator)?;
+        if let Some(revision) = &value.revision {
+            state.serialize_field("revision", revision)?;
+        }
+        if let Some(source_local_id) = &value.source_local_id {
+            state.serialize_field("source_local_id", source_local_id)?;
+        }
+        state.end()
+    }
+}
+
+struct ProvenanceStreamingRef<'a>(&'a Provenance);
+
+impl Serialize for ProvenanceStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Provenance", 5)?;
+        if let Some(confidence) = value.confidence {
+            state.serialize_field("confidence", &confidence)?;
+        }
+        state.serialize_field("extraction_method", &value.extraction_method)?;
+        state.serialize_field("review_status", &value.review_status)?;
+        state.serialize_field("source", &SourceRefStreamingRef(&value.source))?;
+        if let Some(tool_version) = &value.tool_version {
+            state.serialize_field("tool_version", tool_version)?;
+        }
+        state.end()
+    }
+}
+
+struct LocationStreamingRef<'a>(&'a Location);
+
+impl Serialize for LocationStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Location", 6)?;
+        if let Some(end_column) = value.end_column {
+            state.serialize_field("end_column", &end_column)?;
+        }
+        if let Some(end_line) = value.end_line {
+            state.serialize_field("end_line", &end_line)?;
+        }
+        state.serialize_field("path", &value.path)?;
+        if let Some(start_column) = value.start_column {
+            state.serialize_field("start_column", &start_column)?;
+        }
+        if let Some(start_line) = value.start_line {
+            state.serialize_field("start_line", &start_line)?;
+        }
+        if let Some(symbol_id) = &value.symbol_id {
+            state.serialize_field("symbol_id", symbol_id)?;
+        }
+        state.end()
+    }
+}
+
+struct ArtifactStreamingRef<'a>(&'a Artifact);
+struct ArtifactSequence<'a>(&'a [Artifact]);
+
+impl Serialize for ArtifactStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Artifact", 8)?;
+        state.serialize_field("attributes", &value.attributes)?;
+        if let Some(content_hash) = &value.content_hash {
+            state.serialize_field("content_hash", content_hash)?;
+        }
+        state.serialize_field("id", &value.id)?;
+        state.serialize_field("kind", &value.kind)?;
+        state.serialize_field("label", &value.label)?;
+        if let Some(language) = &value.language {
+            state.serialize_field("language", language)?;
+        }
+        if let Some(location) = &value.location {
+            state.serialize_field("location", &LocationStreamingRef(location))?;
+        }
+        state.serialize_field("provenance", &ProvenanceStreamingRef(&value.provenance))?;
+        state.end()
+    }
+}
+
+impl Serialize for ArtifactSequence<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for value in self.0 {
+            sequence.serialize_element(&ArtifactStreamingRef(value))?;
+        }
+        sequence.end()
+    }
+}
+
+struct RelationStreamingRef<'a>(&'a Relation);
+struct RelationSequence<'a>(&'a [Relation]);
+impl Serialize for RelationStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Relation", 7)?;
+        state.serialize_field("attributes", &value.attributes)?;
+        state.serialize_field("directed", &value.directed)?;
+        state.serialize_field("id", &value.id)?;
+        state.serialize_field("kind", &value.kind)?;
+        state.serialize_field("provenance", &ProvenanceStreamingRef(&value.provenance))?;
+        state.serialize_field("source_id", &value.source_id)?;
+        state.serialize_field("target_ids", &value.target_ids)?;
+        state.end()
+    }
+}
+impl Serialize for RelationSequence<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for value in self.0 {
+            sequence.serialize_element(&RelationStreamingRef(value))?;
+        }
+        sequence.end()
+    }
+}
+
+struct ContextStreamingRef<'a>(&'a ReviewContext);
+struct ContextSequence<'a>(&'a [ReviewContext]);
+impl Serialize for ContextStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("ReviewContext", 6)?;
+        state.serialize_field("attributes", &value.attributes)?;
+        state.serialize_field("id", &value.id)?;
+        state.serialize_field("kind", &value.kind)?;
+        state.serialize_field("label", &value.label)?;
+        state.serialize_field("member_ids", &value.member_ids)?;
+        state.serialize_field("provenance", &ProvenanceStreamingRef(&value.provenance))?;
+        state.end()
+    }
+}
+impl Serialize for ContextSequence<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for value in self.0 {
+            sequence.serialize_element(&ContextStreamingRef(value))?;
+        }
+        sequence.end()
+    }
+}
+
+struct InvariantStreamingRef<'a>(&'a Invariant);
+struct InvariantSequence<'a>(&'a [Invariant]);
+impl Serialize for InvariantStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Invariant", 7)?;
+        state.serialize_field("description", &value.description)?;
+        state.serialize_field("id", &value.id)?;
+        state.serialize_field("property_id", &value.property_id)?;
+        state.serialize_field("provenance", &ProvenanceStreamingRef(&value.provenance))?;
+        state.serialize_field("scope_ids", &value.scope_ids)?;
+        state.serialize_field("severity", &value.severity)?;
+        if let Some(mode) = &value.verification_mode {
+            state.serialize_field("verification_mode", mode)?;
+        }
+        state.end()
+    }
+}
+impl Serialize for InvariantSequence<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for value in self.0 {
+            sequence.serialize_element(&InvariantStreamingRef(value))?;
+        }
+        sequence.end()
+    }
+}
+
+struct ProgramEvidenceStreamingRef<'a>(&'a Evidence);
+
+impl Serialize for ProgramEvidenceStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Evidence", 7)?;
+        if let Some(artifact_ref) = &value.artifact_ref {
+            state.serialize_field("artifact_ref", artifact_ref)?;
+        }
+        state.serialize_field("attributes", &value.attributes)?;
+        if let Some(content_hash) = &value.content_hash {
+            state.serialize_field("content_hash", content_hash)?;
+        }
+        state.serialize_field("id", &value.id)?;
+        state.serialize_field("kind", &value.kind)?;
+        state.serialize_field("provenance", &ProvenanceStreamingRef(&value.provenance))?;
+        state.serialize_field("target_ids", &value.target_ids)?;
+        state.end()
+    }
+}
+
+struct ProgramEvidenceSequence<'a>(&'a [Evidence]);
+
+impl Serialize for ProgramEvidenceSequence<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for evidence in self.0 {
+            sequence.serialize_element(&ProgramEvidenceStreamingRef(evidence))?;
+        }
+        sequence.end()
+    }
+}
+
+struct AdapterStreamingRef<'a>(&'a AdapterDescriptor);
+struct AdapterSequence<'a>(&'a [AdapterDescriptor]);
+impl Serialize for AdapterStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("AdapterDescriptor", 5)?;
+        state.serialize_field("id", &value.id)?;
+        if let Some(parsed) = value.parsed {
+            state.serialize_field("parsed", &parsed)?;
+        }
+        state.serialize_field("status", &value.status)?;
+        if let Some(total) = value.total {
+            state.serialize_field("total", &total)?;
+        }
+        state.serialize_field("version", &value.version)?;
+        state.end()
+    }
+}
+impl Serialize for AdapterSequence<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for value in self.0 {
+            sequence.serialize_element(&AdapterStreamingRef(value))?;
+        }
+        sequence.end()
+    }
+}
+
+struct CapabilityStreamingRef<'a>(&'a CapabilityDeclaration);
+struct CapabilityMapStreamingRef<'a>(&'a BTreeMap<String, CapabilityDeclaration>);
+impl Serialize for CapabilityStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("CapabilityDeclaration", 2)?;
+        state.serialize_field("source_ids", &self.0.source_ids)?;
+        state.serialize_field("state", &self.0.state)?;
+        state.end()
+    }
+}
+impl Serialize for CapabilityMapStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in self.0 {
+            map.serialize_entry(key, &CapabilityStreamingRef(value))?;
+        }
+        map.end()
+    }
+}
+
+struct LimitationStreamingRef<'a>(&'a Limitation);
+struct LimitationSequence<'a>(&'a [Limitation]);
+impl Serialize for LimitationStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Limitation", 6)?;
+        state.serialize_field("description", &value.description)?;
+        state.serialize_field("id", &value.id)?;
+        state.serialize_field("kind", &value.kind)?;
+        state.serialize_field("related_capabilities", &value.related_capabilities)?;
+        state.serialize_field("severity", &value.severity)?;
+        state.serialize_field("source_ids", &value.source_ids)?;
+        state.end()
+    }
+}
+impl Serialize for LimitationSequence<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for value in self.0 {
+            sequence.serialize_element(&LimitationStreamingRef(value))?;
+        }
+        sequence.end()
+    }
+}
+
+struct ExtractionStreamingRef<'a>(&'a Extraction);
+impl Serialize for ExtractionStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Extraction", 4)?;
+        state.serialize_field("adapter_set_hash", &value.adapter_set_hash)?;
+        state.serialize_field("adapters", &AdapterSequence(&value.adapters))?;
+        state.serialize_field(
+            "capabilities",
+            &CapabilityMapStreamingRef(&value.capabilities),
+        )?;
+        state.serialize_field("limitations", &LimitationSequence(&value.limitations))?;
+        state.end()
+    }
+}
+
+struct ProgramProfileStreamingRef<'a>(&'a ProgramSpace);
+impl Serialize for ProgramProfileStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Profile", 4)?;
+        state.serialize_field("id", &value.profile_id)?;
+        state.serialize_field("policy_version", &value.policy_version)?;
+        state.serialize_field("rule_set_hash", &value.rule_set_hash)?;
+        state.serialize_field("version", &value.profile_version)?;
+        state.end()
+    }
+}
+
+struct ProgramRepositoryStreamingRef<'a>(&'a ProgramSpace);
+impl Serialize for ProgramRepositoryStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Repository", 4)?;
+        state.serialize_field("id", &value.repository_id)?;
+        state.serialize_field("name", &value.repository_name)?;
+        if let Some(root) = &value.repository_root {
+            state.serialize_field("root", root)?;
+        }
+        if let Some(uri) = &value.repository_uri {
+            state.serialize_field("uri", uri)?;
+        }
+        state.end()
+    }
+}
+
+struct ProgramSnapshotStreamingRef<'a>(&'a ProgramSpace);
+impl Serialize for ProgramSnapshotStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("Snapshot", 6)?;
+        state.serialize_field("base_revision", &value.base_revision)?;
+        if let Some(created_at) = &value.snapshot_created_at {
+            state.serialize_field("created_at", created_at)?;
+        }
+        state.serialize_field("dirty", &value.dirty)?;
+        state.serialize_field("id", &value.snapshot_id)?;
+        state.serialize_field("target_revision", &value.target_revision)?;
+        state.serialize_field("tree_hash", &value.tree_hash)?;
+        state.end()
+    }
+}
+
+impl Serialize for ProgramSpaceStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("ProgramSpace", 11)?;
+        state.serialize_field("artifacts", &ArtifactSequence(&value.artifacts))?;
+        state.serialize_field("contexts", &ContextSequence(&value.contexts))?;
+        state.serialize_field("evidence", &ProgramEvidenceSequence(&value.evidence))?;
+        state.serialize_field("extraction", &ExtractionStreamingRef(&value.extraction))?;
+        state.serialize_field("invariants", &InvariantSequence(&value.invariants))?;
+        state.serialize_field("profile", &ProgramProfileStreamingRef(value))?;
+        state.serialize_field("relations", &RelationSequence(&value.relations))?;
+        state.serialize_field("repository", &ProgramRepositoryStreamingRef(value))?;
+        state.serialize_field("schema", &value.schema)?;
+        state.serialize_field("snapshot", &ProgramSnapshotStreamingRef(value))?;
+        state.serialize_field("source", &SourceRefStreamingRef(&value.source))?;
+        state.end()
+    }
+}
+
 /// Serializes only the checked-in ProgramSpace input contract. Internal
 /// snapshot bindings on evidence remain available to the review aggregate but
 /// are not invented as fields in the v1 input schema.
@@ -2153,6 +2624,8 @@ impl Serialize for ProgramSpace {
     where
         S: serde::Serializer,
     {
+        #[cfg(test)]
+        PROGRAM_SPACE_GENERIC_SERIALIZE_CALLS.with(|calls| calls.set(calls.get() + 1));
         let evidence = self
             .evidence
             .iter()
@@ -2301,6 +2774,166 @@ const PROGRAM_SPACE_SCHEMA_V1: &str = "reviewgraphen.program_space.input.v1";
 const MIGRATION_RECORD_SCHEMA: &str = "reviewgraphen.program_space.migration.v1";
 
 impl ProgramSpace {
+    pub(crate) fn streaming_ref(&self) -> ProgramSpaceStreamingRef<'_> {
+        ProgramSpaceStreamingRef(self)
+    }
+
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        fn ids(values: &BTreeSet<StableId>) -> usize {
+            values.len() * std::mem::size_of::<StableId>()
+                + values.iter().map(StableId::allocated_bytes).sum::<usize>()
+        }
+        fn strings(values: &BTreeSet<String>) -> usize {
+            values.len() * std::mem::size_of::<String>()
+                + values.iter().map(String::capacity).sum::<usize>()
+        }
+        fn json(value: &Value) -> usize {
+            match value {
+                Value::String(value) => value.capacity(),
+                Value::Array(values) => {
+                    values.capacity() * std::mem::size_of::<Value>()
+                        + values.iter().map(json).sum::<usize>()
+                }
+                Value::Object(values) => {
+                    values.len() * std::mem::size_of::<(String, Value)>()
+                        + values
+                            .iter()
+                            .map(|(key, value)| key.capacity() + json(value))
+                            .sum::<usize>()
+                }
+                _ => 0,
+            }
+        }
+        fn attributes(values: &BTreeMap<String, Value>) -> usize {
+            values.len() * std::mem::size_of::<(String, Value)>()
+                + values
+                    .iter()
+                    .map(|(key, value)| key.capacity() + json(value))
+                    .sum::<usize>()
+        }
+        let artifacts = self.artifacts.capacity() * std::mem::size_of::<Artifact>()
+            + self
+                .artifacts
+                .iter()
+                .map(|value| {
+                    value.id.allocated_bytes()
+                        + value.kind.capacity()
+                        + value.label.capacity()
+                        + value.language.as_ref().map_or(0, String::capacity)
+                        + value.location.as_ref().map_or(0, |location| {
+                            location.path.capacity()
+                                + location
+                                    .symbol_id
+                                    .as_ref()
+                                    .map_or(0, StableId::allocated_bytes)
+                        })
+                        + value
+                            .content_hash
+                            .as_ref()
+                            .map_or(0, ContentHash::allocated_bytes)
+                        + attributes(&value.attributes)
+                        + value.provenance.allocated_bytes()
+                })
+                .sum::<usize>();
+        let relations = self.relations.capacity() * std::mem::size_of::<Relation>()
+            + self
+                .relations
+                .iter()
+                .map(|value| {
+                    value.id.allocated_bytes()
+                        + value.kind.capacity()
+                        + value.source_id.allocated_bytes()
+                        + ids(&value.target_ids)
+                        + attributes(&value.attributes)
+                        + value.provenance.allocated_bytes()
+                })
+                .sum::<usize>();
+        let contexts = self.contexts.capacity() * std::mem::size_of::<ReviewContext>()
+            + self
+                .contexts
+                .iter()
+                .map(|value| {
+                    value.id.allocated_bytes()
+                        + value.kind.capacity()
+                        + value.label.capacity()
+                        + ids(&value.member_ids)
+                        + attributes(&value.attributes)
+                        + value.provenance.allocated_bytes()
+                })
+                .sum::<usize>();
+        let invariants = self.invariants.capacity() * std::mem::size_of::<Invariant>()
+            + self
+                .invariants
+                .iter()
+                .map(|value| {
+                    value.id.allocated_bytes()
+                        + value.property_id.capacity()
+                        + value.description.capacity()
+                        + ids(&value.scope_ids)
+                        + value.verification_mode.as_ref().map_or(0, String::capacity)
+                        + value.provenance.allocated_bytes()
+                })
+                .sum::<usize>();
+        let evidence = self.evidence.capacity() * std::mem::size_of::<Evidence>()
+            + self
+                .evidence
+                .iter()
+                .map(Evidence::allocated_bytes)
+                .sum::<usize>();
+        let extraction = self.extraction.adapter_set_hash.allocated_bytes()
+            + self.extraction.adapters.capacity() * std::mem::size_of::<AdapterDescriptor>()
+            + self
+                .extraction
+                .adapters
+                .iter()
+                .map(|value| value.id.capacity() + value.version.capacity())
+                .sum::<usize>()
+            + self.extraction.capabilities.len()
+                * std::mem::size_of::<(String, CapabilityDeclaration)>()
+            + self
+                .extraction
+                .capabilities
+                .iter()
+                .map(|(key, value)| key.capacity() + ids(&value.source_ids))
+                .sum::<usize>()
+            + self.extraction.limitations.capacity() * std::mem::size_of::<Limitation>()
+            + self
+                .extraction
+                .limitations
+                .iter()
+                .map(|value| {
+                    value.id.allocated_bytes()
+                        + value.description.capacity()
+                        + ids(&value.source_ids)
+                        + strings(&value.related_capabilities)
+                })
+                .sum::<usize>();
+        self.schema.capacity()
+            + self.source.allocated_bytes()
+            + self.repository_id.allocated_bytes()
+            + self.repository_name.capacity()
+            + self.repository_root.as_ref().map_or(0, String::capacity)
+            + self.repository_uri.as_ref().map_or(0, String::capacity)
+            + self.snapshot_id.allocated_bytes()
+            + self.base_revision.capacity()
+            + self.target_revision.capacity()
+            + self.tree_hash.allocated_bytes()
+            + self
+                .snapshot_created_at
+                .as_ref()
+                .map_or(0, String::capacity)
+            + self.profile_id.capacity()
+            + self.profile_version.capacity()
+            + self.rule_set_hash.allocated_bytes()
+            + self.policy_version.capacity()
+            + artifacts
+            + relations
+            + contexts
+            + invariants
+            + evidence
+            + extraction
+    }
+
     /// Parses the supported v2 manual JSON adapter input and validates
     /// references. The top-level `schema` discriminator is probed first, so
     /// a v1 document reports a typed migration requirement and an unknown
@@ -2336,6 +2969,12 @@ impl ProgramSpace {
     #[must_use]
     pub fn repository_id(&self) -> &StableId {
         &self.repository_id
+    }
+
+    /// Canonical top-level source whose content hash binds host repository
+    /// authority to the exact ingested ProgramSpace snapshot.
+    pub(crate) fn repository_source(&self) -> &SourceRef {
+        &self.source
     }
 
     /// Optional repository root retained from the input contract.
