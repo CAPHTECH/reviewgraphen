@@ -13,6 +13,5 @@ workspace = true
 [dependencies]
 reviewgraphen-core = { path = "../reviewgraphen-core" }
 thiserror.workspace = true
-
-[dev-dependencies]
+serde.workspace = true
 serde_json.workspace = true
