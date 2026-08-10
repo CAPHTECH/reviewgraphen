@@ -146,11 +146,21 @@ metadata:
 
 ## 7. Derived index
 
-SQLiteの実装schemaはADR 0015に固定される。`index_meta` と `events` を共通に、V2では
+SQLiteのFD-relative実装境界は[ADR 0015](adr/0015-descriptor-anchored-sqlite-derived-index.md)、
+D1 schema version 2の正確なprojection/preimage/rebuild契約は
+[ADR 0017](adr/0017-d1-derived-index-schema-v2.md)に固定される。`index_meta` と `events` を共通に、V2では
 `program_objects`、`program_relations`、`universe`、`obligations`、lifecycle history、claims、
-artifact registration/source rowsを別表として保持する。authority recordsとfindingsもそれぞれ
+artifact registration/source rows、`review_plans`、`context_envelopes`を別表として保持する。
+`review_plans`は完全なbounded canonical plan projectionとbudget preimage/hashを、
+`context_envelopes`はloss IDを捏造せずcanonical loss bodiesとsource traceを保持する。
+review executionはD1 schema v2へ先行予約せず、後続schema versionの対象とする。
+authority recordsとfindingsもそれぞれ
 `unreconciled_authority_records` / `projected_findings` の shadow-only projectionであり、
 Program fact、review claim、evidenceを一表へ混在させない。V1はevents metadata-onlyである。
+
+ここでV1 event journalとSQLite schema version 1を混同しない。historical V1 journalはschema
+version 2へmetadata-only rebuildできるが、既存schema-version-1 SQLite imageはin-place migrateせず
+canonical JSONL/CASからrebuild-requiredである。
 
 indexはquery最適化のためのderived-only projectionです。index databaseだけを書き換えてcanonical
 stateを変更せず、canonical JSONL/CASをauthorityとして置き換えません。

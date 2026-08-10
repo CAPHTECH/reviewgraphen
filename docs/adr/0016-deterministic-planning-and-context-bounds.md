@@ -280,6 +280,11 @@ that serialization, not after materializing bytes.
 
 ### 6. Exact C3 schema-v2 follow-up
 
+[ADR 0017](0017-d1-derived-index-schema-v2.md) closes this follow-up's exact
+schema, component preimages, version-1 rebuild policy, and fixtures. ADR 0017
+governs storage-detail conflicts; this ADR remains authoritative for planner
+and context canonical bodies and identities.
+
 Adding plan/context events changes the derived-index projection contract literal
 to `reviewgraphen.index_projection.v2`, `PRAGMA user_version = 2`, and the
 literal `index_meta.index_schema_version = 2`. Existing v1 images are

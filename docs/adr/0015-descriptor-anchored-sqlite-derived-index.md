@@ -1,12 +1,18 @@
 # ADR 0015: FD-Relative Serialized SQLite Derived Index
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-09
 - Scope: the SQLite implementation required by ADR 0014 §7, including its
   dependency features, in-memory build, serialized-file publication, read-only
   query reconstruction, locks, bounds, schema guards, and restart behavior.
   This ADR does not change the CAS or JSONL canonical-state contracts and does
   not permit any filesystem pathname to reach SQLite.
+
+> D1 schema version 2, its exact plan/context columns and hash preimages, and
+> the version-1 rebuild boundary are closed by
+> [ADR 0017](0017-d1-derived-index-schema-v2.md). This ADR remains normative
+> for the descriptor-relative SQLite, locking, bounds, and publication
+> boundary.
 
 ## Context
 
@@ -252,6 +258,14 @@ result`. `temp_store =
 MEMORY` is mandatory, so a sort or temporary table cannot create an ambient
 file. Exceeding any bound is a typed incomplete operation, never a truncated
 successful index or query.
+
+For schema-version-2 current queries, the lock-held canonical journal view is
+store-owned working state, not an input exempt from this budget. ADR 0017 §6
+defines its raw, decoded, validation-scratch, and comparison charges and the
+stage peaks in which they coexist with the deserialized main image, configured
+cache, and complete-result reservation. The query cache reservation is reduced
+by that retained journal charge; `max_replay_bytes` does not enlarge or replace
+`max_index_working_bytes`.
 
 ### 6. In-memory rebuild
 
@@ -759,20 +773,22 @@ contract. Complete ordered `IndexSnapshot` equality is.
 
 ## Acceptance tests
 
-### Current dependency boundary
+### Staged payload-coverage boundary
 
-The exhaustive projection match already covers every `DecodedPayload` variant
-known to the current core. However, the current V2 event log rejects a legacy
-`ClaimProposed` before ADR 0013's Unit D atomic execution admission is
-implemented; therefore a single legal V2 stream cannot yet contain the
-claim/binding/verification/decision/finding subset. This is a deferred core
-dependency, not permission to relax the index boundary: those arms remain
-fail-closed, and the all-payload V2 fixture in item 1 must be added when Unit D
-lands.
+The exhaustive projection match covers every `DecodedPayload` variant known to
+the current core. A payload that the current V2 event log cannot legally admit
+cannot be manufactured solely to populate an index fixture: its projection arm
+remains fail-closed and is exercised directly. When a later Accepted event
+contract makes that payload legal in a V2 stream, the same change must add it
+to the all-legal-payload stream fixture. This is an Accepted staged acceptance
+rule, not an unresolved schema decision and not permission to omit an
+exhaustive typed arm.
 
-1. A V2 fixture containing every current payload kind builds, serializes,
-   publishes, reads, deserializes, and yields an equal complete
-   `IndexSnapshot` after delete/rebuild.
+1. A V2 fixture containing every payload kind legally admissible by the
+   current Accepted V2 event contract builds, serializes, publishes, reads,
+   deserializes, and yields an equal complete `IndexSnapshot` after
+   delete/rebuild. Every other known typed projection arm is exercised by a
+   direct fail-closed test until its event admission becomes legal.
 2. V1 passes `ValidatedEventView` homogeneous chain/shape validation, produces
    event metadata only, never constructs `OfflineProjectionState`, and cannot
    synthesize a V2 domain baseline.
@@ -785,7 +801,9 @@ lands.
    `OfflineProjectionState` and cannot replace a good active image.
 6. A single SQL statement one byte over `max_index_statement_bytes` is refused
    before prepare; exact-bound statements, image bytes, rows, and query returns
-   are accepted, while `limit + 1` is typed incomplete.
+   are accepted, while `limit + 1` is typed incomplete. Schema-version-2 query
+   working-set exact-bound and `limit + 1` coverage includes ADR 0017's retained
+   lock-held journal view.
 7. Fixed page size, calculated `max_page_count`, `temp_store=MEMORY`, cache
    bound, SQLite limits, checked `i64` conversions, and `PRAGMA user_version =
    index_meta.index_schema_version = 1` are read-back tested before DDL, after
@@ -827,10 +845,10 @@ lands.
     `default-features = false` and exactly the `bundled`, `serialize`, and
     `limits` features requested by `reviewgraphen-store`.
 
-## Follow-up documentation
+## Documentation relationship
 
-Implementation updates ADR 0014 §7 and
-`docs/15_storage_and_repository_layout.md` to remove filesystem-open SQLite,
-DELETE-journal, and sidecar wording in favor of this serialize/deserialize
-contract. Those edits belong to the implementation commit; this proposed ADR
-changes no other file.
+ADR 0014 §7 and `docs/15_storage_and_repository_layout.md` use this
+serialize/deserialize contract instead of filesystem-open SQLite,
+DELETE-journal, or sidecar behavior. ADR 0017 supersedes only the D1 schema-v2
+details enumerated there; this ADR remains normative for descriptor-relative
+access, locking, bounds, publication, and authority separation.
