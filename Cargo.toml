@@ -2,6 +2,7 @@
 members = [
     "crates/reviewgraphen-core",
     "crates/reviewgraphen-ingest",
+    "crates/reviewgraphen-reviewer",
     "crates/reviewgraphen-store",
     "examples/double-submit-payment/fixture",
 ]
