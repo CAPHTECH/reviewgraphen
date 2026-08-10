@@ -384,7 +384,13 @@ pub struct ReviewContextEnvelope {
     projection_hash: ContentHash,
 }
 impl ReviewContextEnvelope {
-    pub(crate) fn allocated_bytes(&self) -> usize {
+    /// Returns the observable retained heap charge of this envelope's owned
+    /// vectors, sets, strings, and identifier backing strings.
+    ///
+    /// This is allocation accounting for bounded D2 construction, not an RSS
+    /// or allocator-internal node-overhead claim.
+    #[must_use]
+    pub fn allocated_bytes(&self) -> usize {
         fn id_set_bytes(values: &BTreeSet<StableId>) -> usize {
             values
                 .len()
@@ -842,6 +848,11 @@ impl ReviewContextEnvelope {
     }
     pub fn assumptions(&self) -> &[String] {
         &self.assumptions
+    }
+    /// Counts the exact canonical UTF-8 bytes without allocating the output
+    /// vector or any formatting scratch.
+    pub fn canonical_byte_len(&self) -> ContextResult<usize> {
+        envelope_byte_len(self)
     }
     pub fn canonical_bytes(&self) -> ContextResult<Vec<u8>> {
         envelope_bytes(self)
@@ -1995,18 +2006,23 @@ fn identity_bytes(
     out.finish()
 }
 
-fn envelope_bytes(envelope: &ReviewContextEnvelope) -> ContextResult<Vec<u8>> {
-    let mut out = BoundedJson::new("context envelope canonical bytes");
+const CONTEXT_POLICY_CANONICAL_BYTE_LEN: usize = 2_451;
+
+fn write_envelope(envelope: &ReviewContextEnvelope, out: &mut BoundedJson) -> ContextResult<()> {
     out.push(b"{\"assumptions\":[],\"candidate_source_ids\":")?;
     out.ids(envelope.candidate_source_ids.iter())?;
     out.push(b",\"context_policy\":")?;
-    out.push(&envelope.context_policy.canonical_bytes()?)?;
+    if out.count_only {
+        out.advance(CONTEXT_POLICY_CANONICAL_BYTE_LEN)?;
+    } else {
+        out.push(&envelope.context_policy.canonical_bytes()?)?;
+    }
     out.push(b",\"context_policy_hash\":")?;
-    out.text(&envelope.context_policy_hash.to_string())?;
+    out.text(envelope.context_policy_hash.as_str())?;
     out.push(b",\"excluded_sources\":")?;
     out.excluded(&envelope.excluded_sources)?;
     out.push(b",\"id\":")?;
-    out.text(&envelope.id.to_string())?;
+    out.text(envelope.id.as_str())?;
     out.push(b",\"included_sources\":")?;
     out.included(&envelope.included_sources)?;
     out.push(b",\"losses\":")?;
@@ -2016,19 +2032,32 @@ fn envelope_bytes(envelope: &ReviewContextEnvelope) -> ContextResult<Vec<u8>> {
     out.push(b",\"obligation_ids\":")?;
     out.ids(envelope.obligation_ids.iter())?;
     out.push(b",\"projection_hash\":")?;
-    out.text(&envelope.projection_hash.to_string())?;
+    out.text(envelope.projection_hash.as_str())?;
     out.push(b",\"projection_policy_version\":")?;
     out.text(&envelope.projection_policy_version)?;
     out.push(b",\"snapshot_id\":")?;
-    out.text(&envelope.snapshot_id.to_string())?;
+    out.text(envelope.snapshot_id.as_str())?;
     out.push(b",\"unknowns\":")?;
     out.unknowns(&envelope.unknowns)?;
-    out.push(b"}")?;
+    out.push(b"}")
+}
+
+fn envelope_byte_len(envelope: &ReviewContextEnvelope) -> ContextResult<usize> {
+    let mut out = BoundedJson::counting("context envelope canonical bytes");
+    write_envelope(envelope, &mut out)?;
+    Ok(out.len)
+}
+
+fn envelope_bytes(envelope: &ReviewContextEnvelope) -> ContextResult<Vec<u8>> {
+    let mut out = BoundedJson::new("context envelope canonical bytes");
+    write_envelope(envelope, &mut out)?;
     out.finish()
 }
 
 struct BoundedJson {
     bytes: Vec<u8>,
+    len: usize,
+    count_only: bool,
     operation: &'static str,
 }
 
@@ -2036,21 +2065,38 @@ impl BoundedJson {
     fn new(operation: &'static str) -> Self {
         Self {
             bytes: Vec::new(),
+            len: 0,
+            count_only: false,
             operation,
         }
     }
-    fn push(&mut self, value: &[u8]) -> ContextResult<()> {
+    fn counting(operation: &'static str) -> Self {
+        Self {
+            bytes: Vec::new(),
+            len: 0,
+            count_only: true,
+            operation,
+        }
+    }
+    fn advance(&mut self, length: usize) -> ContextResult<()> {
         let next = self
-            .bytes
-            .len()
-            .checked_add(value.len())
+            .len
+            .checked_add(length)
             .ok_or_else(|| incomplete(self.operation, MAX_BODY, usize::MAX))?;
         if next > MAX_BODY {
             return Err(incomplete(self.operation, MAX_BODY, next).into());
         }
+        self.len = next;
+        Ok(())
+    }
+    fn push(&mut self, value: &[u8]) -> ContextResult<()> {
+        self.advance(value.len())?;
+        if self.count_only {
+            return Ok(());
+        }
         self.bytes
             .try_reserve_exact(value.len())
-            .map_err(|_| incomplete(self.operation, MAX_BODY, next))?;
+            .map_err(|_| incomplete(self.operation, MAX_BODY, self.len))?;
         self.bytes.extend_from_slice(value);
         Ok(())
     }
@@ -2079,7 +2125,18 @@ impl BoundedJson {
         self.push(b"\"")
     }
     fn number(&mut self, value: u64) -> ContextResult<()> {
-        self.push(value.to_string().as_bytes())
+        let mut digits = [0_u8; 20];
+        let mut cursor = digits.len();
+        let mut remaining = value;
+        loop {
+            cursor -= 1;
+            digits[cursor] = b'0' + u8::try_from(remaining % 10).expect("decimal digit");
+            remaining /= 10;
+            if remaining == 0 {
+                break;
+            }
+        }
+        self.push(&digits[cursor..])
     }
     fn ids<'a>(&mut self, values: impl Iterator<Item = &'a StableId>) -> ContextResult<()> {
         self.push(b"[")?;
@@ -2087,7 +2144,7 @@ impl BoundedJson {
             if index != 0 {
                 self.push(b",")?;
             }
-            self.text(&id.to_string())?;
+            self.text(id.as_str())?;
         }
         self.push(b"]")
     }
@@ -2108,19 +2165,19 @@ impl BoundedJson {
                 self.push(b",")?;
             }
             self.push(b"{\"artifact_id\":")?;
-            self.text(&source.artifact_id.to_string())?;
+            self.text(source.artifact_id.as_str())?;
             self.push(b",\"cas_hash\":")?;
-            self.text(&source.cas_hash.to_string())?;
+            self.text(source.cas_hash.as_str())?;
             self.push(b",\"content_hash\":")?;
-            self.text(&source.content_hash.to_string())?;
+            self.text(source.content_hash.as_str())?;
             self.push(b",\"excerpt\":")?;
             self.excerpt(source.excerpt.as_ref())?;
             self.push(b",\"excerpt_byte_length\":")?;
             self.number(source.excerpt_byte_length)?;
             self.push(b",\"excerpt_hash\":")?;
-            self.text(&source.excerpt_hash.to_string())?;
+            self.text(source.excerpt_hash.as_str())?;
             self.push(b",\"registration_id\":")?;
-            self.text(&source.registration_id.to_string())?;
+            self.text(source.registration_id.as_str())?;
             self.push(b"}")?;
         }
         self.push(b"]")
@@ -2132,7 +2189,7 @@ impl BoundedJson {
                 self.push(b",")?;
             }
             self.push(b"{\"artifact_id\":")?;
-            self.text(&value.artifact_id.to_string())?;
+            self.text(value.artifact_id.as_str())?;
             self.push(b",\"reason\":")?;
             self.text(value.reason.as_str())?;
             self.push(b"}")?;
@@ -2671,8 +2728,17 @@ mod tests {
         assert!(saw_request);
         let built = session.finish().unwrap();
         let canonical = built.envelope().canonical_bytes().unwrap();
+        assert_eq!(
+            built.envelope().canonical_byte_len().unwrap(),
+            canonical.len()
+        );
+        assert_eq!(
+            ContextPolicyV1::baseline().canonical_bytes().unwrap().len(),
+            CONTEXT_POLICY_CANONICAL_BYTE_LEN
+        );
         let decoded = ReviewContextEnvelope::from_canonical_bytes(&canonical, &aggregate).unwrap();
         assert_eq!(&decoded, built.envelope());
+        assert!(decoded.allocated_bytes() > 0);
         let (envelope, _admission) = built.into_parts();
         assert_eq!(
             envelope.normalized_included_source_ids(),

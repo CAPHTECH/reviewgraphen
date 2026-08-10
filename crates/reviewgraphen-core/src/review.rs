@@ -1,8 +1,8 @@
 use crate::context::context_domain_error;
 use crate::{
-    ArtifactRegistered, DomainError, Evidence, ProgramSpace, Result, ReviewContextEnvelope,
-    ReviewPlan, RunGenesisManifest, SnapshotSourcesRecorded, StableId, UniverseDescriptor,
-    VersionTuple,
+    ArtifactRegistered, ArtifactSensitivity, ArtifactSource, DomainError, Evidence,
+    ExecutionClaimV2, ExecutionRecord, ProgramSpace, Result, ReviewContextEnvelope, ReviewPlan,
+    RunGenesisManifest, SnapshotSourcesRecorded, StableId, UniverseDescriptor, VersionTuple,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -566,6 +566,10 @@ pub struct ReviewClaim {
     author_kind: ClaimAuthorKind,
     review_status: ReviewStatus,
 }
+
+/// Frozen M1/v1 claim body retained only for historical `ClaimProposed`
+/// decoding and byte-exact replay. D2 uses [`crate::ExecutionClaimV2`].
+pub type LegacyClaimV1 = ReviewClaim;
 
 /// Claim producer class. Only `Ai` receives the mandatory proposed default.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1534,6 +1538,14 @@ pub struct ReviewAggregate {
     plans: BTreeMap<StableId, ReviewPlan>,
     #[serde(skip)]
     envelopes: BTreeMap<StableId, ReviewContextEnvelope>,
+    #[serde(skip)]
+    offline_execution_envelopes: BTreeMap<StableId, ReviewContextEnvelope>,
+    #[serde(skip)]
+    executions: BTreeMap<StableId, ExecutionRecord>,
+    #[serde(skip)]
+    execution_claims: BTreeMap<StableId, ExecutionClaimV2>,
+    #[serde(skip)]
+    execution_raw_sizes: BTreeMap<StableId, u64>,
 }
 
 impl ReviewAggregate {
@@ -1576,6 +1588,10 @@ impl ReviewAggregate {
             snapshot_sources: BTreeMap::new(),
             plans: BTreeMap::new(),
             envelopes: BTreeMap::new(),
+            offline_execution_envelopes: BTreeMap::new(),
+            executions: BTreeMap::new(),
+            execution_claims: BTreeMap::new(),
+            execution_raw_sizes: BTreeMap::new(),
         };
         aggregate.validate()?;
         Ok(aggregate)
@@ -1832,6 +1848,50 @@ impl ReviewAggregate {
         for envelope in self.envelopes.values() {
             envelope.validate_for_event(self)?;
         }
+        for envelope in self.offline_execution_envelopes.values() {
+            if self.envelopes.contains_key(envelope.id()) {
+                return Err(DomainError::IdCollision {
+                    id: envelope.id().clone(),
+                });
+            }
+            envelope.validate_for_event(self)?;
+        }
+        for execution in self.executions.values() {
+            insert_unique(&mut all_ids, execution.id())?;
+            execution.validate_shape()?;
+            self.validate_execution_closure(execution)?;
+            let expected_size = self
+                .execution_raw_sizes
+                .get(execution.id())
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "execution raw size",
+                    owner_id: execution.id().clone(),
+                    reference: execution.raw_artifact_registration_id().clone(),
+                })?;
+            let registration = self
+                .registered_artifacts
+                .get(execution.raw_artifact_registration_id())
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "execution raw size",
+                    owner_id: execution.id().clone(),
+                    reference: execution.raw_artifact_registration_id().clone(),
+                })?;
+            if registration.size() != *expected_size {
+                return Err(DomainError::Validation(
+                    "D2 registration size must equal the preserved raw byte size".to_owned(),
+                ));
+            }
+        }
+        if self.execution_raw_sizes.len() != self.executions.len() {
+            return Err(DomainError::Validation(
+                "D2 preserved raw sizes must exactly match executions".to_owned(),
+            ));
+        }
+        for claim in self.execution_claims.values() {
+            insert_unique(&mut all_ids, claim.id())?;
+            claim.validate_shape()?;
+            self.validate_execution_claim_closure(claim)?;
+        }
         Ok(())
     }
 
@@ -1843,6 +1903,10 @@ impl ReviewAggregate {
             || !self.findings.is_empty()
             || !self.plans.is_empty()
             || !self.envelopes.is_empty()
+            || !self.offline_execution_envelopes.is_empty()
+            || !self.executions.is_empty()
+            || !self.execution_claims.is_empty()
+            || !self.execution_raw_sizes.is_empty()
             || self
                 .obligations
                 .values()
@@ -1905,11 +1969,8 @@ impl ReviewAggregate {
             ));
         }
         let id = registration.registration_id().clone();
-        if let Some(existing) = self.registered_artifacts.get(&id) {
-            if existing != &registration {
-                return Err(DomainError::IdCollision { id });
-            }
-            return Ok(());
+        if self.registered_artifacts.contains_key(&id) {
+            return Err(DomainError::IdCollision { id });
         }
         self.registered_artifacts.insert(id, registration);
         Ok(())
@@ -2026,6 +2087,248 @@ impl ReviewAggregate {
             return Ok(());
         }
         self.envelopes.insert(id, envelope);
+        Ok(())
+    }
+
+    pub(crate) fn record_offline_execution_envelope(
+        &mut self,
+        envelope: ReviewContextEnvelope,
+    ) -> Result<()> {
+        envelope.validate_for_event(self)?;
+        let id = envelope.id().clone();
+        if self.envelopes.contains_key(&id) || self.offline_execution_envelopes.contains_key(&id) {
+            return Err(DomainError::IdCollision { id });
+        }
+        self.offline_execution_envelopes.insert(id, envelope);
+        Ok(())
+    }
+
+    pub(crate) fn record_execution(
+        &mut self,
+        expected_run_id: &StableId,
+        execution: ExecutionRecord,
+        claims: Vec<ExecutionClaimV2>,
+        expected_raw_size: u64,
+    ) -> Result<()> {
+        execution.validate_shape()?;
+        if self.executions.contains_key(execution.id()) || self.known_ids().contains(execution.id())
+        {
+            return Err(DomainError::IdCollision {
+                id: execution.id().clone(),
+            });
+        }
+        let previous_attempt = self
+            .executions
+            .values()
+            .filter(|existing| existing.same_retry_series(&execution))
+            .map(ExecutionRecord::attempt)
+            .max();
+        let expected_attempt = match previous_attempt {
+            Some(attempt) => attempt
+                .checked_add(1)
+                .ok_or_else(|| DomainError::Validation("D2 retry attempt overflow".to_owned()))?,
+            None => 1,
+        };
+        if execution.attempt() != expected_attempt {
+            return Err(DomainError::Validation(
+                "D2 attempts must start at one and increment without reuse or gaps".to_owned(),
+            ));
+        }
+        let mut seen = self.known_ids();
+        seen.insert(execution.id().clone());
+        for claim in &claims {
+            if !seen.insert(claim.id().clone()) || self.execution_claims.contains_key(claim.id()) {
+                return Err(DomainError::IdCollision {
+                    id: claim.id().clone(),
+                });
+            }
+        }
+        let obligation = execution
+            .obligation_ids()
+            .iter()
+            .next()
+            .and_then(|id| self.obligations.get(id))
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "execution",
+                owner_id: execution.id().clone(),
+                reference: execution
+                    .obligation_ids()
+                    .iter()
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| execution.id().clone()),
+            })?;
+        if obligation.lifecycle() != ObligationLifecycle::InProgress {
+            return Err(DomainError::Validation(
+                "a D2 execution may be recorded only while its obligation is in_progress"
+                    .to_owned(),
+            ));
+        }
+        let registration = self
+            .registered_artifacts
+            .get(execution.raw_artifact_registration_id())
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "execution",
+                owner_id: execution.id().clone(),
+                reference: execution.raw_artifact_registration_id().clone(),
+            })?;
+        if registration.run_id() != expected_run_id
+            || registration.cas_hash() != execution.raw_artifact_hash()
+            || registration.size() != expected_raw_size
+            || registration.sensitivity() != ArtifactSensitivity::Sensitive
+            || !matches!(
+                registration.source(),
+                ArtifactSource::ReviewerExecution {
+                    run_id,
+                    execution_id,
+                    reviewer_id,
+                } if run_id == expected_run_id
+                    && execution_id == execution.id()
+                    && reviewer_id == execution.reviewer_id()
+            )
+        {
+            return Err(DomainError::Validation(
+                "D2 execution raw registration must close over run, execution, reviewer, hash, and sensitivity"
+                    .to_owned(),
+            ));
+        }
+        self.validate_execution_closure(&execution)?;
+        let claim_ids = claims
+            .iter()
+            .map(|claim| claim.id().clone())
+            .collect::<BTreeSet<_>>();
+        if claim_ids != *execution.parsed_claim_ids()
+            || execution.outcome().is_structured() == claims.is_empty()
+        {
+            return Err(DomainError::Validation(
+                "atomic D2 execution claims must exactly match parsed_claim_ids and outcome"
+                    .to_owned(),
+            ));
+        }
+        self.executions
+            .insert(execution.id().clone(), execution.clone());
+        self.execution_raw_sizes
+            .insert(execution.id().clone(), expected_raw_size);
+        for claim in claims {
+            self.validate_execution_claim_closure_with(&execution, &claim)?;
+            self.execution_claims.insert(claim.id().clone(), claim);
+        }
+        self.validate()
+    }
+
+    fn validate_execution_closure(&self, execution: &ExecutionRecord) -> Result<()> {
+        let plan =
+            self.plans
+                .get(execution.plan_id())
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "execution",
+                    owner_id: execution.id().clone(),
+                    reference: execution.plan_id().clone(),
+                })?;
+        let wave = plan
+            .waves()
+            .iter()
+            .find(|wave| wave.id() == execution.wave_id())
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "execution",
+                owner_id: execution.id().clone(),
+                reference: execution.wave_id().clone(),
+            })?;
+        let envelope = self
+            .envelopes
+            .get(execution.envelope_id())
+            .or_else(|| {
+                self.offline_execution_envelopes
+                    .get(execution.envelope_id())
+            })
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "execution",
+                owner_id: execution.id().clone(),
+                reference: execution.envelope_id().clone(),
+            })?;
+        let wave_ids = wave
+            .obligation_ids()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if execution.snapshot_id() != self.program.snapshot_id()
+            || execution.snapshot_id() != plan.snapshot_id()
+            || execution.snapshot_id() != envelope.snapshot_id()
+            || execution.obligation_ids() != envelope.obligation_ids()
+            || !execution.obligation_ids().is_subset(&wave_ids)
+        {
+            return Err(DomainError::Validation(
+                "D2 execution plan/wave/envelope/snapshot/obligation closure mismatch".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_execution_claim_closure(&self, claim: &ExecutionClaimV2) -> Result<()> {
+        let execution = self.executions.get(claim.execution_id()).ok_or_else(|| {
+            DomainError::DanglingReference {
+                owner: "D2 claim",
+                owner_id: claim.id().clone(),
+                reference: claim.execution_id().clone(),
+            }
+        })?;
+        self.validate_execution_claim_closure_with(execution, claim)
+    }
+
+    fn validate_execution_claim_closure_with(
+        &self,
+        execution: &ExecutionRecord,
+        claim: &ExecutionClaimV2,
+    ) -> Result<()> {
+        if !execution.outcome().is_structured()
+            || !execution.parsed_claim_ids().contains(claim.id())
+            || claim.execution_id() != execution.id()
+            || claim.obligation_ids() != execution.obligation_ids()
+        {
+            return Err(DomainError::Validation(
+                "D2 claim must close over its structured atomic execution".to_owned(),
+            ));
+        }
+        let obligation_id =
+            execution
+                .obligation_ids()
+                .iter()
+                .next()
+                .ok_or(DomainError::EmptyField {
+                    field: "D2 execution obligation_ids",
+                })?;
+        let obligation =
+            self.obligations
+                .get(obligation_id)
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "D2 claim",
+                    owner_id: claim.id().clone(),
+                    reference: obligation_id.clone(),
+                })?;
+        let envelope = self
+            .envelopes
+            .get(execution.envelope_id())
+            .or_else(|| {
+                self.offline_execution_envelopes
+                    .get(execution.envelope_id())
+            })
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "D2 claim",
+                owner_id: claim.id().clone(),
+                reference: execution.envelope_id().clone(),
+            })?;
+        if claim.property_id() != obligation.property_id()
+            || !claim
+                .target_refs()
+                .is_subset(obligation.normalized_target_refs())
+            || !claim
+                .source_ids()
+                .is_subset(envelope.normalized_included_source_ids())
+        {
+            return Err(DomainError::Validation(
+                "D2 claim property/target/source closure mismatch".to_owned(),
+            ));
+        }
         Ok(())
     }
 
@@ -2693,6 +2996,16 @@ impl ReviewAggregate {
         self.envelopes.get(id)
     }
 
+    /// Authority-free D2 executions in stable ID order.
+    pub fn executions(&self) -> impl Iterator<Item = &ExecutionRecord> {
+        self.executions.values()
+    }
+
+    /// Authority-free, always-proposed D2 claims in stable ID order.
+    pub fn execution_claims(&self) -> impl Iterator<Item = &ExecutionClaimV2> {
+        self.execution_claims.values()
+    }
+
     #[cfg(test)]
     pub(crate) fn install_context_metadata_for_test(
         &mut self,
@@ -2829,6 +3142,8 @@ impl ReviewAggregate {
             .chain(self.verifications.keys().cloned())
             .chain(self.decisions.keys().cloned())
             .chain(self.findings.keys().cloned())
+            .chain(self.executions.keys().cloned())
+            .chain(self.execution_claims.keys().cloned())
             .collect()
     }
 
@@ -2846,6 +3161,13 @@ impl ReviewAggregate {
                     reference: id.clone(),
                 })?;
         obligation.transition(next)
+    }
+
+    pub(crate) fn has_structured_execution(&self, obligation_id: &StableId) -> bool {
+        self.executions.values().any(|execution| {
+            execution.outcome().is_structured()
+                && execution.obligation_ids().contains(obligation_id)
+        })
     }
 
     pub(crate) fn add_claim(&mut self, claim: ReviewClaim) -> Result<()> {

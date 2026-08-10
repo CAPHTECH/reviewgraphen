@@ -1151,6 +1151,12 @@ impl<'a> DerivedIndex<'a> {
                         &mut rows,
                         self.limits,
                     )?,
+                    DecodedPayload::ReviewExecutionRecorded { .. } => {
+                        return Err(IndexError::RebuildRequired {
+                            found: INDEX_SCHEMA_VERSION,
+                            required: 3,
+                        });
+                    }
                     }
                 }
                 Ok(())
@@ -2338,6 +2344,12 @@ fn payload_kind_decoded(payload: &DecodedPayload) -> Result<&'static str, IndexE
         DecodedPayload::SnapshotSourcesRecorded(_) => "snapshot_sources_recorded",
         DecodedPayload::ReviewPlanRecorded(_) => "review_plan_recorded",
         DecodedPayload::ContextEnvelopeProjected(_) => "context_envelope_projected",
+        DecodedPayload::ReviewExecutionRecorded { .. } => {
+            return Err(IndexError::RebuildRequired {
+                found: INDEX_SCHEMA_VERSION,
+                required: 3,
+            });
+        }
     })
 }
 
@@ -2362,7 +2374,8 @@ fn validate_offline_classification(
             | DecodedPayload::RunGenesisManifest(_)
             | DecodedPayload::ArtifactRegistered(_)
             | DecodedPayload::SnapshotSourcesRecorded(_)
-            | DecodedPayload::ReviewPlanRecorded(_),
+            | DecodedPayload::ReviewPlanRecorded(_)
+            | DecodedPayload::ReviewExecutionRecorded { .. },
         ) => Ok(()),
         _ => Err(IndexError::ProjectionContractViolation),
     }
@@ -4103,9 +4116,10 @@ mod tests {
     use super::*;
     use reviewgraphen_core::{
         ArtifactRegistered, ArtifactSensitivity, ArtifactSource, EventCommand, EventLog, Evidence,
-        EvidenceDetails, MvpRulePack, ObligationLifecycle, PlanBudget, ProgramSpace, Provenance,
-        ReviewAggregate, SnapshotSourceRecordEntry, SnapshotSourcesRecorded, SourceRef, plan,
-        prepare_context,
+        EvidenceDetails, ExecutionClaimInputV2, ExecutionOutcome, ExecutionRecordInput,
+        MvpRulePack, ObligationLifecycle, PlanBudget, ProgramSpace, Provenance, ReviewAggregate,
+        SnapshotSourceRecordEntry, SnapshotSourcesRecorded, SourceRef, ValidatedExecutionBundle,
+        plan, prepare_context,
     };
     use serde_json::Value;
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -4117,6 +4131,60 @@ mod tests {
     };
 
     type IndexMutation = Box<dyn Fn(&Connection)>;
+
+    #[test]
+    fn schema_v2_refuses_d2_execution_projection_with_typed_v3_rebuild() {
+        let input = ExecutionRecordInput::fake(
+            StableId::parse("plan:fixture").unwrap(),
+            StableId::parse("schedule-wave:fixture").unwrap(),
+            StableId::parse("obligation:fixture").unwrap(),
+            StableId::parse("context-envelope:fixture").unwrap(),
+            StableId::parse("snapshot:fixture").unwrap(),
+            1,
+        )
+        .unwrap();
+        let raw = b"fixture";
+        let registration = ArtifactRegistered::reviewer_execution(
+            StableId::parse("run:fixture").unwrap(),
+            input.execution_id().unwrap(),
+            "reviewgraphen.fake_reviewer@1",
+            ContentHash::sha256(raw),
+            "application/json",
+            u64::try_from(raw.len()).unwrap(),
+        )
+        .unwrap();
+        let claim = ExecutionClaimInputV2::new(
+            "property.fixture",
+            BTreeSet::from([StableId::parse("file:fixture").unwrap()]),
+            reviewgraphen_core::ClaimPolarity::IssueAbsent,
+            "bounded fixture",
+            BTreeSet::from([StableId::parse("file:fixture").unwrap()]),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            None,
+        )
+        .unwrap();
+        let bundle = ValidatedExecutionBundle::fake(
+            input,
+            &registration,
+            raw.to_vec(),
+            vec![],
+            vec![claim],
+            ExecutionOutcome::Structured,
+        )
+        .unwrap();
+        let payload = DecodedPayload::ReviewExecutionRecorded {
+            execution: bundle.execution().clone(),
+            claims: bundle.claims().to_vec(),
+        };
+        assert!(matches!(
+            payload_kind_decoded(&payload),
+            Err(IndexError::RebuildRequired {
+                found: 2,
+                required: 3
+            })
+        ));
+    }
 
     #[test]
     fn exact_fd_read_admits_before_allocating_and_returns_exact_capacity() {

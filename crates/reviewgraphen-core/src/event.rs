@@ -1,10 +1,14 @@
 use crate::context::{ContextProjectionAdmission, context_domain_error};
+use crate::execution::{
+    MAX_D2_WORKING_BYTES, ReviewExecutionRecorded, ReviewerRawClosure, preflight_d2_decode_working,
+};
 use crate::{
     BuiltContextProjection, ContentHash, Decision, DecisionAdmission, DomainError, Evidence,
-    EvidenceAdmission, EvidenceBinding, EvidenceSnapshotAdmission, Finding, MvpRulePack,
-    Obligation, ObligationLifecycle, ProgramSpace, Result, ReviewAggregate, ReviewClaim,
-    ReviewContextEnvelope, ReviewPlan, StableId, TrustedHumanAdmission, UniverseDescriptor,
-    Verification, canonical_json, canonical_json_value,
+    EvidenceAdmission, EvidenceBinding, EvidenceSnapshotAdmission, ExecutionClaimV2,
+    ExecutionRecord, Finding, LegacyClaimV1, MvpRulePack, Obligation, ObligationLifecycle,
+    ProgramSpace, Result, ReviewAggregate, ReviewClaim, ReviewContextEnvelope, ReviewPlan,
+    StableId, TrustedHumanAdmission, UniverseDescriptor, ValidatedExecutionBundle, Verification,
+    canonical_json, canonical_json_value,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, value::RawValue};
@@ -316,7 +320,9 @@ pub struct ArtifactRegistered {
 }
 
 impl ArtifactRegistered {
-    fn allocated_bytes(&self) -> usize {
+    const MAX_D2_REGISTRATION_IDENTITY_BYTES: usize = 4_096;
+
+    pub(crate) fn allocated_bytes(&self) -> usize {
         let source = match &self.source {
             ArtifactSource::RunGenesis { run_id } => run_id.allocated_bytes(),
             ArtifactSource::SnapshotIngest {
@@ -392,6 +398,41 @@ impl ArtifactRegistered {
         })
     }
 
+    /// Constructs the exact sensitive registration required before a D2
+    /// reviewer execution event can be admitted.
+    pub fn reviewer_execution(
+        run_id: StableId,
+        execution_id: StableId,
+        reviewer_id: impl Into<String>,
+        cas_hash: ContentHash,
+        media_type: impl Into<String>,
+        size: u64,
+    ) -> Result<Self> {
+        let reviewer_id = reviewer_id.into();
+        let media_type = media_type.into();
+        let source = ArtifactSource::ReviewerExecution {
+            run_id: run_id.clone(),
+            execution_id,
+            reviewer_id,
+        };
+        let registration_id = Self::derived_id(
+            &run_id,
+            &cas_hash,
+            &media_type,
+            ArtifactSensitivity::Sensitive,
+            &source,
+        )?;
+        Self::new(
+            run_id,
+            registration_id,
+            cas_hash,
+            media_type,
+            size,
+            ArtifactSensitivity::Sensitive,
+            source,
+        )
+    }
+
     fn derived_id(
         run_id: &StableId,
         cas_hash: &ContentHash,
@@ -399,6 +440,59 @@ impl ArtifactRegistered {
         sensitivity: ArtifactSensitivity,
         source: &ArtifactSource,
     ) -> Result<StableId> {
+        if let ArtifactSource::ReviewerExecution {
+            run_id: source_run_id,
+            execution_id,
+            reviewer_id,
+        } = source
+        {
+            #[derive(Serialize)]
+            struct ReviewerSourceIdentity<'a> {
+                execution_id: &'a StableId,
+                kind: &'static str,
+                reviewer_id: &'a str,
+                run_id: &'a StableId,
+            }
+
+            #[derive(Serialize)]
+            struct ReviewerRegistrationIdentity<'a> {
+                cas_hash: &'a ContentHash,
+                media_type: &'a str,
+                run_id: &'a StableId,
+                sensitivity: &'static str,
+                source: ReviewerSourceIdentity<'a>,
+            }
+
+            if media_type.len() > 256 || reviewer_id.len() > 256 {
+                return Err(DomainError::Incomplete {
+                    operation: "D2 registration identity string bytes",
+                    limit: 256,
+                    observed: media_type.len().max(reviewer_id.len()),
+                });
+            }
+            let identity = ReviewerRegistrationIdentity {
+                cas_hash,
+                media_type,
+                run_id,
+                sensitivity: match sensitivity {
+                    ArtifactSensitivity::CanonicalState => "canonical_state",
+                    ArtifactSensitivity::WorkspaceSource => "workspace_source",
+                    ArtifactSensitivity::Sensitive => "sensitive",
+                },
+                source: ReviewerSourceIdentity {
+                    execution_id,
+                    kind: "reviewer_execution",
+                    reviewer_id,
+                    run_id: source_run_id,
+                },
+            };
+            let bytes = crate::execution::bounded_json(
+                &identity,
+                Self::MAX_D2_REGISTRATION_IDENTITY_BYTES,
+                "D2 registration identity",
+            )?;
+            return StableId::parse(format!("registration:{}", ContentHash::sha256(&bytes)));
+        }
         let source =
             serde_json::to_value(source).map_err(|error| DomainError::Json(error.to_string()))?;
         StableId::derived(
@@ -866,6 +960,7 @@ enum CommandAdmission {
     Verification(VerificationAdmission),
     Decision(DecisionAdmission),
     ContextProjection(ContextProjectionAdmission),
+    ReviewerRaw(ReviewerRawClosure),
 }
 
 #[derive(Default)]
@@ -875,6 +970,7 @@ struct MatchedAdmissions {
     verification: Option<VerificationAdmission>,
     decision: Option<DecisionAdmission>,
     context_projection: Option<PositionedContextProjectionAdmission>,
+    reviewer_raw: Option<ReviewerRawClosure>,
 }
 
 /// A private byte admission sealed to one exact persisted event position.
@@ -963,6 +1059,7 @@ pub struct EventAdmissions {
     verifications: Vec<VerificationAdmission>,
     decisions: Vec<DecisionAdmission>,
     context_projections: Vec<PositionedContextProjectionAdmission>,
+    reviewer_raw: Vec<ReviewerRawClosure>,
 }
 
 impl EventAdmissions {
@@ -975,6 +1072,7 @@ impl EventAdmissions {
             verifications: Vec::new(),
             decisions,
             context_projections: Vec::new(),
+            reviewer_raw: Vec::new(),
         }
     }
 
@@ -1014,11 +1112,43 @@ impl EventAdmissions {
         Ok(self)
     }
 
+    /// Adds byte-derived, authority-free closure for imported D2 execution
+    /// events. The bytes are consumed only to recheck hash and size; no
+    /// reviewer capability or acceptance authority is minted.
+    pub fn with_reviewer_artifacts(
+        mut self,
+        artifacts: Vec<(EventEnvelope, Vec<u8>)>,
+    ) -> Result<Self> {
+        for (event, raw_bytes) in artifacts {
+            if raw_bytes.len() > crate::execution::MAX_D2_RAW_REVIEWER_BYTES {
+                return Err(DomainError::Incomplete {
+                    operation: "D2 raw reviewer bytes",
+                    limit: crate::execution::MAX_D2_RAW_REVIEWER_BYTES,
+                    observed: raw_bytes.len(),
+                });
+            }
+            let payload = decode_canonical_payload(event.payload.get())?;
+            let PersistedPayload::ReviewExecutionRecorded(recorded) = payload else {
+                return Err(DomainError::Validation(
+                    "reviewer artifact bytes must be paired with a D2 execution event".to_owned(),
+                ));
+            };
+            let closure = ReviewerRawClosure::from_bytes(&recorded, &raw_bytes)?;
+            self.reviewer_raw.push(closure);
+        }
+        Ok(self)
+    }
+
     fn with_context_admissions(
         mut self,
         admissions: Vec<PositionedContextProjectionAdmission>,
     ) -> Self {
         self.context_projections = admissions;
+        self
+    }
+
+    fn with_reviewer_raw(mut self, reviewer_raw: Vec<ReviewerRawClosure>) -> Self {
+        self.reviewer_raw = reviewer_raw;
         self
     }
 
@@ -1114,6 +1244,13 @@ impl EventAdmissions {
         }
         Ok(None)
     }
+
+    fn reviewer_raw_for(&self, recorded: &ReviewExecutionRecorded) -> Option<ReviewerRawClosure> {
+        self.reviewer_raw
+            .iter()
+            .find(|closure| closure.matches(recorded))
+            .cloned()
+    }
 }
 
 impl EvidenceBindingAdmission {
@@ -1202,7 +1339,8 @@ impl EventCommand {
 
     /// Adds a new, necessarily proposed and unreviewed claim.
     #[must_use]
-    pub fn claim_proposed(claim: ReviewClaim) -> Self {
+    #[cfg(test)]
+    pub(crate) fn claim_proposed(claim: ReviewClaim) -> Self {
         Self {
             payload: PersistedPayload::ClaimProposed(claim),
             admission: CommandAdmission::None,
@@ -1296,6 +1434,17 @@ impl EventCommand {
             admission: CommandAdmission::ContextProjection(admission),
         }
     }
+
+    /// Records one validated fake/no-tools D2 execution and all of its claims
+    /// in the only atomic v2 payload that can introduce D2 claim state.
+    #[must_use]
+    pub fn review_execution_recorded(bundle: ValidatedExecutionBundle) -> Self {
+        let (recorded, raw_closure) = bundle.into_parts();
+        Self {
+            payload: PersistedPayload::ReviewExecutionRecorded(recorded),
+            admission: CommandAdmission::ReviewerRaw(raw_closure),
+        }
+    }
 }
 
 /// The closed persisted event vocabulary. It is private so it can never be
@@ -1307,7 +1456,7 @@ enum PersistedPayload {
         obligation_id: StableId,
         next: ObligationLifecycle,
     },
-    ClaimProposed(ReviewClaim),
+    ClaimProposed(LegacyClaimV1),
     EvidenceRecorded(Box<Evidence>),
     EvidenceBound(EvidenceBinding),
     VerificationRecorded(Verification),
@@ -1318,6 +1467,7 @@ enum PersistedPayload {
     SnapshotSourcesRecorded(SnapshotSourcesRecorded),
     ReviewPlanRecorded(ReviewPlan),
     ContextEnvelopeProjected(ReviewContextEnvelope),
+    ReviewExecutionRecorded(ReviewExecutionRecorded),
 }
 
 impl PersistedPayload {
@@ -1331,6 +1481,10 @@ impl PersistedPayload {
                 Some((UnreconciledRecordKind::Verification, value.id()))
             }
             Self::DecisionRecorded(value) => Some((UnreconciledRecordKind::Decision, value.id())),
+            Self::ReviewExecutionRecorded(value) => Some((
+                UnreconciledRecordKind::ReviewExecution,
+                value.execution.id(),
+            )),
             _ => None,
         }
     }
@@ -1343,13 +1497,16 @@ impl PersistedPayload {
                 | Self::SnapshotSourcesRecorded(_)
                 | Self::ReviewPlanRecorded(_)
                 | Self::ContextEnvelopeProjected(_)
+                | Self::ReviewExecutionRecorded(_)
         )
     }
 
     fn is_d1_bounded(&self) -> bool {
         matches!(
             self,
-            Self::ReviewPlanRecorded(_) | Self::ContextEnvelopeProjected(_)
+            Self::ReviewPlanRecorded(_)
+                | Self::ContextEnvelopeProjected(_)
+                | Self::ReviewExecutionRecorded(_)
         )
     }
 
@@ -1391,6 +1548,7 @@ impl PersistedPayload {
                 .canonical_bytes()
                 .map(|_| ())
                 .map_err(context_domain_error),
+            Self::ReviewExecutionRecorded(recorded) => recorded.validate_shape(),
         }
     }
 
@@ -1808,6 +1966,9 @@ fn payload_canonical_bytes(payload: &PersistedPayload) -> Result<Vec<u8>> {
             "context_envelope_projected",
             &envelope.canonical_bytes().map_err(context_domain_error)?,
         ),
+        PersistedPayload::ReviewExecutionRecorded(recorded) => {
+            d1_payload_bytes("review_execution_recorded", &recorded.canonical_bytes()?)
+        }
         _ => canonical_json(payload),
     }
 }
@@ -1837,19 +1998,30 @@ fn reject_v2_legacy_execution_payload(
     version: EventContractVersion,
     payload: &PersistedPayload,
 ) -> Result<()> {
-    if version == EventContractVersion::V2
-        && matches!(
-            payload,
-            PersistedPayload::ClaimProposed(_)
-                | PersistedPayload::ObligationTransition {
-                    next: ObligationLifecycle::Completed,
-                    ..
-                }
-        )
+    if version == EventContractVersion::V2 && matches!(payload, PersistedPayload::ClaimProposed(_))
     {
         return Err(DomainError::Validation(
             "v2 requires the Unit D atomic execution record before claims or completed obligations"
                 .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_v2_completed_transition(
+    version: EventContractVersion,
+    aggregate: &ReviewAggregate,
+    payload: &PersistedPayload,
+) -> Result<()> {
+    if version == EventContractVersion::V2
+        && let PersistedPayload::ObligationTransition {
+            obligation_id,
+            next: ObligationLifecycle::Completed,
+        } = payload
+        && !aggregate.has_structured_execution(obligation_id)
+    {
+        return Err(DomainError::Validation(
+            "v2 completed lifecycle requires an earlier structured D2 execution".to_owned(),
         ));
     }
     Ok(())
@@ -1997,6 +2169,29 @@ impl EventEnvelope {
     /// Imports and structurally validates one JSON envelope. Applying it still
     /// requires replay with its matching run-bound decision admissions.
     pub fn from_json_slice(input: &[u8]) -> Result<Self> {
+        Self::from_json_slice_with_d2_working_limit(input, MAX_D2_WORKING_BYTES)
+    }
+
+    fn from_json_slice_with_d2_working_limit(input: &[u8], working_limit: usize) -> Result<Self> {
+        if input
+            .windows(b"review_execution_recorded".len())
+            .any(|window| window == b"review_execution_recorded")
+        {
+            let line_bytes = input.len().checked_add(1).ok_or(DomainError::Incomplete {
+                operation: "D2 canonical event JSONL",
+                limit: MAX_D1_EVENT_LINE_BYTES,
+                observed: usize::MAX,
+            })?;
+            if line_bytes > MAX_D1_EVENT_LINE_BYTES {
+                return Err(DomainError::Incomplete {
+                    operation: "D2 canonical event JSONL",
+                    limit: MAX_D1_EVENT_LINE_BYTES,
+                    observed: line_bytes,
+                });
+            }
+            preflight_event_json_structure(input)?;
+            preflight_d2_decode_working(input, working_limit)?;
+        }
         serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))
     }
 
@@ -2556,6 +2751,19 @@ impl<'a> ValidatedEvent<'a> {
             DecodedPayload::SnapshotSourcesRecorded(value) => value.allocated_bytes(),
             DecodedPayload::ReviewPlanRecorded(value) => value.allocated_bytes(),
             DecodedPayload::ContextEnvelopeProjected(value) => value.allocated_bytes(),
+            DecodedPayload::ReviewExecutionRecorded { execution, claims } => execution
+                .allocated_bytes()
+                .saturating_add(
+                    claims
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<ExecutionClaimV2>()),
+                )
+                .saturating_add(
+                    claims
+                        .iter()
+                        .map(ExecutionClaimV2::allocated_bytes)
+                        .sum::<usize>(),
+                ),
         }
     }
 
@@ -2587,6 +2795,10 @@ pub enum DecodedPayload {
     SnapshotSourcesRecorded(SnapshotSourcesRecorded),
     ReviewPlanRecorded(ReviewPlan),
     ContextEnvelopeProjected(ReviewContextEnvelope),
+    ReviewExecutionRecorded {
+        execution: ExecutionRecord,
+        claims: Vec<ExecutionClaimV2>,
+    },
 }
 
 fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
@@ -2615,6 +2827,12 @@ fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
         PersistedPayload::ContextEnvelopeProjected(value) => {
             DecodedPayload::ContextEnvelopeProjected(value)
         }
+        PersistedPayload::ReviewExecutionRecorded(value) => {
+            DecodedPayload::ReviewExecutionRecorded {
+                execution: value.execution,
+                claims: value.claims,
+            }
+        }
     }
 }
 
@@ -2630,6 +2848,8 @@ pub enum UnreconciledRecordKind {
     Verification,
     /// A human authority decision.
     Decision,
+    /// A D2 execution whose raw CAS bytes were unavailable offline.
+    ReviewExecution,
 }
 
 /// Safe, typed index metadata for a record which has not been reconciled into
@@ -2904,12 +3124,29 @@ impl OfflineProjectionState {
             DecodedPayload::ContextEnvelopeProjected(value) => {
                 return self.apply_projected_context(value.clone(), envelope);
             }
+            DecodedPayload::ReviewExecutionRecorded { execution, claims } => {
+                return self.apply_unreconciled(
+                    PersistedPayload::ReviewExecutionRecorded(ReviewExecutionRecorded {
+                        execution: execution.clone(),
+                        claims: claims.clone(),
+                    }),
+                    envelope,
+                    event.envelope().actor(),
+                );
+            }
         };
         reject_v2_legacy_execution_payload(self.version, &payload)?;
+        validate_v2_completed_transition(self.version, &self.aggregate, &payload)?;
         reject_duplicate_d1_record(&self.aggregate, &payload)?;
         payload.validate_for_enclosing_run(&self.run_id)?;
         let mut next = self.aggregate.clone();
-        apply(&mut next, &payload, event.envelope().actor(), &self.run_id)?;
+        apply(
+            &mut next,
+            &payload,
+            event.envelope().actor(),
+            &self.run_id,
+            None,
+        )?;
         next.validate()?;
         self.aggregate = next;
         self.advance_offline_cursor(envelope)?;
@@ -2931,6 +3168,7 @@ impl OfflineProjectionState {
         actor: &str,
     ) -> Result<bool> {
         reject_v2_legacy_execution_payload(self.version, &payload)?;
+        validate_v2_completed_transition(self.version, &self.aggregate, &payload)?;
         payload.validate_shape()?;
         payload.validate_for_enclosing_run(&self.run_id)?;
         let (kind, id) = payload
@@ -2941,13 +3179,18 @@ impl OfflineProjectionState {
             })?;
         if self.unreconciled_records.contains_key(&id) || self.projected_findings.contains_key(&id)
         {
+            if matches!(payload, PersistedPayload::ReviewExecutionRecorded(_)) {
+                return Err(DomainError::IdCollision { id });
+            }
             return Err(DomainError::Validation(format!(
                 "offline shadow record ID collision: {id}"
             )));
         }
-        let mut candidate = self.shadow_candidate()?;
-        apply(&mut candidate, &payload, actor, &self.run_id)?;
-        candidate.validate()?;
+        if !matches!(payload, PersistedPayload::ReviewExecutionRecorded(_)) {
+            let mut candidate = self.shadow_candidate()?;
+            apply(&mut candidate, &payload, actor, &self.run_id, None)?;
+            candidate.validate()?;
+        }
         let metadata = UnreconciledRecordMetadata {
             kind,
             id: id.clone(),
@@ -2976,7 +3219,7 @@ impl OfflineProjectionState {
         }
         let payload = PersistedPayload::FindingRecorded(finding.clone());
         let mut candidate = self.shadow_candidate()?;
-        apply(&mut candidate, &payload, actor, &self.run_id)?;
+        apply(&mut candidate, &payload, actor, &self.run_id, None)?;
         candidate.validate()?;
         self.projected_finding_metadata.insert(
             id.clone(),
@@ -3010,6 +3253,11 @@ impl OfflineProjectionState {
                 body_hash: ContentHash::sha256(&bytes),
             },
         );
+        // The canonical envelope metadata is retained privately in the
+        // authority-free aggregate so later D2 execution/claim events can
+        // close their references during offline replay. No runtime admission
+        // or reviewer-resume capability is created by this metadata replay.
+        self.aggregate.record_offline_execution_envelope(context)?;
         self.advance_offline_cursor(envelope)?;
         Ok(false)
     }
@@ -3018,13 +3266,16 @@ impl OfflineProjectionState {
         let mut candidate = self.aggregate.clone();
         for id in &self.unreconciled_order {
             if let Some(payload) = self.unreconciled_records.get(id) {
-                apply(&mut candidate, payload, payload.actor(), &self.run_id)?;
+                if !matches!(payload, PersistedPayload::ReviewExecutionRecorded(_)) {
+                    apply(&mut candidate, payload, payload.actor(), &self.run_id, None)?;
+                }
             } else if let Some(finding) = self.projected_findings.get(id) {
                 apply(
                     &mut candidate,
                     &PersistedPayload::FindingRecorded(finding.clone()),
                     SYSTEM_ACTOR,
                     &self.run_id,
+                    None,
                 )?;
             } else {
                 return Err(DomainError::Validation(
@@ -3146,7 +3397,7 @@ fn decode_payload(input: &str) -> Result<PersistedPayload> {
         serde_json::from_str(input).map_err(|error| DomainError::Json(error.to_string()))?;
     if matches!(
         raw.kind.as_str(),
-        "review_plan_recorded" | "context_envelope_projected"
+        "review_plan_recorded" | "context_envelope_projected" | "review_execution_recorded"
     ) {
         return match raw.kind.as_str() {
             "review_plan_recorded" => Ok(PersistedPayload::ReviewPlanRecorded(
@@ -3156,6 +3407,14 @@ fn decode_payload(input: &str) -> Result<PersistedPayload> {
                 ReviewContextEnvelope::from_event_bytes(raw.data.get().as_bytes())
                     .map_err(context_domain_error)?,
             )),
+            "review_execution_recorded" => {
+                preflight_d2_decode_working(raw.data.get().as_bytes(), MAX_D2_WORKING_BYTES)?;
+                let recorded: ReviewExecutionRecorded = serde_json::from_str(raw.data.get())
+                    .map_err(|error| DomainError::Json(error.to_string()))?;
+                recorded.validate_shape()?;
+                recorded.validate_decode_working(raw.data.get().len())?;
+                Ok(PersistedPayload::ReviewExecutionRecorded(recorded))
+            }
             _ => unreachable!("closed D1 kind checked"),
         };
     }
@@ -3232,6 +3491,7 @@ pub struct Event {
     verification_admission: Option<VerificationAdmission>,
     decision_admission: Option<DecisionAdmission>,
     context_projection_admission: Option<PositionedContextProjectionAdmission>,
+    reviewer_raw_closure: Option<ReviewerRawClosure>,
 }
 
 impl Event {
@@ -3444,6 +3704,7 @@ impl EventLog {
         let sequence = self.next_sequence()?;
         validate_stream_payload_position(self.version, sequence, &payload)?;
         reject_v2_legacy_execution_payload(self.version, &payload)?;
+        validate_v2_completed_transition(self.version, &self.aggregate, &payload)?;
         reject_duplicate_d1_record(&self.aggregate, &payload)?;
         payload.validate_for_enclosing_run(&self.run_id)?;
         match (&payload, &admission) {
@@ -3511,6 +3772,15 @@ impl EventLog {
                         .to_owned(),
                 ));
             }
+            (
+                PersistedPayload::ReviewExecutionRecorded(recorded),
+                CommandAdmission::ReviewerRaw(closure),
+            ) if closure.matches(recorded) => {}
+            (PersistedPayload::ReviewExecutionRecorded(_), _) => {
+                return Err(DomainError::Validation(
+                    "recording a D2 execution requires its exact raw byte closure".to_owned(),
+                ));
+            }
             _ => {}
         }
         let actor = payload.actor().to_owned();
@@ -3530,11 +3800,18 @@ impl EventLog {
             verification_admission,
             decision_admission,
             context_projection_admission,
+            reviewer_raw_closure,
         ) = match admission {
-            CommandAdmission::Evidence(admission) => (Some(admission), None, None, None, None),
-            CommandAdmission::Binding(admission) => (None, Some(admission), None, None, None),
-            CommandAdmission::Verification(admission) => (None, None, Some(admission), None, None),
-            CommandAdmission::Decision(admission) => (None, None, None, Some(admission), None),
+            CommandAdmission::Evidence(admission) => {
+                (Some(admission), None, None, None, None, None)
+            }
+            CommandAdmission::Binding(admission) => (None, Some(admission), None, None, None, None),
+            CommandAdmission::Verification(admission) => {
+                (None, None, Some(admission), None, None, None)
+            }
+            CommandAdmission::Decision(admission) => {
+                (None, None, None, Some(admission), None, None)
+            }
             CommandAdmission::ContextProjection(admission) => {
                 let payload = decode_canonical_payload(envelope.payload.get())?;
                 let PersistedPayload::ContextEnvelopeProjected(context) = payload else {
@@ -3544,9 +3821,10 @@ impl EventLog {
                 };
                 let positioned =
                     PositionedContextProjectionAdmission::seal(&envelope, &context, admission)?;
-                (None, None, None, None, Some(positioned))
+                (None, None, None, None, Some(positioned), None)
             }
-            CommandAdmission::None => (None, None, None, None, None),
+            CommandAdmission::ReviewerRaw(closure) => (None, None, None, None, None, Some(closure)),
+            CommandAdmission::None => (None, None, None, None, None, None),
         };
         self.append_envelope(
             envelope,
@@ -3555,6 +3833,7 @@ impl EventLog {
             verification_admission,
             decision_admission,
             context_projection_admission,
+            reviewer_raw_closure,
         )
     }
 
@@ -3589,6 +3868,10 @@ impl EventLog {
             .iter()
             .filter_map(|event| event.context_projection_admission.clone())
             .collect::<Vec<_>>();
+        let reviewer_raw = events
+            .iter()
+            .filter_map(|event| event.reviewer_raw_closure.clone())
+            .collect::<Vec<_>>();
         Self::replay_envelopes(
             version,
             run_id,
@@ -3596,7 +3879,8 @@ impl EventLog {
             &envelopes,
             &EventAdmissions::new(evidence, decisions)
                 .with_trace_admissions(bindings, verifications)
-                .with_context_admissions(context_projections),
+                .with_context_admissions(context_projections)
+                .with_reviewer_raw(reviewer_raw),
         )
     }
 
@@ -3626,6 +3910,7 @@ impl EventLog {
                 admissions.verification,
                 admissions.decision,
                 admissions.context_projection,
+                admissions.reviewer_raw,
             )?;
         }
         if version == EventContractVersion::V1 {
@@ -3660,12 +3945,14 @@ impl EventLog {
                 admissions.verification,
                 admissions.decision,
                 admissions.context_projection,
+                admissions.reviewer_raw,
             )?;
         }
         *self = next;
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn append_envelope(
         &mut self,
         envelope: EventEnvelope,
@@ -3674,6 +3961,7 @@ impl EventLog {
         verification_admission: Option<VerificationAdmission>,
         decision_admission: Option<DecisionAdmission>,
         context_projection_admission: Option<PositionedContextProjectionAdmission>,
+        reviewer_raw_closure: Option<ReviewerRawClosure>,
     ) -> Result<&Event> {
         self.require_writable()?;
         let expected_sequence = self.next_sequence()?;
@@ -3691,6 +3979,7 @@ impl EventLog {
         let payload = decode_canonical_payload(envelope.payload.get())?;
         validate_stream_payload_position(self.version, expected_sequence, &payload)?;
         reject_v2_legacy_execution_payload(self.version, &payload)?;
+        validate_v2_completed_transition(self.version, &self.aggregate, &payload)?;
         reject_duplicate_d1_record(&self.aggregate, &payload)?;
         payload.validate_for_enclosing_run(&self.run_id)?;
         if let PersistedPayload::EvidenceRecorded(evidence) = &payload
@@ -3761,8 +4050,25 @@ impl EventLog {
                 "context event lacks its exact byte-reverified admission".to_owned(),
             ));
         }
+        if let PersistedPayload::ReviewExecutionRecorded(recorded) = &payload
+            && !reviewer_raw_closure
+                .as_ref()
+                .is_some_and(|closure| closure.matches(recorded))
+        {
+            return Err(DomainError::Validation(
+                "D2 execution event lacks its exact raw byte closure".to_owned(),
+            ));
+        }
         let mut next = self.aggregate.clone();
-        apply(&mut next, &payload, envelope.actor(), &self.run_id)?;
+        apply(
+            &mut next,
+            &payload,
+            envelope.actor(),
+            &self.run_id,
+            reviewer_raw_closure
+                .as_ref()
+                .map(ReviewerRawClosure::raw_artifact_size),
+        )?;
         self.aggregate = next;
         self.events.push(Event {
             envelope,
@@ -3771,6 +4077,7 @@ impl EventLog {
             verification_admission,
             decision_admission,
             context_projection_admission,
+            reviewer_raw_closure,
         });
         self.tail_hash = self
             .events
@@ -3815,6 +4122,26 @@ impl EventLog {
         payload: &PersistedPayload,
         admissions: &EventAdmissions,
     ) -> Result<MatchedAdmissions> {
+        if let PersistedPayload::ReviewExecutionRecorded(recorded) = payload {
+            if self
+                .aggregate
+                .executions()
+                .any(|execution| execution.id() == recorded.execution.id())
+            {
+                return Err(DomainError::IdCollision {
+                    id: recorded.execution.id().clone(),
+                });
+            }
+            if let Some(claim) = recorded.claims.iter().find(|claim| {
+                self.aggregate
+                    .execution_claims()
+                    .any(|existing| existing.id() == claim.id())
+            }) {
+                return Err(DomainError::IdCollision {
+                    id: claim.id().clone(),
+                });
+            }
+        }
         let evidence = match payload {
             PersistedPayload::EvidenceRecorded(evidence) => admissions
                 .evidence_for(
@@ -3902,12 +4229,24 @@ impl EventLog {
                 .map(Some)?,
             _ => None,
         };
+        let reviewer_raw = match payload {
+            PersistedPayload::ReviewExecutionRecorded(recorded) => admissions
+                .reviewer_raw_for(recorded)
+                .ok_or_else(|| {
+                    DomainError::Validation(
+                        "imported D2 execution lacks its exact raw byte closure".to_owned(),
+                    )
+                })
+                .map(Some)?,
+            _ => None,
+        };
         Ok(MatchedAdmissions {
             evidence,
             binding,
             verification,
             decision,
             context_projection,
+            reviewer_raw,
         })
     }
 
@@ -4038,7 +4377,7 @@ impl EventLog {
             self.tail_hash.clone(),
             PersistedPayload::RunGenesisManifest(manifest),
         )?;
-        self.append_envelope(envelope, None, None, None, None, None)?;
+        self.append_envelope(envelope, None, None, None, None, None, None)?;
         let envelope = self
             .events
             .first()
@@ -4154,6 +4493,7 @@ fn apply(
     payload: &PersistedPayload,
     actor: &str,
     expected_run_id: &StableId,
+    reviewer_raw_size: Option<u64>,
 ) -> Result<()> {
     match payload {
         PersistedPayload::ObligationTransition {
@@ -4184,6 +4524,20 @@ fn apply(
         PersistedPayload::ReviewPlanRecorded(plan) => aggregate.record_review_plan(plan.clone()),
         PersistedPayload::ContextEnvelopeProjected(envelope) => {
             aggregate.record_context_envelope(envelope.clone())
+        }
+        PersistedPayload::ReviewExecutionRecorded(recorded) => {
+            let expected_raw_size = reviewer_raw_size.ok_or_else(|| {
+                DomainError::Validation(
+                    "D2 execution requires verified raw bytes; registration metadata is insufficient"
+                        .to_owned(),
+                )
+            })?;
+            aggregate.record_execution(
+                expected_run_id,
+                recorded.execution.clone(),
+                recorded.claims.clone(),
+                expected_raw_size,
+            )
         }
     }
 }
@@ -4265,6 +4619,1100 @@ mod tests {
 
     fn v2_log(run: &str) -> EventLog {
         EventLog::new(id(run), aggregate()).expect("v2 log")
+    }
+
+    fn d2_log() -> (
+        EventLog,
+        ReviewAggregate,
+        ReviewPlan,
+        StableId,
+        ReviewContextEnvelope,
+        BTreeMap<StableId, Vec<u8>>,
+    ) {
+        let mut input: Value = serde_json::from_slice(FIXTURE).unwrap();
+        let mut contains = input["relations"][0].clone();
+        contains["id"] = Value::String("relation:file-contains-payment-charge".to_owned());
+        contains["kind"] = Value::String("contains".to_owned());
+        contains["source_id"] = Value::String("file:payment-repository".to_owned());
+        contains["target_ids"] =
+            Value::Array(vec![Value::String("function:payment-charge".to_owned())]);
+        contains["directed"] = Value::Bool(true);
+        input["relations"].as_array_mut().unwrap().push(contains);
+        let test_artifact = input["artifacts"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|artifact| artifact["id"] == "test:double-submit")
+            .unwrap();
+        test_artifact["location"]["start_line"] = Value::Null;
+        test_artifact["location"]["end_line"] = Value::Null;
+        let bytes_by_path = BTreeMap::from([
+            ("src/checkout_controller.rs", b"checkout\n".repeat(40)),
+            ("src/payment_repository.rs", b"repository\n".repeat(40)),
+        ]);
+        for artifact in input["artifacts"].as_array_mut().unwrap() {
+            if artifact["kind"] == "file" {
+                let path = artifact["location"]["path"].as_str().unwrap();
+                artifact["content_hash"] =
+                    Value::String(ContentHash::sha256(&bytes_by_path[path]).to_string());
+            }
+        }
+        let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&input).unwrap()).unwrap();
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let initial = ReviewAggregate::new(program, universe, obligations).unwrap();
+        let run_id = id("run:d2-core");
+        let mut log = EventLog::new(run_id.clone(), initial.clone()).unwrap();
+        let snapshot_id = log.aggregate().program().snapshot_id().clone();
+        let files = log
+            .aggregate()
+            .program()
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut entries = Vec::new();
+        let mut source_by_id = BTreeMap::new();
+        for artifact in files {
+            let path = artifact.location.as_ref().unwrap().path.clone();
+            let bytes = bytes_by_path[&path.as_str()].clone();
+            let hash = ContentHash::sha256(&bytes);
+            let source = ArtifactSource::SnapshotIngest {
+                run_id: run_id.clone(),
+                snapshot_id: snapshot_id.clone(),
+                adapter_id: "fixture-adapter".to_owned(),
+            };
+            let registration = ArtifactRegistered::new(
+                run_id.clone(),
+                ArtifactRegistered::derived_id(
+                    &run_id,
+                    &hash,
+                    "text/plain",
+                    ArtifactSensitivity::WorkspaceSource,
+                    &source,
+                )
+                .unwrap(),
+                hash.clone(),
+                "text/plain",
+                u64::try_from(bytes.len()).unwrap(),
+                ArtifactSensitivity::WorkspaceSource,
+                source,
+            )
+            .unwrap();
+            entries.push(
+                SnapshotSourceRecordEntry::new(
+                    artifact.id.clone(),
+                    path,
+                    hash.clone(),
+                    registration.registration_id().clone(),
+                    hash,
+                    u64::try_from(bytes.iter().filter(|byte| **byte == b'\n').count()).unwrap() + 1,
+                )
+                .unwrap(),
+            );
+            source_by_id.insert(artifact.id, bytes);
+            log.append(EventCommand::artifact_registered(registration))
+                .unwrap();
+        }
+        entries.sort_by(|left, right| left.path().cmp(right.path()));
+        log.append(EventCommand::snapshot_sources_recorded(
+            SnapshotSourcesRecorded::new(snapshot_id, entries).unwrap(),
+        ))
+        .unwrap();
+        let review_plan = plan(log.aggregate(), PlanBudget::new(16, 16).unwrap()).unwrap();
+        log.append(EventCommand::review_plan_recorded(review_plan.clone()))
+            .unwrap();
+        let (obligation_id, built) = review_plan
+            .waves()
+            .iter()
+            .flat_map(|wave| wave.obligation_ids())
+            .find_map(|candidate| {
+                let mut session =
+                    crate::prepare_context(log.aggregate(), candidate.clone()).ok()?;
+                loop {
+                    let request = match session.next_source_request() {
+                        Ok(Some(request)) => request,
+                        Ok(None) => break,
+                        Err(_) => return None,
+                    };
+                    if session
+                        .submit_source(&request, &source_by_id[request.artifact_id()])
+                        .is_err()
+                    {
+                        return None;
+                    }
+                }
+                let built = session.finish().ok()?;
+                (!built.envelope().normalized_included_source_ids().is_empty())
+                    .then(|| (candidate.clone(), built))
+            })
+            .expect("fixture has a source-grounded scheduled obligation");
+        log.append(EventCommand::obligation_transition(
+            obligation_id.clone(),
+            ObligationLifecycle::Planned,
+        ))
+        .unwrap();
+        log.append(EventCommand::obligation_transition(
+            obligation_id.clone(),
+            ObligationLifecycle::InProgress,
+        ))
+        .unwrap();
+        let envelope = built.envelope().clone();
+        log.append(EventCommand::context_envelope_projected(built))
+            .unwrap();
+        (
+            log,
+            initial,
+            review_plan,
+            obligation_id,
+            envelope,
+            source_by_id,
+        )
+    }
+
+    fn append_d2_attempt(
+        log: &mut EventLog,
+        review_plan: &ReviewPlan,
+        obligation_id: &StableId,
+        envelope: &ReviewContextEnvelope,
+        source_by_id: &BTreeMap<StableId, Vec<u8>>,
+        attempt: u32,
+        outcome: crate::ExecutionOutcome,
+    ) -> (StableId, Option<StableId>) {
+        let wave = review_plan
+            .waves()
+            .iter()
+            .find(|wave| wave.obligation_ids().contains(obligation_id))
+            .unwrap();
+        let input = crate::ExecutionRecordInput::fake(
+            review_plan.id().clone(),
+            wave.id().clone(),
+            obligation_id.clone(),
+            envelope.id().clone(),
+            envelope.snapshot_id().clone(),
+            attempt,
+        )
+        .unwrap();
+        let execution_id = input.execution_id().unwrap();
+        let raw = format!("{{\"attempt\":{attempt},\"fixture\":true}}").into_bytes();
+        let registration = ArtifactRegistered::reviewer_execution(
+            log.run_id().clone(),
+            execution_id.clone(),
+            crate::execution::FAKE_REVIEWER_ID,
+            ContentHash::sha256(&raw),
+            "application/json",
+            u64::try_from(raw.len()).unwrap(),
+        )
+        .unwrap();
+        log.append(EventCommand::artifact_registered(registration.clone()))
+            .unwrap();
+        let claims = if outcome.is_structured() {
+            let obligation = log
+                .aggregate()
+                .obligations()
+                .find(|obligation| obligation.id() == obligation_id)
+                .unwrap();
+            vec![
+                crate::ExecutionClaimInputV2::new(
+                    obligation.property_id(),
+                    obligation.normalized_target_refs().clone(),
+                    ClaimPolarity::IssueAbsent,
+                    "fixture found no issue within the bounded projection",
+                    envelope.normalized_included_source_ids().clone(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    Some(1.0),
+                )
+                .unwrap(),
+            ]
+        } else {
+            Vec::new()
+        };
+        let source_buffers = source_by_id.values().collect::<Vec<_>>();
+        let bundle = ValidatedExecutionBundle::fake(
+            input,
+            &registration,
+            raw,
+            source_buffers,
+            claims,
+            outcome,
+        )
+        .unwrap();
+        let claim_id = bundle.claims().first().map(|claim| claim.id().clone());
+        log.append(EventCommand::review_execution_recorded(bundle))
+            .unwrap();
+        (execution_id, claim_id)
+    }
+
+    #[test]
+    fn d2_registration_identity_is_typed_golden_and_size_is_not_an_id_input() {
+        let run_id = id("run:d2-golden");
+        let execution_id = id("execution:d2-golden");
+        let hash = ContentHash::parse(
+            "sha256:27d5941642c432f2d0b588a4aa7761005af04da7d8062ac2be23a27d95331a30",
+        )
+        .unwrap();
+        let registration = ArtifactRegistered::reviewer_execution(
+            run_id.clone(),
+            execution_id.clone(),
+            crate::execution::FAKE_REVIEWER_ID,
+            hash.clone(),
+            "application/json",
+            17,
+        )
+        .unwrap();
+        assert_eq!(
+            registration.registration_id().as_str(),
+            "registration:sha256:1df56aaaf0c539a2b9e2c65917999b5cf6075f1bf64810a31e08e3a3492df6fc"
+        );
+        let different_size = ArtifactRegistered::reviewer_execution(
+            run_id.clone(),
+            execution_id.clone(),
+            crate::execution::FAKE_REVIEWER_ID,
+            hash.clone(),
+            "application/json",
+            18,
+        )
+        .unwrap();
+        assert_eq!(
+            registration.registration_id(),
+            different_size.registration_id()
+        );
+        let tampered_media = ArtifactRegistered::reviewer_execution(
+            run_id,
+            execution_id,
+            crate::execution::FAKE_REVIEWER_ID,
+            hash,
+            "text/plain",
+            17,
+        )
+        .unwrap();
+        assert_ne!(
+            registration.registration_id(),
+            tampered_media.registration_id()
+        );
+    }
+
+    #[test]
+    fn d2_raw_size_splice_is_rejected_at_atomic_aggregate_admission() {
+        let (mut log, _initial, review_plan, obligation_id, envelope, source_by_id) = d2_log();
+        let wave = review_plan
+            .waves()
+            .iter()
+            .find(|wave| wave.obligation_ids().contains(&obligation_id))
+            .unwrap();
+        let input = crate::ExecutionRecordInput::fake(
+            review_plan.id().clone(),
+            wave.id().clone(),
+            obligation_id,
+            envelope.id().clone(),
+            envelope.snapshot_id().clone(),
+            1,
+        )
+        .unwrap();
+        let raw = br#"{"fixture":"size-closure"}"#;
+        let correct = ArtifactRegistered::reviewer_execution(
+            log.run_id().clone(),
+            input.execution_id().unwrap(),
+            crate::execution::FAKE_REVIEWER_ID,
+            ContentHash::sha256(raw),
+            "application/json",
+            u64::try_from(raw.len()).unwrap(),
+        )
+        .unwrap();
+        let source_buffers = source_by_id.values().collect::<Vec<_>>();
+        let bundle = ValidatedExecutionBundle::fake(
+            input,
+            &correct,
+            raw.to_vec(),
+            source_buffers,
+            vec![],
+            crate::ExecutionOutcome::ProviderFailure {
+                retryable: false,
+                diagnostic: "fixture".to_owned(),
+            },
+        )
+        .unwrap();
+        let wrong_size = ArtifactRegistered::new(
+            correct.run_id().clone(),
+            correct.registration_id().clone(),
+            correct.cas_hash().clone(),
+            correct.media_type(),
+            correct.size() + 1,
+            correct.sensitivity(),
+            correct.source().clone(),
+        )
+        .unwrap();
+        log.append(EventCommand::artifact_registered(wrong_size))
+            .unwrap();
+        let before_events = log.events().len();
+        assert!(matches!(
+            log.append(EventCommand::review_execution_recorded(bundle)),
+            Err(DomainError::Validation(message))
+                if message.contains("raw registration")
+        ));
+        assert_eq!(log.events().len(), before_events);
+        assert_eq!(log.aggregate().executions().count(), 0);
+        assert_eq!(log.aggregate().execution_claims().count(), 0);
+    }
+
+    #[test]
+    fn offline_d2_wrong_size_metadata_without_raw_bytes_is_shadow_only() {
+        let (mut log, initial, review_plan, obligation_id, envelope, source_by_id) = d2_log();
+        let wave = review_plan
+            .waves()
+            .iter()
+            .find(|wave| wave.obligation_ids().contains(&obligation_id))
+            .unwrap();
+        let input = crate::ExecutionRecordInput::fake(
+            review_plan.id().clone(),
+            wave.id().clone(),
+            obligation_id,
+            envelope.id().clone(),
+            envelope.snapshot_id().clone(),
+            1,
+        )
+        .unwrap();
+        let raw = br#"{"fixture":"offline-size"}"#;
+        let correct = ArtifactRegistered::reviewer_execution(
+            log.run_id().clone(),
+            input.execution_id().unwrap(),
+            crate::execution::FAKE_REVIEWER_ID,
+            ContentHash::sha256(raw),
+            "application/json",
+            u64::try_from(raw.len()).unwrap(),
+        )
+        .unwrap();
+        let source_buffers = source_by_id.values().collect::<Vec<_>>();
+        let bundle = ValidatedExecutionBundle::fake(
+            input,
+            &correct,
+            raw.to_vec(),
+            source_buffers,
+            vec![],
+            crate::ExecutionOutcome::ProviderFailure {
+                retryable: false,
+                diagnostic: "fixture".to_owned(),
+            },
+        )
+        .unwrap();
+        let wrong_size = ArtifactRegistered::new(
+            correct.run_id().clone(),
+            correct.registration_id().clone(),
+            correct.cas_hash().clone(),
+            correct.media_type(),
+            correct.size() + 1,
+            correct.sensitivity(),
+            correct.source().clone(),
+        )
+        .unwrap();
+        log.append(EventCommand::artifact_registered(wrong_size))
+            .unwrap();
+        let (recorded, _raw_closure) = bundle.into_parts();
+        let execution_event = EventEnvelope::new(
+            EventContractVersion::V2,
+            log.run_id().clone(),
+            log.genesis_hash().clone(),
+            log.next_sequence().unwrap(),
+            SYSTEM_ACTOR,
+            log.next_sequence().unwrap(),
+            log.tail_hash().clone(),
+            PersistedPayload::ReviewExecutionRecorded(recorded),
+        )
+        .unwrap();
+        let mut envelopes = log.envelopes().cloned().collect::<Vec<_>>();
+        envelopes.push(execution_event);
+        let genesis = RunGenesisSnapshot::from_aggregate(&initial)
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            log.run_id(),
+            EventStreamGenesis::V2(&genesis),
+            &envelopes,
+        )
+        .unwrap();
+        let mut offline = OfflineProjectionState::new(&view, initial).unwrap();
+        for event in view.events() {
+            if matches!(
+                event.payload(),
+                DecodedPayload::ReviewExecutionRecorded { .. }
+            ) {
+                assert!(!offline.apply(event).unwrap());
+            } else {
+                offline.apply(event).unwrap();
+            }
+        }
+        assert_eq!(offline.aggregate().executions().count(), 0);
+        assert_eq!(offline.aggregate().execution_claims().count(), 0);
+        assert_eq!(
+            offline.unreconciled_records().last().unwrap().kind(),
+            UnreconciledRecordKind::ReviewExecution
+        );
+    }
+
+    #[test]
+    fn duplicate_artifact_registration_replay_is_typed_and_atomic() {
+        let (mut log, _initial, _plan, _obligation, _envelope, _sources) = d2_log();
+        let registration = log
+            .events()
+            .iter()
+            .find_map(|event| {
+                match decode_canonical_payload(event.envelope().payload.get()).unwrap() {
+                    PersistedPayload::ArtifactRegistered(registration) => Some(registration),
+                    _ => None,
+                }
+            })
+            .unwrap();
+        let duplicate = forged_envelope(
+            EventContractVersion::V2,
+            log.run_id().clone(),
+            log.genesis_hash().clone(),
+            log.next_sequence().unwrap(),
+            log.tail_hash().clone(),
+            PersistedPayload::ArtifactRegistered(registration.clone()),
+        );
+        let before_events = log.events().len();
+        let before_tail = log.tail_hash().clone();
+        assert!(matches!(
+            log.resume_envelopes(&[duplicate], &EventAdmissions::default()),
+            Err(DomainError::IdCollision { id }) if id == *registration.registration_id()
+        ));
+        assert_eq!(log.events().len(), before_events);
+        assert_eq!(log.tail_hash(), &before_tail);
+    }
+
+    #[test]
+    fn d2_outer_decode_preallocation_refuses_before_envelope_serde() {
+        let (mut log, _initial, plan, obligation, envelope, sources) = d2_log();
+        append_d2_attempt(
+            &mut log,
+            &plan,
+            &obligation,
+            &envelope,
+            &sources,
+            1,
+            crate::ExecutionOutcome::ProviderFailure {
+                retryable: false,
+                diagnostic: "fixture".to_owned(),
+            },
+        );
+        let bytes = log
+            .events()
+            .iter()
+            .rev()
+            .find(|event| {
+                event
+                    .envelope()
+                    .payload
+                    .get()
+                    .contains("review_execution_recorded")
+            })
+            .unwrap()
+            .envelope()
+            .canonical_bytes()
+            .unwrap();
+        let observed = crate::execution::d2_decode_working_observed(&bytes, usize::MAX).unwrap();
+        EventEnvelope::from_json_slice_with_d2_working_limit(&bytes, observed).unwrap();
+        assert!(matches!(
+            EventEnvelope::from_json_slice_with_d2_working_limit(&bytes, observed - 1),
+            Err(DomainError::Incomplete {
+                operation: "D2 decode working bytes",
+                limit,
+                observed: actual,
+            }) if limit + 1 == actual && actual == observed
+        ));
+    }
+
+    fn replace_json_container(input: &str, field: &str, open: u8, close: u8, body: &str) -> String {
+        let marker = format!("\"{field}\":{}", char::from(open));
+        let open_index = input.find(&marker).unwrap() + marker.len() - 1;
+        let bytes = input.as_bytes();
+        let mut depth = 0_usize;
+        let mut index = open_index;
+        let mut in_string = false;
+        while index < bytes.len() {
+            match bytes[index] {
+                b'\\' if in_string => index += 1,
+                b'"' => in_string = !in_string,
+                byte if !in_string && byte == open => depth += 1,
+                byte if !in_string && byte == close => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return format!("{}{}{}", &input[..open_index + 1], body, &input[index..]);
+                    }
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+        panic!("fixture container did not close")
+    }
+
+    struct D2CountBoundary<'a> {
+        open: u8,
+        close: u8,
+        operation: &'a str,
+        limit: usize,
+    }
+
+    fn assert_d2_decode_count_boundary(
+        base: &str,
+        field: &str,
+        exact_body: &str,
+        over_body: &str,
+        boundary: D2CountBoundary<'_>,
+    ) {
+        let exact = replace_json_container(base, field, boundary.open, boundary.close, exact_body);
+        assert!(!matches!(
+            EventEnvelope::from_json_slice(exact.as_bytes()),
+            Err(DomainError::Incomplete {
+                operation: found,
+                ..
+            }) if found == boundary.operation
+        ));
+        let over = replace_json_container(base, field, boundary.open, boundary.close, over_body);
+        let over_result = EventEnvelope::from_json_slice(over.as_bytes());
+        let diagnostic = format!("{over_result:?}");
+        assert!(
+            matches!(
+                over_result,
+                Err(DomainError::Incomplete {
+                    operation: found,
+                    limit: found_limit,
+                    observed,
+                }) if found == boundary.operation
+                    && found_limit == boundary.limit
+                    && observed == boundary.limit + 1
+            ),
+            "field={field} result={diagnostic}"
+        );
+    }
+
+    #[test]
+    fn d2_nested_count_caps_are_preflighted_at_actual_event_decode() {
+        let (mut log, _initial, plan, obligation, envelope, sources) = d2_log();
+        append_d2_attempt(
+            &mut log,
+            &plan,
+            &obligation,
+            &envelope,
+            &sources,
+            1,
+            crate::ExecutionOutcome::Structured,
+        );
+        let base = String::from_utf8(
+            log.events()
+                .iter()
+                .rev()
+                .find(|event| {
+                    event
+                        .envelope()
+                        .payload
+                        .get()
+                        .contains("review_execution_recorded")
+                })
+                .unwrap()
+                .envelope()
+                .canonical_bytes()
+                .unwrap(),
+        )
+        .unwrap();
+
+        let claims_open = base.find("\"claims\":[").unwrap() + "\"claims\":".len();
+        let claims_close = {
+            let bytes = base.as_bytes();
+            let mut depth = 0_usize;
+            let mut index = claims_open;
+            let mut in_string = false;
+            loop {
+                match bytes[index] {
+                    b'\\' if in_string => index += 1,
+                    b'"' => in_string = !in_string,
+                    b'[' if !in_string => depth += 1,
+                    b']' if !in_string => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break index;
+                        }
+                    }
+                    _ => {}
+                }
+                index += 1;
+            }
+        };
+        let one_claim = &base[claims_open + 1..claims_close];
+        let claims_exact = std::iter::repeat_n(one_claim, crate::execution::MAX_D2_CLAIMS)
+            .collect::<Vec<_>>()
+            .join(",");
+        let claims_over = std::iter::repeat_n(one_claim, crate::execution::MAX_D2_CLAIMS + 1)
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_d2_decode_count_boundary(
+            &base,
+            "claims",
+            &claims_exact,
+            &claims_over,
+            D2CountBoundary {
+                open: b'[',
+                close: b']',
+                operation: "D2 execution claims",
+                limit: crate::execution::MAX_D2_CLAIMS,
+            },
+        );
+
+        for (field, limit, operation, prefix) in [
+            (
+                "target_refs",
+                crate::execution::MAX_D2_TARGET_REFS,
+                "D2 claim target refs",
+                "file:t",
+            ),
+            (
+                "source_ids",
+                crate::execution::MAX_D2_SOURCE_IDS,
+                "D2 claim source IDs",
+                "file:s",
+            ),
+            (
+                "assumptions",
+                crate::execution::MAX_D2_ASSUMPTIONS,
+                "D2 claim assumptions",
+                "assumption-",
+            ),
+            (
+                "requested_evidence",
+                crate::execution::MAX_D2_REQUESTED_EVIDENCE,
+                "D2 requested evidence",
+                "request-",
+            ),
+        ] {
+            let values = |count: usize| {
+                (0..count)
+                    .map(|index| format!("\"{prefix}{index:03}\""))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            assert_d2_decode_count_boundary(
+                &base,
+                field,
+                &values(limit),
+                &values(limit + 1),
+                D2CountBoundary {
+                    open: b'[',
+                    close: b']',
+                    operation,
+                    limit,
+                },
+            );
+        }
+
+        let inference = |count: usize| {
+            (0..count)
+                .map(|index| format!("\"k{index:03}\":\"v\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        assert_d2_decode_count_boundary(
+            &base,
+            "inference_settings",
+            &inference(crate::execution::MAX_D2_INFERENCE_ENTRIES),
+            &inference(crate::execution::MAX_D2_INFERENCE_ENTRIES + 1),
+            D2CountBoundary {
+                open: b'{',
+                close: b'}',
+                operation: "D2 inference settings",
+                limit: crate::execution::MAX_D2_INFERENCE_ENTRIES,
+            },
+        );
+    }
+
+    #[test]
+    fn d2_execution_is_atomic_retryable_and_offline_correct_metadata_without_bytes_is_shadow_only()
+    {
+        let (mut log, initial, review_plan, obligation_id, envelope, source_by_id) = d2_log();
+        assert!(
+            log.append(EventCommand::obligation_transition(
+                obligation_id.clone(),
+                ObligationLifecycle::Completed,
+            ))
+            .is_err()
+        );
+
+        let (failed_id, no_claim) = append_d2_attempt(
+            &mut log,
+            &review_plan,
+            &obligation_id,
+            &envelope,
+            &source_by_id,
+            1,
+            crate::ExecutionOutcome::ProviderFailure {
+                retryable: true,
+                diagnostic: "retry fixture".to_owned(),
+            },
+        );
+        assert!(no_claim.is_none());
+        assert_eq!(log.aggregate().executions().count(), 1);
+        assert_eq!(log.aggregate().execution_claims().count(), 0);
+        assert_eq!(
+            log.aggregate()
+                .obligations()
+                .find(|obligation| obligation.id() == &obligation_id)
+                .unwrap()
+                .lifecycle(),
+            ObligationLifecycle::InProgress
+        );
+        assert!(
+            log.append(EventCommand::obligation_transition(
+                obligation_id.clone(),
+                ObligationLifecycle::Completed,
+            ))
+            .is_err()
+        );
+
+        let (structured_id, claim_id) = append_d2_attempt(
+            &mut log,
+            &review_plan,
+            &obligation_id,
+            &envelope,
+            &source_by_id,
+            2,
+            crate::ExecutionOutcome::Structured,
+        );
+        assert_ne!(failed_id, structured_id);
+        assert!(claim_id.is_some());
+        assert_eq!(log.aggregate().executions().count(), 2);
+        assert_eq!(log.aggregate().execution_claims().count(), 1);
+        log.append(EventCommand::obligation_transition(
+            obligation_id.clone(),
+            ObligationLifecycle::Completed,
+        ))
+        .unwrap();
+
+        let envelopes = log.envelopes().cloned().collect::<Vec<_>>();
+        let replayed = EventLog::replay(
+            EventContractVersion::V2,
+            log.run_id().clone(),
+            initial.clone(),
+            log.events(),
+        )
+        .unwrap();
+        assert_eq!(replayed.aggregate().executions().count(), 2);
+        assert_eq!(replayed.aggregate().execution_claims().count(), 1);
+
+        let genesis = RunGenesisSnapshot::from_aggregate(&initial)
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            log.run_id(),
+            EventStreamGenesis::V2(&genesis),
+            &envelopes,
+        )
+        .unwrap();
+        let mut offline = OfflineProjectionState::new(&view, initial).unwrap();
+        for event in view.events() {
+            match event.payload() {
+                DecodedPayload::ReviewExecutionRecorded { .. } => {
+                    assert!(!offline.apply(event).unwrap());
+                }
+                DecodedPayload::ObligationTransition {
+                    next: ObligationLifecycle::Completed,
+                    ..
+                } => {
+                    assert!(offline.apply(event).is_err());
+                    break;
+                }
+                _ => {
+                    offline.apply(event).unwrap();
+                }
+            }
+        }
+        assert_eq!(offline.aggregate().executions().count(), 0);
+        assert_eq!(offline.aggregate().execution_claims().count(), 0);
+        assert_eq!(
+            offline
+                .unreconciled_records()
+                .into_iter()
+                .filter(|metadata| { metadata.kind() == UnreconciledRecordKind::ReviewExecution })
+                .count(),
+            2
+        );
+        assert_eq!(
+            offline
+                .aggregate()
+                .obligations()
+                .find(|obligation| obligation.id() == &obligation_id)
+                .unwrap()
+                .lifecycle(),
+            ObligationLifecycle::InProgress
+        );
+    }
+
+    #[test]
+    fn d2_duplicate_execution_and_atomic_claim_mismatch_leave_state_unchanged() {
+        let (mut log, initial, review_plan, obligation_id, envelope, source_by_id) = d2_log();
+        let (execution_id, _) = append_d2_attempt(
+            &mut log,
+            &review_plan,
+            &obligation_id,
+            &envelope,
+            &source_by_id,
+            1,
+            crate::ExecutionOutcome::Structured,
+        );
+        let before_events = log.events().len();
+        let before_executions = log.aggregate().executions().count();
+        let before_claims = log.aggregate().execution_claims().count();
+
+        let original_event = log
+            .events()
+            .iter()
+            .rev()
+            .find(|event| {
+                event
+                    .envelope()
+                    .payload
+                    .get()
+                    .contains("review_execution_recorded")
+            })
+            .unwrap();
+        let PersistedPayload::ReviewExecutionRecorded(recorded) =
+            decode_canonical_payload(original_event.envelope().payload.get()).unwrap()
+        else {
+            unreachable!("selected D2 event")
+        };
+        let raw_closure = original_event.reviewer_raw_closure.clone().unwrap();
+        assert_eq!(recorded.execution.id(), &execution_id);
+        assert!(matches!(
+            log.append(EventCommand {
+                payload: PersistedPayload::ReviewExecutionRecorded(recorded.clone()),
+                admission: CommandAdmission::ReviewerRaw(raw_closure.clone()),
+            }),
+            Err(DomainError::IdCollision { id }) if id == execution_id
+        ));
+        assert_eq!(log.events().len(), before_events);
+        assert_eq!(log.aggregate().executions().count(), before_executions);
+        assert_eq!(log.aggregate().execution_claims().count(), before_claims);
+
+        let duplicate = forged_envelope(
+            EventContractVersion::V2,
+            log.run_id().clone(),
+            log.genesis_hash().clone(),
+            log.next_sequence().unwrap(),
+            log.tail_hash().clone(),
+            PersistedPayload::ReviewExecutionRecorded(recorded.clone()),
+        );
+        assert!(matches!(
+            log.resume_envelopes(&[duplicate], &EventAdmissions::default()),
+            Err(DomainError::IdCollision { id }) if id == execution_id
+        ));
+        assert_eq!(log.events().len(), before_events);
+        assert_eq!(log.aggregate().executions().count(), before_executions);
+        assert_eq!(log.aggregate().execution_claims().count(), before_claims);
+
+        let duplicate = forged_envelope(
+            EventContractVersion::V2,
+            log.run_id().clone(),
+            log.genesis_hash().clone(),
+            log.next_sequence().unwrap(),
+            log.tail_hash().clone(),
+            PersistedPayload::ReviewExecutionRecorded(recorded.clone()),
+        );
+        let mut replay_events = log.events().to_vec();
+        replay_events.push(Event {
+            envelope: duplicate.clone(),
+            evidence_admission: None,
+            binding_admission: None,
+            verification_admission: None,
+            decision_admission: None,
+            context_projection_admission: None,
+            reviewer_raw_closure: Some(raw_closure),
+        });
+        assert!(matches!(
+            EventLog::replay(
+                EventContractVersion::V2,
+                log.run_id().clone(),
+                initial.clone(),
+                &replay_events,
+            ),
+            Err(DomainError::IdCollision { id }) if id == execution_id
+        ));
+
+        let mut envelopes = log.envelopes().cloned().collect::<Vec<_>>();
+        envelopes.push(duplicate);
+        let genesis = RunGenesisSnapshot::from_aggregate(&initial)
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            log.run_id(),
+            EventStreamGenesis::V2(&genesis),
+            &envelopes,
+        )
+        .unwrap();
+        let mut offline = OfflineProjectionState::new(&view, initial).unwrap();
+        for event in &view.events()[..view.events().len() - 1] {
+            offline.apply(event).unwrap();
+        }
+        let offline_tail = offline.tail_hash().clone();
+        let offline_unreconciled = offline.unreconciled_records().len();
+        assert!(matches!(
+            offline.apply(view.events().last().unwrap()),
+            Err(DomainError::IdCollision { id }) if id == execution_id
+        ));
+        assert_eq!(offline.tail_hash(), &offline_tail);
+        assert_eq!(offline.unreconciled_records().len(), offline_unreconciled);
+        assert_eq!(offline.aggregate().executions().count(), 0);
+        assert_eq!(offline.aggregate().execution_claims().count(), 0);
+
+        let mut mismatched = recorded;
+        mismatched.claims.clear();
+        let malformed = forged_envelope(
+            EventContractVersion::V2,
+            log.run_id().clone(),
+            log.genesis_hash().clone(),
+            log.next_sequence().unwrap(),
+            log.tail_hash().clone(),
+            PersistedPayload::ReviewExecutionRecorded(mismatched),
+        );
+        assert!(
+            log.resume_envelopes(&[malformed], &EventAdmissions::default())
+                .is_err()
+        );
+        assert_eq!(log.events().len(), before_events);
+        assert_eq!(log.aggregate().executions().count(), before_executions);
+        assert_eq!(log.aggregate().execution_claims().count(), before_claims);
+    }
+
+    #[test]
+    fn d2_duplicate_claim_id_is_typed_and_atomic_at_live_resume_replay_and_offline_seams() {
+        let (mut log, initial, review_plan, obligation_id, envelope, source_by_id) = d2_log();
+        let wave = review_plan
+            .waves()
+            .iter()
+            .find(|wave| wave.obligation_ids().contains(&obligation_id))
+            .unwrap();
+        let input = crate::ExecutionRecordInput::fake(
+            review_plan.id().clone(),
+            wave.id().clone(),
+            obligation_id.clone(),
+            envelope.id().clone(),
+            envelope.snapshot_id().clone(),
+            1,
+        )
+        .unwrap();
+        let raw = br#"{"fixture":"duplicate-claim"}"#;
+        let registration = ArtifactRegistered::reviewer_execution(
+            log.run_id().clone(),
+            input.execution_id().unwrap(),
+            crate::execution::FAKE_REVIEWER_ID,
+            ContentHash::sha256(raw),
+            "application/json",
+            u64::try_from(raw.len()).unwrap(),
+        )
+        .unwrap();
+        log.append(EventCommand::artifact_registered(registration.clone()))
+            .unwrap();
+        let obligation = log
+            .aggregate()
+            .obligations()
+            .find(|candidate| candidate.id() == &obligation_id)
+            .unwrap();
+        let claim = crate::ExecutionClaimInputV2::new(
+            obligation.property_id(),
+            obligation.normalized_target_refs().clone(),
+            ClaimPolarity::IssueAbsent,
+            "duplicate claim fixture",
+            envelope.normalized_included_source_ids().clone(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            None,
+        )
+        .unwrap();
+        let source_buffers = source_by_id.values().collect::<Vec<_>>();
+        let bundle = ValidatedExecutionBundle::fake(
+            input,
+            &registration,
+            raw.to_vec(),
+            source_buffers,
+            vec![claim],
+            crate::ExecutionOutcome::Structured,
+        )
+        .unwrap();
+        let (mut recorded, raw_closure) = bundle.into_parts();
+        let duplicate_id = recorded.claims[0].id().clone();
+        recorded.claims.push(recorded.claims[0].clone());
+
+        let before_events = log.events().len();
+        let before_tail = log.tail_hash().clone();
+        assert!(matches!(
+            log.append(EventCommand {
+                payload: PersistedPayload::ReviewExecutionRecorded(recorded.clone()),
+                admission: CommandAdmission::ReviewerRaw(raw_closure.clone()),
+            }),
+            Err(DomainError::IdCollision { id }) if id == duplicate_id
+        ));
+        assert_eq!(log.events().len(), before_events);
+        assert_eq!(log.tail_hash(), &before_tail);
+        assert_eq!(log.aggregate().executions().count(), 0);
+        assert_eq!(log.aggregate().execution_claims().count(), 0);
+
+        let malformed = forged_envelope(
+            EventContractVersion::V2,
+            log.run_id().clone(),
+            log.genesis_hash().clone(),
+            log.next_sequence().unwrap(),
+            log.tail_hash().clone(),
+            PersistedPayload::ReviewExecutionRecorded(recorded),
+        );
+        assert!(matches!(
+            log.resume_envelopes(std::slice::from_ref(&malformed), &EventAdmissions::default()),
+            Err(DomainError::IdCollision { id }) if id == duplicate_id
+        ));
+        assert_eq!(log.events().len(), before_events);
+        assert_eq!(log.tail_hash(), &before_tail);
+        assert_eq!(log.aggregate().executions().count(), 0);
+        assert_eq!(log.aggregate().execution_claims().count(), 0);
+
+        let mut replay_events = log.events().to_vec();
+        replay_events.push(Event {
+            envelope: malformed.clone(),
+            evidence_admission: None,
+            binding_admission: None,
+            verification_admission: None,
+            decision_admission: None,
+            context_projection_admission: None,
+            reviewer_raw_closure: Some(raw_closure),
+        });
+        assert!(matches!(
+            EventLog::replay(
+                EventContractVersion::V2,
+                log.run_id().clone(),
+                initial.clone(),
+                &replay_events,
+            ),
+            Err(DomainError::IdCollision { id }) if id == duplicate_id
+        ));
+
+        let mut envelopes = log.envelopes().cloned().collect::<Vec<_>>();
+        envelopes.push(malformed);
+        let genesis = RunGenesisSnapshot::from_aggregate(&initial)
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        assert!(matches!(
+            EventEnvelope::validated_view(
+                EventContractVersion::V2,
+                log.run_id(),
+                EventStreamGenesis::V2(&genesis),
+                &envelopes,
+            ),
+            Err(DomainError::IdCollision { id }) if id == duplicate_id
+        ));
     }
 
     #[test]

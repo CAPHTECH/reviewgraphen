@@ -10,6 +10,7 @@ mod context;
 mod coverage;
 mod error;
 mod event;
+mod execution;
 mod id;
 mod planning;
 mod program;
@@ -43,6 +44,13 @@ pub use event::{
     UnreconciledRecordMetadata, ValidatedEvent, ValidatedEventView, VerificationAdmission,
     VerifiedV2Genesis, preflight_index_genesis_json_structure,
 };
+pub use execution::{
+    AbstentionReason, ExecutionClaimInputV2, ExecutionClaimV2, ExecutionOutcome, ExecutionRecord,
+    ExecutionRecordInput, FAKE_REVIEWER_ID, FAKE_REVIEWER_KIND, FIXTURE_PROMPT_TEMPLATE_VERSION,
+    MAX_D2_RAW_REVIEWER_BYTES, MAX_D2_RESOLVED_SOURCE_BYTES, MAX_D2_WORKING_BYTES,
+    MalformedOutputReason, NO_TOOLS_POLICY_VERSION, NO_TOOLS_SYSTEM_PROMPT_VERSION,
+    ValidatedExecutionBundle,
+};
 pub use id::{ContentHash, IdRegistry, StableId, VersionTuple};
 pub use planning::{
     DeferralReason, PlanBudget, PlannerPolicyV1, ReviewPlan, RiskDescriptor, ScheduleWave, plan,
@@ -57,10 +65,10 @@ pub use program::{
 };
 pub use projection::{AuditProjection, HumanProjection, Projection, ProjectionKind, ReviewReport};
 pub use review::{
-    ClaimDisposition, ClaimPolarity, Decision, DecisionAdmission, DecisionAuthority,
-    DecisionOutcome, EvidenceBinding, EvidenceRelation, Finding, FindingStatus, FindingTrace,
-    Freshness, Obligation, ObligationLifecycle, ReviewAggregate, ReviewClaim, ReviewStatus,
-    TrustedHumanAdmission, Verification, VerificationOutcome,
+    ClaimAuthorKind, ClaimDisposition, ClaimPolarity, Decision, DecisionAdmission,
+    DecisionAuthority, DecisionOutcome, EvidenceBinding, EvidenceRelation, Finding, FindingStatus,
+    FindingTrace, Freshness, LegacyClaimV1, Obligation, ObligationLifecycle, ReviewAggregate,
+    ReviewClaim, ReviewStatus, TrustedHumanAdmission, Verification, VerificationOutcome,
 };
 pub use source::{SnapshotSourceBundle, SnapshotSourceEntry};
 pub use synthesize::{
