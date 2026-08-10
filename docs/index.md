@@ -85,6 +85,7 @@
 | [`adr/0019-replayed-v2-run-session.md`](adr/0019-replayed-v2-run-session.md) | admission-bound V2 replay session、durability uncertainty、exact replay count/byte limits。 |
 | [`adr/0020-minimal-deterministic-fake-runtime.md`](adr/0020-minimal-deterministic-fake-runtime.md) | admission-bound deterministic fake D2 runtime と crash/resume 境界。 |
 | [`adr/0021-m4-evidence-bound-verification.md`](adr/0021-m4-evidence-bound-verification.md) | M4のD2 claim authority bridge、固定verifier、human admission、index v4/report v3のAccepted設計契約。 |
+| [`adr/0022-m5-context-cover-and-gluing.md`](adr/0022-m5-context-cover-and-gluing.md) | M5のContext Cover、閉じたSection assignment、source-bound gluing、index v5/report v4のAccepted設計契約。 |
 
 ## 4. Schemaと参照シナリオ
 
