@@ -433,7 +433,7 @@ impl ArtifactRegistered {
         )
     }
 
-    fn derived_id(
+    pub(crate) fn derived_id(
         run_id: &StableId,
         cas_hash: &ContentHash,
         media_type: &str,
@@ -5202,6 +5202,91 @@ mod tests {
         log.append(EventCommand::review_execution_recorded(bundle))
             .unwrap();
         (execution_id, claim_id)
+    }
+
+    #[test]
+    fn fake_attempt_state_tracks_none_raw_recorded_and_completed_without_inference() {
+        let (mut log, _initial, review_plan, obligation_id, envelope, source_by_id) = d2_log();
+        let wave = review_plan
+            .waves()
+            .iter()
+            .find(|wave| wave.obligation_ids().contains(&obligation_id))
+            .unwrap();
+        let input = crate::ExecutionRecordInput::fake(
+            review_plan.id().clone(),
+            wave.id().clone(),
+            obligation_id.clone(),
+            envelope.id().clone(),
+            envelope.snapshot_id().clone(),
+            1,
+        )
+        .unwrap();
+        let execution_id = input.execution_id().unwrap();
+        assert!(matches!(
+            log.aggregate().fake_attempt_state(&execution_id),
+            crate::FakeAttemptState::None
+        ));
+
+        let raw = br#"{"fixture":"progress"}"#.to_vec();
+        let registration = ArtifactRegistered::reviewer_execution(
+            log.run_id().clone(),
+            execution_id.clone(),
+            crate::execution::FAKE_REVIEWER_ID,
+            ContentHash::sha256(&raw),
+            "application/json",
+            u64::try_from(raw.len()).unwrap(),
+        )
+        .unwrap();
+        log.append(EventCommand::artifact_registered(registration.clone()))
+            .unwrap();
+        assert!(matches!(
+            log.aggregate().fake_attempt_state(&execution_id),
+            crate::FakeAttemptState::RawRegistered { .. }
+        ));
+
+        let sources = source_by_id.values().collect::<Vec<_>>();
+        let obligation = log
+            .aggregate()
+            .obligations()
+            .find(|obligation| obligation.id() == &obligation_id)
+            .unwrap();
+        let claims = vec![
+            crate::ExecutionClaimInputV2::new(
+                obligation.property_id(),
+                obligation.normalized_target_refs().clone(),
+                ClaimPolarity::IssueAbsent,
+                "fixture found no issue within the bounded projection",
+                envelope.normalized_included_source_ids().clone(),
+                BTreeSet::new(),
+                BTreeSet::new(),
+                Some(1.0),
+            )
+            .unwrap(),
+        ];
+        let bundle = ValidatedExecutionBundle::fake(
+            input,
+            &registration,
+            raw,
+            sources,
+            claims,
+            crate::ExecutionOutcome::Structured,
+        )
+        .unwrap();
+        log.append(EventCommand::review_execution_recorded(bundle))
+            .unwrap();
+        assert!(matches!(
+            log.aggregate().fake_attempt_state(&execution_id),
+            crate::FakeAttemptState::ExecutionRecorded { .. }
+        ));
+        log.append(EventCommand::obligation_transition(
+            obligation_id,
+            ObligationLifecycle::Completed,
+        ))
+        .unwrap();
+        assert!(matches!(
+            log.aggregate().fake_attempt_state(&execution_id),
+            crate::FakeAttemptState::Completed { .. }
+        ));
     }
 
     #[test]

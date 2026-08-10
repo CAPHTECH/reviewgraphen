@@ -200,6 +200,98 @@ pub struct CasStore<'a> {
     tmp: OwnedFd,
 }
 
+/// Read-only opener for already-published CAS objects. Unlike `CasStore`, it
+/// never creates directories, staging files, markers, or fsyncs metadata.
+#[cfg(target_os = "linux")]
+pub struct CasReader<'a> {
+    root: &'a StoreRoot,
+    sha256: OwnedFd,
+}
+
+#[cfg(target_os = "linux")]
+impl<'a> CasReader<'a> {
+    pub fn open_existing(root: &'a StoreRoot) -> Result<Self, StoreError> {
+        let cas = open_existing_dir(root.fd(), "artifacts", "CAS artifacts directory")?;
+        let sha256 = open_existing_dir(&cas, "sha256", "CAS SHA-256 directory")?;
+        Ok(Self { root, sha256 })
+    }
+
+    pub fn read(&self, hash: &CasHash) -> Result<Vec<u8>, StoreError> {
+        let mut bytes = Vec::new();
+        self.read_into(hash, None, &mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Reads a verified object into caller-owned storage. The caller can
+    /// reserve its bounded capacity before this method opens the object.
+    pub fn read_into(
+        &self,
+        hash: &CasHash,
+        expected_size: Option<u64>,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), StoreError> {
+        if !bytes.is_empty() {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        let parent = fs::openat(
+            &self.sha256,
+            hash.prefix(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(map_artifact_open_error)?;
+        verify_artifact_fd(&parent, FileType::Directory, 0o700)?;
+        let entry = fs::statat(&parent, hash.hex(), AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(map_artifact_open_error)?;
+        verify_artifact_stat(&entry, FileType::RegularFile, 0o600)?;
+        let fd = fs::openat(
+            &parent,
+            hash.hex(),
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(map_artifact_open_error)?;
+        verify_artifact_fd(&fd, FileType::RegularFile, 0o600)?;
+        let opened = fs::fstat(&fd)?;
+        if opened.st_dev != entry.st_dev || opened.st_ino != entry.st_ino {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        let observed_size =
+            u64::try_from(opened.st_size).map_err(|_| StoreError::CorruptedArtifact)?;
+        if observed_size > self.root.limits.max_object_bytes
+            || expected_size.is_some_and(|expected| expected != observed_size)
+        {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        let expected_len =
+            usize::try_from(observed_size).map_err(|_| StoreError::CorruptedArtifact)?;
+        let admitted_capacity = bytes.capacity();
+        if admitted_capacity < expected_len {
+            return Err(StoreError::Incomplete {
+                limit: u64::try_from(admitted_capacity).unwrap_or(u64::MAX),
+                observed: observed_size,
+            });
+        }
+        bytes.resize(expected_len, 0);
+        let mut file = std::fs::File::from(fd);
+        file.read_exact(bytes).map_err(StoreError::Stream)?;
+        let mut trailing = [0u8; 1];
+        if file.read(&mut trailing).map_err(StoreError::Stream)? != 0
+            || bytes.capacity() != admitted_capacity
+        {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        if u64::try_from(bytes.len()).ok() != Some(observed_size) {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        let actual = CasHash::parse(format!("sha256:{:x}", Sha256::digest(&*bytes)))?;
+        if &actual != hash {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(target_os = "linux")]
 impl<'a> CasStore<'a> {
     const VERIFY_CHUNK_BYTES: usize = 64 * 1024;
@@ -632,6 +724,29 @@ fn open_or_create_dir(
 }
 
 #[cfg(target_os = "linux")]
+fn open_existing_dir(
+    parent: &OwnedFd,
+    name: &str,
+    label: &'static str,
+) -> Result<OwnedFd, StoreError> {
+    let fd = fs::openat(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        if error == rustix::io::Errno::NOENT {
+            StoreError::MissingArtifact
+        } else {
+            StoreError::Io(error)
+        }
+    })?;
+    verify_fd_kind_mode(&fd, label, FileType::Directory, 0o700)?;
+    Ok(fd)
+}
+
+#[cfg(target_os = "linux")]
 fn verify_fd_kind_mode(
     fd: &OwnedFd,
     path: &'static str,
@@ -1025,6 +1140,49 @@ mod tests {
             Err(StoreError::ObjectTooLarge { .. })
         ));
         assert!(store.put(&hash, Some(3), &b"abc"[..]).unwrap().existed);
+    }
+
+    #[test]
+    fn read_only_cas_reader_accepts_zero_byte_object_into_exact_buffer() {
+        let (_workspace, root) = store_with_limit(3);
+        let store = CasStore::open(&root).unwrap();
+        let hash = CasHash::parse(
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        )
+        .unwrap();
+        store.put(&hash, Some(0), &b""[..]).unwrap();
+        drop(store);
+        let reader = CasReader::open_existing(&root).unwrap();
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(0).unwrap();
+        reader.read_into(&hash, Some(0), &mut bytes).unwrap();
+        assert!(bytes.is_empty());
+        assert_eq!(bytes.capacity(), 0);
+    }
+
+    #[test]
+    fn read_only_cas_reader_refuses_to_grow_beyond_admitted_capacity() {
+        let (_workspace, root) = store_with_limit(3);
+        let store = CasStore::open(&root).unwrap();
+        let hash = abc_hash();
+        store.put(&hash, Some(3), &b"abc"[..]).unwrap();
+        drop(store);
+        let reader = CasReader::open_existing(&root).unwrap();
+        let mut undersized = Vec::with_capacity(2);
+        assert!(matches!(
+            reader.read_into(&hash, Some(3), &mut undersized),
+            Err(StoreError::Incomplete {
+                limit: 2,
+                observed: 3
+            })
+        ));
+        assert!(undersized.is_empty());
+        assert_eq!(undersized.capacity(), 2);
+
+        let mut exact = Vec::with_capacity(3);
+        reader.read_into(&hash, Some(3), &mut exact).unwrap();
+        assert_eq!(exact, b"abc");
+        assert_eq!(exact.capacity(), 3);
     }
 
     #[test]

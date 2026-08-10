@@ -103,6 +103,174 @@ pub struct ResolvedSourceInput {
     artifact_bytes: Vec<u8>,
 }
 
+/// Immutable source identity and allocation declaration used to admit a
+/// request before its CAS bytes are opened. This is deliberately sufficient
+/// for closure and bounded-memory checks, but carries no source bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedSourceMetadata {
+    registration_id: StableId,
+    artifact_id: StableId,
+    content_hash: ContentHash,
+    cas_hash: ContentHash,
+    excerpt: Option<reviewgraphen_core::ExcerptRange>,
+    declared_artifact_bytes: u64,
+    declared_artifact_capacity: u64,
+}
+
+impl ResolvedSourceMetadata {
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new(
+        registration_id: StableId,
+        artifact_id: StableId,
+        content_hash: ContentHash,
+        cas_hash: ContentHash,
+        excerpt: Option<reviewgraphen_core::ExcerptRange>,
+        declared_artifact_bytes: u64,
+        declared_artifact_capacity: u64,
+    ) -> Self {
+        Self {
+            registration_id,
+            artifact_id,
+            content_hash,
+            cas_hash,
+            excerpt,
+            declared_artifact_bytes,
+            declared_artifact_capacity,
+        }
+    }
+
+    fn heap_capacity_bytes(&self, artifact_capacity: u64) -> Result<u64> {
+        let operation = "D2 reviewer-stage working bytes";
+        let limit = MAX_D2_WORKING_BYTES as u64;
+        [
+            self.registration_id.allocated_bytes(),
+            self.artifact_id.allocated_bytes(),
+            self.content_hash.allocated_bytes(),
+            self.cas_hash.allocated_bytes(),
+        ]
+        .into_iter()
+        .try_fold(artifact_capacity, |total, value| {
+            checked_add(total, usize_u64(value, operation, limit)?, operation, limit)
+        })
+    }
+
+    fn buffer_reservation(&self) -> Result<usize> {
+        usize::try_from(self.declared_artifact_capacity).map_err(|_| {
+            incomplete(
+                "D2 reviewer-stage working bytes",
+                MAX_D2_WORKING_BYTES as u64,
+                u64::MAX,
+            )
+        })
+    }
+}
+
+impl From<&ResolvedSourceInput> for ResolvedSourceMetadata {
+    fn from(value: &ResolvedSourceInput) -> Self {
+        Self::new(
+            value.registration_id.clone(),
+            value.artifact_id.clone(),
+            value.content_hash.clone(),
+            value.cas_hash.clone(),
+            value.excerpt.clone(),
+            value.artifact_bytes.len() as u64,
+            value.artifact_bytes.capacity() as u64,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReviewerRequestAccounting {
+    retained_working_bytes: u64,
+    planned_construction_peak_bytes: u64,
+}
+
+/// Successful reviewer-side admission plan. It exposes only accounting
+/// charges and exact reservation sizes; the source identity declarations stay
+/// inside the validation boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewerRequestPreflight {
+    source_vector_reservation: usize,
+    source_buffer_reservations: Vec<usize>,
+    retained_working_bytes: u64,
+    construction_peak_bytes: u64,
+}
+
+impl ReviewerRequestPreflight {
+    /// Checks source count/order/identity and all bounded-memory charges
+    /// without opening or retaining any CAS source bytes.
+    pub fn new(
+        envelope: &ReviewContextEnvelope,
+        resolved_sources: Vec<ResolvedSourceMetadata>,
+    ) -> Result<Self> {
+        let source_vector_reservation = resolved_sources.len();
+        let mut source_buffer_reservations = Vec::new();
+        source_buffer_reservations
+            .try_reserve_exact(source_vector_reservation)
+            .map_err(|_| {
+                incomplete(
+                    "D2 reviewer-stage working bytes",
+                    MAX_D2_WORKING_BYTES as u64,
+                    u64::MAX,
+                )
+            })?;
+        for source in &resolved_sources {
+            source_buffer_reservations.push(source.buffer_reservation()?);
+        }
+        Self::with_actual_reservations(
+            envelope,
+            resolved_sources,
+            source_vector_reservation,
+            source_buffer_reservations,
+        )
+    }
+
+    /// Rechecks the same closure and memory formula against capacities
+    /// actually granted by the allocator. This is a second admission before
+    /// CAS bytes are opened, not a promise that `try_reserve_exact` returned
+    /// the requested capacity.
+    pub fn with_actual_reservations(
+        envelope: &ReviewContextEnvelope,
+        resolved_sources: Vec<ResolvedSourceMetadata>,
+        source_vector_reservation: usize,
+        source_buffer_reservations: Vec<usize>,
+    ) -> Result<Self> {
+        let accounting = reviewer_request_accounting(
+            envelope,
+            &resolved_sources,
+            source_vector_reservation,
+            Some(&source_buffer_reservations),
+        )?;
+        Ok(Self {
+            source_vector_reservation,
+            source_buffer_reservations,
+            retained_working_bytes: accounting.retained_working_bytes,
+            construction_peak_bytes: accounting.planned_construction_peak_bytes,
+        })
+    }
+
+    #[must_use]
+    pub fn source_vector_reservation(&self) -> usize {
+        self.source_vector_reservation
+    }
+
+    #[must_use]
+    pub fn source_buffer_reservation(&self, index: usize) -> Option<usize> {
+        self.source_buffer_reservations.get(index).copied()
+    }
+
+    #[must_use]
+    pub fn retained_working_bytes(&self) -> u64 {
+        self.retained_working_bytes
+    }
+
+    #[must_use]
+    pub fn construction_peak_bytes(&self) -> u64 {
+        self.construction_peak_bytes
+    }
+}
+
 impl ResolvedSourceInput {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -128,20 +296,10 @@ impl ResolvedSourceInput {
         })
     }
 
+    #[cfg(test)]
     fn heap_capacity_bytes(&self) -> Result<u64> {
-        let operation = "D2 reviewer-stage working bytes";
-        let limit = MAX_D2_WORKING_BYTES as u64;
-        [
-            self.registration_id.allocated_bytes(),
-            self.artifact_id.allocated_bytes(),
-            self.content_hash.allocated_bytes(),
-            self.cas_hash.allocated_bytes(),
-            self.artifact_bytes.capacity(),
-        ]
-        .into_iter()
-        .try_fold(0_u64, |total, value| {
-            checked_add(total, usize_u64(value, operation, limit)?, operation, limit)
-        })
+        ResolvedSourceMetadata::from(self)
+            .heap_capacity_bytes(self.artifact_bytes.capacity() as u64)
     }
 }
 
@@ -161,74 +319,26 @@ impl<'a> ReviewerRequest<'a> {
         envelope: &'a ReviewContextEnvelope,
         resolved_sources: Vec<ResolvedSourceInput>,
     ) -> Result<Self> {
-        if envelope.included_sources().len() != resolved_sources.len() {
-            return Err(ReviewerError::Validation(
-                "resolved source count does not equal envelope inclusion count",
-            ));
-        }
+        let metadata = resolved_sources
+            .iter()
+            .map(ResolvedSourceMetadata::from)
+            .collect::<Vec<_>>();
+        let actual_capacities = resolved_sources
+            .iter()
+            .map(|source| source.artifact_bytes.capacity())
+            .collect::<Vec<_>>();
+        let accounting = reviewer_request_accounting(
+            envelope,
+            &metadata,
+            resolved_sources.capacity(),
+            Some(&actual_capacities),
+        )?;
 
-        // Charge retained capacities before allocating the canonical envelope
-        // scratch. Full source buffers are moved, never copied.
         let operation = "D2 reviewer-stage working bytes";
         let working_limit = MAX_D2_WORKING_BYTES as u64;
-        let mut source_heap = 0_u64;
-        let mut source_bytes = 0_u64;
-        for source in &resolved_sources {
-            source_heap = checked_add(
-                source_heap,
-                source.heap_capacity_bytes()?,
-                operation,
-                working_limit,
-            )?;
-            source_bytes = checked_add(
-                source_bytes,
-                usize_u64(
-                    source.artifact_bytes.len(),
-                    "D2 resolved request source bytes",
-                    MAX_D2_RESOLVED_SOURCE_BYTES as u64,
-                )?,
-                "D2 resolved request source bytes",
-                MAX_D2_RESOLVED_SOURCE_BYTES as u64,
-            )?;
-        }
-        require_u64(
-            source_bytes,
-            MAX_D2_RESOLVED_SOURCE_BYTES as u64,
-            "D2 resolved request source bytes",
-        )?;
-
-        let vector_backing = checked_mul(
-            usize_u64(resolved_sources.capacity(), operation, working_limit)?,
-            std::mem::size_of::<ResolvedSourceInput>() as u64,
-            operation,
-            working_limit,
-        )?;
-        let request_inline = std::mem::size_of::<Self>() as u64;
-        let envelope_owned = usize_u64(envelope.allocated_bytes(), operation, working_limit)?;
-        let retained = [request_inline, envelope_owned, vector_backing, source_heap]
-            .into_iter()
-            .try_fold(0_u64, |total, value| {
-                checked_add(total, value, operation, working_limit)
-            })?;
-        require_u64(retained, working_limit, operation)?;
-
         let canonical_len = envelope
             .canonical_byte_len()
             .map_err(|_| ReviewerError::Validation("context envelope canonical length failed"))?;
-        require_len(
-            canonical_len,
-            MAX_ENVELOPE_BYTES,
-            "D2 context envelope canonical bytes",
-        )?;
-        // The no-allocation core count closes the preallocation boundary.
-        let scratch_charge = checked_add(
-            std::mem::size_of::<Vec<u8>>() as u64,
-            usize_u64(canonical_len, operation, working_limit)?,
-            operation,
-            working_limit,
-        )?;
-        let preallocation_peak = checked_add(retained, scratch_charge, operation, working_limit)?;
-        require_u64(preallocation_peak, working_limit, operation)?;
 
         let mut canonical_scratch = Vec::<u8>::new();
         canonical_scratch
@@ -240,7 +350,12 @@ impl<'a> ReviewerRequest<'a> {
             operation,
             working_limit,
         )?;
-        let actual_peak = checked_add(retained, actual_scratch_charge, operation, working_limit)?;
+        let actual_peak = checked_add(
+            accounting.retained_working_bytes,
+            actual_scratch_charge,
+            operation,
+            working_limit,
+        )?;
         require_u64(actual_peak, working_limit, operation)?;
 
         for (expected, actual) in envelope.included_sources().iter().zip(&resolved_sources) {
@@ -270,7 +385,7 @@ impl<'a> ReviewerRequest<'a> {
         Ok(Self {
             envelope,
             resolved_sources,
-            retained_working_bytes: retained,
+            retained_working_bytes: accounting.retained_working_bytes,
             construction_peak_bytes: actual_peak,
         })
     }
@@ -301,6 +416,115 @@ impl<'a> ReviewerRequest<'a> {
     pub fn construction_peak_bytes(&self) -> u64 {
         self.construction_peak_bytes
     }
+}
+
+fn reviewer_request_accounting(
+    envelope: &ReviewContextEnvelope,
+    resolved_sources: &[ResolvedSourceMetadata],
+    source_vector_capacity: usize,
+    actual_source_capacities: Option<&[usize]>,
+) -> Result<ReviewerRequestAccounting> {
+    if envelope.included_sources().len() != resolved_sources.len() {
+        return Err(ReviewerError::Validation(
+            "resolved source count does not equal envelope inclusion count",
+        ));
+    }
+
+    let operation = "D2 reviewer-stage working bytes";
+    let working_limit = MAX_D2_WORKING_BYTES as u64;
+    if actual_source_capacities.is_some_and(|capacities| capacities.len() != resolved_sources.len())
+    {
+        return Err(ReviewerError::Validation(
+            "actual source buffer capacity count does not equal envelope inclusion count",
+        ));
+    }
+    let mut source_heap = 0_u64;
+    let mut source_bytes = 0_u64;
+    for (index, (expected, actual)) in envelope
+        .included_sources()
+        .iter()
+        .zip(resolved_sources)
+        .enumerate()
+    {
+        if expected.registration_id() != &actual.registration_id
+            || expected.artifact_id() != &actual.artifact_id
+            || expected.content_hash() != &actual.content_hash
+            || expected.cas_hash() != &actual.cas_hash
+            || expected.excerpt() != actual.excerpt.as_ref()
+        {
+            return Err(ReviewerError::Validation(
+                "resolved source metadata or order differs from envelope",
+            ));
+        }
+        if actual.declared_artifact_bytes > actual.declared_artifact_capacity {
+            return Err(ReviewerError::Validation(
+                "resolved source declared bytes exceed declared capacity",
+            ));
+        }
+        let artifact_capacity = actual_source_capacities
+            .map(|capacities| capacities[index])
+            .unwrap_or_else(|| actual.buffer_reservation().unwrap_or(usize::MAX));
+        let artifact_capacity = usize_u64(artifact_capacity, operation, working_limit)?;
+        if artifact_capacity < actual.declared_artifact_bytes {
+            return Err(ReviewerError::Validation(
+                "actual source buffer capacity is below declared source bytes",
+            ));
+        }
+        source_heap = checked_add(
+            source_heap,
+            actual.heap_capacity_bytes(artifact_capacity)?,
+            operation,
+            working_limit,
+        )?;
+        source_bytes = checked_add(
+            source_bytes,
+            actual.declared_artifact_bytes,
+            "D2 resolved request source bytes",
+            MAX_D2_RESOLVED_SOURCE_BYTES as u64,
+        )?;
+    }
+    require_u64(
+        source_bytes,
+        MAX_D2_RESOLVED_SOURCE_BYTES as u64,
+        "D2 resolved request source bytes",
+    )?;
+
+    let vector_backing = checked_mul(
+        usize_u64(source_vector_capacity, operation, working_limit)?,
+        std::mem::size_of::<ResolvedSourceInput>() as u64,
+        operation,
+        working_limit,
+    )?;
+    let request_inline = std::mem::size_of::<ReviewerRequest<'static>>() as u64;
+    let envelope_owned = usize_u64(envelope.allocated_bytes(), operation, working_limit)?;
+    let retained = [request_inline, envelope_owned, vector_backing, source_heap]
+        .into_iter()
+        .try_fold(0_u64, |total, value| {
+            checked_add(total, value, operation, working_limit)
+        })?;
+    require_u64(retained, working_limit, operation)?;
+
+    let canonical_len = envelope
+        .canonical_byte_len()
+        .map_err(|_| ReviewerError::Validation("context envelope canonical length failed"))?;
+    require_len(
+        canonical_len,
+        MAX_ENVELOPE_BYTES,
+        "D2 context envelope canonical bytes",
+    )?;
+    let scratch_charge = checked_add(
+        std::mem::size_of::<Vec<u8>>() as u64,
+        usize_u64(canonical_len, operation, working_limit)?,
+        operation,
+        working_limit,
+    )?;
+    let planned_construction_peak_bytes =
+        checked_add(retained, scratch_charge, operation, working_limit)?;
+    require_u64(planned_construction_peak_bytes, working_limit, operation)?;
+    Ok(ReviewerRequestAccounting {
+        retained_working_bytes: retained,
+        planned_construction_peak_bytes,
+    })
 }
 
 fn validate_excerpt_closure(
@@ -3117,6 +3341,109 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn request_preflight_shares_exact_capacity_accounting_and_rejects_plus_one_overflow() {
+        let (envelope, mut inputs, _) = source_fixture();
+        let operation = "D2 reviewer-stage working bytes";
+        let limit = MAX_D2_WORKING_BYTES as u64;
+        let vector_backing =
+            inputs.capacity() as u64 * std::mem::size_of::<ResolvedSourceInput>() as u64;
+        let fixed_source_heap = inputs
+            .iter()
+            .enumerate()
+            .try_fold(0_u64, |total, (index, source)| {
+                let heap = source.heap_capacity_bytes()?;
+                let fixed = if index == 0 {
+                    heap - source.artifact_bytes.capacity() as u64
+                } else {
+                    heap
+                };
+                checked_add(total, fixed, operation, limit)
+            })
+            .unwrap();
+        let fixed = [
+            std::mem::size_of::<ReviewerRequest<'_>>() as u64,
+            envelope.allocated_bytes() as u64,
+            vector_backing,
+            fixed_source_heap,
+            std::mem::size_of::<Vec<u8>>() as u64,
+            envelope.canonical_byte_len().unwrap() as u64,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, value| {
+            checked_add(total, value, operation, limit)
+        })
+        .unwrap();
+        let desired_capacity = usize::try_from(limit - fixed).unwrap();
+        let bytes = inputs[0].artifact_bytes.clone();
+        let mut exact_capacity = Vec::with_capacity(desired_capacity);
+        exact_capacity.extend_from_slice(&bytes);
+        inputs[0].artifact_bytes = exact_capacity;
+        let metadata = inputs
+            .iter()
+            .map(ResolvedSourceMetadata::from)
+            .collect::<Vec<_>>();
+        let preflight = ReviewerRequestPreflight::new(&envelope, metadata.clone()).unwrap();
+        assert_eq!(preflight.source_vector_reservation(), inputs.len());
+        assert_eq!(
+            preflight.source_buffer_reservation(0),
+            Some(desired_capacity)
+        );
+        assert_eq!(preflight.construction_peak_bytes(), limit);
+        let actual_capacities = metadata
+            .iter()
+            .map(|source| usize::try_from(source.declared_artifact_capacity).unwrap())
+            .collect::<Vec<_>>();
+        let actual = ReviewerRequestPreflight::with_actual_reservations(
+            &envelope,
+            metadata.clone(),
+            inputs.capacity(),
+            actual_capacities.clone(),
+        )
+        .unwrap();
+        assert_eq!(actual.construction_peak_bytes(), limit);
+        let mut actual_plus_one = actual_capacities;
+        actual_plus_one[0] += 1;
+        assert!(matches!(
+            ReviewerRequestPreflight::with_actual_reservations(
+                &envelope,
+                metadata.clone(),
+                inputs.capacity(),
+                actual_plus_one,
+            ),
+            Err(ReviewerError::Incomplete { limit: actual, observed, .. })
+                if actual == limit && observed == limit + 1
+        ));
+        let request = ReviewerRequest::new(&envelope, inputs).unwrap();
+        assert_eq!(
+            request.construction_peak_bytes(),
+            preflight.construction_peak_bytes()
+        );
+
+        let mut plus_one = metadata;
+        plus_one[0].declared_artifact_capacity += 1;
+        assert!(matches!(
+            ReviewerRequestPreflight::new(&envelope, plus_one),
+            Err(ReviewerError::Incomplete { limit: actual, observed, .. })
+                if actual == limit && observed == limit + 1
+        ));
+
+        let mut overflow = inputs_to_metadata(&source_fixture().1);
+        overflow[0].declared_artifact_bytes = u64::MAX;
+        overflow[0].declared_artifact_capacity = u64::MAX;
+        assert!(matches!(
+            ReviewerRequestPreflight::new(&envelope, overflow),
+            Err(ReviewerError::Incomplete {
+                observed: u64::MAX,
+                ..
+            })
+        ));
+    }
+
+    fn inputs_to_metadata(inputs: &[ResolvedSourceInput]) -> Vec<ResolvedSourceMetadata> {
+        inputs.iter().map(ResolvedSourceMetadata::from).collect()
     }
 
     #[test]

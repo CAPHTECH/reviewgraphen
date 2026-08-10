@@ -1,0 +1,21 @@
+[package]
+name = "reviewgraphen-runtime"
+description = "Deterministic prepare-only fake runtime for ReviewGraphen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Apache-2.0"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+reviewgraphen-core = { path = "../reviewgraphen-core" }
+reviewgraphen-store = { path = "../reviewgraphen-store" }
+reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer" }
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true

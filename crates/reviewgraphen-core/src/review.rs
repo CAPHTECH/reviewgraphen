@@ -1548,6 +1548,31 @@ pub struct ReviewAggregate {
     execution_raw_sizes: BTreeMap<StableId, u64>,
 }
 
+/// Immutable, validated source-registration closure for one current snapshot
+/// artifact. It is a read-only runtime projection and carries no admission or
+/// mutation capability.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContextSourceRegistration {
+    pub artifact_id: StableId,
+    pub registration_id: StableId,
+    pub content_hash: crate::ContentHash,
+    pub cas_hash: crate::ContentHash,
+    pub line_count: u64,
+    pub size: u64,
+    pub media_type: String,
+    pub sensitivity: ArtifactSensitivity,
+    pub source: ArtifactSource,
+}
+
+/// Read-only durable progress for one fake execution identity.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FakeAttemptState {
+    None,
+    RawRegistered { registration: ArtifactRegistered },
+    ExecutionRecorded { execution: ExecutionRecord },
+    Completed { execution: ExecutionRecord },
+}
+
 impl ReviewAggregate {
     /// Starts a run from a validated ProgramSpace and deterministic universe.
     pub fn new(
@@ -2970,6 +2995,74 @@ impl ReviewAggregate {
         self.snapshot_sources.get(snapshot_id)
     }
 
+    /// Resolves exactly one accepted source closure for the aggregate's
+    /// current snapshot. Missing or mismatched links are a typed dangling
+    /// reference; callers cannot observe the backing metadata maps.
+    pub fn resolve_context_source(
+        &self,
+        artifact_id: &StableId,
+    ) -> Result<ContextSourceRegistration> {
+        let snapshot_id = self.program.snapshot_id();
+        let missing = || DomainError::DanglingReference {
+            owner: "runtime context source",
+            owner_id: snapshot_id.clone(),
+            reference: artifact_id.clone(),
+        };
+        let sources = self.snapshot_sources.get(snapshot_id).ok_or_else(missing)?;
+        let entry = sources
+            .entries()
+            .iter()
+            .find(|entry| entry.artifact_id() == artifact_id)
+            .ok_or_else(missing)?;
+        let registration = self
+            .registered_artifacts
+            .get(entry.registration_id())
+            .ok_or_else(missing)?;
+        if registration.cas_hash() != entry.cas_hash()
+            || !matches!(registration.source(), ArtifactSource::SnapshotIngest { snapshot_id: registered_snapshot, .. } if registered_snapshot == snapshot_id)
+        {
+            return Err(missing());
+        }
+        Ok(ContextSourceRegistration {
+            artifact_id: entry.artifact_id().clone(),
+            registration_id: entry.registration_id().clone(),
+            content_hash: entry.content_hash().clone(),
+            cas_hash: entry.cas_hash().clone(),
+            line_count: entry.line_count(),
+            size: registration.size(),
+            media_type: registration.media_type().to_owned(),
+            sensitivity: registration.sensitivity(),
+            source: registration.source().clone(),
+        })
+    }
+
+    /// Projects only persisted fake-attempt progress for one exact execution
+    /// ID. It has no replay admission or mutation capability.
+    pub fn fake_attempt_state(&self, execution_id: &StableId) -> FakeAttemptState {
+        if let Some(execution) = self.executions.get(execution_id) {
+            let completed = execution.obligation_ids().iter().all(|id| {
+                self.obligations.get(id).is_some_and(|obligation| {
+                    obligation.lifecycle() == ObligationLifecycle::Completed
+                })
+            });
+            return if completed {
+                FakeAttemptState::Completed {
+                    execution: execution.clone(),
+                }
+            } else {
+                FakeAttemptState::ExecutionRecorded {
+                    execution: execution.clone(),
+                }
+            };
+        }
+        self.registered_artifacts
+            .values()
+            .find(|registration| matches!(registration.source(), ArtifactSource::ReviewerExecution { execution_id: recorded, .. } if recorded == execution_id))
+            .cloned()
+            .map(|registration| FakeAttemptState::RawRegistered { registration })
+            .unwrap_or(FakeAttemptState::None)
+    }
+
     /// Internal exact obligation lookup used by deterministic projections.
     pub(crate) fn obligation(&self, id: &StableId) -> Option<&Obligation> {
         self.obligations.get(id)
@@ -3332,6 +3425,87 @@ impl ReviewAggregate {
         }
         self.findings.insert(finding.id.clone(), finding);
         self.validate()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod context_source_tests {
+    use super::*;
+    use crate::{MvpRulePack, ProgramSpace, SnapshotSourceRecordEntry};
+
+    fn aggregate() -> ReviewAggregate {
+        let program = ProgramSpace::from_json_slice(include_bytes!(
+            "../../../examples/double-submit-payment/program-space.json"
+        ))
+        .unwrap();
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        ReviewAggregate::new(program, universe, obligations).unwrap()
+    }
+
+    fn install(aggregate: &mut ReviewAggregate, registration_hash: crate::ContentHash) {
+        let run_id = StableId::parse("run:context-source-test").unwrap();
+        let artifact_id = StableId::parse("file:checkout-controller").unwrap();
+        let source = ArtifactSource::SnapshotIngest {
+            run_id: run_id.clone(),
+            snapshot_id: aggregate.program().snapshot_id().clone(),
+            adapter_id: "test".to_owned(),
+        };
+        let registration_id = ArtifactRegistered::derived_id(
+            &run_id,
+            &registration_hash,
+            "text/plain",
+            ArtifactSensitivity::WorkspaceSource,
+            &source,
+        )
+        .unwrap();
+        let registration = ArtifactRegistered::new(
+            run_id,
+            registration_id.clone(),
+            registration_hash.clone(),
+            "text/plain",
+            4,
+            ArtifactSensitivity::WorkspaceSource,
+            source,
+        )
+        .unwrap();
+        let entries = vec![
+            SnapshotSourceRecordEntry::new(
+                artifact_id,
+                "src/checkout_controller.rs",
+                crate::ContentHash::sha256(b"abc\n"),
+                registration_id,
+                crate::ContentHash::sha256(b"abc\n"),
+                2,
+            )
+            .unwrap(),
+        ];
+        aggregate.install_context_metadata_for_test(
+            vec![registration],
+            SnapshotSourcesRecorded::new(aggregate.program().snapshot_id().clone(), entries)
+                .unwrap(),
+        );
+    }
+
+    #[test]
+    fn context_source_projection_is_read_only_and_rejects_missing_or_mismatched_links() {
+        let mut valid = aggregate();
+        install(&mut valid, crate::ContentHash::sha256(b"abc\n"));
+        let id = StableId::parse("file:checkout-controller").unwrap();
+        let resolved = valid.resolve_context_source(&id).unwrap();
+        assert_eq!(resolved.size, 4);
+        assert_eq!(resolved.line_count, 2);
+        assert!(matches!(
+            valid.resolve_context_source(&StableId::parse("file:missing").unwrap()),
+            Err(DomainError::DanglingReference { .. })
+        ));
+
+        let mut mismatched = aggregate();
+        install(&mut mismatched, crate::ContentHash::sha256(b"wrong\n"));
+        assert!(matches!(
+            mismatched.resolve_context_source(&id),
+            Err(DomainError::DanglingReference { .. })
+        ));
     }
 }
 

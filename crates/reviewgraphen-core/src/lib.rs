@@ -65,10 +65,11 @@ pub use program::{
 };
 pub use projection::{AuditProjection, HumanProjection, Projection, ProjectionKind, ReviewReport};
 pub use review::{
-    ClaimAuthorKind, ClaimDisposition, ClaimPolarity, Decision, DecisionAdmission,
-    DecisionAuthority, DecisionOutcome, EvidenceBinding, EvidenceRelation, Finding, FindingStatus,
-    FindingTrace, Freshness, LegacyClaimV1, Obligation, ObligationLifecycle, ReviewAggregate,
-    ReviewClaim, ReviewStatus, TrustedHumanAdmission, Verification, VerificationOutcome,
+    ClaimAuthorKind, ClaimDisposition, ClaimPolarity, ContextSourceRegistration, Decision,
+    DecisionAdmission, DecisionAuthority, DecisionOutcome, EvidenceBinding, EvidenceRelation,
+    FakeAttemptState, Finding, FindingStatus, FindingTrace, Freshness, LegacyClaimV1, Obligation,
+    ObligationLifecycle, ReviewAggregate, ReviewClaim, ReviewStatus, TrustedHumanAdmission,
+    Verification, VerificationOutcome,
 };
 pub use source::{SnapshotSourceBundle, SnapshotSourceEntry};
 pub use synthesize::{
