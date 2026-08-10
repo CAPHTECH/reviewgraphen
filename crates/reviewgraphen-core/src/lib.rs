@@ -37,10 +37,10 @@ pub use error::{DomainError, PlanningError, Result};
 pub use event::{
     ArtifactRegistered, ArtifactSensitivity, ArtifactSource, DecodedPayload, Event,
     EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
-    EventStreamGenesis, EvidenceBindingAdmission, OfflineProjectionState, ProjectedFindingMetadata,
-    RunGenesisManifest, RunGenesisSnapshot, SnapshotSourceRecordEntry, SnapshotSourcesRecorded,
-    UnreconciledRecordKind, UnreconciledRecordMetadata, ValidatedEvent, ValidatedEventView,
-    VerificationAdmission,
+    EventStreamGenesis, EvidenceBindingAdmission, OfflineProjectionState,
+    ProjectedContextEnvelopeMetadata, ProjectedFindingMetadata, RunGenesisManifest,
+    RunGenesisSnapshot, SnapshotSourceRecordEntry, SnapshotSourcesRecorded, UnreconciledRecordKind,
+    UnreconciledRecordMetadata, ValidatedEvent, ValidatedEventView, VerificationAdmission,
 };
 pub use id::{ContentHash, IdRegistry, StableId, VersionTuple};
 pub use planning::{

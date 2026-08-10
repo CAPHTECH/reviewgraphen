@@ -1,6 +1,8 @@
+use crate::context::context_domain_error;
 use crate::{
-    ArtifactRegistered, DomainError, Evidence, ProgramSpace, Result, RunGenesisManifest,
-    SnapshotSourcesRecorded, StableId, UniverseDescriptor, VersionTuple,
+    ArtifactRegistered, DomainError, Evidence, ProgramSpace, Result, ReviewContextEnvelope,
+    ReviewPlan, RunGenesisManifest, SnapshotSourcesRecorded, StableId, UniverseDescriptor,
+    VersionTuple,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1467,6 +1469,10 @@ pub struct ReviewAggregate {
     registered_artifacts: BTreeMap<StableId, ArtifactRegistered>,
     #[serde(skip)]
     snapshot_sources: BTreeMap<StableId, SnapshotSourcesRecorded>,
+    #[serde(skip)]
+    plans: BTreeMap<StableId, ReviewPlan>,
+    #[serde(skip)]
+    envelopes: BTreeMap<StableId, ReviewContextEnvelope>,
 }
 
 impl ReviewAggregate {
@@ -1507,6 +1513,8 @@ impl ReviewAggregate {
             genesis_manifest: None,
             registered_artifacts: BTreeMap::new(),
             snapshot_sources: BTreeMap::new(),
+            plans: BTreeMap::new(),
+            envelopes: BTreeMap::new(),
         };
         aggregate.validate()?;
         Ok(aggregate)
@@ -1733,6 +1741,36 @@ impl ReviewAggregate {
                 self.validate_accepted_claim(claim)?;
             }
         }
+        for plan in self.plans.values() {
+            if plan.snapshot_id() != self.program.snapshot_id()
+                || plan.universe_id() != self.universe.id()
+            {
+                return Err(DomainError::Validation(
+                    "recorded plan must bind the aggregate snapshot and universe".to_owned(),
+                ));
+            }
+            let scheduled = plan
+                .waves()
+                .iter()
+                .flat_map(|wave| wave.obligation_ids().iter().cloned())
+                .chain(plan.deferred().keys().cloned())
+                .collect::<BTreeSet<_>>();
+            if scheduled != obligation_ids
+                || plan
+                    .risk_breakdown()
+                    .keys()
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    != obligation_ids
+            {
+                return Err(DomainError::Validation(
+                    "recorded plan must preserve the complete obligation denominator".to_owned(),
+                ));
+            }
+        }
+        for envelope in self.envelopes.values() {
+            envelope.validate_for_event(self)?;
+        }
         Ok(())
     }
 
@@ -1742,6 +1780,8 @@ impl ReviewAggregate {
             || !self.verifications.is_empty()
             || !self.decisions.is_empty()
             || !self.findings.is_empty()
+            || !self.plans.is_empty()
+            || !self.envelopes.is_empty()
             || self
                 .obligations
                 .values()
@@ -1894,6 +1934,37 @@ impl ReviewAggregate {
             return Ok(());
         }
         self.snapshot_sources.insert(snapshot, sources);
+        Ok(())
+    }
+
+    pub(crate) fn record_review_plan(&mut self, plan: ReviewPlan) -> Result<()> {
+        plan.validate_against(self)?;
+        let id = plan.id().clone();
+        if let Some(existing) = self.plans.get(&id) {
+            if existing.canonical_bytes()? != plan.canonical_bytes()? {
+                return Err(DomainError::IdCollision { id });
+            }
+            return Ok(());
+        }
+        self.plans.insert(id, plan);
+        Ok(())
+    }
+
+    pub(crate) fn record_context_envelope(
+        &mut self,
+        envelope: ReviewContextEnvelope,
+    ) -> Result<()> {
+        envelope.validate_for_event(self)?;
+        let id = envelope.id().clone();
+        if let Some(existing) = self.envelopes.get(&id) {
+            if existing.canonical_bytes().map_err(context_domain_error)?
+                != envelope.canonical_bytes().map_err(context_domain_error)?
+            {
+                return Err(DomainError::IdCollision { id });
+            }
+            return Ok(());
+        }
+        self.envelopes.insert(id, envelope);
         Ok(())
     }
 
@@ -2538,6 +2609,27 @@ impl ReviewAggregate {
     /// Internal exact obligation lookup used by deterministic projections.
     pub(crate) fn obligation(&self, id: &StableId) -> Option<&Obligation> {
         self.obligations.get(id)
+    }
+
+    /// Recorded deterministic plans in StableId order.
+    pub fn review_plans(&self) -> impl Iterator<Item = &ReviewPlan> {
+        self.plans.values()
+    }
+
+    /// Recorded live context envelopes in StableId order. Offline metadata-only
+    /// projection never enters this map.
+    pub fn context_envelopes(&self) -> impl Iterator<Item = &ReviewContextEnvelope> {
+        self.envelopes.values()
+    }
+
+    #[must_use]
+    pub fn review_plan(&self, id: &StableId) -> Option<&ReviewPlan> {
+        self.plans.get(id)
+    }
+
+    #[must_use]
+    pub fn context_envelope(&self, id: &StableId) -> Option<&ReviewContextEnvelope> {
+        self.envelopes.get(id)
     }
 
     #[cfg(test)]

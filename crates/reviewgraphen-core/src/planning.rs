@@ -408,8 +408,7 @@ impl ReviewPlan {
         plan_bytes(self, PlannerPolicyV1::MAX_CANONICAL_PLAN_BYTES)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn from_canonical_bytes(bytes: &[u8], aggregate: &ReviewAggregate) -> Result<Self> {
+    pub(crate) fn from_event_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > PlannerPolicyV1::MAX_CANONICAL_PLAN_BYTES {
             return Err(incomplete(
                 "review plan canonical bytes",
@@ -512,6 +511,12 @@ impl ReviewPlan {
         {
             return Err(DomainError::Planning(PlanningError::InvalidInput));
         }
+        Ok(plan)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn from_canonical_bytes(bytes: &[u8], aggregate: &ReviewAggregate) -> Result<Self> {
+        let plan = Self::from_event_bytes(bytes)?;
         plan.validate_against(aggregate)?;
         Ok(plan)
     }

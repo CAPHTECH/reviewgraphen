@@ -16,14 +16,14 @@ use rustix::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::sync::Mutex;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
     os::fd::AsFd,
     time::{SystemTime, UNIX_EPOCH},
 };
-#[cfg(test)]
-use std::sync::Mutex;
 use thiserror::Error;
 
 const RUNS_DIR: &str = "runs";
@@ -327,7 +327,7 @@ impl<'a> EventJournal<'a> {
         }
         validate_limits(limits)?;
         validate_prefix(&identity, std::slice::from_ref(&first_manifest_envelope))?;
-        let mut line = canonical_json(&first_manifest_envelope)?;
+        let mut line = first_manifest_envelope.canonical_bytes()?;
         line.push(b'\n');
         limit(line.len() as u64, limits.max_event_line_bytes)?;
         limit(1, limits.max_events)?;
@@ -366,7 +366,7 @@ impl<'a> EventJournal<'a> {
         validate_prefix(&identity, events)?;
         let mut bytes = Vec::new();
         for event in events {
-            let mut line = canonical_json(event)?;
+            let mut line = event.canonical_bytes()?;
             line.push(b'\n');
             limit(
                 u64::try_from(line.len()).map_err(|_| JournalError::Incomplete {
@@ -513,11 +513,7 @@ impl<'a> EventJournal<'a> {
                 recovery_id: intent.recovery_id.clone(),
                 post_file_hash: ContentHash::sha256(&prefix),
             };
-            reserve_recovery_capacity(
-                &audit,
-                self.limits,
-                &[receipt_bytes(&completion)?],
-            )?;
+            reserve_recovery_capacity(&audit, self.limits, &[receipt_bytes(&completion)?])?;
             if actual_len > intent.good_offset {
                 let suffix =
                     read_suffix(&mut file, intent.good_offset, self.limits.max_replay_bytes)?;
@@ -530,7 +526,9 @@ impl<'a> EventJournal<'a> {
                 file.seek(SeekFrom::Start(intent.good_offset))?;
                 #[cfg(test)]
                 if self.take_recovery_fault(RecoveryFault::MarkerLogSync) {
-                    return Err(JournalError::Io(injected_io_error("marker recovery log sync")));
+                    return Err(JournalError::Io(injected_io_error(
+                        "marker recovery log sync",
+                    )));
                 }
                 file.sync_data()?;
             } else {
@@ -564,7 +562,9 @@ impl<'a> EventJournal<'a> {
             if marker_state.torn.is_none() {
                 #[cfg(test)]
                 if self.take_recovery_fault(RecoveryFault::MarkerLogSync) {
-                    return Err(JournalError::Io(injected_io_error("marker recovery log sync")));
+                    return Err(JournalError::Io(injected_io_error(
+                        "marker recovery log sync",
+                    )));
                 }
                 file.sync_data()?;
                 let nonce = recovery_nonce()?;
@@ -820,7 +820,7 @@ impl JournalWriter {
         if self.poisoned {
             return Err(JournalError::Poisoned);
         }
-        let mut line = canonical_json(&envelope)?;
+        let mut line = envelope.canonical_bytes()?;
         line.push(b'\n');
         limit(line.len() as u64, self.limits.max_event_line_bytes)?;
         let mut candidate = self.state.events.clone();
@@ -851,14 +851,16 @@ impl JournalWriter {
         // A writer may be reused after a failed append, which leaves two
         // immutable receipts behind.  Re-audit for every append rather than
         // relying on the capacity seen when this lock was acquired.
-        let audit = recovery_audit(&self.intents, &self.completions, &self.identity, self.limits)?;
-        sync_recovery_dirs(&self.intents, &self.completions)?;
-        let rollback_sizes = rollback_receipt_size_bound(&self.identity, pre, &self.state.tail_hash)?;
-        reserve_recovery_capacity(
-            &audit,
+        let audit = recovery_audit(
+            &self.intents,
+            &self.completions,
+            &self.identity,
             self.limits,
-            &rollback_sizes,
         )?;
+        sync_recovery_dirs(&self.intents, &self.completions)?;
+        let rollback_sizes =
+            rollback_receipt_size_bound(&self.identity, pre, &self.state.tail_hash)?;
+        reserve_recovery_capacity(&audit, self.limits, &rollback_sizes)?;
         self.record_append_marker()?;
         self.file.seek(SeekFrom::Start(pre))?;
         let write_result = self.write_candidate(&line);
@@ -1174,7 +1176,7 @@ fn scan_bytes(
                 auto_recoverable: false,
             }
         })?;
-        if canonical_json(&event).map_err(JournalError::Domain)? != bytes[start..end] {
+        if event.canonical_bytes().map_err(JournalError::Domain)? != bytes[start..end] {
             return Err(JournalError::CorruptNeedsRecovery {
                 good_offset: good,
                 auto_recoverable: false,
@@ -1492,7 +1494,7 @@ fn publish_initial_log(
             fs::flock(existing.as_fd(), FlockOperation::LockShared).map_err(StoreError::Io)?;
             let state = scan(&mut existing, identity, limits, true)?;
             if state.events.first().is_some_and(|first| {
-                canonical_json(first).ok().as_deref() == Some(&line[..line.len() - 1])
+                first.canonical_bytes().ok().as_deref() == Some(&line[..line.len() - 1])
             }) {
                 fs::fsync(run)
                     .map_err(StoreError::Io)
@@ -1767,13 +1769,14 @@ fn reserve_recovery_capacity(
             observed: u64::MAX,
         })
     })?;
-    let scanned = audit
-        .receipt_scan_bytes
-        .checked_add(receipt_bytes)
-        .ok_or(JournalError::Incomplete {
-            limit: limits.max_receipt_scan_bytes,
-            observed: u64::MAX,
-        })?;
+    let scanned =
+        audit
+            .receipt_scan_bytes
+            .checked_add(receipt_bytes)
+            .ok_or(JournalError::Incomplete {
+                limit: limits.max_receipt_scan_bytes,
+                observed: u64::MAX,
+            })?;
     limit(scanned, limits.max_receipt_scan_bytes)
 }
 
@@ -2060,14 +2063,17 @@ fn publish_receipt<T: Serialize + for<'de> Deserialize<'de> + Eq>(
     )
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use reviewgraphen_core::{
-        EventCommand, EventLog, MvpRulePack, ObligationLifecycle, ProgramSpace, ReviewAggregate,
+        ArtifactRegistered, ArtifactSensitivity, ArtifactSource, EventCommand, EventLog,
+        MvpRulePack, ObligationLifecycle, PlanBudget, ProgramSpace, ReviewAggregate,
+        SnapshotSourceRecordEntry, SnapshotSourcesRecorded, plan, prepare_context,
     };
+    use serde_json::Value;
     use std::{
+        collections::BTreeMap,
         os::unix::fs::PermissionsExt,
         sync::{Arc, Barrier, mpsc},
     };
@@ -2100,6 +2106,137 @@ mod tests {
     }
     fn fixture_event() -> (JournalIdentity, EventEnvelope) {
         fixture_event_for("run:journal-test")
+    }
+
+    fn d1_fixture() -> (JournalIdentity, Vec<EventEnvelope>) {
+        let run_id = StableId::parse("run:journal-d1").unwrap();
+        let source_bytes = BTreeMap::from([
+            (
+                "src/checkout_controller.rs",
+                b"controller line\n".repeat(100),
+            ),
+            (
+                "src/payment_repository.rs",
+                b"repository line\n".repeat(100),
+            ),
+        ]);
+        let mut value: Value = serde_json::from_slice(include_bytes!(
+            "../../../examples/double-submit-payment/program-space.json"
+        ))
+        .unwrap();
+        let mut contains = value["relations"].as_array().unwrap()[0].clone();
+        contains["id"] = Value::String("relation:file-contains-payment-charge".to_owned());
+        contains["kind"] = Value::String("contains".to_owned());
+        contains["source_id"] = Value::String("file:payment-repository".to_owned());
+        contains["target_ids"] = serde_json::json!(["function:payment-charge"]);
+        contains["directed"] = Value::Bool(true);
+        value["relations"].as_array_mut().unwrap().push(contains);
+        let test = value["artifacts"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|artifact| artifact["id"] == "test:double-submit")
+            .unwrap();
+        test["location"]["start_line"] = Value::Null;
+        test["location"]["end_line"] = Value::Null;
+        for artifact in value["artifacts"].as_array_mut().unwrap() {
+            if artifact["kind"] == "file" {
+                let path = artifact["location"]["path"].as_str().unwrap();
+                artifact["content_hash"] =
+                    Value::String(ContentHash::sha256(&source_bytes[path]).to_string());
+            }
+        }
+        let program: ProgramSpace = serde_json::from_value(value).unwrap();
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let aggregate = ReviewAggregate::new(program.clone(), universe, obligations).unwrap();
+        let mut log = EventLog::new(run_id.clone(), aggregate).unwrap();
+        let genesis = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+
+        let mut entries = Vec::new();
+        let mut bytes_by_id = BTreeMap::new();
+        for artifact in program
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+        {
+            let path = artifact.location.as_ref().unwrap().path.clone();
+            let bytes = source_bytes[path.as_str()].clone();
+            let hash = ContentHash::sha256(&bytes);
+            let source = ArtifactSource::SnapshotIngest {
+                run_id: run_id.clone(),
+                snapshot_id: program.snapshot_id().clone(),
+                adapter_id: "journal-d1-fixture@1".to_owned(),
+            };
+            let media_type = "application/octet-stream";
+            let registration_id = StableId::derived(
+                "registration",
+                &BTreeMap::from([
+                    ("run_id".to_owned(), Value::String(run_id.to_string())),
+                    ("cas_hash".to_owned(), Value::String(hash.to_string())),
+                    (
+                        "media_type".to_owned(),
+                        Value::String(media_type.to_owned()),
+                    ),
+                    (
+                        "sensitivity".to_owned(),
+                        Value::String("workspace_source".to_owned()),
+                    ),
+                    ("source".to_owned(), serde_json::to_value(&source).unwrap()),
+                ]),
+            )
+            .unwrap();
+            let registration = ArtifactRegistered::new(
+                run_id.clone(),
+                registration_id.clone(),
+                hash.clone(),
+                media_type,
+                u64::try_from(bytes.len()).unwrap(),
+                ArtifactSensitivity::WorkspaceSource,
+                source,
+            )
+            .unwrap();
+            log.append(EventCommand::artifact_registered(registration))
+                .unwrap();
+            entries.push(
+                SnapshotSourceRecordEntry::new(
+                    artifact.id.clone(),
+                    path,
+                    hash.clone(),
+                    registration_id,
+                    hash,
+                    u64::try_from(bytes.iter().filter(|byte| **byte == b'\n').count()).unwrap() + 1,
+                )
+                .unwrap(),
+            );
+            bytes_by_id.insert(artifact.id.clone(), bytes);
+        }
+        entries.sort_by(|left, right| left.path().cmp(right.path()));
+        log.append(EventCommand::snapshot_sources_recorded(
+            SnapshotSourcesRecorded::new(program.snapshot_id().clone(), entries).unwrap(),
+        ))
+        .unwrap();
+        let review_plan = plan(log.aggregate(), PlanBudget::new(16, 2).unwrap()).unwrap();
+        log.append(EventCommand::review_plan_recorded(review_plan))
+            .unwrap();
+        let obligation = log.aggregate().obligations().next().unwrap().id().clone();
+        let mut session = prepare_context(log.aggregate(), obligation).unwrap();
+        while let Some(request) = session.next_source_request().unwrap() {
+            session
+                .submit_source(&request, &bytes_by_id[request.artifact_id()])
+                .unwrap();
+        }
+        log.append(EventCommand::context_envelope_projected(
+            session.finish().unwrap(),
+        ))
+        .unwrap();
+        (
+            JournalIdentity::new(run_id, JournalGenesis::V2(genesis)).unwrap(),
+            log.envelopes().cloned().collect(),
+        )
     }
 
     /// All V2 test streams begin with the same durable, sequence-one
@@ -2139,7 +2276,10 @@ mod tests {
     }
 
     fn create_empty_v2_layout(root: &StoreRoot, identity: &JournalIdentity) {
-        let run = root.path().join(RUNS_DIR).join(run_dir_name(&identity.run_id));
+        let run = root
+            .path()
+            .join(RUNS_DIR)
+            .join(run_dir_name(&identity.run_id));
         std::fs::create_dir_all(run.join(RECOVERY_DIR).join(INTENTS_DIR)).unwrap();
         std::fs::create_dir_all(run.join(RECOVERY_DIR).join(COMPLETIONS_DIR)).unwrap();
         std::fs::write(run.join(JOURNAL_FILE), b"").unwrap();
@@ -2152,17 +2292,27 @@ mod tests {
         ] {
             std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        std::fs::set_permissions(run.join(JOURNAL_FILE), std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(
+            run.join(JOURNAL_FILE),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
     }
     fn log_path(root: &StoreRoot) -> std::path::PathBuf {
-        journal_dir(root).join(JOURNAL_FILE)
+        log_path_for(root, &StableId::parse("run:journal-test").unwrap())
+    }
+    fn log_path_for(root: &StoreRoot, run_id: &StableId) -> std::path::PathBuf {
+        root.path()
+            .join(RUNS_DIR)
+            .join(run_dir_name(run_id))
+            .join(JOURNAL_FILE)
     }
     fn recovery_path(root: &StoreRoot) -> std::path::PathBuf {
         journal_dir(root).join(RECOVERY_DIR)
     }
 
     fn event_line(event: &EventEnvelope) -> Vec<u8> {
-        let mut line = canonical_json(event).unwrap();
+        let mut line = event.canonical_bytes().unwrap();
         line.push(b'\n');
         line
     }
@@ -2229,8 +2379,12 @@ mod tests {
         let (_workspace, root) = root();
         let (identity, event) = fixture_event();
         let genesis = first_manifest(&identity);
-        let journal = EventJournal::initialize_v2(&root, identity.clone(), genesis.clone()).unwrap();
-        assert_eq!(std::fs::read(log_path(&root)).unwrap(), event_line(&genesis));
+        let journal =
+            EventJournal::initialize_v2(&root, identity.clone(), genesis.clone()).unwrap();
+        assert_eq!(
+            std::fs::read(log_path(&root)).unwrap(),
+            event_line(&genesis)
+        );
         let reader = journal.reader().unwrap();
         assert_eq!(reader.events().len(), 1);
         assert_eq!(reader.events()[0].event_hash(), genesis.event_hash());
@@ -2247,9 +2401,18 @@ mod tests {
         let (identity, _event) = fixture_event();
         create_empty_v2_layout(&root, &identity);
         let journal = EventJournal::open(&root, identity).unwrap();
-        assert!(matches!(journal.reader(), Err(JournalError::V2GenesisRequired)));
-        assert!(matches!(journal.writer(), Err(JournalError::V2GenesisRequired)));
-        assert!(matches!(journal.recover("test", "reviewgraphen-store@1"), Err(JournalError::V2GenesisRequired)));
+        assert!(matches!(
+            journal.reader(),
+            Err(JournalError::V2GenesisRequired)
+        ));
+        assert!(matches!(
+            journal.writer(),
+            Err(JournalError::V2GenesisRequired)
+        ));
+        assert!(matches!(
+            journal.recover("test", "reviewgraphen-store@1"),
+            Err(JournalError::V2GenesisRequired)
+        ));
     }
 
     #[test]
@@ -2260,7 +2423,8 @@ mod tests {
         let first_genesis = first_manifest(&first_identity);
         let second_genesis = first_manifest(&second_identity);
         EventJournal::initialize_v2(&root, first_identity.clone(), first_genesis.clone()).unwrap();
-        EventJournal::initialize_v2(&root, second_identity.clone(), second_genesis.clone()).unwrap();
+        EventJournal::initialize_v2(&root, second_identity.clone(), second_genesis.clone())
+            .unwrap();
         let first = root
             .path()
             .join(RUNS_DIR)
@@ -2340,14 +2504,18 @@ mod tests {
             })
         ));
         assert!(marker.exists());
-        assert!(std::fs::read_dir(recovery_path(&root).join(INTENTS_DIR))
-            .unwrap()
-            .next()
-            .is_none());
-        assert!(std::fs::read_dir(recovery_path(&root).join(COMPLETIONS_DIR))
-            .unwrap()
-            .next()
-            .is_none());
+        assert!(
+            std::fs::read_dir(recovery_path(&root).join(INTENTS_DIR))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        assert!(
+            std::fs::read_dir(recovery_path(&root).join(COMPLETIONS_DIR))
+                .unwrap()
+                .next()
+                .is_none()
+        );
     }
 
     #[test]
@@ -2376,7 +2544,10 @@ mod tests {
         let mut writer = journal.writer().unwrap();
         writer.inject_faults([AppendFault::ClearMarkerDirectorySync]);
         assert!(matches!(writer.append(event), Err(JournalError::Io(_))));
-        assert!(matches!(writer.append(fixture_event().1), Err(JournalError::Poisoned)));
+        assert!(matches!(
+            writer.append(fixture_event().1),
+            Err(JournalError::Poisoned)
+        ));
         drop(writer);
         assert!(journal_dir(&root).join(APPEND_PENDING_MARKER).exists());
         assert!(journal.recover("test", "reviewgraphen-store@1").is_ok());
@@ -2419,7 +2590,9 @@ mod tests {
     fn a_later_chain_failure_reports_the_start_of_that_complete_line() {
         let (identity, _) = fixture_event();
         let genesis = first_manifest(&identity);
-        let JournalGenesis::V2(bytes) = &identity.genesis else { panic!("fixture is V2") };
+        let JournalGenesis::V2(bytes) = &identity.genesis else {
+            panic!("fixture is V2")
+        };
         let aggregate = reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes(bytes)
             .unwrap()
             .rebuild_aggregate()
@@ -2608,7 +2781,10 @@ mod tests {
         let journal = open_fixture(&root, identity);
         let mut writer = journal.writer().unwrap();
         let receipt = writer.append(event.clone()).unwrap();
-        assert_eq!(std::fs::read(log_path(&root)).unwrap(), initialized_with_event(&journal.identity, &event));
+        assert_eq!(
+            std::fs::read(log_path(&root)).unwrap(),
+            initialized_with_event(&journal.identity, &event)
+        );
         drop(writer);
         let reader = journal.reader().unwrap();
         reader.with_locked_snapshot(|events, offset, _| {
@@ -2646,7 +2822,10 @@ mod tests {
                 writer.append(event.clone()),
                 Err(JournalError::Io(_))
             ));
-            assert_eq!(std::fs::read(log_path(&root)).unwrap(), initialized_bytes(&writer.identity));
+            assert_eq!(
+                std::fs::read(log_path(&root)).unwrap(),
+                initialized_bytes(&writer.identity)
+            );
             assert_eq!(writer.events().len(), 1);
             assert_eq!(writer.append(event).unwrap().sequence, 2);
         }
@@ -2756,31 +2935,118 @@ mod tests {
 
         // A too-small first-record bound fails before a durable run exists.
         let (_workspace2, root2) = root();
-        assert!(matches!(EventJournal::initialize_v2_with_limits(
-            &root2,
-            identity.clone(),
-            genesis.clone(),
-            JournalLimits {
-                max_event_line_bytes: genesis_len - 1,
-                ..exact
-            },
-        ), Err(JournalError::Incomplete { .. })
+        assert!(matches!(
+            EventJournal::initialize_v2_with_limits(
+                &root2,
+                identity.clone(),
+                genesis.clone(),
+                JournalLimits {
+                    max_event_line_bytes: genesis_len - 1,
+                    ..exact
+                },
+            ),
+            Err(JournalError::Incomplete { .. })
         ));
         assert!(!log_path(&root2).exists());
 
         let (_workspace3, root3) = root();
-        assert!(matches!(EventJournal::initialize_v2_with_limits(
-            &root3,
-            identity,
-            genesis,
-            JournalLimits {
-                max_replay_bytes: genesis_len - 1,
-                ..exact
-            },
-        ), Err(JournalError::Incomplete { .. })
+        assert!(matches!(
+            EventJournal::initialize_v2_with_limits(
+                &root3,
+                identity,
+                genesis,
+                JournalLimits {
+                    max_replay_bytes: genesis_len - 1,
+                    ..exact
+                },
+            ),
+            Err(JournalError::Incomplete { .. })
         ));
         assert!(!log_path(&root3).exists());
         drop(journal);
+    }
+
+    #[test]
+    fn d1_plan_and_context_round_trip_with_exact_configured_line_bound() {
+        let (identity, events) = d1_fixture();
+        let lines = events.iter().map(event_line).collect::<Vec<_>>();
+        let context_len = u64::try_from(lines.last().unwrap().len()).unwrap();
+        let prior_max = lines[..lines.len() - 1]
+            .iter()
+            .map(Vec::len)
+            .max()
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap();
+        assert!(context_len > prior_max);
+        let replay_bytes = lines
+            .iter()
+            .try_fold(0_u64, |total, line| {
+                total.checked_add(u64::try_from(line.len()).ok()?)
+            })
+            .unwrap();
+        let event_count = u64::try_from(events.len()).unwrap();
+
+        let (_workspace, primary_root) = root();
+        let exact = JournalLimits {
+            max_event_line_bytes: context_len,
+            max_events: event_count,
+            max_replay_bytes: replay_bytes,
+            ..JournalLimits::from_store(primary_root.limits())
+        };
+        let journal = EventJournal::initialize_v2_with_limits(
+            &primary_root,
+            identity.clone(),
+            events[0].clone(),
+            exact,
+        )
+        .unwrap();
+        {
+            let mut writer = journal.writer().unwrap();
+            for event in &events[1..] {
+                writer.append(event.clone()).unwrap();
+            }
+        }
+        let expected = lines.concat();
+        assert_eq!(
+            std::fs::read(log_path_for(&primary_root, &identity.run_id)).unwrap(),
+            expected
+        );
+        let reader = journal.reader().unwrap();
+        assert_eq!(reader.events().len(), events.len());
+        for (actual, expected) in reader.events().iter().zip(&events) {
+            assert_eq!(
+                actual.canonical_bytes().unwrap(),
+                expected.canonical_bytes().unwrap()
+            );
+            assert_eq!(actual.event_hash(), expected.event_hash());
+        }
+
+        let (_workspace_small, small_root) = root();
+        let small_log_path = log_path_for(&small_root, &identity.run_id);
+        let lower = JournalLimits {
+            max_event_line_bytes: context_len - 1,
+            ..exact
+        };
+        let small = EventJournal::initialize_v2_with_limits(
+            &small_root,
+            identity,
+            events[0].clone(),
+            lower,
+        )
+        .unwrap();
+        let mut writer = small.writer().unwrap();
+        for event in &events[1..events.len() - 1] {
+            writer.append(event.clone()).unwrap();
+        }
+        let before = std::fs::read(&small_log_path).unwrap();
+        assert!(matches!(
+            writer.append(events.last().unwrap().clone()),
+            Err(JournalError::Incomplete {
+                limit,
+                observed,
+            }) if limit == context_len - 1 && observed == context_len
+        ));
+        assert_eq!(std::fs::read(small_log_path).unwrap(), before);
     }
 
     #[test]
@@ -2805,7 +3071,10 @@ mod tests {
             if recoverable {
                 let recovered = journal.recover("test", "reviewgraphen-store@1").unwrap();
                 assert_eq!(recovered.intent.good_offset, receipt.tail_offset);
-                assert_eq!(std::fs::read(log_path(&root)).unwrap(), initialized_with_event(&journal.identity, &event));
+                assert_eq!(
+                    std::fs::read(log_path(&root)).unwrap(),
+                    initialized_with_event(&journal.identity, &event)
+                );
             } else {
                 assert!(matches!(
                     journal.recover("test", "reviewgraphen-store@1"),
@@ -2841,7 +3110,10 @@ mod tests {
         let resumed = journal.recover("another actor", "another tool").unwrap();
         assert!(resumed.resumed);
         assert_eq!(resumed.intent, intent);
-        assert_eq!(std::fs::read(log_path(&root)).unwrap(), initialized_with_event(&journal.identity, &event));
+        assert_eq!(
+            std::fs::read(log_path(&root)).unwrap(),
+            initialized_with_event(&journal.identity, &event)
+        );
     }
 
     #[test]

@@ -17,7 +17,7 @@ version = "0.1.0"
 insta = { version = "=1.42.2", features = ["yaml"] }
 proptest = "=1.6.0"
 serde = { version = "=1.0.219", features = ["derive"] }
-serde_json = "=1.0.140"
+serde_json = { version = "=1.0.140", features = ["raw_value"] }
 sha2 = "=0.10.9"
 thiserror = "=2.0.12"
 jsonschema = { version = "=0.30.0", default-features = false }

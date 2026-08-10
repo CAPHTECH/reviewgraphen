@@ -242,6 +242,12 @@ pub enum ContextError {
     Protocol(&'static str),
 }
 type ContextResult<T> = std::result::Result<T, ContextError>;
+pub(crate) fn context_domain_error(error: ContextError) -> DomainError {
+    match error {
+        ContextError::Domain(error) => error,
+        ContextError::Protocol(message) => DomainError::Validation(message.to_owned()),
+    }
+}
 fn incomplete(operation: &'static str, limit: usize, observed: usize) -> DomainError {
     DomainError::Incomplete {
         operation,
@@ -378,10 +384,7 @@ pub struct ReviewContextEnvelope {
     projection_hash: ContentHash,
 }
 impl ReviewContextEnvelope {
-    /// Strict canonical metadata-only decode. This checks the exact aggregate
-    /// closure and identity, but deliberately cannot mint a live admission
-    /// because no source bytes are supplied.
-    pub fn from_canonical_bytes(input: &[u8], aggregate: &ReviewAggregate) -> ContextResult<Self> {
+    pub(crate) fn from_event_bytes(input: &[u8]) -> ContextResult<Self> {
         if input.len() > MAX_BODY {
             return Err(
                 incomplete("context envelope canonical bytes", MAX_BODY, input.len()).into(),
@@ -405,17 +408,168 @@ impl ReviewContextEnvelope {
             losses: raw.losses,
             projection_hash: raw.projection_hash,
         };
-        envelope.validate_metadata(aggregate)?;
-        if envelope.canonical_bytes()? != input {
-            return Err(DomainError::Validation(
-                "context envelope must use exact canonical bytes".to_owned(),
-            )
+        envelope.validate_local()?;
+        let expected = envelope.canonical_bytes()?;
+        if expected != input {
+            return Err(DomainError::Validation(format!(
+                "context envelope must use exact canonical bytes (expected {}, observed {})",
+                ContentHash::sha256(&expected),
+                ContentHash::sha256(input)
+            ))
             .into());
         }
         Ok(envelope)
     }
 
+    /// Strict canonical metadata-only decode. This checks the exact aggregate
+    /// closure and identity, but deliberately cannot mint a live admission
+    /// because no source bytes are supplied.
+    pub fn from_canonical_bytes(input: &[u8], aggregate: &ReviewAggregate) -> ContextResult<Self> {
+        let envelope = Self::from_event_bytes(input)?;
+        envelope.validate_metadata(aggregate)?;
+        Ok(envelope)
+    }
+
+    fn validate_local(&self) -> ContextResult<()> {
+        if self.id.kind() != "context-envelope"
+            || self.snapshot_id.kind() != "snapshot"
+            || self.projection_policy_version != ContextPolicyV1::VERSION
+            || self.context_policy != ContextPolicyV1::baseline()
+            || self.context_policy_hash != self.context_policy.hash()?
+            || !self.assumptions.is_empty()
+            || self.obligation_ids.len() != 1
+            || self
+                .obligation_ids
+                .iter()
+                .any(|id| id.kind() != "obligation")
+            || self
+                .candidate_source_ids
+                .iter()
+                .any(|id| id.kind() != "file")
+        {
+            return Err(DomainError::Validation(
+                "invalid fixed context envelope local metadata".to_owned(),
+            )
+            .into());
+        }
+        let included_ids = self
+            .included_sources
+            .iter()
+            .map(|source| source.artifact_id.clone())
+            .collect::<BTreeSet<_>>();
+        let excluded_ids = self
+            .excluded_sources
+            .iter()
+            .map(|source| source.artifact_id.clone())
+            .collect::<BTreeSet<_>>();
+        if included_ids != self.normalized_included_source_ids
+            || included_ids.len() != self.included_sources.len()
+            || excluded_ids.len() != self.excluded_sources.len()
+            || !included_ids.is_disjoint(&excluded_ids)
+            || included_ids
+                .union(&excluded_ids)
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                != self.candidate_source_ids
+            || self
+                .included_sources
+                .windows(2)
+                .any(|pair| pair[0].artifact_id >= pair[1].artifact_id)
+            || self
+                .excluded_sources
+                .windows(2)
+                .any(|pair| pair[0].artifact_id >= pair[1].artifact_id)
+        {
+            return Err(DomainError::Validation(
+                "context source partition is not canonical and complete".to_owned(),
+            )
+            .into());
+        }
+        for source in &self.included_sources {
+            if source.registration_id.kind() != "registration"
+                || source.artifact_id.kind() != "file"
+                || !is_sha256(&source.content_hash)
+                || !is_sha256(&source.cas_hash)
+                || !is_sha256(&source.excerpt_hash)
+                || source.excerpt_byte_length > MAX_EXCERPT as u64
+            {
+                return Err(DomainError::Validation(
+                    "invalid included source local metadata".to_owned(),
+                )
+                .into());
+            }
+            if let Some(range) = &source.excerpt
+                && (range.start_line == 0
+                    || range.end_line < range.start_line
+                    || u64::from(range.end_line - range.start_line) >= MAX_LINES as u64)
+            {
+                return Err(DomainError::Validation(
+                    "invalid included source excerpt range".to_owned(),
+                )
+                .into());
+            }
+        }
+        if self.unknowns.len() > ContextPolicyV1::baseline().max_unknowns()
+            || self.losses.len() > ContextPolicyV1::baseline().max_losses()
+            || self.unknowns.iter().any(|unknown| {
+                !matches!(
+                    unknown.description.as_str(),
+                    "context_unknown:unresolved_seed_reference"
+                        | "context_unknown:unresolved_relation_endpoint"
+                        | "context_unknown:unresolved_review_context_member"
+                        | "context_unknown:unresolved_invariant_scope"
+                )
+            })
+            || self.unknowns.windows(2).any(|pair| {
+                (&pair[0].description, &pair[0].source_ids)
+                    >= (&pair[1].description, &pair[1].source_ids)
+            })
+            || self.losses.windows(2).any(|pair| {
+                (
+                    &pair[0].description,
+                    &pair[0].affected_properties,
+                    &pair[0].source_ids,
+                ) >= (
+                    &pair[1].description,
+                    &pair[1].affected_properties,
+                    &pair[1].source_ids,
+                )
+            })
+            || self.losses.iter().any(|loss| {
+                loss.severity != Severity::Low
+                    || loss.affected_properties.len() != 1
+                    || loss.source_ids.is_empty()
+            })
+        {
+            return Err(DomainError::Validation(
+                "invalid canonical context unknown or loss groups".to_owned(),
+            )
+            .into());
+        }
+        let obligation_id = self.obligation_ids.first().expect("length checked");
+        let body = identity_bytes(
+            &self.snapshot_id,
+            obligation_id,
+            &self.context_policy_hash,
+            &self.candidate_source_ids,
+            &self.included_sources,
+            &self.excluded_sources,
+            &self.unknowns,
+            &self.losses,
+        )?;
+        let projection_hash = ContentHash::sha256(&body);
+        if self.projection_hash != projection_hash
+            || self.id != StableId::parse(format!("context-envelope:{projection_hash}"))?
+        {
+            return Err(
+                DomainError::Validation("context identity body hash mismatch".to_owned()).into(),
+            );
+        }
+        Ok(())
+    }
+
     fn validate_metadata(&self, aggregate: &ReviewAggregate) -> ContextResult<()> {
+        self.validate_local()?;
         if self.projection_policy_version != ContextPolicyV1::VERSION
             || self.context_policy != ContextPolicyV1::baseline()
             || self.context_policy_hash != self.context_policy.hash()?
@@ -568,6 +722,11 @@ impl ReviewContextEnvelope {
         Ok(())
     }
 
+    pub(crate) fn validate_for_event(&self, aggregate: &ReviewAggregate) -> Result<()> {
+        self.validate_metadata(aggregate)
+            .map_err(context_domain_error)
+    }
+
     pub fn id(&self) -> &StableId {
         &self.id
     }
@@ -664,7 +823,7 @@ impl Serialize for ReviewContextEnvelope {
 
 /// Opaque byte-reverified admission. It has no serializer or public constructor.
 #[allow(dead_code)] // fields are consumed by event.rs in the next implementation unit.
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ContextProjectionAdmission {
     pub(crate) manifest_digest: ContentHash,
     pub(crate) envelope_id: StableId,
@@ -673,12 +832,53 @@ pub(crate) struct ContextProjectionAdmission {
 }
 
 #[allow(dead_code)] // consumed by the event admission seam in the next unit.
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AdmittedSource {
     pub(crate) registration_id: StableId,
     pub(crate) excerpt: Option<ExcerptRange>,
     pub(crate) excerpt_byte_length: u64,
     pub(crate) excerpt_hash: ContentHash,
+}
+
+impl ContextProjectionAdmission {
+    pub(crate) fn matches_projection(&self, envelope: &ReviewContextEnvelope) -> bool {
+        let expected_sources = envelope
+            .included_sources
+            .iter()
+            .map(|source| AdmittedSource {
+                registration_id: source.registration_id.clone(),
+                excerpt: source.excerpt.clone(),
+                excerpt_byte_length: source.excerpt_byte_length,
+                excerpt_hash: source.excerpt_hash.clone(),
+            })
+            .collect::<Vec<_>>();
+        self.envelope_id == envelope.id
+            && self.projection_hash == envelope.projection_hash
+            && self.sources == expected_sources
+    }
+
+    pub(crate) fn matches(
+        &self,
+        envelope: &ReviewContextEnvelope,
+        aggregate: &ReviewAggregate,
+    ) -> Result<bool> {
+        envelope
+            .validate_metadata(aggregate)
+            .map_err(context_domain_error)?;
+        let obligation_id = envelope.obligation_ids.first().ok_or_else(|| {
+            DomainError::Validation("context envelope has no obligation".to_owned())
+        })?;
+        let prepared =
+            prepare_context(aggregate, obligation_id.clone()).map_err(context_domain_error)?;
+        let expected_manifest = manifest_digest(
+            &prepared.snapshot_id,
+            prepared.obligation.id(),
+            &prepared.policy_hash,
+            &prepared.candidates,
+        )
+        .map_err(context_domain_error)?;
+        Ok(self.manifest_digest == expected_manifest && self.matches_projection(envelope))
+    }
 }
 /// A successful builder result, deliberately coupled to its private admission.
 #[derive(Debug)]
@@ -2036,8 +2236,10 @@ fn manifest_digest(
 mod tests {
     use super::*;
     use crate::{
-        ArtifactSource, MvpRulePack, PlannerPolicyV1, ProgramSpace, ReviewAggregate,
-        SnapshotSourceRecordEntry, SnapshotSourcesRecorded,
+        ArtifactSource, EventAdmissions, EventCommand, EventContractVersion, EventEnvelope,
+        EventLog, EventStreamGenesis, MvpRulePack, ObligationLifecycle, OfflineProjectionState,
+        PlanBudget, PlannerPolicyV1, ProgramSpace, ReviewAggregate, SnapshotSourceRecordEntry,
+        SnapshotSourcesRecorded, plan,
     };
     use serde_json::{Value, json};
 
@@ -2133,6 +2335,29 @@ mod tests {
         source_bytes: BTreeMap<&'static str, Vec<u8>>,
     ) -> (ReviewAggregate, BTreeMap<StableId, Vec<u8>>) {
         fixture_from_program_value(context_ready_program_value(), source_bytes)
+    }
+
+    fn build_projection(
+        aggregate: &ReviewAggregate,
+        bytes: &BTreeMap<StableId, Vec<u8>>,
+    ) -> BuiltContextProjection {
+        let obligation = aggregate.obligations().next().unwrap().id().clone();
+        let mut session = prepare_context(aggregate, obligation).unwrap();
+        while let Some(request) = session.next_source_request().unwrap() {
+            session
+                .submit_source(&request, &bytes[request.artifact_id()])
+                .unwrap();
+        }
+        session.finish().unwrap()
+    }
+
+    fn event_initial(ready: &ReviewAggregate) -> ReviewAggregate {
+        ReviewAggregate::new(
+            ready.program().clone(),
+            ready.universe().clone(),
+            ready.obligations().cloned().collect(),
+        )
+        .unwrap()
     }
 
     fn fixture_from_program_value(
@@ -2505,6 +2730,291 @@ mod tests {
         assert_eq!(
             escaped.finish().unwrap(),
             serde_json::to_vec("quote:\" slash:\\ control:\u{1f} 日本").unwrap()
+        );
+    }
+
+    #[test]
+    fn d1_events_require_live_context_admission_but_offline_retain_metadata_only() {
+        let (ready, bytes) = fixture();
+        let initial = event_initial(&ready);
+        let run_id = StableId::parse("run:context-test").unwrap();
+        let sources = ready
+            .snapshot_sources_for(ready.program().snapshot_id())
+            .unwrap()
+            .clone();
+        let mut log = EventLog::new(run_id.clone(), initial.clone()).unwrap();
+        let registration_ids = sources
+            .entries()
+            .iter()
+            .map(|entry| entry.registration_id().clone())
+            .collect::<BTreeSet<_>>();
+        for registration_id in registration_ids {
+            log.append(EventCommand::artifact_registered(
+                ready.registered_artifact(&registration_id).unwrap().clone(),
+            ))
+            .unwrap();
+        }
+        log.append(EventCommand::snapshot_sources_recorded(sources))
+            .unwrap();
+
+        let review_plan = plan(log.aggregate(), PlanBudget::new(16, 2).unwrap()).unwrap();
+        let plan_id = review_plan.id().clone();
+        log.append(EventCommand::review_plan_recorded(review_plan.clone()))
+            .unwrap();
+        let count_before_duplicate = log.events().len();
+        let tail_before_duplicate = log.tail_hash().clone();
+        assert!(matches!(
+            log.append(EventCommand::review_plan_recorded(review_plan)),
+            Err(DomainError::IdCollision { .. })
+        ));
+        assert_eq!(log.events().len(), count_before_duplicate);
+        assert_eq!(log.tail_hash(), &tail_before_duplicate);
+        let mut spliced_log = log.clone();
+        let built = build_projection(log.aggregate(), &bytes);
+        let context_id = built.envelope().id().clone();
+        log.append(EventCommand::context_envelope_projected(built))
+            .unwrap();
+        let duplicate_context = build_projection(log.aggregate(), &bytes);
+        let count_before_duplicate = log.events().len();
+        let tail_before_duplicate = log.tail_hash().clone();
+        assert!(matches!(
+            log.append(EventCommand::context_envelope_projected(duplicate_context)),
+            Err(DomainError::IdCollision { .. })
+        ));
+        assert_eq!(log.events().len(), count_before_duplicate);
+        assert_eq!(log.tail_hash(), &tail_before_duplicate);
+        assert!(log.aggregate().review_plan(&plan_id).is_some());
+        assert!(log.aggregate().context_envelope(&context_id).is_some());
+        assert_eq!(log.aggregate().review_plans().count(), 1);
+        assert_eq!(log.aggregate().context_envelopes().count(), 1);
+
+        let context_event = log.envelopes().last().unwrap();
+        let context_event_bytes = context_event.canonical_bytes().unwrap();
+        assert!(context_event_bytes.len() < 1_048_576);
+        assert_eq!(
+            EventEnvelope::from_json_slice(&context_event_bytes)
+                .unwrap()
+                .canonical_bytes()
+                .unwrap(),
+            context_event_bytes
+        );
+
+        let replayed = EventLog::replay(
+            EventContractVersion::V2,
+            run_id.clone(),
+            initial.clone(),
+            log.events(),
+        )
+        .unwrap();
+        assert!(replayed.aggregate().review_plan(&plan_id).is_some());
+        assert!(replayed.aggregate().context_envelope(&context_id).is_some());
+
+        let envelopes = log.envelopes().cloned().collect::<Vec<_>>();
+        assert!(
+            EventLog::replay_envelopes(
+                EventContractVersion::V2,
+                run_id.clone(),
+                initial.clone(),
+                &envelopes,
+                &EventAdmissions::default(),
+            )
+            .is_err()
+        );
+        let spliced_obligation = spliced_log
+            .aggregate()
+            .obligations()
+            .next()
+            .unwrap()
+            .id()
+            .clone();
+        spliced_log
+            .append(EventCommand::obligation_transition(
+                spliced_obligation,
+                ObligationLifecycle::Planned,
+            ))
+            .unwrap();
+        let spliced_context = build_projection(spliced_log.aggregate(), &bytes);
+        assert_eq!(spliced_context.envelope().id(), &context_id);
+        spliced_log
+            .append(EventCommand::context_envelope_projected(spliced_context))
+            .unwrap();
+        let spliced_envelopes = spliced_log.envelopes().cloned().collect::<Vec<_>>();
+
+        let rebuilt = build_projection(log.aggregate(), &bytes);
+        let admissions = EventAdmissions::default()
+            .with_context_projections(vec![(envelopes.last().unwrap().clone(), rebuilt)])
+            .unwrap();
+        assert!(
+            EventLog::replay_envelopes(
+                EventContractVersion::V2,
+                run_id.clone(),
+                initial.clone(),
+                &spliced_envelopes,
+                &admissions,
+            )
+            .is_err()
+        );
+        assert!(
+            EventLog::replay_envelopes(
+                EventContractVersion::V2,
+                run_id.clone(),
+                initial.clone(),
+                &envelopes,
+                &admissions,
+            )
+            .is_ok()
+        );
+
+        let duplicate_context_event = envelopes
+            .last()
+            .unwrap()
+            .next_context_duplicate_for_test(
+                log.aggregate()
+                    .context_envelope(&context_id)
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap();
+        let mut duplicate_envelopes = envelopes.clone();
+        duplicate_envelopes.push(duplicate_context_event.clone());
+        let duplicate_admissions = EventAdmissions::default()
+            .with_context_projections(vec![
+                (
+                    envelopes.last().unwrap().clone(),
+                    build_projection(log.aggregate(), &bytes),
+                ),
+                (
+                    duplicate_context_event.clone(),
+                    build_projection(log.aggregate(), &bytes),
+                ),
+            ])
+            .unwrap();
+        assert!(matches!(
+            EventLog::replay_envelopes(
+                EventContractVersion::V2,
+                run_id.clone(),
+                initial.clone(),
+                &duplicate_envelopes,
+                &duplicate_admissions,
+            ),
+            Err(DomainError::IdCollision { .. })
+        ));
+
+        let mut duplicate_resume = EventLog::replay_envelopes(
+            EventContractVersion::V2,
+            run_id.clone(),
+            initial.clone(),
+            &envelopes,
+            &admissions,
+        )
+        .unwrap();
+        let duplicate_resume_tail = duplicate_resume.tail_hash().clone();
+        let duplicate_resume_count = duplicate_resume.events().len();
+        let duplicate_only_admission = EventAdmissions::default()
+            .with_context_projections(vec![(
+                duplicate_context_event.clone(),
+                build_projection(log.aggregate(), &bytes),
+            )])
+            .unwrap();
+        assert!(matches!(
+            duplicate_resume.resume_envelopes(
+                std::slice::from_ref(&duplicate_context_event),
+                &duplicate_only_admission,
+            ),
+            Err(DomainError::IdCollision { .. })
+        ));
+        assert_eq!(duplicate_resume.tail_hash(), &duplicate_resume_tail);
+        assert_eq!(duplicate_resume.events().len(), duplicate_resume_count);
+        assert_eq!(duplicate_resume.aggregate().context_envelopes().count(), 1);
+
+        let prefix = &envelopes[..envelopes.len() - 1];
+        let mut resumed = EventLog::replay_envelopes(
+            EventContractVersion::V2,
+            run_id.clone(),
+            initial.clone(),
+            prefix,
+            &EventAdmissions::default(),
+        )
+        .unwrap();
+        let prior_tail = resumed.tail_hash().clone();
+        let prior_count = resumed.events().len();
+        assert!(
+            resumed
+                .resume_envelopes(
+                    &envelopes[envelopes.len() - 1..],
+                    &EventAdmissions::default()
+                )
+                .is_err()
+        );
+        assert_eq!(resumed.tail_hash(), &prior_tail);
+        assert_eq!(resumed.events().len(), prior_count);
+        assert_eq!(resumed.aggregate().context_envelopes().count(), 0);
+
+        let genesis = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            &run_id,
+            EventStreamGenesis::V2(&genesis),
+            &envelopes,
+        )
+        .unwrap();
+        let mut offline = OfflineProjectionState::new(&view, initial.clone()).unwrap();
+        let mut plan_applied = false;
+        let mut context_metadata_only = false;
+        for event in view.events() {
+            let accepted = offline.apply(event).unwrap();
+            match event.payload() {
+                crate::DecodedPayload::ReviewPlanRecorded(_) => plan_applied = accepted,
+                crate::DecodedPayload::ContextEnvelopeProjected(_) => {
+                    context_metadata_only = !accepted
+                }
+                _ => {}
+            }
+        }
+        assert!(plan_applied);
+        assert!(context_metadata_only);
+        assert!(offline.aggregate().review_plan(&plan_id).is_some());
+        assert_eq!(offline.aggregate().context_envelopes().count(), 0);
+        assert_eq!(offline.projected_context_envelopes().len(), 1);
+        assert_eq!(offline.projected_context_envelopes()[0].id(), &context_id);
+        assert!(offline.is_complete());
+        assert_eq!(offline.tail_hash(), log.tail_hash());
+
+        let duplicate_view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            &run_id,
+            EventStreamGenesis::V2(&genesis),
+            &duplicate_envelopes,
+        )
+        .unwrap();
+        let mut duplicate_offline =
+            OfflineProjectionState::new(&duplicate_view, initial.clone()).unwrap();
+        for event in &duplicate_view.events()[..duplicate_view.events().len() - 1] {
+            duplicate_offline.apply(event).unwrap();
+        }
+        let duplicate_offline_tail = duplicate_offline.tail_hash().clone();
+        assert!(matches!(
+            duplicate_offline.apply(duplicate_view.events().last().unwrap()),
+            Err(DomainError::IdCollision { .. })
+        ));
+        assert_eq!(duplicate_offline.tail_hash(), &duplicate_offline_tail);
+        assert_eq!(duplicate_offline.projected_context_envelopes().len(), 1);
+        assert!(!duplicate_offline.is_complete());
+
+        let mut v1 = EventLog::new_v1_for_test(run_id, initial).unwrap();
+        let v1_plan = plan(v1.aggregate(), PlanBudget::new(16, 2).unwrap()).unwrap();
+        assert!(
+            v1.append(EventCommand::review_plan_recorded(v1_plan))
+                .is_err()
+        );
+        let v1_context = build_projection(&ready, &bytes);
+        assert!(
+            v1.append(EventCommand::context_envelope_projected(v1_context))
+                .is_err()
         );
     }
 

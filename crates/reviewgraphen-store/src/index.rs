@@ -324,6 +324,8 @@ pub enum IndexError {
     InvalidLimits,
     #[error("derived index is missing")]
     Missing,
+    #[error("derived index schema {found} must be rebuilt as schema {required}")]
+    RebuildRequired { found: u32, required: u32 },
     #[error("derived index bytes or layout are corrupt")]
     CorruptIndex,
     #[error("derived index path entry changed while locked")]
@@ -834,7 +836,7 @@ impl<'a> DerivedIndex<'a> {
                 &transaction,
                 event.envelope(),
                 version.schema(),
-                payload_kind_decoded(event.payload()),
+                payload_kind_decoded(event.payload())?,
             )?;
         }
         if let Some((initial, genesis)) = initial {
@@ -1646,8 +1648,8 @@ fn insert_sources(
     Ok(())
 }
 
-fn payload_kind_decoded(payload: &DecodedPayload) -> &'static str {
-    match payload {
+fn payload_kind_decoded(payload: &DecodedPayload) -> Result<&'static str, IndexError> {
+    Ok(match payload {
         DecodedPayload::ObligationTransition { .. } => "obligation_transition",
         DecodedPayload::ClaimProposed(_) => "claim_proposed",
         DecodedPayload::EvidenceRecorded(_) => "evidence_recorded",
@@ -1658,7 +1660,13 @@ fn payload_kind_decoded(payload: &DecodedPayload) -> &'static str {
         DecodedPayload::RunGenesisManifest(_) => "run_genesis_manifest",
         DecodedPayload::ArtifactRegistered(_) => "artifact_registered",
         DecodedPayload::SnapshotSourcesRecorded(_) => "snapshot_sources_recorded",
-    }
+        DecodedPayload::ReviewPlanRecorded(_) | DecodedPayload::ContextEnvelopeProjected(_) => {
+            return Err(IndexError::RebuildRequired {
+                found: 1,
+                required: 2,
+            });
+        }
+    })
 }
 
 fn unreconciled_kind(kind: reviewgraphen_core::UnreconciledRecordKind) -> &'static str {
@@ -2227,7 +2235,7 @@ mod tests {
     use super::*;
     use reviewgraphen_core::{
         EventCommand, EventLog, Evidence, EvidenceDetails, MvpRulePack, ObligationLifecycle,
-        ProgramSpace, Provenance, ReviewAggregate, SourceRef,
+        PlanBudget, ProgramSpace, Provenance, ReviewAggregate, SourceRef, plan,
     };
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::Path;
@@ -2279,6 +2287,25 @@ mod tests {
         let transition = log.envelopes().nth(1).unwrap().clone();
         let index = DerivedIndex::open(root).unwrap();
         (journal, cas, index, transition)
+    }
+
+    #[test]
+    fn schema_v1_projection_refuses_d1_payload_as_rebuild_required() {
+        let program = ProgramSpace::from_json_slice(include_bytes!(
+            "../../../examples/double-submit-payment/program-space.json"
+        ))
+        .unwrap();
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let aggregate = ReviewAggregate::new(program, universe, obligations).unwrap();
+        let review_plan = plan(&aggregate, PlanBudget::new(16, 2).unwrap()).unwrap();
+
+        assert!(matches!(
+            payload_kind_decoded(&DecodedPayload::ReviewPlanRecorded(review_plan)),
+            Err(IndexError::RebuildRequired {
+                found: 1,
+                required: 2
+            })
+        ));
     }
 
     #[test]

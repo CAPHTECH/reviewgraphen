@@ -1,12 +1,15 @@
+use crate::context::{ContextProjectionAdmission, context_domain_error};
 use crate::{
-    ContentHash, Decision, DecisionAdmission, DomainError, Evidence, EvidenceAdmission,
-    EvidenceBinding, EvidenceSnapshotAdmission, Finding, MvpRulePack, Obligation,
-    ObligationLifecycle, ProgramSpace, Result, ReviewAggregate, ReviewClaim, StableId,
-    TrustedHumanAdmission, UniverseDescriptor, Verification, canonical_json,
+    BuiltContextProjection, ContentHash, Decision, DecisionAdmission, DomainError, Evidence,
+    EvidenceAdmission, EvidenceBinding, EvidenceSnapshotAdmission, Finding, MvpRulePack,
+    Obligation, ObligationLifecycle, ProgramSpace, Result, ReviewAggregate, ReviewClaim,
+    ReviewContextEnvelope, ReviewPlan, StableId, TrustedHumanAdmission, UniverseDescriptor,
+    Verification, canonical_json,
 };
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde_json::{Value, value::RawValue};
 use std::collections::BTreeMap;
+use std::io::Write as _;
 
 /// The immutable wire contract carried by every envelope in a stream.
 ///
@@ -52,6 +55,7 @@ pub enum EventStreamGenesis<'a> {
 
 const SYSTEM_ACTOR: &str = "reviewgraphen-core@1";
 const RUN_GENESIS_SCHEMA: &str = "reviewgraphen.run_genesis.v1";
+const MAX_D1_EVENT_LINE_BYTES: usize = 1_048_576;
 
 /// Typed, canonical state from which a v2 run begins. It is deliberately not
 /// `ReviewAggregate` serialization: only a pristine baseline belongs here.
@@ -517,7 +521,7 @@ fn validate_v2_genesis_envelope(
             "v2 genesis envelope hash must equal the verified canonical genesis CAS".to_owned(),
         ));
     }
-    let payload = decode_canonical_payload(envelope.payload.clone())?;
+    let payload = decode_canonical_payload(envelope.payload.get())?;
     let PersistedPayload::RunGenesisManifest(manifest) = payload else {
         return Err(DomainError::EventSequence(
             "v2 sequence one must carry RunGenesisManifest".to_owned(),
@@ -697,6 +701,7 @@ enum CommandAdmission {
     Binding(EvidenceBindingAdmission),
     Verification(VerificationAdmission),
     Decision(DecisionAdmission),
+    ContextProjection(ContextProjectionAdmission),
 }
 
 #[derive(Default)]
@@ -705,6 +710,57 @@ struct MatchedAdmissions {
     binding: Option<EvidenceBindingAdmission>,
     verification: Option<VerificationAdmission>,
     decision: Option<DecisionAdmission>,
+    context_projection: Option<PositionedContextProjectionAdmission>,
+}
+
+/// A private byte admission sealed to one exact persisted event position.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PositionedContextProjectionAdmission {
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    previous_event_hash: ContentHash,
+    sequence: u64,
+    event_id: StableId,
+    projection: ContextProjectionAdmission,
+}
+
+impl PositionedContextProjectionAdmission {
+    fn seal(
+        event: &EventEnvelope,
+        context: &ReviewContextEnvelope,
+        projection: ContextProjectionAdmission,
+    ) -> Result<Self> {
+        if !projection.matches_projection(context) {
+            return Err(DomainError::Validation(
+                "context projection admission does not match the persisted envelope".to_owned(),
+            ));
+        }
+        Ok(Self {
+            run_id: event.run_id.clone(),
+            genesis_hash: event.genesis_hash.clone(),
+            previous_event_hash: event.previous_event_hash.clone(),
+            sequence: event.sequence,
+            event_id: event.id.clone(),
+            projection,
+        })
+    }
+
+    fn matches(
+        &self,
+        event: &EventEnvelope,
+        context: &ReviewContextEnvelope,
+        aggregate: &ReviewAggregate,
+    ) -> Result<bool> {
+        Ok(self.matches_position(event) && self.projection.matches(context, aggregate)?)
+    }
+
+    fn matches_position(&self, event: &EventEnvelope) -> bool {
+        self.run_id == event.run_id
+            && self.genesis_hash == event.genesis_hash
+            && self.previous_event_hash == event.previous_event_hash
+            && self.sequence == event.sequence
+            && self.event_id == event.id
+    }
 }
 
 /// Opaque, non-serializable authorization for one exact claim/evidence binding
@@ -742,6 +798,7 @@ pub struct EventAdmissions {
     bindings: Vec<EvidenceBindingAdmission>,
     verifications: Vec<VerificationAdmission>,
     decisions: Vec<DecisionAdmission>,
+    context_projections: Vec<PositionedContextProjectionAdmission>,
 }
 
 impl EventAdmissions {
@@ -753,7 +810,52 @@ impl EventAdmissions {
             bindings: Vec::new(),
             verifications: Vec::new(),
             decisions,
+            context_projections: Vec::new(),
         }
+    }
+
+    /// Consumes independently rebuilt projections paired with the exact
+    /// imported events they authorize, sealing each private byte admission to
+    /// that event's run, genesis, predecessor, sequence, and event ID.
+    pub fn with_context_projections(
+        mut self,
+        projections: Vec<(EventEnvelope, BuiltContextProjection)>,
+    ) -> Result<Self> {
+        for (event, built) in projections {
+            let (built_context, projection) = built.into_parts();
+            let payload = decode_canonical_payload(event.payload.get())?;
+            let PersistedPayload::ContextEnvelopeProjected(event_context) = payload else {
+                return Err(DomainError::Validation(
+                    "context projection admission must be paired with a context event".to_owned(),
+                ));
+            };
+            if built_context
+                .canonical_bytes()
+                .map_err(context_domain_error)?
+                != event_context
+                    .canonical_bytes()
+                    .map_err(context_domain_error)?
+            {
+                return Err(DomainError::Validation(
+                    "rebuilt context projection does not equal its paired event payload".to_owned(),
+                ));
+            }
+            self.context_projections
+                .push(PositionedContextProjectionAdmission::seal(
+                    &event,
+                    &event_context,
+                    projection,
+                )?);
+        }
+        Ok(self)
+    }
+
+    fn with_context_admissions(
+        mut self,
+        admissions: Vec<PositionedContextProjectionAdmission>,
+    ) -> Self {
+        self.context_projections = admissions;
+        self
     }
 
     /// Adds the exact non-serializable admissions retained by locally recorded
@@ -833,6 +935,20 @@ impl EventAdmissions {
                 )
             })
             .cloned()
+    }
+
+    fn context_projection_for(
+        &self,
+        event: &EventEnvelope,
+        envelope: &ReviewContextEnvelope,
+        aggregate: &ReviewAggregate,
+    ) -> Result<Option<PositionedContextProjectionAdmission>> {
+        for admission in &self.context_projections {
+            if admission.matches(event, envelope, aggregate)? {
+                return Ok(Some(admission.clone()));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -995,6 +1111,27 @@ impl EventCommand {
             admission: CommandAdmission::None,
         }
     }
+
+    /// Records one deterministic, aggregate-bound review plan in a v2 stream.
+    #[must_use]
+    pub fn review_plan_recorded(plan: ReviewPlan) -> Self {
+        Self {
+            payload: PersistedPayload::ReviewPlanRecorded(plan),
+            admission: CommandAdmission::None,
+        }
+    }
+
+    /// Records one byte-reverified context projection. A metadata-only
+    /// envelope cannot be supplied here because the builder result is consumed
+    /// together with its private runtime admission.
+    #[must_use]
+    pub fn context_envelope_projected(projection: BuiltContextProjection) -> Self {
+        let (envelope, admission) = projection.into_parts();
+        Self {
+            payload: PersistedPayload::ContextEnvelopeProjected(envelope),
+            admission: CommandAdmission::ContextProjection(admission),
+        }
+    }
 }
 
 /// The closed persisted event vocabulary. It is private so it can never be
@@ -1015,6 +1152,8 @@ enum PersistedPayload {
     RunGenesisManifest(RunGenesisManifest),
     ArtifactRegistered(ArtifactRegistered),
     SnapshotSourcesRecorded(SnapshotSourcesRecorded),
+    ReviewPlanRecorded(ReviewPlan),
+    ContextEnvelopeProjected(ReviewContextEnvelope),
 }
 
 impl PersistedPayload {
@@ -1038,6 +1177,15 @@ impl PersistedPayload {
             Self::RunGenesisManifest(_)
                 | Self::ArtifactRegistered(_)
                 | Self::SnapshotSourcesRecorded(_)
+                | Self::ReviewPlanRecorded(_)
+                | Self::ContextEnvelopeProjected(_)
+        )
+    }
+
+    fn is_d1_bounded(&self) -> bool {
+        matches!(
+            self,
+            Self::ReviewPlanRecorded(_) | Self::ContextEnvelopeProjected(_)
         )
     }
 
@@ -1071,6 +1219,14 @@ impl PersistedPayload {
             Self::RunGenesisManifest(manifest) => manifest.validate(),
             Self::ArtifactRegistered(registration) => registration.validate(),
             Self::SnapshotSourcesRecorded(sources) => sources.validate_shape(),
+            Self::ReviewPlanRecorded(plan) => {
+                let _ = plan.canonical_bytes()?;
+                Ok(())
+            }
+            Self::ContextEnvelopeProjected(envelope) => envelope
+                .canonical_bytes()
+                .map(|_| ())
+                .map_err(context_domain_error),
         }
     }
 
@@ -1093,6 +1249,112 @@ impl PersistedPayload {
             _ => Ok(()),
         }
     }
+}
+
+struct BoundedEventJson {
+    bytes: Vec<u8>,
+    max: usize,
+    overflow: Option<usize>,
+}
+
+impl BoundedEventJson {
+    fn new(max: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            max,
+            overflow: None,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> Result<()> {
+        self.write_all(bytes).map_err(|error| {
+            if let Some(observed) = self.overflow {
+                DomainError::Incomplete {
+                    operation: "D1 canonical event JSONL",
+                    limit: MAX_D1_EVENT_LINE_BYTES,
+                    observed: observed.saturating_add(1),
+                }
+            } else {
+                DomainError::CanonicalJson(error.to_string())
+            }
+        })
+    }
+
+    fn string(&mut self, value: &str) -> Result<()> {
+        serde_json::to_writer(&mut *self, value).map_err(|error| {
+            if let Some(observed) = self.overflow {
+                DomainError::Incomplete {
+                    operation: "D1 canonical event JSONL",
+                    limit: MAX_D1_EVENT_LINE_BYTES,
+                    observed: observed.saturating_add(1),
+                }
+            } else {
+                DomainError::CanonicalJson(error.to_string())
+            }
+        })
+    }
+
+    fn number(&mut self, value: u64) -> Result<()> {
+        write!(self, "{value}").map_err(|error| DomainError::CanonicalJson(error.to_string()))
+    }
+
+    fn finish(self) -> Result<Vec<u8>> {
+        if let Some(observed) = self.overflow {
+            return Err(DomainError::Incomplete {
+                operation: "D1 canonical event JSONL",
+                limit: MAX_D1_EVENT_LINE_BYTES,
+                observed: observed.saturating_add(1),
+            });
+        }
+        Ok(self.bytes)
+    }
+}
+
+impl std::io::Write for BoundedEventJson {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let observed = self.bytes.len().saturating_add(bytes.len());
+        if observed > self.max {
+            self.overflow = Some(observed);
+            return Err(std::io::Error::other(
+                "bounded event JSON exceeded its limit",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn d1_payload_bytes(kind: &str, data: &[u8]) -> Result<Vec<u8>> {
+    let mut out = BoundedEventJson::new(MAX_D1_EVENT_LINE_BYTES - 1);
+    out.push(b"{\"data\":")?;
+    out.push(data)?;
+    out.push(b",\"type\":")?;
+    out.string(kind)?;
+    out.push(b"}")?;
+    out.finish()
+}
+
+fn payload_canonical_bytes(payload: &PersistedPayload) -> Result<Vec<u8>> {
+    match payload {
+        PersistedPayload::ReviewPlanRecorded(plan) => {
+            d1_payload_bytes("review_plan_recorded", &plan.canonical_bytes()?)
+        }
+        PersistedPayload::ContextEnvelopeProjected(envelope) => d1_payload_bytes(
+            "context_envelope_projected",
+            &envelope.canonical_bytes().map_err(context_domain_error)?,
+        ),
+        _ => canonical_json(payload),
+    }
+}
+
+fn raw_payload(bytes: Vec<u8>) -> Result<Box<RawValue>> {
+    let text =
+        String::from_utf8(bytes).map_err(|error| DomainError::CanonicalJson(error.to_string()))?;
+    RawValue::from_string(text).map_err(|error| DomainError::Json(error.to_string()))
 }
 
 fn validate_stream_payload_position(
@@ -1132,6 +1394,28 @@ fn reject_v2_legacy_execution_payload(
     Ok(())
 }
 
+fn reject_duplicate_d1_record(
+    aggregate: &ReviewAggregate,
+    payload: &PersistedPayload,
+) -> Result<()> {
+    let duplicate = match payload {
+        PersistedPayload::ReviewPlanRecorded(plan) => aggregate.review_plan(plan.id()).is_some(),
+        PersistedPayload::ContextEnvelopeProjected(context) => {
+            aggregate.context_envelope(context.id()).is_some()
+        }
+        _ => false,
+    };
+    if duplicate {
+        let id = match payload {
+            PersistedPayload::ReviewPlanRecorded(plan) => plan.id().clone(),
+            PersistedPayload::ContextEnvelopeProjected(context) => context.id().clone(),
+            _ => unreachable!("duplicate is true only for D1 records"),
+        };
+        return Err(DomainError::IdCollision { id });
+    }
+    Ok(())
+}
+
 /// A validated event envelope binding a closed persisted payload to one logical
 /// run and to the canonical genesis aggregate of that run.
 #[derive(Clone, Debug, Serialize)]
@@ -1143,7 +1427,7 @@ pub struct EventEnvelope {
     sequence: u64,
     actor: String,
     logical_time: u64,
-    payload: Value,
+    payload: Box<RawValue>,
     payload_hash: ContentHash,
     previous_event_hash: ContentHash,
     event_hash: ContentHash,
@@ -1165,9 +1449,9 @@ impl EventEnvelope {
     ) -> Result<Self> {
         payload.validate_shape()?;
         let actor = actor.into();
-        let payload =
-            serde_json::to_value(payload).map_err(|error| DomainError::Json(error.to_string()))?;
-        let payload_hash = ContentHash::sha256(&canonical_json(&payload)?);
+        let payload_bytes = payload_canonical_bytes(&payload)?;
+        let payload_hash = ContentHash::sha256(&payload_bytes);
+        let payload = raw_payload(payload_bytes)?;
         let id = event_id(
             version.schema(),
             &run_id,
@@ -1203,7 +1487,30 @@ impl EventEnvelope {
             event_hash,
         };
         envelope.validate()?;
+        if envelope.payload_is_d1()? {
+            let _ = envelope.canonical_bytes()?;
+        }
         Ok(envelope)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn next_context_duplicate_for_test(
+        &self,
+        context: ReviewContextEnvelope,
+    ) -> Result<Self> {
+        let sequence = self.sequence.checked_add(1).ok_or_else(|| {
+            DomainError::EventSequence("event sequence overflow in test fixture".to_owned())
+        })?;
+        Self::new(
+            EventContractVersion::parse(&self.schema)?,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            sequence,
+            SYSTEM_ACTOR,
+            sequence,
+            self.event_hash.clone(),
+            PersistedPayload::ContextEnvelopeProjected(context),
+        )
     }
 
     /// Imports and structurally validates one JSON envelope. Applying it still
@@ -1226,7 +1533,7 @@ impl EventEnvelope {
                 "event actor must be non-empty".to_owned(),
             ));
         }
-        let payload = decode_canonical_payload(self.payload.clone())?;
+        let payload = decode_canonical_payload(self.payload.get())?;
         if version == EventContractVersion::V1 && payload.is_v2_only() {
             return Err(DomainError::EventSequence(
                 "v1 stream cannot contain v2-only payloads".to_owned(),
@@ -1246,7 +1553,14 @@ impl EventEnvelope {
                 "event actor must match the typed payload authority".to_owned(),
             ));
         }
-        let expected_hash = ContentHash::sha256(&canonical_json(&self.payload)?);
+        let expected_payload_bytes = payload_canonical_bytes(&payload)?;
+        let actual_payload_bytes = self.payload.get().as_bytes();
+        if actual_payload_bytes != expected_payload_bytes {
+            return Err(DomainError::EventSequence(
+                "persisted event payload must equal its canonical closed representation".to_owned(),
+            ));
+        }
+        let expected_hash = ContentHash::sha256(&expected_payload_bytes);
         if self.payload_hash != expected_hash {
             return Err(DomainError::EventSequence(
                 "event payload hash does not match payload".to_owned(),
@@ -1283,7 +1597,62 @@ impl EventEnvelope {
                 "event hash does not bind its envelope and predecessor".to_owned(),
             ));
         }
+        if payload.is_d1_bounded() {
+            let _ = self.canonical_bytes()?;
+        }
         Ok(())
+    }
+
+    fn payload_is_d1(&self) -> Result<bool> {
+        Ok(decode_canonical_payload(self.payload.get())?.is_d1_bounded())
+    }
+
+    /// Exact canonical event bytes. D1 payloads are written through a bounded
+    /// writer whose limit reserves the mandatory trailing LF byte.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        let payload = decode_canonical_payload(self.payload.get())?;
+        if !payload.is_d1_bounded() {
+            return canonical_json(self);
+        }
+        let payload_bytes = payload_canonical_bytes(&payload)?;
+        let mut out = BoundedEventJson::new(MAX_D1_EVENT_LINE_BYTES - 1);
+        out.push(b"{\"actor\":")?;
+        out.string(&self.actor)?;
+        out.push(b",\"event_hash\":")?;
+        out.string(&self.event_hash.to_string())?;
+        out.push(b",\"genesis_hash\":")?;
+        out.string(&self.genesis_hash.to_string())?;
+        out.push(b",\"id\":")?;
+        out.string(&self.id.to_string())?;
+        out.push(b",\"logical_time\":")?;
+        out.number(self.logical_time)?;
+        out.push(b",\"payload\":")?;
+        out.push(&payload_bytes)?;
+        out.push(b",\"payload_hash\":")?;
+        out.string(&self.payload_hash.to_string())?;
+        out.push(b",\"previous_event_hash\":")?;
+        out.string(&self.previous_event_hash.to_string())?;
+        out.push(b",\"run_id\":")?;
+        out.string(&self.run_id.to_string())?;
+        out.push(b",\"schema\":")?;
+        out.string(&self.schema)?;
+        out.push(b",\"sequence\":")?;
+        out.number(self.sequence)?;
+        out.push(b"}")?;
+        let bytes = out.finish()?;
+        let line_length = bytes.len().checked_add(1).ok_or(DomainError::Incomplete {
+            operation: "D1 canonical event JSONL",
+            limit: MAX_D1_EVENT_LINE_BYTES,
+            observed: usize::MAX,
+        })?;
+        if line_length > MAX_D1_EVENT_LINE_BYTES {
+            return Err(DomainError::Incomplete {
+                operation: "D1 canonical event JSONL",
+                limit: MAX_D1_EVENT_LINE_BYTES,
+                observed: line_length,
+            });
+        }
+        Ok(bytes)
     }
 
     /// Validates a contiguous prefix, including the requested run even for an
@@ -1409,7 +1778,7 @@ impl EventEnvelope {
             .map(|envelope| {
                 Ok(ValidatedEvent {
                     envelope,
-                    payload: decoded_payload(decode_canonical_payload(envelope.payload.clone())?),
+                    payload: decoded_payload(decode_canonical_payload(envelope.payload.get())?),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1519,6 +1888,8 @@ pub enum DecodedPayload {
     RunGenesisManifest(RunGenesisManifest),
     ArtifactRegistered(ArtifactRegistered),
     SnapshotSourcesRecorded(SnapshotSourcesRecorded),
+    ReviewPlanRecorded(ReviewPlan),
+    ContextEnvelopeProjected(ReviewContextEnvelope),
 }
 
 fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
@@ -1542,6 +1913,10 @@ fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
         PersistedPayload::ArtifactRegistered(value) => DecodedPayload::ArtifactRegistered(value),
         PersistedPayload::SnapshotSourcesRecorded(value) => {
             DecodedPayload::SnapshotSourcesRecorded(value)
+        }
+        PersistedPayload::ReviewPlanRecorded(value) => DecodedPayload::ReviewPlanRecorded(value),
+        PersistedPayload::ContextEnvelopeProjected(value) => {
+            DecodedPayload::ContextEnvelopeProjected(value)
         }
     }
 }
@@ -1605,6 +1980,32 @@ pub struct ProjectedFindingMetadata {
     body_hash: ContentHash,
 }
 
+/// Metadata-only context projection retained during offline replay. The
+/// envelope body stays private and never enters the live aggregate map.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectedContextEnvelopeMetadata {
+    id: StableId,
+    projection_hash: ContentHash,
+    body_hash: ContentHash,
+}
+
+impl ProjectedContextEnvelopeMetadata {
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn projection_hash(&self) -> &ContentHash {
+        &self.projection_hash
+    }
+
+    #[must_use]
+    pub fn body_hash(&self) -> &ContentHash {
+        &self.body_hash
+    }
+}
+
 impl ProjectedFindingMetadata {
     #[must_use]
     pub fn id(&self) -> &StableId {
@@ -1633,6 +2034,7 @@ pub struct OfflineProjectionState {
     unreconciled_metadata: BTreeMap<StableId, UnreconciledRecordMetadata>,
     projected_findings: BTreeMap<StableId, Finding>,
     projected_finding_metadata: BTreeMap<StableId, ProjectedFindingMetadata>,
+    projected_context_metadata: BTreeMap<StableId, ProjectedContextEnvelopeMetadata>,
     unreconciled_order: Vec<StableId>,
 }
 
@@ -1666,6 +2068,7 @@ impl OfflineProjectionState {
             unreconciled_metadata: BTreeMap::new(),
             projected_findings: BTreeMap::new(),
             projected_finding_metadata: BTreeMap::new(),
+            projected_context_metadata: BTreeMap::new(),
             unreconciled_order: Vec::new(),
         })
     }
@@ -1764,8 +2167,15 @@ impl OfflineProjectionState {
             DecodedPayload::SnapshotSourcesRecorded(value) => {
                 PersistedPayload::SnapshotSourcesRecorded(value.clone())
             }
+            DecodedPayload::ReviewPlanRecorded(value) => {
+                PersistedPayload::ReviewPlanRecorded(value.clone())
+            }
+            DecodedPayload::ContextEnvelopeProjected(value) => {
+                return self.apply_projected_context(value.clone(), envelope);
+            }
         };
         reject_v2_legacy_execution_payload(self.version, &payload)?;
+        reject_duplicate_d1_record(&self.aggregate, &payload)?;
         payload.validate_for_enclosing_run(&self.run_id)?;
         let mut next = self.aggregate.clone();
         apply(&mut next, &payload, event.envelope().actor(), &self.run_id)?;
@@ -1850,6 +2260,29 @@ impl OfflineProjectionState {
         Ok(false)
     }
 
+    fn apply_projected_context(
+        &mut self,
+        context: ReviewContextEnvelope,
+        envelope: &EventEnvelope,
+    ) -> Result<bool> {
+        context.validate_for_event(&self.aggregate)?;
+        let id = context.id().clone();
+        if self.projected_context_metadata.contains_key(&id) {
+            return Err(DomainError::IdCollision { id });
+        }
+        let bytes = context.canonical_bytes().map_err(context_domain_error)?;
+        self.projected_context_metadata.insert(
+            id.clone(),
+            ProjectedContextEnvelopeMetadata {
+                id: id.clone(),
+                projection_hash: context.projection_hash().clone(),
+                body_hash: ContentHash::sha256(&bytes),
+            },
+        );
+        self.advance_offline_cursor(envelope)?;
+        Ok(false)
+    }
+
     fn shadow_candidate(&self) -> Result<ReviewAggregate> {
         let mut candidate = self.aggregate.clone();
         for id in &self.unreconciled_order {
@@ -1896,6 +2329,13 @@ impl OfflineProjectionState {
             .collect()
     }
 
+    /// Returns metadata only. No offline replay path exposes a live context
+    /// envelope or a context admission.
+    #[must_use]
+    pub fn projected_context_envelopes(&self) -> Vec<&ProjectedContextEnvelopeMetadata> {
+        self.projected_context_metadata.values().collect()
+    }
+
     /// Whether every event in the bound validated view has been applied.
     #[must_use]
     pub fn is_complete(&self) -> bool {
@@ -1921,7 +2361,7 @@ struct RawEventEnvelope {
     sequence: u64,
     actor: String,
     logical_time: u64,
-    payload: Value,
+    payload: Box<RawValue>,
     payload_hash: ContentHash,
     previous_event_hash: ContentHash,
     event_hash: ContentHash,
@@ -1953,15 +2393,33 @@ impl<'de> Deserialize<'de> for EventEnvelope {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawPayloadHeader {
+struct RawPayloadHeader<'a> {
     #[serde(rename = "type")]
     kind: String,
-    data: Value,
+    #[serde(borrow)]
+    data: &'a RawValue,
 }
 
-fn decode_payload(value: Value) -> Result<PersistedPayload> {
-    let raw: RawPayloadHeader =
-        serde_json::from_value(value).map_err(|error| DomainError::Json(error.to_string()))?;
+fn decode_payload(input: &str) -> Result<PersistedPayload> {
+    let raw: RawPayloadHeader<'_> =
+        serde_json::from_str(input).map_err(|error| DomainError::Json(error.to_string()))?;
+    if matches!(
+        raw.kind.as_str(),
+        "review_plan_recorded" | "context_envelope_projected"
+    ) {
+        return match raw.kind.as_str() {
+            "review_plan_recorded" => Ok(PersistedPayload::ReviewPlanRecorded(
+                ReviewPlan::from_event_bytes(raw.data.get().as_bytes())?,
+            )),
+            "context_envelope_projected" => Ok(PersistedPayload::ContextEnvelopeProjected(
+                ReviewContextEnvelope::from_event_bytes(raw.data.get().as_bytes())
+                    .map_err(context_domain_error)?,
+            )),
+            _ => unreachable!("closed D1 kind checked"),
+        };
+    }
+    let data: Value = serde_json::from_str(raw.data.get())
+        .map_err(|error| DomainError::Json(error.to_string()))?;
     match raw.kind.as_str() {
         "obligation_transition" => {
             #[derive(Deserialize)]
@@ -1970,7 +2428,7 @@ fn decode_payload(value: Value) -> Result<PersistedPayload> {
                 obligation_id: StableId,
                 next: ObligationLifecycle,
             }
-            let data: RawTransition = serde_json::from_value(raw.data)
+            let data: RawTransition = serde_json::from_value(data)
                 .map_err(|error| DomainError::Json(error.to_string()))?;
             Ok(PersistedPayload::ObligationTransition {
                 obligation_id: data.obligation_id,
@@ -1978,34 +2436,31 @@ fn decode_payload(value: Value) -> Result<PersistedPayload> {
             })
         }
         "claim_proposed" => Ok(PersistedPayload::ClaimProposed(
-            ReviewClaim::from_event_value(raw.data)?,
+            ReviewClaim::from_event_value(data)?,
         )),
         "evidence_recorded" => Ok(PersistedPayload::EvidenceRecorded(Box::new(
-            Evidence::from_event_value(raw.data)?,
+            Evidence::from_event_value(data)?,
         ))),
         "evidence_bound" => Ok(PersistedPayload::EvidenceBound(
-            EvidenceBinding::from_event_value(raw.data)?,
+            EvidenceBinding::from_event_value(data)?,
         )),
         "verification_recorded" => Ok(PersistedPayload::VerificationRecorded(
-            Verification::from_event_value(raw.data)?,
+            Verification::from_event_value(data)?,
         )),
         "decision_recorded" => Ok(PersistedPayload::DecisionRecorded(
-            Decision::from_event_value(raw.data)?,
+            Decision::from_event_value(data)?,
         )),
         "finding_recorded" => Ok(PersistedPayload::FindingRecorded(
-            Finding::from_event_value(raw.data)?,
+            Finding::from_event_value(data)?,
         )),
         "run_genesis_manifest" => Ok(PersistedPayload::RunGenesisManifest(
-            serde_json::from_value(raw.data)
-                .map_err(|error| DomainError::Json(error.to_string()))?,
+            serde_json::from_value(data).map_err(|error| DomainError::Json(error.to_string()))?,
         )),
         "artifact_registered" => Ok(PersistedPayload::ArtifactRegistered(
-            serde_json::from_value(raw.data)
-                .map_err(|error| DomainError::Json(error.to_string()))?,
+            serde_json::from_value(data).map_err(|error| DomainError::Json(error.to_string()))?,
         )),
         "snapshot_sources_recorded" => Ok(PersistedPayload::SnapshotSourcesRecorded(
-            serde_json::from_value(raw.data)
-                .map_err(|error| DomainError::Json(error.to_string()))?,
+            serde_json::from_value(data).map_err(|error| DomainError::Json(error.to_string()))?,
         )),
         _ => Err(DomainError::EventSequence(
             "unknown persisted event payload type".to_owned(),
@@ -2013,10 +2468,10 @@ fn decode_payload(value: Value) -> Result<PersistedPayload> {
     }
 }
 
-fn decode_canonical_payload(value: Value) -> Result<PersistedPayload> {
-    let payload = decode_payload(value.clone())?;
-    let canonical_raw = canonical_json(&value)?;
-    let canonical_typed = canonical_json(&payload)?;
+fn decode_canonical_payload(input: &str) -> Result<PersistedPayload> {
+    let payload = decode_payload(input)?;
+    let canonical_raw = input.as_bytes();
+    let canonical_typed = payload_canonical_bytes(&payload)?;
     if canonical_raw != canonical_typed {
         return Err(DomainError::EventSequence(
             "persisted event payload must equal the canonical closed payload representation"
@@ -2035,6 +2490,7 @@ pub struct Event {
     binding_admission: Option<EvidenceBindingAdmission>,
     verification_admission: Option<VerificationAdmission>,
     decision_admission: Option<DecisionAdmission>,
+    context_projection_admission: Option<PositionedContextProjectionAdmission>,
 }
 
 impl Event {
@@ -2247,6 +2703,7 @@ impl EventLog {
         let sequence = self.next_sequence()?;
         validate_stream_payload_position(self.version, sequence, &payload)?;
         reject_v2_legacy_execution_payload(self.version, &payload)?;
+        reject_duplicate_d1_record(&self.aggregate, &payload)?;
         payload.validate_for_enclosing_run(&self.run_id)?;
         match (&payload, &admission) {
             (
@@ -2303,6 +2760,16 @@ impl EventLog {
                     "recording a decision requires an exact run-bound trusted admission".to_owned(),
                 ));
             }
+            (
+                PersistedPayload::ContextEnvelopeProjected(envelope),
+                CommandAdmission::ContextProjection(capability),
+            ) if capability.matches(envelope, &self.aggregate)? => {}
+            (PersistedPayload::ContextEnvelopeProjected(_), _) => {
+                return Err(DomainError::Validation(
+                    "recording a context envelope requires a byte-reverified builder result"
+                        .to_owned(),
+                ));
+            }
             _ => {}
         }
         let actor = payload.actor().to_owned();
@@ -2316,20 +2783,37 @@ impl EventLog {
             self.tail_hash.clone(),
             payload,
         )?;
-        let (evidence_admission, binding_admission, verification_admission, decision_admission) =
-            match admission {
-                CommandAdmission::Evidence(admission) => (Some(admission), None, None, None),
-                CommandAdmission::Binding(admission) => (None, Some(admission), None, None),
-                CommandAdmission::Verification(admission) => (None, None, Some(admission), None),
-                CommandAdmission::Decision(admission) => (None, None, None, Some(admission)),
-                CommandAdmission::None => (None, None, None, None),
-            };
+        let (
+            evidence_admission,
+            binding_admission,
+            verification_admission,
+            decision_admission,
+            context_projection_admission,
+        ) = match admission {
+            CommandAdmission::Evidence(admission) => (Some(admission), None, None, None, None),
+            CommandAdmission::Binding(admission) => (None, Some(admission), None, None, None),
+            CommandAdmission::Verification(admission) => (None, None, Some(admission), None, None),
+            CommandAdmission::Decision(admission) => (None, None, None, Some(admission), None),
+            CommandAdmission::ContextProjection(admission) => {
+                let payload = decode_canonical_payload(envelope.payload.get())?;
+                let PersistedPayload::ContextEnvelopeProjected(context) = payload else {
+                    return Err(DomainError::Validation(
+                        "context admission cannot seal a non-context event".to_owned(),
+                    ));
+                };
+                let positioned =
+                    PositionedContextProjectionAdmission::seal(&envelope, &context, admission)?;
+                (None, None, None, None, Some(positioned))
+            }
+            CommandAdmission::None => (None, None, None, None, None),
+        };
         self.append_envelope(
             envelope,
             evidence_admission,
             binding_admission,
             verification_admission,
             decision_admission,
+            context_projection_admission,
         )
     }
 
@@ -2360,13 +2844,18 @@ impl EventLog {
             .iter()
             .filter_map(|event| event.decision_admission.clone())
             .collect::<Vec<_>>();
+        let context_projections = events
+            .iter()
+            .filter_map(|event| event.context_projection_admission.clone())
+            .collect::<Vec<_>>();
         Self::replay_envelopes(
             version,
             run_id,
             initial,
             &envelopes,
             &EventAdmissions::new(evidence, decisions)
-                .with_trace_admissions(bindings, verifications),
+                .with_trace_admissions(bindings, verifications)
+                .with_context_admissions(context_projections),
         )
     }
 
@@ -2387,14 +2876,15 @@ impl EventLog {
             validate_v2_genesis_envelope(&log.run_id, &log.initial, &bytes, first)?;
         }
         for envelope in envelopes {
-            let payload = decode_canonical_payload(envelope.payload.clone())?;
-            let admissions = log.admissions_for(&payload, admissions)?;
+            let payload = decode_canonical_payload(envelope.payload.get())?;
+            let admissions = log.admissions_for(envelope, &payload, admissions)?;
             log.append_envelope(
                 envelope.clone(),
                 admissions.evidence,
                 admissions.binding,
                 admissions.verification,
                 admissions.decision,
+                admissions.context_projection,
             )?;
         }
         if version == EventContractVersion::V1 {
@@ -2420,14 +2910,15 @@ impl EventLog {
             validate_v2_genesis_envelope(&next.run_id, &next.initial, &bytes, first)?;
         }
         for envelope in envelopes {
-            let payload = decode_canonical_payload(envelope.payload.clone())?;
-            let admissions = next.admissions_for(&payload, admissions)?;
+            let payload = decode_canonical_payload(envelope.payload.get())?;
+            let admissions = next.admissions_for(envelope, &payload, admissions)?;
             next.append_envelope(
                 envelope.clone(),
                 admissions.evidence,
                 admissions.binding,
                 admissions.verification,
                 admissions.decision,
+                admissions.context_projection,
             )?;
         }
         *self = next;
@@ -2441,6 +2932,7 @@ impl EventLog {
         binding_admission: Option<EvidenceBindingAdmission>,
         verification_admission: Option<VerificationAdmission>,
         decision_admission: Option<DecisionAdmission>,
+        context_projection_admission: Option<PositionedContextProjectionAdmission>,
     ) -> Result<&Event> {
         self.require_writable()?;
         let expected_sequence = self.next_sequence()?;
@@ -2455,9 +2947,10 @@ impl EventLog {
                 "event run ID, genesis hash, and sequence must continue this log".to_owned(),
             ));
         }
-        let payload = decode_canonical_payload(envelope.payload.clone())?;
+        let payload = decode_canonical_payload(envelope.payload.get())?;
         validate_stream_payload_position(self.version, expected_sequence, &payload)?;
         reject_v2_legacy_execution_payload(self.version, &payload)?;
+        reject_duplicate_d1_record(&self.aggregate, &payload)?;
         payload.validate_for_enclosing_run(&self.run_id)?;
         if let PersistedPayload::EvidenceRecorded(evidence) = &payload
             && !evidence_admission.as_ref().is_some_and(|admission| {
@@ -2514,6 +3007,19 @@ impl EventLog {
                 "decision event lacks an exact run-bound trusted admission".to_owned(),
             ));
         }
+        if let PersistedPayload::ContextEnvelopeProjected(context) = &payload
+            && !context_projection_admission
+                .as_ref()
+                .is_some_and(|admission| {
+                    admission
+                        .matches(&envelope, context, &self.aggregate)
+                        .is_ok_and(|matched| matched)
+                })
+        {
+            return Err(DomainError::Validation(
+                "context event lacks its exact byte-reverified admission".to_owned(),
+            ));
+        }
         let mut next = self.aggregate.clone();
         apply(&mut next, &payload, envelope.actor(), &self.run_id)?;
         self.aggregate = next;
@@ -2523,6 +3029,7 @@ impl EventLog {
             binding_admission,
             verification_admission,
             decision_admission,
+            context_projection_admission,
         });
         self.tail_hash = self
             .events
@@ -2563,6 +3070,7 @@ impl EventLog {
 
     fn admissions_for(
         &self,
+        event: &EventEnvelope,
         payload: &PersistedPayload,
         admissions: &EventAdmissions,
     ) -> Result<MatchedAdmissions> {
@@ -2641,11 +3149,24 @@ impl EventLog {
             }
             _ => None,
         };
+        let context_projection = match payload {
+            PersistedPayload::ContextEnvelopeProjected(context) => admissions
+                .context_projection_for(event, context, &self.aggregate)?
+                .ok_or_else(|| {
+                    DomainError::Validation(
+                        "imported context envelope lacks an exact byte-reverified admission"
+                            .to_owned(),
+                    )
+                })
+                .map(Some)?,
+            _ => None,
+        };
         Ok(MatchedAdmissions {
             evidence,
             binding,
             verification,
             decision,
+            context_projection,
         })
     }
 
@@ -2776,7 +3297,7 @@ impl EventLog {
             self.tail_hash.clone(),
             PersistedPayload::RunGenesisManifest(manifest),
         )?;
-        self.append_envelope(envelope, None, None, None, None)?;
+        self.append_envelope(envelope, None, None, None, None, None)?;
         let envelope = self
             .events
             .first()
@@ -2919,6 +3440,10 @@ fn apply(
         PersistedPayload::SnapshotSourcesRecorded(sources) => {
             aggregate.record_snapshot_sources(sources.clone())
         }
+        PersistedPayload::ReviewPlanRecorded(plan) => aggregate.record_review_plan(plan.clone()),
+        PersistedPayload::ContextEnvelopeProjected(envelope) => {
+            aggregate.record_context_envelope(envelope.clone())
+        }
     }
 }
 
@@ -2927,8 +3452,8 @@ mod tests {
     use super::*;
     use crate::{
         ClaimPolarity, DecisionOutcome, EvidenceDetails, EvidenceRelation, FindingStatus,
-        FindingTrace, MvpRulePack, ProgramSpace, Provenance, SourceRef, VerificationOutcome,
-        canonical_json,
+        FindingTrace, MvpRulePack, PlanBudget, ProgramSpace, Provenance, SourceRef,
+        VerificationOutcome, canonical_json, plan,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2956,8 +3481,9 @@ mod tests {
         payload: PersistedPayload,
     ) -> EventEnvelope {
         let actor = payload.actor().to_owned();
-        let payload = serde_json::to_value(payload).expect("payload JSON");
-        let payload_hash = ContentHash::sha256(&canonical_json(&payload).expect("canonical JSON"));
+        let payload_bytes = payload_canonical_bytes(&payload).expect("canonical payload JSON");
+        let payload_hash = ContentHash::sha256(&payload_bytes);
+        let payload = raw_payload(payload_bytes).expect("raw payload JSON");
         let id = event_id(
             version.schema(),
             &run_id,
@@ -3000,6 +3526,167 @@ mod tests {
         EventLog::new(id(run), aggregate()).expect("v2 log")
     }
 
+    #[test]
+    fn d1_raw_decode_is_strict_and_duplicate_plan_replay_is_atomic() {
+        let initial = aggregate();
+        let run_id = id("run:d1-duplicate-plan");
+        let mut log = EventLog::new(run_id.clone(), initial.clone()).unwrap();
+        let review_plan = plan(log.aggregate(), PlanBudget::new(16, 2).unwrap()).unwrap();
+
+        let mut plan_text = String::from_utf8(review_plan.canonical_bytes().unwrap()).unwrap();
+        assert_eq!(plan_text.pop(), Some('}'));
+        let unknown_payload = format!(
+            "{{\"data\":{plan_text},\"unknown\":null}},\"type\":\"review_plan_recorded\"}}"
+        );
+        assert!(decode_payload(&unknown_payload).is_err());
+        let duplicate_header = format!(
+            "{{\"data\":{}}},\"type\":\"review_plan_recorded\",\"type\":\"review_plan_recorded\"}}",
+            review_plan
+                .canonical_bytes()
+                .map(String::from_utf8)
+                .unwrap()
+                .unwrap()
+        );
+        assert!(decode_payload(&duplicate_header).is_err());
+        let oversized_context = format!(
+            "{{\"data\":{{\"padding\":\"{}\"}},\"type\":\"context_envelope_projected\"}}",
+            "x".repeat(786_432)
+        );
+        assert!(matches!(
+            decode_payload(&oversized_context),
+            Err(DomainError::Incomplete {
+                operation: "context envelope canonical bytes",
+                limit: 786_432,
+                observed,
+            }) if observed > 786_432
+        ));
+
+        log.append(EventCommand::review_plan_recorded(review_plan.clone()))
+            .unwrap();
+        let duplicate = EventEnvelope::new(
+            EventContractVersion::V2,
+            run_id.clone(),
+            log.genesis_hash().clone(),
+            log.next_sequence().unwrap(),
+            SYSTEM_ACTOR,
+            log.next_sequence().unwrap(),
+            log.tail_hash().clone(),
+            PersistedPayload::ReviewPlanRecorded(review_plan),
+        )
+        .unwrap();
+        let mut envelopes = log.envelopes().cloned().collect::<Vec<_>>();
+        envelopes.push(duplicate.clone());
+
+        assert!(matches!(
+            EventLog::replay_envelopes(
+                EventContractVersion::V2,
+                run_id.clone(),
+                initial.clone(),
+                &envelopes,
+                &EventAdmissions::default(),
+            ),
+            Err(DomainError::IdCollision { .. })
+        ));
+
+        let mut resumed = EventLog::replay_envelopes(
+            EventContractVersion::V2,
+            run_id.clone(),
+            initial.clone(),
+            &envelopes[..envelopes.len() - 1],
+            &EventAdmissions::default(),
+        )
+        .unwrap();
+        let resumed_tail = resumed.tail_hash().clone();
+        let resumed_count = resumed.events().len();
+        assert!(matches!(
+            resumed.resume_envelopes(&[duplicate], &EventAdmissions::default()),
+            Err(DomainError::IdCollision { .. })
+        ));
+        assert_eq!(resumed.tail_hash(), &resumed_tail);
+        assert_eq!(resumed.events().len(), resumed_count);
+        assert_eq!(resumed.aggregate().review_plans().count(), 1);
+
+        let genesis = RunGenesisSnapshot::from_aggregate(&initial)
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            &run_id,
+            EventStreamGenesis::V2(&genesis),
+            &envelopes,
+        )
+        .unwrap();
+        let mut offline = OfflineProjectionState::new(&view, initial).unwrap();
+        for event in &view.events()[..view.events().len() - 1] {
+            offline.apply(event).unwrap();
+        }
+        let offline_tail = offline.tail_hash().clone();
+        assert!(matches!(
+            offline.apply(view.events().last().unwrap()),
+            Err(DomainError::IdCollision { .. })
+        ));
+        assert_eq!(offline.tail_hash(), &offline_tail);
+        assert_eq!(offline.aggregate().review_plans().count(), 1);
+        assert!(!offline.is_complete());
+    }
+
+    #[test]
+    fn positioned_context_admission_rejects_every_event_position_splice() {
+        let log = v2_log("run:context-position");
+        let event = log.envelopes().next().unwrap().clone();
+        let admission = PositionedContextProjectionAdmission {
+            run_id: event.run_id.clone(),
+            genesis_hash: event.genesis_hash.clone(),
+            previous_event_hash: event.previous_event_hash.clone(),
+            sequence: event.sequence,
+            event_id: event.id.clone(),
+            projection: ContextProjectionAdmission {
+                manifest_digest: ContentHash::sha256(b"position-test-manifest"),
+                envelope_id: id("context-envelope:position-test"),
+                projection_hash: ContentHash::sha256(b"position-test-projection"),
+                sources: Vec::new(),
+            },
+        };
+        assert!(admission.matches_position(&event));
+
+        let mut wrong_run = event.clone();
+        wrong_run.run_id = id("run:other-context-position");
+        assert!(!admission.matches_position(&wrong_run));
+        let mut wrong_genesis = event.clone();
+        wrong_genesis.genesis_hash = ContentHash::sha256(b"other genesis");
+        assert!(!admission.matches_position(&wrong_genesis));
+        let mut wrong_tail = event.clone();
+        wrong_tail.previous_event_hash = ContentHash::sha256(b"other tail");
+        assert!(!admission.matches_position(&wrong_tail));
+        let mut wrong_sequence = event.clone();
+        wrong_sequence.sequence += 1;
+        assert!(!admission.matches_position(&wrong_sequence));
+        let mut wrong_event = event;
+        wrong_event.id = id("event:other-context-position");
+        assert!(!admission.matches_position(&wrong_event));
+    }
+
+    #[test]
+    fn d1_outer_jsonl_writer_accepts_exact_mebibyte_and_refuses_plus_one() {
+        let mut exact = BoundedEventJson::new(MAX_D1_EVENT_LINE_BYTES - 1);
+        exact
+            .push(&vec![b'x'; MAX_D1_EVENT_LINE_BYTES - 1])
+            .unwrap();
+        let exact = exact.finish().unwrap();
+        assert_eq!(exact.len() + 1, MAX_D1_EVENT_LINE_BYTES);
+
+        let mut over = BoundedEventJson::new(MAX_D1_EVENT_LINE_BYTES - 1);
+        assert!(matches!(
+            over.push(&vec![b'x'; MAX_D1_EVENT_LINE_BYTES]),
+            Err(DomainError::Incomplete {
+                operation: "D1 canonical event JSONL",
+                limit: MAX_D1_EVENT_LINE_BYTES,
+                observed,
+            }) if observed == MAX_D1_EVENT_LINE_BYTES + 1
+        ));
+    }
+
     fn planned_payload(log: &EventLog) -> PersistedPayload {
         PersistedPayload::ObligationTransition {
             obligation_id: log
@@ -3036,7 +3723,7 @@ mod tests {
             .is_err()
         );
 
-        let manifest_payload = decode_canonical_payload(manifest.payload.clone()).unwrap();
+        let manifest_payload = decode_canonical_payload(manifest.payload.get()).unwrap();
         let duplicate = forged_envelope(
             EventContractVersion::V2,
             log.run_id.clone(),
@@ -3091,11 +3778,11 @@ mod tests {
         assert_eq!(snapshot.universe(), &expected_universe);
         assert_eq!(snapshot.obligations(), expected_obligations.as_slice());
         let bytes = snapshot.canonical_bytes().unwrap();
-        let manifest =
-            match decode_canonical_payload(log.events[0].envelope.payload.clone()).unwrap() {
-                PersistedPayload::RunGenesisManifest(value) => value,
-                _ => unreachable!("v2 first event is manifest"),
-            };
+        let manifest = match decode_canonical_payload(log.events[0].envelope.payload.get()).unwrap()
+        {
+            PersistedPayload::RunGenesisManifest(value) => value,
+            _ => unreachable!("v2 first event is manifest"),
+        };
         for pointer in [
             "/run_id",
             "/repository_identity",
