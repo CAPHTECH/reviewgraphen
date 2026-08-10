@@ -11,6 +11,7 @@ mod coverage;
 mod error;
 mod event;
 mod execution;
+mod harness_source_v1;
 mod id;
 mod m4;
 mod planning;
@@ -41,14 +42,15 @@ pub use event::{
     ArtifactSourceV3, AuthorityArtifactResolverV3, AuthorityReplayBasisV3, AuthorityTrustRootsV3,
     DecisionInputV3, DecodedPayload, Event, EventAdmissions, EventCommand, EventContractVersion,
     EventEnvelope, EventLog, EventReplayLimits, EventStreamGenesis, EventViewAccounting,
-    EvidenceBindingAdmission, HarnessTrustRootInputV3, HumanAuthorityCapabilityV3,
-    HumanTrustGrantInputV3, OfflineProjectionState, ProjectedContextEnvelopeMetadata,
-    ProjectedFindingMetadata, RunGenesisManifest, RunGenesisManifestV3, RunGenesisSnapshot,
-    SnapshotSourceRecordEntry, SnapshotSourcesRecorded, UnreconciledRecordKind,
+    EvidenceBindingAdmission, ExternalWitnessAdmissionV3, FixtureExecutionReceiptV1,
+    HarnessTrustRootInputV3, HumanAuthorityCapabilityV3, HumanTrustGrantInputV3,
+    OfflineProjectionState, ProjectedContextEnvelopeMetadata, ProjectedFindingMetadata,
+    RunGenesisManifest, RunGenesisManifestV3, RunGenesisSnapshot, SnapshotSourceRecordEntry,
+    SnapshotSourcesRecorded, TrustedFixtureHarnessV1, UnreconciledRecordKind,
     UnreconciledRecordMetadata, ValidatedArtifactRegistrationV3, ValidatedDecisionV3,
     ValidatedEvent, ValidatedEventView, ValidatedFindingV3, ValidatedVerificationBundleV3,
-    VerificationAdmission, VerificationBundleReceiptV3, VerifiedV2Genesis, VerifierArtifactRoleV3,
-    preflight_index_genesis_json_structure,
+    VerificationAdmission, VerificationBundleReceiptV3, VerificationBundleResumeAuthorityV3,
+    VerifiedV2Genesis, VerifierArtifactRoleV3, preflight_index_genesis_json_structure,
 };
 pub use execution::{
     AbstentionReason, ExecutionClaimInputV2, ExecutionClaimV2, ExecutionOutcome, ExecutionRecord,
@@ -62,13 +64,13 @@ pub use m4::{
     AssessmentDispositionV3, AssessmentReviewStatusV3, AuthorityScopeDescriptorV3,
     AuthorityScopeV3, ClaimAssessmentV3, DecisionOutcomeV3, DecisionV3, EvidenceBindingV3,
     EvidenceKindV3, EvidenceObservationV3, EvidenceRelationV3, EvidenceV3, FINDING_PROJECTION_ID,
-    FIXTURE_DESCRIPTOR_ID, FIXTURE_HARNESS_ID, FIXTURE_HARNESS_REVISION, FIXTURE_MEDIA_TYPE,
-    FIXTURE_PROCEDURE_ID, FIXTURE_TEST_ARTIFACT_ID, FIXTURE_WITNESS_HASH, FindingStatusV3,
-    FindingV3, FixedFixtureResultV1, M4_PROPERTY_ID, M4Error, M4Result, M4SensitivityV3,
-    STATIC_DESCRIPTOR_ID, STATIC_PROCEDURE_ID, StaticApplicabilityV1, StaticFactEvaluationV1,
-    StaticFactInputV1, StaticFactResultV1, StaticRecordProposalV1, StaticScopeV3,
-    VerificationOutcomeV3, VerificationV3, VerifierDescriptorV3, VerifierProcedureV3,
-    evaluate_static_fact_v1,
+    FIXTURE_DESCRIPTOR_ID, FIXTURE_HARNESS_ID, FIXTURE_HARNESS_REVISION,
+    FIXTURE_HARNESS_SOURCE_HASH, FIXTURE_MEDIA_TYPE, FIXTURE_PROCEDURE_ID,
+    FIXTURE_TEST_ARTIFACT_ID, FIXTURE_WITNESS_HASH, FindingStatusV3, FindingV3,
+    FixedFixtureResultV1, M4_PROPERTY_ID, M4Error, M4Result, M4SensitivityV3, STATIC_DESCRIPTOR_ID,
+    STATIC_PROCEDURE_ID, StaticApplicabilityV1, StaticFactEvaluationV1, StaticFactInputV1,
+    StaticFactResultV1, StaticRecordProposalV1, StaticScopeV3, VerificationOutcomeV3,
+    VerificationV3, VerifierDescriptorV3, VerifierProcedureV3, evaluate_static_fact_v1,
 };
 pub use planning::{
     DeferralReason, PlanBudget, PlannerPolicyV1, ReviewPlan, RiskDescriptor, ScheduleWave, plan,

@@ -140,6 +140,8 @@ pub const FIXTURE_PROCEDURE_ID: &str = "reviewgraphen.fixture_test.duplicate_sub
 pub const FINDING_PROJECTION_ID: &str = "reviewgraphen.finding_projection@1";
 pub const FIXTURE_HARNESS_ID: &str = "reviewgraphen.double_submit_harness@1";
 pub const FIXTURE_HARNESS_REVISION: &str = "1";
+pub const FIXTURE_HARNESS_SOURCE_HASH: &str =
+    "sha256:74d708edd94103e3bab724c71df8c151a89ea613ad06fd8c6bd21ba78027848a";
 pub const FIXTURE_TEST_ARTIFACT_ID: &str = "test:double-submit";
 pub const FIXTURE_MEDIA_TYPE: &str = "application/vnd.reviewgraphen.test-witness+json;version=1";
 pub const FIXTURE_WITNESS_HASH: &str =

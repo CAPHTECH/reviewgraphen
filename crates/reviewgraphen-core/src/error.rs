@@ -134,6 +134,23 @@ pub enum DomainError {
     #[error("event-v3 verification bundle does not match its sealed scope")]
     VerificationBundleMismatch,
 
+    /// A partial verification bundle or its recovery authority no longer
+    /// matches the exact canonical prefix and trust closure.
+    #[error("event-v3 verification bundle resume authority mismatch")]
+    BundleResumeAuthorityMismatch,
+
+    /// The complete deterministic verification plan is already durable.
+    #[error("event-v3 verification bundle is already complete")]
+    AlreadyComplete,
+
+    /// The immutable D2 claim no longer has its exact raw reviewer artifact
+    /// registration in the current v3 closure.
+    #[error("event-v3 claim `{claim_id}` raw reviewer closure is missing at `{registration_id}`")]
+    ClaimRawClosureMissing {
+        claim_id: StableId,
+        registration_id: StableId,
+    },
+
     /// A witness admission was changed, reused, or moved to another position.
     #[error("event-v3 external witness admission does not match its sealed scope")]
     WitnessAdmissionMismatch,

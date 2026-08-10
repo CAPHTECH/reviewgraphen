@@ -5,6 +5,7 @@
 //! only deterministic descriptor outputs; the later Store/session boundary is
 //! responsible for authority, CAS registration, and durable append ordering.
 
+#[path = "../../reviewgraphen-core/src/harness_source_v1.rs"]
 mod harness_source_v1;
 
 use reviewgraphen_core::{
@@ -214,7 +215,9 @@ impl FixedFixtureWitnessV1 {
 /// Checks the exact source text of the fixed harness against the code-owned
 /// registry. This check neither runs nor locates a harness.
 pub fn verify_harness_source() -> Result<()> {
-    verify_harness_source_bytes(include_bytes!("harness_source_v1.rs"))
+    verify_harness_source_bytes(include_bytes!(
+        "../../reviewgraphen-core/src/harness_source_v1.rs"
+    ))
 }
 
 fn verify_harness_source_bytes(source_bytes: &[u8]) -> Result<()> {

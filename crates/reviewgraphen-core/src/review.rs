@@ -2226,13 +2226,14 @@ impl ReviewAggregate {
                 "event log genesis must be a pristine aggregate without review state".to_owned(),
             ));
         }
-        let seeded = self
-            .program
-            .evidence()
-            .iter()
-            .map(|item| (item.id().clone(), item.clone()))
-            .collect::<BTreeMap<_, _>>();
-        if self.evidence != seeded {
+        let seeded = self.program.evidence();
+        if self.evidence.len() != seeded.len()
+            || self
+                .evidence
+                .iter()
+                .zip(seeded)
+                .any(|((id, retained), expected)| id != expected.id() || retained != expected)
+        {
             return Err(DomainError::Validation(
                 "event log genesis evidence must exactly equal ProgramSpace-seeded evidence"
                     .to_owned(),

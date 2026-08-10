@@ -6,12 +6,12 @@ use crate::{
     BuiltContextProjection, ContentHash, Decision, DecisionAdmission, DecisionV3, DomainError,
     Evidence, EvidenceAdmission, EvidenceBinding, EvidenceBindingV3, EvidenceSnapshotAdmission,
     EvidenceV3, ExecutionClaimV2, ExecutionRecord, FIXTURE_DESCRIPTOR_ID, FIXTURE_HARNESS_ID,
-    FIXTURE_HARNESS_REVISION, FIXTURE_MEDIA_TYPE, FIXTURE_PROCEDURE_ID, FIXTURE_TEST_ARTIFACT_ID,
-    FIXTURE_WITNESS_HASH, Finding, FindingV3, LegacyClaimV1, M4_PROPERTY_ID, MvpRulePack,
-    Obligation, ObligationLifecycle, ProgramSpace, Result, ReviewAggregate, ReviewClaim,
-    ReviewContextEnvelope, ReviewPlan, STATIC_DESCRIPTOR_ID, STATIC_PROCEDURE_ID, StableId,
-    TrustedHumanAdmission, UniverseDescriptor, ValidatedExecutionBundle, Verification,
-    VerificationV3, canonical_json, canonical_json_value,
+    FIXTURE_HARNESS_REVISION, FIXTURE_HARNESS_SOURCE_HASH, FIXTURE_MEDIA_TYPE,
+    FIXTURE_PROCEDURE_ID, FIXTURE_TEST_ARTIFACT_ID, FIXTURE_WITNESS_HASH, Finding, FindingV3,
+    LegacyClaimV1, M4_PROPERTY_ID, MvpRulePack, Obligation, ObligationLifecycle, ProgramSpace,
+    Result, ReviewAggregate, ReviewClaim, ReviewContextEnvelope, ReviewPlan, STATIC_DESCRIPTOR_ID,
+    STATIC_PROCEDURE_ID, StableId, TrustedHumanAdmission, UniverseDescriptor,
+    ValidatedExecutionBundle, Verification, VerificationV3, canonical_json, canonical_json_value,
 };
 use serde::de::Visitor;
 use serde::ser::{SerializeSeq, SerializeStruct};
@@ -89,6 +89,8 @@ const STATIC_OUTPUT_MEDIA_TYPE: &str =
     "application/vnd.reviewgraphen.static-fact-result+json;version=1";
 const FIXTURE_OUTPUT_MEDIA_TYPE: &str =
     "application/vnd.reviewgraphen.fixture-test-result+json;version=1";
+const FIXTURE_WITNESS_BYTES: &[u8] = br#"{"charge_count":2,"expected_max":1,"outcome":"witnessed","schema":"reviewgraphen.test_witness_result.v1","test_artifact_id":"test:double-submit"}"#;
+const FIXTURE_WITNESS_SIZE: u64 = 145;
 
 /// Typed, canonical state from which a v2 or v3 run begins. It is deliberately
 /// not `ReviewAggregate` serialization: only a pristine baseline belongs here.
@@ -397,13 +399,69 @@ impl RunGenesisSnapshot {
 
     fn from_aggregate_with_wire(aggregate: &ReviewAggregate, v3_wire: bool) -> Result<Self> {
         aggregate.validate_pristine_for_event_log()?;
+        let obligation_count = aggregate.obligations().count();
+        let mut obligations = Vec::new();
+        obligations
+            .try_reserve_exact(obligation_count)
+            .map_err(|_| v3_memory_error("run genesis obligations", u64::MAX))?;
+        obligations.extend(aggregate.obligations().cloned());
         Ok(Self {
             schema: RUN_GENESIS_SCHEMA.to_owned(),
             program_space: aggregate.program().clone(),
             universe: aggregate.universe().clone(),
-            obligations: aggregate.obligations().cloned().collect(),
+            obligations,
             v3_wire,
         })
+    }
+
+    fn projected_owned_bytes(aggregate: &ReviewAggregate) -> Result<u64> {
+        let mut total =
+            u64::try_from(size_of::<Self>() + RUN_GENESIS_SCHEMA.len()).unwrap_or(u64::MAX);
+        for bytes in [
+            aggregate.program().allocated_bytes(),
+            aggregate.universe().allocated_bytes(),
+        ] {
+            v3_add(
+                &mut total,
+                u64::try_from(bytes).unwrap_or(u64::MAX),
+                "run genesis snapshot ownership",
+            )?;
+        }
+        for obligation in aggregate.obligations() {
+            v3_add(
+                &mut total,
+                u64::try_from(size_of::<Obligation>() + obligation.allocated_bytes())
+                    .unwrap_or(u64::MAX),
+                "run genesis snapshot obligations",
+            )?;
+        }
+        Ok(total)
+    }
+
+    fn owned_bytes(&self) -> Result<u64> {
+        let mut total =
+            u64::try_from(size_of::<Self>() + self.schema.capacity()).unwrap_or(u64::MAX);
+        for bytes in [
+            self.program_space.allocated_bytes(),
+            self.universe.allocated_bytes(),
+            self.obligations
+                .capacity()
+                .saturating_mul(size_of::<Obligation>()),
+        ] {
+            v3_add(
+                &mut total,
+                u64::try_from(bytes).unwrap_or(u64::MAX),
+                "run genesis snapshot ownership",
+            )?;
+        }
+        for obligation in &self.obligations {
+            v3_add(
+                &mut total,
+                u64::try_from(obligation.allocated_bytes()).unwrap_or(u64::MAX),
+                "run genesis snapshot obligations",
+            )?;
+        }
+        Ok(total)
     }
 
     /// Canonical CAS bytes for the v2 genesis object.
@@ -1403,6 +1461,7 @@ fn artifact_source_v3_closure(
                 && procedure_version == FIXTURE_PROCEDURE_ID
                 && harness_id == FIXTURE_HARNESS_ID
                 && harness_revision == FIXTURE_HARNESS_REVISION
+                && harness_source_hash.as_str() == FIXTURE_HARNESS_SOURCE_HASH
                 && property_id == M4_PROPERTY_ID
                 && media_type == FIXTURE_MEDIA_TYPE
                 && cas_hash.to_string() == FIXTURE_WITNESS_HASH
@@ -5317,6 +5376,13 @@ std::thread_local! {
     static V3_TEST_SELECTED_APPEND_KIND: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static V3_TEST_SELECTED_APPEND_PEAK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_SELECTED_SHADOW_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V3_TEST_FIXTURE_STAGE_KIND: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static V3_TEST_FIXTURE_STAGE_PEAK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V3_TEST_RESUME_TOKEN_ALLOCATION_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V3_TEST_RESUME_TOKEN_LIMIT: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    static V3_TEST_RECOVERY_GENESIS_ALLOCATION_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V3_TEST_RECOVERY_GENESIS_LIMIT: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -5356,6 +5422,80 @@ fn mark_v3_transaction_allocation_seam() {
 
 #[cfg(not(test))]
 fn mark_v3_transaction_allocation_seam() {}
+
+#[cfg(test)]
+fn mark_fixture_stage_allocation_seam(stage: u8) {
+    if V3_TEST_FIXTURE_STAGE_KIND.with(|kind| kind.get()) == stage {
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(value.get() + 1));
+    }
+}
+
+#[cfg(not(test))]
+fn mark_fixture_stage_allocation_seam(_stage: u8) {}
+
+#[cfg(test)]
+fn record_fixture_stage_peak(stage: u8, peak: u64) {
+    if V3_TEST_FIXTURE_STAGE_KIND.with(|kind| kind.get()) == stage {
+        V3_TEST_FIXTURE_STAGE_PEAK.with(|value| value.set(peak));
+    }
+}
+
+#[cfg(not(test))]
+fn record_fixture_stage_peak(_stage: u8, _peak: u64) {}
+
+#[cfg(test)]
+fn mark_resume_token_allocation_seam() {
+    V3_TEST_RESUME_TOKEN_ALLOCATION_SEAMS.with(|value| value.set(value.get() + 1));
+}
+
+#[cfg(not(test))]
+fn mark_resume_token_allocation_seam() {}
+
+#[cfg(test)]
+fn ensure_resume_token_test_limit(peak: u64) -> Result<()> {
+    if let Some(limit) = V3_TEST_RESUME_TOKEN_LIMIT.with(|value| value.get())
+        && peak > limit
+    {
+        return Err(DomainError::Incomplete {
+            operation: "verification bundle recovery token bytes",
+            limit: usize::try_from(limit).unwrap_or(usize::MAX),
+            observed: usize::try_from(peak).unwrap_or(usize::MAX),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn ensure_resume_token_test_limit(_peak: u64) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+fn mark_recovery_genesis_allocation_seam() {
+    V3_TEST_RECOVERY_GENESIS_ALLOCATION_SEAMS.with(|value| value.set(value.get() + 1));
+}
+
+#[cfg(not(test))]
+fn mark_recovery_genesis_allocation_seam() {}
+
+#[cfg(test)]
+fn ensure_recovery_genesis_test_limit(peak: u64) -> Result<()> {
+    if let Some(limit) = V3_TEST_RECOVERY_GENESIS_LIMIT.with(|value| value.get())
+        && peak > limit
+    {
+        return Err(DomainError::Incomplete {
+            operation: "verification bundle recovery genesis bytes",
+            limit: usize::try_from(limit).unwrap_or(usize::MAX),
+            observed: usize::try_from(peak).unwrap_or(usize::MAX),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn ensure_recovery_genesis_test_limit(_peak: u64) -> Result<()> {
+    Ok(())
+}
 
 #[cfg(test)]
 fn record_v3_test_selected_peak(peak: u64) {
@@ -5685,10 +5825,10 @@ impl V3RunAggregate {
             });
         }
         if evidence.snapshot_id() != aggregate.program().snapshot_id()
-            || evidence.subject_ids().iter().any(|id| {
-                id.as_str() != FIXTURE_TEST_ARTIFACT_ID
-                    && !aggregate.program().known_ids().contains(id)
-            })
+            || evidence
+                .subject_ids()
+                .iter()
+                .any(|id| !aggregate.program().known_ids().contains(id))
         {
             return Err(DomainError::Validation(
                 "v3 evidence is outside the current ProgramSpace".to_owned(),
@@ -5901,7 +6041,9 @@ pub struct HumanTrustGrantInputV3 {
 }
 
 #[derive(Debug)]
-struct HarnessTrustRootV3(HarnessTrustRootInputV3);
+struct HarnessTrustRootV3 {
+    input: HarnessTrustRootInputV3,
+}
 
 #[derive(Debug)]
 struct HumanTrustGrantV3(HumanTrustGrantInputV3);
@@ -5977,7 +6119,10 @@ impl AuthorityTrustRootsV3 {
             policy_revision_hash,
             repository_id,
             repository_source_hash,
-            harnesses: harnesses.into_iter().map(HarnessTrustRootV3).collect(),
+            harnesses: harnesses
+                .into_iter()
+                .map(|input| HarnessTrustRootV3 { input })
+                .collect(),
             human_grants: human_grants.into_iter().map(HumanTrustGrantV3).collect(),
         })
     }
@@ -5991,7 +6136,7 @@ impl AuthorityTrustRootsV3 {
         &self,
         registration: &ArtifactRegisteredV3,
     ) -> Option<&HarnessTrustRootInputV3> {
-        self.harnesses.iter().map(|root| &root.0).find(|root| {
+        self.harnesses.iter().map(|root| &root.input).find(|root| {
             let ArtifactSourceV3::ExternalHarnessWitness {
                 policy_revision_hash,
                 repository_id,
@@ -6063,6 +6208,67 @@ impl AuthorityTrustRootsV3 {
                         .is_none_or(|expires| expires <= grant.valid_until.as_str())
             })
     }
+
+    fn retained_bytes(&self) -> Result<u64> {
+        let mut total = u64::try_from(size_of::<Self>())
+            .map_err(|_| v3_memory_error("authority roots retained bytes", u64::MAX))?;
+        for bytes in [
+            self.policy_revision_hash.allocated_bytes(),
+            self.repository_id.allocated_bytes(),
+            self.repository_source_hash.allocated_bytes(),
+        ] {
+            v3_add(
+                &mut total,
+                u64::try_from(bytes).unwrap_or(u64::MAX),
+                "authority roots retained bytes",
+            )?;
+        }
+        for root in &self.harnesses {
+            v3_add(
+                &mut total,
+                fixture_scope_allocated_bytes(&root.input)?,
+                "authority roots retained bytes",
+            )?;
+        }
+        for grant in &self.human_grants {
+            let input = &grant.0;
+            let mut grant_bytes =
+                u64::try_from(size_of::<HumanTrustGrantInputV3>()).unwrap_or(u64::MAX);
+            for bytes in [
+                input.policy_revision_hash.allocated_bytes(),
+                input.actor.capacity(),
+                input.authority_id.capacity(),
+                input.run_id.allocated_bytes(),
+                input.snapshot_id.allocated_bytes(),
+                input.universe_id.allocated_bytes(),
+                input.valid_from.capacity(),
+                input.valid_until.capacity(),
+            ] {
+                v3_add(
+                    &mut grant_bytes,
+                    u64::try_from(bytes).unwrap_or(u64::MAX),
+                    "authority roots retained bytes",
+                )?;
+            }
+            for property in &input.property_ids {
+                v3_add(
+                    &mut grant_bytes,
+                    u64::try_from(property.capacity()).unwrap_or(u64::MAX),
+                    "authority roots retained bytes",
+                )?;
+            }
+            for claim in &input.claim_ids {
+                v3_add(
+                    &mut grant_bytes,
+                    u64::try_from(size_of::<StableId>() + claim.allocated_bytes())
+                        .unwrap_or(u64::MAX),
+                    "authority roots retained bytes",
+                )?;
+            }
+            v3_add(&mut total, grant_bytes, "authority roots retained bytes")?;
+        }
+        Ok(total)
+    }
 }
 
 fn validate_harness_root(
@@ -6079,6 +6285,7 @@ fn validate_harness_root(
     }
     let exact = root.harness_id == FIXTURE_HARNESS_ID
         && root.harness_revision == FIXTURE_HARNESS_REVISION
+        && root.harness_source_hash.as_str() == FIXTURE_HARNESS_SOURCE_HASH
         && root.test_artifact_id.as_str() == FIXTURE_TEST_ARTIFACT_ID
         && root.descriptor_id == FIXTURE_DESCRIPTOR_ID
         && root.procedure_version == FIXTURE_PROCEDURE_ID
@@ -6097,6 +6304,139 @@ fn validate_harness_root(
         ));
     }
     Ok(())
+}
+
+impl TrustedFixtureHarnessV1 {
+    fn from_execution(scope: HarnessTrustRootInputV3) -> Self {
+        Self { scope }
+    }
+}
+
+fn exact_fixture_claim_for_log<'a>(
+    log: &'a EventLog,
+    claim_id: &StableId,
+) -> Result<&'a ExecutionClaimV2> {
+    if log.version != EventContractVersion::V3 {
+        return Err(DomainError::EventV3AuthorityReplayRequired {
+            operation: "fixture execution",
+        });
+    }
+    let claim = log
+        .aggregate
+        .execution_claims()
+        .find(|claim| claim.id() == claim_id)
+        .ok_or_else(|| DomainError::DanglingReference {
+            owner: "fixture execution claim",
+            owner_id: claim_id.clone(),
+            reference: claim_id.clone(),
+        })?;
+    claim.validate_shape()?;
+    let test_artifact_id = StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?;
+    if claim.property_id() != M4_PROPERTY_ID
+        || claim.polarity() != crate::ClaimPolarity::IssuePresent
+        || log
+            .v3_aggregate
+            .as_ref()
+            .and_then(|state| state.assessment_scopes.get(claim_id))
+            .is_none()
+        || !log
+            .aggregate
+            .program()
+            .known_ids()
+            .contains(&test_artifact_id)
+        || !claim
+            .target_refs()
+            .iter()
+            .all(|id| log.aggregate.program().known_ids().contains(id))
+    {
+        return Err(DomainError::VerificationBundleMismatch);
+    }
+    log.aggregate.validate()?;
+    Ok(claim)
+}
+
+fn validate_fresh_fixture_scope(
+    log: &EventLog,
+    basis: &AuthorityReplayBasisV3,
+    scope: &HarnessTrustRootInputV3,
+) -> Result<()> {
+    let claim = exact_fixture_claim_for_log(log, &scope.claim_id)?;
+    let repository_source_hash = log
+        .aggregate
+        .program()
+        .repository_source()
+        .content_hash()
+        .ok_or(DomainError::AuthorityPolicyMismatch)?;
+    if scope.policy_revision_hash != basis.policy_revision_hash
+        || scope.repository_id != *log.aggregate.program().repository_id()
+        || scope.repository_source_hash != *repository_source_hash
+        || scope.harness_id != crate::harness_source_v1::HARNESS_ID
+        || scope.harness_revision != crate::harness_source_v1::HARNESS_REVISION
+        || scope.harness_source_hash.as_str() != FIXTURE_HARNESS_SOURCE_HASH
+        || scope.test_artifact_id.as_str() != FIXTURE_TEST_ARTIFACT_ID
+        || scope.descriptor_id != FIXTURE_DESCRIPTOR_ID
+        || scope.procedure_version != FIXTURE_PROCEDURE_ID
+        || scope.result_hash.as_str() != FIXTURE_WITNESS_HASH
+        || scope.result_size != FIXTURE_WITNESS_SIZE
+        || scope.result_media_type != FIXTURE_MEDIA_TYPE
+        || scope.result_sensitivity != ArtifactSensitivity::CanonicalState
+        || scope.run_id != log.run_id
+        || scope.genesis_hash != log.genesis_hash
+        || scope.snapshot_id != *log.aggregate.program().snapshot_id()
+        || scope.universe_id != *log.aggregate.universe().id()
+        || scope.property_id != claim.property_id()
+        || scope.claim_body_hash != claim.body_hash()?
+    {
+        return Err(DomainError::WitnessAdmissionMismatch);
+    }
+    Ok(())
+}
+
+fn fixture_registration_matches_scope(
+    registration: &ArtifactRegisteredV3,
+    scope: &HarnessTrustRootInputV3,
+) -> bool {
+    let ArtifactSourceV3::ExternalHarnessWitness {
+        policy_revision_hash,
+        repository_id,
+        repository_source_hash,
+        run_id,
+        genesis_hash,
+        snapshot_id,
+        universe_id,
+        property_id,
+        claim_id,
+        claim_body_hash,
+        harness_id,
+        harness_revision,
+        harness_source_hash,
+        test_artifact_id,
+        descriptor_id,
+        procedure_version,
+    } = registration.source()
+    else {
+        return false;
+    };
+    registration.cas_hash() == &scope.result_hash
+        && registration.size() == scope.result_size
+        && registration.media_type() == scope.result_media_type
+        && registration.sensitivity() == scope.result_sensitivity
+        && *policy_revision_hash == scope.policy_revision_hash
+        && *repository_id == scope.repository_id
+        && *repository_source_hash == scope.repository_source_hash
+        && *run_id == scope.run_id
+        && *genesis_hash == scope.genesis_hash
+        && *snapshot_id == scope.snapshot_id
+        && *universe_id == scope.universe_id
+        && *property_id == scope.property_id
+        && *claim_id == scope.claim_id
+        && *claim_body_hash == scope.claim_body_hash
+        && *harness_id == scope.harness_id
+        && *harness_revision == scope.harness_revision
+        && *harness_source_hash == scope.harness_source_hash
+        && *test_artifact_id == scope.test_artifact_id
+        && *descriptor_id == scope.descriptor_id
+        && *procedure_version == scope.procedure_version
 }
 
 fn validate_human_grant(
@@ -6187,6 +6527,199 @@ impl ValidatedArtifactRegistrationV3 {
     }
 }
 
+/// Code-sealed one-shot fixture authority derived only from an exact
+/// claim-bound host trust root. There is deliberately no public constructor.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::TrustedFixtureHarnessV1>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::TrustedFixtureHarnessV1>();
+/// ```
+#[derive(Debug)]
+pub struct TrustedFixtureHarnessV1 {
+    scope: HarnessTrustRootInputV3,
+}
+
+/// Result of one actual execution of the fixed, process-free fixture harness.
+/// The embedded authority can be consumed once after durable registration;
+/// validation and preflight failures leave it available to retry.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::FixtureExecutionReceiptV1>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::FixtureExecutionReceiptV1>();
+/// ```
+#[derive(Debug)]
+pub struct FixtureExecutionReceiptV1 {
+    harness: Option<TrustedFixtureHarnessV1>,
+    basis_digest: ContentHash,
+    tail_hash: ContentHash,
+    expected_first_sequence: u64,
+    subject_ids: Vec<StableId>,
+    fixture_result_hash: ContentHash,
+    fixture_result_bytes: Vec<u8>,
+    witness_bytes: Vec<u8>,
+    expected_witness_event: Option<ExpectedFixtureRegistrationEventV1>,
+    expected_output_event: Option<ExpectedFixtureRegistrationEventV1>,
+}
+
+#[derive(Debug)]
+struct ExpectedFixtureRegistrationEventV1 {
+    registration_id: StableId,
+    envelope: EventEnvelope,
+}
+
+impl FixtureExecutionReceiptV1 {
+    #[must_use]
+    pub fn witness_bytes(&self) -> &[u8] {
+        &self.witness_bytes
+    }
+
+    #[must_use]
+    pub fn fixture_result_bytes(&self) -> &[u8] {
+        &self.fixture_result_bytes
+    }
+}
+
+fn fixture_scope_allocated_bytes(scope: &HarnessTrustRootInputV3) -> Result<u64> {
+    let mut total = u64::try_from(size_of::<HarnessTrustRootInputV3>())
+        .map_err(|_| v3_memory_error("fixture execution scope", u64::MAX))?;
+    for bytes in [
+        scope.policy_revision_hash.allocated_bytes(),
+        scope.repository_id.allocated_bytes(),
+        scope.repository_source_hash.allocated_bytes(),
+        scope.harness_id.capacity(),
+        scope.harness_revision.capacity(),
+        scope.harness_source_hash.allocated_bytes(),
+        scope.test_artifact_id.allocated_bytes(),
+        scope.descriptor_id.capacity(),
+        scope.procedure_version.capacity(),
+        scope.result_hash.allocated_bytes(),
+        scope.result_media_type.capacity(),
+        scope.run_id.allocated_bytes(),
+        scope.genesis_hash.allocated_bytes(),
+        scope.snapshot_id.allocated_bytes(),
+        scope.universe_id.allocated_bytes(),
+        scope.property_id.capacity(),
+        scope.claim_id.allocated_bytes(),
+        scope.claim_body_hash.allocated_bytes(),
+    ] {
+        v3_add(
+            &mut total,
+            u64::try_from(bytes).unwrap_or(u64::MAX),
+            "fixture execution scope",
+        )?;
+    }
+    Ok(total)
+}
+
+fn fixture_receipt_allocated_bytes(receipt: &FixtureExecutionReceiptV1) -> Result<u64> {
+    let mut total = u64::try_from(size_of::<FixtureExecutionReceiptV1>())
+        .map_err(|_| v3_memory_error("fixture execution receipt", u64::MAX))?;
+    if let Some(harness) = &receipt.harness {
+        v3_add(
+            &mut total,
+            fixture_scope_allocated_bytes(&harness.scope)?,
+            "fixture execution receipt",
+        )?;
+    }
+    for bytes in [
+        receipt.basis_digest.allocated_bytes(),
+        receipt.tail_hash.allocated_bytes(),
+        receipt.fixture_result_hash.allocated_bytes(),
+        receipt.fixture_result_bytes.capacity(),
+        receipt.witness_bytes.capacity(),
+    ] {
+        v3_add(
+            &mut total,
+            u64::try_from(bytes).unwrap_or(u64::MAX),
+            "fixture execution receipt",
+        )?;
+    }
+    for id in &receipt.subject_ids {
+        v3_add(
+            &mut total,
+            u64::try_from(size_of::<StableId>() + id.allocated_bytes()).unwrap_or(u64::MAX),
+            "fixture execution receipt",
+        )?;
+    }
+    for expected in [
+        receipt.expected_witness_event.as_ref(),
+        receipt.expected_output_event.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        v3_add(
+            &mut total,
+            u64::try_from(
+                size_of::<ExpectedFixtureRegistrationEventV1>()
+                    + expected.registration_id.allocated_bytes()
+                    + size_of::<EventEnvelope>()
+                    + expected.envelope.allocated_bytes(),
+            )
+            .unwrap_or(u64::MAX),
+            "fixture execution receipt",
+        )?;
+    }
+    Ok(total)
+}
+
+fn fixture_stage_preflight(
+    stage: u8,
+    log: &EventLog,
+    basis: &AuthorityReplayBasisV3,
+    receipt: Option<&FixtureExecutionReceiptV1>,
+    additions: impl IntoIterator<Item = u64>,
+) -> Result<()> {
+    let mut retained = log.retained_bytes_v3()?;
+    v3_add(
+        &mut retained,
+        basis.retained_bytes()?,
+        "fixture stage retained bytes",
+    )?;
+    if let Some(receipt) = receipt {
+        v3_add(
+            &mut retained,
+            fixture_receipt_allocated_bytes(receipt)?,
+            "fixture stage retained bytes",
+        )?;
+    }
+    let peak = ensure_v3_working_peak(retained, additions)?;
+    record_fixture_stage_peak(stage, peak);
+    mark_fixture_stage_allocation_seam(stage);
+    Ok(())
+}
+
+/// Exact external-witness admission sealed to one current log position.
+/// It is consumed when minting the fixture verification bundle.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::ExternalWitnessAdmissionV3>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::ExternalWitnessAdmissionV3>();
+/// ```
+#[derive(Debug)]
+pub struct ExternalWitnessAdmissionV3 {
+    harness: TrustedFixtureHarnessV1,
+    basis_digest: ContentHash,
+    tail_hash: ContentHash,
+    expected_first_sequence: u64,
+    witness_registration_id: StableId,
+}
+
 /// Complete static verifier event suffix sealed to one log position.
 ///
 /// ```compile_fail
@@ -6201,6 +6734,155 @@ pub struct ValidatedVerificationBundleV3 {
     first_sequence: u64,
     payloads: Vec<PersistedPayload>,
     trust_digests: Vec<ContentHash>,
+}
+
+/// One roots-reconstructed authority for completing an interrupted generic
+/// verification bundle. Durable marker bytes are descriptive only: this value
+/// is created after the complete planned bundle and observed prefix replay
+/// successfully through the canonical v3 authority validator.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::VerificationBundleResumeAuthorityV3>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::VerificationBundleResumeAuthorityV3>();
+/// ```
+#[derive(Debug)]
+pub struct VerificationBundleResumeAuthorityV3 {
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    pre_tail_hash: ContentHash,
+    first_sequence: u64,
+    bundle_digest: ContentHash,
+    planned_event_ids: Vec<StableId>,
+    planned_event_hashes: Vec<ContentHash>,
+    durable_stage: usize,
+    current_tail_hash: ContentHash,
+    current_sequence: u64,
+    current_basis_digest: ContentHash,
+    missing_envelopes: Vec<EventEnvelope>,
+    missing_payloads: Vec<PersistedPayload>,
+    missing_entries: Vec<AuthorityReplayEntryV3>,
+    verification_id: StableId,
+}
+
+fn verification_bundle_resume_allocated_bytes(
+    authority: &VerificationBundleResumeAuthorityV3,
+) -> Result<u64> {
+    let mut total = u64::try_from(size_of::<VerificationBundleResumeAuthorityV3>())
+        .map_err(|_| v3_memory_error("verification bundle resume authority", u64::MAX))?;
+    for bytes in [
+        authority.run_id.allocated_bytes(),
+        authority.genesis_hash.allocated_bytes(),
+        authority.pre_tail_hash.allocated_bytes(),
+        authority.bundle_digest.allocated_bytes(),
+        authority.current_tail_hash.allocated_bytes(),
+        authority.current_basis_digest.allocated_bytes(),
+        authority.verification_id.allocated_bytes(),
+    ] {
+        v3_add(
+            &mut total,
+            u64::try_from(bytes).unwrap_or(u64::MAX),
+            "verification bundle resume authority",
+        )?;
+    }
+    for id in &authority.planned_event_ids {
+        v3_add(
+            &mut total,
+            u64::try_from(size_of::<StableId>() + id.allocated_bytes()).unwrap_or(u64::MAX),
+            "verification bundle resume authority",
+        )?;
+    }
+    for hash in &authority.planned_event_hashes {
+        v3_add(
+            &mut total,
+            u64::try_from(size_of::<ContentHash>() + hash.allocated_bytes()).unwrap_or(u64::MAX),
+            "verification bundle resume authority",
+        )?;
+    }
+    for envelope in &authority.missing_envelopes {
+        v3_add(
+            &mut total,
+            u64::try_from(size_of::<EventEnvelope>() + envelope.allocated_bytes())
+                .unwrap_or(u64::MAX),
+            "verification bundle resume authority",
+        )?;
+    }
+    v3_add(
+        &mut total,
+        payload_vec_owned_bytes(&authority.missing_payloads)?,
+        "verification bundle resume authority",
+    )?;
+    v3_add(
+        &mut total,
+        authority_entries_retained(&authority.missing_entries)?,
+        "verification bundle resume authority",
+    )?;
+    Ok(total)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn projected_verification_bundle_resume_allocated_bytes(
+    run_id: &StableId,
+    genesis_hash: &ContentHash,
+    pre_tail_hash: &ContentHash,
+    bundle_digest: &ContentHash,
+    planned_envelopes: &[EventEnvelope],
+    durable_stage: usize,
+    current_tail_hash: &ContentHash,
+    current_basis_digest: &ContentHash,
+    payloads: &[PersistedPayload],
+    planned_entries: &[AuthorityReplayEntryV3],
+    verification_id: &StableId,
+) -> Result<u64> {
+    let mut total = u64::try_from(size_of::<VerificationBundleResumeAuthorityV3>())
+        .map_err(|_| v3_memory_error("verification bundle resume authority", u64::MAX))?;
+    for bytes in [
+        run_id.allocated_bytes(),
+        genesis_hash.allocated_bytes(),
+        pre_tail_hash.allocated_bytes(),
+        bundle_digest.allocated_bytes(),
+        current_tail_hash.allocated_bytes(),
+        current_basis_digest.allocated_bytes(),
+        verification_id.allocated_bytes(),
+    ] {
+        v3_add(
+            &mut total,
+            u64::try_from(bytes).unwrap_or(u64::MAX),
+            "verification bundle resume authority",
+        )?;
+    }
+    for envelope in planned_envelopes {
+        for bytes in [
+            size_of::<StableId>() + envelope.id().allocated_bytes(),
+            size_of::<ContentHash>() + envelope.event_hash().allocated_bytes(),
+        ] {
+            v3_add(
+                &mut total,
+                u64::try_from(bytes).unwrap_or(u64::MAX),
+                "verification bundle resume authority",
+            )?;
+        }
+    }
+    v3_add(
+        &mut total,
+        envelope_slice_owned_bytes(&planned_envelopes[durable_stage..])?,
+        "verification bundle resume authority",
+    )?;
+    v3_add(
+        &mut total,
+        projected_payload_vec_owned_bytes(&payloads[durable_stage..])?,
+        "verification bundle resume authority",
+    )?;
+    v3_add(
+        &mut total,
+        authority_entry_slice_owned_bytes(&planned_entries[durable_stage..])?,
+        "verification bundle resume authority",
+    )?;
+    Ok(total)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6429,6 +7111,246 @@ impl AuthorityReplayBasisV3 {
             entries,
         )
     }
+}
+
+fn same_authority_basis(left: &AuthorityReplayBasisV3, right: &AuthorityReplayBasisV3) -> bool {
+    left.run_id == right.run_id
+        && left.genesis_hash == right.genesis_hash
+        && left.confirmed_tail_hash == right.confirmed_tail_hash
+        && left.confirmed_event_count == right.confirmed_event_count
+        && left.policy_revision_hash == right.policy_revision_hash
+        && left.entries == right.entries
+        && left.basis_digest == right.basis_digest
+}
+
+fn validate_verification_bundle_plan_shape(payloads: &[PersistedPayload]) -> Result<StableId> {
+    if payloads.len() < 2 || payloads.len() > 3 {
+        return Err(DomainError::VerificationBundleMismatch);
+    }
+    let verification = match payloads.last() {
+        Some(PersistedPayload::VerificationRecordedV3(value)) => value,
+        _ => return Err(DomainError::VerificationBundleMismatch),
+    };
+    match payloads {
+        [
+            PersistedPayload::EvidenceRecordedV3(_),
+            PersistedPayload::VerificationRecordedV3(_),
+        ]
+        | [
+            PersistedPayload::EvidenceRecordedV3(_),
+            PersistedPayload::EvidenceBoundV3(_),
+            PersistedPayload::VerificationRecordedV3(_),
+        ] => Ok(verification.id().clone()),
+        _ => Err(DomainError::VerificationBundleMismatch),
+    }
+}
+
+fn bundle_resume_mismatch(error: DomainError) -> DomainError {
+    match error {
+        incomplete @ DomainError::Incomplete { .. }
+        | incomplete @ DomainError::ClaimRawClosureMissing { .. }
+        | incomplete @ DomainError::AlreadyComplete => incomplete,
+        _ => DomainError::BundleResumeAuthorityMismatch,
+    }
+}
+
+fn claim_raw_registration<'a>(
+    log: &'a EventLog,
+    claim_id: &StableId,
+) -> Result<&'a ArtifactRegisteredV3> {
+    let claim = log
+        .aggregate
+        .execution_claims()
+        .find(|claim| claim.id() == claim_id)
+        .ok_or(DomainError::BundleResumeAuthorityMismatch)?;
+    let execution = log
+        .aggregate
+        .executions()
+        .find(|execution| execution.id() == claim.execution_id())
+        .ok_or(DomainError::BundleResumeAuthorityMismatch)?;
+    let registration_id = execution.raw_artifact_registration_id();
+    let missing = || DomainError::ClaimRawClosureMissing {
+        claim_id: claim_id.clone(),
+        registration_id: registration_id.clone(),
+    };
+    let registration = log
+        .v3_aggregate
+        .as_ref()
+        .and_then(|state| state.registrations.get(registration_id))
+        .ok_or_else(missing)?;
+    let exact_source = matches!(
+        registration.source(),
+        ArtifactSourceV3::ReviewerExecution {
+            execution_id,
+            reviewer_id,
+            run_id,
+        } if execution_id == execution.id()
+            && reviewer_id == execution.reviewer_id()
+            && run_id == log.run_id()
+    );
+    if !exact_source
+        || registration.run_id() != log.run_id()
+        || registration.cas_hash() != execution.raw_artifact_hash()
+        || registration.sensitivity() != ArtifactSensitivity::Sensitive
+    {
+        return Err(missing());
+    }
+    Ok(registration)
+}
+
+fn envelope_slice_owned_bytes(envelopes: &[EventEnvelope]) -> Result<u64> {
+    let mut total = u64::try_from(envelopes.len().saturating_mul(size_of::<EventEnvelope>()))
+        .unwrap_or(u64::MAX);
+    for envelope in envelopes {
+        v3_add(
+            &mut total,
+            u64::try_from(envelope.allocated_bytes()).unwrap_or(u64::MAX),
+            "verification bundle recovery envelopes",
+        )?;
+    }
+    Ok(total)
+}
+
+fn verification_payload_heap_bytes(payload: &PersistedPayload) -> Result<u64> {
+    match payload {
+        PersistedPayload::EvidenceRecordedV3(value) => {
+            value.allocated_bytes().map_err(m4_domain_error)
+        }
+        PersistedPayload::EvidenceBoundV3(value) => {
+            value.allocated_bytes().map_err(m4_domain_error)
+        }
+        PersistedPayload::VerificationRecordedV3(value) => {
+            value.allocated_bytes().map_err(m4_domain_error)
+        }
+        _ => Err(DomainError::VerificationBundleMismatch),
+    }
+}
+
+fn payload_vec_owned_bytes(payloads: &Vec<PersistedPayload>) -> Result<u64> {
+    let mut total = u64::try_from(
+        payloads
+            .capacity()
+            .saturating_mul(size_of::<PersistedPayload>()),
+    )
+    .unwrap_or(u64::MAX);
+    for payload in payloads {
+        v3_add(
+            &mut total,
+            verification_payload_heap_bytes(payload)?,
+            "verification bundle recovery payloads",
+        )?;
+    }
+    Ok(total)
+}
+
+fn projected_payload_vec_owned_bytes(payloads: &[PersistedPayload]) -> Result<u64> {
+    let mut total = u64::try_from(payloads.len().saturating_mul(size_of::<PersistedPayload>()))
+        .unwrap_or(u64::MAX);
+    for payload in payloads {
+        v3_add(
+            &mut total,
+            verification_payload_heap_bytes(payload)?,
+            "verification bundle recovery projected payloads",
+        )?;
+    }
+    Ok(total)
+}
+
+fn authority_entry_slice_owned_bytes(entries: &[AuthorityReplayEntryV3]) -> Result<u64> {
+    let mut total = u64::try_from(
+        entries
+            .len()
+            .saturating_mul(size_of::<AuthorityReplayEntryV3>()),
+    )
+    .unwrap_or(u64::MAX);
+    for entry in entries {
+        for bytes in [
+            entry.event_id.allocated_bytes(),
+            entry.payload_kind.len(),
+            entry.record_id.allocated_bytes(),
+            entry.record_body_hash.allocated_bytes(),
+            entry.predecessor_event_hash.allocated_bytes(),
+            entry.trust_binding_digest.allocated_bytes(),
+        ] {
+            v3_add(
+                &mut total,
+                u64::try_from(bytes).unwrap_or(u64::MAX),
+                "verification bundle recovery entries",
+            )?;
+        }
+    }
+    Ok(total)
+}
+
+fn authority_entry_owned_bytes(entry: &AuthorityReplayEntryV3) -> Result<u64> {
+    let mut total = u64::try_from(size_of::<AuthorityReplayEntryV3>()).unwrap_or(u64::MAX);
+    for bytes in [
+        entry.event_id.allocated_bytes(),
+        entry.payload_kind.len(),
+        entry.record_id.allocated_bytes(),
+        entry.record_body_hash.allocated_bytes(),
+        entry.predecessor_event_hash.allocated_bytes(),
+        entry.trust_binding_digest.allocated_bytes(),
+    ] {
+        v3_add(
+            &mut total,
+            u64::try_from(bytes).unwrap_or(u64::MAX),
+            "verification bundle recovery entry",
+        )?;
+    }
+    Ok(total)
+}
+
+fn verification_bundle_recovery_inputs_retained(
+    pre_bundle_log: &EventLog,
+    pre_bundle_basis: &AuthorityReplayBasisV3,
+    current_log: &EventLog,
+    current_basis: &AuthorityReplayBasisV3,
+    planned_envelopes: &[EventEnvelope],
+    roots: &AuthorityTrustRootsV3,
+    raw_cas_bytes: u64,
+) -> Result<u64> {
+    let mut retained = pre_bundle_log.retained_bytes_v3()?;
+    for bytes in [
+        current_log.retained_bytes_v3()?,
+        pre_bundle_basis.retained_bytes()?,
+        current_basis.retained_bytes()?,
+        roots.retained_bytes()?,
+        envelope_slice_owned_bytes(planned_envelopes)?,
+        raw_cas_bytes,
+    ] {
+        v3_add(
+            &mut retained,
+            bytes,
+            "verification bundle recovery retained bytes",
+        )?;
+    }
+    Ok(retained)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn preflight_verification_bundle_recovery(
+    pre_bundle_log: &EventLog,
+    pre_bundle_basis: &AuthorityReplayBasisV3,
+    current_log: &EventLog,
+    current_basis: &AuthorityReplayBasisV3,
+    planned_envelopes: &[EventEnvelope],
+    roots: &AuthorityTrustRootsV3,
+    raw_cas_bytes: u64,
+    additions: impl IntoIterator<Item = u64>,
+) -> Result<u64> {
+    ensure_v3_working_peak(
+        verification_bundle_recovery_inputs_retained(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            raw_cas_bytes,
+        )?,
+        additions,
+    )
 }
 
 fn authority_entries_retained(entries: &Vec<AuthorityReplayEntryV3>) -> Result<u64> {
@@ -6867,10 +7789,9 @@ fn validate_authority_registration(
                 })?;
             if claim.body_hash()? != *claim_body_hash
                 || claim.body_hash()? != root.claim_body_hash
-                || bytes.len() != 145
+                || bytes.len() != usize::try_from(FIXTURE_WITNESS_SIZE).unwrap_or(usize::MAX)
                 || ContentHash::sha256(bytes).as_str() != FIXTURE_WITNESS_HASH
-                || bytes
-                    != br#"{"charge_count":2,"expected_max":1,"outcome":"witnessed","schema":"reviewgraphen.test_witness_result.v1","test_artifact_id":"test:double-submit"}"#
+                || bytes != FIXTURE_WITNESS_BYTES
             {
                 return Err(DomainError::WitnessAdmissionMismatch);
             }
@@ -6983,6 +7904,190 @@ struct FixtureReplayClosure {
     proposal: crate::m4::FixtureRecordProposalV1,
 }
 
+fn validate_fixture_result_for_root(
+    aggregate: &ReviewAggregate,
+    root: &HarnessTrustRootInputV3,
+    output_bytes: &[u8],
+) -> Result<crate::FixedFixtureResultV1> {
+    let claim = aggregate
+        .execution_claims()
+        .find(|claim| claim.id() == &root.claim_id)
+        .ok_or(DomainError::VerificationBundleMismatch)?;
+    let result =
+        crate::FixedFixtureResultV1::from_json_bytes(output_bytes).map_err(m4_domain_error)?;
+    let mut subject_ids = claim.target_refs().iter().cloned().collect::<Vec<_>>();
+    subject_ids.push(StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?);
+    subject_ids.sort_unstable();
+    if claim.body_hash()? != root.claim_body_hash
+        || claim.property_id() != root.property_id
+        || claim.polarity() != crate::ClaimPolarity::IssuePresent
+        || result.claim_id() != &root.claim_id
+        || result.property_id() != root.property_id
+        || result.descriptor() != crate::VerifierDescriptorV3::FixedFixtureV1
+        || result.procedure() != crate::VerifierProcedureV3::DuplicateSubmitV1
+        || result.outcome() != crate::VerificationOutcomeV3::Passed
+        || result.witness_hash().as_str() != FIXTURE_WITNESS_HASH
+        || result.subject_ids() != subject_ids
+    {
+        return Err(DomainError::VerificationBundleMismatch);
+    }
+    Ok(result)
+}
+
+fn validate_fixture_receipt_for_log<'a>(
+    log: &EventLog,
+    receipt: &'a FixtureExecutionReceiptV1,
+    basis: &AuthorityReplayBasisV3,
+    durable_stage: u64,
+) -> Result<&'a HarnessTrustRootInputV3> {
+    if durable_stage > 2 {
+        return Err(DomainError::WitnessAdmissionMismatch);
+    }
+    let root = &receipt
+        .harness
+        .as_ref()
+        .ok_or(DomainError::WitnessAdmissionMismatch)?
+        .scope;
+    let expected_sequence = receipt
+        .expected_first_sequence
+        .checked_add(durable_stage)
+        .ok_or_else(|| DomainError::EventSequence("fixture stage overflow".to_owned()))?;
+    if basis.policy_revision_hash != root.policy_revision_hash
+        || log.next_sequence()? != expected_sequence
+        || (durable_stage == 0
+            && (receipt.basis_digest != basis.basis_digest || receipt.tail_hash != log.tail_hash))
+        || receipt.witness_bytes.as_slice() != FIXTURE_WITNESS_BYTES
+        || ContentHash::sha256(&receipt.witness_bytes) != root.result_hash
+        || ContentHash::sha256(&receipt.fixture_result_bytes) != receipt.fixture_result_hash
+    {
+        return Err(DomainError::WitnessAdmissionMismatch);
+    }
+    validate_fresh_fixture_scope(log, basis, root)?;
+    let exact_event = |expected: &ExpectedFixtureRegistrationEventV1| -> Result<()> {
+        let index = usize::try_from(expected.envelope.sequence().saturating_sub(1))
+            .map_err(|_| DomainError::WitnessAdmissionMismatch)?;
+        let observed = log
+            .events
+            .get(index)
+            .ok_or(DomainError::WitnessAdmissionMismatch)?
+            .envelope();
+        if observed.id() != expected.envelope.id()
+            || observed.event_hash() != expected.envelope.event_hash()
+            || observed.previous_event_hash() != expected.envelope.previous_event_hash()
+            || observed.actor() != expected.envelope.actor()
+            || observed.payload_hash() != expected.envelope.payload_hash()
+            || observed.canonical_bytes()? != expected.envelope.canonical_bytes()?
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        Ok(())
+    };
+    if durable_stage >= 1 {
+        let expected = receipt
+            .expected_witness_event
+            .as_ref()
+            .ok_or(DomainError::WitnessAdmissionMismatch)?;
+        if expected.envelope.sequence() != receipt.expected_first_sequence
+            || expected.envelope.previous_event_hash() != &receipt.tail_hash
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        exact_event(expected)?;
+        if durable_stage == 1 && log.tail_hash() != expected.envelope.event_hash() {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+    }
+    if durable_stage == 2 {
+        let witness = receipt
+            .expected_witness_event
+            .as_ref()
+            .ok_or(DomainError::WitnessAdmissionMismatch)?;
+        let output = receipt
+            .expected_output_event
+            .as_ref()
+            .ok_or(DomainError::WitnessAdmissionMismatch)?;
+        if output.envelope.sequence() != receipt.expected_first_sequence + 1
+            || output.envelope.previous_event_hash() != witness.envelope.event_hash()
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        exact_event(output)?;
+        if log.tail_hash() != output.envelope.event_hash() {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+    }
+    let result =
+        validate_fixture_result_for_root(&log.aggregate, root, &receipt.fixture_result_bytes)?;
+    if result.subject_ids() != receipt.subject_ids {
+        return Err(DomainError::VerificationBundleMismatch);
+    }
+    Ok(root)
+}
+
+fn validate_fresh_fixture_witness_registration(
+    aggregate: &ReviewAggregate,
+    registration: &ArtifactRegisteredV3,
+    bytes: &[u8],
+    scope: &HarnessTrustRootInputV3,
+) -> Result<()> {
+    if !fixture_registration_matches_scope(registration, scope)
+        || bytes != FIXTURE_WITNESS_BYTES
+        || ContentHash::sha256(bytes) != scope.result_hash
+    {
+        return Err(DomainError::WitnessAdmissionMismatch);
+    }
+    let claim = aggregate
+        .execution_claims()
+        .find(|claim| claim.id() == &scope.claim_id)
+        .ok_or_else(|| DomainError::DanglingReference {
+            owner: "v3 external witness claim",
+            owner_id: registration.registration_id().clone(),
+            reference: scope.claim_id.clone(),
+        })?;
+    if claim.body_hash()? != scope.claim_body_hash
+        || !aggregate
+            .program()
+            .known_ids()
+            .contains(&scope.test_artifact_id)
+    {
+        return Err(DomainError::WitnessAdmissionMismatch);
+    }
+    Ok(())
+}
+
+fn expected_fixture_registration_event(
+    log: &EventLog,
+    registration: &ArtifactRegisteredV3,
+) -> Result<ExpectedFixtureRegistrationEventV1> {
+    let payload = PersistedPayload::ArtifactRegisteredV3(registration.clone());
+    let sequence = log.next_sequence()?;
+    let actor = payload.actor().to_owned();
+    let envelope = EventEnvelope::new(
+        EventContractVersion::V3,
+        log.run_id.clone(),
+        log.genesis_hash.clone(),
+        sequence,
+        actor,
+        sequence,
+        log.tail_hash.clone(),
+        payload,
+    )?;
+    Ok(ExpectedFixtureRegistrationEventV1 {
+        registration_id: registration.registration_id().clone(),
+        envelope,
+    })
+}
+
+fn same_expected_fixture_event(
+    left: &ExpectedFixtureRegistrationEventV1,
+    right: &ExpectedFixtureRegistrationEventV1,
+) -> Result<bool> {
+    Ok(left.registration_id == right.registration_id
+        && left.envelope.id() == right.envelope.id()
+        && left.envelope.event_hash() == right.envelope.event_hash()
+        && left.envelope.canonical_bytes()? == right.envelope.canonical_bytes()?)
+}
+
 fn fixture_replay_closure(
     aggregate: &ReviewAggregate,
     state: &V3RunAggregate,
@@ -7022,19 +8127,11 @@ fn fixture_replay_closure(
     }
     ensure_v3_working_peak(state.retained_bytes()?, [output.size()])?;
     let output_bytes = resolve_registered_bytes(output, resolver)?;
-    let result =
-        crate::FixedFixtureResultV1::from_json_bytes(&output_bytes).map_err(m4_domain_error)?;
+    let result = validate_fixture_result_for_root(aggregate, root, &output_bytes)?;
     let mut subject_ids = claim.target_refs().iter().cloned().collect::<Vec<_>>();
     subject_ids.push(StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?);
     subject_ids.sort_unstable();
-    if result.claim_id() != &root.claim_id
-        || result.property_id() != root.property_id
-        || result.descriptor() != crate::VerifierDescriptorV3::FixedFixtureV1
-        || result.procedure() != crate::VerifierProcedureV3::DuplicateSubmitV1
-        || result.outcome() != crate::VerificationOutcomeV3::Passed
-        || result.witness_hash().as_str() != FIXTURE_WITNESS_HASH
-        || result.subject_ids() != subject_ids
-        || evidence.snapshot_id() != &root.snapshot_id
+    if evidence.snapshot_id() != &root.snapshot_id
         || evidence.subject_ids() != subject_ids
         || evidence.input_registration_id() != input.registration_id()
         || evidence.output_registration_id() != output.registration_id()
@@ -7923,6 +9020,224 @@ impl EventLog {
         self.prepare_authority_registration_v3(registration, resolver, roots, basis)
     }
 
+    /// Executes the fixed, checked-in duplicate-submit harness against one
+    /// current D2 claim. No replay root, source assertion, hash, path, command,
+    /// or harness metadata is accepted from the caller.
+    pub fn execute_fixture_harness_v1(
+        &self,
+        claim_id: &StableId,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<FixtureExecutionReceiptV1> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        fixture_stage_preflight(
+            1,
+            self,
+            basis,
+            None,
+            [
+                FIXTURE_WITNESS_SIZE,
+                crate::m4::MAX_RECORD_BYTES as u64,
+                8_192,
+            ],
+        )?;
+        let claim = exact_fixture_claim_for_log(self, claim_id)?;
+        if crate::harness_source_v1::HARNESS_ID != FIXTURE_HARNESS_ID
+            || crate::harness_source_v1::HARNESS_REVISION != FIXTURE_HARNESS_REVISION
+        {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        let witness_bytes = crate::harness_source_v1::run_duplicate_submit_harness();
+        if witness_bytes.as_slice() != FIXTURE_WITNESS_BYTES
+            || u64::try_from(witness_bytes.len()).unwrap_or(u64::MAX) != FIXTURE_WITNESS_SIZE
+            || ContentHash::sha256(&witness_bytes).as_str() != FIXTURE_WITNESS_HASH
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        let mut subject_ids = claim.target_refs().iter().cloned().collect::<Vec<_>>();
+        subject_ids.push(StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?);
+        subject_ids.sort_unstable();
+        if !subject_ids
+            .iter()
+            .all(|id| self.aggregate.program().known_ids().contains(id))
+        {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        let fixture_result_bytes = canonical_json(&serde_json::json!({
+            "claim_id": claim.id(),
+            "descriptor_id": FIXTURE_DESCRIPTOR_ID,
+            "outcome": "passed",
+            "procedure_version": FIXTURE_PROCEDURE_ID,
+            "property_id": M4_PROPERTY_ID,
+            "schema": "reviewgraphen.fixture_test_result.v1",
+            "subject_ids": subject_ids,
+            "witness_hash": FIXTURE_WITNESS_HASH,
+        }))?;
+        let fixture_result_hash = ContentHash::sha256(&fixture_result_bytes);
+        let scope = HarnessTrustRootInputV3 {
+            policy_revision_hash: basis.policy_revision_hash.clone(),
+            repository_id: self.aggregate.program().repository_id().clone(),
+            repository_source_hash: self
+                .aggregate
+                .program()
+                .repository_source()
+                .content_hash()
+                .ok_or(DomainError::AuthorityPolicyMismatch)?
+                .clone(),
+            harness_id: crate::harness_source_v1::HARNESS_ID.to_owned(),
+            harness_revision: crate::harness_source_v1::HARNESS_REVISION.to_owned(),
+            harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH)?,
+            test_artifact_id: StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?,
+            descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+            procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+            result_hash: ContentHash::sha256(&witness_bytes),
+            result_size: FIXTURE_WITNESS_SIZE,
+            result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+            result_sensitivity: ArtifactSensitivity::CanonicalState,
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            snapshot_id: self.aggregate.program().snapshot_id().clone(),
+            universe_id: self.aggregate.universe().id().clone(),
+            property_id: claim.property_id().to_owned(),
+            claim_id: claim.id().clone(),
+            claim_body_hash: claim.body_hash()?,
+        };
+        let result =
+            validate_fixture_result_for_root(&self.aggregate, &scope, &fixture_result_bytes)?;
+        if result.subject_ids() != subject_ids {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        Ok(FixtureExecutionReceiptV1 {
+            harness: Some(TrustedFixtureHarnessV1::from_execution(scope)),
+            basis_digest: basis.basis_digest.clone(),
+            tail_hash: self.tail_hash.clone(),
+            expected_first_sequence: self.next_sequence()?,
+            subject_ids,
+            fixture_result_hash,
+            fixture_result_bytes,
+            witness_bytes,
+            expected_witness_event: None,
+            expected_output_event: None,
+        })
+    }
+
+    /// Prepares the witness registration emitted by one actual fixture
+    /// execution. All durable source fields are derived from the receipt.
+    pub fn prepare_external_fixture_witness_registration_v3(
+        &self,
+        receipt: &mut FixtureExecutionReceiptV1,
+        resolver: &impl AuthorityArtifactResolverV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedArtifactRegistrationV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        fixture_stage_preflight(2, self, basis, Some(receipt), [FIXTURE_WITNESS_SIZE, 8_192])?;
+        let root = validate_fixture_receipt_for_log(self, receipt, basis, 0)?;
+        let registration = ArtifactRegisteredV3::new_validated(
+            self.run_id.clone(),
+            root.result_hash.clone(),
+            FIXTURE_MEDIA_TYPE,
+            FIXTURE_WITNESS_SIZE,
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::ExternalHarnessWitness {
+                policy_revision_hash: root.policy_revision_hash.clone(),
+                repository_id: root.repository_id.clone(),
+                repository_source_hash: root.repository_source_hash.clone(),
+                run_id: root.run_id.clone(),
+                genesis_hash: root.genesis_hash.clone(),
+                snapshot_id: root.snapshot_id.clone(),
+                universe_id: root.universe_id.clone(),
+                property_id: root.property_id.clone(),
+                claim_id: root.claim_id.clone(),
+                claim_body_hash: root.claim_body_hash.clone(),
+                harness_id: root.harness_id.clone(),
+                harness_revision: root.harness_revision.clone(),
+                harness_source_hash: root.harness_source_hash.clone(),
+                test_artifact_id: root.test_artifact_id.clone(),
+                descriptor_id: root.descriptor_id.clone(),
+                procedure_version: root.procedure_version.clone(),
+            },
+        )?;
+        let bytes = resolve_registered_bytes(&registration, resolver)?;
+        validate_fresh_fixture_witness_registration(&self.aggregate, &registration, &bytes, root)?;
+        let expected = expected_fixture_registration_event(self, &registration)?;
+        if let Some(prior) = &receipt.expected_witness_event
+            && !same_expected_fixture_event(prior, &expected)?
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        receipt.expected_witness_event = Some(expected);
+        Ok(ValidatedArtifactRegistrationV3 {
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            tail_hash: self.tail_hash.clone(),
+            sequence: self.next_sequence()?,
+            registration,
+        })
+    }
+
+    /// Prepares the deterministic fixture-result output registration for one
+    /// exact D2 claim. Only its already-CAS-backed hash and size are named.
+    pub fn prepare_fixture_verifier_output_registration_v3(
+        &self,
+        receipt: &mut FixtureExecutionReceiptV1,
+        resolver: &impl AuthorityArtifactResolverV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedArtifactRegistrationV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        fixture_stage_preflight(
+            3,
+            self,
+            basis,
+            Some(receipt),
+            [
+                u64::try_from(receipt.fixture_result_bytes.len()).unwrap_or(u64::MAX),
+                8_192,
+            ],
+        )?;
+        let root = validate_fixture_receipt_for_log(self, receipt, basis, 1)?;
+        let registration = ArtifactRegisteredV3::new_validated(
+            self.run_id.clone(),
+            receipt.fixture_result_hash.clone(),
+            FIXTURE_OUTPUT_MEDIA_TYPE,
+            u64::try_from(receipt.fixture_result_bytes.len()).map_err(|_| {
+                DomainError::Incomplete {
+                    operation: "fixture result registration size",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                }
+            })?,
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::VerifierArtifact {
+                run_id: self.run_id.clone(),
+                claim_id: root.claim_id.clone(),
+                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                role: VerifierArtifactRoleV3::Output,
+            },
+        )?;
+        let bytes = resolve_registered_bytes(&registration, resolver)?;
+        if bytes != receipt.fixture_result_bytes {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        validate_fixture_result_for_root(&self.aggregate, root, &bytes)?;
+        let expected = expected_fixture_registration_event(self, &registration)?;
+        if let Some(prior) = &receipt.expected_output_event
+            && !same_expected_fixture_event(prior, &expected)?
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        receipt.expected_output_event = Some(expected);
+        Ok(ValidatedArtifactRegistrationV3 {
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            tail_hash: self.tail_hash.clone(),
+            sequence: self.next_sequence()?,
+            registration,
+        })
+    }
+
     fn prepare_authority_registration_v3(
         &self,
         registration: ArtifactRegisteredV3,
@@ -7933,7 +9248,7 @@ impl EventLog {
         self.require_writable()?;
         basis.validate_for_log(self)?;
         validate_repository_trust_root(&self.aggregate, roots)?;
-        let static_registration = matches!(
+        let admitted_registration = matches!(
             registration.source(),
             ArtifactSourceV3::VerifierArtifact {
                 descriptor_id,
@@ -7942,16 +9257,29 @@ impl EventLog {
                 ..
             } if descriptor_id == STATIC_DESCRIPTOR_ID
                 && procedure_version == STATIC_PROCEDURE_ID
+        ) || matches!(
+            registration.source(),
+            ArtifactSourceV3::VerifierArtifact {
+                descriptor_id,
+                procedure_version,
+                role: VerifierArtifactRoleV3::Output,
+                ..
+            } if descriptor_id == FIXTURE_DESCRIPTOR_ID
+                && procedure_version == FIXTURE_PROCEDURE_ID
+        ) || matches!(
+            registration.source(),
+            ArtifactSourceV3::ExternalHarnessWitness { .. }
         );
         if basis.policy_revision_hash != roots.policy_revision_hash {
             return Err(DomainError::AuthorityPolicyMismatch);
         }
         if self.version != EventContractVersion::V3
-            || !static_registration
+            || !admitted_registration
             || registration.run_id() != &self.run_id
         {
             return Err(DomainError::Validation(
-                "fresh v3 authority registration admits only static verifier artifacts".to_owned(),
+                "fresh v3 authority registration is outside the closed verifier registry"
+                    .to_owned(),
             ));
         }
         ensure_v3_working_peak(
@@ -8008,6 +9336,169 @@ impl EventLog {
         *basis = next_basis;
         self.events.last().ok_or_else(|| {
             DomainError::EventSequence("authority registration append was not retained".to_owned())
+        })
+    }
+
+    /// Consumes the authority in one actual execution receipt only after all
+    /// durable-state, CAS, and allocation checks have succeeded.
+    pub fn admit_external_witness_v3(
+        &self,
+        receipt: &mut FixtureExecutionReceiptV1,
+        witness_registration_id: &StableId,
+        resolver: &impl AuthorityArtifactResolverV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ExternalWitnessAdmissionV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        fixture_stage_preflight(4, self, basis, Some(receipt), [FIXTURE_WITNESS_SIZE, 8_192])?;
+        if self.next_sequence()?
+            != receipt
+                .expected_first_sequence
+                .checked_add(2)
+                .ok_or(DomainError::WitnessAdmissionMismatch)?
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        let root = validate_fixture_receipt_for_log(self, receipt, basis, 2)?;
+        if receipt
+            .expected_witness_event
+            .as_ref()
+            .is_none_or(|expected| &expected.registration_id != witness_registration_id)
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        let state = self.v3_aggregate.as_ref().ok_or({
+            DomainError::EventV3AuthorityReplayRequired {
+                operation: "external witness admission",
+            }
+        })?;
+        let registration = state
+            .registrations
+            .get(witness_registration_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "external witness admission",
+                owner_id: root.claim_id.clone(),
+                reference: witness_registration_id.clone(),
+            })?;
+        if !fixture_registration_matches_scope(registration, root) {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        let witness_bytes = resolve_registered_bytes(registration, resolver)?;
+        validate_fresh_fixture_witness_registration(
+            &self.aggregate,
+            registration,
+            &witness_bytes,
+            root,
+        )?;
+        let trusted = receipt
+            .harness
+            .take()
+            .ok_or(DomainError::WitnessAdmissionMismatch)?;
+        Ok(ExternalWitnessAdmissionV3 {
+            harness: trusted,
+            basis_digest: basis.basis_digest.clone(),
+            tail_hash: self.tail_hash.clone(),
+            expected_first_sequence: self.next_sequence()?,
+            witness_registration_id: witness_registration_id.clone(),
+        })
+    }
+
+    /// Consumes one exact witness admission and seals the deterministic
+    /// Evidence -> Reproduces Binding -> Passed Verification suffix.
+    pub fn mint_fixture_verification_bundle_v3(
+        &self,
+        admission: ExternalWitnessAdmissionV3,
+        output_registration_id: &StableId,
+        resolver: &impl AuthorityArtifactResolverV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedVerificationBundleV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        fixture_stage_preflight(
+            5,
+            self,
+            basis,
+            None,
+            [
+                FIXTURE_WITNESS_SIZE,
+                crate::m4::MAX_RECORD_BYTES as u64,
+                3 * crate::m4::MAX_RECORD_BYTES as u64,
+                8_192,
+            ],
+        )?;
+        if admission.basis_digest != basis.basis_digest
+            || admission.tail_hash != self.tail_hash
+            || admission.expected_first_sequence != self.next_sequence()?
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        let root = &admission.harness.scope;
+        validate_fresh_fixture_scope(self, basis, root)?;
+        let state = self.v3_aggregate.as_ref().ok_or({
+            DomainError::EventV3AuthorityReplayRequired {
+                operation: "fixture verification bundle mint",
+            }
+        })?;
+        let input = state
+            .registrations
+            .get(&admission.witness_registration_id)
+            .ok_or(DomainError::WitnessAdmissionMismatch)?;
+        let output = state
+            .registrations
+            .get(output_registration_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        if !fixture_registration_matches_scope(input, root)
+            || !verifier_registration_matches(
+                output,
+                &root.claim_id,
+                FIXTURE_DESCRIPTOR_ID,
+                FIXTURE_PROCEDURE_ID,
+                VerifierArtifactRoleV3::Output,
+            )
+        {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        let witness_bytes = resolve_registered_bytes(input, resolver)?;
+        validate_fresh_fixture_witness_registration(&self.aggregate, input, &witness_bytes, root)?;
+        let output_bytes = resolve_registered_bytes(output, resolver)?;
+        let result = validate_fixture_result_for_root(&self.aggregate, root, &output_bytes)?;
+        let scope = state
+            .assessment_scopes
+            .get(&root.claim_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let proposal = crate::m4::materialize_fixture_replay_v1(
+            scope,
+            &result,
+            input.registration_id().clone(),
+            output.registration_id().clone(),
+        )
+        .map_err(m4_domain_error)?;
+        let payloads = vec![
+            PersistedPayload::EvidenceRecordedV3(proposal.evidence),
+            PersistedPayload::EvidenceBoundV3(proposal.binding),
+            PersistedPayload::VerificationRecordedV3(proposal.verification),
+        ];
+        let proposal_staging = payloads.iter().try_fold(0_u64, |mut total, payload| {
+            v3_add(
+                &mut total,
+                v3_payload_staging_bytes(payload)?,
+                "event-v3 fixture proposal staging",
+            )?;
+            Ok(total)
+        })?;
+        ensure_v3_working_peak(
+            self.retained_bytes_v3()?,
+            [basis.retained_bytes()?, proposal_staging],
+        )?;
+        let trust_digest = trust_digest_for_harness(root)?;
+        let trust_digests = vec![trust_digest; payloads.len()];
+        Ok(ValidatedVerificationBundleV3 {
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            tail_hash: self.tail_hash.clone(),
+            first_sequence: self.next_sequence()?,
+            payloads,
+            trust_digests,
         })
     }
 
@@ -8161,6 +9652,660 @@ impl EventLog {
         Ok(VerificationBundleReceiptV3 {
             event_ids,
             verification_id,
+        })
+    }
+
+    /// Reconstructs narrowly scoped authority for a partially durable
+    /// verification bundle. Stage zero is intentionally refused: fresh
+    /// execution authority cannot be recreated from a store marker.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recover_verification_bundle_resume_authority_v3(
+        pre_bundle_log: &EventLog,
+        pre_bundle_basis: &AuthorityReplayBasisV3,
+        current_log: &EventLog,
+        current_basis: &AuthorityReplayBasisV3,
+        planned_envelopes: &[EventEnvelope],
+        resolver: &impl AuthorityArtifactResolverV3,
+        roots: &AuthorityTrustRootsV3,
+    ) -> Result<VerificationBundleResumeAuthorityV3> {
+        pre_bundle_log
+            .require_writable()
+            .map_err(bundle_resume_mismatch)?;
+        current_log
+            .require_writable()
+            .map_err(bundle_resume_mismatch)?;
+        pre_bundle_basis
+            .validate_for_log(pre_bundle_log)
+            .map_err(bundle_resume_mismatch)?;
+        current_basis
+            .validate_for_log(current_log)
+            .map_err(bundle_resume_mismatch)?;
+        validate_repository_trust_root(&pre_bundle_log.aggregate, roots)
+            .map_err(bundle_resume_mismatch)?;
+        validate_repository_trust_root(&current_log.aggregate, roots)
+            .map_err(bundle_resume_mismatch)?;
+        if pre_bundle_basis.policy_revision_hash != roots.policy_revision_hash
+            || current_basis.policy_revision_hash != roots.policy_revision_hash
+            || pre_bundle_log.run_id != current_log.run_id
+            || pre_bundle_log.genesis_hash != current_log.genesis_hash
+            || planned_envelopes.len() < 2
+            || planned_envelopes.len() > 3
+        {
+            return Err(DomainError::BundleResumeAuthorityMismatch);
+        }
+        let pre_count = pre_bundle_log.events.len();
+        let durable_stage = current_log
+            .events
+            .len()
+            .checked_sub(pre_count)
+            .ok_or(DomainError::BundleResumeAuthorityMismatch)?;
+        if durable_stage == planned_envelopes.len() {
+            return Err(DomainError::AlreadyComplete);
+        }
+        if durable_stage == 0 || durable_stage > planned_envelopes.len() {
+            return Err(DomainError::BundleResumeAuthorityMismatch);
+        }
+        let current_envelopes_projected =
+            current_log
+                .envelopes()
+                .try_fold(0_u64, |mut total, envelope| {
+                    v3_add(
+                        &mut total,
+                        u64::try_from(size_of::<EventEnvelope>() + envelope.allocated_bytes())
+                            .unwrap_or(u64::MAX),
+                        "verification bundle recovery current envelopes",
+                    )?;
+                    Ok(total)
+                })?;
+        preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            0,
+            [current_envelopes_projected],
+        )?;
+
+        let mut current_envelopes = Vec::new();
+        current_envelopes
+            .try_reserve_exact(current_log.events.len())
+            .map_err(|_| {
+                v3_memory_error(
+                    "verification bundle recovery current envelopes",
+                    current_envelopes_projected,
+                )
+            })?;
+        current_envelopes.extend(current_log.envelopes().cloned());
+        let current_envelopes_owned = envelope_slice_owned_bytes(&current_envelopes)?;
+        let same_canonical_envelope =
+            |observed: &EventEnvelope, expected: &EventEnvelope| -> Result<bool> {
+                let observed_canonical = crate::canonical::canonical_json_count_bounded(
+                    observed,
+                    crate::m4::MAX_RETAINED_WORKING_BYTES as usize,
+                    "verification bundle recovery observed envelope",
+                )?;
+                let expected_canonical = crate::canonical::canonical_json_count_bounded(
+                    expected,
+                    crate::m4::MAX_RETAINED_WORKING_BYTES as usize,
+                    "verification bundle recovery expected envelope",
+                )?;
+                preflight_verification_bundle_recovery(
+                    pre_bundle_log,
+                    pre_bundle_basis,
+                    current_log,
+                    current_basis,
+                    planned_envelopes,
+                    roots,
+                    0,
+                    [
+                        current_envelopes_owned,
+                        observed_canonical,
+                        expected_canonical,
+                    ],
+                )?;
+                Ok(observed.id() == expected.id()
+                    && observed.event_hash() == expected.event_hash()
+                    && observed.canonical_bytes()? == expected.canonical_bytes()?)
+            };
+        for (observed, expected) in current_envelopes
+            .iter()
+            .take(pre_count)
+            .zip(pre_bundle_log.envelopes())
+        {
+            if !same_canonical_envelope(observed, expected)? {
+                return Err(DomainError::BundleResumeAuthorityMismatch);
+            }
+        }
+        for (observed, expected) in current_envelopes[pre_count..]
+            .iter()
+            .zip(&planned_envelopes[..durable_stage])
+        {
+            if !same_canonical_envelope(observed, expected)? {
+                return Err(DomainError::BundleResumeAuthorityMismatch);
+            }
+        }
+
+        let payloads_projected = planned_envelopes.iter().try_fold(
+            u64::try_from(
+                planned_envelopes
+                    .len()
+                    .saturating_mul(size_of::<PersistedPayload>()),
+            )
+            .unwrap_or(u64::MAX),
+            |mut total, envelope| {
+                v3_add(
+                    &mut total,
+                    u64::try_from(envelope.payload.get().len()).unwrap_or(u64::MAX),
+                    "verification bundle recovery decoded payloads",
+                )?;
+                Ok(total)
+            },
+        )?;
+        preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            0,
+            [current_envelopes_owned, payloads_projected],
+        )?;
+        let mut payloads = Vec::new();
+        payloads
+            .try_reserve_exact(planned_envelopes.len())
+            .map_err(|_| {
+                v3_memory_error(
+                    "verification bundle recovery decoded payloads",
+                    payloads_projected,
+                )
+            })?;
+        for envelope in planned_envelopes {
+            payloads.push(
+                decode_canonical_payload(EventContractVersion::V3, envelope.payload.get())
+                    .map_err(bundle_resume_mismatch)?,
+            );
+        }
+        let verification_id =
+            validate_verification_bundle_plan_shape(&payloads).map_err(bundle_resume_mismatch)?;
+        let claim_id = match payloads.last() {
+            Some(PersistedPayload::VerificationRecordedV3(value)) => value.claim_id(),
+            _ => return Err(DomainError::BundleResumeAuthorityMismatch),
+        };
+        let raw_registration = claim_raw_registration(pre_bundle_log, claim_id)?;
+        let raw_cas_bytes = raw_registration.size();
+        let payloads_owned = payload_vec_owned_bytes(&payloads)?;
+        preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            raw_cas_bytes,
+            [current_envelopes_owned, payloads_owned],
+        )?;
+        let raw_bytes = match resolve_registered_bytes(raw_registration, resolver) {
+            Ok(bytes) => bytes,
+            Err(incomplete @ DomainError::Incomplete { .. }) => return Err(incomplete),
+            Err(_) => {
+                return Err(DomainError::ClaimRawClosureMissing {
+                    claim_id: claim_id.clone(),
+                    registration_id: raw_registration.registration_id().clone(),
+                });
+            }
+        };
+
+        let complete_envelopes_owned = envelope_slice_owned_bytes(&current_envelopes[..pre_count])?
+            .checked_add(envelope_slice_owned_bytes(planned_envelopes)?)
+            .ok_or_else(|| {
+                v3_memory_error("verification bundle recovery complete envelopes", u64::MAX)
+            })?;
+        preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            raw_cas_bytes,
+            [
+                current_envelopes_owned,
+                payloads_owned,
+                complete_envelopes_owned,
+            ],
+        )?;
+        let mut complete_envelopes = current_envelopes[..pre_count].to_vec();
+        complete_envelopes.extend(planned_envelopes.iter().cloned());
+        let genesis_snapshot_owned =
+            RunGenesisSnapshot::projected_owned_bytes(&pre_bundle_log.initial)?;
+        let genesis_canonical_count = crate::canonical::canonical_json_count_bounded(
+            &BorrowedRunGenesisSnapshot(&pre_bundle_log.initial),
+            crate::m4::MAX_RETAINED_WORKING_BYTES as usize,
+            "verification bundle recovery genesis canonical count",
+        )?;
+        let genesis_peak = preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            raw_cas_bytes,
+            [
+                current_envelopes_owned,
+                payloads_owned,
+                complete_envelopes_owned,
+                genesis_snapshot_owned,
+                genesis_canonical_count,
+            ],
+        )?;
+        ensure_recovery_genesis_test_limit(genesis_peak)?;
+        mark_recovery_genesis_allocation_seam();
+        let genesis_snapshot = pre_bundle_log.run_genesis_snapshot()?;
+        if genesis_snapshot.owned_bytes()? != genesis_snapshot_owned {
+            return Err(DomainError::BundleResumeAuthorityMismatch);
+        }
+        let genesis_bytes = genesis_snapshot.canonical_bytes()?;
+        if u64::try_from(genesis_bytes.len()).unwrap_or(u64::MAX) != genesis_canonical_count {
+            return Err(DomainError::BundleResumeAuthorityMismatch);
+        }
+        drop(genesis_snapshot);
+        let genesis_owned = u64::try_from(genesis_bytes.capacity()).unwrap_or(u64::MAX);
+        let replay_limits = EventReplayLimits::new(
+            u64::try_from(complete_envelopes.len()).unwrap_or(u64::MAX),
+            u64::MAX,
+        );
+        preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            raw_cas_bytes,
+            [
+                current_envelopes_owned,
+                payloads_owned,
+                complete_envelopes_owned,
+                genesis_owned,
+                pre_bundle_log.retained_bytes_v3()?,
+                pre_bundle_basis.retained_bytes()?,
+            ],
+        )?;
+        let (replayed_pre_log, replayed_pre_basis) = EventLog::replay_validated_v3_prefix(
+            pre_bundle_log.run_id.clone(),
+            &genesis_bytes,
+            &current_envelopes[..pre_count],
+            resolver,
+            roots,
+            EventReplayLimits::new(u64::try_from(pre_count).unwrap_or(u64::MAX), u64::MAX),
+        )
+        .map_err(bundle_resume_mismatch)?;
+        if !same_authority_basis(&replayed_pre_basis, pre_bundle_basis) {
+            return Err(DomainError::BundleResumeAuthorityMismatch);
+        }
+        preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            raw_cas_bytes,
+            [
+                current_envelopes_owned,
+                payloads_owned,
+                complete_envelopes_owned,
+                genesis_owned,
+                replayed_pre_log.retained_bytes_v3()?,
+                replayed_pre_basis.retained_bytes()?,
+                current_log.retained_bytes_v3()?,
+                current_basis.retained_bytes()?,
+            ],
+        )?;
+        let (replayed_current_log, replayed_current_basis) = EventLog::replay_validated_v3_prefix(
+            current_log.run_id.clone(),
+            &genesis_bytes,
+            &current_envelopes,
+            resolver,
+            roots,
+            EventReplayLimits::new(
+                u64::try_from(current_envelopes.len()).unwrap_or(u64::MAX),
+                u64::MAX,
+            ),
+        )
+        .map_err(bundle_resume_mismatch)?;
+        if !same_authority_basis(&replayed_current_basis, current_basis) {
+            return Err(DomainError::BundleResumeAuthorityMismatch);
+        }
+        preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            raw_cas_bytes,
+            [
+                current_envelopes_owned,
+                payloads_owned,
+                complete_envelopes_owned,
+                genesis_owned,
+                replayed_pre_log.retained_bytes_v3()?,
+                replayed_pre_basis.retained_bytes()?,
+                replayed_current_log.retained_bytes_v3()?,
+                replayed_current_basis.retained_bytes()?,
+                current_log.retained_bytes_v3()?,
+                current_basis.retained_bytes()?,
+            ],
+        )?;
+        let (complete_log, complete_basis) = EventLog::replay_validated_v3_prefix(
+            pre_bundle_log.run_id.clone(),
+            &genesis_bytes,
+            &complete_envelopes,
+            resolver,
+            roots,
+            replay_limits,
+        )
+        .map_err(bundle_resume_mismatch)?;
+        let first_sequence = pre_bundle_log.next_sequence()?;
+        for (index, envelope) in planned_envelopes.iter().enumerate() {
+            let expected_sequence = first_sequence
+                .checked_add(u64::try_from(index).unwrap_or(u64::MAX))
+                .ok_or_else(|| DomainError::EventSequence("bundle sequence overflow".to_owned()))?;
+            if envelope.sequence() != expected_sequence
+                || (index == 0 && envelope.previous_event_hash() != pre_bundle_log.tail_hash())
+                || (index > 0
+                    && envelope.previous_event_hash() != planned_envelopes[index - 1].event_hash())
+            {
+                return Err(DomainError::BundleResumeAuthorityMismatch);
+            }
+        }
+        let planned_end = first_sequence
+            .checked_add(u64::try_from(planned_envelopes.len()).unwrap_or(u64::MAX))
+            .ok_or_else(|| DomainError::EventSequence("bundle sequence overflow".to_owned()))?;
+        let planned_entries_owned = complete_basis
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.event_sequence >= first_sequence && entry.event_sequence < planned_end
+            })
+            .try_fold(0_u64, |mut total, entry| {
+                v3_add(
+                    &mut total,
+                    authority_entry_owned_bytes(entry)?,
+                    "verification bundle recovery planned entries",
+                )?;
+                Ok(total)
+            })?;
+        let replay_outputs_owned = [
+            replayed_pre_log.retained_bytes_v3()?,
+            replayed_pre_basis.retained_bytes()?,
+            replayed_current_log.retained_bytes_v3()?,
+            replayed_current_basis.retained_bytes()?,
+            complete_log.retained_bytes_v3()?,
+            complete_basis.retained_bytes()?,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |mut total, bytes| {
+            v3_add(
+                &mut total,
+                bytes,
+                "verification bundle recovery replay outputs",
+            )?;
+            Ok(total)
+        })?;
+        preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            raw_cas_bytes,
+            [
+                current_envelopes_owned,
+                payloads_owned,
+                complete_envelopes_owned,
+                genesis_owned,
+                replay_outputs_owned,
+                planned_entries_owned,
+            ],
+        )?;
+        let mut planned_entries = Vec::new();
+        planned_entries
+            .try_reserve_exact(planned_envelopes.len())
+            .map_err(|_| {
+                v3_memory_error(
+                    "verification bundle recovery planned entries",
+                    planned_entries_owned,
+                )
+            })?;
+        planned_entries.extend(
+            complete_basis
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.event_sequence >= first_sequence && entry.event_sequence < planned_end
+                })
+                .cloned(),
+        );
+        if planned_entries.len() != planned_envelopes.len()
+            || planned_entries
+                .iter()
+                .zip(planned_envelopes)
+                .any(|(entry, envelope)| {
+                    entry.event_id != *envelope.id()
+                        || entry.event_sequence != envelope.sequence()
+                        || entry.predecessor_event_hash != *envelope.previous_event_hash()
+                })
+        {
+            return Err(DomainError::BundleResumeAuthorityMismatch);
+        }
+        let bundle_canonical_size = crate::canonical::canonical_json_count_bounded(
+            &planned_envelopes,
+            crate::m4::MAX_RETAINED_WORKING_BYTES as usize,
+            "verification bundle recovery canonical bundle",
+        )?;
+        preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            raw_cas_bytes,
+            [
+                current_envelopes_owned,
+                payloads_owned,
+                complete_envelopes_owned,
+                genesis_owned,
+                replay_outputs_owned,
+                planned_entries_owned,
+                bundle_canonical_size,
+            ],
+        )?;
+        let bundle_canonical_bytes = canonical_json(&planned_envelopes)?;
+        let bundle_digest = ContentHash::sha256(&bundle_canonical_bytes);
+        drop(bundle_canonical_bytes);
+        drop(raw_bytes);
+        drop(genesis_bytes);
+        drop(current_envelopes);
+        drop(complete_envelopes);
+        drop(replayed_pre_log);
+        drop(replayed_pre_basis);
+        drop(replayed_current_log);
+        drop(replayed_current_basis);
+        drop(complete_log);
+        drop(complete_basis);
+
+        let projected_token = projected_verification_bundle_resume_allocated_bytes(
+            &current_log.run_id,
+            &current_log.genesis_hash,
+            &pre_bundle_log.tail_hash,
+            &bundle_digest,
+            planned_envelopes,
+            durable_stage,
+            &current_log.tail_hash,
+            &current_basis.basis_digest,
+            &payloads,
+            &planned_entries,
+            &verification_id,
+        )?;
+        let token_peak = preflight_verification_bundle_recovery(
+            pre_bundle_log,
+            pre_bundle_basis,
+            current_log,
+            current_basis,
+            planned_envelopes,
+            roots,
+            0,
+            [payloads_owned, planned_entries_owned, projected_token],
+        )?;
+        ensure_resume_token_test_limit(token_peak)?;
+        mark_resume_token_allocation_seam();
+        let mut planned_event_ids = Vec::new();
+        let mut planned_event_hashes = Vec::new();
+        let mut missing_envelopes = Vec::new();
+        planned_event_ids
+            .try_reserve_exact(planned_envelopes.len())
+            .map_err(|_| v3_memory_error("verification bundle recovery token ids", u64::MAX))?;
+        planned_event_hashes
+            .try_reserve_exact(planned_envelopes.len())
+            .map_err(|_| v3_memory_error("verification bundle recovery token hashes", u64::MAX))?;
+        missing_envelopes
+            .try_reserve_exact(planned_envelopes.len() - durable_stage)
+            .map_err(|_| {
+                v3_memory_error("verification bundle recovery token envelopes", u64::MAX)
+            })?;
+        planned_event_ids.extend(
+            planned_envelopes
+                .iter()
+                .map(|envelope| envelope.id().clone()),
+        );
+        planned_event_hashes.extend(
+            planned_envelopes
+                .iter()
+                .map(|envelope| envelope.event_hash().clone()),
+        );
+        missing_envelopes.extend_from_slice(&planned_envelopes[durable_stage..]);
+        let missing_count = planned_envelopes.len() - durable_stage;
+        let mut missing_payloads = Vec::new();
+        let mut missing_entries = Vec::new();
+        missing_payloads
+            .try_reserve_exact(missing_count)
+            .map_err(|_| {
+                v3_memory_error("verification bundle recovery token payloads", u64::MAX)
+            })?;
+        missing_entries
+            .try_reserve_exact(missing_count)
+            .map_err(|_| v3_memory_error("verification bundle recovery token entries", u64::MAX))?;
+        missing_payloads.extend(payloads.into_iter().skip(durable_stage));
+        missing_entries.extend(planned_entries.into_iter().skip(durable_stage));
+        let authority = VerificationBundleResumeAuthorityV3 {
+            run_id: current_log.run_id.clone(),
+            genesis_hash: current_log.genesis_hash.clone(),
+            pre_tail_hash: pre_bundle_log.tail_hash.clone(),
+            first_sequence,
+            bundle_digest,
+            planned_event_ids,
+            planned_event_hashes,
+            durable_stage,
+            current_tail_hash: current_log.tail_hash.clone(),
+            current_sequence: current_log.next_sequence()?,
+            current_basis_digest: current_basis.basis_digest.clone(),
+            missing_envelopes,
+            missing_payloads,
+            missing_entries,
+            verification_id,
+        };
+        debug_assert_eq!(
+            verification_bundle_resume_allocated_bytes(&authority)?,
+            projected_token
+        );
+        Ok(authority)
+    }
+
+    /// Atomically appends only the missing suffix sealed by a roots-rebuilt
+    /// resume authority. The token is consumed even when validation fails.
+    pub fn resume_verification_bundle_v3(
+        &mut self,
+        basis: &mut AuthorityReplayBasisV3,
+        authority: VerificationBundleResumeAuthorityV3,
+    ) -> Result<VerificationBundleReceiptV3> {
+        ensure_v3_working_peak(
+            self.retained_bytes_v3()?,
+            [
+                basis.retained_bytes()?,
+                verification_bundle_resume_allocated_bytes(&authority)?,
+                self.retained_bytes_v3()?,
+                basis.retained_bytes()?,
+            ],
+        )?;
+        if authority.run_id != self.run_id
+            || authority.genesis_hash != self.genesis_hash
+            || authority.current_tail_hash != self.tail_hash
+            || authority.current_sequence != self.next_sequence()?
+            || authority.current_basis_digest != basis.basis_digest
+            || authority.durable_stage == 0
+            || authority.durable_stage >= authority.planned_event_ids.len()
+            || authority.planned_event_ids.len() != authority.planned_event_hashes.len()
+            || authority.missing_envelopes.len() != authority.missing_payloads.len()
+            || authority.missing_envelopes.len() != authority.missing_entries.len()
+            || authority.bundle_digest.as_str().is_empty()
+            || authority.pre_tail_hash.as_str().is_empty()
+            || authority
+                .first_sequence
+                .checked_add(u64::try_from(authority.durable_stage).unwrap_or(u64::MAX))
+                != Some(authority.current_sequence)
+        {
+            return Err(DomainError::BundleResumeAuthorityMismatch);
+        }
+        basis
+            .validate_for_log(self)
+            .map_err(bundle_resume_mismatch)?;
+        for (offset, envelope) in authority.missing_envelopes.iter().enumerate() {
+            let index = authority.durable_stage + offset;
+            if envelope.id() != &authority.planned_event_ids[index]
+                || envelope.event_hash() != &authority.planned_event_hashes[index]
+            {
+                return Err(DomainError::BundleResumeAuthorityMismatch);
+            }
+        }
+        self.preflight_v3_outer_transaction(basis, &authority.missing_payloads)
+            .map_err(bundle_resume_mismatch)?;
+        let mut next = self.clone();
+        let mut entries = basis.entries.clone();
+        for ((envelope, payload), entry) in authority
+            .missing_envelopes
+            .into_iter()
+            .zip(authority.missing_payloads)
+            .zip(authority.missing_entries)
+        {
+            if envelope.sequence() != next.next_sequence()?
+                || envelope.previous_event_hash() != next.tail_hash()
+                || entry.event_id != *envelope.id()
+                || entry.event_sequence != envelope.sequence()
+                || entry.predecessor_event_hash != *envelope.previous_event_hash()
+                || authority_record_identity(&payload)?.is_none()
+            {
+                return Err(DomainError::BundleResumeAuthorityMismatch);
+            }
+            next.append_envelope(envelope, None, None, None, None, None, None, true)
+                .map_err(bundle_resume_mismatch)?;
+            entries.push(entry);
+        }
+        let next_basis = basis
+            .advanced_for_log(&next, entries)
+            .map_err(bundle_resume_mismatch)?;
+        *self = next;
+        *basis = next_basis;
+        Ok(VerificationBundleReceiptV3 {
+            event_ids: authority.planned_event_ids,
+            verification_id: authority.verification_id,
         })
     }
 
@@ -10017,7 +12162,7 @@ mod tests {
             genesis_hash: ContentHash::sha256(b"genesis"),
             harness_id: FIXTURE_HARNESS_ID.to_owned(),
             harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
-            harness_source_hash: ContentHash::sha256(b"harness source"),
+            harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH).unwrap(),
             policy_revision_hash: ContentHash::sha256(b"policy"),
             procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
             property_id: M4_PROPERTY_ID.to_owned(),
@@ -10063,6 +12208,17 @@ mod tests {
         d2_log_with_version(true, Some(M4_PROPERTY_ID))
     }
 
+    fn d2_v3_m4_log_without_fixture_test() -> (
+        EventLog,
+        ReviewAggregate,
+        ReviewPlan,
+        StableId,
+        ReviewContextEnvelope,
+        BTreeMap<StableId, Vec<u8>>,
+    ) {
+        d2_log_with_version_and_test_id(true, Some(M4_PROPERTY_ID), "test:not-the-harness")
+    }
+
     fn d2_log_with_version(
         v3: bool,
         required_property: Option<&str>,
@@ -10074,7 +12230,49 @@ mod tests {
         ReviewContextEnvelope,
         BTreeMap<StableId, Vec<u8>>,
     ) {
+        d2_log_with_version_and_test_id(v3, required_property, FIXTURE_TEST_ARTIFACT_ID)
+    }
+
+    fn replace_json_string(value: &mut Value, from: &str, to: &str) {
+        match value {
+            Value::String(text) if text == from => *text = to.to_owned(),
+            Value::Array(values) => values
+                .iter_mut()
+                .for_each(|value| replace_json_string(value, from, to)),
+            Value::Object(values) => values
+                .values_mut()
+                .for_each(|value| replace_json_string(value, from, to)),
+            _ => {}
+        }
+    }
+
+    fn add_seeded_program_evidence(input: &mut Value) {
+        let provenance = input["artifacts"][0]["provenance"].clone();
+        input["evidence"] = serde_json::json!([{
+            "id": "evidence:seeded-payment-source",
+            "kind": "static_analysis",
+            "target_ids": ["function:payment-charge"],
+            "artifact_ref": null,
+            "content_hash": null,
+            "attributes": {"seeded": true},
+            "provenance": provenance
+        }]);
+    }
+
+    fn d2_log_with_version_and_test_id(
+        v3: bool,
+        required_property: Option<&str>,
+        fixture_test_id: &str,
+    ) -> (
+        EventLog,
+        ReviewAggregate,
+        ReviewPlan,
+        StableId,
+        ReviewContextEnvelope,
+        BTreeMap<StableId, Vec<u8>>,
+    ) {
         let mut input: Value = serde_json::from_slice(FIXTURE).unwrap();
+        replace_json_string(&mut input, FIXTURE_TEST_ARTIFACT_ID, fixture_test_id);
         let mut contains = input["relations"][0].clone();
         contains["id"] = Value::String("relation:file-contains-payment-charge".to_owned());
         contains["kind"] = Value::String("contains".to_owned());
@@ -10087,7 +12285,7 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .iter_mut()
-            .find(|artifact| artifact["id"] == "test:double-submit")
+            .find(|artifact| artifact["id"] == fixture_test_id)
             .unwrap();
         test_artifact["location"]["start_line"] = Value::Null;
         test_artifact["location"]["end_line"] = Value::Null;
@@ -10103,6 +12301,9 @@ mod tests {
             }
         }
         if required_property == Some(M4_PROPERTY_ID) {
+            if v3 {
+                add_seeded_program_evidence(&mut input);
+            }
             let invariant = input["invariants"]
                 .as_array_mut()
                 .unwrap()
@@ -10742,6 +12943,278 @@ mod tests {
         }
     }
 
+    fn fixture_receipt_oracle_bytes(receipt: &FixtureExecutionReceiptV1) -> u64 {
+        let mut total = size_of::<FixtureExecutionReceiptV1>() as u64;
+        let scope = &receipt.harness.as_ref().unwrap().scope;
+        total += size_of::<HarnessTrustRootInputV3>() as u64;
+        total += [
+            scope.policy_revision_hash.allocated_bytes(),
+            scope.repository_id.allocated_bytes(),
+            scope.repository_source_hash.allocated_bytes(),
+            scope.harness_id.capacity(),
+            scope.harness_revision.capacity(),
+            scope.harness_source_hash.allocated_bytes(),
+            scope.test_artifact_id.allocated_bytes(),
+            scope.descriptor_id.capacity(),
+            scope.procedure_version.capacity(),
+            scope.result_hash.allocated_bytes(),
+            scope.result_media_type.capacity(),
+            scope.run_id.allocated_bytes(),
+            scope.genesis_hash.allocated_bytes(),
+            scope.snapshot_id.allocated_bytes(),
+            scope.universe_id.allocated_bytes(),
+            scope.property_id.capacity(),
+            scope.claim_id.allocated_bytes(),
+            scope.claim_body_hash.allocated_bytes(),
+        ]
+        .into_iter()
+        .map(|bytes| bytes as u64)
+        .sum::<u64>();
+        total += [
+            receipt.basis_digest.allocated_bytes(),
+            receipt.tail_hash.allocated_bytes(),
+            receipt.fixture_result_hash.allocated_bytes(),
+            receipt.fixture_result_bytes.capacity(),
+            receipt.witness_bytes.capacity(),
+        ]
+        .into_iter()
+        .map(|bytes| bytes as u64)
+        .sum::<u64>();
+        total += receipt
+            .subject_ids
+            .iter()
+            .map(|id| (size_of::<StableId>() + id.allocated_bytes()) as u64)
+            .sum::<u64>();
+        for expected in [
+            receipt.expected_witness_event.as_ref(),
+            receipt.expected_output_event.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            total += (size_of::<ExpectedFixtureRegistrationEventV1>()
+                + expected.registration_id.allocated_bytes()
+                + size_of::<EventEnvelope>()
+                + expected.envelope.allocated_bytes()) as u64;
+        }
+        total
+    }
+
+    fn recovery_envelopes_oracle(envelopes: &[EventEnvelope]) -> u64 {
+        envelopes.len() as u64 * size_of::<EventEnvelope>() as u64
+            + envelopes
+                .iter()
+                .map(|envelope| envelope.allocated_bytes() as u64)
+                .sum::<u64>()
+    }
+
+    fn recovery_payloads_oracle(payloads: &Vec<PersistedPayload>) -> u64 {
+        payloads.capacity() as u64 * size_of::<PersistedPayload>() as u64
+            + payloads
+                .iter()
+                .map(|payload| match payload {
+                    PersistedPayload::EvidenceRecordedV3(value) => value.allocated_bytes().unwrap(),
+                    PersistedPayload::EvidenceBoundV3(value) => value.allocated_bytes().unwrap(),
+                    PersistedPayload::VerificationRecordedV3(value) => {
+                        value.allocated_bytes().unwrap()
+                    }
+                    _ => panic!("recovery oracle accepts only a verification bundle"),
+                })
+                .sum::<u64>()
+    }
+
+    fn recovery_entries_oracle(entries: &[AuthorityReplayEntryV3]) -> u64 {
+        entries.len() as u64 * size_of::<AuthorityReplayEntryV3>() as u64
+            + entries
+                .iter()
+                .map(|entry| {
+                    (entry.event_id.allocated_bytes()
+                        + entry.payload_kind.len()
+                        + entry.record_id.allocated_bytes()
+                        + entry.record_body_hash.allocated_bytes()
+                        + entry.predecessor_event_hash.allocated_bytes()
+                        + entry.trust_binding_digest.allocated_bytes()) as u64
+                })
+                .sum::<u64>()
+    }
+
+    fn recovery_token_oracle(authority: &VerificationBundleResumeAuthorityV3) -> u64 {
+        size_of::<VerificationBundleResumeAuthorityV3>() as u64
+            + [
+                authority.run_id.allocated_bytes(),
+                authority.genesis_hash.allocated_bytes(),
+                authority.pre_tail_hash.allocated_bytes(),
+                authority.bundle_digest.allocated_bytes(),
+                authority.current_tail_hash.allocated_bytes(),
+                authority.current_basis_digest.allocated_bytes(),
+                authority.verification_id.allocated_bytes(),
+            ]
+            .into_iter()
+            .sum::<usize>() as u64
+            + authority
+                .planned_event_ids
+                .iter()
+                .map(|id| (size_of::<StableId>() + id.allocated_bytes()) as u64)
+                .sum::<u64>()
+            + authority
+                .planned_event_hashes
+                .iter()
+                .map(|hash| (size_of::<ContentHash>() + hash.allocated_bytes()) as u64)
+                .sum::<u64>()
+            + recovery_envelopes_oracle(&authority.missing_envelopes)
+            + recovery_payloads_oracle(&authority.missing_payloads)
+            + recovery_entries_oracle(&authority.missing_entries)
+    }
+
+    fn recovery_genesis_snapshot_oracle(initial: &ReviewAggregate) -> u64 {
+        let program_owned = initial.program().allocated_bytes() as u64;
+        let seeded_evidence_owned = initial
+            .program()
+            .evidence()
+            .iter()
+            .map(|evidence| evidence.allocated_bytes() as u64)
+            .sum::<u64>();
+        assert!(seeded_evidence_owned > 0);
+        assert!(program_owned >= seeded_evidence_owned);
+        size_of::<RunGenesisSnapshot>() as u64
+            + RUN_GENESIS_SCHEMA.len() as u64
+            + program_owned
+            + initial.universe().allocated_bytes() as u64
+            + initial.obligations().count() as u64 * size_of::<Obligation>() as u64
+            + initial
+                .obligations()
+                .map(|obligation| obligation.allocated_bytes() as u64)
+                .sum::<u64>()
+    }
+
+    fn fixture_stage_base() -> (
+        EventLog,
+        AuthorityReplayBasisV3,
+        StableId,
+        AuthorityTestResolver,
+    ) {
+        let (mut log, _, plan, obligation_id, envelope, sources) = d2_v3_m4_log();
+        let (_, claim_id) = append_d2_attempt_v3_with_polarity(
+            &mut log,
+            &plan,
+            &obligation_id,
+            &envelope,
+            &sources,
+            ClaimPolarity::IssuePresent,
+        );
+        let roots = authority_roots_for_claim(
+            &log,
+            claim_id.clone(),
+            ContentHash::sha256(b"fixture stage resource policy"),
+        );
+        let basis = log.fresh_authority_basis_v3(&roots).unwrap();
+        let mut resolver = AuthorityTestResolver::default();
+        for bytes in sources.into_values() {
+            resolver.insert(bytes);
+        }
+        resolver.insert(br#"{"attempt":1,"fixture":true,"version":3}"#.to_vec());
+        (log, basis, claim_id, resolver)
+    }
+
+    fn fixture_through_witness_registration() -> (
+        EventLog,
+        AuthorityReplayBasisV3,
+        StableId,
+        AuthorityTestResolver,
+        FixtureExecutionReceiptV1,
+        StableId,
+    ) {
+        let (mut log, mut basis, claim_id, mut resolver) = fixture_stage_base();
+        let mut receipt = log.execute_fixture_harness_v1(&claim_id, &basis).unwrap();
+        resolver.insert(receipt.witness_bytes().to_vec());
+        resolver.insert(receipt.fixture_result_bytes().to_vec());
+        let registration = log
+            .prepare_external_fixture_witness_registration_v3(&mut receipt, &resolver, &basis)
+            .unwrap();
+        let registration_id = registration.registration_id().clone();
+        log.append_authority_registration_v3(registration, &mut basis)
+            .unwrap();
+        (log, basis, claim_id, resolver, receipt, registration_id)
+    }
+
+    fn fixture_through_output_registration() -> (
+        EventLog,
+        AuthorityReplayBasisV3,
+        StableId,
+        AuthorityTestResolver,
+        FixtureExecutionReceiptV1,
+        StableId,
+        StableId,
+    ) {
+        let (mut log, mut basis, claim_id, resolver, mut receipt, witness_id) =
+            fixture_through_witness_registration();
+        let registration = log
+            .prepare_fixture_verifier_output_registration_v3(&mut receipt, &resolver, &basis)
+            .unwrap();
+        let output_id = registration.registration_id().clone();
+        log.append_authority_registration_v3(registration, &mut basis)
+            .unwrap();
+        (
+            log, basis, claim_id, resolver, receipt, witness_id, output_id,
+        )
+    }
+
+    fn verification_bundle_transaction_exact(
+        log: &EventLog,
+        basis: &AuthorityReplayBasisV3,
+        bundle: &ValidatedVerificationBundleV3,
+    ) -> u64 {
+        let sealed_payload_bytes = u64::try_from(
+            bundle
+                .payloads
+                .len()
+                .saturating_mul(size_of::<PersistedPayload>()),
+        )
+        .unwrap()
+            + bundle
+                .payloads
+                .iter()
+                .map(|payload| v3_payload_staging_bytes(payload).unwrap())
+                .sum::<u64>();
+        let canonical_payload_bytes = bundle
+            .payloads
+            .iter()
+            .map(|payload| u64::try_from(payload_canonical_bytes(payload).unwrap().len()).unwrap())
+            .sum::<u64>();
+        let trust_digest_bytes = u64::try_from(
+            bundle
+                .payloads
+                .len()
+                .saturating_mul(size_of::<ContentHash>() + 71),
+        )
+        .unwrap();
+        let reducer_growth_bytes = bundle
+            .payloads
+            .iter()
+            .map(|payload| v3_reducer_growth_upper_bound(payload).unwrap())
+            .sum::<u64>();
+        log.retained_bytes_v3()
+            .unwrap()
+            .checked_mul(2)
+            .and_then(|value| {
+                basis
+                    .retained_bytes()
+                    .unwrap()
+                    .checked_mul(2)
+                    .and_then(|basis_bytes| value.checked_add(basis_bytes))
+            })
+            .and_then(|value| value.checked_add(sealed_payload_bytes))
+            .and_then(|value| value.checked_add(canonical_payload_bytes))
+            .and_then(|value| value.checked_add(trust_digest_bytes))
+            .and_then(|value| value.checked_add(log.aggregate.retained_bytes_v3().unwrap()))
+            .and_then(|value| {
+                value.checked_add(log.v3_aggregate.as_ref().unwrap().retained_bytes().unwrap())
+            })
+            .and_then(|value| value.checked_add(event_vector_retained(&log.events).unwrap()))
+            .and_then(|value| value.checked_add(reducer_growth_bytes))
+            .unwrap()
+    }
+
     fn assert_selected_replay_append_boundary(
         log: &EventLog,
         genesis: &[u8],
@@ -10916,60 +13389,7 @@ mod tests {
                 &basis,
             )
             .unwrap();
-        let sealed_payload_bytes = u64::try_from(
-            bundle
-                .payloads
-                .len()
-                .saturating_mul(size_of::<PersistedPayload>()),
-        )
-        .unwrap()
-            + bundle
-                .payloads
-                .iter()
-                .map(|payload| v3_payload_staging_bytes(payload).unwrap())
-                .sum::<u64>();
-        let canonical_payload_bytes = bundle
-            .payloads
-            .iter()
-            .map(|payload| u64::try_from(payload_canonical_bytes(payload).unwrap().len()).unwrap())
-            .sum::<u64>();
-        let trust_digest_bytes = u64::try_from(
-            bundle
-                .payloads
-                .len()
-                .saturating_mul(size_of::<ContentHash>() + 71),
-        )
-        .unwrap();
-        let reducer_growth_bytes = bundle
-            .payloads
-            .iter()
-            .map(|payload| {
-                v3_payload_staging_bytes(payload).unwrap() * 5
-                    + u64::try_from(size_of::<StableId>() * 4 + size_of::<ContentHash>() * 2)
-                        .unwrap()
-            })
-            .sum::<u64>();
-        let bundle_exact = log
-            .retained_bytes_v3()
-            .unwrap()
-            .checked_mul(2)
-            .and_then(|value| {
-                basis
-                    .retained_bytes()
-                    .unwrap()
-                    .checked_mul(2)
-                    .and_then(|basis_bytes| value.checked_add(basis_bytes))
-            })
-            .and_then(|value| value.checked_add(sealed_payload_bytes))
-            .and_then(|value| value.checked_add(canonical_payload_bytes))
-            .and_then(|value| value.checked_add(trust_digest_bytes))
-            .and_then(|value| value.checked_add(log.aggregate.retained_bytes_v3().unwrap()))
-            .and_then(|value| {
-                value.checked_add(log.v3_aggregate.as_ref().unwrap().retained_bytes().unwrap())
-            })
-            .and_then(|value| value.checked_add(event_vector_retained(&log.events).unwrap()))
-            .and_then(|value| value.checked_add(reducer_growth_bytes))
-            .unwrap();
+        let bundle_exact = verification_bundle_transaction_exact(&log, &basis, &bundle);
         let events_before = log.envelopes().count();
         let basis_before = basis.basis_digest().clone();
         V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(bundle_exact - 1)));
@@ -11503,8 +13923,234 @@ mod tests {
     }
 
     #[test]
+    fn fixture_execution_refuses_missing_fixed_test_artifact() {
+        let (mut log, _, plan, obligation_id, envelope, sources) =
+            d2_v3_m4_log_without_fixture_test();
+        let (_, claim_id) = append_d2_attempt_v3_with_polarity(
+            &mut log,
+            &plan,
+            &obligation_id,
+            &envelope,
+            &sources,
+            ClaimPolarity::IssuePresent,
+        );
+        assert!(
+            !log.aggregate()
+                .program()
+                .known_ids()
+                .contains(&id(FIXTURE_TEST_ARTIFACT_ID))
+        );
+        let roots = authority_roots_for_claim(
+            &log,
+            claim_id.clone(),
+            ContentHash::sha256(b"missing fixture artifact policy"),
+        );
+        let basis = log.fresh_authority_basis_v3(&roots).unwrap();
+        assert!(matches!(
+            log.execute_fixture_harness_v1(&claim_id, &basis),
+            Err(DomainError::VerificationBundleMismatch)
+        ));
+    }
+
+    #[test]
+    fn fixture_fresh_stages_preflight_independent_exact_and_minus_one() {
+        let fixture_exact = |log: &EventLog,
+                             basis: &AuthorityReplayBasisV3,
+                             receipt: Option<&FixtureExecutionReceiptV1>,
+                             additions: &[u64]| {
+            log.retained_bytes_v3().unwrap()
+                + basis.retained_bytes().unwrap()
+                + receipt.map_or(0, fixture_receipt_oracle_bytes)
+                + additions.iter().sum::<u64>()
+        };
+
+        let (log, basis, claim_id, _) = fixture_stage_base();
+        let execute_exact = fixture_exact(
+            &log,
+            &basis,
+            None,
+            &[
+                FIXTURE_WITNESS_SIZE,
+                crate::m4::MAX_RECORD_BYTES as u64,
+                8_192,
+            ],
+        );
+        V3_TEST_FIXTURE_STAGE_KIND.with(|value| value.set(1));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(execute_exact)));
+        log.execute_fixture_harness_v1(&claim_id, &basis).unwrap();
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(execute_exact - 1)));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        assert!(matches!(
+            log.execute_fixture_harness_v1(&claim_id, &basis),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+
+        let (log, basis, claim_id, mut resolver) = fixture_stage_base();
+        let mut receipt = log.execute_fixture_harness_v1(&claim_id, &basis).unwrap();
+        resolver.insert(receipt.witness_bytes().to_vec());
+        resolver.insert(receipt.fixture_result_bytes().to_vec());
+        let witness_exact =
+            fixture_exact(&log, &basis, Some(&receipt), &[FIXTURE_WITNESS_SIZE, 8_192]);
+        V3_TEST_FIXTURE_STAGE_KIND.with(|value| value.set(2));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(witness_exact)));
+        log.prepare_external_fixture_witness_registration_v3(&mut receipt, &resolver, &basis)
+            .unwrap();
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        let (log_low, basis_low, claim_low, mut resolver_low) = fixture_stage_base();
+        let mut receipt_low = log_low
+            .execute_fixture_harness_v1(&claim_low, &basis_low)
+            .unwrap();
+        resolver_low.insert(receipt_low.witness_bytes().to_vec());
+        resolver_low.insert(receipt_low.fixture_result_bytes().to_vec());
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(witness_exact - 1)));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        assert!(matches!(
+            log_low.prepare_external_fixture_witness_registration_v3(
+                &mut receipt_low,
+                &resolver_low,
+                &basis_low,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+
+        let (log, basis, _, resolver, mut receipt, _) = fixture_through_witness_registration();
+        let output_exact = fixture_exact(
+            &log,
+            &basis,
+            Some(&receipt),
+            &[receipt.fixture_result_bytes.len() as u64, 8_192],
+        );
+        V3_TEST_FIXTURE_STAGE_KIND.with(|value| value.set(3));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(output_exact)));
+        log.prepare_fixture_verifier_output_registration_v3(&mut receipt, &resolver, &basis)
+            .unwrap();
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        let (log_low, basis_low, _, resolver_low, mut receipt_low, _) =
+            fixture_through_witness_registration();
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(output_exact - 1)));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        assert!(matches!(
+            log_low.prepare_fixture_verifier_output_registration_v3(
+                &mut receipt_low,
+                &resolver_low,
+                &basis_low,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+
+        let (log, basis, _, resolver, mut receipt, witness_id, output_id) =
+            fixture_through_output_registration();
+        let admit_exact =
+            fixture_exact(&log, &basis, Some(&receipt), &[FIXTURE_WITNESS_SIZE, 8_192]);
+        V3_TEST_FIXTURE_STAGE_KIND.with(|value| value.set(4));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(admit_exact)));
+        let admission = log
+            .admit_external_witness_v3(&mut receipt, &witness_id, &resolver, &basis)
+            .unwrap();
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        let (log_low, basis_low, _, resolver_low, mut receipt_low, witness_low, _) =
+            fixture_through_output_registration();
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(admit_exact - 1)));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        assert!(matches!(
+            log_low.admit_external_witness_v3(
+                &mut receipt_low,
+                &witness_low,
+                &resolver_low,
+                &basis_low,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+
+        let mint_exact = fixture_exact(
+            &log,
+            &basis,
+            None,
+            &[
+                FIXTURE_WITNESS_SIZE,
+                crate::m4::MAX_RECORD_BYTES as u64,
+                3 * crate::m4::MAX_RECORD_BYTES as u64,
+                8_192,
+            ],
+        );
+        V3_TEST_FIXTURE_STAGE_KIND.with(|value| value.set(5));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(mint_exact)));
+        log.mint_fixture_verification_bundle_v3(admission, &output_id, &resolver, &basis)
+            .unwrap();
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        let (log_low, basis_low, _, resolver_low, mut receipt_low, witness_low, output_low) =
+            fixture_through_output_registration();
+        let admission_low = log_low
+            .admit_external_witness_v3(&mut receipt_low, &witness_low, &resolver_low, &basis_low)
+            .unwrap();
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(mint_exact - 1)));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        assert!(matches!(
+            log_low.mint_fixture_verification_bundle_v3(
+                admission_low,
+                &output_low,
+                &resolver_low,
+                &basis_low,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        V3_TEST_FIXTURE_STAGE_KIND.with(|value| value.set(0));
+    }
+
+    #[test]
     fn v3_fixture_replay_rejects_shared_target_sibling_claim_laundering() {
         let (mut log, _, plan, obligation_id, envelope, sources) = d2_v3_m4_log();
+        assert!(!log.aggregate().program().evidence().is_empty());
         let (_, claims) = append_d2_attempt_v3_claims(
             &mut log,
             &plan,
@@ -11548,7 +14194,7 @@ mod tests {
             genesis_hash: log.genesis_hash().clone(),
             harness_id: FIXTURE_HARNESS_ID.to_owned(),
             harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
-            harness_source_hash: ContentHash::sha256(b"fixture harness source"),
+            harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH).unwrap(),
             policy_revision_hash: policy.clone(),
             procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
             property_id: M4_PROPERTY_ID.to_owned(),
@@ -11602,33 +14248,50 @@ mod tests {
             },
         )
         .unwrap();
-        let roots = AuthorityTrustRootsV3::new(
-            policy.clone(),
-            repository_id.clone(),
-            repository_source_hash.clone(),
-            vec![HarnessTrustRootInputV3 {
-                policy_revision_hash: policy,
-                repository_id,
-                repository_source_hash,
-                harness_id: FIXTURE_HARNESS_ID.to_owned(),
-                harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
-                harness_source_hash: ContentHash::sha256(b"fixture harness source"),
-                test_artifact_id: id(FIXTURE_TEST_ARTIFACT_ID),
-                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
-                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
-                result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH).unwrap(),
-                result_size: 145,
-                result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
-                result_sensitivity: ArtifactSensitivity::CanonicalState,
-                run_id: log.run_id().clone(),
-                genesis_hash: log.genesis_hash().clone(),
-                snapshot_id: log.aggregate().program().snapshot_id().clone(),
-                universe_id: log.aggregate().universe().id().clone(),
-                property_id: M4_PROPERTY_ID.to_owned(),
-                claim_id: claims[0].clone(),
-                claim_body_hash: trusted_claim.body_hash().unwrap(),
-            }],
-            Vec::new(),
+        let make_roots = |harness_source_hash: ContentHash,
+                          root_claim_id: StableId,
+                          root_claim_body_hash: ContentHash| {
+            AuthorityTrustRootsV3::new(
+                policy.clone(),
+                repository_id.clone(),
+                repository_source_hash.clone(),
+                vec![HarnessTrustRootInputV3 {
+                    policy_revision_hash: policy.clone(),
+                    repository_id: repository_id.clone(),
+                    repository_source_hash: repository_source_hash.clone(),
+                    harness_id: FIXTURE_HARNESS_ID.to_owned(),
+                    harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+                    harness_source_hash,
+                    test_artifact_id: id(FIXTURE_TEST_ARTIFACT_ID),
+                    descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                    procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                    result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH).unwrap(),
+                    result_size: 145,
+                    result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+                    result_sensitivity: ArtifactSensitivity::CanonicalState,
+                    run_id: log.run_id().clone(),
+                    genesis_hash: log.genesis_hash().clone(),
+                    snapshot_id: log.aggregate().program().snapshot_id().clone(),
+                    universe_id: log.aggregate().universe().id().clone(),
+                    property_id: M4_PROPERTY_ID.to_owned(),
+                    claim_id: root_claim_id,
+                    claim_body_hash: root_claim_body_hash,
+                }],
+                Vec::new(),
+            )
+        };
+        assert!(matches!(
+            make_roots(
+                ContentHash::sha256(b"untrusted harness source"),
+                trusted_claim_id.clone(),
+                trusted_claim.body_hash().unwrap(),
+            ),
+            Err(DomainError::Validation(_))
+        ));
+        let roots = make_roots(
+            ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH).unwrap(),
+            trusted_claim_id.clone(),
+            trusted_claim.body_hash().unwrap(),
         )
         .unwrap();
         let mut resolver = AuthorityTestResolver::default();
@@ -11637,7 +14300,725 @@ mod tests {
         }
         resolver.insert(br#"{"attempt":1,"fixture":true,"version":3}"#.to_vec());
         resolver.insert(witness);
-        resolver.insert(result_bytes);
+        resolver.insert(result_bytes.clone());
+        let mut fresh = log.clone();
+        let registration_base = fresh.clone();
+        let mut fresh_basis = fresh.fresh_authority_basis_v3(&roots).unwrap();
+        let mut execution = fresh
+            .execute_fixture_harness_v1(&trusted_claim_id, &fresh_basis)
+            .unwrap();
+        assert_eq!(execution.witness_bytes(), FIXTURE_WITNESS_BYTES);
+        assert_eq!(execution.fixture_result_bytes(), result_bytes);
+
+        // A failed admission neither fabricates a registration nor consumes
+        // the code-sealed execution authority.
+        assert!(matches!(
+            fresh.admit_external_witness_v3(
+                &mut execution,
+                input_registration.registration_id(),
+                &resolver,
+                &fresh_basis,
+            ),
+            Err(DomainError::WitnessAdmissionMismatch)
+        ));
+        let prepared_input = fresh
+            .prepare_external_fixture_witness_registration_v3(
+                &mut execution,
+                &resolver,
+                &fresh_basis,
+            )
+            .unwrap();
+        assert_eq!(
+            prepared_input.registration_id(),
+            input_registration.registration_id()
+        );
+        fresh
+            .append_authority_registration_v3(prepared_input, &mut fresh_basis)
+            .unwrap();
+        let prepared_output = fresh
+            .prepare_fixture_verifier_output_registration_v3(
+                &mut execution,
+                &resolver,
+                &fresh_basis,
+            )
+            .unwrap();
+        assert_eq!(
+            prepared_output.registration_id(),
+            output_registration.registration_id()
+        );
+        fresh
+            .append_authority_registration_v3(prepared_output, &mut fresh_basis)
+            .unwrap();
+
+        let append_registration = |log: &mut EventLog, registration: ArtifactRegisteredV3| {
+            let payload = PersistedPayload::ArtifactRegisteredV3(registration);
+            let sequence = log.next_sequence().unwrap();
+            let actor = payload.actor().to_owned();
+            let envelope = EventEnvelope::new(
+                EventContractVersion::V3,
+                log.run_id().clone(),
+                log.genesis_hash().clone(),
+                sequence,
+                actor,
+                sequence,
+                log.tail_hash().clone(),
+                payload,
+            )
+            .unwrap();
+            log.append_envelope(envelope, None, None, None, None, None, None, true)
+                .map(|_| ())
+        };
+        let genesis = registration_base
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+
+        let mut swapped = registration_base.clone();
+        append_registration(&mut swapped, output_registration.clone()).unwrap();
+        append_registration(&mut swapped, input_registration.clone()).unwrap();
+        let swapped_envelopes = swapped.envelopes().cloned().collect::<Vec<_>>();
+        let (swapped, swapped_basis) = EventLog::replay_validated_v3_prefix(
+            swapped.run_id().clone(),
+            &genesis,
+            &swapped_envelopes,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(swapped_envelopes.len() as u64, u64::MAX),
+        )
+        .unwrap();
+        assert!(matches!(
+            swapped.admit_external_witness_v3(
+                &mut execution,
+                input_registration.registration_id(),
+                &resolver,
+                &swapped_basis,
+            ),
+            Err(DomainError::WitnessAdmissionMismatch)
+        ));
+
+        let mut duplicate = registration_base.clone();
+        append_registration(&mut duplicate, input_registration.clone()).unwrap();
+        assert!(matches!(
+            append_registration(&mut duplicate, input_registration.clone()),
+            Err(DomainError::IdCollision { .. })
+        ));
+
+        let mut preexisting = registration_base.clone();
+        append_registration(&mut preexisting, input_registration.clone()).unwrap();
+        let preexisting_envelopes = preexisting.envelopes().cloned().collect::<Vec<_>>();
+        let (mut preexisting, mut preexisting_basis) = EventLog::replay_validated_v3_prefix(
+            preexisting.run_id().clone(),
+            &genesis,
+            &preexisting_envelopes,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(preexisting_envelopes.len() as u64, u64::MAX),
+        )
+        .unwrap();
+        let mut preexisting_execution = preexisting
+            .execute_fixture_harness_v1(&trusted_claim_id, &preexisting_basis)
+            .unwrap();
+        assert!(matches!(
+            preexisting.admit_external_witness_v3(
+                &mut preexisting_execution,
+                input_registration.registration_id(),
+                &resolver,
+                &preexisting_basis,
+            ),
+            Err(DomainError::WitnessAdmissionMismatch)
+        ));
+        let duplicate_prepared = preexisting
+            .prepare_external_fixture_witness_registration_v3(
+                &mut preexisting_execution,
+                &resolver,
+                &preexisting_basis,
+            )
+            .unwrap();
+        assert!(matches!(
+            preexisting
+                .append_authority_registration_v3(duplicate_prepared, &mut preexisting_basis,),
+            Err(DomainError::IdCollision { .. })
+        ));
+
+        let unrelated_bytes = b"unrelated registration".to_vec();
+        let unrelated_hash = resolver.insert(unrelated_bytes.clone());
+        let unrelated = ArtifactRegisteredV3::new(
+            registration_base.run_id().clone(),
+            unrelated_hash,
+            "application/octet-stream",
+            unrelated_bytes.len() as u64,
+            ArtifactSensitivity::WorkspaceSource,
+            ArtifactSourceV3::SnapshotIngest {
+                adapter_id: "fixture-unrelated@1".to_owned(),
+                run_id: registration_base.run_id().clone(),
+                snapshot_id: registration_base
+                    .aggregate()
+                    .program()
+                    .snapshot_id()
+                    .clone(),
+            },
+        )
+        .unwrap();
+        let mut intervening = registration_base.clone();
+        append_registration(&mut intervening, unrelated).unwrap();
+        append_registration(&mut intervening, input_registration.clone()).unwrap();
+        append_registration(&mut intervening, output_registration.clone()).unwrap();
+        let intervening_envelopes = intervening.envelopes().cloned().collect::<Vec<_>>();
+        let (intervening, intervening_basis) = EventLog::replay_validated_v3_prefix(
+            intervening.run_id().clone(),
+            &genesis,
+            &intervening_envelopes,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(intervening_envelopes.len() as u64, u64::MAX),
+        )
+        .unwrap();
+        assert!(matches!(
+            intervening.admit_external_witness_v3(
+                &mut execution,
+                input_registration.registration_id(),
+                &resolver,
+                &intervening_basis,
+            ),
+            Err(DomainError::WitnessAdmissionMismatch)
+        ));
+
+        let witness_admission = fresh
+            .admit_external_witness_v3(
+                &mut execution,
+                input_registration.registration_id(),
+                &resolver,
+                &fresh_basis,
+            )
+            .unwrap();
+        assert!(matches!(
+            fresh.admit_external_witness_v3(
+                &mut execution,
+                input_registration.registration_id(),
+                &resolver,
+                &fresh_basis,
+            ),
+            Err(DomainError::WitnessAdmissionMismatch)
+        ));
+        let bundle = fresh
+            .mint_fixture_verification_bundle_v3(
+                witness_admission,
+                output_registration.registration_id(),
+                &resolver,
+                &fresh_basis,
+            )
+            .unwrap();
+        assert!(matches!(
+            bundle.payloads.as_slice(),
+            [
+                PersistedPayload::EvidenceRecordedV3(_),
+                PersistedPayload::EvidenceBoundV3(_),
+                PersistedPayload::VerificationRecordedV3(_)
+            ]
+        ));
+        let fresh_events_before = fresh.envelopes().count();
+        let pre_bundle_log = fresh.clone();
+        let pre_count = pre_bundle_log.events().len();
+        let genesis = pre_bundle_log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let pre_envelopes = pre_bundle_log.envelopes().cloned().collect::<Vec<_>>();
+        let (_, pre_bundle_basis) = EventLog::replay_validated_v3_prefix(
+            pre_bundle_log.run_id().clone(),
+            &genesis,
+            &pre_envelopes,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(pre_envelopes.len() as u64, u64::MAX),
+        )
+        .unwrap();
+        let (_, mut complete_basis) = EventLog::replay_validated_v3_prefix(
+            pre_bundle_log.run_id().clone(),
+            &genesis,
+            &pre_envelopes,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(pre_envelopes.len() as u64, u64::MAX),
+        )
+        .unwrap();
+        let mut complete = pre_bundle_log.clone();
+        let receipt = complete
+            .append_verification_bundle_v3(bundle, &mut complete_basis)
+            .unwrap();
+        let planned = complete
+            .envelopes()
+            .skip(pre_count)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            EventLog::recover_verification_bundle_resume_authority_v3(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &complete,
+                &complete_basis,
+                &planned,
+                &resolver,
+                &roots,
+            ),
+            Err(DomainError::AlreadyComplete)
+        ));
+        let partial_envelopes = complete
+            .envelopes()
+            .take(pre_count + 1)
+            .cloned()
+            .collect::<Vec<_>>();
+        let (mut partial, mut partial_basis) = EventLog::replay_validated_v3_prefix(
+            complete.run_id().clone(),
+            &genesis,
+            &partial_envelopes,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(partial_envelopes.len() as u64, u64::MAX),
+        )
+        .unwrap();
+        let partial_two_envelopes = complete
+            .envelopes()
+            .take(pre_count + 2)
+            .cloned()
+            .collect::<Vec<_>>();
+        let (mut partial_two, mut partial_two_basis) = EventLog::replay_validated_v3_prefix(
+            complete.run_id().clone(),
+            &genesis,
+            &partial_two_envelopes,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(partial_two_envelopes.len() as u64, u64::MAX),
+        )
+        .unwrap();
+        let stage_two_resume = EventLog::recover_verification_bundle_resume_authority_v3(
+            &pre_bundle_log,
+            &pre_bundle_basis,
+            &partial_two,
+            &partial_two_basis,
+            &planned,
+            &resolver,
+            &roots,
+        )
+        .unwrap();
+        partial_two
+            .resume_verification_bundle_v3(&mut partial_two_basis, stage_two_resume)
+            .unwrap();
+        assert_eq!(partial_two.tail_hash(), complete.tail_hash());
+        assert!(matches!(
+            EventLog::recover_verification_bundle_resume_authority_v3(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &planned,
+                &resolver,
+                &roots,
+            ),
+            Err(DomainError::BundleResumeAuthorityMismatch)
+        ));
+        let mut reordered = planned.clone();
+        reordered.swap(0, 1);
+        assert!(matches!(
+            EventLog::recover_verification_bundle_resume_authority_v3(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &partial,
+                &partial_basis,
+                &reordered,
+                &resolver,
+                &roots,
+            ),
+            Err(DomainError::BundleResumeAuthorityMismatch)
+        ));
+        let mut tampered_hash = planned.clone();
+        tampered_hash[1].event_hash = ContentHash::sha256(b"tampered planned event hash");
+        assert!(matches!(
+            EventLog::recover_verification_bundle_resume_authority_v3(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &partial,
+                &partial_basis,
+                &tampered_hash,
+                &resolver,
+                &roots,
+            ),
+            Err(DomainError::BundleResumeAuthorityMismatch)
+        ));
+        let gap_plan = vec![planned[0].clone(), planned[2].clone()];
+        assert!(matches!(
+            EventLog::recover_verification_bundle_resume_authority_v3(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &partial,
+                &partial_basis,
+                &gap_plan,
+                &resolver,
+                &roots,
+            ),
+            Err(DomainError::BundleResumeAuthorityMismatch)
+        ));
+        let mut cross_run = partial.clone();
+        cross_run.run_id = id("run:cross-run-resume");
+        assert!(matches!(
+            EventLog::recover_verification_bundle_resume_authority_v3(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &cross_run,
+                &partial_basis,
+                &planned,
+                &resolver,
+                &roots,
+            ),
+            Err(DomainError::BundleResumeAuthorityMismatch)
+        ));
+        let raw_registration_id = pre_bundle_log
+            .aggregate()
+            .executions()
+            .find(|execution| execution.id() == trusted_claim.execution_id())
+            .unwrap()
+            .raw_artifact_registration_id()
+            .clone();
+        let mut missing_raw_pre = pre_bundle_log.clone();
+        missing_raw_pre
+            .v3_aggregate
+            .as_mut()
+            .unwrap()
+            .registrations
+            .remove(&raw_registration_id);
+        let mut missing_raw_current = partial.clone();
+        missing_raw_current
+            .v3_aggregate
+            .as_mut()
+            .unwrap()
+            .registrations
+            .remove(&raw_registration_id);
+        assert!(matches!(
+            EventLog::recover_verification_bundle_resume_authority_v3(
+                &missing_raw_pre,
+                &pre_bundle_basis,
+                &missing_raw_current,
+                &partial_basis,
+                &planned,
+                &resolver,
+                &roots,
+            ),
+            Err(DomainError::ClaimRawClosureMissing { .. })
+        ));
+        let recovery_payloads = planned
+            .iter()
+            .map(|envelope| {
+                decode_canonical_payload(EventContractVersion::V3, envelope.payload.get()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let recovery_first_sequence = pre_bundle_log.next_sequence().unwrap();
+        let recovery_end = recovery_first_sequence + planned.len() as u64;
+        let recovery_entries = complete_basis
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.event_sequence >= recovery_first_sequence
+                    && entry.event_sequence < recovery_end
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let raw_size = pre_bundle_log
+            .v3_aggregate
+            .as_ref()
+            .unwrap()
+            .registrations
+            .get(&raw_registration_id)
+            .unwrap()
+            .size();
+        let recovery_base_for_declared_raw = |declared_raw_size: u64| {
+            pre_bundle_log.retained_bytes_v3().unwrap()
+                + partial.retained_bytes_v3().unwrap()
+                + pre_bundle_basis.retained_bytes().unwrap()
+                + partial_basis.retained_bytes().unwrap()
+                + roots.retained_bytes().unwrap()
+                + recovery_envelopes_oracle(&planned)
+                + declared_raw_size
+        };
+        let recovery_base = recovery_base_for_declared_raw(raw_size);
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(recovery_base)));
+        preflight_verification_bundle_recovery(
+            &pre_bundle_log,
+            &pre_bundle_basis,
+            &partial,
+            &partial_basis,
+            &planned,
+            &roots,
+            raw_size,
+            [],
+        )
+        .unwrap();
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(recovery_base - 1)));
+        assert!(matches!(
+            preflight_verification_bundle_recovery(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &partial,
+                &partial_basis,
+                &planned,
+                &roots,
+                raw_size,
+                [],
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        let raw_delta = 4_096_u64;
+        let larger_raw_exact = recovery_base_for_declared_raw(raw_size + raw_delta);
+        assert_eq!(larger_raw_exact - recovery_base, raw_delta);
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(larger_raw_exact)));
+        preflight_verification_bundle_recovery(
+            &pre_bundle_log,
+            &pre_bundle_basis,
+            &partial,
+            &partial_basis,
+            &planned,
+            &roots,
+            raw_size + raw_delta,
+            [],
+        )
+        .unwrap();
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(larger_raw_exact - 1)));
+        assert!(matches!(
+            preflight_verification_bundle_recovery(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &partial,
+                &partial_basis,
+                &planned,
+                &roots,
+                raw_size + raw_delta,
+                [],
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        let (oracle_pre_log, oracle_pre_basis) = EventLog::replay_validated_v3_prefix(
+            pre_bundle_log.run_id().clone(),
+            &genesis,
+            &pre_envelopes,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(pre_envelopes.len() as u64, u64::MAX),
+        )
+        .unwrap();
+        let (oracle_current_log, oracle_current_basis) = EventLog::replay_validated_v3_prefix(
+            partial.run_id().clone(),
+            &genesis,
+            &partial_envelopes,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(partial_envelopes.len() as u64, u64::MAX),
+        )
+        .unwrap();
+        let complete_envelopes_oracle = complete.envelopes().cloned().collect::<Vec<_>>();
+        let (oracle_complete_log, oracle_complete_basis) = EventLog::replay_validated_v3_prefix(
+            complete.run_id().clone(),
+            &genesis,
+            &complete_envelopes_oracle,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(complete_envelopes_oracle.len() as u64, u64::MAX),
+        )
+        .unwrap();
+        let replay_recovery_exact = recovery_base
+            + recovery_envelopes_oracle(&partial_envelopes)
+            + recovery_payloads_oracle(&recovery_payloads)
+            + recovery_envelopes_oracle(&pre_envelopes)
+            + recovery_envelopes_oracle(&planned)
+            + genesis.capacity() as u64
+            + oracle_pre_log.retained_bytes_v3().unwrap()
+            + oracle_pre_basis.retained_bytes().unwrap()
+            + oracle_current_log.retained_bytes_v3().unwrap()
+            + oracle_current_basis.retained_bytes().unwrap()
+            + oracle_complete_log.retained_bytes_v3().unwrap()
+            + oracle_complete_basis.retained_bytes().unwrap()
+            + recovery_entries_oracle(&recovery_entries)
+            + canonical_json(&planned).unwrap().len() as u64;
+        let genesis_recovery_exact = recovery_base
+            + recovery_envelopes_oracle(&partial_envelopes)
+            + recovery_payloads_oracle(&recovery_payloads)
+            + recovery_envelopes_oracle(&pre_envelopes)
+            + recovery_envelopes_oracle(&planned)
+            + recovery_genesis_snapshot_oracle(&pre_bundle_log.initial)
+            + genesis.len() as u64;
+        let oracle_token = EventLog::recover_verification_bundle_resume_authority_v3(
+            &pre_bundle_log,
+            &pre_bundle_basis,
+            &partial,
+            &partial_basis,
+            &planned,
+            &resolver,
+            &roots,
+        )
+        .unwrap();
+        let final_token_exact = recovery_base - raw_size
+            + recovery_payloads_oracle(&recovery_payloads)
+            + recovery_entries_oracle(&recovery_entries)
+            + recovery_token_oracle(&oracle_token);
+        let recovery_exact = replay_recovery_exact
+            .max(final_token_exact)
+            .max(genesis_recovery_exact);
+        drop(oracle_token);
+        V3_TEST_RESUME_TOKEN_ALLOCATION_SEAMS.with(|value| value.set(0));
+        V3_TEST_RESUME_TOKEN_LIMIT.with(|value| value.set(Some(final_token_exact)));
+        V3_TEST_RECOVERY_GENESIS_ALLOCATION_SEAMS.with(|value| value.set(0));
+        V3_TEST_RECOVERY_GENESIS_LIMIT.with(|value| value.set(Some(genesis_recovery_exact)));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(recovery_exact)));
+        EventLog::recover_verification_bundle_resume_authority_v3(
+            &pre_bundle_log,
+            &pre_bundle_basis,
+            &partial,
+            &partial_basis,
+            &planned,
+            &resolver,
+            &roots,
+        )
+        .unwrap();
+        assert_eq!(
+            V3_TEST_RESUME_TOKEN_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        assert_eq!(
+            V3_TEST_RECOVERY_GENESIS_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        V3_TEST_RESUME_TOKEN_LIMIT.with(|value| value.set(None));
+        V3_TEST_RECOVERY_GENESIS_LIMIT.with(|value| value.set(None));
+        V3_TEST_RESUME_TOKEN_ALLOCATION_SEAMS.with(|value| value.set(0));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(recovery_exact - 1)));
+        assert!(matches!(
+            EventLog::recover_verification_bundle_resume_authority_v3(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &partial,
+                &partial_basis,
+                &planned,
+                &resolver,
+                &roots,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_RESUME_TOKEN_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(recovery_exact)));
+        V3_TEST_RESUME_TOKEN_LIMIT.with(|value| value.set(Some(final_token_exact - 1)));
+        V3_TEST_RESUME_TOKEN_ALLOCATION_SEAMS.with(|value| value.set(0));
+        assert!(matches!(
+            EventLog::recover_verification_bundle_resume_authority_v3(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &partial,
+                &partial_basis,
+                &planned,
+                &resolver,
+                &roots,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_RESUME_TOKEN_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        V3_TEST_RESUME_TOKEN_LIMIT.with(|value| value.set(None));
+        V3_TEST_RECOVERY_GENESIS_ALLOCATION_SEAMS.with(|value| value.set(0));
+        V3_TEST_RECOVERY_GENESIS_LIMIT.with(|value| value.set(Some(genesis_recovery_exact - 1)));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(recovery_exact)));
+        assert!(matches!(
+            EventLog::recover_verification_bundle_resume_authority_v3(
+                &pre_bundle_log,
+                &pre_bundle_basis,
+                &partial,
+                &partial_basis,
+                &planned,
+                &resolver,
+                &roots,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_RECOVERY_GENESIS_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        V3_TEST_RECOVERY_GENESIS_LIMIT.with(|value| value.set(None));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        let stale_resume = EventLog::recover_verification_bundle_resume_authority_v3(
+            &pre_bundle_log,
+            &pre_bundle_basis,
+            &partial,
+            &partial_basis,
+            &planned,
+            &resolver,
+            &roots,
+        )
+        .unwrap();
+        let confirmed_tail = partial_basis.confirmed_tail_hash.clone();
+        partial_basis.confirmed_tail_hash = ContentHash::sha256(b"stale partial basis");
+        assert!(
+            partial
+                .resume_verification_bundle_v3(&mut partial_basis, stale_resume)
+                .is_err()
+        );
+        partial_basis.confirmed_tail_hash = confirmed_tail;
+        let mut corrupted_resume = EventLog::recover_verification_bundle_resume_authority_v3(
+            &pre_bundle_log,
+            &pre_bundle_basis,
+            &partial,
+            &partial_basis,
+            &planned,
+            &resolver,
+            &roots,
+        )
+        .unwrap();
+        corrupted_resume.missing_envelopes[0].event_hash =
+            ContentHash::sha256(b"corrupted sealed suffix");
+        let partial_tail_before = partial.tail_hash().clone();
+        let partial_count_before = partial.events().len();
+        let partial_basis_before = partial_basis.basis_digest().clone();
+        assert!(matches!(
+            partial.resume_verification_bundle_v3(&mut partial_basis, corrupted_resume),
+            Err(DomainError::BundleResumeAuthorityMismatch)
+        ));
+        assert_eq!(partial.tail_hash(), &partial_tail_before);
+        assert_eq!(partial.events().len(), partial_count_before);
+        assert_eq!(partial_basis.basis_digest(), &partial_basis_before);
+        let resume = EventLog::recover_verification_bundle_resume_authority_v3(
+            &pre_bundle_log,
+            &pre_bundle_basis,
+            &partial,
+            &partial_basis,
+            &planned,
+            &resolver,
+            &roots,
+        )
+        .unwrap();
+        let resumed_receipt = partial
+            .resume_verification_bundle_v3(&mut partial_basis, resume)
+            .unwrap();
+        assert_eq!(resumed_receipt, receipt);
+        assert_eq!(partial.tail_hash(), complete.tail_hash());
+        fresh = partial;
+        assert_eq!(receipt.event_ids().len(), 3);
+        assert_eq!(fresh.envelopes().count(), fresh_events_before + 3);
+        let fresh_assessment = fresh.claim_assessment_v3(&trusted_claim_id).unwrap();
+        assert_eq!(
+            fresh_assessment.disposition(),
+            crate::AssessmentDispositionV3::Supported
+        );
+        assert_eq!(
+            fresh_assessment.review_status(),
+            crate::AssessmentReviewStatusV3::Unreviewed
+        );
+        assert_eq!(fresh_assessment.decision_ids().len(), 0);
+        assert_eq!(fresh_assessment.finding_ids().len(), 0);
+
         let append_payload = |log: &mut EventLog, payload: PersistedPayload| {
             let sequence = log.next_sequence().unwrap();
             let actor = payload.actor().to_owned();
@@ -13440,6 +16821,7 @@ mod tests {
     fn aggregate_with_escaped_repository_name(repetitions: usize) -> ReviewAggregate {
         let mut value: Value = serde_json::from_slice(FIXTURE).unwrap();
         value["repository"]["name"] = Value::String("\n\\\"".repeat(repetitions));
+        add_seeded_program_evidence(&mut value);
         let program = ProgramSpace::from_json_slice(&canonical_json(&value).unwrap()).unwrap();
         let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
         ReviewAggregate::new(program, universe, obligations).unwrap()
@@ -13492,6 +16874,7 @@ mod tests {
     #[test]
     fn actual_new_v3_refuses_escaped_plus_one_before_allocation_seams() {
         let exact_initial = aggregate_with_escaped_repository_name(256);
+        assert!(!exact_initial.program().evidence().is_empty());
         let retained = exact_initial.retained_bytes_v3().unwrap();
         let wire_len = crate::canonical::canonical_json_count_bounded(
             &BorrowedRunGenesisSnapshot(&exact_initial),
