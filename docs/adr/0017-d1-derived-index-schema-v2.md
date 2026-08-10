@@ -10,7 +10,11 @@
   version 1, table projections, payload-kind checks, snapshot columns, or the
   scope of `max_index_working_bytes`. It does not change ADR 0015's
   descriptor-relative SQLite boundary, locking, publication protocol, or
-  authority rules.
+  authority rules. ADR 0015's exhaustive replay branch follows ADR 0016's
+  classification: plans are `true` live-aggregate events, while context
+  envelopes are `false` metadata-only events whose typed SQLite projection
+  does not confer authority, admission, aggregate membership, or future
+  lookup.
 
 ## Context
 

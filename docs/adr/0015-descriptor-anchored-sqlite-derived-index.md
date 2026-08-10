@@ -319,10 +319,17 @@ rebuild first records only its envelope metadata in `events`, then calls
 `OfflineProjectionState::apply` exactly once and branches on both its boolean
 and the closed `DecodedPayload` variant:
 
-- `true` is valid only for authority-free domain variants other than
-  `FindingRecorded`: genesis, artifact/source records, plan/context/execution
-  records, obligation transitions, and claims. Their domain rows are inserted
-  only after successful apply.
+- `true` is valid for the authority-free live-aggregate variants: genesis,
+  artifact/source records, `ReviewPlanRecorded`, execution records, obligation
+  transitions, and claims. Their domain rows are inserted only after
+  successful apply. In particular, ADR 0016 makes `ReviewPlanRecorded` a
+  `true` live-aggregate event.
+- `false` with `ContextEnvelopeProjected` is the deliberate ADR 0016
+  metadata-only offline classification. Rebuild still projects the typed,
+  validated event into the `context_envelopes` SQLite row, but it does not add
+  the envelope to the live aggregate, mint a context admission, enable future
+  lookup, or promote any authority. `(true, ContextEnvelopeProjected)` is a
+  `ProjectionContractViolation`.
 - `false` with `EvidenceRecorded`, `EvidenceBound`,
   `VerificationRecorded`, or `DecisionRecorded` writes shadow metadata only
   with `authority_reconciled = 0`.
