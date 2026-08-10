@@ -12,6 +12,7 @@ mod error;
 mod event;
 mod execution;
 mod id;
+mod m4;
 mod planning;
 mod program;
 mod projection;
@@ -52,6 +53,18 @@ pub use execution::{
     ResolvedSourceBufferAccounting, ValidatedExecutionBundle,
 };
 pub use id::{ContentHash, IdRegistry, StableId, VersionTuple};
+pub use m4::{
+    AssessmentDispositionV3, AssessmentReviewStatusV3, AuthorityScopeDescriptorV3,
+    AuthorityScopeV3, ClaimAssessmentV3, DecisionOutcomeV3, DecisionV3, EvidenceBindingV3,
+    EvidenceKindV3, EvidenceObservationV3, EvidenceRelationV3, EvidenceV3, FINDING_PROJECTION_ID,
+    FIXTURE_DESCRIPTOR_ID, FIXTURE_HARNESS_ID, FIXTURE_HARNESS_REVISION, FIXTURE_MEDIA_TYPE,
+    FIXTURE_PROCEDURE_ID, FIXTURE_TEST_ARTIFACT_ID, FIXTURE_WITNESS_HASH, FindingStatusV3,
+    FindingV3, FixedFixtureResultV1, M4_PROPERTY_ID, M4Error, M4Result, M4SensitivityV3,
+    STATIC_DESCRIPTOR_ID, STATIC_PROCEDURE_ID, StaticApplicabilityV1, StaticFactEvaluationV1,
+    StaticFactInputV1, StaticFactResultV1, StaticRecordProposalV1, StaticScopeV3,
+    VerificationOutcomeV3, VerificationV3, VerifierDescriptorV3, VerifierProcedureV3,
+    evaluate_static_fact_v1,
+};
 pub use planning::{
     DeferralReason, PlanBudget, PlannerPolicyV1, ReviewPlan, RiskDescriptor, ScheduleWave, plan,
 };
