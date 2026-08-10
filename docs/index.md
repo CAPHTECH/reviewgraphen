@@ -86,6 +86,7 @@
 | [`adr/0020-minimal-deterministic-fake-runtime.md`](adr/0020-minimal-deterministic-fake-runtime.md) | admission-bound deterministic fake D2 runtime と crash/resume 境界。 |
 | [`adr/0021-m4-evidence-bound-verification.md`](adr/0021-m4-evidence-bound-verification.md) | M4のD2 claim authority bridge、固定verifier、human admission、index v4/report v3のAccepted設計契約。 |
 | [`adr/0022-m5-context-cover-and-gluing.md`](adr/0022-m5-context-cover-and-gluing.md) | M5のContext Cover、閉じたSection assignment、source-bound gluing、index v5/report v4のAccepted設計契約。 |
+| [`adr/0023-m6-incremental-review-and-staleness.md`](adr/0023-m6-incremental-review-and-staleness.md) | M6のtwo-run change morphism、property-sensitive staleness、preservation verification、partial rerun、index v6/report v5/gateのAccepted設計契約。 |
 
 ## 4. Schemaと参照シナリオ
 
