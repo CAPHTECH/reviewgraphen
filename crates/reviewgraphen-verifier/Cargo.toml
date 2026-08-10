@@ -1,0 +1,18 @@
+[package]
+name = "reviewgraphen-verifier"
+description = "Closed process-free M4 verifier descriptors for ReviewGraphen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Apache-2.0"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+reviewgraphen-core = { path = "../reviewgraphen-core" }
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

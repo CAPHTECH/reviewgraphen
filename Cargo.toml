@@ -3,6 +3,7 @@ members = [
     "crates/reviewgraphen-core",
     "crates/reviewgraphen-ingest",
     "crates/reviewgraphen-reviewer",
+    "crates/reviewgraphen-verifier",
     "crates/reviewgraphen-runtime",
     "crates/reviewgraphen-report",
     "crates/reviewgraphen-store",
