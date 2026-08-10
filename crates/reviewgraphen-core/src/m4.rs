@@ -149,12 +149,12 @@ pub const FIXTURE_WITNESS_HASH: &str =
 
 pub(crate) const MAX_RECORD_BYTES: usize = 65_536;
 const MAX_SET: usize = 64;
-const MAX_EVIDENCE_SUBJECTS: usize = 128;
+pub(crate) const MAX_EVIDENCE_SUBJECTS: usize = 128;
 const MAX_VERIFICATION_EVIDENCE: usize = 128;
 const MAX_DECISION_SOURCES: usize = 256;
 const MAX_LIMITATIONS: usize = 32;
-const MAX_LIMITATION_BYTES: usize = 2_048;
-const MAX_TRACE_BYTES: usize = 256;
+pub(crate) const MAX_LIMITATION_BYTES: usize = 2_048;
+pub(crate) const MAX_TRACE_BYTES: usize = 256;
 const MAX_RATIONALE_BYTES: usize = 8_192;
 pub(crate) const MAX_RETAINED_WORKING_BYTES: u64 = 16_777_216;
 const MAX_M4_OBJECT_MEMBERS: usize = 64;
@@ -609,6 +609,33 @@ fn string_vec_allocated_bytes(values: &[String]) -> Result<u64> {
     let mut total = 0;
     checked_memory_add(&mut total, size_of_val(values))?;
     for value in values {
+        checked_memory_add(&mut total, value.capacity())?;
+    }
+    Ok(total)
+}
+
+fn id_set_allocated_bytes(values: &BTreeSet<StableId>) -> Result<u64> {
+    let mut total = 0;
+    for value in values {
+        checked_memory_add(&mut total, size_of::<StableId>())?;
+        checked_memory_add(&mut total, value.allocated_bytes())?;
+    }
+    Ok(total)
+}
+
+fn cloned_ids_allocated_bytes<'a>(values: impl IntoIterator<Item = &'a StableId>) -> Result<u64> {
+    let mut total = 0_u64;
+    for value in values {
+        checked_memory_add(&mut total, size_of::<StableId>())?;
+        checked_memory_add(&mut total, value.allocated_bytes())?;
+    }
+    Ok(total)
+}
+
+fn string_set_allocated_bytes(values: &BTreeSet<String>) -> Result<u64> {
+    let mut total = 0;
+    for value in values {
+        checked_memory_add(&mut total, size_of::<String>())?;
         checked_memory_add(&mut total, value.capacity())?;
     }
     Ok(total)
@@ -1669,6 +1696,48 @@ impl StaticFactInputV1 {
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
         bounded_bytes(self, "static fact input")
     }
+
+    pub(crate) fn canonical_size(&self) -> Result<u64> {
+        u64::try_from(canonical_len(self, "static fact input")?).map_err(|_| M4Error::Incomplete {
+            operation: "static fact input canonical size",
+            limit: MAX_RECORD_BYTES,
+            observed: usize::MAX,
+        })
+    }
+
+    pub(crate) fn allocated_bytes(&self) -> Result<u64> {
+        let mut total = 0_u64;
+        for values in [
+            &self.candidate_invariant_ids,
+            &self.claim_source_ids,
+            &self.obligation_context_ids,
+            &self.obligation_source_ids,
+            &self.obligation_target_refs,
+            &self.selected_invariant_scope_ids,
+        ] {
+            total =
+                total
+                    .checked_add(id_set_allocated_bytes(values)?)
+                    .ok_or(M4Error::Incomplete {
+                        operation: "M4 retained verifier bytes",
+                        limit: MAX_RETAINED_WORKING_BYTES as usize,
+                        observed: usize::MAX,
+                    })?;
+        }
+        for bytes in [
+            self.claim_id.allocated_bytes(),
+            self.obligation_id.allocated_bytes(),
+            self.property_id.capacity(),
+            self.schema.capacity(),
+            self.selected_invariant_id
+                .as_ref()
+                .map_or(0, StableId::allocated_bytes),
+            self.snapshot_id.allocated_bytes(),
+        ] {
+            checked_memory_add(&mut total, bytes)?;
+        }
+        Ok(total)
+    }
 }
 
 impl StaticFactInputV1 {
@@ -1691,6 +1760,56 @@ impl StaticFactInputV1 {
         }
         let _ = bounded_bytes(self, "StaticFactInputV1")?;
         Ok(())
+    }
+
+    fn reconstructed_applicability(&self) -> StaticApplicabilityV1 {
+        if self.property_id != M4_PROPERTY_ID {
+            StaticApplicabilityV1::UnsupportedProperty
+        } else {
+            match self.candidate_invariant_ids.len() {
+                0 => StaticApplicabilityV1::Absent,
+                1 => StaticApplicabilityV1::Unique,
+                _ => StaticApplicabilityV1::Ambiguous,
+            }
+        }
+    }
+
+    pub(crate) fn projected_result_accounting(&self) -> Result<(u64, u64)> {
+        #[derive(Serialize)]
+        struct ProjectedResult<'a> {
+            applicability: StaticApplicabilityV1,
+            claim_id: &'a StableId,
+            limitations: [&'static str; 1],
+            observation: Option<EvidenceObservationV3>,
+            outcome: VerificationOutcomeV3,
+            schema: &'static str,
+        }
+        let applicability = self.reconstructed_applicability();
+        let (outcome, observation, limitation) = static_result_parts(applicability);
+        let projection = ProjectedResult {
+            applicability,
+            claim_id: &self.claim_id,
+            limitations: [limitation],
+            observation,
+            outcome,
+            schema: "reviewgraphen.static_fact_result.v1",
+        };
+        let canonical = u64::try_from(canonical_len(&projection, "static projected result")?)
+            .map_err(|_| M4Error::Incomplete {
+                operation: "static projected result canonical size",
+                limit: MAX_RECORD_BYTES,
+                observed: usize::MAX,
+            })?;
+        let mut retained = u64::try_from(size_of::<StaticFactResultV1>()).unwrap_or(u64::MAX);
+        for bytes in [
+            self.claim_id.as_str().len(),
+            size_of::<String>(),
+            limitation.len(),
+            "reviewgraphen.static_fact_result.v1".len(),
+        ] {
+            checked_memory_add(&mut retained, bytes)?;
+        }
+        Ok((retained, canonical))
     }
 }
 
@@ -1750,6 +1869,29 @@ impl StaticFactEvaluationV1 {
     pub fn evidence_subject_ids(&self) -> Option<&BTreeSet<StableId>> {
         self.evidence_subject_ids.as_ref()
     }
+
+    pub(crate) fn allocated_bytes(&self) -> Result<u64> {
+        let mut total = self.input.allocated_bytes()?;
+        let scope = self.scope.allocated_bytes()?;
+        total = total
+            .checked_add(self.result.allocated_bytes()?)
+            .and_then(|value| value.checked_add(scope))
+            .ok_or(M4Error::Incomplete {
+                operation: "M4 retained verifier bytes",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?;
+        if let Some(subject_ids) = &self.evidence_subject_ids {
+            total = total
+                .checked_add(id_set_allocated_bytes(subject_ids)?)
+                .ok_or(M4Error::Incomplete {
+                    operation: "M4 retained verifier bytes",
+                    limit: MAX_RETAINED_WORKING_BYTES as usize,
+                    observed: usize::MAX,
+                })?;
+        }
+        Ok(total)
+    }
     pub fn materialize(
         &self,
         input_registration_id: StableId,
@@ -1795,6 +1937,40 @@ impl StaticFactEvaluationV1 {
     }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static STATIC_EVALUATOR_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static STATIC_RECONSTRUCTION_ALLOCATION_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_static_evaluator_calls() {
+    STATIC_EVALUATOR_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn static_evaluator_calls() -> u64 {
+    STATIC_EVALUATOR_CALLS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_static_reconstruction_allocation_seams() {
+    STATIC_RECONSTRUCTION_ALLOCATION_SEAMS.with(|value| value.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn static_reconstruction_allocation_seams() -> u64 {
+    STATIC_RECONSTRUCTION_ALLOCATION_SEAMS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn mark_static_reconstruction_allocation_seam() {
+    STATIC_RECONSTRUCTION_ALLOCATION_SEAMS.with(|value| value.set(value.get() + 1));
+}
+
+#[cfg(not(test))]
+fn mark_static_reconstruction_allocation_seam() {}
+
 /// Pure static applicability evaluation. Candidate cardinality is computed by
 /// core and cannot be selected by a caller.
 pub fn evaluate_static_fact_v1(
@@ -1802,6 +1978,8 @@ pub fn evaluate_static_fact_v1(
     obligation: &Obligation,
     claim: &ExecutionClaimV2,
 ) -> Result<StaticFactEvaluationV1> {
+    #[cfg(test)]
+    STATIC_EVALUATOR_CALLS.with(|calls| calls.set(calls.get() + 1));
     claim.validate_shape()?;
     if obligation.version().snapshot() != program.snapshot_id() {
         return Err(M4Error::SnapshotMismatch {
@@ -1912,33 +2090,45 @@ pub struct StaticFactResultV1 {
     schema: String,
 }
 
+impl StaticScopeV3 {
+    fn allocated_bytes(&self) -> Result<u64> {
+        let mut total = 0_u64;
+        for values in [
+            &self.candidate_invariant_ids,
+            &self.source_ids,
+            &self.target_refs,
+        ] {
+            total =
+                total
+                    .checked_add(id_set_allocated_bytes(values)?)
+                    .ok_or(M4Error::Incomplete {
+                        operation: "M4 retained verifier bytes",
+                        limit: MAX_RETAINED_WORKING_BYTES as usize,
+                        observed: usize::MAX,
+                    })?;
+        }
+        for bytes in [
+            self.claim_body_hash.allocated_bytes(),
+            self.claim_id.allocated_bytes(),
+            self.obligation_id.allocated_bytes(),
+            self.property_id.capacity(),
+            self.selected_invariant_id
+                .as_ref()
+                .map_or(0, StableId::allocated_bytes),
+            self.snapshot_id.allocated_bytes(),
+        ] {
+            checked_memory_add(&mut total, bytes)?;
+        }
+        Ok(total)
+    }
+}
+
 impl StaticFactResultV1 {
     fn from_applicability(
         claim_id: StableId,
         applicability: StaticApplicabilityV1,
     ) -> Result<Self> {
-        let (outcome, observation, limitation) = match applicability {
-            StaticApplicabilityV1::Absent => (
-                VerificationOutcomeV3::Inconclusive,
-                None,
-                "required declared invariant is absent",
-            ),
-            StaticApplicabilityV1::Unique => (
-                VerificationOutcomeV3::Inconclusive,
-                Some(EvidenceObservationV3::FactPresent),
-                "declared invariant is not an observed violation",
-            ),
-            StaticApplicabilityV1::Ambiguous => (
-                VerificationOutcomeV3::Inconclusive,
-                None,
-                "multiple applicable declared invariants",
-            ),
-            StaticApplicabilityV1::UnsupportedProperty => (
-                VerificationOutcomeV3::Unsupported,
-                None,
-                "unsupported property: reviewgraphen.static_fact_verifier@1 supports only payment.at_most_once",
-            ),
-        };
+        let (outcome, observation, limitation) = static_result_parts(applicability);
         let value = Self {
             schema: "reviewgraphen.static_fact_result.v1".to_owned(),
             claim_id,
@@ -1949,6 +2139,22 @@ impl StaticFactResultV1 {
         };
         value.validate()?;
         Ok(value)
+    }
+
+    pub(crate) fn canonical_size(&self) -> Result<u64> {
+        u64::try_from(canonical_len(self, "static fact result")?).map_err(|_| M4Error::Incomplete {
+            operation: "static fact result canonical size",
+            limit: MAX_RECORD_BYTES,
+            observed: usize::MAX,
+        })
+    }
+
+    pub(crate) fn allocated_bytes(&self) -> Result<u64> {
+        let mut total = string_set_allocated_bytes(&self.limitations)?;
+        for bytes in [self.claim_id.allocated_bytes(), self.schema.capacity()] {
+            checked_memory_add(&mut total, bytes)?;
+        }
+        Ok(total)
     }
     #[cfg(test)]
     fn new(scope: &AuthorityScopeV3, applicability: StaticApplicabilityV1) -> Result<Self> {
@@ -2011,6 +2217,37 @@ impl StaticFactResultV1 {
     }
 }
 
+fn static_result_parts(
+    applicability: StaticApplicabilityV1,
+) -> (
+    VerificationOutcomeV3,
+    Option<EvidenceObservationV3>,
+    &'static str,
+) {
+    match applicability {
+        StaticApplicabilityV1::Absent => (
+            VerificationOutcomeV3::Inconclusive,
+            None,
+            "required declared invariant is absent",
+        ),
+        StaticApplicabilityV1::Unique => (
+            VerificationOutcomeV3::Inconclusive,
+            Some(EvidenceObservationV3::FactPresent),
+            "declared invariant is not an observed violation",
+        ),
+        StaticApplicabilityV1::Ambiguous => (
+            VerificationOutcomeV3::Inconclusive,
+            None,
+            "multiple applicable declared invariants",
+        ),
+        StaticApplicabilityV1::UnsupportedProperty => (
+            VerificationOutcomeV3::Unsupported,
+            None,
+            "unsupported property: reviewgraphen.static_fact_verifier@1 supports only payment.at_most_once",
+        ),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StaticFactResultWire {
@@ -2036,6 +2273,392 @@ impl StaticFactResultV1 {
         value.validate()?;
         Ok(value)
     }
+}
+
+pub(crate) fn static_input_structural_upper_bound_bytes() -> Result<u64> {
+    let mut total = u64::try_from(size_of::<StaticFactInputV1>()).unwrap_or(u64::MAX);
+    let set_entry =
+        size_of::<StableId>()
+            .checked_add(MAX_TRACE_BYTES)
+            .ok_or(M4Error::Incomplete {
+                operation: "static input structural bound",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?;
+    checked_memory_add(
+        &mut total,
+        6_usize
+            .checked_mul(MAX_EVIDENCE_SUBJECTS)
+            .and_then(|value| value.checked_mul(set_entry))
+            .ok_or(M4Error::Incomplete {
+                operation: "static input structural bound",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?,
+    )?;
+    checked_memory_add(
+        &mut total,
+        4_usize
+            .checked_mul(MAX_TRACE_BYTES)
+            .and_then(|value| value.checked_add(2 * MAX_TRACE_BYTES))
+            .ok_or(M4Error::Incomplete {
+                operation: "static input structural bound",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?,
+    )?;
+    Ok(total)
+}
+
+pub(crate) fn static_result_structural_upper_bound_bytes() -> Result<u64> {
+    let mut total = u64::try_from(size_of::<StaticFactResultV1>()).unwrap_or(u64::MAX);
+    checked_memory_add(
+        &mut total,
+        MAX_TRACE_BYTES
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(size_of::<String>()))
+            .and_then(|value| value.checked_add(MAX_LIMITATION_BYTES))
+            .ok_or(M4Error::Incomplete {
+                operation: "static result structural bound",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?,
+    )?;
+    Ok(total)
+}
+
+pub(crate) fn static_reconstruction_scratch_bytes(
+    program: &ProgramSpace,
+    obligation: &Obligation,
+    claim: &ExecutionClaimV2,
+) -> Result<u64> {
+    let mut total = 0_u64;
+    // closure and relevance coexist. Count every source occurrence so overlap
+    // can only make this conservative; each cloned BTreeSet value owns both
+    // the inline StableId and its backing String.
+    for values in [
+        obligation.normalized_target_refs(),
+        obligation.normalized_context_ids(),
+        obligation.normalized_source_ids(),
+        claim.source_ids(),
+        claim.target_refs(),
+        obligation.normalized_context_ids(),
+        claim.source_ids(),
+    ] {
+        total = total
+            .checked_add(cloned_ids_allocated_bytes(values)?)
+            .ok_or(M4Error::Incomplete {
+                operation: "static reconstruction scratch",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?;
+    }
+    let candidate_ids =
+        cloned_ids_allocated_bytes(program.invariants().iter().map(|value| &value.id))?;
+    total = total
+        .checked_add(candidate_ids)
+        .ok_or(M4Error::Incomplete {
+            operation: "static reconstruction scratch",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })?;
+    let mut selected_scope = 0_u64;
+    for invariant in program.invariants() {
+        selected_scope = selected_scope.max(cloned_ids_allocated_bytes(&invariant.scope_ids)?);
+    }
+    total = total
+        .checked_add(selected_scope)
+        .ok_or(M4Error::Incomplete {
+            operation: "static reconstruction scratch",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })?;
+    let selected_id = program
+        .invariants()
+        .iter()
+        .map(|value| size_of::<StableId>() + value.id.allocated_bytes())
+        .max()
+        .unwrap_or(0);
+    checked_memory_add(&mut total, selected_id)?;
+
+    // The comparison DTO owns another copy of the immutable input closure.
+    checked_memory_add(&mut total, size_of::<StaticFactInputV1>())?;
+    for values in [
+        obligation.normalized_target_refs(),
+        obligation.normalized_context_ids(),
+        obligation.normalized_source_ids(),
+        claim.source_ids(),
+    ] {
+        total = total
+            .checked_add(cloned_ids_allocated_bytes(values)?)
+            .ok_or(M4Error::Incomplete {
+                operation: "static reconstruction comparison input",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?;
+    }
+    total = total
+        .checked_add(candidate_ids)
+        .and_then(|value| value.checked_add(selected_scope))
+        .ok_or(M4Error::Incomplete {
+            operation: "static reconstruction comparison input",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })?;
+    for bytes in [
+        claim.id().allocated_bytes(),
+        program.snapshot_id().allocated_bytes(),
+        claim.property_id().len(),
+        obligation.id().allocated_bytes(),
+        selected_id,
+        "reviewgraphen.static_fact_input.v1".len(),
+    ] {
+        checked_memory_add(&mut total, bytes)?;
+    }
+    total = total
+        .checked_add(static_result_structural_upper_bound_bytes()?)
+        .and_then(|value| value.checked_add(MAX_RECORD_BYTES as u64))
+        .ok_or(M4Error::Incomplete {
+            operation: "static reconstruction result/scratch",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })?;
+    Ok(total)
+}
+
+#[cfg(test)]
+pub(crate) fn static_evaluation_test_oracle_bytes(value: &StaticFactEvaluationV1) -> u64 {
+    fn ids(values: &BTreeSet<StableId>) -> u64 {
+        values
+            .iter()
+            .map(|id| (size_of::<StableId>() + id.allocated_bytes()) as u64)
+            .sum()
+    }
+    let input = &value.input;
+    let mut total = size_of::<StaticFactEvaluationV1>() as u64;
+    for values in [
+        &input.candidate_invariant_ids,
+        &input.claim_source_ids,
+        &input.obligation_context_ids,
+        &input.obligation_source_ids,
+        &input.obligation_target_refs,
+        &input.selected_invariant_scope_ids,
+        &value.scope.candidate_invariant_ids,
+        &value.scope.source_ids,
+        &value.scope.target_refs,
+    ] {
+        total += ids(values);
+    }
+    total += [
+        input.claim_id.allocated_bytes(),
+        input.obligation_id.allocated_bytes(),
+        input.property_id.capacity(),
+        input.schema.capacity(),
+        input
+            .selected_invariant_id
+            .as_ref()
+            .map_or(0, StableId::allocated_bytes),
+        input.snapshot_id.allocated_bytes(),
+        value.result.claim_id.allocated_bytes(),
+        value.result.schema.capacity(),
+        value.scope.claim_body_hash.allocated_bytes(),
+        value.scope.claim_id.allocated_bytes(),
+        value.scope.obligation_id.allocated_bytes(),
+        value.scope.property_id.capacity(),
+        value
+            .scope
+            .selected_invariant_id
+            .as_ref()
+            .map_or(0, StableId::allocated_bytes),
+        value.scope.snapshot_id.allocated_bytes(),
+    ]
+    .into_iter()
+    .map(|bytes| bytes as u64)
+    .sum::<u64>();
+    total += value
+        .result
+        .limitations
+        .iter()
+        .map(|text| (size_of::<String>() + text.capacity()) as u64)
+        .sum::<u64>();
+    total += value.evidence_subject_ids.as_ref().map_or(0, ids);
+    total
+}
+
+#[cfg(test)]
+pub(crate) fn static_reconstruction_test_oracle_bytes(
+    program: &ProgramSpace,
+    obligation: &Obligation,
+    claim: &ExecutionClaimV2,
+) -> u64 {
+    fn ids<'a>(values: impl IntoIterator<Item = &'a StableId>) -> u64 {
+        values
+            .into_iter()
+            .map(|id| (size_of::<StableId>() + id.allocated_bytes()) as u64)
+            .sum()
+    }
+    let mut total = 0_u64;
+    for values in [
+        obligation.normalized_target_refs(),
+        obligation.normalized_context_ids(),
+        obligation.normalized_source_ids(),
+        claim.source_ids(),
+        claim.target_refs(),
+        obligation.normalized_context_ids(),
+        claim.source_ids(),
+    ] {
+        total += ids(values);
+    }
+    let candidates = ids(program.invariants().iter().map(|value| &value.id));
+    let selected_scope = program
+        .invariants()
+        .iter()
+        .map(|value| ids(&value.scope_ids))
+        .max()
+        .unwrap_or(0);
+    let selected_id = program
+        .invariants()
+        .iter()
+        .map(|value| (size_of::<StableId>() + value.id.allocated_bytes()) as u64)
+        .max()
+        .unwrap_or(0);
+    total += candidates + selected_scope + selected_id + size_of::<StaticFactInputV1>() as u64;
+    for values in [
+        obligation.normalized_target_refs(),
+        obligation.normalized_context_ids(),
+        obligation.normalized_source_ids(),
+        claim.source_ids(),
+    ] {
+        total += ids(values);
+    }
+    total += candidates
+        + selected_scope
+        + claim.id().allocated_bytes() as u64
+        + program.snapshot_id().allocated_bytes() as u64
+        + claim.property_id().len() as u64
+        + obligation.id().allocated_bytes() as u64
+        + selected_id
+        + "reviewgraphen.static_fact_input.v1".len() as u64
+        + size_of::<StaticFactResultV1>() as u64
+        + (2 * MAX_TRACE_BYTES + size_of::<String>() + MAX_LIMITATION_BYTES) as u64
+        + MAX_RECORD_BYTES as u64;
+    total
+}
+
+pub(crate) fn reconstruct_static_result_from_durable_input_v1(
+    program: &ProgramSpace,
+    obligation: &Obligation,
+    claim: &ExecutionClaimV2,
+    input: &StaticFactInputV1,
+) -> Result<StaticFactResultV1> {
+    claim.validate_shape()?;
+    if obligation.version().snapshot() != program.snapshot_id() {
+        return Err(M4Error::SnapshotMismatch {
+            expected: program.snapshot_id().clone(),
+            actual: obligation.version().snapshot().clone(),
+        });
+    }
+    if claim.obligation_ids().len() != 1 || !claim.obligation_ids().contains(obligation.id()) {
+        return Err(M4Error::ClaimMismatch {
+            expected: obligation.id().clone(),
+            actual: claim.id().clone(),
+        });
+    }
+    let supported = claim.property_id() == M4_PROPERTY_ID
+        && obligation.property_id() == M4_PROPERTY_ID
+        && claim.property_id() == obligation.property_id();
+    mark_static_reconstruction_allocation_seam();
+    let mut closure = obligation.normalized_target_refs().clone();
+    closure.extend(obligation.normalized_context_ids().iter().cloned());
+    closure.extend(obligation.normalized_source_ids().iter().cloned());
+    closure.extend(claim.source_ids().iter().cloned());
+    let relevance = claim
+        .target_refs()
+        .iter()
+        .chain(obligation.normalized_context_ids())
+        .chain(claim.source_ids())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let candidates = if supported {
+        program
+            .invariants()
+            .iter()
+            .filter(|invariant| {
+                invariant.property_id == claim.property_id()
+                    && !invariant.scope_ids.is_empty()
+                    && invariant.scope_ids.is_subset(&closure)
+                    && !invariant.scope_ids.is_disjoint(&relevance)
+            })
+            .map(|invariant| invariant.id.clone())
+            .collect::<BTreeSet<_>>()
+    } else {
+        BTreeSet::new()
+    };
+    let selected_invariant_id = (candidates.len() == 1)
+        .then(|| candidates.first().cloned())
+        .flatten();
+    let selected_invariant_scope_ids = selected_invariant_id
+        .as_ref()
+        .and_then(|id| program.invariant(id))
+        .map_or_else(BTreeSet::new, |invariant| invariant.scope_ids.clone());
+    let expected = StaticFactInputV1 {
+        schema: "reviewgraphen.static_fact_input.v1".to_owned(),
+        claim_id: claim.id().clone(),
+        snapshot_id: program.snapshot_id().clone(),
+        property_id: claim.property_id().to_owned(),
+        obligation_id: obligation.id().clone(),
+        obligation_target_refs: obligation.normalized_target_refs().clone(),
+        obligation_context_ids: obligation.normalized_context_ids().clone(),
+        obligation_source_ids: obligation.normalized_source_ids().clone(),
+        claim_source_ids: claim.source_ids().clone(),
+        candidate_invariant_ids: candidates,
+        selected_invariant_id,
+        selected_invariant_scope_ids,
+    };
+    expected.validate()?;
+    if input != &expected {
+        return Err(validation(
+            "durable static input does not match the immutable fact closure",
+        ));
+    }
+    StaticFactResultV1::from_applicability(claim.id().clone(), input.reconstructed_applicability())
+}
+
+pub(crate) fn materialize_static_from_durable_input_v1(
+    program: &ProgramSpace,
+    obligation: &Obligation,
+    claim: &ExecutionClaimV2,
+    input: StaticFactInputV1,
+    input_registration_id: StableId,
+    output_registration_id: StableId,
+) -> Result<StaticRecordProposalV1> {
+    let result =
+        reconstruct_static_result_from_durable_input_v1(program, obligation, claim, &input)?;
+    let evidence_subject_ids = input.selected_invariant_id.as_ref().map(|id| {
+        let mut subjects = claim.target_refs().clone();
+        subjects.insert(id.clone());
+        subjects
+    });
+    let scope = StaticScopeV3 {
+        snapshot_id: program.snapshot_id().clone(),
+        claim_id: claim.id().clone(),
+        claim_body_hash: claim.body_hash()?,
+        property_id: claim.property_id().to_owned(),
+        obligation_id: obligation.id().clone(),
+        target_refs: claim.target_refs().clone(),
+        source_ids: claim.source_ids().clone(),
+        candidate_invariant_ids: input.candidate_invariant_ids.clone(),
+        selected_invariant_id: input.selected_invariant_id.clone(),
+        descriptor: VerifierDescriptorV3::StaticFactV1,
+        procedure: VerifierProcedureV3::StaticProjectionV1,
+    };
+    StaticFactEvaluationV1 {
+        scope,
+        input,
+        result,
+        evidence_subject_ids,
+    }
+    .materialize(input_registration_id, output_registration_id)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

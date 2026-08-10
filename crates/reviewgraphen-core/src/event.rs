@@ -5383,6 +5383,9 @@ std::thread_local! {
     static V3_TEST_RESUME_TOKEN_LIMIT: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     static V3_TEST_RECOVERY_GENESIS_ALLOCATION_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_RECOVERY_GENESIS_LIMIT: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    static V3_TEST_STATIC_EXPECTATION_KIND: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static V3_TEST_STATIC_EXPECTATION_PEAK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -5442,6 +5445,26 @@ fn record_fixture_stage_peak(stage: u8, peak: u64) {
 
 #[cfg(not(test))]
 fn record_fixture_stage_peak(_stage: u8, _peak: u64) {}
+
+#[cfg(test)]
+fn mark_static_expectation_allocation_seam(stage: u8) {
+    if V3_TEST_STATIC_EXPECTATION_KIND.with(|kind| kind.get()) == stage {
+        V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.set(value.get() + 1));
+    }
+}
+
+#[cfg(not(test))]
+fn mark_static_expectation_allocation_seam(_stage: u8) {}
+
+#[cfg(test)]
+fn record_static_expectation_peak(stage: u8, peak: u64) {
+    if V3_TEST_STATIC_EXPECTATION_KIND.with(|kind| kind.get()) == stage {
+        V3_TEST_STATIC_EXPECTATION_PEAK.with(|value| value.set(value.get().max(peak)));
+    }
+}
+
+#[cfg(not(test))]
+fn record_static_expectation_peak(_stage: u8, _peak: u64) {}
 
 #[cfg(test)]
 fn mark_resume_token_allocation_seam() {
@@ -6181,6 +6204,34 @@ impl AuthorityTrustRootsV3 {
         })
     }
 
+    fn harness_for_scope(
+        &self,
+        scope: &HarnessTrustRootInputV3,
+    ) -> Option<&HarnessTrustRootInputV3> {
+        self.harnesses.iter().map(|root| &root.input).find(|root| {
+            root.policy_revision_hash == scope.policy_revision_hash
+                && root.repository_id == scope.repository_id
+                && root.repository_source_hash == scope.repository_source_hash
+                && root.harness_id == scope.harness_id
+                && root.harness_revision == scope.harness_revision
+                && root.harness_source_hash == scope.harness_source_hash
+                && root.test_artifact_id == scope.test_artifact_id
+                && root.descriptor_id == scope.descriptor_id
+                && root.procedure_version == scope.procedure_version
+                && root.result_hash == scope.result_hash
+                && root.result_size == scope.result_size
+                && root.result_media_type == scope.result_media_type
+                && root.result_sensitivity == scope.result_sensitivity
+                && root.run_id == scope.run_id
+                && root.genesis_hash == scope.genesis_hash
+                && root.snapshot_id == scope.snapshot_id
+                && root.universe_id == scope.universe_id
+                && root.property_id == scope.property_id
+                && root.claim_id == scope.claim_id
+                && root.claim_body_hash == scope.claim_body_hash
+        })
+    }
+
     fn human_grant_for(&self, decision: &DecisionV3) -> Option<&HumanTrustGrantInputV3> {
         let capability = match decision.outcome() {
             crate::DecisionOutcomeV3::Accept => HumanAuthorityCapabilityV3::AcceptFinding,
@@ -6353,6 +6404,98 @@ fn exact_fixture_claim_for_log<'a>(
     }
     log.aggregate.validate()?;
     Ok(claim)
+}
+
+fn clone_harness_root_input(root: &HarnessTrustRootInputV3) -> HarnessTrustRootInputV3 {
+    HarnessTrustRootInputV3 {
+        policy_revision_hash: root.policy_revision_hash.clone(),
+        repository_id: root.repository_id.clone(),
+        repository_source_hash: root.repository_source_hash.clone(),
+        harness_id: root.harness_id.clone(),
+        harness_revision: root.harness_revision.clone(),
+        harness_source_hash: root.harness_source_hash.clone(),
+        test_artifact_id: root.test_artifact_id.clone(),
+        descriptor_id: root.descriptor_id.clone(),
+        procedure_version: root.procedure_version.clone(),
+        result_hash: root.result_hash.clone(),
+        result_size: root.result_size,
+        result_media_type: root.result_media_type.clone(),
+        result_sensitivity: root.result_sensitivity,
+        run_id: root.run_id.clone(),
+        genesis_hash: root.genesis_hash.clone(),
+        snapshot_id: root.snapshot_id.clone(),
+        universe_id: root.universe_id.clone(),
+        property_id: root.property_id.clone(),
+        claim_id: root.claim_id.clone(),
+        claim_body_hash: root.claim_body_hash.clone(),
+    }
+}
+
+fn deterministic_fixture_result_for_claim(
+    aggregate: &ReviewAggregate,
+    claim: &ExecutionClaimV2,
+    root: &HarnessTrustRootInputV3,
+) -> Result<(Vec<StableId>, Vec<u8>, ContentHash)> {
+    let mut subject_ids = claim.target_refs().iter().cloned().collect::<Vec<_>>();
+    subject_ids.push(StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?);
+    subject_ids.sort_unstable();
+    if !subject_ids
+        .iter()
+        .all(|id| aggregate.program().known_ids().contains(id))
+    {
+        return Err(DomainError::VerificationBundleMismatch);
+    }
+    let bytes = canonical_json(&serde_json::json!({
+        "claim_id": claim.id(),
+        "descriptor_id": FIXTURE_DESCRIPTOR_ID,
+        "outcome": "passed",
+        "procedure_version": FIXTURE_PROCEDURE_ID,
+        "property_id": M4_PROPERTY_ID,
+        "schema": "reviewgraphen.fixture_test_result.v1",
+        "subject_ids": subject_ids,
+        "witness_hash": FIXTURE_WITNESS_HASH,
+    }))?;
+    let result = validate_fixture_result_for_root(aggregate, root, &bytes)?;
+    if result.subject_ids() != subject_ids {
+        return Err(DomainError::VerificationBundleMismatch);
+    }
+    let hash = ContentHash::sha256(&bytes);
+    Ok((subject_ids, bytes, hash))
+}
+
+fn expected_fixture_scope_for_claim(
+    log: &EventLog,
+    claim: &ExecutionClaimV2,
+    basis: &AuthorityReplayBasisV3,
+) -> Result<HarnessTrustRootInputV3> {
+    Ok(HarnessTrustRootInputV3 {
+        policy_revision_hash: basis.policy_revision_hash.clone(),
+        repository_id: log.aggregate.program().repository_id().clone(),
+        repository_source_hash: log
+            .aggregate
+            .program()
+            .repository_source()
+            .content_hash()
+            .ok_or(DomainError::AuthorityPolicyMismatch)?
+            .clone(),
+        harness_id: FIXTURE_HARNESS_ID.to_owned(),
+        harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+        harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH)?,
+        test_artifact_id: StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?,
+        descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+        procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+        result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH)?,
+        result_size: FIXTURE_WITNESS_SIZE,
+        result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+        result_sensitivity: ArtifactSensitivity::CanonicalState,
+        run_id: log.run_id.clone(),
+        genesis_hash: log.genesis_hash.clone(),
+        snapshot_id: log.aggregate.program().snapshot_id().clone(),
+        universe_id: log.aggregate.universe().id().clone(),
+        property_id: claim.property_id().to_owned(),
+        claim_id: claim.id().clone(),
+        claim_body_hash: claim.body_hash()?,
+    })
 }
 
 fn validate_fresh_fixture_scope(
@@ -6569,6 +6712,156 @@ pub struct FixtureExecutionReceiptV1 {
     witness_bytes: Vec<u8>,
     expected_witness_event: Option<ExpectedFixtureRegistrationEventV1>,
     expected_output_event: Option<ExpectedFixtureRegistrationEventV1>,
+}
+
+/// One position-bound authority reconstructed from an exact durable fixture
+/// registration prefix.  It is deliberately neither clonable nor
+/// serializable and cannot execute (or recreate authority to execute) the
+/// fixture harness.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::FixtureRegistrationResumeAuthorityV3>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::FixtureRegistrationResumeAuthorityV3>();
+/// ```
+#[derive(Debug)]
+pub struct FixtureRegistrationResumeAuthorityV3 {
+    scope: HarnessTrustRootInputV3,
+    basis_digest: ContentHash,
+    tail_hash: ContentHash,
+    expected_sequence: u64,
+    witness_registration_id: StableId,
+    output_registration_id: Option<StableId>,
+    fixture_result_hash: ContentHash,
+    fixture_result_bytes: Vec<u8>,
+    expected_output_event: Option<ExpectedFixtureRegistrationEventV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExpectedVerificationKindV3 {
+    Static,
+    Fixture,
+}
+
+/// Opaque deterministic description of one exact verifier attempt.  It is
+/// built by Core from the immutable claim closure and fixed descriptor
+/// registry; callers cannot compose registration identities or source roles.
+#[derive(Debug)]
+pub struct ExpectedVerificationAttemptV3 {
+    kind: ExpectedVerificationKindV3,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    claim_id: StableId,
+    basis_digest: ContentHash,
+    tail_hash: ContentHash,
+    input_registration: ArtifactRegisteredV3,
+    input_bytes: Vec<u8>,
+    output_registration: ArtifactRegisteredV3,
+    output_bytes: Vec<u8>,
+}
+
+impl ExpectedVerificationAttemptV3 {
+    #[must_use]
+    pub fn descriptor_id(&self) -> &'static str {
+        match self.kind {
+            ExpectedVerificationKindV3::Static => STATIC_DESCRIPTOR_ID,
+            ExpectedVerificationKindV3::Fixture => FIXTURE_DESCRIPTOR_ID,
+        }
+    }
+
+    #[must_use]
+    pub fn claim_id(&self) -> &StableId {
+        &self.claim_id
+    }
+
+    #[must_use]
+    pub fn input_registration_id(&self) -> &StableId {
+        self.input_registration.registration_id()
+    }
+
+    #[must_use]
+    pub fn input_hash(&self) -> &ContentHash {
+        self.input_registration.cas_hash()
+    }
+
+    #[must_use]
+    pub fn input_size(&self) -> u64 {
+        self.input_registration.size()
+    }
+
+    #[must_use]
+    pub fn input_bytes(&self) -> &[u8] {
+        &self.input_bytes
+    }
+
+    #[must_use]
+    pub fn output_registration_id(&self) -> &StableId {
+        self.output_registration.registration_id()
+    }
+
+    #[must_use]
+    pub fn output_hash(&self) -> &ContentHash {
+        self.output_registration.cas_hash()
+    }
+
+    #[must_use]
+    pub fn output_size(&self) -> u64 {
+        self.output_registration.size()
+    }
+
+    #[must_use]
+    pub fn output_bytes(&self) -> &[u8] {
+        &self.output_bytes
+    }
+}
+
+/// Closed read-only classification of one exact verifier attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VerificationAttemptStageV3 {
+    Ready,
+    InputRegistered,
+    WitnessRegistered,
+    OutputRegistered,
+    BundlePartial,
+    Complete,
+}
+
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // boxing would add an untracked allocation to this bounded seam
+pub enum StaticVerificationAttemptInspectionV3 {
+    Ready,
+    Existing {
+        expected: ExpectedVerificationAttemptV3,
+        stage: VerificationAttemptStageV3,
+    },
+}
+
+impl FixtureRegistrationResumeAuthorityV3 {
+    /// Canonical deterministic output bytes.  Exposing these bytes does not
+    /// expose a harness capability; the authority itself remains one-shot.
+    #[must_use]
+    pub fn fixture_result_bytes(&self) -> &[u8] {
+        &self.fixture_result_bytes
+    }
+
+    #[must_use]
+    pub fn fixture_result_hash(&self) -> &ContentHash {
+        &self.fixture_result_hash
+    }
+
+    #[must_use]
+    pub fn witness_registration_id(&self) -> &StableId {
+        &self.witness_registration_id
+    }
+
+    #[must_use]
+    pub fn output_registration_id(&self) -> Option<&StableId> {
+        self.output_registration_id.as_ref()
+    }
 }
 
 #[derive(Debug)]
@@ -7865,33 +8158,384 @@ fn static_proposal_for_registrations(
                 owner_id: claim_id.clone(),
                 reference: obligation_id.clone(),
             })?;
-    let evaluation = crate::evaluate_static_fact_v1(aggregate.program(), obligation, claim)
-        .map_err(m4_domain_error)?;
     ensure_v3_working_peak(
         state.retained_bytes()?,
         [input_registration.size(), output_registration.size()],
     )?;
     let input_bytes = resolve_registered_bytes(input_registration, resolver)?;
     let output_bytes = resolve_registered_bytes(output_registration, resolver)?;
-    if evaluation
-        .input()
-        .canonical_bytes()
-        .map_err(m4_domain_error)?
-        != input_bytes
-        || evaluation
-            .result()
-            .canonical_bytes()
-            .map_err(m4_domain_error)?
-            != output_bytes
-    {
+    let input = crate::StaticFactInputV1::from_json_bytes(&input_bytes).map_err(m4_domain_error)?;
+    let reconstructed = crate::m4::reconstruct_static_result_from_durable_input_v1(
+        aggregate.program(),
+        obligation,
+        claim,
+        &input,
+    )
+    .map_err(m4_domain_error)?;
+    if reconstructed.canonical_bytes().map_err(m4_domain_error)? != output_bytes {
         return Err(DomainError::VerificationBundleMismatch);
     }
-    evaluation
-        .materialize(
-            input_registration_id.clone(),
-            output_registration_id.clone(),
-        )
-        .map_err(m4_domain_error)
+    crate::m4::materialize_static_from_durable_input_v1(
+        aggregate.program(),
+        obligation,
+        claim,
+        input,
+        input_registration_id.clone(),
+        output_registration_id.clone(),
+    )
+    .map_err(m4_domain_error)
+}
+
+fn projected_static_registration_heap_bytes(
+    log: &EventLog,
+    claim_id: &StableId,
+    media_type: &str,
+) -> Result<u64> {
+    // All values are constructed by exact-length `Clone`, `to_owned`, SHA-256,
+    // or the fixed `registration:<sha256>` namespace below the preflight.
+    const SHA256_TEXT_BYTES: usize = "sha256:".len() + 64;
+    const REGISTRATION_ID_TEXT_BYTES: usize = "registration:".len() + SHA256_TEXT_BYTES;
+    let mut total = 0_u64;
+    for bytes in [
+        log.run_id.as_str().len(),
+        REGISTRATION_ID_TEXT_BYTES,
+        SHA256_TEXT_BYTES,
+        media_type.len(),
+        claim_id.as_str().len(),
+        STATIC_DESCRIPTOR_ID.len(),
+        STATIC_PROCEDURE_ID.len(),
+        log.run_id.as_str().len(),
+    ] {
+        v3_add(
+            &mut total,
+            u64::try_from(bytes).unwrap_or(u64::MAX),
+            "static verifier registration projection",
+        )?;
+    }
+    Ok(total)
+}
+
+fn projected_static_expected_bytes(
+    log: &EventLog,
+    claim_id: &StableId,
+    basis: &AuthorityReplayBasisV3,
+    input_size: u64,
+    output_size: u64,
+) -> Result<u64> {
+    let mut total = u64::try_from(size_of::<ExpectedVerificationAttemptV3>())
+        .map_err(|_| v3_memory_error("static expected attempt projection", u64::MAX))?;
+    for bytes in [
+        log.run_id.as_str().len(),
+        log.genesis_hash.as_str().len(),
+        claim_id.as_str().len(),
+        basis.basis_digest.as_str().len(),
+        log.tail_hash.as_str().len(),
+    ] {
+        v3_add(
+            &mut total,
+            u64::try_from(bytes).unwrap_or(u64::MAX),
+            "static expected attempt projection",
+        )?;
+    }
+    // ArtifactRegisteredV3 is inline in ExpectedVerificationAttemptV3; only
+    // its owned heap is additional here.
+    v3_add(
+        &mut total,
+        projected_static_registration_heap_bytes(log, claim_id, STATIC_INPUT_MEDIA_TYPE)?,
+        "static expected attempt projection",
+    )?;
+    v3_add(
+        &mut total,
+        projected_static_registration_heap_bytes(log, claim_id, STATIC_OUTPUT_MEDIA_TYPE)?,
+        "static expected attempt projection",
+    )?;
+    v3_add(&mut total, input_size, "static expected attempt projection")?;
+    v3_add(
+        &mut total,
+        output_size,
+        "static expected attempt projection",
+    )?;
+    Ok(total)
+}
+
+fn static_expectation_preflight(
+    stage: u8,
+    log: &EventLog,
+    basis: &AuthorityReplayBasisV3,
+    additions: impl IntoIterator<Item = u64>,
+) -> Result<u64> {
+    let mut retained = log.retained_bytes_v3()?;
+    v3_add(
+        &mut retained,
+        basis.retained_bytes()?,
+        "static expected attempt retained bytes",
+    )?;
+    let peak = ensure_v3_working_peak(retained, additions)?;
+    record_static_expectation_peak(stage, peak);
+    Ok(peak)
+}
+
+fn static_fresh_expectation_preflight(
+    log: &EventLog,
+    claim_id: &StableId,
+    evaluation: &crate::StaticFactEvaluationV1,
+    reconstructed: &crate::StaticFactResultV1,
+    basis: &AuthorityReplayBasisV3,
+) -> Result<()> {
+    let input_size = evaluation
+        .input()
+        .canonical_size()
+        .map_err(m4_domain_error)?;
+    let output_size = evaluation
+        .result()
+        .canonical_size()
+        .map_err(m4_domain_error)?;
+    let evaluation_bytes = u64::try_from(size_of::<crate::StaticFactEvaluationV1>())
+        .unwrap_or(u64::MAX)
+        .checked_add(evaluation.allocated_bytes().map_err(m4_domain_error)?)
+        .ok_or_else(|| v3_memory_error("static borrowed evaluation", u64::MAX))?;
+    let projected_result_bytes = u64::try_from(size_of::<crate::StaticFactResultV1>())
+        .unwrap_or(u64::MAX)
+        .checked_add(reconstructed.allocated_bytes().map_err(m4_domain_error)?)
+        .ok_or_else(|| v3_memory_error("static reconstructed result", u64::MAX))?;
+    let expected = projected_static_expected_bytes(log, claim_id, basis, input_size, output_size)?;
+    // The canonical buffers are staged while registration identities are
+    // serialized. Expected owns the same buffers, so compare the two actual
+    // phases instead of double-counting mutually exclusive ownership.
+    let mut registration_phase = evaluation_bytes;
+    for addition in [
+        projected_result_bytes,
+        input_size,
+        output_size,
+        projected_static_registration_heap_bytes(log, claim_id, STATIC_INPUT_MEDIA_TYPE)?,
+        projected_static_registration_heap_bytes(log, claim_id, STATIC_OUTPUT_MEDIA_TYPE)?,
+        MAX_V3_REGISTRATION_IDENTITY_BYTES as u64,
+    ] {
+        v3_add(
+            &mut registration_phase,
+            addition,
+            "static registration construction phase",
+        )?;
+    }
+    let mut expected_phase = evaluation_bytes;
+    v3_add(
+        &mut expected_phase,
+        projected_result_bytes,
+        "static Expected construction phase",
+    )?;
+    v3_add(
+        &mut expected_phase,
+        expected,
+        "static Expected construction phase",
+    )?;
+    static_expectation_preflight(1, log, basis, [registration_phase.max(expected_phase)])?;
+    Ok(())
+}
+
+fn static_fresh_pre_reconstruction_preflight(
+    log: &EventLog,
+    claim_id: &StableId,
+    obligation: &crate::Obligation,
+    evaluation: &crate::StaticFactEvaluationV1,
+    basis: &AuthorityReplayBasisV3,
+) -> Result<()> {
+    let input_size = evaluation
+        .input()
+        .canonical_size()
+        .map_err(m4_domain_error)?;
+    let output_size = evaluation
+        .result()
+        .canonical_size()
+        .map_err(m4_domain_error)?;
+    let evaluation_bytes = u64::try_from(size_of::<crate::StaticFactEvaluationV1>())
+        .unwrap_or(u64::MAX)
+        .checked_add(evaluation.allocated_bytes().map_err(m4_domain_error)?)
+        .ok_or_else(|| v3_memory_error("static borrowed evaluation", u64::MAX))?;
+    let reconstruction = crate::m4::static_reconstruction_scratch_bytes(
+        log.aggregate.program(),
+        obligation,
+        log.aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == claim_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?,
+    )
+    .map_err(m4_domain_error)?;
+    let expected = projected_static_expected_bytes(log, claim_id, basis, input_size, output_size)?;
+    let mut downstream = input_size;
+    for addition in [
+        output_size,
+        projected_static_registration_heap_bytes(log, claim_id, STATIC_INPUT_MEDIA_TYPE)?,
+        projected_static_registration_heap_bytes(log, claim_id, STATIC_OUTPUT_MEDIA_TYPE)?,
+        MAX_V3_REGISTRATION_IDENTITY_BYTES as u64,
+        expected,
+    ] {
+        v3_add(
+            &mut downstream,
+            addition,
+            "static fresh downstream construction",
+        )?;
+    }
+    static_expectation_preflight(
+        1,
+        log,
+        basis,
+        [evaluation_bytes, reconstruction, downstream],
+    )?;
+    Ok(())
+}
+
+fn static_durable_read_preflight(
+    log: &EventLog,
+    claim_id: &StableId,
+    obligation: &crate::Obligation,
+    claim: &crate::ExecutionClaimV2,
+    input_size: u64,
+    basis: &AuthorityReplayBasisV3,
+) -> Result<()> {
+    let record_bound = crate::m4::MAX_RECORD_BYTES as u64;
+    let expected = projected_static_expected_bytes(log, claim_id, basis, input_size, record_bound)?;
+    let decoded_input =
+        crate::m4::static_input_structural_upper_bound_bytes().map_err(m4_domain_error)?;
+    let reconstructed =
+        crate::m4::static_reconstruction_scratch_bytes(log.aggregate.program(), obligation, claim)
+            .map_err(m4_domain_error)?;
+    let result =
+        crate::m4::static_result_structural_upper_bound_bytes().map_err(m4_domain_error)?;
+    // The admitted input buffer, decoded DTO backing, reconstructed result,
+    // output canonical bytes, registration identity scratch, and final token
+    // all fit under this pre-CAS bound. This makes refusal precede read_exact.
+    static_expectation_preflight(
+        2,
+        log,
+        basis,
+        [
+            input_size,
+            decoded_input,
+            reconstructed,
+            result,
+            record_bound,
+            expected,
+            MAX_V3_REGISTRATION_IDENTITY_BYTES as u64,
+        ],
+    )?;
+    Ok(())
+}
+
+fn static_durable_reconstruction_preflight(
+    log: &EventLog,
+    claim_id: &StableId,
+    obligation: &crate::Obligation,
+    claim: &crate::ExecutionClaimV2,
+    input_bytes: &[u8],
+    input: &crate::StaticFactInputV1,
+    basis: &AuthorityReplayBasisV3,
+) -> Result<()> {
+    let input_dto = u64::try_from(size_of::<crate::StaticFactInputV1>())
+        .unwrap_or(u64::MAX)
+        .checked_add(input.allocated_bytes().map_err(m4_domain_error)?)
+        .ok_or_else(|| v3_memory_error("static durable decoded input", u64::MAX))?;
+    let reconstruction =
+        crate::m4::static_reconstruction_scratch_bytes(log.aggregate.program(), obligation, claim)
+            .map_err(m4_domain_error)?;
+    let (result, output_size) = input
+        .projected_result_accounting()
+        .map_err(m4_domain_error)?;
+    let expected = projected_static_expected_bytes(
+        log,
+        claim_id,
+        basis,
+        u64::try_from(input_bytes.len()).unwrap_or(u64::MAX),
+        output_size,
+    )?;
+    static_expectation_preflight(
+        2,
+        log,
+        basis,
+        [
+            u64::try_from(input_bytes.len()).unwrap_or(u64::MAX),
+            input_dto,
+            reconstruction,
+            result,
+            output_size,
+            projected_static_registration_heap_bytes(log, claim_id, STATIC_INPUT_MEDIA_TYPE)?,
+            projected_static_registration_heap_bytes(log, claim_id, STATIC_OUTPUT_MEDIA_TYPE)?,
+            MAX_V3_REGISTRATION_IDENTITY_BYTES as u64,
+            expected,
+        ],
+    )?;
+    Ok(())
+}
+
+fn expected_static_attempt_from_bytes(
+    log: &EventLog,
+    claim_id: &StableId,
+    input_bytes: Vec<u8>,
+    output_bytes: Vec<u8>,
+    basis: &AuthorityReplayBasisV3,
+    stage: u8,
+    borrowed_bytes: u64,
+) -> Result<ExpectedVerificationAttemptV3> {
+    let input_registration = ArtifactRegisteredV3::new_validated(
+        log.run_id.clone(),
+        ContentHash::sha256(&input_bytes),
+        STATIC_INPUT_MEDIA_TYPE,
+        u64::try_from(input_bytes.len()).unwrap_or(u64::MAX),
+        ArtifactSensitivity::CanonicalState,
+        ArtifactSourceV3::VerifierArtifact {
+            run_id: log.run_id.clone(),
+            claim_id: claim_id.clone(),
+            descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+            procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+            role: VerifierArtifactRoleV3::Input,
+        },
+    )?;
+    let output_registration = ArtifactRegisteredV3::new_validated(
+        log.run_id.clone(),
+        ContentHash::sha256(&output_bytes),
+        STATIC_OUTPUT_MEDIA_TYPE,
+        u64::try_from(output_bytes.len()).unwrap_or(u64::MAX),
+        ArtifactSensitivity::CanonicalState,
+        ArtifactSourceV3::VerifierArtifact {
+            run_id: log.run_id.clone(),
+            claim_id: claim_id.clone(),
+            descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+            procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+            role: VerifierArtifactRoleV3::Output,
+        },
+    )?;
+    let mut expected_bytes = u64::try_from(size_of::<ExpectedVerificationAttemptV3>())
+        .map_err(|_| v3_memory_error("static expected attempt", u64::MAX))?;
+    for bytes in [
+        log.run_id.allocated_bytes(),
+        log.genesis_hash.allocated_bytes(),
+        claim_id.allocated_bytes(),
+        basis.basis_digest.allocated_bytes(),
+        log.tail_hash.allocated_bytes(),
+        input_registration.allocated_bytes(),
+        input_bytes.capacity(),
+        output_registration.allocated_bytes(),
+        output_bytes.capacity(),
+    ] {
+        v3_add(
+            &mut expected_bytes,
+            u64::try_from(bytes).unwrap_or(u64::MAX),
+            "static expected attempt",
+        )?;
+    }
+    static_expectation_preflight(stage, log, basis, [borrowed_bytes, expected_bytes])?;
+    mark_static_expectation_allocation_seam(stage);
+    Ok(ExpectedVerificationAttemptV3 {
+        kind: ExpectedVerificationKindV3::Static,
+        run_id: log.run_id.clone(),
+        genesis_hash: log.genesis_hash.clone(),
+        claim_id: claim_id.clone(),
+        basis_digest: basis.basis_digest.clone(),
+        tail_hash: log.tail_hash.clone(),
+        input_registration,
+        input_bytes,
+        output_registration,
+        output_bytes,
+    })
 }
 
 struct FixtureReplayClosure {
@@ -8975,6 +9619,523 @@ impl EventLog {
         )
     }
 
+    pub fn seal_static_verification_attempt_v3(
+        &self,
+        claim_id: &StableId,
+        evaluation: &crate::StaticFactEvaluationV1,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ExpectedVerificationAttemptV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        let claim = self
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == claim_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let obligation_id = claim
+            .obligation_ids()
+            .first()
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let obligation = self
+            .aggregate
+            .obligation(obligation_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        static_fresh_pre_reconstruction_preflight(self, claim_id, obligation, evaluation, basis)?;
+        let reconstructed = crate::m4::reconstruct_static_result_from_durable_input_v1(
+            self.aggregate.program(),
+            obligation,
+            claim,
+            evaluation.input(),
+        )
+        .map_err(m4_domain_error)?;
+        if &reconstructed != evaluation.result() {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        static_fresh_expectation_preflight(self, claim_id, evaluation, &reconstructed, basis)?;
+        let reconstructed_allocated = reconstructed.allocated_bytes().map_err(m4_domain_error)?;
+        let borrowed_bytes = u64::try_from(size_of::<crate::StaticFactEvaluationV1>())
+            .unwrap_or(u64::MAX)
+            .checked_add(evaluation.allocated_bytes().map_err(m4_domain_error)?)
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(size_of::<crate::StaticFactResultV1>()).unwrap_or(u64::MAX),
+                )
+            })
+            .and_then(|value| value.checked_add(reconstructed_allocated))
+            .ok_or_else(|| v3_memory_error("static fresh borrowed values", u64::MAX))?;
+        expected_static_attempt_from_bytes(
+            self,
+            claim_id,
+            evaluation
+                .input()
+                .canonical_bytes()
+                .map_err(m4_domain_error)?,
+            evaluation
+                .result()
+                .canonical_bytes()
+                .map_err(m4_domain_error)?,
+            basis,
+            1,
+            borrowed_bytes,
+        )
+    }
+
+    pub fn inspect_static_verification_attempt_v3(
+        &self,
+        claim_id: &StableId,
+        resolver: &impl AuthorityArtifactResolverV3,
+        roots: &AuthorityTrustRootsV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<StaticVerificationAttemptInspectionV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        validate_repository_trust_root(&self.aggregate, roots)?;
+        if basis.policy_revision_hash != roots.policy_revision_hash {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        let state = self.v3_aggregate.as_ref().ok_or({
+            DomainError::EventV3AuthorityReplayRequired {
+                operation: "static verification attempt inspection",
+            }
+        })?;
+        let mut input = None;
+        let mut output = None;
+        for registration in state.registrations.values() {
+            let ArtifactSourceV3::VerifierArtifact {
+                claim_id: registered_claim,
+                descriptor_id,
+                procedure_version,
+                role,
+                ..
+            } = registration.source()
+            else {
+                continue;
+            };
+            if registered_claim != claim_id {
+                continue;
+            }
+            if descriptor_id != STATIC_DESCRIPTOR_ID || procedure_version != STATIC_PROCEDURE_ID {
+                return Err(DomainError::VerificationBundleMismatch);
+            }
+            let slot = match role {
+                VerifierArtifactRoleV3::Input => &mut input,
+                VerifierArtifactRoleV3::Output => &mut output,
+            };
+            if slot.replace(registration).is_some() {
+                return Err(DomainError::VerificationBundleMismatch);
+            }
+        }
+        let Some(input_registration) = input else {
+            if output.is_some()
+                || state
+                    .verifications
+                    .values()
+                    .any(|record| record.claim_id() == claim_id)
+                || state
+                    .bindings
+                    .values()
+                    .any(|record| record.claim_id() == claim_id)
+            {
+                return Err(DomainError::VerificationBundleMismatch);
+            }
+            return Ok(StaticVerificationAttemptInspectionV3::Ready);
+        };
+        let claim = self
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == claim_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let obligation_id = claim
+            .obligation_ids()
+            .first()
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let obligation = self
+            .aggregate
+            .obligation(obligation_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        static_durable_read_preflight(
+            self,
+            claim_id,
+            obligation,
+            claim,
+            input_registration.size(),
+            basis,
+        )?;
+        let input_bytes = resolve_registered_bytes(input_registration, resolver)?;
+        let input_dto =
+            crate::StaticFactInputV1::from_json_bytes(&input_bytes).map_err(m4_domain_error)?;
+        static_durable_reconstruction_preflight(
+            self,
+            claim_id,
+            obligation,
+            claim,
+            &input_bytes,
+            &input_dto,
+            basis,
+        )?;
+        let output_dto = crate::m4::reconstruct_static_result_from_durable_input_v1(
+            self.aggregate.program(),
+            obligation,
+            claim,
+            &input_dto,
+        )
+        .map_err(m4_domain_error)?;
+        let output_bytes = output_dto.canonical_bytes().map_err(m4_domain_error)?;
+        let output_allocated = output_dto.allocated_bytes().map_err(m4_domain_error)?;
+        let borrowed_bytes = u64::try_from(size_of::<crate::StaticFactInputV1>())
+            .unwrap_or(u64::MAX)
+            .checked_add(input_dto.allocated_bytes().map_err(m4_domain_error)?)
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(size_of::<crate::StaticFactResultV1>()).unwrap_or(u64::MAX),
+                )
+            })
+            .and_then(|value| value.checked_add(output_allocated))
+            .ok_or_else(|| v3_memory_error("static durable borrowed values", u64::MAX))?;
+        let expected = expected_static_attempt_from_bytes(
+            self,
+            claim_id,
+            input_bytes,
+            output_bytes,
+            basis,
+            2,
+            borrowed_bytes,
+        )?;
+        if input_registration != &expected.input_registration
+            || output.is_some_and(|registration| registration != &expected.output_registration)
+        {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        let stage = self.inspect_verification_attempt_v3(&expected, resolver, roots, basis)?;
+        Ok(StaticVerificationAttemptInspectionV3::Existing { expected, stage })
+    }
+
+    pub fn expect_fixture_verification_attempt_v3(
+        &self,
+        claim_id: &StableId,
+        roots: &AuthorityTrustRootsV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ExpectedVerificationAttemptV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        validate_repository_trust_root(&self.aggregate, roots)?;
+        if basis.policy_revision_hash != roots.policy_revision_hash {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        let claim = exact_fixture_claim_for_log(self, claim_id)?;
+        let scope = expected_fixture_scope_for_claim(self, claim, basis)?;
+        if roots.harness_for_scope(&scope).is_none() {
+            return Err(DomainError::HarnessTrustRootMissing);
+        }
+        let (_, output_bytes, output_hash) =
+            deterministic_fixture_result_for_claim(&self.aggregate, claim, &scope)?;
+        let input_bytes = FIXTURE_WITNESS_BYTES.to_vec();
+        let input_registration = ArtifactRegisteredV3::new_validated(
+            self.run_id.clone(),
+            scope.result_hash.clone(),
+            FIXTURE_MEDIA_TYPE,
+            FIXTURE_WITNESS_SIZE,
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::ExternalHarnessWitness {
+                policy_revision_hash: scope.policy_revision_hash.clone(),
+                repository_id: scope.repository_id.clone(),
+                repository_source_hash: scope.repository_source_hash.clone(),
+                run_id: scope.run_id.clone(),
+                genesis_hash: scope.genesis_hash.clone(),
+                snapshot_id: scope.snapshot_id.clone(),
+                universe_id: scope.universe_id.clone(),
+                property_id: scope.property_id.clone(),
+                claim_id: scope.claim_id.clone(),
+                claim_body_hash: scope.claim_body_hash.clone(),
+                harness_id: scope.harness_id.clone(),
+                harness_revision: scope.harness_revision.clone(),
+                harness_source_hash: scope.harness_source_hash.clone(),
+                test_artifact_id: scope.test_artifact_id.clone(),
+                descriptor_id: scope.descriptor_id.clone(),
+                procedure_version: scope.procedure_version.clone(),
+            },
+        )?;
+        let output_registration = ArtifactRegisteredV3::new_validated(
+            self.run_id.clone(),
+            output_hash,
+            FIXTURE_OUTPUT_MEDIA_TYPE,
+            u64::try_from(output_bytes.len()).unwrap_or(u64::MAX),
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::VerifierArtifact {
+                run_id: self.run_id.clone(),
+                claim_id: claim_id.clone(),
+                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                role: VerifierArtifactRoleV3::Output,
+            },
+        )?;
+        ensure_v3_working_peak(
+            self.retained_bytes_v3()?,
+            [
+                FIXTURE_WITNESS_SIZE,
+                u64::try_from(output_bytes.len()).unwrap_or(u64::MAX),
+                fixture_scope_allocated_bytes(&scope)?,
+                8_192,
+            ],
+        )?;
+        Ok(ExpectedVerificationAttemptV3 {
+            kind: ExpectedVerificationKindV3::Fixture,
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            claim_id: claim_id.clone(),
+            basis_digest: basis.basis_digest.clone(),
+            tail_hash: self.tail_hash.clone(),
+            input_registration,
+            input_bytes,
+            output_registration,
+            output_bytes,
+        })
+    }
+
+    /// Classifies only the exact attempt described by `expected`.  Existing
+    /// registrations are re-read from CAS; wrong-role, wrong-source and
+    /// ambiguous claim-local registrations are refusals, never misses.
+    pub fn inspect_verification_attempt_v3(
+        &self,
+        expected: &ExpectedVerificationAttemptV3,
+        resolver: &impl AuthorityArtifactResolverV3,
+        roots: &AuthorityTrustRootsV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<VerificationAttemptStageV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        validate_repository_trust_root(&self.aggregate, roots)?;
+        if basis.policy_revision_hash != roots.policy_revision_hash
+            || expected.run_id != self.run_id
+            || expected.genesis_hash != self.genesis_hash
+            || expected.basis_digest != basis.basis_digest
+            || expected.tail_hash != self.tail_hash
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        if expected.kind == ExpectedVerificationKindV3::Fixture {
+            let root = roots
+                .harness_for_source(&expected.input_registration)
+                .ok_or(DomainError::HarnessTrustRootMissing)?;
+            validate_fresh_fixture_scope(self, basis, root)?;
+        }
+        let state = self.v3_aggregate.as_ref().ok_or({
+            DomainError::EventV3AuthorityReplayRequired {
+                operation: "verification attempt inspection",
+            }
+        })?;
+        let mut input = None;
+        let mut output = None;
+        for registration in state.registrations.values() {
+            let belongs_to_claim = match registration.source() {
+                ArtifactSourceV3::VerifierArtifact { claim_id, .. } => {
+                    claim_id == &expected.claim_id
+                }
+                ArtifactSourceV3::ExternalHarnessWitness { claim_id, .. } => {
+                    claim_id == &expected.claim_id
+                }
+                _ => false,
+            };
+            if !belongs_to_claim {
+                continue;
+            }
+            if registration.registration_id() == expected.input_registration.registration_id() {
+                if registration != &expected.input_registration
+                    || input.replace(registration).is_some()
+                {
+                    return Err(DomainError::VerificationBundleMismatch);
+                }
+            } else if registration.registration_id()
+                == expected.output_registration.registration_id()
+            {
+                if registration != &expected.output_registration
+                    || output.replace(registration).is_some()
+                {
+                    return Err(DomainError::VerificationBundleMismatch);
+                }
+            } else {
+                return Err(DomainError::VerificationBundleMismatch);
+            }
+        }
+
+        if let Some(registration) = input {
+            let bytes = resolve_registered_bytes(registration, resolver)?;
+            if bytes != expected.input_bytes {
+                return Err(DomainError::VerificationBundleMismatch);
+            }
+        }
+        if let Some(registration) = output {
+            let bytes = resolve_registered_bytes(registration, resolver)?;
+            if bytes != expected.output_bytes {
+                return Err(DomainError::VerificationBundleMismatch);
+            }
+        }
+        let mut input_event = None;
+        let mut output_event = None;
+        for event in &self.events {
+            let payload = decode_canonical_payload(self.version, event.envelope.payload.get())?;
+            if let PersistedPayload::ArtifactRegisteredV3(registration) = payload {
+                if registration.registration_id() == expected.input_registration.registration_id() {
+                    input_event = Some(&event.envelope);
+                }
+                if registration.registration_id() == expected.output_registration.registration_id()
+                {
+                    output_event = Some(&event.envelope);
+                }
+            }
+        }
+        match (input, output) {
+            (None, None) => return Ok(VerificationAttemptStageV3::Ready),
+            (Some(_), None) => {
+                let input_event = input_event.ok_or(DomainError::VerificationBundleMismatch)?;
+                if self.tail_hash != *input_event.event_hash()
+                    || self.next_sequence()?
+                        != input_event
+                            .sequence()
+                            .checked_add(1)
+                            .ok_or(DomainError::VerificationBundleMismatch)?
+                {
+                    return Err(DomainError::VerificationBundleMismatch);
+                }
+                return Ok(match expected.kind {
+                    ExpectedVerificationKindV3::Static => {
+                        VerificationAttemptStageV3::InputRegistered
+                    }
+                    ExpectedVerificationKindV3::Fixture => {
+                        VerificationAttemptStageV3::WitnessRegistered
+                    }
+                });
+            }
+            (None, Some(_)) => return Err(DomainError::VerificationBundleMismatch),
+            (Some(_), Some(_)) => {
+                let input_event = input_event.ok_or(DomainError::VerificationBundleMismatch)?;
+                let output_event = output_event.ok_or(DomainError::VerificationBundleMismatch)?;
+                if output_event.sequence()
+                    != input_event
+                        .sequence()
+                        .checked_add(1)
+                        .ok_or(DomainError::VerificationBundleMismatch)?
+                    || output_event.previous_event_hash() != input_event.event_hash()
+                {
+                    return Err(DomainError::VerificationBundleMismatch);
+                }
+            }
+        }
+
+        let (expected_evidence, expected_binding, expected_verification) = match expected.kind {
+            ExpectedVerificationKindV3::Static => {
+                let proposal = static_proposal_for_registrations(
+                    &self.aggregate,
+                    state,
+                    resolver,
+                    expected.input_registration.registration_id(),
+                    expected.output_registration.registration_id(),
+                )?;
+                (
+                    proposal.evidence().cloned(),
+                    proposal.binding().cloned(),
+                    proposal.verification().clone(),
+                )
+            }
+            ExpectedVerificationKindV3::Fixture => {
+                let input = state
+                    .registrations
+                    .get(expected.input_registration.registration_id())
+                    .ok_or(DomainError::VerificationBundleMismatch)?;
+                let root = roots
+                    .harness_for_source(input)
+                    .ok_or(DomainError::HarnessTrustRootMissing)?;
+                validate_fresh_fixture_scope(self, basis, root)?;
+                let result = validate_fixture_result_for_root(
+                    &self.aggregate,
+                    root,
+                    &expected.output_bytes,
+                )?;
+                let scope = state
+                    .assessment_scopes
+                    .get(&expected.claim_id)
+                    .ok_or(DomainError::VerificationBundleMismatch)?;
+                let proposal = crate::m4::materialize_fixture_replay_v1(
+                    scope,
+                    &result,
+                    expected.input_registration.registration_id().clone(),
+                    expected.output_registration.registration_id().clone(),
+                )
+                .map_err(m4_domain_error)?;
+                (
+                    Some(proposal.evidence),
+                    Some(proposal.binding),
+                    proposal.verification,
+                )
+            }
+        };
+
+        let evidence_present = if let Some(record) = &expected_evidence {
+            state
+                .evidence
+                .get(record.id())
+                .is_some_and(|found| found == record)
+        } else {
+            false
+        };
+        let binding_present = if let Some(record) = &expected_binding {
+            state
+                .bindings
+                .get(record.id())
+                .is_some_and(|found| found == record)
+        } else {
+            false
+        };
+        let verification_present = state
+            .verifications
+            .get(expected_verification.id())
+            .is_some_and(|found| found == &expected_verification);
+
+        let unexpected_evidence = state.evidence.values().any(|record| {
+            (record.input_registration_id() == expected.input_registration.registration_id()
+                || record.output_registration_id()
+                    == expected.output_registration.registration_id())
+                && expected_evidence
+                    .as_ref()
+                    .is_none_or(|expected| record != expected)
+        });
+        let unexpected_binding = state.bindings.values().any(|record| {
+            record.claim_id() == &expected.claim_id
+                && expected_binding
+                    .as_ref()
+                    .is_none_or(|expected| record != expected)
+        });
+        let unexpected_verification = state.verifications.values().any(|record| {
+            record.claim_id() == &expected.claim_id && record != &expected_verification
+        });
+        if unexpected_evidence || unexpected_binding || unexpected_verification {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+
+        let expected_record_count =
+            usize::from(expected_evidence.is_some()) + usize::from(expected_binding.is_some()) + 1;
+        let present_record_count = usize::from(evidence_present)
+            + usize::from(binding_present)
+            + usize::from(verification_present);
+        if present_record_count == 0 {
+            let output_event = output_event.ok_or(DomainError::VerificationBundleMismatch)?;
+            if self.tail_hash != *output_event.event_hash()
+                || self.next_sequence()?
+                    != output_event
+                        .sequence()
+                        .checked_add(1)
+                        .ok_or(DomainError::VerificationBundleMismatch)?
+            {
+                return Err(DomainError::VerificationBundleMismatch);
+            }
+            Ok(VerificationAttemptStageV3::OutputRegistered)
+        } else if present_record_count == expected_record_count {
+            Ok(VerificationAttemptStageV3::Complete)
+        } else {
+            Ok(VerificationAttemptStageV3::BundlePartial)
+        }
+    }
+
     // Every argument is independently sealed into the registration or its
     // authority basis; grouping them would introduce a caller-shaped DTO.
     #[allow(clippy::too_many_arguments)]
@@ -9026,10 +10187,20 @@ impl EventLog {
     pub fn execute_fixture_harness_v1(
         &self,
         claim_id: &StableId,
+        roots: &AuthorityTrustRootsV3,
         basis: &AuthorityReplayBasisV3,
     ) -> Result<FixtureExecutionReceiptV1> {
         self.require_writable()?;
         basis.validate_for_log(self)?;
+        validate_repository_trust_root(&self.aggregate, roots)?;
+        if basis.policy_revision_hash != roots.policy_revision_hash {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        let claim = exact_fixture_claim_for_log(self, claim_id)?;
+        let scope = expected_fixture_scope_for_claim(self, claim, basis)?;
+        if roots.harness_for_scope(&scope).is_none() {
+            return Err(DomainError::HarnessTrustRootMissing);
+        }
         fixture_stage_preflight(
             1,
             self,
@@ -9041,7 +10212,6 @@ impl EventLog {
                 8_192,
             ],
         )?;
-        let claim = exact_fixture_claim_for_log(self, claim_id)?;
         if crate::harness_source_v1::HARNESS_ID != FIXTURE_HARNESS_ID
             || crate::harness_source_v1::HARNESS_REVISION != FIXTURE_HARNESS_REVISION
         {
@@ -9054,59 +10224,8 @@ impl EventLog {
         {
             return Err(DomainError::WitnessAdmissionMismatch);
         }
-        let mut subject_ids = claim.target_refs().iter().cloned().collect::<Vec<_>>();
-        subject_ids.push(StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?);
-        subject_ids.sort_unstable();
-        if !subject_ids
-            .iter()
-            .all(|id| self.aggregate.program().known_ids().contains(id))
-        {
-            return Err(DomainError::VerificationBundleMismatch);
-        }
-        let fixture_result_bytes = canonical_json(&serde_json::json!({
-            "claim_id": claim.id(),
-            "descriptor_id": FIXTURE_DESCRIPTOR_ID,
-            "outcome": "passed",
-            "procedure_version": FIXTURE_PROCEDURE_ID,
-            "property_id": M4_PROPERTY_ID,
-            "schema": "reviewgraphen.fixture_test_result.v1",
-            "subject_ids": subject_ids,
-            "witness_hash": FIXTURE_WITNESS_HASH,
-        }))?;
-        let fixture_result_hash = ContentHash::sha256(&fixture_result_bytes);
-        let scope = HarnessTrustRootInputV3 {
-            policy_revision_hash: basis.policy_revision_hash.clone(),
-            repository_id: self.aggregate.program().repository_id().clone(),
-            repository_source_hash: self
-                .aggregate
-                .program()
-                .repository_source()
-                .content_hash()
-                .ok_or(DomainError::AuthorityPolicyMismatch)?
-                .clone(),
-            harness_id: crate::harness_source_v1::HARNESS_ID.to_owned(),
-            harness_revision: crate::harness_source_v1::HARNESS_REVISION.to_owned(),
-            harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH)?,
-            test_artifact_id: StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?,
-            descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
-            procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
-            result_hash: ContentHash::sha256(&witness_bytes),
-            result_size: FIXTURE_WITNESS_SIZE,
-            result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
-            result_sensitivity: ArtifactSensitivity::CanonicalState,
-            run_id: self.run_id.clone(),
-            genesis_hash: self.genesis_hash.clone(),
-            snapshot_id: self.aggregate.program().snapshot_id().clone(),
-            universe_id: self.aggregate.universe().id().clone(),
-            property_id: claim.property_id().to_owned(),
-            claim_id: claim.id().clone(),
-            claim_body_hash: claim.body_hash()?,
-        };
-        let result =
-            validate_fixture_result_for_root(&self.aggregate, &scope, &fixture_result_bytes)?;
-        if result.subject_ids() != subject_ids {
-            return Err(DomainError::VerificationBundleMismatch);
-        }
+        let (subject_ids, fixture_result_bytes, fixture_result_hash) =
+            deterministic_fixture_result_for_claim(&self.aggregate, claim, &scope)?;
         Ok(FixtureExecutionReceiptV1 {
             harness: Some(TrustedFixtureHarnessV1::from_execution(scope)),
             basis_digest: basis.basis_digest.clone(),
@@ -9336,6 +10455,395 @@ impl EventLog {
         *basis = next_basis;
         self.events.last().ok_or_else(|| {
             DomainError::EventSequence("authority registration append was not retained".to_owned())
+        })
+    }
+
+    /// Reconstructs narrowly scoped authority after the exact fixed fixture
+    /// witness registration became durable.  This path never runs the
+    /// harness and never reconstructs `TrustedFixtureHarnessV1`.
+    pub fn recover_fixture_registration_resume_authority_v3(
+        &self,
+        claim_id: &StableId,
+        resolver: &impl AuthorityArtifactResolverV3,
+        roots: &AuthorityTrustRootsV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<FixtureRegistrationResumeAuthorityV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        validate_repository_trust_root(&self.aggregate, roots)?;
+        if basis.policy_revision_hash != roots.policy_revision_hash {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        let claim = exact_fixture_claim_for_log(self, claim_id)?;
+        let state = self.v3_aggregate.as_ref().ok_or({
+            DomainError::EventV3AuthorityReplayRequired {
+                operation: "fixture registration resume",
+            }
+        })?;
+
+        // A registration resume authority is valid only before any bundle or
+        // human-review record for this claim.  Bundle-prefix recovery has its
+        // own, separately sealed authority.
+        if state
+            .verifications
+            .values()
+            .any(|record| record.claim_id() == claim_id)
+        {
+            return Err(DomainError::AlreadyComplete);
+        }
+        if state
+            .bindings
+            .values()
+            .any(|record| record.claim_id() == claim_id)
+            || state
+                .decisions
+                .values()
+                .any(|record| record.claim_id() == claim_id)
+            || state
+                .findings
+                .values()
+                .any(|record| record.claim_id() == claim_id)
+        {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+
+        let mut witness = None;
+        let mut output = None;
+        for registration in state.registrations.values() {
+            match registration.source() {
+                ArtifactSourceV3::ExternalHarnessWitness {
+                    claim_id: registered_claim,
+                    ..
+                } if registered_claim == claim_id => match witness {
+                    None => witness = Some(registration),
+                    Some(_) => return Err(DomainError::VerificationBundleMismatch),
+                },
+                ArtifactSourceV3::VerifierArtifact {
+                    claim_id: registered_claim,
+                    descriptor_id,
+                    procedure_version,
+                    role,
+                    ..
+                } if registered_claim == claim_id => {
+                    if descriptor_id != FIXTURE_DESCRIPTOR_ID
+                        || procedure_version != FIXTURE_PROCEDURE_ID
+                        || *role != VerifierArtifactRoleV3::Output
+                    {
+                        return Err(DomainError::VerificationBundleMismatch);
+                    }
+                    match output {
+                        None => output = Some(registration),
+                        Some(_) => return Err(DomainError::VerificationBundleMismatch),
+                    }
+                }
+                _ => {}
+            }
+        }
+        let witness = witness.ok_or(DomainError::WitnessAdmissionMismatch)?;
+        if state.evidence.values().any(|record| {
+            [
+                record.input_registration_id(),
+                record.output_registration_id(),
+            ]
+            .into_iter()
+            .any(|registration_id| {
+                state
+                    .registrations
+                    .get(registration_id)
+                    .is_some_and(|registration| match registration.source() {
+                        ArtifactSourceV3::VerifierArtifact {
+                            claim_id: registered_claim,
+                            ..
+                        }
+                        | ArtifactSourceV3::ExternalHarnessWitness {
+                            claim_id: registered_claim,
+                            ..
+                        } => registered_claim == claim_id,
+                        _ => false,
+                    })
+            })
+        }) {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        let root = roots
+            .harness_for_source(witness)
+            .ok_or(DomainError::HarnessTrustRootMissing)?;
+        validate_fresh_fixture_scope(self, basis, root)?;
+        if !fixture_registration_matches_scope(witness, root) {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        let witness_bytes = resolve_registered_bytes(witness, resolver)?;
+        validate_fresh_fixture_witness_registration(
+            &self.aggregate,
+            witness,
+            &witness_bytes,
+            root,
+        )?;
+        let (_, fixture_result_bytes, fixture_result_hash) =
+            deterministic_fixture_result_for_claim(&self.aggregate, claim, root)?;
+
+        let mut witness_event = None;
+        let mut output_event = None;
+        for event in &self.events {
+            let payload = decode_canonical_payload(self.version, event.envelope.payload.get())?;
+            if let PersistedPayload::ArtifactRegisteredV3(registration) = payload {
+                if registration.registration_id() == witness.registration_id() {
+                    witness_event = Some(&event.envelope);
+                }
+                if output.is_some_and(|candidate| {
+                    candidate.registration_id() == registration.registration_id()
+                }) {
+                    output_event = Some(&event.envelope);
+                }
+            }
+        }
+        let witness_event = witness_event.ok_or(DomainError::WitnessAdmissionMismatch)?;
+        let output_registration_id = if let Some(output) = output {
+            let output_event = output_event.ok_or(DomainError::VerificationBundleMismatch)?;
+            if !verifier_registration_matches(
+                output,
+                claim_id,
+                FIXTURE_DESCRIPTOR_ID,
+                FIXTURE_PROCEDURE_ID,
+                VerifierArtifactRoleV3::Output,
+            ) || output.cas_hash() != &fixture_result_hash
+                || output.size() != u64::try_from(fixture_result_bytes.len()).unwrap_or(u64::MAX)
+                || output.media_type() != FIXTURE_OUTPUT_MEDIA_TYPE
+                || output.sensitivity() != ArtifactSensitivity::CanonicalState
+                || output_event.sequence()
+                    != witness_event
+                        .sequence()
+                        .checked_add(1)
+                        .ok_or(DomainError::VerificationBundleMismatch)?
+                || output_event.previous_event_hash() != witness_event.event_hash()
+                || self.tail_hash != *output_event.event_hash()
+            {
+                return Err(DomainError::VerificationBundleMismatch);
+            }
+            let bytes = resolve_registered_bytes(output, resolver)?;
+            if bytes != fixture_result_bytes {
+                return Err(DomainError::VerificationBundleMismatch);
+            }
+            Some(output.registration_id().clone())
+        } else {
+            if self.tail_hash != *witness_event.event_hash()
+                || self.next_sequence()?
+                    != witness_event
+                        .sequence()
+                        .checked_add(1)
+                        .ok_or(DomainError::WitnessAdmissionMismatch)?
+            {
+                return Err(DomainError::WitnessAdmissionMismatch);
+            }
+            None
+        };
+
+        fixture_stage_preflight(
+            6,
+            self,
+            basis,
+            None,
+            [
+                fixture_scope_allocated_bytes(root)?,
+                u64::try_from(fixture_result_bytes.len()).unwrap_or(u64::MAX),
+                8_192,
+            ],
+        )?;
+        Ok(FixtureRegistrationResumeAuthorityV3 {
+            scope: clone_harness_root_input(root),
+            basis_digest: basis.basis_digest.clone(),
+            tail_hash: self.tail_hash.clone(),
+            expected_sequence: self.next_sequence()?,
+            witness_registration_id: witness.registration_id().clone(),
+            output_registration_id,
+            fixture_result_hash,
+            fixture_result_bytes,
+            expected_output_event: None,
+        })
+    }
+
+    /// Prepares the first missing deterministic fixture output registration.
+    /// A token recovered after an already-durable output cannot use this seam.
+    pub fn prepare_fixture_output_from_resume_v3(
+        &self,
+        authority: &mut FixtureRegistrationResumeAuthorityV3,
+        resolver: &impl AuthorityArtifactResolverV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedArtifactRegistrationV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        fixture_stage_preflight(
+            7,
+            self,
+            basis,
+            None,
+            [
+                u64::try_from(authority.fixture_result_bytes.len()).unwrap_or(u64::MAX),
+                8_192,
+            ],
+        )?;
+        if authority.output_registration_id.is_some()
+            || authority.basis_digest != basis.basis_digest
+            || authority.tail_hash != self.tail_hash
+            || authority.expected_sequence != self.next_sequence()?
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        validate_fresh_fixture_scope(self, basis, &authority.scope)?;
+        let registration = ArtifactRegisteredV3::new_validated(
+            self.run_id.clone(),
+            authority.fixture_result_hash.clone(),
+            FIXTURE_OUTPUT_MEDIA_TYPE,
+            u64::try_from(authority.fixture_result_bytes.len()).map_err(|_| {
+                DomainError::Incomplete {
+                    operation: "fixture resume result registration size",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                }
+            })?,
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::VerifierArtifact {
+                run_id: self.run_id.clone(),
+                claim_id: authority.scope.claim_id.clone(),
+                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                role: VerifierArtifactRoleV3::Output,
+            },
+        )?;
+        let bytes = resolve_registered_bytes(&registration, resolver)?;
+        if bytes != authority.fixture_result_bytes {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        validate_fixture_result_for_root(&self.aggregate, &authority.scope, &bytes)?;
+        let expected = expected_fixture_registration_event(self, &registration)?;
+        authority.output_registration_id = Some(registration.registration_id().clone());
+        authority.expected_output_event = Some(expected);
+        Ok(ValidatedArtifactRegistrationV3 {
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            tail_hash: self.tail_hash.clone(),
+            sequence: self.next_sequence()?,
+            registration,
+        })
+    }
+
+    /// Consumes registration-resume authority and reconstructs the exact
+    /// fixture E→B→V proposal from durable CAS-backed registrations.
+    pub fn mint_fixture_verification_bundle_from_resume_v3(
+        &self,
+        authority: FixtureRegistrationResumeAuthorityV3,
+        resolver: &impl AuthorityArtifactResolverV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedVerificationBundleV3> {
+        self.require_writable()?;
+        basis.validate_for_log(self)?;
+        fixture_stage_preflight(
+            8,
+            self,
+            basis,
+            None,
+            [
+                FIXTURE_WITNESS_SIZE,
+                u64::try_from(authority.fixture_result_bytes.len()).unwrap_or(u64::MAX),
+                3 * crate::m4::MAX_RECORD_BYTES as u64,
+                8_192,
+            ],
+        )?;
+        let output_registration_id = authority
+            .output_registration_id
+            .as_ref()
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        match &authority.expected_output_event {
+            Some(expected) => {
+                if expected.envelope.sequence() != authority.expected_sequence
+                    || expected.envelope.previous_event_hash() != &authority.tail_hash
+                    || authority.expected_sequence.checked_add(1) != Some(self.next_sequence()?)
+                {
+                    return Err(DomainError::WitnessAdmissionMismatch);
+                }
+                let observed = self
+                    .events
+                    .last()
+                    .ok_or(DomainError::WitnessAdmissionMismatch)?;
+                if observed.envelope.sequence() != expected.envelope.sequence()
+                    || observed.envelope.event_hash() != expected.envelope.event_hash()
+                    || observed.envelope.canonical_bytes()?
+                        != expected.envelope.canonical_bytes()?
+                {
+                    return Err(DomainError::WitnessAdmissionMismatch);
+                }
+            }
+            None => {
+                if authority.basis_digest != basis.basis_digest
+                    || authority.tail_hash != self.tail_hash
+                    || authority.expected_sequence != self.next_sequence()?
+                {
+                    return Err(DomainError::WitnessAdmissionMismatch);
+                }
+            }
+        }
+        validate_fresh_fixture_scope(self, basis, &authority.scope)?;
+        let state = self.v3_aggregate.as_ref().ok_or({
+            DomainError::EventV3AuthorityReplayRequired {
+                operation: "fixture registration resume bundle mint",
+            }
+        })?;
+        let input = state
+            .registrations
+            .get(&authority.witness_registration_id)
+            .ok_or(DomainError::WitnessAdmissionMismatch)?;
+        let output = state
+            .registrations
+            .get(output_registration_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        if !fixture_registration_matches_scope(input, &authority.scope)
+            || !verifier_registration_matches(
+                output,
+                &authority.scope.claim_id,
+                FIXTURE_DESCRIPTOR_ID,
+                FIXTURE_PROCEDURE_ID,
+                VerifierArtifactRoleV3::Output,
+            )
+        {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        let witness_bytes = resolve_registered_bytes(input, resolver)?;
+        validate_fresh_fixture_witness_registration(
+            &self.aggregate,
+            input,
+            &witness_bytes,
+            &authority.scope,
+        )?;
+        let output_bytes = resolve_registered_bytes(output, resolver)?;
+        if output_bytes != authority.fixture_result_bytes {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        let result =
+            validate_fixture_result_for_root(&self.aggregate, &authority.scope, &output_bytes)?;
+        let scope = state
+            .assessment_scopes
+            .get(&authority.scope.claim_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let proposal = crate::m4::materialize_fixture_replay_v1(
+            scope,
+            &result,
+            input.registration_id().clone(),
+            output.registration_id().clone(),
+        )
+        .map_err(m4_domain_error)?;
+        let payloads = vec![
+            PersistedPayload::EvidenceRecordedV3(proposal.evidence),
+            PersistedPayload::EvidenceBoundV3(proposal.binding),
+            PersistedPayload::VerificationRecordedV3(proposal.verification),
+        ];
+        let trust_digest = trust_digest_for_harness(&authority.scope)?;
+        Ok(ValidatedVerificationBundleV3 {
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            tail_hash: self.tail_hash.clone(),
+            first_sequence: self.next_sequence()?,
+            trust_digests: vec![trust_digest; payloads.len()],
+            payloads,
         })
     }
 
@@ -13125,7 +14633,10 @@ mod tests {
         StableId,
     ) {
         let (mut log, mut basis, claim_id, mut resolver) = fixture_stage_base();
-        let mut receipt = log.execute_fixture_harness_v1(&claim_id, &basis).unwrap();
+        let roots = fixture_stage_roots(&log, claim_id.clone());
+        let mut receipt = log
+            .execute_fixture_harness_v1(&claim_id, &roots, &basis)
+            .unwrap();
         resolver.insert(receipt.witness_bytes().to_vec());
         resolver.insert(receipt.fixture_result_bytes().to_vec());
         let registration = log
@@ -13157,6 +14668,193 @@ mod tests {
         (
             log, basis, claim_id, resolver, receipt, witness_id, output_id,
         )
+    }
+
+    fn fixture_stage_roots(log: &EventLog, claim_id: StableId) -> AuthorityTrustRootsV3 {
+        let policy = ContentHash::sha256(b"fixture stage resource policy");
+        let claim = log
+            .aggregate()
+            .execution_claims()
+            .find(|claim| claim.id() == &claim_id)
+            .unwrap();
+        let repository_id = log.aggregate().program().repository_id().clone();
+        let repository_source_hash = log
+            .aggregate()
+            .program()
+            .repository_source()
+            .content_hash()
+            .unwrap()
+            .clone();
+        AuthorityTrustRootsV3::new(
+            policy.clone(),
+            repository_id.clone(),
+            repository_source_hash.clone(),
+            vec![HarnessTrustRootInputV3 {
+                policy_revision_hash: policy,
+                repository_id,
+                repository_source_hash,
+                harness_id: FIXTURE_HARNESS_ID.to_owned(),
+                harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+                harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH).unwrap(),
+                test_artifact_id: id(FIXTURE_TEST_ARTIFACT_ID),
+                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH).unwrap(),
+                result_size: FIXTURE_WITNESS_SIZE,
+                result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+                result_sensitivity: ArtifactSensitivity::CanonicalState,
+                run_id: log.run_id().clone(),
+                genesis_hash: log.genesis_hash().clone(),
+                snapshot_id: log.aggregate().program().snapshot_id().clone(),
+                universe_id: log.aggregate().universe().id().clone(),
+                property_id: M4_PROPERTY_ID.to_owned(),
+                claim_id,
+                claim_body_hash: claim.body_hash().unwrap(),
+            }],
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn fixture_registration_resume_completes_without_recreating_harness_authority() {
+        let (mut log, mut basis, claim_id, resolver, _receipt, witness_id) =
+            fixture_through_witness_registration();
+        let roots = fixture_stage_roots(&log, claim_id.clone());
+        let mut resume = log
+            .recover_fixture_registration_resume_authority_v3(&claim_id, &resolver, &roots, &basis)
+            .unwrap();
+        assert_eq!(resume.witness_registration_id(), &witness_id);
+        assert!(resume.output_registration_id().is_none());
+        let output = log
+            .prepare_fixture_output_from_resume_v3(&mut resume, &resolver, &basis)
+            .unwrap();
+        let output_id = output.registration_id().clone();
+        log.append_authority_registration_v3(output, &mut basis)
+            .unwrap();
+        assert_eq!(resume.output_registration_id(), Some(&output_id));
+        let bundle = log
+            .mint_fixture_verification_bundle_from_resume_v3(resume, &resolver, &basis)
+            .unwrap();
+        log.append_verification_bundle_v3(bundle, &mut basis)
+            .unwrap();
+        assert_eq!(log.verifications_v3().count(), 1);
+    }
+
+    #[test]
+    fn fixture_output_registration_resume_mints_only_the_bundle() {
+        let (mut log, mut basis, claim_id, resolver, _receipt, witness_id, output_id) =
+            fixture_through_output_registration();
+        let roots = fixture_stage_roots(&log, claim_id.clone());
+        let resume = log
+            .recover_fixture_registration_resume_authority_v3(&claim_id, &resolver, &roots, &basis)
+            .unwrap();
+        assert_eq!(resume.witness_registration_id(), &witness_id);
+        assert_eq!(resume.output_registration_id(), Some(&output_id));
+        let bundle = log
+            .mint_fixture_verification_bundle_from_resume_v3(resume, &resolver, &basis)
+            .unwrap();
+        log.append_verification_bundle_v3(bundle, &mut basis)
+            .unwrap();
+        assert_eq!(log.verifications_v3().count(), 1);
+    }
+
+    #[test]
+    fn fixture_attempt_inspection_tracks_registration_and_completion_stages() {
+        let (log, basis, claim_id, resolver) = fixture_stage_base();
+        let roots = fixture_stage_roots(&log, claim_id.clone());
+        let expected = log
+            .expect_fixture_verification_attempt_v3(&claim_id, &roots, &basis)
+            .unwrap();
+        assert_eq!(
+            log.inspect_verification_attempt_v3(&expected, &resolver, &roots, &basis)
+                .unwrap(),
+            VerificationAttemptStageV3::Ready
+        );
+
+        let (log, basis, claim_id, resolver, _receipt, _) = fixture_through_witness_registration();
+        let roots = fixture_stage_roots(&log, claim_id.clone());
+        let expected = log
+            .expect_fixture_verification_attempt_v3(&claim_id, &roots, &basis)
+            .unwrap();
+        assert_eq!(
+            log.inspect_verification_attempt_v3(&expected, &resolver, &roots, &basis)
+                .unwrap(),
+            VerificationAttemptStageV3::WitnessRegistered
+        );
+
+        let (mut log, mut basis, claim_id, resolver, mut receipt, witness_id, output_id) =
+            fixture_through_output_registration();
+        let roots = fixture_stage_roots(&log, claim_id.clone());
+        let expected = log
+            .expect_fixture_verification_attempt_v3(&claim_id, &roots, &basis)
+            .unwrap();
+        assert_eq!(
+            log.inspect_verification_attempt_v3(&expected, &resolver, &roots, &basis)
+                .unwrap(),
+            VerificationAttemptStageV3::OutputRegistered
+        );
+        let admission = log
+            .admit_external_witness_v3(&mut receipt, &witness_id, &resolver, &basis)
+            .unwrap();
+        let bundle = log
+            .mint_fixture_verification_bundle_v3(admission, &output_id, &resolver, &basis)
+            .unwrap();
+        log.append_verification_bundle_v3(bundle, &mut basis)
+            .unwrap();
+        let expected = log
+            .expect_fixture_verification_attempt_v3(&claim_id, &roots, &basis)
+            .unwrap();
+        assert_eq!(
+            log.inspect_verification_attempt_v3(&expected, &resolver, &roots, &basis)
+                .unwrap(),
+            VerificationAttemptStageV3::Complete
+        );
+    }
+
+    #[test]
+    fn fixture_registration_resume_preflight_is_exact_and_precedes_token_allocation() {
+        let (log, basis, claim_id, resolver, receipt, witness_id) =
+            fixture_through_witness_registration();
+        let roots = fixture_stage_roots(&log, claim_id.clone());
+        let root = roots
+            .harness_for_source(
+                log.v3_aggregate
+                    .as_ref()
+                    .unwrap()
+                    .registrations
+                    .get(&witness_id)
+                    .unwrap(),
+            )
+            .unwrap();
+        let exact = log.retained_bytes_v3().unwrap()
+            + basis.retained_bytes().unwrap()
+            + fixture_scope_allocated_bytes(root).unwrap()
+            + receipt.fixture_result_bytes().len() as u64
+            + 8_192;
+        V3_TEST_FIXTURE_STAGE_KIND.with(|value| value.set(6));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(exact)));
+        log.recover_fixture_registration_resume_authority_v3(&claim_id, &resolver, &roots, &basis)
+            .unwrap();
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(exact - 1)));
+        V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
+        assert!(matches!(
+            log.recover_fixture_registration_resume_authority_v3(
+                &claim_id, &resolver, &roots, &basis,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        V3_TEST_FIXTURE_STAGE_KIND.with(|value| value.set(0));
     }
 
     fn verification_bundle_transaction_exact(
@@ -13314,6 +15012,244 @@ mod tests {
         .unwrap()
     }
 
+    fn static_registration_heap_oracle(
+        log: &EventLog,
+        claim_id: &StableId,
+        media_type: &str,
+    ) -> u64 {
+        (log.run_id.as_str().len()
+            + "registration:".len()
+            + "sha256:".len()
+            + 64
+            + "sha256:".len()
+            + 64
+            + media_type.len()
+            + claim_id.as_str().len()
+            + STATIC_DESCRIPTOR_ID.len()
+            + STATIC_PROCEDURE_ID.len()
+            + log.run_id.as_str().len()) as u64
+    }
+
+    fn static_expected_oracle(
+        log: &EventLog,
+        basis: &AuthorityReplayBasisV3,
+        claim_id: &StableId,
+        input_size: u64,
+        output_size: u64,
+    ) -> u64 {
+        size_of::<ExpectedVerificationAttemptV3>() as u64
+            + log.run_id.as_str().len() as u64
+            + log.genesis_hash.as_str().len() as u64
+            + claim_id.as_str().len() as u64
+            + basis.basis_digest.as_str().len() as u64
+            + log.tail_hash.as_str().len() as u64
+            + static_registration_heap_oracle(log, claim_id, STATIC_INPUT_MEDIA_TYPE)
+            + static_registration_heap_oracle(log, claim_id, STATIC_OUTPUT_MEDIA_TYPE)
+            + input_size
+            + output_size
+    }
+
+    fn static_boundary_base() -> (
+        EventLog,
+        AuthorityReplayBasisV3,
+        AuthorityTrustRootsV3,
+        StableId,
+        crate::StaticFactEvaluationV1,
+        AuthorityTestResolver,
+    ) {
+        let (mut log, _, plan, obligation_id, envelope, sources) = d2_v3_m4_log();
+        let (_, claim_id) = append_d2_attempt_v3_with_polarity(
+            &mut log,
+            &plan,
+            &obligation_id,
+            &envelope,
+            &sources,
+            ClaimPolarity::IssuePresent,
+        );
+        let claim = log
+            .aggregate()
+            .execution_claims()
+            .find(|claim| claim.id() == &claim_id)
+            .unwrap();
+        let obligation = log.aggregate().obligation(&obligation_id).unwrap();
+        let evaluation =
+            crate::evaluate_static_fact_v1(log.aggregate().program(), obligation, claim).unwrap();
+        let roots = authority_roots_for_claim(
+            &log,
+            claim_id.clone(),
+            ContentHash::sha256(b"static expectation boundary policy"),
+        );
+        let basis = log.fresh_authority_basis_v3(&roots).unwrap();
+        let mut resolver = AuthorityTestResolver::default();
+        for bytes in sources.values() {
+            resolver.insert(bytes.clone());
+        }
+        (log, basis, roots, claim_id, evaluation, resolver)
+    }
+
+    #[test]
+    fn static_fresh_seal_preflight_is_exact_before_expected_allocation() {
+        let (log, basis, _roots, claim_id, evaluation, resolver) = static_boundary_base();
+        let claim = log
+            .aggregate()
+            .execution_claims()
+            .find(|claim| claim.id() == &claim_id)
+            .unwrap();
+        let obligation_id = claim.obligation_ids().first().unwrap();
+        let obligation = log.aggregate().obligation(obligation_id).unwrap();
+        let input_size = evaluation.input().canonical_bytes().unwrap().len() as u64;
+        let output_size = evaluation.result().canonical_bytes().unwrap().len() as u64;
+        let evaluation_bytes = crate::m4::static_evaluation_test_oracle_bytes(&evaluation);
+        let reconstruction = crate::m4::static_reconstruction_test_oracle_bytes(
+            log.aggregate().program(),
+            obligation,
+            claim,
+        );
+        let downstream = input_size
+            + output_size
+            + static_registration_heap_oracle(&log, &claim_id, STATIC_INPUT_MEDIA_TYPE)
+            + static_registration_heap_oracle(&log, &claim_id, STATIC_OUTPUT_MEDIA_TYPE)
+            + MAX_V3_REGISTRATION_IDENTITY_BYTES as u64
+            + static_expected_oracle(&log, &basis, &claim_id, input_size, output_size);
+        let exact = log.retained_bytes_v3().unwrap()
+            + basis.retained_bytes().unwrap()
+            + evaluation_bytes
+            + reconstruction
+            + downstream;
+        let events_before = log.envelopes().count();
+        let basis_before = basis.basis_digest().clone();
+        let objects_before = resolver.objects.len();
+        let reads_before = resolver.reads.get();
+
+        V3_TEST_STATIC_EXPECTATION_KIND.with(|value| value.set(1));
+        V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.set(0));
+        crate::m4::reset_static_reconstruction_allocation_seams();
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(exact)));
+        log.seal_static_verification_attempt_v3(&claim_id, &evaluation, &basis)
+            .unwrap();
+        assert_eq!(
+            V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        assert!(crate::m4::static_reconstruction_allocation_seams() > 0);
+
+        V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.set(0));
+        crate::m4::reset_static_reconstruction_allocation_seams();
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(exact - 1)));
+        assert!(matches!(
+            log.seal_static_verification_attempt_v3(&claim_id, &evaluation, &basis),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        assert_eq!(crate::m4::static_reconstruction_allocation_seams(), 0);
+        assert_eq!(log.envelopes().count(), events_before);
+        assert_eq!(basis.basis_digest(), &basis_before);
+        assert_eq!(resolver.objects.len(), objects_before);
+        assert_eq!(resolver.reads.get(), reads_before);
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        V3_TEST_STATIC_EXPECTATION_KIND.with(|value| value.set(0));
+    }
+
+    #[test]
+    fn static_durable_inspect_preflight_is_exact_before_cas_allocation() {
+        let (mut log, mut basis, roots, claim_id, evaluation, mut resolver) =
+            static_boundary_base();
+        let input_bytes = evaluation.input().canonical_bytes().unwrap();
+        let input_hash = resolver.insert(input_bytes.clone());
+        let input = log
+            .prepare_static_verifier_artifact_registration_v3(
+                claim_id.clone(),
+                VerifierArtifactRoleV3::Input,
+                input_hash,
+                input_bytes.len() as u64,
+                &resolver,
+                &roots,
+                &basis,
+            )
+            .unwrap();
+        log.append_authority_registration_v3(input, &mut basis)
+            .unwrap();
+        let record_bound = crate::m4::MAX_RECORD_BYTES as u64;
+        let decoded_input = size_of::<crate::StaticFactInputV1>() as u64
+            + (6 * crate::m4::MAX_EVIDENCE_SUBJECTS
+                * (size_of::<StableId>() + crate::m4::MAX_TRACE_BYTES)) as u64
+            + (6 * crate::m4::MAX_TRACE_BYTES) as u64;
+        let result_bound = size_of::<crate::StaticFactResultV1>() as u64
+            + (2 * crate::m4::MAX_TRACE_BYTES
+                + size_of::<String>()
+                + crate::m4::MAX_LIMITATION_BYTES) as u64;
+        let claim = log
+            .aggregate()
+            .execution_claims()
+            .find(|claim| claim.id() == &claim_id)
+            .unwrap();
+        let obligation = log
+            .aggregate()
+            .obligation(claim.obligation_ids().first().unwrap())
+            .unwrap();
+        let reconstruction = crate::m4::static_reconstruction_test_oracle_bytes(
+            log.aggregate().program(),
+            obligation,
+            claim,
+        );
+        let exact = log.retained_bytes_v3().unwrap()
+            + basis.retained_bytes().unwrap()
+            + input_bytes.len() as u64
+            + decoded_input
+            + reconstruction
+            + result_bound
+            + record_bound
+            + static_expected_oracle(
+                &log,
+                &basis,
+                &claim_id,
+                input_bytes.len() as u64,
+                record_bound,
+            )
+            + MAX_V3_REGISTRATION_IDENTITY_BYTES as u64;
+        let events_before = log.envelopes().count();
+        let basis_before = basis.basis_digest().clone();
+        let objects_before = resolver.objects.len();
+
+        V3_TEST_STATIC_EXPECTATION_KIND.with(|value| value.set(2));
+        V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.set(0));
+        crate::m4::reset_static_reconstruction_allocation_seams();
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(exact)));
+        assert!(matches!(
+            log.inspect_static_verification_attempt_v3(&claim_id, &resolver, &roots, &basis)
+                .unwrap(),
+            StaticVerificationAttemptInspectionV3::Existing { .. }
+        ));
+        assert_eq!(
+            V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        assert!(crate::m4::static_reconstruction_allocation_seams() > 0);
+
+        V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.set(0));
+        crate::m4::reset_static_reconstruction_allocation_seams();
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(exact - 1)));
+        let reads_before = resolver.reads.get();
+        assert!(matches!(
+            log.inspect_static_verification_attempt_v3(&claim_id, &resolver, &roots, &basis),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(resolver.reads.get(), reads_before);
+        assert_eq!(
+            V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        assert_eq!(crate::m4::static_reconstruction_allocation_seams(), 0);
+        assert_eq!(log.envelopes().count(), events_before);
+        assert_eq!(basis.basis_digest(), &basis_before);
+        assert_eq!(resolver.objects.len(), objects_before);
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        V3_TEST_STATIC_EXPECTATION_KIND.with(|value| value.set(0));
+    }
+
     #[test]
     fn v3_static_decision_finding_and_roots_bound_replay_are_exact() {
         let (mut log, _initial, plan, obligation_id, envelope, sources) = d2_v3_m4_log();
@@ -13350,6 +15286,41 @@ mod tests {
         let roots = authority_roots_for_claim(&log, claim_id.clone(), policy.clone());
         let mut basis = log.fresh_authority_basis_v3(&roots).unwrap();
 
+        let fresh_events = log.envelopes().count();
+        let fresh_basis = basis.basis_digest().clone();
+        let fresh_objects = resolver.objects.len();
+        let fresh_reads = resolver.reads.get();
+        V3_TEST_STATIC_EXPECTATION_KIND.with(|value| value.set(1));
+        V3_TEST_STATIC_EXPECTATION_PEAK.with(|value| value.set(0));
+        log.seal_static_verification_attempt_v3(&claim_id, &evaluation, &basis)
+            .unwrap();
+        let fresh_exact = V3_TEST_STATIC_EXPECTATION_PEAK.with(|value| value.get());
+        assert!(fresh_exact > 0);
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(fresh_exact)));
+        V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.set(0));
+        log.seal_static_verification_attempt_v3(&claim_id, &evaluation, &basis)
+            .unwrap();
+        assert_eq!(
+            V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(fresh_exact - 1)));
+        V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.set(0));
+        assert!(matches!(
+            log.seal_static_verification_attempt_v3(&claim_id, &evaluation, &basis),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(
+            V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        assert_eq!(log.envelopes().count(), fresh_events);
+        assert_eq!(basis.basis_digest(), &fresh_basis);
+        assert_eq!(resolver.objects.len(), fresh_objects);
+        assert_eq!(resolver.reads.get(), fresh_reads);
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        V3_TEST_STATIC_EXPECTATION_KIND.with(|value| value.set(0));
+
         let input = log
             .prepare_static_verifier_artifact_registration_v3(
                 claim_id.clone(),
@@ -13364,6 +15335,54 @@ mod tests {
         let input_registration_id = input.registration_id().clone();
         log.append_authority_registration_v3(input, &mut basis)
             .unwrap();
+        crate::m4::reset_static_evaluator_calls();
+        let durable_events = log.envelopes().count();
+        let durable_basis = basis.basis_digest().clone();
+        let durable_objects = resolver.objects.len();
+        V3_TEST_STATIC_EXPECTATION_KIND.with(|value| value.set(2));
+        V3_TEST_STATIC_EXPECTATION_PEAK.with(|value| value.set(0));
+        assert!(matches!(
+            log.inspect_static_verification_attempt_v3(&claim_id, &resolver, &roots, &basis,)
+                .unwrap(),
+            StaticVerificationAttemptInspectionV3::Existing {
+                stage: VerificationAttemptStageV3::InputRegistered,
+                ..
+            }
+        ));
+        let durable_exact = V3_TEST_STATIC_EXPECTATION_PEAK.with(|value| value.get());
+        assert!(durable_exact > 0);
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(durable_exact)));
+        V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.set(0));
+        assert!(matches!(
+            log.inspect_static_verification_attempt_v3(&claim_id, &resolver, &roots, &basis,)
+                .unwrap(),
+            StaticVerificationAttemptInspectionV3::Existing {
+                stage: VerificationAttemptStageV3::InputRegistered,
+                ..
+            }
+        ));
+        assert_eq!(
+            V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.get()),
+            1
+        );
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(durable_exact - 1)));
+        V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.set(0));
+        let reads_before_refusal = resolver.reads.get();
+        assert!(matches!(
+            log.inspect_static_verification_attempt_v3(&claim_id, &resolver, &roots, &basis,),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(resolver.reads.get(), reads_before_refusal);
+        assert_eq!(
+            V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS.with(|value| value.get()),
+            0
+        );
+        assert_eq!(log.envelopes().count(), durable_events);
+        assert_eq!(basis.basis_digest(), &durable_basis);
+        assert_eq!(resolver.objects.len(), durable_objects);
+        V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
+        V3_TEST_STATIC_EXPECTATION_KIND.with(|value| value.set(0));
+        assert_eq!(crate::m4::static_evaluator_calls(), 0);
         let output = log
             .prepare_static_verifier_artifact_registration_v3(
                 claim_id.clone(),
@@ -13389,6 +15408,7 @@ mod tests {
                 &basis,
             )
             .unwrap();
+        assert_eq!(crate::m4::static_evaluator_calls(), 0);
         let bundle_exact = verification_bundle_transaction_exact(&log, &basis, &bundle);
         let events_before = log.envelopes().count();
         let basis_before = basis.basis_digest().clone();
@@ -13947,7 +15967,7 @@ mod tests {
         );
         let basis = log.fresh_authority_basis_v3(&roots).unwrap();
         assert!(matches!(
-            log.execute_fixture_harness_v1(&claim_id, &basis),
+            log.execute_fixture_harness_v1(&claim_id, &roots, &basis),
             Err(DomainError::VerificationBundleMismatch)
         ));
     }
@@ -13965,6 +15985,7 @@ mod tests {
         };
 
         let (log, basis, claim_id, _) = fixture_stage_base();
+        let roots = fixture_stage_roots(&log, claim_id.clone());
         let execute_exact = fixture_exact(
             &log,
             &basis,
@@ -13978,7 +15999,8 @@ mod tests {
         V3_TEST_FIXTURE_STAGE_KIND.with(|value| value.set(1));
         V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
         V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(execute_exact)));
-        log.execute_fixture_harness_v1(&claim_id, &basis).unwrap();
+        log.execute_fixture_harness_v1(&claim_id, &roots, &basis)
+            .unwrap();
         assert_eq!(
             V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.get()),
             1
@@ -13986,7 +16008,7 @@ mod tests {
         V3_TEST_WORKING_LIMIT.with(|value| value.set(Some(execute_exact - 1)));
         V3_TEST_FIXTURE_STAGE_ALLOCATION_SEAMS.with(|value| value.set(0));
         assert!(matches!(
-            log.execute_fixture_harness_v1(&claim_id, &basis),
+            log.execute_fixture_harness_v1(&claim_id, &roots, &basis),
             Err(DomainError::Incomplete { .. })
         ));
         assert_eq!(
@@ -13996,7 +16018,10 @@ mod tests {
         V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
 
         let (log, basis, claim_id, mut resolver) = fixture_stage_base();
-        let mut receipt = log.execute_fixture_harness_v1(&claim_id, &basis).unwrap();
+        let roots = fixture_stage_roots(&log, claim_id.clone());
+        let mut receipt = log
+            .execute_fixture_harness_v1(&claim_id, &roots, &basis)
+            .unwrap();
         resolver.insert(receipt.witness_bytes().to_vec());
         resolver.insert(receipt.fixture_result_bytes().to_vec());
         let witness_exact =
@@ -14012,8 +16037,9 @@ mod tests {
         );
         V3_TEST_WORKING_LIMIT.with(|value| value.set(None));
         let (log_low, basis_low, claim_low, mut resolver_low) = fixture_stage_base();
+        let roots_low = fixture_stage_roots(&log_low, claim_low.clone());
         let mut receipt_low = log_low
-            .execute_fixture_harness_v1(&claim_low, &basis_low)
+            .execute_fixture_harness_v1(&claim_low, &roots_low, &basis_low)
             .unwrap();
         resolver_low.insert(receipt_low.witness_bytes().to_vec());
         resolver_low.insert(receipt_low.fixture_result_bytes().to_vec());
@@ -14305,7 +16331,7 @@ mod tests {
         let registration_base = fresh.clone();
         let mut fresh_basis = fresh.fresh_authority_basis_v3(&roots).unwrap();
         let mut execution = fresh
-            .execute_fixture_harness_v1(&trusted_claim_id, &fresh_basis)
+            .execute_fixture_harness_v1(&trusted_claim_id, &roots, &fresh_basis)
             .unwrap();
         assert_eq!(execution.witness_bytes(), FIXTURE_WITNESS_BYTES);
         assert_eq!(execution.fixture_result_bytes(), result_bytes);
@@ -14417,7 +16443,7 @@ mod tests {
         )
         .unwrap();
         let mut preexisting_execution = preexisting
-            .execute_fixture_harness_v1(&trusted_claim_id, &preexisting_basis)
+            .execute_fixture_harness_v1(&trusted_claim_id, &roots, &preexisting_basis)
             .unwrap();
         assert!(matches!(
             preexisting.admit_external_witness_v3(
