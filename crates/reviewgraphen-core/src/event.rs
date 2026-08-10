@@ -4,7 +4,7 @@ use crate::{
     EvidenceAdmission, EvidenceBinding, EvidenceSnapshotAdmission, Finding, MvpRulePack,
     Obligation, ObligationLifecycle, ProgramSpace, Result, ReviewAggregate, ReviewClaim,
     ReviewContextEnvelope, ReviewPlan, StableId, TrustedHumanAdmission, UniverseDescriptor,
-    Verification, canonical_json,
+    Verification, canonical_json, canonical_json_value,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, value::RawValue};
@@ -51,11 +51,19 @@ impl EventContractVersion {
 pub enum EventStreamGenesis<'a> {
     V1(&'a ContentHash),
     V2(&'a [u8]),
+    /// Compact certificate created only by strict canonical-genesis decode.
+    /// Durable readers use it to avoid rebuilding the full baseline merely
+    /// to re-check the sequence-one manifest.
+    V2Verified(&'a VerifiedV2Genesis),
 }
 
 const SYSTEM_ACTOR: &str = "reviewgraphen-core@1";
 const RUN_GENESIS_SCHEMA: &str = "reviewgraphen.run_genesis.v1";
 const MAX_D1_EVENT_LINE_BYTES: usize = 1_048_576;
+const MAX_EVENT_JSON_DEPTH: usize = 128;
+const MAX_EVENT_JSON_VALUES: usize = 65_536;
+const MAX_GENESIS_JSON_DEPTH: usize = 128;
+const MAX_GENESIS_JSON_VALUES: usize = 1_048_576;
 
 /// Typed, canonical state from which a v2 run begins. It is deliberately not
 /// `ReviewAggregate` serialization: only a pristine baseline belongs here.
@@ -66,6 +74,101 @@ pub struct RunGenesisSnapshot {
     program_space: ProgramSpace,
     universe: UniverseDescriptor,
     obligations: Vec<Obligation>,
+}
+
+/// Immutable, compact witness that canonical V2 genesis bytes were strictly
+/// decoded and rebuilt through the pristine aggregate boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedV2Genesis {
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    byte_len: u64,
+    repository_identity: String,
+    snapshot_id: StableId,
+    profile_id: String,
+    profile_version: String,
+    pristine_aggregate_hash: ContentHash,
+}
+
+impl VerifiedV2Genesis {
+    /// Creates a certificate only after the complete canonical genesis and
+    /// deterministic baseline reconstruction have both succeeded.
+    pub fn from_canonical_bytes(run_id: &StableId, input: &[u8]) -> Result<Self> {
+        let snapshot = RunGenesisSnapshot::from_canonical_bytes(input)?;
+        let aggregate = snapshot.rebuild_aggregate()?;
+        Ok(Self {
+            run_id: run_id.clone(),
+            genesis_hash: ContentHash::sha256(input),
+            byte_len: u64::try_from(input.len())
+                .map_err(|_| DomainError::Validation("genesis bytes do not fit u64".to_owned()))?,
+            repository_identity: snapshot.program_space.repository_identity().to_owned(),
+            snapshot_id: snapshot.program_space.snapshot_id().clone(),
+            profile_id: snapshot.program_space.profile_id().to_owned(),
+            profile_version: snapshot.program_space.profile_version().to_owned(),
+            pristine_aggregate_hash: ContentHash::sha256(&canonical_json(&aggregate)?),
+        })
+    }
+
+    #[must_use]
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+
+    #[must_use]
+    pub fn genesis_hash(&self) -> &ContentHash {
+        &self.genesis_hash
+    }
+
+    /// Requested bytes retained by the compact verified-genesis certificate,
+    /// including its fixed Arc payload layout and backing-string capacities.
+    #[must_use]
+    pub fn allocated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(self.run_id.allocated_bytes())
+            .saturating_add(self.genesis_hash.allocated_bytes())
+            .saturating_add(self.repository_identity.capacity())
+            .saturating_add(self.snapshot_id.allocated_bytes())
+            .saturating_add(self.profile_id.capacity())
+            .saturating_add(self.profile_version.capacity())
+            .saturating_add(self.pristine_aggregate_hash.allocated_bytes())
+    }
+
+    /// Confirms that a reconstructed pristine aggregate is the one certified
+    /// by these canonical genesis bytes without retaining those bytes again.
+    pub fn validate_pristine_aggregate(&self, aggregate: &ReviewAggregate) -> Result<()> {
+        aggregate.validate_pristine_for_event_log()?;
+        if ContentHash::sha256(&canonical_json(aggregate)?) != self.pristine_aggregate_hash {
+            return Err(DomainError::Validation(
+                "offline v2 projection initial aggregate does not match verified genesis bytes"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_manifest(&self, run_id: &StableId, manifest: &RunGenesisManifest) -> Result<()> {
+        manifest.validate()?;
+        if &self.run_id != run_id
+            || manifest.run_id != *run_id
+            || manifest.genesis_artifact.run_id != *run_id
+            || manifest.genesis_artifact.cas_hash != self.genesis_hash
+            || manifest.genesis_artifact.size != self.byte_len
+            || manifest.repository_identity != self.repository_identity
+            || manifest.snapshot_id != self.snapshot_id
+            || manifest.profile_id != self.profile_id
+            || manifest.profile_version != self.profile_version
+            || !matches!(
+                &manifest.genesis_artifact.source,
+                ArtifactSource::RunGenesis { run_id: source_run_id } if source_run_id == run_id
+            )
+        {
+            return Err(DomainError::Validation(
+                "run genesis manifest must exactly bind verified genesis bytes and provenance"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl RunGenesisSnapshot {
@@ -104,6 +207,13 @@ impl RunGenesisSnapshot {
         let aggregate = snapshot.rebuild_aggregate()?;
         aggregate.validate_pristine_for_event_log()?;
         Ok(snapshot)
+    }
+
+    /// Index-only bounded decode seam. The structural cap is operational and
+    /// deliberately does not alter the canonical genesis schema.
+    pub fn from_canonical_bytes_for_index(input: &[u8]) -> Result<Self> {
+        preflight_genesis_json_structure(input)?;
+        Self::from_canonical_bytes(input)
     }
 
     /// Reconstructs exactly the pristine aggregate represented by this DTO.
@@ -206,6 +316,33 @@ pub struct ArtifactRegistered {
 }
 
 impl ArtifactRegistered {
+    fn allocated_bytes(&self) -> usize {
+        let source = match &self.source {
+            ArtifactSource::RunGenesis { run_id } => run_id.allocated_bytes(),
+            ArtifactSource::SnapshotIngest {
+                run_id,
+                snapshot_id,
+                adapter_id,
+            } => run_id
+                .allocated_bytes()
+                .saturating_add(snapshot_id.allocated_bytes())
+                .saturating_add(adapter_id.capacity()),
+            ArtifactSource::ReviewerExecution {
+                run_id,
+                execution_id,
+                reviewer_id,
+            } => run_id
+                .allocated_bytes()
+                .saturating_add(execution_id.allocated_bytes())
+                .saturating_add(reviewer_id.capacity()),
+        };
+        self.run_id
+            .allocated_bytes()
+            .saturating_add(self.registration_id.allocated_bytes())
+            .saturating_add(self.cas_hash.allocated_bytes())
+            .saturating_add(self.media_type.capacity())
+            .saturating_add(source)
+    }
     /// Constructs a registration after requiring its explicit sensitivity and
     /// stable registration namespace.
     pub fn new(
@@ -407,6 +544,16 @@ pub struct RunGenesisManifest {
 }
 
 impl RunGenesisManifest {
+    fn allocated_bytes(&self) -> usize {
+        self.run_id
+            .allocated_bytes()
+            .saturating_add(self.event_contract_version.capacity())
+            .saturating_add(self.genesis_artifact.allocated_bytes())
+            .saturating_add(self.repository_identity.capacity())
+            .saturating_add(self.snapshot_id.allocated_bytes())
+            .saturating_add(self.profile_id.capacity())
+            .saturating_add(self.profile_version.capacity())
+    }
     /// Builds the sole v2 run-genesis manifest.
     pub fn new(
         run_id: StableId,
@@ -585,6 +732,23 @@ pub struct SnapshotSourcesRecorded {
 }
 
 impl SnapshotSourcesRecorded {
+    fn allocated_bytes(&self) -> usize {
+        self.snapshot_id
+            .allocated_bytes()
+            .saturating_add(
+                self.entries
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<SnapshotSourceRecordEntry>()),
+            )
+            .saturating_add(self.entries.iter().fold(0_usize, |total, entry| {
+                total
+                    .saturating_add(entry.artifact_id.allocated_bytes())
+                    .saturating_add(entry.path.capacity())
+                    .saturating_add(entry.content_hash.allocated_bytes())
+                    .saturating_add(entry.registration_id.allocated_bytes())
+                    .saturating_add(entry.cas_hash.allocated_bytes())
+            }))
+    }
     /// Constructs a path-ordered exact source record set.
     pub fn new(snapshot_id: StableId, entries: Vec<SnapshotSourceRecordEntry>) -> Result<Self> {
         let sources = Self {
@@ -1251,6 +1415,287 @@ impl PersistedPayload {
     }
 }
 
+#[derive(Clone, Copy)]
+enum JsonFrame {
+    Array(JsonArrayState),
+    Object(JsonObjectState),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum JsonArrayState {
+    ValueOrEnd,
+    CommaOrEnd,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum JsonObjectState {
+    KeyOrEnd,
+    Colon,
+    Value,
+    CommaOrEnd,
+}
+
+/// Performs the fixed structural admission required for every persisted event
+/// JSON document. The scanner intentionally does not allocate or decide
+/// duplicate-key semantics; serde and the closed typed DTOs retain those
+/// responsibilities after this resource check succeeds.
+pub(crate) fn preflight_event_json_structure(input: &[u8]) -> Result<()> {
+    preflight_json_structure(
+        input,
+        "index event JSON structure",
+        MAX_EVENT_JSON_DEPTH,
+        MAX_EVENT_JSON_VALUES,
+    )
+}
+
+pub fn preflight_index_genesis_json_structure(input: &[u8]) -> Result<()> {
+    preflight_json_structure(
+        input,
+        "index genesis JSON structure",
+        MAX_GENESIS_JSON_DEPTH,
+        MAX_GENESIS_JSON_VALUES,
+    )
+}
+
+fn preflight_genesis_json_structure(input: &[u8]) -> Result<()> {
+    preflight_index_genesis_json_structure(input)
+}
+
+/// Counts every object member and array element without constructing a JSON
+/// value tree. The fixed 128-entry stack is sufficient for both contracts, so
+/// successful scans retain no owned allocation.
+fn preflight_json_structure(
+    input: &[u8],
+    operation: &'static str,
+    max_depth: usize,
+    max_values: usize,
+) -> Result<()> {
+    let mut stack = [JsonFrame::Array(JsonArrayState::ValueOrEnd); MAX_EVENT_JSON_DEPTH];
+    let mut stack_len = 0_usize;
+    let mut values = 0_usize;
+    let mut root_started = false;
+    let mut root_complete = false;
+    let mut index = 0_usize;
+
+    while index < input.len() {
+        if input[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
+        if root_complete {
+            return invalid_json_structure();
+        }
+
+        match input[index] {
+            b'{' | b'[' => {
+                accept_json_value(
+                    &mut stack,
+                    stack_len,
+                    &mut values,
+                    &mut root_started,
+                    operation,
+                    max_values,
+                )?;
+                let next_depth = stack_len.saturating_add(1);
+                if next_depth > max_depth {
+                    return Err(DomainError::Incomplete {
+                        operation,
+                        limit: max_depth,
+                        observed: next_depth,
+                    });
+                }
+                stack[stack_len] = if input[index] == b'{' {
+                    JsonFrame::Object(JsonObjectState::KeyOrEnd)
+                } else {
+                    JsonFrame::Array(JsonArrayState::ValueOrEnd)
+                };
+                stack_len = next_depth;
+                index += 1;
+            }
+            b'}' => {
+                let Some(JsonFrame::Object(state)) =
+                    stack_len.checked_sub(1).map(|position| stack[position])
+                else {
+                    return invalid_json_structure();
+                };
+                if !matches!(
+                    state,
+                    JsonObjectState::KeyOrEnd | JsonObjectState::CommaOrEnd
+                ) {
+                    return invalid_json_structure();
+                }
+                stack_len -= 1;
+                if stack_len == 0 {
+                    root_complete = true;
+                }
+                index += 1;
+            }
+            b']' => {
+                let Some(JsonFrame::Array(state)) =
+                    stack_len.checked_sub(1).map(|position| stack[position])
+                else {
+                    return invalid_json_structure();
+                };
+                if !matches!(
+                    state,
+                    JsonArrayState::ValueOrEnd | JsonArrayState::CommaOrEnd
+                ) {
+                    return invalid_json_structure();
+                }
+                stack_len -= 1;
+                if stack_len == 0 {
+                    root_complete = true;
+                }
+                index += 1;
+            }
+            b',' => {
+                let Some(frame) = stack_len
+                    .checked_sub(1)
+                    .map(|position| &mut stack[position])
+                else {
+                    return invalid_json_structure();
+                };
+                match frame {
+                    JsonFrame::Array(state) if *state == JsonArrayState::CommaOrEnd => {
+                        *state = JsonArrayState::ValueOrEnd;
+                    }
+                    JsonFrame::Object(state) if *state == JsonObjectState::CommaOrEnd => {
+                        *state = JsonObjectState::KeyOrEnd;
+                    }
+                    _ => return invalid_json_structure(),
+                }
+                index += 1;
+            }
+            b':' => {
+                let Some(JsonFrame::Object(state)) = stack_len
+                    .checked_sub(1)
+                    .map(|position| &mut stack[position])
+                else {
+                    return invalid_json_structure();
+                };
+                if *state != JsonObjectState::Colon {
+                    return invalid_json_structure();
+                }
+                *state = JsonObjectState::Value;
+                index += 1;
+            }
+            b'"' => {
+                let string_end = scan_json_string(input, index)?;
+                let is_object_key = matches!(
+                    stack_len.checked_sub(1).map(|position| &stack[position]),
+                    Some(JsonFrame::Object(JsonObjectState::KeyOrEnd))
+                );
+                if is_object_key {
+                    if let JsonFrame::Object(state) = &mut stack[stack_len - 1] {
+                        *state = JsonObjectState::Colon;
+                    }
+                } else {
+                    accept_json_value(
+                        &mut stack,
+                        stack_len,
+                        &mut values,
+                        &mut root_started,
+                        operation,
+                        max_values,
+                    )?;
+                    if stack_len == 0 {
+                        root_complete = true;
+                    }
+                }
+                index = string_end;
+            }
+            _ => {
+                let value_end = scan_json_primitive(input, index)?;
+                accept_json_value(
+                    &mut stack,
+                    stack_len,
+                    &mut values,
+                    &mut root_started,
+                    operation,
+                    max_values,
+                )?;
+                if stack_len == 0 {
+                    root_complete = true;
+                }
+                index = value_end;
+            }
+        }
+    }
+
+    if !root_started || !root_complete || stack_len != 0 {
+        return invalid_json_structure();
+    }
+    Ok(())
+}
+
+fn accept_json_value(
+    stack: &mut [JsonFrame; MAX_EVENT_JSON_DEPTH],
+    stack_len: usize,
+    values: &mut usize,
+    root_started: &mut bool,
+    operation: &'static str,
+    max_values: usize,
+) -> Result<()> {
+    if stack_len == 0 {
+        if *root_started {
+            return invalid_json_structure();
+        }
+        *root_started = true;
+        return Ok(());
+    }
+    match &mut stack[stack_len - 1] {
+        JsonFrame::Array(state) if *state == JsonArrayState::ValueOrEnd => {
+            *state = JsonArrayState::CommaOrEnd;
+        }
+        JsonFrame::Object(state) if *state == JsonObjectState::Value => {
+            *state = JsonObjectState::CommaOrEnd;
+        }
+        _ => return invalid_json_structure(),
+    }
+    *values = values.saturating_add(1);
+    if *values > max_values {
+        return Err(DomainError::Incomplete {
+            operation,
+            limit: max_values,
+            observed: *values,
+        });
+    }
+    Ok(())
+}
+
+fn scan_json_string(input: &[u8], mut index: usize) -> Result<usize> {
+    debug_assert_eq!(input[index], b'"');
+    index += 1;
+    while index < input.len() {
+        match input[index] {
+            b'"' => return Ok(index + 1),
+            b'\\' => {
+                index = index.saturating_add(2);
+            }
+            _ => index += 1,
+        }
+    }
+    invalid_json_structure()
+}
+
+fn scan_json_primitive(input: &[u8], mut index: usize) -> Result<usize> {
+    let start = index;
+    while index < input.len()
+        && !input[index].is_ascii_whitespace()
+        && !matches!(input[index], b',' | b']' | b'}' | b':' | b'{' | b'[' | b'"')
+    {
+        index += 1;
+    }
+    if index == start {
+        return invalid_json_structure();
+    }
+    Ok(index)
+}
+
+fn invalid_json_structure<T>() -> Result<T> {
+    Err(DomainError::Json("invalid JSON structure".to_owned()))
+}
+
 struct BoundedEventJson {
     bytes: Vec<u8>,
     max: usize,
@@ -1264,6 +1709,22 @@ impl BoundedEventJson {
             max,
             overflow: None,
         }
+    }
+
+    fn new_reserved(max: usize, capacity: usize) -> Result<Self> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|_| DomainError::Incomplete {
+                operation: "index canonical event destination",
+                limit: capacity,
+                observed: capacity,
+            })?;
+        Ok(Self {
+            bytes,
+            max,
+            overflow: None,
+        })
     }
 
     fn push(&mut self, bytes: &[u8]) -> Result<()> {
@@ -1434,6 +1895,26 @@ pub struct EventEnvelope {
 }
 
 impl EventEnvelope {
+    /// Heap capacity retained by this decoded envelope, excluding the inline
+    /// `EventEnvelope` value charged by its owning vector.
+    #[must_use]
+    pub fn allocated_bytes(&self) -> usize {
+        self.schema.capacity()
+            + self.id.allocated_bytes()
+            + self.run_id.allocated_bytes()
+            + self.genesis_hash.allocated_bytes()
+            + self.actor.capacity()
+            + self.payload.get().len()
+            + self.payload_hash.allocated_bytes()
+            + self.previous_event_hash.allocated_bytes()
+            + self.event_hash.allocated_bytes()
+    }
+
+    /// Declared closed event-contract version after envelope validation.
+    pub fn contract_version(&self) -> Result<EventContractVersion> {
+        EventContractVersion::parse(&self.schema)
+    }
+
     // Each field is independently hash-bound. Grouping them would obscure
     // the selected schema input at call sites and risks a mismatched tuple.
     #[allow(clippy::too_many_arguments)]
@@ -1517,6 +1998,13 @@ impl EventEnvelope {
     /// requires replay with its matching run-bound decision admissions.
     pub fn from_json_slice(input: &[u8]) -> Result<Self> {
         serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))
+    }
+
+    /// Index-only bounded import seam. The structural cap is operational and
+    /// does not change which historical envelopes are canonical.
+    pub fn from_json_slice_for_index(input: &[u8]) -> Result<Self> {
+        preflight_event_json_structure(input)?;
+        Self::from_json_slice(input)
     }
 
     /// Validates deterministic envelope bindings and every nested untrusted
@@ -1655,6 +2143,62 @@ impl EventEnvelope {
         Ok(bytes)
     }
 
+    /// Canonical writer used only by the bounded derived-index scanner. The
+    /// destination request is made at the caller-admitted capacity before
+    /// serialization; serde/value-tree transients remain core-owned.
+    pub fn canonical_bytes_for_index(&self, capacity: usize) -> Result<Vec<u8>> {
+        let payload = decode_canonical_payload(self.payload.get())?;
+        if payload.is_d1_bounded() {
+            let payload_bytes = payload_canonical_bytes(&payload)?;
+            let mut out = BoundedEventJson::new_reserved(capacity, capacity)?;
+            out.push(b"{\"actor\":")?;
+            out.string(&self.actor)?;
+            out.push(b",\"event_hash\":")?;
+            out.string(&self.event_hash.to_string())?;
+            out.push(b",\"genesis_hash\":")?;
+            out.string(&self.genesis_hash.to_string())?;
+            out.push(b",\"id\":")?;
+            out.string(&self.id.to_string())?;
+            out.push(b",\"logical_time\":")?;
+            out.number(self.logical_time)?;
+            out.push(b",\"payload\":")?;
+            out.push(&payload_bytes)?;
+            out.push(b",\"payload_hash\":")?;
+            out.string(&self.payload_hash.to_string())?;
+            out.push(b",\"previous_event_hash\":")?;
+            out.string(&self.previous_event_hash.to_string())?;
+            out.push(b",\"run_id\":")?;
+            out.string(&self.run_id.to_string())?;
+            out.push(b",\"schema\":")?;
+            out.string(&self.schema)?;
+            out.push(b",\"sequence\":")?;
+            out.number(self.sequence)?;
+            out.push(b"}")?;
+            return out.finish();
+        }
+        let value = serde_json::to_value(self)
+            .map(canonical_json_value)
+            .map_err(|error| DomainError::CanonicalJson(error.to_string()))?;
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(capacity)
+            .map_err(|_| DomainError::Incomplete {
+                operation: "index canonical event destination",
+                limit: capacity,
+                observed: capacity,
+            })?;
+        serde_json::to_writer(&mut output, &value)
+            .map_err(|error| DomainError::CanonicalJson(error.to_string()))?;
+        if output.len() > capacity {
+            return Err(DomainError::Incomplete {
+                operation: "index canonical event destination",
+                limit: capacity,
+                observed: output.len(),
+            });
+        }
+        Ok(output)
+    }
+
     /// Validates a contiguous prefix, including the requested run even for an
     /// empty stream and the exact initial aggregate hash for every event.
     pub fn validate_sequence(
@@ -1744,6 +2288,18 @@ impl EventEnvelope {
         &self.event_hash
     }
 
+    /// Decodes the closed payload for an envelope whose stream cursor is
+    /// validated online by a durable reader. Envelope shape and payload hash
+    /// are still rechecked here; callers receive no access to raw JSON.
+    pub fn decode_for_streaming_projection(&self) -> Result<ValidatedEvent<'_>> {
+        self.validate()?;
+        preflight_event_json_structure(self.payload.get().as_bytes())?;
+        Ok(ValidatedEvent {
+            envelope: self,
+            payload: decoded_payload(decode_canonical_payload(self.payload.get())?),
+        })
+    }
+
     /// Validates one complete, confirmed stream prefix and exposes only
     /// typed payloads. Store code must not inspect the private JSON payload.
     pub fn validated_view<'a>(
@@ -1752,11 +2308,14 @@ impl EventEnvelope {
         genesis: EventStreamGenesis<'_>,
         events: &'a [EventEnvelope],
     ) -> Result<ValidatedEventView<'a>> {
-        let (genesis_hash, snapshot) = match (version, genesis) {
-            (EventContractVersion::V1, EventStreamGenesis::V1(hash)) => (hash.clone(), None),
+        let (genesis_hash, snapshot, verified) = match (version, genesis) {
+            (EventContractVersion::V1, EventStreamGenesis::V1(hash)) => (hash.clone(), None, None),
             (EventContractVersion::V2, EventStreamGenesis::V2(bytes)) => {
                 let snapshot = RunGenesisSnapshot::from_canonical_bytes(bytes)?;
-                (ContentHash::sha256(bytes), Some(snapshot))
+                (ContentHash::sha256(bytes), Some(snapshot), None)
+            }
+            (EventContractVersion::V2, EventStreamGenesis::V2Verified(verified)) => {
+                (verified.genesis_hash.clone(), None, Some(verified))
             }
             _ => {
                 return Err(DomainError::EventSequence(
@@ -1782,11 +2341,22 @@ impl EventEnvelope {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        if let (EventContractVersion::V2, Some(first), Some(verified)) =
+            (version, events.first(), verified)
+        {
+            let DecodedPayload::RunGenesisManifest(manifest) = first.payload() else {
+                return Err(DomainError::EventSequence(
+                    "v2 sequence one must carry RunGenesisManifest".to_owned(),
+                ));
+            };
+            verified.validate_manifest(run_id, manifest)?;
+        }
         Ok(ValidatedEventView {
             version,
             run_id: run_id.clone(),
             genesis_hash,
-            snapshot,
+            verified_v2_genesis: snapshot.is_some() || verified.is_some(),
+            verified_pristine_hash: verified.map(|value| value.pristine_aggregate_hash.clone()),
             events,
         })
     }
@@ -1798,11 +2368,116 @@ pub struct ValidatedEventView<'a> {
     version: EventContractVersion,
     run_id: StableId,
     genesis_hash: ContentHash,
-    snapshot: Option<RunGenesisSnapshot>,
+    verified_v2_genesis: bool,
+    verified_pristine_hash: Option<ContentHash>,
     events: Vec<ValidatedEvent<'a>>,
 }
 
+/// Retained-capacity charge exposed to bounded durable projections.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EventViewAccounting {
+    retained_bytes: u64,
+    scratch_peak_bytes: u64,
+}
+
+impl EventViewAccounting {
+    #[must_use]
+    pub const fn retained_bytes(self) -> u64 {
+        self.retained_bytes
+    }
+    #[must_use]
+    pub const fn scratch_peak_bytes(self) -> u64 {
+        self.scratch_peak_bytes
+    }
+}
+
 impl<'a> ValidatedEventView<'a> {
+    /// Builds a typed view only after reserving its complete input-derived
+    /// allocation charge against the caller's combined working limit.
+    pub fn with_working_limit(
+        version: EventContractVersion,
+        run_id: &StableId,
+        genesis: EventStreamGenesis<'_>,
+        events: &'a [EventEnvelope],
+        already_retained: u64,
+        working_limit: u64,
+    ) -> Result<(Self, EventViewAccounting)> {
+        let working_limit_usize = usize::try_from(working_limit).unwrap_or(usize::MAX);
+        let genesis_scratch = match genesis {
+            EventStreamGenesis::V1(_) => 0,
+            EventStreamGenesis::V2(bytes) => u64::try_from(bytes.len())
+                .ok()
+                .and_then(|length| length.checked_mul(2))
+                .ok_or(DomainError::Incomplete {
+                    operation: "validated genesis scratch",
+                    limit: working_limit_usize,
+                    observed: usize::MAX,
+                })?,
+            EventStreamGenesis::V2Verified(_) => 0,
+        };
+        let payload_scratch = events
+            .iter()
+            .map(|event| u64::try_from(event.payload.get().len()).unwrap_or(u64::MAX))
+            .max()
+            .unwrap_or(0)
+            .checked_mul(2)
+            .ok_or(DomainError::Incomplete {
+                operation: "validated payload scratch",
+                limit: working_limit_usize,
+                observed: usize::MAX,
+            })?;
+        let scratch_peak_bytes = genesis_scratch.max(payload_scratch);
+        let view = EventEnvelope::validated_view(version, run_id, genesis, events)?;
+        let retained_bytes = view.allocated_bytes()?;
+        let observed = already_retained
+            .checked_add(retained_bytes)
+            .and_then(|value| value.checked_add(scratch_peak_bytes))
+            .ok_or(DomainError::Incomplete {
+                operation: "validated event view allocation",
+                limit: working_limit_usize,
+                observed: usize::MAX,
+            })?;
+        if observed > working_limit {
+            return Err(DomainError::Incomplete {
+                operation: "validated event view allocation",
+                limit: working_limit_usize,
+                observed: usize::try_from(observed).unwrap_or(usize::MAX),
+            });
+        }
+        Ok((
+            view,
+            EventViewAccounting {
+                retained_bytes,
+                scratch_peak_bytes,
+            },
+        ))
+    }
+
+    fn allocated_bytes(&self) -> Result<u64> {
+        let vector = self
+            .events
+            .capacity()
+            .checked_mul(std::mem::size_of::<ValidatedEvent<'_>>())
+            .ok_or(DomainError::Incomplete {
+                operation: "validated event view retained capacity",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let heap = self.events.iter().fold(0_usize, |total, event| {
+            total.saturating_add(event.payload_allocated_bytes())
+        });
+        u64::try_from(
+            vector
+                .saturating_add(heap)
+                .saturating_add(self.run_id.allocated_bytes())
+                .saturating_add(self.genesis_hash.allocated_bytes()),
+        )
+        .map_err(|_| DomainError::Incomplete {
+            operation: "validated event view retained capacity",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })
+    }
     #[must_use]
     pub const fn event_contract_version(&self) -> EventContractVersion {
         self.version
@@ -1823,8 +2498,8 @@ impl<'a> ValidatedEventView<'a> {
 
     fn validate_initial(&self, initial: &ReviewAggregate) -> Result<()> {
         initial.validate_pristine_for_event_log()?;
-        match (self.version, &self.snapshot) {
-            (EventContractVersion::V1, None) => {
+        match (self.version, self.verified_v2_genesis) {
+            (EventContractVersion::V1, false) => {
                 if self.genesis_hash != ContentHash::sha256(&canonical_json(initial)?) {
                     return Err(DomainError::Validation(
                         "offline v1 projection initial aggregate does not match its genesis hash"
@@ -1832,12 +2507,15 @@ impl<'a> ValidatedEventView<'a> {
                     ));
                 }
             }
-            (EventContractVersion::V2, Some(snapshot)) => {
-                let bytes = snapshot.canonical_bytes()?;
-                let rebuilt = snapshot.rebuild_aggregate()?;
-                if self.genesis_hash != ContentHash::sha256(&bytes)
-                    || canonical_json(&rebuilt)? != canonical_json(initial)?
-                {
+            (EventContractVersion::V2, true) => {
+                let matches = if let Some(expected) = &self.verified_pristine_hash {
+                    expected == &ContentHash::sha256(&canonical_json(initial)?)
+                } else {
+                    let snapshot = RunGenesisSnapshot::from_aggregate(initial)?;
+                    let bytes = snapshot.canonical_bytes()?;
+                    self.genesis_hash == ContentHash::sha256(&bytes)
+                };
+                if !matches {
                     return Err(DomainError::Validation(
                         "offline v2 projection initial aggregate does not match verified genesis bytes"
                             .to_owned(),
@@ -1862,6 +2540,25 @@ pub struct ValidatedEvent<'a> {
 }
 
 impl<'a> ValidatedEvent<'a> {
+    fn payload_allocated_bytes(&self) -> usize {
+        match &self.payload {
+            DecodedPayload::ObligationTransition { obligation_id, .. } => {
+                obligation_id.allocated_bytes()
+            }
+            DecodedPayload::ClaimProposed(value) => value.allocated_bytes(),
+            DecodedPayload::EvidenceRecorded(value) => value.allocated_bytes(),
+            DecodedPayload::EvidenceBound(value) => value.allocated_bytes(),
+            DecodedPayload::VerificationRecorded(value) => value.allocated_bytes(),
+            DecodedPayload::DecisionRecorded(value) => value.allocated_bytes(),
+            DecodedPayload::FindingRecorded(value) => value.allocated_bytes(),
+            DecodedPayload::RunGenesisManifest(value) => value.allocated_bytes(),
+            DecodedPayload::ArtifactRegistered(value) => value.allocated_bytes(),
+            DecodedPayload::SnapshotSourcesRecorded(value) => value.allocated_bytes(),
+            DecodedPayload::ReviewPlanRecorded(value) => value.allocated_bytes(),
+            DecodedPayload::ContextEnvelopeProjected(value) => value.allocated_bytes(),
+        }
+    }
+
     #[must_use]
     pub fn envelope(&self) -> &'a EventEnvelope {
         self.envelope
@@ -2028,7 +2725,7 @@ pub struct OfflineProjectionState {
     genesis_hash: ContentHash,
     next_sequence: u64,
     previous_event_hash: ContentHash,
-    expected_events: Vec<OfflineExpectedEvent>,
+    expected_events: Option<Vec<OfflineExpectedEvent>>,
     aggregate: ReviewAggregate,
     unreconciled_records: BTreeMap<StableId, PersistedPayload>,
     unreconciled_metadata: BTreeMap<StableId, UnreconciledRecordMetadata>,
@@ -2055,14 +2752,46 @@ impl OfflineProjectionState {
             genesis_hash: view.genesis_hash.clone(),
             next_sequence: 1,
             previous_event_hash: event_chain_genesis_hash(&view.run_id, &view.genesis_hash)?,
-            expected_events: view
-                .events
-                .iter()
-                .map(|event| OfflineExpectedEvent {
-                    id: event.envelope.id.clone(),
-                    event_hash: event.envelope.event_hash.clone(),
-                })
-                .collect(),
+            expected_events: Some(
+                view.events
+                    .iter()
+                    .map(|event| OfflineExpectedEvent {
+                        id: event.envelope.id.clone(),
+                        event_hash: event.envelope.event_hash.clone(),
+                    })
+                    .collect(),
+            ),
+            aggregate: initial,
+            unreconciled_records: BTreeMap::new(),
+            unreconciled_metadata: BTreeMap::new(),
+            projected_findings: BTreeMap::new(),
+            projected_finding_metadata: BTreeMap::new(),
+            projected_context_metadata: BTreeMap::new(),
+            unreconciled_order: Vec::new(),
+        })
+    }
+
+    /// Seeds a V2 projection whose envelopes will be validated and decoded
+    /// one at a time by a lock-held durable stream reader.
+    pub fn new_streaming_v2(
+        run_id: &StableId,
+        verified_genesis: &VerifiedV2Genesis,
+        initial: ReviewAggregate,
+    ) -> Result<Self> {
+        if verified_genesis.run_id() != run_id {
+            return Err(DomainError::EventSequence(
+                "streaming projection run does not match verified genesis".to_owned(),
+            ));
+        }
+        verified_genesis.validate_pristine_aggregate(&initial)?;
+        let genesis_hash = verified_genesis.genesis_hash().clone();
+        Ok(Self {
+            version: EventContractVersion::V2,
+            run_id: run_id.clone(),
+            next_sequence: 1,
+            previous_event_hash: event_chain_genesis_hash(run_id, &genesis_hash)?,
+            genesis_hash,
+            expected_events: None,
             aggregate: initial,
             unreconciled_records: BTreeMap::new(),
             unreconciled_metadata: BTreeMap::new(),
@@ -2082,22 +2811,24 @@ impl OfflineProjectionState {
     /// aggregate.
     pub fn apply(&mut self, event: &ValidatedEvent<'_>) -> Result<bool> {
         let envelope = event.envelope();
-        let expected = self
-            .expected_events
-            .get(usize::try_from(self.next_sequence - 1).map_err(|_| {
-                DomainError::EventSequence(
-                    "offline projection sequence does not fit usize".to_owned(),
-                )
-            })?)
-            .ok_or_else(|| {
-                DomainError::EventSequence(
-                    "offline projection cannot apply an event beyond its validated view".to_owned(),
-                )
-            })?;
-        if envelope.id != expected.id || envelope.event_hash != expected.event_hash {
-            return Err(DomainError::EventSequence(
-                "offline projection event is not the expected validated-view event".to_owned(),
-            ));
+        if let Some(expected_events) = &self.expected_events {
+            let expected = expected_events
+                .get(usize::try_from(self.next_sequence - 1).map_err(|_| {
+                    DomainError::EventSequence(
+                        "offline projection sequence does not fit usize".to_owned(),
+                    )
+                })?)
+                .ok_or_else(|| {
+                    DomainError::EventSequence(
+                        "offline projection cannot apply an event beyond its validated view"
+                            .to_owned(),
+                    )
+                })?;
+            if envelope.id != expected.id || envelope.event_hash != expected.event_hash {
+                return Err(DomainError::EventSequence(
+                    "offline projection event is not the expected validated-view event".to_owned(),
+                ));
+            }
         }
         if envelope.run_id != self.run_id
             || envelope.genesis_hash != self.genesis_hash
@@ -2339,8 +3070,18 @@ impl OfflineProjectionState {
     /// Whether every event in the bound validated view has been applied.
     #[must_use]
     pub fn is_complete(&self) -> bool {
-        usize::try_from(self.next_sequence - 1)
-            .is_ok_and(|count| count == self.expected_events.len())
+        self.expected_events.as_ref().is_some_and(|events| {
+            usize::try_from(self.next_sequence - 1).is_ok_and(|count| count == events.len())
+        })
+    }
+
+    /// Confirms the terminal cursor for a streaming projection after the
+    /// durable reader has issued its complete-prefix certificate.
+    #[must_use]
+    pub fn streaming_cursor_matches(&self, event_count: u64, tail_hash: &ContentHash) -> bool {
+        self.expected_events.is_none()
+            && self.next_sequence.checked_sub(1) == Some(event_count)
+            && &self.previous_event_hash == tail_hash
     }
 
     /// The hash at the projection cursor; on completion this equals the
@@ -3563,6 +4304,14 @@ mod tests {
 
         log.append(EventCommand::review_plan_recorded(review_plan.clone()))
             .unwrap();
+        for event in log.envelopes() {
+            assert_eq!(
+                event.canonical_bytes().unwrap(),
+                event
+                    .canonical_bytes_for_index(MAX_D1_EVENT_LINE_BYTES - 1)
+                    .unwrap()
+            );
+        }
         let duplicate = EventEnvelope::new(
             EventContractVersion::V2,
             run_id.clone(),
@@ -3669,6 +4418,16 @@ mod tests {
 
     #[test]
     fn d1_outer_jsonl_writer_accepts_exact_mebibyte_and_refuses_plus_one() {
+        let event = v2_log("run:index-writer-equivalence")
+            .envelopes()
+            .next()
+            .unwrap()
+            .clone();
+        let regular = event.canonical_bytes().unwrap();
+        let indexed = event
+            .canonical_bytes_for_index(MAX_D1_EVENT_LINE_BYTES - 1)
+            .unwrap();
+        assert_eq!(regular, indexed);
         let mut exact = BoundedEventJson::new(MAX_D1_EVENT_LINE_BYTES - 1);
         exact
             .push(&vec![b'x'; MAX_D1_EVENT_LINE_BYTES - 1])
@@ -3684,6 +4443,196 @@ mod tests {
                 limit: MAX_D1_EVENT_LINE_BYTES,
                 observed,
             }) if observed == MAX_D1_EVENT_LINE_BYTES + 1
+        ));
+    }
+
+    fn nested_array_json(depth: usize) -> Vec<u8> {
+        let mut json = Vec::with_capacity(depth.saturating_mul(2).saturating_add(1));
+        json.extend(std::iter::repeat_n(b'[', depth));
+        json.push(b'0');
+        json.extend(std::iter::repeat_n(b']', depth));
+        json
+    }
+
+    fn one_member_array_json(elements: usize) -> Vec<u8> {
+        let mut json = Vec::with_capacity(elements.saturating_mul(2).saturating_add(8));
+        json.extend_from_slice(b"{\"a\":[");
+        for element in 0..elements {
+            if element != 0 {
+                json.push(b',');
+            }
+            json.push(b'0');
+        }
+        json.extend_from_slice(b"]}");
+        json
+    }
+
+    #[test]
+    fn event_json_structure_accepts_exact_depth_and_refuses_next_depth() {
+        assert!(preflight_event_json_structure(&nested_array_json(MAX_EVENT_JSON_DEPTH)).is_ok());
+        assert!(matches!(
+            preflight_event_json_structure(&nested_array_json(MAX_EVENT_JSON_DEPTH + 1)),
+            Err(DomainError::Incomplete {
+                operation: "index event JSON structure",
+                limit: MAX_EVENT_JSON_DEPTH,
+                observed,
+            }) if observed == MAX_EVENT_JSON_DEPTH + 1
+        ));
+    }
+
+    #[test]
+    fn event_json_structure_accepts_exact_fanout_and_refuses_next_value() {
+        assert!(
+            preflight_event_json_structure(&one_member_array_json(MAX_EVENT_JSON_VALUES - 1))
+                .is_ok()
+        );
+        assert!(matches!(
+            preflight_event_json_structure(&one_member_array_json(MAX_EVENT_JSON_VALUES)),
+            Err(DomainError::Incomplete {
+                operation: "index event JSON structure",
+                limit: MAX_EVENT_JSON_VALUES,
+                observed,
+            }) if observed == MAX_EVENT_JSON_VALUES + 1
+        ));
+    }
+
+    #[test]
+    fn genesis_json_structure_uses_its_fixed_depth_and_fanout_caps() {
+        assert!(
+            preflight_genesis_json_structure(&nested_array_json(MAX_GENESIS_JSON_DEPTH)).is_ok()
+        );
+        assert!(matches!(
+            preflight_genesis_json_structure(&nested_array_json(MAX_GENESIS_JSON_DEPTH + 1)),
+            Err(DomainError::Incomplete {
+                operation: "index genesis JSON structure",
+                limit: MAX_GENESIS_JSON_DEPTH,
+                observed,
+            }) if observed == MAX_GENESIS_JSON_DEPTH + 1
+        ));
+        assert!(
+            preflight_genesis_json_structure(&one_member_array_json(MAX_GENESIS_JSON_VALUES - 1))
+                .is_ok()
+        );
+        assert!(matches!(
+            preflight_genesis_json_structure(&one_member_array_json(MAX_GENESIS_JSON_VALUES)),
+            Err(DomainError::Incomplete {
+                operation: "index genesis JSON structure",
+                limit: MAX_GENESIS_JSON_VALUES,
+                observed,
+            }) if observed == MAX_GENESIS_JSON_VALUES + 1
+        ));
+    }
+
+    fn persisted_family_fanout_json(kind: &str, elements: usize) -> Vec<u8> {
+        let mut json = format!("{{\"payload\":{{\"type\":\"{kind}\",\"padding\":[").into_bytes();
+        for element in 0..elements {
+            if element != 0 {
+                json.push(b',');
+            }
+            json.push(b'0');
+        }
+        json.extend_from_slice(b"]}}");
+        json
+    }
+
+    fn persisted_family_depth_json(kind: &str, nested: usize) -> Vec<u8> {
+        let mut json = format!("{{\"payload\":{{\"type\":\"{kind}\",\"padding\":").into_bytes();
+        json.extend(std::iter::repeat_n(b'[', nested));
+        json.push(b'0');
+        json.extend(std::iter::repeat_n(b']', nested));
+        json.extend_from_slice(b"}}");
+        json
+    }
+
+    #[test]
+    fn every_persisted_family_hits_structural_caps_at_the_actual_index_decode_seam() {
+        for kind in [
+            "obligation_transition",
+            "claim_proposed",
+            "evidence_recorded",
+            "evidence_bound",
+            "verification_recorded",
+            "decision_recorded",
+            "finding_recorded",
+            "run_genesis_manifest",
+            "artifact_registered",
+            "snapshot_sources_recorded",
+            "review_plan_recorded",
+            "context_envelope_projected",
+        ] {
+            // Three enclosing object members precede the array elements.
+            let exact_values = persisted_family_fanout_json(kind, MAX_EVENT_JSON_VALUES - 3);
+            assert!(
+                preflight_event_json_structure(&exact_values).is_ok(),
+                "{kind}"
+            );
+            assert!(!matches!(
+                EventEnvelope::from_json_slice_for_index(&exact_values),
+                Err(DomainError::Incomplete { .. })
+            ));
+            let over_values = persisted_family_fanout_json(kind, MAX_EVENT_JSON_VALUES - 2);
+            assert!(matches!(
+                EventEnvelope::from_json_slice_for_index(&over_values),
+                Err(DomainError::Incomplete {
+                    operation: "index event JSON structure",
+                    limit: MAX_EVENT_JSON_VALUES,
+                    observed,
+                }) if observed == MAX_EVENT_JSON_VALUES + 1
+            ));
+
+            // The envelope and payload objects consume the first two levels.
+            let exact_depth = persisted_family_depth_json(kind, MAX_EVENT_JSON_DEPTH - 2);
+            assert!(
+                preflight_event_json_structure(&exact_depth).is_ok(),
+                "{kind}"
+            );
+            assert!(!matches!(
+                EventEnvelope::from_json_slice_for_index(&exact_depth),
+                Err(DomainError::Incomplete { .. })
+            ));
+            let over_depth = persisted_family_depth_json(kind, MAX_EVENT_JSON_DEPTH - 1);
+            assert!(matches!(
+                EventEnvelope::from_json_slice_for_index(&over_depth),
+                Err(DomainError::Incomplete {
+                    operation: "index event JSON structure",
+                    limit: MAX_EVENT_JSON_DEPTH,
+                    observed,
+                }) if observed == MAX_EVENT_JSON_DEPTH + 1
+            ));
+        }
+    }
+
+    #[test]
+    fn genesis_structural_caps_apply_at_the_actual_index_decode_seam() {
+        let exact_values = one_member_array_json(MAX_GENESIS_JSON_VALUES - 1);
+        assert!(!matches!(
+            RunGenesisSnapshot::from_canonical_bytes_for_index(&exact_values),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert!(matches!(
+            RunGenesisSnapshot::from_canonical_bytes_for_index(&one_member_array_json(
+                MAX_GENESIS_JSON_VALUES
+            )),
+            Err(DomainError::Incomplete {
+                operation: "index genesis JSON structure",
+                limit: MAX_GENESIS_JSON_VALUES,
+                observed,
+            }) if observed == MAX_GENESIS_JSON_VALUES + 1
+        ));
+        let exact_depth = nested_array_json(MAX_GENESIS_JSON_DEPTH);
+        assert!(!matches!(
+            RunGenesisSnapshot::from_canonical_bytes_for_index(&exact_depth),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert!(matches!(
+            RunGenesisSnapshot::from_canonical_bytes_for_index(&nested_array_json(
+                MAX_GENESIS_JSON_DEPTH + 1
+            )),
+            Err(DomainError::Incomplete {
+                operation: "index genesis JSON structure",
+                limit: MAX_GENESIS_JSON_DEPTH,
+                observed,
+            }) if observed == MAX_GENESIS_JSON_DEPTH + 1
         ));
     }
 
@@ -3778,6 +4727,14 @@ mod tests {
         assert_eq!(snapshot.universe(), &expected_universe);
         assert_eq!(snapshot.obligations(), expected_obligations.as_slice());
         let bytes = snapshot.canonical_bytes().unwrap();
+        let verified = VerifiedV2Genesis::from_canonical_bytes(log.run_id(), &bytes).unwrap();
+        EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            log.run_id(),
+            EventStreamGenesis::V2Verified(&verified),
+            &log.envelopes().cloned().collect::<Vec<_>>(),
+        )
+        .unwrap();
         let manifest = match decode_canonical_payload(log.events[0].envelope.payload.get()).unwrap()
         {
             PersistedPayload::RunGenesisManifest(value) => value,
@@ -3827,6 +4784,7 @@ mod tests {
                     .validate_against_genesis(log.run_id(), &snapshot, &bytes)
                     .is_err()
             );
+            assert!(verified.validate_manifest(log.run_id(), &tampered).is_err());
         }
 
         let mut unknown = serde_json::from_slice::<Value>(&bytes).unwrap();

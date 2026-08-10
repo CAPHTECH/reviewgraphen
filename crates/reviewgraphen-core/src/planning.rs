@@ -338,6 +338,58 @@ pub struct ReviewPlan {
 }
 
 impl ReviewPlan {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        let risk_nodes = self
+            .risk_breakdown
+            .len()
+            .saturating_mul(std::mem::size_of::<(StableId, RiskDescriptor)>());
+        let risk_keys = self
+            .risk_breakdown
+            .keys()
+            .map(StableId::allocated_bytes)
+            .sum::<usize>();
+        let wave_storage = self
+            .waves
+            .capacity()
+            .saturating_mul(std::mem::size_of::<ScheduleWave>());
+        let wave_heap = self.waves.iter().fold(0_usize, |total, wave| {
+            total
+                .saturating_add(wave.id.allocated_bytes())
+                .saturating_add(
+                    wave.obligation_ids
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<StableId>()),
+                )
+                .saturating_add(
+                    wave.obligation_ids
+                        .iter()
+                        .map(StableId::allocated_bytes)
+                        .sum::<usize>(),
+                )
+        });
+        let deferred_nodes = self
+            .deferred
+            .len()
+            .saturating_mul(std::mem::size_of::<(StableId, DeferralReason)>());
+        let deferred_keys = self
+            .deferred
+            .keys()
+            .map(StableId::allocated_bytes)
+            .sum::<usize>();
+        self.id
+            .allocated_bytes()
+            .saturating_add(self.universe_id.allocated_bytes())
+            .saturating_add(self.snapshot_id.allocated_bytes())
+            .saturating_add(self.planner_policy_hash.allocated_bytes())
+            .saturating_add(self.planner_input_hash.allocated_bytes())
+            .saturating_add(risk_nodes)
+            .saturating_add(risk_keys)
+            .saturating_add(wave_storage)
+            .saturating_add(wave_heap)
+            .saturating_add(deferred_nodes)
+            .saturating_add(deferred_keys)
+    }
+
     pub(crate) fn build(input: PlannerInput) -> Result<Self> {
         schedule(input)
     }
@@ -514,8 +566,10 @@ impl ReviewPlan {
         Ok(plan)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn from_canonical_bytes(bytes: &[u8], aggregate: &ReviewAggregate) -> Result<Self> {
+    /// Strict metadata-only decode for durable projections. This reconstructs
+    /// and validates the complete canonical plan against the immutable
+    /// aggregate, but does not create any event admission capability.
+    pub fn from_canonical_bytes(bytes: &[u8], aggregate: &ReviewAggregate) -> Result<Self> {
         let plan = Self::from_event_bytes(bytes)?;
         plan.validate_against(aggregate)?;
         Ok(plan)

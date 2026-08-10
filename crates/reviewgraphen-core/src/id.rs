@@ -53,6 +53,18 @@ impl StableId {
     pub fn kind(&self) -> &str {
         self.0.split_once(':').map_or("", |(kind, _)| kind)
     }
+
+    /// Returns the validated serialized representation without allocating.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Requested backing-string capacity used by bounded store projections.
+    #[must_use]
+    pub fn allocated_bytes(&self) -> usize {
+        self.0.capacity()
+    }
 }
 
 impl fmt::Display for StableId {
@@ -78,7 +90,7 @@ pub struct ContentHash(String);
 impl ContentHash {
     /// Parses `sha256:`, `blake3:`, or `git:` hexadecimal hashes.
     pub fn parse(value: impl Into<String>) -> Result<Self> {
-        let value = value.into();
+        let mut value = value.into();
         let Some((algorithm, hex)) = value.split_once(':') else {
             return Err(DomainError::InvalidHash { value });
         };
@@ -88,7 +100,8 @@ impl ContentHash {
         {
             return Err(DomainError::InvalidHash { value });
         }
-        Ok(Self(value.to_ascii_lowercase()))
+        value.make_ascii_lowercase();
+        Ok(Self(value))
     }
 
     /// Returns a SHA-256 content hash for canonical bytes.
@@ -96,6 +109,18 @@ impl ContentHash {
         use sha2::{Digest, Sha256};
         let digest = Sha256::digest(bytes);
         Self(format!("sha256:{digest:x}"))
+    }
+
+    /// Returns the validated serialized representation without allocating.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Requested backing-string capacity used by bounded store projections.
+    #[must_use]
+    pub fn allocated_bytes(&self) -> usize {
+        self.0.capacity()
     }
 }
 

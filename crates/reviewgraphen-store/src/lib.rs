@@ -12,9 +12,9 @@ mod journal;
 #[cfg(target_os = "linux")]
 pub use index::{
     DerivedIndex, IndexArtifactRegistration, IndexClaim, IndexContextEnvelope, IndexError,
-    IndexEvent, IndexExecution, IndexFinding, IndexLimits, IndexMarker, IndexObligation,
-    IndexObligationLifecycle, IndexProgramObject, IndexProgramRelation, IndexRebuildReceipt,
-    IndexReviewPlan, IndexShadow, IndexSnapshot, IndexSnapshotSource, IndexUniverse,
+    IndexEvent, IndexFinding, IndexLimits, IndexMarker, IndexObligation, IndexObligationLifecycle,
+    IndexProgramObject, IndexProgramRelation, IndexRebuildReceipt, IndexReviewPlan, IndexShadow,
+    IndexSnapshot, IndexSnapshotSource, IndexUniverse,
 };
 #[cfg(target_os = "linux")]
 pub use journal::{
@@ -202,6 +202,16 @@ pub struct CasStore<'a> {
 
 #[cfg(target_os = "linux")]
 impl<'a> CasStore<'a> {
+    const VERIFY_CHUNK_BYTES: usize = 64 * 1024;
+
+    pub(crate) const fn verification_chunk_capacity(expected_len: usize) -> usize {
+        if expected_len < Self::VERIFY_CHUNK_BYTES {
+            expected_len
+        } else {
+            Self::VERIFY_CHUNK_BYTES
+        }
+    }
+
     pub fn open(root: &'a StoreRoot) -> Result<Self, StoreError> {
         // Each component is created/opened/verified independently.  In
         // particular, no slash-containing path is ever handed to *at.
@@ -312,6 +322,71 @@ impl<'a> CasStore<'a> {
         }
     }
     pub fn read(&self, hash: &CasHash) -> Result<Vec<u8>, StoreError> {
+        let fd = self.open_verified_object(hash)?;
+        let mut bytes = Vec::new();
+        std::fs::File::from(fd)
+            .take(self.root.limits.max_object_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(StoreError::Stream)?;
+        if bytes.len() as u64 > self.root.limits.max_object_bytes {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        let actual = CasHash::parse(format!("sha256:{:x}", Sha256::digest(&bytes)))?;
+        if &actual != hash {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        Ok(bytes)
+    }
+
+    /// Verify a CAS object against an already-retained byte slice without
+    /// materializing a second full object. The only requested store buffer is
+    /// a fixed-capacity chunk of at most 64 KiB.
+    pub(crate) fn verify_exact_bytes_streaming(
+        &self,
+        hash: &CasHash,
+        expected: &[u8],
+    ) -> Result<(), StoreError> {
+        let fd = self.open_verified_object(hash)?;
+        let stat = fs::fstat(&fd)?;
+        let expected_len =
+            u64::try_from(expected.len()).map_err(|_| StoreError::CorruptedArtifact)?;
+        let observed_len =
+            u64::try_from(stat.st_size).map_err(|_| StoreError::CorruptedArtifact)?;
+        if observed_len != expected_len || observed_len > self.root.limits.max_object_bytes {
+            return Err(StoreError::CorruptedArtifact);
+        }
+
+        let chunk_capacity = Self::verification_chunk_capacity(expected.len());
+        let mut chunk = Vec::new();
+        chunk
+            .try_reserve_exact(chunk_capacity)
+            .map_err(|error| StoreError::Stream(std::io::Error::other(error)))?;
+        chunk.resize(chunk_capacity, 0);
+        let mut file = std::fs::File::from(fd);
+        let mut digest = Sha256::new();
+        let mut offset = 0usize;
+        while offset < expected.len() {
+            let wanted = (expected.len() - offset).min(chunk.len());
+            file.read_exact(&mut chunk[..wanted])
+                .map_err(StoreError::Stream)?;
+            if chunk[..wanted] != expected[offset..offset + wanted] {
+                return Err(StoreError::CorruptedArtifact);
+            }
+            digest.update(&chunk[..wanted]);
+            offset += wanted;
+        }
+        let mut trailing = [0u8; 1];
+        if file.read(&mut trailing).map_err(StoreError::Stream)? != 0 {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        let actual = CasHash::parse(format!("sha256:{:x}", digest.finalize()))?;
+        if &actual != hash {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        Ok(())
+    }
+
+    fn open_verified_object(&self, hash: &CasHash) -> Result<OwnedFd, StoreError> {
         let parent = fs::openat(
             &self.sha256,
             hash.prefix(),
@@ -339,19 +414,7 @@ impl<'a> CasStore<'a> {
         if opened_stat.st_dev != entry_stat.st_dev || opened_stat.st_ino != entry_stat.st_ino {
             return Err(StoreError::CorruptedArtifact);
         }
-        let mut bytes = Vec::new();
-        std::fs::File::from(fd)
-            .take(self.root.limits.max_object_bytes.saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(StoreError::Stream)?;
-        if bytes.len() as u64 > self.root.limits.max_object_bytes {
-            return Err(StoreError::CorruptedArtifact);
-        }
-        let actual = CasHash::parse(format!("sha256:{:x}", Sha256::digest(&bytes)))?;
-        if &actual != hash {
-            return Err(StoreError::CorruptedArtifact);
-        }
-        Ok(bytes)
+        Ok(fd)
     }
 
     /// Delete only regular staging files for which this process can acquire

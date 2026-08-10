@@ -7,6 +7,13 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+fn id_set_allocated(values: &BTreeSet<StableId>) -> usize {
+    values
+        .len()
+        .saturating_mul(std::mem::size_of::<StableId>())
+        .saturating_add(values.iter().map(StableId::allocated_bytes).sum::<usize>())
+}
+
 /// Human review status, independent from claim disposition and verification.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -573,6 +580,14 @@ pub enum ClaimAuthorKind {
 }
 
 impl ReviewClaim {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.id
+            .allocated_bytes()
+            .saturating_add(self.execution_id.allocated_bytes())
+            .saturating_add(id_set_allocated(&self.obligation_ids))
+            .saturating_add(self.summary.capacity())
+            .saturating_add(id_set_allocated(&self.source_ids))
+    }
     /// Constructs an AI claim in its only admitted initial state: proposed and
     /// unreviewed. Confidence is descriptive and cannot alter this state.
     pub fn propose_ai(
@@ -793,6 +808,23 @@ pub struct EvidenceBinding {
 }
 
 impl EvidenceBinding {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        let scope = self.scope.iter().fold(
+            self.scope
+                .len()
+                .saturating_mul(std::mem::size_of::<(String, String)>()),
+            |total, (key, value)| {
+                total
+                    .saturating_add(key.capacity())
+                    .saturating_add(value.capacity())
+            },
+        );
+        self.id
+            .allocated_bytes()
+            .saturating_add(self.claim_id.allocated_bytes())
+            .saturating_add(self.evidence_id.allocated_bytes())
+            .saturating_add(scope)
+    }
     /// Binds one separately stored evidence record to one claim.
     pub fn new(
         id: StableId,
@@ -858,6 +890,13 @@ pub struct Verification {
 }
 
 impl Verification {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.id
+            .allocated_bytes()
+            .saturating_add(self.claim_id.allocated_bytes())
+            .saturating_add(self.verifier_id.capacity())
+            .saturating_add(id_set_allocated(&self.evidence_ids))
+    }
     /// Constructs a verifier record. Passing verification requires cited evidence.
     pub fn new(
         id: StableId,
@@ -1047,6 +1086,15 @@ pub struct Decision {
 }
 
 impl Decision {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.id
+            .allocated_bytes()
+            .saturating_add(self.target_claim_id.allocated_bytes())
+            .saturating_add(self.authority.capacity())
+            .saturating_add(self.actor.capacity())
+            .saturating_add(self.rationale.capacity())
+            .saturating_add(id_set_allocated(&self.source_ids))
+    }
     /// Constructs an explicit accountable human decision.
     pub fn human(
         id: StableId,
@@ -1204,6 +1252,19 @@ impl FindingTrace {
 }
 
 impl Finding {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.id
+            .allocated_bytes()
+            .saturating_add(self.claim_id.allocated_bytes())
+            .saturating_add(id_set_allocated(&self.evidence_ids))
+            .saturating_add(id_set_allocated(&self.verification_ids))
+            .saturating_add(
+                self.decision_id
+                    .as_ref()
+                    .map_or(0, StableId::allocated_bytes),
+            )
+            .saturating_add(id_set_allocated(&self.source_ids))
+    }
     /// Creates a report finding. `Accepted` is checked only when it is added to
     /// a validated aggregate with its joined claim/evidence/verification/decision trace.
     #[must_use]

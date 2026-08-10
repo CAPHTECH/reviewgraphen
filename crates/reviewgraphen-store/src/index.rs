@@ -4,13 +4,17 @@
 //! owns the bytes crossing that boundary; callers never provide a path or a
 //! connection and the canonical journal remains the authority.
 
+use super::journal::IndexReplayError;
 use super::{
     CasHash, CasStore, EventJournal, JournalError, JournalIdentity, StoreError, StoreLimits,
     StoreRoot, open_or_create_dir,
 };
+#[cfg(test)]
+use reviewgraphen_core::ReviewAggregate;
 use reviewgraphen_core::{
-    ContentHash, DecodedPayload, EventContractVersion, EventEnvelope, OfflineProjectionState,
-    RunGenesisSnapshot, StableId, canonical_json,
+    ContentHash, ContextPolicyV1, DecodedPayload, EventContractVersion, EventEnvelope,
+    OfflineProjectionState, PlannerPolicyV1, ReviewContextEnvelope, ReviewPlan, RunGenesisSnapshot,
+    StableId, canonical_json,
 };
 use rusqlite::{Connection, MAIN_DB, OpenFlags, limits::Limit};
 use rustix::{
@@ -36,6 +40,8 @@ const INDEX_DIR: &str = "indexes";
 const LOCK_FILE: &str = "index.lock";
 const ACTIVE_FILE: &str = "reviewgraphen.sqlite";
 const PAGE_SIZE: u64 = 4096;
+const INDEX_SCHEMA_VERSION: u32 = 2;
+const PROJECTION_CONTRACT_VERSION: &str = "reviewgraphen.index_projection.v2";
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,6 +50,7 @@ pub(crate) enum PublishFault {
     BeforeCandidateSync,
     AfterCandidateLinkBeforeDirectorySync,
     AfterCandidateSync,
+    AfterImageDropBeforeCandidateRead,
     AfterValidation,
     AfterRename,
     AfterActiveVerify,
@@ -130,6 +137,21 @@ pub struct IndexMarker {
     pub confirmed_offset: u64,
     pub tail_hash: ContentHash,
     pub event_count: u64,
+}
+
+impl IndexMarker {
+    fn requested_capacity(&self) -> Result<u64, IndexError> {
+        let bytes = self
+            .projection_contract_version
+            .capacity()
+            .checked_add(self.event_contract_version.capacity())
+            .and_then(|value| value.checked_add(self.projection_mode.capacity()))
+            .and_then(|value| value.checked_add(self.run_id.allocated_bytes()))
+            .and_then(|value| value.checked_add(self.genesis_hash.allocated_bytes()))
+            .and_then(|value| value.checked_add(self.tail_hash.allocated_bytes()))
+            .ok_or(IndexError::IntegerOutOfRange)?;
+        u64::try_from(bytes).map_err(|_| IndexError::IntegerOutOfRange)
+    }
 }
 
 /// Typed envelope metadata retained by the derived index.
@@ -237,10 +259,18 @@ pub struct IndexContextEnvelope {
     pub event_sequence: u64,
     pub event_id: StableId,
     pub envelope_id: StableId,
-    pub obligation_id: StableId,
+    pub snapshot_id: StableId,
+    pub context_policy_version: String,
+    pub context_policy_hash: ContentHash,
+    pub candidate_ids_canonical_json: String,
+    pub obligation_ids_canonical_json: String,
+    pub context_policy_canonical_json: String,
+    pub included_sources_canonical_json: String,
+    pub excluded_sources_canonical_json: String,
+    pub unknowns_canonical_json: String,
+    pub assumptions_canonical_json: String,
+    pub losses_canonical_json: String,
     pub projection_hash: ContentHash,
-    pub source_ids_canonical_json: String,
-    pub loss_ids_canonical_json: String,
     pub body_hash: ContentHash,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -248,23 +278,17 @@ pub struct IndexReviewPlan {
     pub event_sequence: u64,
     pub event_id: StableId,
     pub plan_id: StableId,
-    pub run_id: StableId,
+    pub universe_id: StableId,
+    pub snapshot_id: StableId,
+    pub planner_input_hash: ContentHash,
+    pub planner_policy_version: String,
+    pub planner_policy_hash: ContentHash,
+    pub budget_canonical_json: String,
     pub budget_hash: ContentHash,
-    pub policy_hash: ContentHash,
-    pub body_hash: ContentHash,
-}
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct IndexExecution {
-    pub event_sequence: u64,
-    pub event_id: StableId,
-    pub execution_id: StableId,
-    pub reviewer_id: String,
-    pub envelope_id: StableId,
-    pub outcome: String,
-    pub raw_registration_id: StableId,
-    pub raw_hash: ContentHash,
-    pub obligation_ids_canonical_json: String,
-    pub claim_ids_canonical_json: String,
+    pub risk_breakdown_canonical_json: String,
+    pub waves_canonical_json: String,
+    pub deferred_canonical_json: String,
+    pub identity_body_hash: ContentHash,
     pub body_hash: ContentHash,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -294,7 +318,6 @@ pub struct IndexSnapshot {
     pub snapshot_sources: Vec<IndexSnapshotSource>,
     pub context_envelopes: Vec<IndexContextEnvelope>,
     pub review_plans: Vec<IndexReviewPlan>,
-    pub executions: Vec<IndexExecution>,
 }
 
 /// Receipt emitted only after a complete rebuild publication.
@@ -483,11 +506,11 @@ impl<'a> DerivedIndex<'a> {
     ) -> Result<IndexRebuildReceipt, IndexError> {
         let index_lock = self.lock_exclusive()?;
         self.audit_candidates(true)?;
-        let reader = journal.reader()?;
+        let mut reader = journal
+            .index_reader(self.limits.max_working_bytes)
+            .map_err(map_index_journal)?;
         let identity = reader.identity().clone();
-        let result = reader.with_locked_snapshot(|events, offset, tail| {
-            self.build_locked(&identity, events, offset, tail, cas)
-        });
+        let result = self.build_streaming_locked(&mut reader, &identity, cas);
         index_lock.verify_unchanged()?;
         result
     }
@@ -500,37 +523,100 @@ impl<'a> DerivedIndex<'a> {
     ) -> Result<IndexSnapshot, IndexError> {
         let index_lock = self.lock_shared()?;
         self.audit_candidates(false)?;
-        let reader = journal.reader()?;
+        let mut reader = journal
+            .index_reader(self.limits.max_working_bytes)
+            .map_err(map_index_journal)?;
         let identity = reader.identity().clone();
-        let result = reader.with_locked_snapshot(|events, offset, tail| {
+        let retained = streaming_journal_retained(&reader, &identity, self.limits)?;
+        let mut projection = streaming_projection(&identity)?;
+        let certificate = reader
+            .with_locked_prefix(|event, _| {
+                if let Some(state) = projection.as_mut() {
+                    let decoded = event
+                        .decode_for_streaming_projection()
+                        .map_err(|_| IndexError::ProjectionContractViolation)?;
+                    let applied = state
+                        .apply(&decoded)
+                        .map_err(|_| IndexError::ProjectionContractViolation)?;
+                    validate_offline_classification(applied, decoded.payload())?;
+                }
+                Ok(())
+            })
+            .map_err(map_index_replay)?;
+        admit_streaming_scan(retained, &certificate, self.limits)?;
+        if projection.as_ref().is_some_and(|state| {
+            !state.streaming_cursor_matches(certificate.event_count, &certificate.tail_hash)
+        }) {
+            return Err(IndexError::ProjectionContractViolation);
+        }
+        drop(projection);
+        let result = (|| {
             let active_before = fs::statat(&self.indexes, ACTIVE_FILE, AtFlags::SYMLINK_NOFOLLOW)
                 .map_err(map_entry_error)?;
             verify_index_stat(&active_before, FileType::RegularFile, 0o600)?;
-            let image = self.read_active_image_locked()?;
-            let connection = deserialize_read_only(image, self.limits)
+            let image = self.read_active_image_locked_with_retained(retained)?;
+            let connection = deserialize_read_only_with_journal(image, self.limits, retained)
                 .map_err(normalize_external_image_error)?;
-            let snapshot = snapshot_from_connection(
+            // Refuse a committed-tail mismatch before cursor comparison: a
+            // legitimately older disposable image is stale, not corrupt.
+            let committed_marker = index_marker_from_connection(&connection, self.limits)
+                .map_err(normalize_external_image_error)?;
+            if committed_marker.run_id != identity.run_id
+                || committed_marker.genesis_hash != identity.genesis_hash()
+                || committed_marker.confirmed_offset != certificate.confirmed_offset
+                || committed_marker.tail_hash != certificate.tail_hash
+                || committed_marker.event_count != certificate.event_count
+                || committed_marker.event_contract_version != identity.version().schema()
+            {
+                return Err(IndexError::CommittedIndexStale {
+                    indexed_offset: committed_marker.confirmed_offset,
+                    indexed_tail: committed_marker.tail_hash,
+                    committed_offset: certificate.confirmed_offset,
+                    committed_tail: certificate.tail_hash.clone(),
+                });
+            }
+            drop(committed_marker);
+            let snapshot = snapshot_from_connection_with_journal(
                 &connection,
                 self.limits,
-                query_cache_reservation(self.limits)?,
+                query_cache_reservation_with_journal(self.limits, retained)?,
+                retained,
+                0,
+                Some(D1ValidationSource::streaming()),
             )
             .map_err(normalize_external_image_error)?;
-            let event_count =
-                u64::try_from(events.len()).map_err(|_| IndexError::IntegerOutOfRange)?;
             if snapshot.marker.run_id != identity.run_id
                 || snapshot.marker.genesis_hash != identity.genesis_hash()
-                || snapshot.marker.confirmed_offset != offset
-                || snapshot.marker.tail_hash != *tail
-                || snapshot.marker.event_count != event_count
+                || snapshot.marker.confirmed_offset != certificate.confirmed_offset
+                || snapshot.marker.tail_hash != certificate.tail_hash
+                || snapshot.marker.event_count != certificate.event_count
                 || snapshot.marker.event_contract_version != identity.version().schema()
             {
                 return Err(IndexError::CommittedIndexStale {
                     indexed_offset: snapshot.marker.confirmed_offset,
                     indexed_tail: snapshot.marker.tail_hash,
-                    committed_offset: offset,
-                    committed_tail: tail.clone(),
+                    committed_offset: certificate.confirmed_offset,
+                    committed_tail: certificate.tail_hash.clone(),
                 });
             }
+            admit_query_compare_peak(
+                &connection,
+                retained,
+                &certificate,
+                &snapshot.marker,
+                self.limits,
+            )?;
+            let mut comparator = StreamingSnapshotComparator::new(&snapshot, identity.version());
+            let compared = reader
+                .with_locked_prefix(|event, _| comparator.compare_event(event))
+                .map_err(map_index_replay)?;
+            if compared.confirmed_offset != certificate.confirmed_offset
+                || compared.tail_hash != certificate.tail_hash
+                || compared.event_count != certificate.event_count
+            {
+                return Err(IndexError::IndexPathRace);
+            }
+            comparator.finish()?;
             #[cfg(test)]
             self.wait_after_snapshot_marker_check();
             let active_after = fs::statat(&self.indexes, ACTIVE_FILE, AtFlags::SYMLINK_NOFOLLOW)
@@ -538,7 +624,7 @@ impl<'a> DerivedIndex<'a> {
             verify_index_stat(&active_after, FileType::RegularFile, 0o600)?;
             ensure_same_inode(&active_before, &active_after)?;
             Ok(snapshot)
-        });
+        })();
         index_lock.verify_unchanged()?;
         result
     }
@@ -609,13 +695,22 @@ impl<'a> DerivedIndex<'a> {
         self.lock(FlockOperation::LockExclusive)
     }
 
+    #[cfg(test)]
     pub(crate) fn new_in_memory_connection(&self) -> Result<Connection, IndexError> {
+        self.new_in_memory_connection_with_retained(0)
+    }
+
+    fn new_in_memory_connection_with_retained(
+        &self,
+        retained_view: u64,
+    ) -> Result<Connection, IndexError> {
+        preflight_build_connection(self.limits, retained_view)?;
         let connection = Connection::open_in_memory_with_flags(
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        configure_connection(&connection, self.limits)?;
+        configure_connection(&connection, self.limits, retained_view)?;
         create_schema(&connection, self.limits)?;
         Ok(connection)
     }
@@ -627,11 +722,16 @@ impl<'a> DerivedIndex<'a> {
     pub(crate) fn publish_image(
         &self,
         image: Vec<u8>,
-        run_id: &StableId,
-        tail_hash: &ContentHash,
+        _run_id: &StableId,
+        _tail_hash: &ContentHash,
     ) -> Result<ContentHash, IndexError> {
         let lock = self.lock_exclusive()?;
-        let result = self.publish_image_locked(image, run_id, tail_hash);
+        let inspection = deserialize_read_only(image.clone(), self.limits)
+            .map_err(normalize_external_image_error)?;
+        let expected = index_marker_from_connection(&inspection, self.limits)?;
+        drop(inspection);
+        let retained = expected.requested_capacity()?;
+        let result = self.publish_image_locked(image, &expected, None, retained);
         lock.verify_unchanged()?;
         result
     }
@@ -639,8 +739,9 @@ impl<'a> DerivedIndex<'a> {
     fn publish_image_locked(
         &self,
         image: Vec<u8>,
-        run_id: &StableId,
-        tail_hash: &ContentHash,
+        expected_marker: &IndexMarker,
+        validation_source: Option<D1ValidationSource<'_>>,
+        retained_view: u64,
     ) -> Result<ContentHash, IndexError> {
         check_image_len(image.len(), self.limits)?;
         self.audit_candidates(true)?;
@@ -698,21 +799,44 @@ impl<'a> DerivedIndex<'a> {
         // reread and reconstructed. This makes candidate validation a
         // distinct bounded stage rather than two simultaneous image buffers.
         drop(image);
+        #[cfg(test)]
+        if self.take_publish_fault(PublishFault::AfterImageDropBeforeCandidateRead) {
+            return Err(test_publish_failure(
+                "after publication image drop before candidate read allocation",
+            ));
+        }
         let candidate = self.open_entry(&name)?;
         ensure_same_inode(&fs::fstat(&tmp)?, &fs::fstat(&candidate)?)?;
-        let candidate_bytes = read_fd_exact(candidate, self.limits.max_serialized_bytes)?;
+        let candidate_bytes = read_fd_exact_with_retained(
+            candidate,
+            self.limits.max_serialized_bytes,
+            retained_view,
+            self.limits.max_working_bytes,
+        )?;
         if ContentHash::sha256(&candidate_bytes) != hash {
             return Err(IndexError::CorruptIndex);
         }
         // Prepared is not merely byte-hash valid: an independent in-memory,
         // read-only deserialize must re-check schema, marker, FK and complete
         // typed snapshot before it can replace the active image.
-        let candidate_connection = deserialize_read_only(candidate_bytes, self.limits)
+        let candidate_read_image =
+            u64::try_from(candidate_bytes.len()).map_err(|_| IndexError::IntegerOutOfRange)?;
+        let candidate_connection =
+            deserialize_read_only_with_journal(candidate_bytes, self.limits, retained_view)
+                .map_err(normalize_external_image_error)?;
+        let candidate_marker = index_marker_from_connection(&candidate_connection, self.limits)
             .map_err(normalize_external_image_error)?;
-        let _ = snapshot_from_connection(
+        if &candidate_marker != expected_marker {
+            return Err(IndexError::CorruptIndex);
+        }
+        drop(candidate_marker);
+        let _ = snapshot_from_connection_with_journal(
             &candidate_connection,
             self.limits,
-            query_cache_reservation(self.limits)?,
+            query_cache_reservation_with_journal(self.limits, retained_view)?,
+            retained_view,
+            candidate_read_image,
+            validation_source,
         )
         .map_err(normalize_external_image_error)?;
         drop(candidate_connection);
@@ -728,15 +852,20 @@ impl<'a> DerivedIndex<'a> {
         #[cfg(test)]
         if self.take_publish_fault(PublishFault::AfterRename) {
             return Err(IndexError::PublicationDurabilityUncertain {
-                run_id: run_id.clone(),
-                tail_hash: tail_hash.clone(),
+                run_id: expected_marker.run_id.clone(),
+                tail_hash: expected_marker.tail_hash.clone(),
                 image_hash: hash,
             });
         }
         let durable = (|| -> Result<(), IndexError> {
             let active = self.open_entry(ACTIVE_FILE)?;
             ensure_same_inode(&fs::fstat(&tmp)?, &fs::fstat(&active)?)?;
-            let active_bytes = read_fd_exact(active, self.limits.max_serialized_bytes)?;
+            let active_bytes = read_fd_exact_with_retained(
+                active,
+                self.limits.max_serialized_bytes,
+                retained_view,
+                self.limits.max_working_bytes,
+            )?;
             if ContentHash::sha256(&active_bytes) != hash {
                 return Err(IndexError::CorruptIndex);
             }
@@ -749,8 +878,8 @@ impl<'a> DerivedIndex<'a> {
         })();
         if durable.is_err() {
             return Err(IndexError::PublicationDurabilityUncertain {
-                run_id: run_id.clone(),
-                tail_hash: tail_hash.clone(),
+                run_id: expected_marker.run_id.clone(),
+                tail_hash: expected_marker.tail_hash.clone(),
                 image_hash: hash,
             });
         }
@@ -764,84 +893,128 @@ impl<'a> DerivedIndex<'a> {
         self.read_active_image_locked()
     }
 
+    #[cfg(test)]
     fn read_active_image_locked(&self) -> Result<Vec<u8>, IndexError> {
-        let bytes = read_fd_exact(
+        self.read_active_image_locked_with_retained(0)
+    }
+
+    fn read_active_image_locked_with_retained(&self, retained: u64) -> Result<Vec<u8>, IndexError> {
+        let bytes = read_fd_exact_with_retained(
             self.open_entry(ACTIVE_FILE)?,
             self.limits.max_serialized_bytes,
+            retained,
+            self.limits.max_working_bytes,
         )?;
         check_image_len(bytes.len(), self.limits)?;
         Ok(bytes)
     }
 
-    fn build_locked(
+    fn build_streaming_locked(
         &self,
+        reader: &mut super::journal::IndexJournalReader,
         identity: &JournalIdentity,
-        events: &[reviewgraphen_core::EventEnvelope],
-        offset: u64,
-        tail: &ContentHash,
         cas: &CasStore<'_>,
     ) -> Result<IndexRebuildReceipt, IndexError> {
         let version = identity.version();
-        let initial_view = EventEnvelope::validated_view(
-            version,
-            &identity.run_id,
-            identity.core_genesis(),
-            events,
-        )
-        .map_err(|_| IndexError::ProjectionContractViolation)?;
-        let (view, initial) = match version {
-            EventContractVersion::V1 => (initial_view, None),
-            EventContractVersion::V2 => {
-                let Some(first) = initial_view.events().first() else {
-                    return Err(IndexError::ProjectionContractViolation);
-                };
-                let DecodedPayload::RunGenesisManifest(manifest) = first.payload() else {
-                    return Err(IndexError::ProjectionContractViolation);
-                };
-                let hash = CasHash::parse(manifest.genesis_artifact().cas_hash().to_string())
-                    .map_err(|_| IndexError::ProjectionContractViolation)?;
-                let bytes = cas
-                    .read(&hash)
-                    .map_err(|_| IndexError::ProjectionContractViolation)?;
-                let reviewgraphen_core::EventStreamGenesis::V2(initial_bytes) =
-                    identity.core_genesis()
-                else {
-                    return Err(IndexError::ProjectionContractViolation);
-                };
-                if bytes != initial_bytes || ContentHash::sha256(&bytes) != identity.genesis_hash()
-                {
-                    return Err(IndexError::ProjectionContractViolation);
-                }
-                let snapshot = RunGenesisSnapshot::from_canonical_bytes(&bytes)
-                    .map_err(|_| IndexError::ProjectionContractViolation)?;
-                let rebuilt = snapshot
-                    .rebuild_aggregate()
-                    .map_err(|_| IndexError::ProjectionContractViolation)?;
-                let definitive = EventEnvelope::validated_view(
-                    version,
-                    &identity.run_id,
-                    reviewgraphen_core::EventStreamGenesis::V2(&bytes),
-                    events,
-                )
+        let retained = streaming_journal_retained(reader, identity, self.limits)?;
+        let genesis = if version == EventContractVersion::V2 {
+            let bytes = identity
+                .v2_genesis_backing()
+                .ok_or(IndexError::ProjectionContractViolation)?;
+            let hash = CasHash::parse(identity.genesis_hash().to_string())
                 .map_err(|_| IndexError::ProjectionContractViolation)?;
-                (definitive, Some((rebuilt, snapshot)))
+            let cas_chunk = u64::try_from(CasStore::verification_chunk_capacity(bytes.len()))
+                .map_err(|_| IndexError::IntegerOutOfRange)?;
+            let cas_peak = retained
+                .checked_add(cas_chunk)
+                .ok_or(IndexError::Incomplete {
+                    limit: self.limits.max_working_bytes,
+                    observed: u64::MAX,
+                })?;
+            if cas_peak > self.limits.max_working_bytes {
+                return Err(IndexError::Incomplete {
+                    limit: self.limits.max_working_bytes,
+                    observed: cas_peak,
+                });
             }
+            cas.verify_exact_bytes_streaming(&hash, bytes)
+                .map_err(IndexError::Store)?;
+            Some(
+                RunGenesisSnapshot::from_canonical_bytes_for_index(bytes)
+                    .map_err(|_| IndexError::ProjectionContractViolation)?,
+            )
+        } else {
+            None
         };
-        let connection = self.new_in_memory_connection()?;
+
+        let mut projection = streaming_projection(identity)?;
+        let certificate = reader
+            .with_locked_prefix(|event, _| {
+                if let Some(state) = projection.as_mut() {
+                    let decoded = event
+                        .decode_for_streaming_projection()
+                        .map_err(|_| IndexError::ProjectionContractViolation)?;
+                    let applied = state
+                        .apply(&decoded)
+                        .map_err(|_| IndexError::ProjectionContractViolation)?;
+                    validate_offline_classification(applied, decoded.payload())?;
+                }
+                Ok(())
+            })
+            .map_err(map_index_replay)?;
+        admit_streaming_scan(retained, &certificate, self.limits)?;
+        if projection.as_ref().is_some_and(|state| {
+            !state.streaming_cursor_matches(certificate.event_count, &certificate.tail_hash)
+        }) {
+            return Err(IndexError::ProjectionContractViolation);
+        }
+        drop(projection);
+
+        let genesis_tuple_bound = identity
+            .v2_genesis_backing()
+            .map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+        let current_insert_tuple = certificate
+            .line_buffer_capacity
+            .max(genesis_tuple_bound)
+            .checked_mul(2)
+            .ok_or(IndexError::Incomplete {
+                limit: self.limits.max_working_bytes,
+                observed: u64::MAX,
+            })?;
+        let rebuild_projection_retained = retained
+            .checked_add(certificate.line_buffer_capacity)
+            .and_then(|value| value.checked_add(certificate.canonical_scratch_capacity))
+            // Baseline fields partition G; event fields partition one JSONL
+            // record. A second equal reservation covers the temporary owned
+            // SQL parameter strings produced for that tuple.
+            .and_then(|value| value.checked_add(current_insert_tuple))
+            .ok_or(IndexError::Incomplete {
+                limit: self.limits.max_working_bytes,
+                observed: u64::MAX,
+            })?;
+        let connection =
+            self.new_in_memory_connection_with_retained(rebuild_projection_retained)?;
         let transaction = connection.unchecked_transaction()?;
         let mut rows = 0_u64;
-        for event in view.events() {
-            reserve_row(&mut rows, self.limits)?;
-            insert_event(
-                &transaction,
-                event.envelope(),
-                version.schema(),
-                payload_kind_decoded(event.payload())?,
-            )?;
-        }
-        if let Some((initial, genesis)) = initial {
-            insert_baseline(&transaction, &genesis, &mut rows, self.limits)?;
-            let mut expected_lifecycles = genesis
+        let mode = if version == EventContractVersion::V1 {
+            "v1_event_metadata_only"
+        } else {
+            "v2_domain"
+        };
+        reserve_row(&mut rows, self.limits)?;
+        insert_index_marker(
+            &transaction,
+            identity,
+            version,
+            mode,
+            certificate.confirmed_offset,
+            &certificate.tail_hash,
+            certificate.event_count,
+        )?;
+        validate_index_marker_version(&transaction)?;
+        let mut expected_lifecycles = if let Some(genesis) = genesis.as_ref() {
+            insert_baseline(&transaction, genesis, &mut rows, self.limits)?;
+            genesis
                 .obligations()
                 .iter()
                 .map(|obligation| {
@@ -850,47 +1023,75 @@ impl<'a> DerivedIndex<'a> {
                         serialized_enum(&obligation.lifecycle())?,
                     ))
                 })
-                .collect::<Result<BTreeMap<_, _>, IndexError>>()?;
-            let mut projection = OfflineProjectionState::new(&view, initial)
-                .map_err(|_| IndexError::ProjectionContractViolation)?;
-            for event in view.events() {
-                let accepted = projection
-                    .apply(event)
+                .collect::<Result<BTreeMap<_, _>, IndexError>>()?
+        } else {
+            BTreeMap::new()
+        };
+        let inserted = reader
+            .with_locked_prefix(|envelope, _| {
+                let event = envelope
+                    .decode_for_streaming_projection()
                     .map_err(|_| IndexError::ProjectionContractViolation)?;
-                match (accepted, event.payload()) {
-                    (false, DecodedPayload::EvidenceRecorded(_))
-                    | (false, DecodedPayload::EvidenceBound(_))
-                    | (false, DecodedPayload::VerificationRecorded(_))
-                    | (false, DecodedPayload::DecisionRecorded(_)) => {
-                        let metadata_records = projection.unreconciled_records();
-                        let metadata = metadata_records
-                            .last()
-                            .ok_or(IndexError::ProjectionContractViolation)?;
+                reserve_row(&mut rows, self.limits)?;
+                insert_event(
+                    &transaction,
+                    envelope,
+                    version.schema(),
+                    payload_kind_decoded(event.payload())?,
+                )?;
+                if genesis.is_some() {
+                    match event.payload() {
+                    DecodedPayload::EvidenceRecorded(value) => insert_shadow_record(
+                        &transaction,
+                        envelope,
+                        value.id(),
+                        "evidence_recorded",
+                        value,
+                        &mut rows,
+                        self.limits,
+                    )?,
+                    DecodedPayload::EvidenceBound(value) => insert_shadow_record(
+                        &transaction,
+                        envelope,
+                        value.id(),
+                        "evidence_bound",
+                        value,
+                        &mut rows,
+                        self.limits,
+                    )?,
+                    DecodedPayload::VerificationRecorded(value) => insert_shadow_record(
+                        &transaction,
+                        envelope,
+                        value.id(),
+                        "verification_recorded",
+                        value,
+                        &mut rows,
+                        self.limits,
+                    )?,
+                    DecodedPayload::DecisionRecorded(value) => insert_shadow_record(
+                        &transaction,
+                        envelope,
+                        value.id(),
+                        "decision_recorded",
+                        value,
+                        &mut rows,
+                        self.limits,
+                    )?,
+                    DecodedPayload::FindingRecorded(value) => {
                         reserve_row(&mut rows, self.limits)?;
-                        transaction.execute("INSERT INTO unreconciled_authority_records(event_sequence,event_id,record_id,kind,body_hash,authority_reconciled) VALUES(?1,?2,?3,?4,?5,0)", rusqlite::params![to_i64(event.envelope().sequence())?, event.envelope().id().to_string(), metadata.id().to_string(), unreconciled_kind(metadata.kind()), metadata.body_hash().to_string()]).map_err(map_sql)?;
+                        transaction.execute("INSERT INTO projected_findings(event_sequence,event_id,finding_id,body_hash,projection_status) VALUES(?1,?2,?3,?4,'shadow_only')", rusqlite::params![to_i64(envelope.sequence())?, envelope.id().to_string(), value.id().to_string(), body_hash(value)?.to_string()]).map_err(map_sql)?;
                     }
-                    (false, DecodedPayload::FindingRecorded(_)) => {
-                        let finding_metadata = projection.projected_findings();
-                        let metadata = finding_metadata
-                            .last()
-                            .ok_or(IndexError::ProjectionContractViolation)?;
-                        reserve_row(&mut rows, self.limits)?;
-                        transaction.execute("INSERT INTO projected_findings(event_sequence,event_id,finding_id,body_hash,projection_status) VALUES(?1,?2,?3,?4,'shadow_only')", rusqlite::params![to_i64(event.envelope().sequence())?, event.envelope().id().to_string(), metadata.id().to_string(), metadata.body_hash().to_string()]).map_err(map_sql)?;
-                    }
-                    (
-                        true,
-                        DecodedPayload::ObligationTransition {
-                            obligation_id,
-                            next,
-                        },
-                    ) => {
+                    DecodedPayload::ObligationTransition {
+                        obligation_id,
+                        next,
+                    } => {
                         reserve_row(&mut rows, self.limits)?;
                         let lifecycle = serialized_enum(next)?;
                         let previous = expected_lifecycles
                             .get(obligation_id)
                             .ok_or(IndexError::ProjectionContractViolation)?
                             .clone();
-                        transaction.execute("INSERT INTO obligation_lifecycle(event_sequence,event_id,obligation_id,next_lifecycle) VALUES(?1,?2,?3,?4)", rusqlite::params![to_i64(event.envelope().sequence())?, event.envelope().id().to_string(), obligation_id.to_string(), lifecycle]).map_err(map_sql)?;
+                        transaction.execute("INSERT INTO obligation_lifecycle(event_sequence,event_id,obligation_id,next_lifecycle) VALUES(?1,?2,?3,?4)", rusqlite::params![to_i64(envelope.sequence())?, envelope.id().to_string(), obligation_id.to_string(), lifecycle]).map_err(map_sql)?;
                         let changed = transaction
                             .execute(
                                 "UPDATE obligations SET lifecycle=?1 WHERE obligation_id=?2 AND lifecycle=?3",
@@ -906,77 +1107,116 @@ impl<'a> DerivedIndex<'a> {
                         }
                         expected_lifecycles.insert(obligation_id.clone(), serialized_enum(next)?);
                     }
-                    (true, DecodedPayload::ClaimProposed(claim)) => insert_claim(
+                    DecodedPayload::ClaimProposed(claim) => insert_claim(
                         &transaction,
-                        event.envelope(),
+                        envelope,
                         claim,
                         &mut rows,
                         self.limits,
                     )?,
-                    (true, DecodedPayload::RunGenesisManifest(manifest)) => {
+                    DecodedPayload::RunGenesisManifest(manifest) => {
                         insert_registration(
                             &transaction,
-                            event.envelope(),
+                            envelope,
                             manifest.genesis_artifact(),
                             &mut rows,
                             self.limits,
                         )?;
                     }
-                    (true, DecodedPayload::ArtifactRegistered(registration)) => {
-                        insert_registration(
-                            &transaction,
-                            event.envelope(),
-                            registration,
-                            &mut rows,
-                            self.limits,
-                        )?
-                    }
-                    (true, DecodedPayload::SnapshotSourcesRecorded(sources)) => insert_sources(
+                    DecodedPayload::ArtifactRegistered(registration) => insert_registration(
                         &transaction,
-                        event.envelope(),
+                        envelope,
+                        registration,
+                        &mut rows,
+                        self.limits,
+                    )?,
+                    DecodedPayload::SnapshotSourcesRecorded(sources) => insert_sources(
+                        &transaction,
+                        envelope,
                         sources,
                         &mut rows,
                         self.limits,
                     )?,
-                    _ => return Err(IndexError::ProjectionContractViolation),
+                    DecodedPayload::ReviewPlanRecorded(plan) => insert_review_plan(
+                        &transaction,
+                        envelope,
+                        plan,
+                        &mut rows,
+                        self.limits,
+                    )?,
+                    DecodedPayload::ContextEnvelopeProjected(context) => insert_context_envelope(
+                        &transaction,
+                        envelope,
+                        context,
+                        &mut rows,
+                        self.limits,
+                    )?,
+                    }
                 }
-            }
-            if !projection.is_complete() || projection.tail_hash() != tail {
-                return Err(IndexError::ProjectionContractViolation);
-            }
+                Ok(())
+            })
+            .map_err(map_index_replay)?;
+        if inserted != certificate {
+            return Err(IndexError::IndexPathRace);
         }
-        reserve_row(&mut rows, self.limits)?;
-        let event_count = u64::try_from(events.len()).map_err(|_| IndexError::IntegerOutOfRange)?;
-        let mode = if version == EventContractVersion::V1 {
-            "v1_event_metadata_only"
-        } else {
-            "v2_domain"
-        };
-        transaction.execute("INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,1,'reviewgraphen.index_projection.v1',?1,?2,?3,?4,?5,?6,?7)", rusqlite::params![version.schema(), mode, identity.run_id.to_string(), identity.genesis_hash().to_string(), to_i64(offset)?, tail.to_string(), to_i64(event_count)?]).map_err(map_sql)?;
         transaction.commit()?;
         if !connection.is_autocommit() {
             return Err(IndexError::ProjectionContractViolation);
         }
         // Validate the complete marker/table/FK/integrity contract before
         // any bytes cross the SQLite-to-store publication boundary.
-        let _ = snapshot_from_connection(
+        let rebuilt_snapshot = snapshot_from_connection_with_journal(
             &connection,
             self.limits,
-            build_cache_reservation(self.limits)?,
+            build_cache_reservation_with_journal(self.limits, retained)?,
+            retained,
+            0,
+            Some(D1ValidationSource::streaming()),
         )?;
-        let image = serialize_connection(&connection, self.limits)?;
+        admit_query_compare_peak(
+            &connection,
+            retained,
+            &certificate,
+            &rebuilt_snapshot.marker,
+            self.limits,
+        )?;
+        let mut comparator = StreamingSnapshotComparator::new(&rebuilt_snapshot, version);
+        let compared = reader
+            .with_locked_prefix(|event, _| comparator.compare_event(event))
+            .map_err(map_index_replay)?;
+        if compared != certificate {
+            return Err(IndexError::IndexPathRace);
+        }
+        comparator.finish()?;
+        let IndexSnapshot {
+            marker: rebuilt_marker,
+            ..
+        } = rebuilt_snapshot;
+        let publication_retained = retained
+            .checked_add(rebuilt_marker.requested_capacity()?)
+            .ok_or(IndexError::Incomplete {
+                limit: self.limits.max_working_bytes,
+                observed: u64::MAX,
+            })?;
+        let image =
+            serialize_connection_with_retained(&connection, self.limits, publication_retained)?;
         let serialized_bytes =
             u64::try_from(image.len()).map_err(|_| IndexError::IntegerOutOfRange)?;
         // SQLite build/cache memory is released before descriptor publication
         // takes ownership of the serialized image.
         drop(connection);
-        let image_hash = self.publish_image_locked(image, &identity.run_id, tail)?;
+        let image_hash = self.publish_image_locked(
+            image,
+            &rebuilt_marker,
+            Some(D1ValidationSource::streaming()),
+            publication_retained,
+        )?;
         Ok(IndexRebuildReceipt {
             run_id: identity.run_id.clone(),
             genesis_hash: identity.genesis_hash(),
-            confirmed_offset: offset,
-            tail_hash: tail.clone(),
-            event_count,
+            confirmed_offset: certificate.confirmed_offset,
+            tail_hash: certificate.tail_hash,
+            event_count: certificate.event_count,
             serialized_bytes,
             image_hash,
         })
@@ -1064,7 +1304,11 @@ impl IndexLock<'_> {
     }
 }
 
-fn configure_connection(connection: &Connection, limits: IndexLimits) -> Result<(), IndexError> {
+fn configure_connection(
+    connection: &Connection,
+    limits: IndexLimits,
+    retained_view: u64,
+) -> Result<(), IndexError> {
     // All SQL is fixed checked-in text.  No user input reaches SQLite.
     let max_pages =
         i64::try_from(limits.max_pages()?).map_err(|_| IndexError::IntegerOutOfRange)?;
@@ -1075,12 +1319,15 @@ fn configure_connection(connection: &Connection, limits: IndexLimits) -> Result<
         "PRAGMA journal_mode = MEMORY",
         "PRAGMA locking_mode = EXCLUSIVE",
         "PRAGMA trusted_schema = OFF",
-        "PRAGMA user_version = 1",
+        "PRAGMA user_version = 2",
     ] {
         checked_batch(connection, statement, limits)?;
     }
     connection.pragma_update(None, "max_page_count", max_pages)?;
-    let cache_kib = cache_kib(limits, build_cache_reservation(limits)?)?;
+    let cache_kib = cache_kib(
+        limits,
+        build_cache_reservation_with_journal(limits, retained_view)?,
+    )?;
     connection.pragma_update(None, "cache_size", -cache_kib)?;
     let image_limit =
         i32::try_from(limits.max_serialized_bytes).map_err(|_| IndexError::IntegerOutOfRange)?;
@@ -1104,7 +1351,7 @@ fn configure_connection(connection: &Connection, limits: IndexLimits) -> Result<
             "page_size",
             i64::try_from(PAGE_SIZE).map_err(|_| IndexError::IntegerOutOfRange)?,
         ),
-        ("user_version", 1),
+        ("user_version", i64::from(INDEX_SCHEMA_VERSION)),
     ] {
         let observed: i64 =
             connection.query_row(&format!("PRAGMA {pragma}"), [], |row| row.get(0))?;
@@ -1137,6 +1384,29 @@ fn configure_connection(connection: &Connection, limits: IndexLimits) -> Result<
     Ok(())
 }
 
+fn preflight_build_connection(limits: IndexLimits, retained_view: u64) -> Result<(), IndexError> {
+    // Refuse before SQLite can allocate a connection, reconstructed main
+    // image, page cache, or schema. The future serialize peak is also checked
+    // here because the configured build cache is selected from that retained
+    // reservation.
+    let serialize_reservation = build_cache_reservation_with_journal(limits, retained_view)?;
+    let configured_cache = configured_cache_bytes(limits, serialize_reservation)?;
+    let build_peak = retained_view
+        .checked_add(limits.max_serialized_bytes)
+        .and_then(|value| value.checked_add(configured_cache))
+        .ok_or(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed: u64::MAX,
+        })?;
+    if build_peak > limits.max_working_bytes {
+        return Err(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed: build_peak,
+        });
+    }
+    Ok(())
+}
+
 fn checked_batch(
     connection: &Connection,
     statement: &str,
@@ -1159,8 +1429,8 @@ fn create_schema(connection: &Connection, limits: IndexLimits) -> Result<(), Ind
     const DDL: &str = r#"
 CREATE TABLE index_meta (
  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
- index_schema_version INTEGER NOT NULL CHECK (index_schema_version = 1),
- projection_contract_version TEXT NOT NULL CHECK (projection_contract_version = 'reviewgraphen.index_projection.v1'),
+ index_schema_version INTEGER NOT NULL CHECK (index_schema_version = 2),
+ projection_contract_version TEXT NOT NULL CHECK (projection_contract_version = 'reviewgraphen.index_projection.v2'),
  event_contract_version TEXT NOT NULL CHECK (event_contract_version IN ('reviewgraphen.review_event.v1','reviewgraphen.review_event.v2')),
  projection_mode TEXT NOT NULL CHECK (projection_mode IN ('v1_event_metadata_only','v2_domain')),
  run_id TEXT NOT NULL, genesis_hash TEXT NOT NULL,
@@ -1172,7 +1442,7 @@ CREATE TABLE events (
  sequence INTEGER PRIMARY KEY CHECK (sequence > 0), event_id TEXT NOT NULL UNIQUE,
  schema TEXT NOT NULL CHECK (schema IN ('reviewgraphen.review_event.v1','reviewgraphen.review_event.v2')),
  event_hash TEXT NOT NULL, payload_hash TEXT NOT NULL,
- payload_kind TEXT NOT NULL CHECK (payload_kind IN ('obligation_transition','claim_proposed','evidence_recorded','evidence_bound','verification_recorded','decision_recorded','finding_recorded','run_genesis_manifest','artifact_registered','snapshot_sources_recorded')),
+ payload_kind TEXT NOT NULL CHECK (payload_kind IN ('obligation_transition','claim_proposed','evidence_recorded','evidence_bound','verification_recorded','decision_recorded','finding_recorded','run_genesis_manifest','artifact_registered','snapshot_sources_recorded','review_plan_recorded','context_envelope_projected')),
  actor TEXT NOT NULL, logical_time INTEGER NOT NULL CHECK (logical_time >= 0), UNIQUE(sequence,event_id)
 ) STRICT;
 CREATE TABLE program_objects (object_id TEXT PRIMARY KEY, object_kind TEXT NOT NULL, body_hash TEXT NOT NULL) STRICT;
@@ -1183,27 +1453,75 @@ CREATE TABLE obligation_lifecycle (event_sequence INTEGER NOT NULL, event_id TEX
 CREATE TABLE claims (event_sequence INTEGER NOT NULL, event_id TEXT NOT NULL, claim_id TEXT NOT NULL UNIQUE, execution_id TEXT NOT NULL, polarity TEXT NOT NULL CHECK(polarity IN ('issue_present','issue_absent','inconclusive','not_applicable','conflict')), body_hash TEXT NOT NULL, PRIMARY KEY(event_sequence,claim_id), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
 CREATE TABLE artifact_registrations (event_sequence INTEGER NOT NULL, event_id TEXT NOT NULL, registration_id TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL, cas_hash TEXT NOT NULL, media_type TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), sensitivity TEXT NOT NULL CHECK(sensitivity IN ('canonical_state','workspace_source','sensitive')), source_kind TEXT NOT NULL CHECK(source_kind IN ('run_genesis','snapshot_ingest','reviewer_execution')), source_id TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(event_sequence,registration_id), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
 CREATE TABLE snapshot_source_index (event_sequence INTEGER NOT NULL, event_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, artifact_id TEXT NOT NULL, registration_id TEXT NOT NULL, path TEXT NOT NULL, content_hash TEXT NOT NULL, cas_hash TEXT NOT NULL, line_count INTEGER NOT NULL CHECK(line_count >= 0), PRIMARY KEY(snapshot_id,path,artifact_id), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
-CREATE TABLE context_envelopes (event_sequence INTEGER NOT NULL, event_id TEXT NOT NULL, envelope_id TEXT NOT NULL UNIQUE, obligation_id TEXT NOT NULL, projection_hash TEXT NOT NULL, source_ids_canonical_json TEXT NOT NULL, loss_ids_canonical_json TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(event_sequence,envelope_id), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
-CREATE TABLE review_plans (event_sequence INTEGER NOT NULL, event_id TEXT NOT NULL, plan_id TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL, budget_hash TEXT NOT NULL, policy_hash TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(event_sequence,plan_id), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
-CREATE TABLE executions (event_sequence INTEGER NOT NULL, event_id TEXT NOT NULL, execution_id TEXT NOT NULL UNIQUE, reviewer_id TEXT NOT NULL, envelope_id TEXT NOT NULL, outcome TEXT NOT NULL CHECK(outcome IN ('completed','abstained','malformed','provider_failure')), raw_registration_id TEXT NOT NULL, raw_hash TEXT NOT NULL, obligation_ids_canonical_json TEXT NOT NULL, claim_ids_canonical_json TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(event_sequence,execution_id), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
+CREATE TABLE review_plans (
+ event_sequence INTEGER NOT NULL CHECK(event_sequence > 0), event_id TEXT NOT NULL,
+ plan_id TEXT NOT NULL UNIQUE, universe_id TEXT NOT NULL, snapshot_id TEXT NOT NULL,
+ planner_input_hash TEXT NOT NULL,
+ planner_policy_version TEXT NOT NULL CHECK(planner_policy_version = 'scheduler.baseline@1'),
+ planner_policy_hash TEXT NOT NULL, budget_canonical_json TEXT NOT NULL,
+ budget_hash TEXT NOT NULL, risk_breakdown_canonical_json TEXT NOT NULL,
+ waves_canonical_json TEXT NOT NULL, deferred_canonical_json TEXT NOT NULL,
+ identity_body_hash TEXT NOT NULL, body_hash TEXT NOT NULL,
+ PRIMARY KEY(event_sequence,plan_id),
+ FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)
+) STRICT;
+CREATE TABLE context_envelopes (
+ event_sequence INTEGER NOT NULL CHECK(event_sequence > 0), event_id TEXT NOT NULL,
+ envelope_id TEXT NOT NULL UNIQUE, snapshot_id TEXT NOT NULL,
+ context_policy_version TEXT NOT NULL CHECK(context_policy_version = 'context.baseline@1'),
+ context_policy_hash TEXT NOT NULL, candidate_ids_canonical_json TEXT NOT NULL,
+ obligation_ids_canonical_json TEXT NOT NULL, context_policy_canonical_json TEXT NOT NULL,
+ included_sources_canonical_json TEXT NOT NULL, excluded_sources_canonical_json TEXT NOT NULL,
+ unknowns_canonical_json TEXT NOT NULL, assumptions_canonical_json TEXT NOT NULL,
+ losses_canonical_json TEXT NOT NULL, projection_hash TEXT NOT NULL, body_hash TEXT NOT NULL,
+ PRIMARY KEY(event_sequence,envelope_id),
+ FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)
+) STRICT;
 CREATE TABLE unreconciled_authority_records (event_sequence INTEGER NOT NULL CHECK(event_sequence > 0), event_id TEXT NOT NULL, record_id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('evidence_recorded','evidence_bound','verification_recorded','decision_recorded')), body_hash TEXT NOT NULL, authority_reconciled INTEGER NOT NULL DEFAULT 0 CHECK(authority_reconciled = 0), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
 CREATE TABLE projected_findings (event_sequence INTEGER NOT NULL CHECK(event_sequence > 0), event_id TEXT NOT NULL, finding_id TEXT PRIMARY KEY, body_hash TEXT NOT NULL, projection_status TEXT NOT NULL DEFAULT 'shadow_only' CHECK(projection_status = 'shadow_only'), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
 "#;
     checked_batch(connection, DDL, limits)
 }
 
+#[cfg(test)]
 pub(crate) fn serialize_connection(
     connection: &Connection,
     limits: IndexLimits,
 ) -> Result<Vec<u8>, IndexError> {
-    let image = connection.serialize(MAIN_DB)?;
-    let one = u64::try_from(image.len()).map_err(|_| IndexError::IntegerOutOfRange)?;
+    serialize_connection_with_retained(connection, limits, 0)
+}
+
+fn serialize_connection_with_retained(
+    connection: &Connection,
+    limits: IndexLimits,
+    retained_view: u64,
+) -> Result<Vec<u8>, IndexError> {
+    let page_count: i64 = connection.pragma_query_value(None, "page_count", |row| row.get(0))?;
+    let one = u64::try_from(page_count)
+        .map_err(|_| IndexError::ProjectionContractViolation)?
+        .checked_mul(PAGE_SIZE)
+        .ok_or(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed: u64::MAX,
+        })?;
+    if one == 0 || one > limits.max_serialized_bytes {
+        return Err(IndexError::Incomplete {
+            limit: limits.max_serialized_bytes,
+            observed: one,
+        });
+    }
     // At this point the build connection still owns its page cache while
     // SQLite exposes a serialized view and `to_vec` creates the publication
     // image.  Publication begins only after its caller drops `connection`.
-    let cache = configured_cache_bytes(limits, build_cache_reservation(limits)?)?;
-    let peak = one
-        .checked_mul(3)
+    let cache = configured_cache_bytes(
+        limits,
+        build_cache_reservation_with_journal(limits, retained_view)?,
+    )?;
+    let peak = retained_view
+        .checked_add(one.checked_mul(3).ok_or(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed: u64::MAX,
+        })?)
         .and_then(|value| value.checked_add(cache))
         .ok_or(IndexError::Incomplete {
             limit: limits.max_working_bytes,
@@ -1215,6 +1533,12 @@ pub(crate) fn serialize_connection(
             observed: peak,
         });
     }
+    // `Connection::serialize` may allocate its returned view, so admission is
+    // based on checked page_count * page_size before entering SQLite.
+    let image = connection.serialize(MAIN_DB)?;
+    if u64::try_from(image.len()).map_err(|_| IndexError::IntegerOutOfRange)? != one {
+        return Err(IndexError::ProjectionContractViolation);
+    }
     let bytes = image.to_vec();
     check_image_len(bytes.len(), limits)?;
     Ok(bytes)
@@ -1223,9 +1547,18 @@ pub(crate) fn serialize_connection(
 /// Reconstructs an image solely into an ephemeral SQLite connection.  The
 /// caller retains no borrowed image and the connection is query-only before
 /// a marker or projection table can be inspected.
+#[cfg(test)]
 pub(crate) fn deserialize_read_only(
     image: Vec<u8>,
     limits: IndexLimits,
+) -> Result<Connection, IndexError> {
+    deserialize_read_only_with_journal(image, limits, 0)
+}
+
+fn deserialize_read_only_with_journal(
+    image: Vec<u8>,
+    limits: IndexLimits,
+    journal_view: u64,
 ) -> Result<Connection, IndexError> {
     let image_len = image.len();
     check_image_len(image_len, limits)?;
@@ -1234,9 +1567,13 @@ pub(crate) fn deserialize_read_only(
     // `deserialize_read_exact`; before that transfer, account it beside the
     // reconstructed main image and the query cache. Public result material is
     // charged later, after this Vec has gone away.
-    let cache = configured_cache_bytes(limits, query_cache_reservation(limits)?)?;
-    let deserialize_peak = image_bytes
+    let cache = configured_cache_bytes(
+        limits,
+        query_cache_reservation_with_journal(limits, journal_view)?,
+    )?;
+    let deserialize_peak = journal_view
         .checked_add(image_bytes)
+        .and_then(|value| value.checked_add(image_bytes))
         .and_then(|value| value.checked_add(cache))
         .ok_or(IndexError::Incomplete {
             limit: limits.max_working_bytes,
@@ -1254,14 +1591,26 @@ pub(crate) fn deserialize_read_only(
             | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     connection.deserialize_read_exact(MAIN_DB, Cursor::new(image), image_len, true)?;
-    configure_query_connection(&connection, limits)?;
+    // Classification is the first read from untrusted reconstructed bytes.
+    // No pragma mutation, limit installation, or schema/table access may
+    // precede the disposable schema-version decision.
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == 1 {
+        return Err(IndexError::RebuildRequired {
+            found: 1,
+            required: INDEX_SCHEMA_VERSION,
+        });
+    }
+    if version != i64::from(INDEX_SCHEMA_VERSION) {
+        return Err(IndexError::CorruptIndex);
+    }
+    configure_query_connection(&connection, limits, journal_view)?;
     connection.pragma_update(None, "query_only", true)?;
     let query_only: i64 = connection.pragma_query_value(None, "query_only", |row| row.get(0))?;
-    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     // SQLite reports an in-memory deserialize as writable even with its
     // read-only deserialize flag; `query_only=1` is the enforceable mutation
     // boundary for this path and is read back below.
-    if query_only != 1 || version != 1 {
+    if query_only != 1 {
         return Err(IndexError::CorruptIndex);
     }
     Ok(connection)
@@ -1270,11 +1619,15 @@ pub(crate) fn deserialize_read_only(
 fn configure_query_connection(
     connection: &Connection,
     limits: IndexLimits,
+    journal_view: u64,
 ) -> Result<(), IndexError> {
     connection.pragma_update(None, "temp_store", "MEMORY")?;
     connection.pragma_update(None, "foreign_keys", true)?;
     connection.pragma_update(None, "trusted_schema", false)?;
-    let cache_kib = cache_kib(limits, query_cache_reservation(limits)?)?;
+    let cache_kib = cache_kib(
+        limits,
+        query_cache_reservation_with_journal(limits, journal_view)?,
+    )?;
     connection.pragma_update(None, "cache_size", -cache_kib)?;
     let temp_store: i64 = connection.pragma_query_value(None, "temp_store", |row| row.get(0))?;
     let foreign_keys: i64 =
@@ -1316,20 +1669,50 @@ fn check_image_len(len: usize, limits: IndexLimits) -> Result<(), IndexError> {
     Ok(())
 }
 
+#[cfg(test)]
 fn build_cache_reservation(limits: IndexLimits) -> Result<u64, IndexError> {
-    limits
-        .max_serialized_bytes
-        .checked_mul(3)
+    build_cache_reservation_with_journal(limits, 0)
+}
+
+fn build_cache_reservation_with_journal(
+    limits: IndexLimits,
+    retained_view: u64,
+) -> Result<u64, IndexError> {
+    retained_view
+        .checked_add(
+            limits
+                .max_serialized_bytes
+                .checked_mul(3)
+                .ok_or(IndexError::Incomplete {
+                    limit: limits.max_working_bytes,
+                    observed: u64::MAX,
+                })?,
+        )
         .ok_or(IndexError::Incomplete {
             limit: limits.max_working_bytes,
             observed: u64::MAX,
         })
 }
 
+#[cfg(test)]
 fn query_cache_reservation(limits: IndexLimits) -> Result<u64, IndexError> {
-    limits
-        .max_serialized_bytes
-        .checked_mul(2)
+    query_cache_reservation_with_journal(limits, 0)
+}
+
+fn query_cache_reservation_with_journal(
+    limits: IndexLimits,
+    journal_view: u64,
+) -> Result<u64, IndexError> {
+    journal_view
+        .checked_add(
+            limits
+                .max_serialized_bytes
+                .checked_mul(2)
+                .ok_or(IndexError::Incomplete {
+                    limit: limits.max_working_bytes,
+                    observed: u64::MAX,
+                })?,
+        )
         .ok_or(IndexError::Incomplete {
             limit: limits.max_working_bytes,
             observed: u64::MAX,
@@ -1342,22 +1725,17 @@ fn query_cache_reservation(limits: IndexLimits) -> Result<u64, IndexError> {
 }
 
 fn cache_kib(limits: IndexLimits, reserved: u64) -> Result<i64, IndexError> {
-    let remaining =
-        limits
-            .max_working_bytes
-            .checked_sub(reserved)
-            .ok_or(IndexError::Incomplete {
-                limit: limits.max_working_bytes,
-                observed: reserved,
-            })?;
-    let kib = remaining / 1024;
-    if kib == 0 {
+    let required = reserved.checked_add(1024).ok_or(IndexError::Incomplete {
+        limit: limits.max_working_bytes,
+        observed: u64::MAX,
+    })?;
+    if required > limits.max_working_bytes {
         return Err(IndexError::Incomplete {
             limit: limits.max_working_bytes,
-            observed: reserved,
+            observed: required,
         });
     }
-    i64::try_from(kib).map_err(|_| IndexError::IntegerOutOfRange)
+    Ok(1)
 }
 
 fn configured_cache_bytes(limits: IndexLimits, reserved: u64) -> Result<u64, IndexError> {
@@ -1368,6 +1746,25 @@ fn configured_cache_bytes(limits: IndexLimits, reserved: u64) -> Result<u64, Ind
             limit: limits.max_working_bytes,
             observed: u64::MAX,
         })
+}
+
+fn admit_candidate_reread_peak(
+    components: [u64; 7],
+    working_limit: u64,
+) -> Result<u64, IndexError> {
+    let observed = components.into_iter().try_fold(0_u64, |used, value| {
+        used.checked_add(value).ok_or(IndexError::Incomplete {
+            limit: working_limit,
+            observed: u64::MAX,
+        })
+    })?;
+    if observed > working_limit {
+        return Err(IndexError::Incomplete {
+            limit: working_limit,
+            observed,
+        });
+    }
+    Ok(observed)
 }
 
 fn candidate_name(nonce: &[u8; 32]) -> String {
@@ -1394,7 +1791,12 @@ fn is_candidate_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn read_fd_exact(fd: OwnedFd, max: u64) -> Result<Vec<u8>, IndexError> {
+fn read_fd_exact_with_retained(
+    fd: OwnedFd,
+    max: u64,
+    retained: u64,
+    working_limit: u64,
+) -> Result<Vec<u8>, IndexError> {
     let before = fs::fstat(&fd)?;
     verify_index_stat(&before, FileType::RegularFile, 0o600)?;
     let size = u64::try_from(before.st_size).map_err(|_| IndexError::CorruptIndex)?;
@@ -1404,17 +1806,40 @@ fn read_fd_exact(fd: OwnedFd, max: u64) -> Result<Vec<u8>, IndexError> {
             observed: size,
         });
     }
+    let observed = retained.checked_add(size).ok_or(IndexError::Incomplete {
+        limit: working_limit,
+        observed: u64::MAX,
+    })?;
+    if observed > working_limit {
+        return Err(IndexError::Incomplete {
+            limit: working_limit,
+            observed,
+        });
+    }
     let capacity = usize::try_from(size).map_err(|_| IndexError::IntegerOutOfRange)?;
     let mut file = File::from(fd);
-    let mut bytes = Vec::with_capacity(capacity);
-    (&mut file)
-        .take(size.checked_add(1).ok_or(IndexError::IntegerOutOfRange)?)
-        .read_to_end(&mut bytes)?;
-    if u64::try_from(bytes.len()).map_err(|_| IndexError::IntegerOutOfRange)? != size {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| IndexError::Incomplete {
+            limit: working_limit,
+            observed,
+        })?;
+    bytes.resize(capacity, 0);
+    if let Err(error) = file.read_exact(&mut bytes) {
+        if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            return Err(IndexError::CorruptIndex);
+        }
+        return Err(IndexError::Io(error));
+    }
+    let mut eof_probe = [0_u8; 1];
+    if file.read(&mut eof_probe)? != 0 {
         return Err(IndexError::CorruptIndex);
     }
-    let after = file.metadata()?;
-    if after.len() != size {
+    let after = fs::fstat(&file)?;
+    ensure_same_inode(&before, &after)?;
+    let after_size = u64::try_from(after.st_size).map_err(|_| IndexError::IndexPathRace)?;
+    if after_size != size {
         return Err(IndexError::IndexPathRace);
     }
     Ok(bytes)
@@ -1457,7 +1882,8 @@ fn normalize_external_image_error(error: IndexError) -> IndexError {
     match error {
         IndexError::Incomplete { .. }
         | IndexError::InvalidLimits
-        | IndexError::IntegerOutOfRange => error,
+        | IndexError::IntegerOutOfRange
+        | IndexError::RebuildRequired { .. } => error,
         _ => IndexError::CorruptIndex,
     }
 }
@@ -1504,6 +1930,52 @@ fn reserve_row(rows: &mut u64, limits: IndexLimits) -> Result<(), IndexError> {
             limit: limits.max_rows,
             observed: *rows,
         });
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_index_marker(
+    tx: &rusqlite::Transaction<'_>,
+    identity: &JournalIdentity,
+    version: EventContractVersion,
+    mode: &str,
+    offset: u64,
+    tail: &ContentHash,
+    event_count: u64,
+) -> Result<(), IndexError> {
+    tx.execute(
+        "INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,2,'reviewgraphen.index_projection.v2',?1,?2,?3,?4,?5,?6,?7)",
+        rusqlite::params![
+            version.schema(),
+            mode,
+            identity.run_id.to_string(),
+            identity.genesis_hash().to_string(),
+            to_i64(offset)?,
+            tail.to_string(),
+            to_i64(event_count)?
+        ],
+    )
+    .map_err(map_sql)?;
+    Ok(())
+}
+
+fn validate_index_marker_version(connection: &Connection) -> Result<(), IndexError> {
+    let user_version: i64 =
+        connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM index_meta", [], |row| row.get(0))?;
+    let (schema_version, projection): (i64, String) = connection.query_row(
+        "SELECT index_schema_version,projection_contract_version FROM index_meta WHERE singleton=1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if count != 1
+        || user_version != i64::from(INDEX_SCHEMA_VERSION)
+        || schema_version != i64::from(INDEX_SCHEMA_VERSION)
+        || projection != PROJECTION_CONTRACT_VERSION
+    {
+        return Err(IndexError::ProjectionContractViolation);
     }
     Ok(())
 }
@@ -1556,6 +2028,30 @@ fn body_hash<T: Serialize>(value: &T) -> Result<ContentHash, IndexError> {
     Ok(ContentHash::sha256(
         &canonical_json(value).map_err(|_| IndexError::ProjectionContractViolation)?,
     ))
+}
+
+fn insert_shadow_record<T: Serialize>(
+    tx: &rusqlite::Transaction<'_>,
+    event: &EventEnvelope,
+    record_id: &StableId,
+    kind: &'static str,
+    value: &T,
+    rows: &mut u64,
+    limits: IndexLimits,
+) -> Result<(), IndexError> {
+    reserve_row(rows, limits)?;
+    tx.execute(
+        "INSERT INTO unreconciled_authority_records(event_sequence,event_id,record_id,kind,body_hash,authority_reconciled) VALUES(?1,?2,?3,?4,?5,0)",
+        rusqlite::params![
+            to_i64(event.sequence())?,
+            event.id().to_string(),
+            record_id.to_string(),
+            kind,
+            body_hash(value)?.to_string()
+        ],
+    )
+    .map_err(map_sql)?;
+    Ok(())
 }
 
 fn insert_baseline(
@@ -1648,6 +2144,186 @@ fn insert_sources(
     Ok(())
 }
 
+fn canonical_component(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<String, IndexError> {
+    let value = object
+        .get(key)
+        .ok_or(IndexError::ProjectionContractViolation)?;
+    String::from_utf8(canonical_json(value).map_err(|_| IndexError::ProjectionContractViolation)?)
+        .map_err(|_| IndexError::ProjectionContractViolation)
+}
+
+fn canonical_object(
+    bytes: &[u8],
+) -> Result<serde_json::Map<String, serde_json::Value>, IndexError> {
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| IndexError::ProjectionContractViolation)?;
+    value
+        .as_object()
+        .cloned()
+        .ok_or(IndexError::ProjectionContractViolation)
+}
+
+fn insert_review_plan(
+    tx: &rusqlite::Transaction<'_>,
+    event: &EventEnvelope,
+    plan: &ReviewPlan,
+    rows: &mut u64,
+    limits: IndexLimits,
+) -> Result<(), IndexError> {
+    let row = projected_review_plan(event, plan)?;
+    reserve_row(rows, limits)?;
+    tx.execute(
+        "INSERT INTO review_plans(event_sequence,event_id,plan_id,universe_id,snapshot_id,planner_input_hash,planner_policy_version,planner_policy_hash,budget_canonical_json,budget_hash,risk_breakdown_canonical_json,waves_canonical_json,deferred_canonical_json,identity_body_hash,body_hash) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+        rusqlite::params![
+            to_i64(row.event_sequence)?,
+            row.event_id.to_string(),
+            row.plan_id.to_string(),
+            row.universe_id.to_string(),
+            row.snapshot_id.to_string(),
+            row.planner_input_hash.to_string(),
+            row.planner_policy_version,
+            row.planner_policy_hash.to_string(),
+            row.budget_canonical_json,
+            row.budget_hash.to_string(),
+            row.risk_breakdown_canonical_json,
+            row.waves_canonical_json,
+            row.deferred_canonical_json,
+            row.identity_body_hash.to_string(),
+            row.body_hash.to_string(),
+        ],
+    )
+    .map_err(map_sql)?;
+    Ok(())
+}
+
+fn projected_review_plan(
+    event: &EventEnvelope,
+    plan: &ReviewPlan,
+) -> Result<IndexReviewPlan, IndexError> {
+    let body = plan
+        .canonical_bytes()
+        .map_err(|_| IndexError::ProjectionContractViolation)?;
+    let object = canonical_object(&body)?;
+    let budget = String::from_utf8(
+        canonical_json(&plan.budget()).map_err(|_| IndexError::ProjectionContractViolation)?,
+    )
+    .map_err(|_| IndexError::ProjectionContractViolation)?;
+    if budget.len() > 50 || canonical_component(&object, "budget")? != budget {
+        return Err(IndexError::ProjectionContractViolation);
+    }
+    let budget_hash = ContentHash::sha256(budget.as_bytes());
+    let identity_body_hash = plan
+        .identity_body_hash()
+        .map_err(|_| IndexError::ProjectionContractViolation)?;
+    if plan.id()
+        != &StableId::parse(format!("plan:{identity_body_hash}"))
+            .map_err(|_| IndexError::ProjectionContractViolation)?
+        || plan.planner_policy_hash()
+            != &PlannerPolicyV1::baseline()
+                .hash()
+                .map_err(|_| IndexError::ProjectionContractViolation)?
+    {
+        return Err(IndexError::ProjectionContractViolation);
+    }
+    Ok(IndexReviewPlan {
+        event_sequence: event.sequence(),
+        event_id: event.id().clone(),
+        plan_id: plan.id().clone(),
+        universe_id: plan.universe_id().clone(),
+        snapshot_id: plan.snapshot_id().clone(),
+        planner_input_hash: plan.planner_input_hash().clone(),
+        planner_policy_version: plan.planner_policy_version().to_owned(),
+        planner_policy_hash: plan.planner_policy_hash().clone(),
+        budget_canonical_json: budget,
+        budget_hash,
+        risk_breakdown_canonical_json: canonical_component(&object, "risk_breakdown")?,
+        waves_canonical_json: canonical_component(&object, "waves")?,
+        deferred_canonical_json: canonical_component(&object, "deferred")?,
+        identity_body_hash,
+        body_hash: ContentHash::sha256(&body),
+    })
+}
+
+fn insert_context_envelope(
+    tx: &rusqlite::Transaction<'_>,
+    event: &EventEnvelope,
+    envelope: &ReviewContextEnvelope,
+    rows: &mut u64,
+    limits: IndexLimits,
+) -> Result<(), IndexError> {
+    let row = projected_context_envelope(event, envelope)?;
+    reserve_row(rows, limits)?;
+    tx.execute(
+        "INSERT INTO context_envelopes(event_sequence,event_id,envelope_id,snapshot_id,context_policy_version,context_policy_hash,candidate_ids_canonical_json,obligation_ids_canonical_json,context_policy_canonical_json,included_sources_canonical_json,excluded_sources_canonical_json,unknowns_canonical_json,assumptions_canonical_json,losses_canonical_json,projection_hash,body_hash) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        rusqlite::params![
+            to_i64(row.event_sequence)?,
+            row.event_id.to_string(),
+            row.envelope_id.to_string(),
+            row.snapshot_id.to_string(),
+            row.context_policy_version,
+            row.context_policy_hash.to_string(),
+            row.candidate_ids_canonical_json,
+            row.obligation_ids_canonical_json,
+            row.context_policy_canonical_json,
+            row.included_sources_canonical_json,
+            row.excluded_sources_canonical_json,
+            row.unknowns_canonical_json,
+            row.assumptions_canonical_json,
+            row.losses_canonical_json,
+            row.projection_hash.to_string(),
+            row.body_hash.to_string(),
+        ],
+    )
+    .map_err(map_sql)?;
+    Ok(())
+}
+
+fn projected_context_envelope(
+    event: &EventEnvelope,
+    envelope: &ReviewContextEnvelope,
+) -> Result<IndexContextEnvelope, IndexError> {
+    let body = envelope
+        .canonical_bytes()
+        .map_err(|_| IndexError::ProjectionContractViolation)?;
+    let object = canonical_object(&body)?;
+    let policy = String::from_utf8(
+        envelope
+            .context_policy()
+            .canonical_bytes()
+            .map_err(|_| IndexError::ProjectionContractViolation)?,
+    )
+    .map_err(|_| IndexError::ProjectionContractViolation)?;
+    let policy_matches = envelope.context_policy() == &ContextPolicyV1::baseline();
+    let hash_matches = envelope.context_policy_hash() == &ContentHash::sha256(policy.as_bytes());
+    let id_matches = envelope.id()
+        == &StableId::parse(format!("context-envelope:{}", envelope.projection_hash()))
+            .map_err(|_| IndexError::ProjectionContractViolation)?;
+    if !policy_matches || !hash_matches || !id_matches {
+        return Err(IndexError::ProjectionContractViolation);
+    }
+    Ok(IndexContextEnvelope {
+        event_sequence: event.sequence(),
+        event_id: event.id().clone(),
+        envelope_id: envelope.id().clone(),
+        snapshot_id: envelope.snapshot_id().clone(),
+        context_policy_version: envelope.projection_policy_version().to_owned(),
+        context_policy_hash: envelope.context_policy_hash().clone(),
+        candidate_ids_canonical_json: canonical_component(&object, "candidate_source_ids")?,
+        obligation_ids_canonical_json: canonical_component(&object, "obligation_ids")?,
+        context_policy_canonical_json: policy,
+        included_sources_canonical_json: canonical_component(&object, "included_sources")?,
+        excluded_sources_canonical_json: canonical_component(&object, "excluded_sources")?,
+        unknowns_canonical_json: canonical_component(&object, "unknowns")?,
+        assumptions_canonical_json: canonical_component(&object, "assumptions")?,
+        losses_canonical_json: canonical_component(&object, "losses")?,
+        projection_hash: envelope.projection_hash().clone(),
+        body_hash: ContentHash::sha256(&body),
+    })
+}
+
 fn payload_kind_decoded(payload: &DecodedPayload) -> Result<&'static str, IndexError> {
     Ok(match payload {
         DecodedPayload::ObligationTransition { .. } => "obligation_transition",
@@ -1660,35 +2336,408 @@ fn payload_kind_decoded(payload: &DecodedPayload) -> Result<&'static str, IndexE
         DecodedPayload::RunGenesisManifest(_) => "run_genesis_manifest",
         DecodedPayload::ArtifactRegistered(_) => "artifact_registered",
         DecodedPayload::SnapshotSourcesRecorded(_) => "snapshot_sources_recorded",
-        DecodedPayload::ReviewPlanRecorded(_) | DecodedPayload::ContextEnvelopeProjected(_) => {
-            return Err(IndexError::RebuildRequired {
-                found: 1,
-                required: 2,
-            });
-        }
+        DecodedPayload::ReviewPlanRecorded(_) => "review_plan_recorded",
+        DecodedPayload::ContextEnvelopeProjected(_) => "context_envelope_projected",
     })
 }
 
-fn unreconciled_kind(kind: reviewgraphen_core::UnreconciledRecordKind) -> &'static str {
-    match kind {
-        reviewgraphen_core::UnreconciledRecordKind::Evidence => "evidence_recorded",
-        reviewgraphen_core::UnreconciledRecordKind::EvidenceBinding => "evidence_bound",
-        reviewgraphen_core::UnreconciledRecordKind::Verification => "verification_recorded",
-        reviewgraphen_core::UnreconciledRecordKind::Decision => "decision_recorded",
+fn validate_offline_classification(
+    applied_to_accepted: bool,
+    payload: &DecodedPayload,
+) -> Result<(), IndexError> {
+    match (applied_to_accepted, payload) {
+        (
+            false,
+            DecodedPayload::EvidenceRecorded(_)
+            | DecodedPayload::EvidenceBound(_)
+            | DecodedPayload::VerificationRecorded(_)
+            | DecodedPayload::DecisionRecorded(_)
+            | DecodedPayload::FindingRecorded(_)
+            | DecodedPayload::ContextEnvelopeProjected(_),
+        )
+        | (
+            true,
+            DecodedPayload::ObligationTransition { .. }
+            | DecodedPayload::ClaimProposed(_)
+            | DecodedPayload::RunGenesisManifest(_)
+            | DecodedPayload::ArtifactRegistered(_)
+            | DecodedPayload::SnapshotSourcesRecorded(_)
+            | DecodedPayload::ReviewPlanRecorded(_),
+        ) => Ok(()),
+        _ => Err(IndexError::ProjectionContractViolation),
     }
 }
 
+fn map_index_journal(error: JournalError) -> IndexError {
+    match error {
+        JournalError::Incomplete { limit, observed } => IndexError::Incomplete { limit, observed },
+        other => IndexError::Journal(other),
+    }
+}
+
+fn streaming_journal_retained(
+    reader: &super::journal::IndexJournalReader,
+    identity: &JournalIdentity,
+    limits: IndexLimits,
+) -> Result<u64, IndexError> {
+    let genesis = identity
+        .v2_genesis_backing()
+        .map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+    let metadata = reader
+        .retained_metadata_capacity()
+        .map_err(map_index_journal)?;
+    let local_identity = identity
+        .cloned_local_metadata_capacity()
+        .map_err(map_index_journal)?;
+    let retained = genesis
+        .checked_add(metadata)
+        .and_then(|value| value.checked_add(local_identity))
+        // `EventJournal` retains the originating identity while the reader
+        // and this cursor copy are live. Its V2 Arc allocations are shared;
+        // only the local run/V1-hash backing is an additional request.
+        .and_then(|value| value.checked_add(local_identity))
+        .ok_or(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed: u64::MAX,
+        })?;
+    if retained > limits.max_working_bytes {
+        return Err(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed: retained,
+        });
+    }
+    Ok(retained)
+}
+
+fn streaming_projection(
+    identity: &JournalIdentity,
+) -> Result<Option<OfflineProjectionState>, IndexError> {
+    if identity.version() == EventContractVersion::V1 {
+        return Ok(None);
+    }
+    let bytes = identity
+        .v2_genesis_backing()
+        .ok_or(IndexError::ProjectionContractViolation)?;
+    let initial = RunGenesisSnapshot::from_canonical_bytes_for_index(bytes)
+        .and_then(|snapshot| snapshot.rebuild_aggregate())
+        .map_err(|_| IndexError::ProjectionContractViolation)?;
+    let verified = match identity
+        .verified_core_genesis()
+        .map_err(map_index_journal)?
+    {
+        reviewgraphen_core::EventStreamGenesis::V2Verified(verified) => verified,
+        _ => return Err(IndexError::ProjectionContractViolation),
+    };
+    OfflineProjectionState::new_streaming_v2(&identity.run_id, verified, initial)
+        .map(Some)
+        .map_err(|_| IndexError::ProjectionContractViolation)
+}
+
+fn admit_streaming_scan(
+    retained: u64,
+    certificate: &super::journal::PrefixCertificate,
+    limits: IndexLimits,
+) -> Result<(), IndexError> {
+    let observed = retained
+        .checked_add(certificate.line_buffer_capacity)
+        .and_then(|value| value.checked_add(certificate.canonical_scratch_capacity))
+        .ok_or(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed: u64::MAX,
+        })?;
+    if observed > limits.max_working_bytes {
+        return Err(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed,
+        });
+    }
+    Ok(())
+}
+
+fn map_index_replay(error: IndexReplayError<IndexError>) -> IndexError {
+    match error {
+        IndexReplayError::Journal(error) => map_index_journal(error),
+        IndexReplayError::Visitor(error) => error,
+    }
+}
+
+struct StreamingSnapshotComparator<'a> {
+    snapshot: &'a IndexSnapshot,
+    event_index: usize,
+    plan_index: usize,
+    context_index: usize,
+    schema: &'static str,
+}
+
+impl<'a> StreamingSnapshotComparator<'a> {
+    fn new(snapshot: &'a IndexSnapshot, version: EventContractVersion) -> Self {
+        Self {
+            snapshot,
+            event_index: 0,
+            plan_index: 0,
+            context_index: 0,
+            schema: version.schema(),
+        }
+    }
+
+    fn compare_event(&mut self, envelope: &EventEnvelope) -> Result<(), IndexError> {
+        let validated = envelope
+            .decode_for_streaming_projection()
+            .map_err(|_| IndexError::CorruptIndex)?;
+        let row = self
+            .snapshot
+            .events
+            .get(self.event_index)
+            .ok_or(IndexError::CorruptIndex)?;
+        if !event_row_matches(&validated, row, self.schema)? {
+            return Err(IndexError::CorruptIndex);
+        }
+        self.event_index += 1;
+        match validated.payload() {
+            DecodedPayload::ReviewPlanRecorded(plan) => {
+                let actual = self
+                    .snapshot
+                    .review_plans
+                    .get(self.plan_index)
+                    .ok_or(IndexError::CorruptIndex)?;
+                if actual.event_sequence != envelope.sequence()
+                    || actual.event_id != *envelope.id()
+                    || actual.plan_id != *plan.id()
+                    || actual.body_hash
+                        != ContentHash::sha256(
+                            &plan
+                                .canonical_bytes()
+                                .map_err(|_| IndexError::CorruptIndex)?,
+                        )
+                {
+                    return Err(IndexError::CorruptIndex);
+                }
+                self.plan_index += 1;
+            }
+            DecodedPayload::ContextEnvelopeProjected(context) => {
+                let actual = self
+                    .snapshot
+                    .context_envelopes
+                    .get(self.context_index)
+                    .ok_or(IndexError::CorruptIndex)?;
+                if actual.event_sequence != envelope.sequence()
+                    || actual.event_id != *envelope.id()
+                    || actual.envelope_id != *context.id()
+                    || actual.body_hash
+                        != ContentHash::sha256(
+                            &context
+                                .canonical_bytes()
+                                .map_err(|_| IndexError::CorruptIndex)?,
+                        )
+                {
+                    return Err(IndexError::CorruptIndex);
+                }
+                self.context_index += 1;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<(), IndexError> {
+        if self.event_index != self.snapshot.events.len()
+            || self.plan_index != self.snapshot.review_plans.len()
+            || self.context_index != self.snapshot.context_envelopes.len()
+        {
+            return Err(IndexError::CorruptIndex);
+        }
+        Ok(())
+    }
+}
+
+fn event_row_matches(
+    validated: &reviewgraphen_core::ValidatedEvent<'_>,
+    row: &IndexEvent,
+    schema: &str,
+) -> Result<bool, IndexError> {
+    let envelope = validated.envelope();
+    Ok(row.sequence == envelope.sequence()
+        && row.event_id == *envelope.id()
+        && row.schema == schema
+        && row.event_hash == *envelope.event_hash()
+        && row.payload_hash == *envelope.payload_hash()
+        && row.payload_kind == payload_kind_decoded(validated.payload())?
+        && row.actor == envelope.actor()
+        && row.logical_time == envelope.logical_time())
+}
+
+fn event_compare_tuple_bytes(connection: &Connection) -> Result<u64, IndexError> {
+    let dynamic: i64 = connection.query_row(
+        "SELECT COALESCE(MAX(length(CAST(event_id AS BLOB))+length(CAST(schema AS BLOB))+length(CAST(event_hash AS BLOB))+length(CAST(payload_hash AS BLOB))+length(CAST(payload_kind AS BLOB))+length(CAST(actor AS BLOB))),0) FROM events",
+        [],
+        |row| row.get(0),
+    )?;
+    u64::try_from(dynamic)
+        .map_err(|_| IndexError::CorruptIndex)?
+        .checked_add(
+            u64::try_from(std::mem::size_of::<IndexEvent>())
+                .map_err(|_| IndexError::IntegerOutOfRange)?,
+        )
+        // A plan/context comparison retains one compact SHA-256 body hash;
+        // its canonical body writer is core-owned transient state.
+        .and_then(|value| value.checked_add(71))
+        .ok_or(IndexError::Incomplete {
+            limit: u64::MAX,
+            observed: u64::MAX,
+        })
+}
+
+fn admit_query_compare_peak(
+    connection: &Connection,
+    retained: u64,
+    certificate: &super::journal::PrefixCertificate,
+    marker: &IndexMarker,
+    limits: IndexLimits,
+) -> Result<(), IndexError> {
+    let result = preflight_query_budget(connection, marker, limits)?;
+    let page_count: i64 = connection.pragma_query_value(None, "page_count", |row| row.get(0))?;
+    let main = u64::try_from(page_count)
+        .map_err(|_| IndexError::CorruptIndex)?
+        .checked_mul(PAGE_SIZE)
+        .ok_or(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed: u64::MAX,
+        })?;
+    let cache = configured_cache_bytes(
+        limits,
+        query_cache_reservation_with_journal(limits, retained)?,
+    )?;
+    let compare = event_compare_tuple_bytes(connection)?;
+    let observed = retained
+        .checked_add(certificate.line_buffer_capacity)
+        .and_then(|value| value.checked_add(certificate.canonical_scratch_capacity))
+        .and_then(|value| value.checked_add(main))
+        .and_then(|value| value.checked_add(cache))
+        .and_then(|value| value.checked_add(result))
+        .and_then(|value| value.checked_add(compare))
+        .ok_or(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed: u64::MAX,
+        })?;
+    if observed > limits.max_working_bytes {
+        return Err(IndexError::Incomplete {
+            limit: limits.max_working_bytes,
+            observed,
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn snapshot_from_connection(
     connection: &Connection,
     limits: IndexLimits,
     cache_reservation: u64,
+    aggregate: Option<&ReviewAggregate>,
 ) -> Result<IndexSnapshot, IndexError> {
+    snapshot_from_connection_with_journal(
+        connection,
+        limits,
+        cache_reservation,
+        0,
+        0,
+        aggregate.map(D1ValidationSource::Aggregate),
+    )
+}
+
+#[derive(Clone, Copy)]
+enum D1ValidationSource<'a> {
+    #[cfg(test)]
+    Aggregate(&'a ReviewAggregate),
+    /// The row's canonical body is checked here and bound to its exact
+    /// journal payload hash by the following lock-held streaming pass.
+    StreamingJournal(std::marker::PhantomData<&'a ()>),
+}
+
+impl D1ValidationSource<'_> {
+    const fn streaming() -> Self {
+        Self::StreamingJournal(std::marker::PhantomData)
+    }
+}
+
+fn preflight_marker_query(connection: &Connection, limits: IndexLimits) -> Result<u64, IndexError> {
+    let text: i64 = connection
+        .query_row(
+            "SELECT COALESCE(length(CAST(projection_contract_version AS BLOB))+length(CAST(event_contract_version AS BLOB))+length(CAST(projection_mode AS BLOB))+length(CAST(run_id AS BLOB))+length(CAST(genesis_hash AS BLOB))+length(CAST(tail_hash AS BLOB)),0) FROM index_meta WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| IndexError::CorruptIndex)?;
+    let text = u64::try_from(text).map_err(|_| IndexError::CorruptIndex)?;
+    let fixed = u64::try_from(std::mem::size_of::<IndexMarker>())
+        .map_err(|_| IndexError::IntegerOutOfRange)?;
+    let requested = text.checked_add(fixed).ok_or(IndexError::Incomplete {
+        limit: limits.max_query_bytes,
+        observed: u64::MAX,
+    })?;
+    if requested > limits.max_query_bytes {
+        return Err(IndexError::Incomplete {
+            limit: limits.max_query_bytes,
+            observed: requested,
+        });
+    }
+    Ok(requested)
+}
+
+fn index_marker_from_connection(
+    connection: &Connection,
+    limits: IndexLimits,
+) -> Result<IndexMarker, IndexError> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != 1 {
+    if version == 1 {
+        return Err(IndexError::RebuildRequired {
+            found: 1,
+            required: INDEX_SCHEMA_VERSION,
+        });
+    }
+    if version != i64::from(INDEX_SCHEMA_VERSION) {
         return Err(IndexError::CorruptIndex);
     }
-    let integrity: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-    if integrity != "ok" {
+    let count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM index_meta", [], |row| row.get(0))?;
+    if count != 1 {
+        return Err(IndexError::CorruptIndex);
+    }
+    preflight_marker_query(connection, limits)?;
+    let marker = connection.query_row("SELECT index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count FROM index_meta WHERE singleton=1", [], |row| {
+        Ok(IndexMarker { index_schema_version: u64::try_from(row.get::<_,i64>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?, sqlite_user_version: u64::try_from(version).map_err(|_| rusqlite::Error::InvalidQuery)?, projection_contract_version: row_text(row, 1)?, event_contract_version: row_text(row, 2)?, projection_mode: row_text(row, 3)?, run_id: StableId::parse(row_text(row, 4)?).map_err(|_| rusqlite::Error::InvalidQuery)?, genesis_hash: ContentHash::parse(row_text(row, 5)?).map_err(|_| rusqlite::Error::InvalidQuery)?, confirmed_offset: u64::try_from(row.get::<_,i64>(6)?).map_err(|_| rusqlite::Error::InvalidQuery)?, tail_hash: ContentHash::parse(row_text(row, 7)?).map_err(|_| rusqlite::Error::InvalidQuery)?, event_count: u64::try_from(row.get::<_,i64>(8)?).map_err(|_| rusqlite::Error::InvalidQuery)? })
+    }).map_err(|_| IndexError::CorruptIndex)?;
+    if marker.index_schema_version != marker.sqlite_user_version
+        || marker.sqlite_user_version != u64::from(INDEX_SCHEMA_VERSION)
+        || marker.projection_contract_version != PROJECTION_CONTRACT_VERSION
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    Ok(marker)
+}
+
+fn snapshot_from_connection_with_journal(
+    connection: &Connection,
+    limits: IndexLimits,
+    cache_reservation: u64,
+    journal_view: u64,
+    candidate_read_image: u64,
+    validation_source: Option<D1ValidationSource<'_>>,
+) -> Result<IndexSnapshot, IndexError> {
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == 1 {
+        return Err(IndexError::RebuildRequired {
+            found: 1,
+            required: INDEX_SCHEMA_VERSION,
+        });
+    }
+    if version != i64::from(INDEX_SCHEMA_VERSION) {
+        return Err(IndexError::CorruptIndex);
+    }
+    let integrity_ok: bool = connection.query_row("PRAGMA integrity_check", [], |row| {
+        Ok(row.get_ref(0)?.as_str()? == "ok")
+    })?;
+    if !integrity_ok {
         return Err(IndexError::CorruptIndex);
     }
     let mut foreign_keys = connection.prepare("PRAGMA foreign_key_check")?;
@@ -1700,10 +2749,13 @@ fn snapshot_from_connection(
     if count != 1 {
         return Err(IndexError::CorruptIndex);
     }
+    preflight_marker_query(connection, limits)?;
     let marker = connection.query_row("SELECT index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count FROM index_meta WHERE singleton=1", [], |row| {
-        Ok(IndexMarker { index_schema_version: u64::try_from(row.get::<_,i64>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?, sqlite_user_version: u64::try_from(version).map_err(|_| rusqlite::Error::InvalidQuery)?, projection_contract_version: row.get(1)?, event_contract_version: row.get(2)?, projection_mode: row.get(3)?, run_id: StableId::parse(row.get::<_,String>(4)?).map_err(|_| rusqlite::Error::InvalidQuery)?, genesis_hash: ContentHash::parse(row.get::<_,String>(5)?).map_err(|_| rusqlite::Error::InvalidQuery)?, confirmed_offset: u64::try_from(row.get::<_,i64>(6)?).map_err(|_| rusqlite::Error::InvalidQuery)?, tail_hash: ContentHash::parse(row.get::<_,String>(7)?).map_err(|_| rusqlite::Error::InvalidQuery)?, event_count: u64::try_from(row.get::<_,i64>(8)?).map_err(|_| rusqlite::Error::InvalidQuery)? })
+        Ok(IndexMarker { index_schema_version: u64::try_from(row.get::<_,i64>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?, sqlite_user_version: u64::try_from(version).map_err(|_| rusqlite::Error::InvalidQuery)?, projection_contract_version: row_text(row, 1)?, event_contract_version: row_text(row, 2)?, projection_mode: row_text(row, 3)?, run_id: StableId::parse(row_text(row, 4)?).map_err(|_| rusqlite::Error::InvalidQuery)?, genesis_hash: ContentHash::parse(row_text(row, 5)?).map_err(|_| rusqlite::Error::InvalidQuery)?, confirmed_offset: u64::try_from(row.get::<_,i64>(6)?).map_err(|_| rusqlite::Error::InvalidQuery)?, tail_hash: ContentHash::parse(row_text(row, 7)?).map_err(|_| rusqlite::Error::InvalidQuery)?, event_count: u64::try_from(row.get::<_,i64>(8)?).map_err(|_| rusqlite::Error::InvalidQuery)? })
     }).map_err(|_| IndexError::CorruptIndex)?;
-    if marker.index_schema_version != marker.sqlite_user_version || marker.sqlite_user_version != 1
+    if marker.index_schema_version != marker.sqlite_user_version
+        || marker.sqlite_user_version != u64::from(INDEX_SCHEMA_VERSION)
+        || marker.projection_contract_version != PROJECTION_CONTRACT_VERSION
     {
         return Err(IndexError::CorruptIndex);
     }
@@ -1719,7 +2771,6 @@ fn snapshot_from_connection(
             "SELECT COUNT(*) FROM snapshot_source_index",
             "SELECT COUNT(*) FROM context_envelopes",
             "SELECT COUNT(*) FROM review_plans",
-            "SELECT COUNT(*) FROM executions",
             "SELECT COUNT(*) FROM unreconciled_authority_records",
             "SELECT COUNT(*) FROM projected_findings",
         ] {
@@ -1749,7 +2800,8 @@ fn snapshot_from_connection(
     // The projection returns owned strings and vectors.  Measure the complete
     // fixed query shape before asking SQLite for a row, so an over-budget image
     // cannot materialize even a partial public snapshot.
-    let query_bytes = preflight_query_budget(connection, &marker, limits)?;
+    let (query_bytes, table_text_bytes) =
+        preflight_query_budget_details(connection, &marker, limits)?;
     let page_count: i64 = connection.pragma_query_value(None, "page_count", |row| row.get(0))?;
     let main_bytes = u64::try_from(page_count)
         .map_err(|_| IndexError::CorruptIndex)?
@@ -1759,34 +2811,43 @@ fn snapshot_from_connection(
             observed: u64::MAX,
         })?;
     let cache_bytes = configured_cache_bytes(limits, cache_reservation)?;
-    let peak = main_bytes
-        .checked_add(cache_bytes)
-        .and_then(|value| value.checked_add(query_bytes))
-        .ok_or(IndexError::Incomplete {
-            limit: limits.max_working_bytes,
-            observed: u64::MAX,
-        })?;
-    if peak > limits.max_working_bytes {
-        return Err(IndexError::Incomplete {
-            limit: limits.max_working_bytes,
-            observed: peak,
-        });
-    }
+    let compare_tuple = event_compare_tuple_bytes(connection)?;
+    admit_candidate_reread_peak(
+        [
+            journal_view,
+            candidate_read_image,
+            main_bytes,
+            cache_bytes,
+            query_bytes,
+            compare_tuple,
+            0,
+        ],
+        limits.max_working_bytes,
+    )?;
+    let text_admission = QueryTextAdmission::new(table_text_bytes)?;
     let mut events = Vec::new();
+    events
+        .try_reserve_exact(
+            usize::try_from(marker.event_count).map_err(|_| IndexError::IntegerOutOfRange)?,
+        )
+        .map_err(|_| IndexError::Incomplete {
+            limit: limits.max_query_bytes,
+            observed: query_bytes,
+        })?;
     let mut statement = connection.prepare("SELECT sequence,event_id,schema,event_hash,payload_hash,payload_kind,actor,logical_time FROM events ORDER BY sequence,event_id")?;
     let rows = statement.query_map([], |row| {
         Ok(IndexEvent {
             sequence: u64::try_from(row.get::<_, i64>(0)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            event_id: StableId::parse(row.get::<_, String>(1)?)
+            event_id: StableId::parse(row_text(row, 1)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            schema: row.get(2)?,
-            event_hash: ContentHash::parse(row.get::<_, String>(3)?)
+            schema: row_text(row, 2)?,
+            event_hash: ContentHash::parse(row_text(row, 3)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            payload_hash: ContentHash::parse(row.get::<_, String>(4)?)
+            payload_hash: ContentHash::parse(row_text(row, 4)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            payload_kind: row.get(5)?,
-            actor: row.get(6)?,
+            payload_kind: row_text(row, 5)?,
+            actor: row_text(row, 6)?,
             logical_time: u64::try_from(row.get::<_, i64>(7)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
         })
@@ -1812,18 +2873,21 @@ fn snapshot_from_connection(
     {
         return Err(IndexError::CorruptIndex);
     }
-    let mut shadows = Vec::new();
+    let mut shadows = reserved_query_vec(
+        connection,
+        "SELECT COUNT(*) FROM unreconciled_authority_records",
+    )?;
     let mut shadow_statement = connection.prepare("SELECT event_sequence,event_id,record_id,kind,body_hash,authority_reconciled FROM unreconciled_authority_records ORDER BY event_sequence,record_id")?;
     let shadow_rows = shadow_statement.query_map([], |row| {
         Ok(IndexShadow {
             event_sequence: u64::try_from(row.get::<_, i64>(0)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            event_id: StableId::parse(row.get::<_, String>(1)?)
+            event_id: StableId::parse(row_text(row, 1)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            record_id: StableId::parse(row.get::<_, String>(2)?)
+            record_id: StableId::parse(row_text(row, 2)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            kind: row.get(3)?,
-            body_hash: ContentHash::parse(row.get::<_, String>(4)?)
+            kind: row_text(row, 3)?,
+            body_hash: ContentHash::parse(row_text(row, 4)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
             authority_reconciled: row.get::<_, i64>(5)? != 0,
         })
@@ -1844,10 +2908,10 @@ fn snapshot_from_connection(
     let claims = query_claims(connection)?;
     let artifact_registrations = query_registrations(connection)?;
     let snapshot_sources = query_sources(connection)?;
-    let context_envelopes = query_context_envelopes(connection)?;
-    let review_plans = query_review_plans(connection)?;
-    let executions = query_executions(connection)?;
-    Ok(IndexSnapshot {
+    let context_envelopes = query_context_envelopes(connection, validation_source)?;
+    let review_plans = query_review_plans(connection, validation_source)?;
+    text_admission.finish()?;
+    let snapshot = IndexSnapshot {
         marker,
         events,
         shadows,
@@ -1862,8 +2926,266 @@ fn snapshot_from_connection(
         snapshot_sources,
         context_envelopes,
         review_plans,
-        executions,
-    })
+    };
+    if preflight_query_budget(connection, &snapshot.marker, limits)? != query_bytes
+        || snapshot_query_budget(&snapshot, limits)? != query_bytes
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    Ok(snapshot)
+}
+
+fn charge_texts<'a>(
+    used: &mut u64,
+    limits: IndexLimits,
+    values: impl IntoIterator<Item = &'a str>,
+) -> Result<(), IndexError> {
+    for value in values {
+        charge_bytes(
+            used,
+            limits,
+            u64::try_from(value.len()).map_err(|_| IndexError::IntegerOutOfRange)?,
+        )?;
+    }
+    Ok(())
+}
+
+fn charge_rows<T>(used: &mut u64, limits: IndexLimits, rows: &[T]) -> Result<(), IndexError> {
+    let bytes = u64::try_from(rows.len())
+        .map_err(|_| IndexError::IntegerOutOfRange)?
+        .checked_mul(vector_row_cost::<T>())
+        .ok_or(IndexError::Incomplete {
+            limit: limits.max_query_bytes,
+            observed: u64::MAX,
+        })?;
+    charge_bytes(used, limits, bytes)
+}
+
+/// Reconcile every decoded field with the earlier fixed-SQL length/count
+/// preflight. This catches type coercion, row drift, or a query implementation
+/// that accidentally requests a different owned result shape.
+fn snapshot_query_budget(snapshot: &IndexSnapshot, limits: IndexLimits) -> Result<u64, IndexError> {
+    let mut used = u64::try_from(std::mem::size_of::<IndexMarker>())
+        .map_err(|_| IndexError::IntegerOutOfRange)?;
+    charge_texts(
+        &mut used,
+        limits,
+        [
+            snapshot.marker.projection_contract_version.as_str(),
+            snapshot.marker.event_contract_version.as_str(),
+            snapshot.marker.projection_mode.as_str(),
+            snapshot.marker.run_id.as_str(),
+            snapshot.marker.genesis_hash.as_str(),
+            snapshot.marker.tail_hash.as_str(),
+        ],
+    )?;
+
+    charge_rows(&mut used, limits, &snapshot.events)?;
+    for row in &snapshot.events {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.event_id.as_str(),
+                row.schema.as_str(),
+                row.event_hash.as_str(),
+                row.payload_hash.as_str(),
+                row.payload_kind.as_str(),
+                row.actor.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.shadows)?;
+    for row in &snapshot.shadows {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.event_id.as_str(),
+                row.record_id.as_str(),
+                row.kind.as_str(),
+                row.body_hash.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.findings)?;
+    for row in &snapshot.findings {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.event_id.as_str(),
+                row.finding_id.as_str(),
+                row.body_hash.as_str(),
+                row.projection_status.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.program_objects)?;
+    for row in &snapshot.program_objects {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.object_id.as_str(),
+                row.object_kind.as_str(),
+                row.body_hash.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.program_relations)?;
+    for row in &snapshot.program_relations {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.relation_id.as_str(),
+                row.relation_kind.as_str(),
+                row.source_id.as_str(),
+                row.target_ids_canonical_json.as_str(),
+                row.body_hash.as_str(),
+            ],
+        )?;
+    }
+    if let Some(row) = &snapshot.universe {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.universe_id.as_str(),
+                row.snapshot_id.as_str(),
+                row.profile_id.as_str(),
+                row.rule_set_hash.as_str(),
+                row.extractor_set_hash.as_str(),
+                row.policy_version.as_str(),
+                row.rule_pack_version.as_str(),
+                row.body_hash.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.obligations)?;
+    for row in &snapshot.obligations {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.obligation_id.as_str(),
+                row.target_kind.as_str(),
+                row.target_ids_canonical_json.as_str(),
+                row.property_id.as_str(),
+                row.lifecycle.as_str(),
+                row.body_hash.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.obligation_lifecycle)?;
+    for row in &snapshot.obligation_lifecycle {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.event_id.as_str(),
+                row.obligation_id.as_str(),
+                row.next_lifecycle.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.claims)?;
+    for row in &snapshot.claims {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.event_id.as_str(),
+                row.claim_id.as_str(),
+                row.execution_id.as_str(),
+                row.polarity.as_str(),
+                row.body_hash.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.artifact_registrations)?;
+    for row in &snapshot.artifact_registrations {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.event_id.as_str(),
+                row.registration_id.as_str(),
+                row.run_id.as_str(),
+                row.cas_hash.as_str(),
+                row.media_type.as_str(),
+                row.sensitivity.as_str(),
+                row.source_kind.as_str(),
+                row.source_id.as_str(),
+                row.body_hash.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.snapshot_sources)?;
+    for row in &snapshot.snapshot_sources {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.event_id.as_str(),
+                row.snapshot_id.as_str(),
+                row.artifact_id.as_str(),
+                row.registration_id.as_str(),
+                row.path.as_str(),
+                row.content_hash.as_str(),
+                row.cas_hash.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.context_envelopes)?;
+    for row in &snapshot.context_envelopes {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.event_id.as_str(),
+                row.envelope_id.as_str(),
+                row.snapshot_id.as_str(),
+                row.context_policy_version.as_str(),
+                row.context_policy_hash.as_str(),
+                row.candidate_ids_canonical_json.as_str(),
+                row.obligation_ids_canonical_json.as_str(),
+                row.context_policy_canonical_json.as_str(),
+                row.included_sources_canonical_json.as_str(),
+                row.excluded_sources_canonical_json.as_str(),
+                row.unknowns_canonical_json.as_str(),
+                row.assumptions_canonical_json.as_str(),
+                row.losses_canonical_json.as_str(),
+                row.projection_hash.as_str(),
+                row.body_hash.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.review_plans)?;
+    for row in &snapshot.review_plans {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.event_id.as_str(),
+                row.plan_id.as_str(),
+                row.universe_id.as_str(),
+                row.snapshot_id.as_str(),
+                row.planner_input_hash.as_str(),
+                row.planner_policy_version.as_str(),
+                row.planner_policy_hash.as_str(),
+                row.budget_canonical_json.as_str(),
+                row.budget_hash.as_str(),
+                row.risk_breakdown_canonical_json.as_str(),
+                row.waves_canonical_json.as_str(),
+                row.deferred_canonical_json.as_str(),
+                row.identity_body_hash.as_str(),
+                row.body_hash.as_str(),
+            ],
+        )?;
+    }
+    Ok(used)
 }
 
 fn charge_bytes(used: &mut u64, limits: IndexLimits, value: u64) -> Result<(), IndexError> {
@@ -1888,14 +3210,23 @@ fn preflight_query_budget(
     marker: &IndexMarker,
     limits: IndexLimits,
 ) -> Result<u64, IndexError> {
-    let mut used = 0_u64;
+    Ok(preflight_query_budget_details(connection, marker, limits)?.0)
+}
+
+fn preflight_query_budget_details(
+    connection: &Connection,
+    marker: &IndexMarker,
+    limits: IndexLimits,
+) -> Result<(u64, u64), IndexError> {
+    let mut used = u64::try_from(std::mem::size_of::<IndexMarker>())
+        .map_err(|_| IndexError::IntegerOutOfRange)?;
     for value in [
         marker.projection_contract_version.as_str(),
         marker.event_contract_version.as_str(),
         marker.projection_mode.as_str(),
-        &marker.run_id.to_string(),
-        &marker.genesis_hash.to_string(),
-        &marker.tail_hash.to_string(),
+        marker.run_id.as_str(),
+        marker.genesis_hash.as_str(),
+        marker.tail_hash.as_str(),
     ] {
         charge_bytes(
             &mut used,
@@ -1903,78 +3234,83 @@ fn preflight_query_budget(
             u64::try_from(value.len()).map_err(|_| IndexError::IntegerOutOfRange)?,
         )?;
     }
-    charge_bytes(&mut used, limits, 24)?;
     let tables = [
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(event_id)+length(schema)+length(event_hash)+length(payload_hash)+length(payload_kind)+length(actor)),0) FROM events",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(schema AS BLOB))+length(CAST(event_hash AS BLOB))+length(CAST(payload_hash AS BLOB))+length(CAST(payload_kind AS BLOB))+length(CAST(actor AS BLOB))),0) FROM events",
             vector_row_cost::<IndexEvent>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(event_id)+length(record_id)+length(kind)+length(body_hash)),0) FROM unreconciled_authority_records",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(record_id AS BLOB))+length(CAST(kind AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM unreconciled_authority_records",
             vector_row_cost::<IndexShadow>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(event_id)+length(finding_id)+length(body_hash)+length(projection_status)),0) FROM projected_findings",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(finding_id AS BLOB))+length(CAST(body_hash AS BLOB))+length(CAST(projection_status AS BLOB))),0) FROM projected_findings",
             vector_row_cost::<IndexFinding>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(object_id)+length(object_kind)+length(body_hash)),0) FROM program_objects",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(object_id AS BLOB))+length(CAST(object_kind AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM program_objects",
             vector_row_cost::<IndexProgramObject>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(relation_id)+length(relation_kind)+length(source_id)+length(target_ids_canonical_json)+length(body_hash)),0) FROM program_relations",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(relation_id AS BLOB))+length(CAST(relation_kind AS BLOB))+length(CAST(source_id AS BLOB))+length(CAST(target_ids_canonical_json AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM program_relations",
             vector_row_cost::<IndexProgramRelation>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(universe_id)+length(snapshot_id)+length(profile_id)+length(rule_set_hash)+length(extractor_set_hash)+length(policy_version)+length(rule_pack_version)+length(body_hash)),0) FROM universe",
-            vector_row_cost::<IndexUniverse>(),
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(universe_id AS BLOB))+length(CAST(snapshot_id AS BLOB))+length(CAST(profile_id AS BLOB))+length(CAST(rule_set_hash AS BLOB))+length(CAST(extractor_set_hash AS BLOB))+length(CAST(policy_version AS BLOB))+length(CAST(rule_pack_version AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM universe",
+            0,
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(obligation_id)+length(target_kind)+length(target_ids_canonical_json)+length(property_id)+length(lifecycle)+length(body_hash)),0) FROM obligations",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(obligation_id AS BLOB))+length(CAST(target_kind AS BLOB))+length(CAST(target_ids_canonical_json AS BLOB))+length(CAST(property_id AS BLOB))+length(CAST(lifecycle AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM obligations",
             vector_row_cost::<IndexObligation>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(event_id)+length(obligation_id)+length(next_lifecycle)),0) FROM obligation_lifecycle",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(obligation_id AS BLOB))+length(CAST(next_lifecycle AS BLOB))),0) FROM obligation_lifecycle",
             vector_row_cost::<IndexObligationLifecycle>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(event_id)+length(claim_id)+length(execution_id)+length(polarity)+length(body_hash)),0) FROM claims",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(claim_id AS BLOB))+length(CAST(execution_id AS BLOB))+length(CAST(polarity AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM claims",
             vector_row_cost::<IndexClaim>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(event_id)+length(registration_id)+length(run_id)+length(cas_hash)+length(media_type)+length(sensitivity)+length(source_kind)+length(source_id)+length(body_hash)),0) FROM artifact_registrations",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(registration_id AS BLOB))+length(CAST(run_id AS BLOB))+length(CAST(cas_hash AS BLOB))+length(CAST(media_type AS BLOB))+length(CAST(sensitivity AS BLOB))+length(CAST(source_kind AS BLOB))+length(CAST(source_id AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM artifact_registrations",
             vector_row_cost::<IndexArtifactRegistration>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(event_id)+length(snapshot_id)+length(artifact_id)+length(registration_id)+length(path)+length(content_hash)+length(cas_hash)),0) FROM snapshot_source_index",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(snapshot_id AS BLOB))+length(CAST(artifact_id AS BLOB))+length(CAST(registration_id AS BLOB))+length(CAST(path AS BLOB))+length(CAST(content_hash AS BLOB))+length(CAST(cas_hash AS BLOB))),0) FROM snapshot_source_index",
             vector_row_cost::<IndexSnapshotSource>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(event_id)+length(envelope_id)+length(obligation_id)+length(projection_hash)+length(source_ids_canonical_json)+length(loss_ids_canonical_json)+length(body_hash)),0) FROM context_envelopes",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(envelope_id AS BLOB))+length(CAST(snapshot_id AS BLOB))+length(CAST(context_policy_version AS BLOB))+length(CAST(context_policy_hash AS BLOB))+length(CAST(candidate_ids_canonical_json AS BLOB))+length(CAST(obligation_ids_canonical_json AS BLOB))+length(CAST(context_policy_canonical_json AS BLOB))+length(CAST(included_sources_canonical_json AS BLOB))+length(CAST(excluded_sources_canonical_json AS BLOB))+length(CAST(unknowns_canonical_json AS BLOB))+length(CAST(assumptions_canonical_json AS BLOB))+length(CAST(losses_canonical_json AS BLOB))+length(CAST(projection_hash AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM context_envelopes",
             vector_row_cost::<IndexContextEnvelope>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(event_id)+length(plan_id)+length(run_id)+length(budget_hash)+length(policy_hash)+length(body_hash)),0) FROM review_plans",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(plan_id AS BLOB))+length(CAST(universe_id AS BLOB))+length(CAST(snapshot_id AS BLOB))+length(CAST(planner_input_hash AS BLOB))+length(CAST(planner_policy_version AS BLOB))+length(CAST(planner_policy_hash AS BLOB))+length(CAST(budget_canonical_json AS BLOB))+length(CAST(budget_hash AS BLOB))+length(CAST(risk_breakdown_canonical_json AS BLOB))+length(CAST(waves_canonical_json AS BLOB))+length(CAST(deferred_canonical_json AS BLOB))+length(CAST(identity_body_hash AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM review_plans",
             vector_row_cost::<IndexReviewPlan>(),
         ),
     ];
+    let mut table_text_bytes = 0_u64;
     for (sql, scalar_bytes) in tables {
-        charge_query_measurement(connection, sql, scalar_bytes, &mut used, limits)?;
+        table_text_bytes = table_text_bytes
+            .checked_add(charge_query_measurement(
+                connection,
+                sql,
+                scalar_bytes,
+                &mut used,
+                limits,
+            )?)
+            .ok_or(IndexError::Incomplete {
+                limit: limits.max_query_bytes,
+                observed: u64::MAX,
+            })?;
     }
-    charge_query_measurement(
-        connection,
-        "SELECT COUNT(*), COALESCE(SUM(length(event_id)+length(execution_id)+length(reviewer_id)+length(envelope_id)+length(outcome)+length(raw_registration_id)+length(raw_hash)+length(obligation_ids_canonical_json)+length(claim_ids_canonical_json)+length(body_hash)),0) FROM executions",
-        vector_row_cost::<IndexExecution>(),
-        &mut used,
-        limits,
-    )?;
-    Ok(used)
+    Ok((used, table_text_bytes))
 }
 
 fn vector_row_cost<T>() -> u64 {
-    // `Vec` growth can hold both the old and new allocation during a resize.
-    // Charge two elements per returned row before materializing any row.
-    u64::try_from(std::mem::size_of::<T>()).expect("type size fits u64") * 2
+    // Public query vectors use `try_reserve_exact` before decoding their first
+    // row. The normative metric is the requested Layout byte count, not an
+    // allocator's usable-size or growth policy.
+    u64::try_from(std::mem::size_of::<T>()).expect("type size fits u64")
 }
 
 fn charge_query_measurement(
@@ -1983,7 +3319,7 @@ fn charge_query_measurement(
     scalar_bytes: u64,
     used: &mut u64,
     limits: IndexLimits,
-) -> Result<(), IndexError> {
+) -> Result<u64, IndexError> {
     let (rows, text_bytes): (i64, i64) = connection
         .query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
         .map_err(|_| IndexError::CorruptIndex)?;
@@ -1996,7 +3332,8 @@ fn charge_query_measurement(
             observed: u64::MAX,
         })?;
     charge_bytes(used, limits, text_bytes)?;
-    charge_bytes(used, limits, scalar_bytes)
+    charge_bytes(used, limits, scalar_bytes)?;
+    Ok(text_bytes)
 }
 
 fn parse_id(value: String) -> rusqlite::Result<StableId> {
@@ -2005,34 +3342,111 @@ fn parse_id(value: String) -> rusqlite::Result<StableId> {
 fn parse_hash(value: String) -> rusqlite::Result<ContentHash> {
     ContentHash::parse(value).map_err(|_| rusqlite::Error::InvalidQuery)
 }
+
+thread_local! {
+    static QUERY_TEXT_REMAINING: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+struct QueryTextAdmission;
+
+impl QueryTextAdmission {
+    fn new(bytes: u64) -> Result<Self, IndexError> {
+        QUERY_TEXT_REMAINING.with(|remaining| {
+            if remaining.replace(Some(bytes)).is_some() {
+                Err(IndexError::ProjectionContractViolation)
+            } else {
+                Ok(Self)
+            }
+        })
+    }
+
+    fn finish(self) -> Result<(), IndexError> {
+        let remaining = QUERY_TEXT_REMAINING.with(|value| value.replace(None));
+        std::mem::forget(self);
+        if remaining == Some(0) {
+            Ok(())
+        } else {
+            Err(IndexError::CorruptIndex)
+        }
+    }
+}
+
+impl Drop for QueryTextAdmission {
+    fn drop(&mut self) {
+        QUERY_TEXT_REMAINING.with(|remaining| remaining.set(None));
+    }
+}
+
+fn row_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<String> {
+    let source = row.get_ref(index)?.as_str()?;
+    QUERY_TEXT_REMAINING.with(|remaining| {
+        if let Some(available) = remaining.get() {
+            let requested =
+                u64::try_from(source.len()).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let next = available
+                .checked_sub(requested)
+                .ok_or(rusqlite::Error::InvalidQuery)?;
+            // Consume the fixed-SQL measurement before requesting the owned
+            // destination, so drift cannot allocate even one over-budget row.
+            remaining.set(Some(next));
+        }
+        Ok::<_, rusqlite::Error>(())
+    })?;
+    let mut owned = String::new();
+    owned
+        .try_reserve_exact(source.len())
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    owned.push_str(source);
+    Ok(owned)
+}
+
+fn reserved_query_vec<T>(connection: &Connection, sql: &'static str) -> Result<Vec<T>, IndexError> {
+    let count: i64 = connection
+        .query_row(sql, [], |row| row.get(0))
+        .map_err(|_| IndexError::CorruptIndex)?;
+    let count = usize::try_from(count).map_err(|_| IndexError::CorruptIndex)?;
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(count)
+        .map_err(|_| IndexError::Incomplete {
+            limit: u64::try_from(count)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(u64::try_from(std::mem::size_of::<T>()).unwrap_or(u64::MAX)),
+            observed: u64::MAX,
+        })?;
+    Ok(rows)
+}
 fn query_program_objects(c: &Connection) -> Result<Vec<IndexProgramObject>, IndexError> {
     let mut s = c.prepare(
         "SELECT object_id,object_kind,body_hash FROM program_objects ORDER BY object_id",
     )?;
     let r = s.query_map([], |x| {
         Ok(IndexProgramObject {
-            object_id: parse_id(x.get(0)?)?,
-            object_kind: x.get(1)?,
-            body_hash: parse_hash(x.get(2)?)?,
+            object_id: parse_id(row_text(x, 0)?)?,
+            object_kind: row_text(x, 1)?,
+            body_hash: parse_hash(row_text(x, 2)?)?,
         })
     })?;
-    r.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| IndexError::CorruptIndex)
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM program_objects")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
+    Ok(rows)
 }
 fn query_program_relations(c: &Connection) -> Result<Vec<IndexProgramRelation>, IndexError> {
     let mut s=c.prepare("SELECT relation_id,relation_kind,source_id,target_ids_canonical_json,body_hash FROM program_relations ORDER BY relation_id")?;
     let r = s.query_map([], |x| {
         Ok(IndexProgramRelation {
-            relation_id: parse_id(x.get(0)?)?,
-            relation_kind: x.get(1)?,
-            source_id: parse_id(x.get(2)?)?,
-            target_ids_canonical_json: x.get(3)?,
-            body_hash: parse_hash(x.get(4)?)?,
+            relation_id: parse_id(row_text(x, 0)?)?,
+            relation_kind: row_text(x, 1)?,
+            source_id: parse_id(row_text(x, 2)?)?,
+            target_ids_canonical_json: row_text(x, 3)?,
+            body_hash: parse_hash(row_text(x, 4)?)?,
         })
     })?;
-    let rows = r
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| IndexError::CorruptIndex)?;
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM program_relations")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
     for row in &rows {
         validate_canonical_ids(&row.target_ids_canonical_json)?;
     }
@@ -2044,14 +3458,14 @@ fn query_universe(c: &Connection) -> Result<Option<IndexUniverse>, IndexError> {
     match r.next()? {
         None => Ok(None),
         Some(x) => Ok(Some(IndexUniverse {
-            universe_id: parse_id(x.get(0)?)?,
-            snapshot_id: parse_id(x.get(1)?)?,
-            profile_id: x.get(2)?,
-            rule_set_hash: parse_hash(x.get(3)?)?,
-            extractor_set_hash: parse_hash(x.get(4)?)?,
-            policy_version: x.get(5)?,
-            rule_pack_version: x.get(6)?,
-            body_hash: parse_hash(x.get(7)?)?,
+            universe_id: parse_id(row_text(x, 0)?)?,
+            snapshot_id: parse_id(row_text(x, 1)?)?,
+            profile_id: row_text(x, 2)?,
+            rule_set_hash: parse_hash(row_text(x, 3)?)?,
+            extractor_set_hash: parse_hash(row_text(x, 4)?)?,
+            policy_version: row_text(x, 5)?,
+            rule_pack_version: row_text(x, 6)?,
+            body_hash: parse_hash(row_text(x, 7)?)?,
         })),
     }
 }
@@ -2059,17 +3473,18 @@ fn query_obligations(c: &Connection) -> Result<Vec<IndexObligation>, IndexError>
     let mut s=c.prepare("SELECT obligation_id,target_kind,target_ids_canonical_json,property_id,lifecycle,body_hash FROM obligations ORDER BY obligation_id")?;
     let r = s.query_map([], |x| {
         Ok(IndexObligation {
-            obligation_id: parse_id(x.get(0)?)?,
-            target_kind: x.get(1)?,
-            target_ids_canonical_json: x.get(2)?,
-            property_id: x.get(3)?,
-            lifecycle: x.get(4)?,
-            body_hash: parse_hash(x.get(5)?)?,
+            obligation_id: parse_id(row_text(x, 0)?)?,
+            target_kind: row_text(x, 1)?,
+            target_ids_canonical_json: row_text(x, 2)?,
+            property_id: row_text(x, 3)?,
+            lifecycle: row_text(x, 4)?,
+            body_hash: parse_hash(row_text(x, 5)?)?,
         })
     })?;
-    let rows = r
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| IndexError::CorruptIndex)?;
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM obligations")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
     for row in &rows {
         validate_canonical_ids(&row.target_ids_canonical_json)?;
     }
@@ -2081,13 +3496,16 @@ fn query_obligation_lifecycle(c: &Connection) -> Result<Vec<IndexObligationLifec
         Ok(IndexObligationLifecycle {
             event_sequence: u64::try_from(x.get::<_, i64>(0)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            event_id: parse_id(x.get(1)?)?,
-            obligation_id: parse_id(x.get(2)?)?,
-            next_lifecycle: x.get(3)?,
+            event_id: parse_id(row_text(x, 1)?)?,
+            obligation_id: parse_id(row_text(x, 2)?)?,
+            next_lifecycle: row_text(x, 3)?,
         })
     })?;
-    r.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| IndexError::CorruptIndex)
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM obligation_lifecycle")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
+    Ok(rows)
 }
 fn query_claims(c: &Connection) -> Result<Vec<IndexClaim>, IndexError> {
     let mut s=c.prepare("SELECT event_sequence,event_id,claim_id,execution_id,polarity,body_hash FROM claims ORDER BY event_sequence,claim_id")?;
@@ -2095,15 +3513,18 @@ fn query_claims(c: &Connection) -> Result<Vec<IndexClaim>, IndexError> {
         Ok(IndexClaim {
             event_sequence: u64::try_from(x.get::<_, i64>(0)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            event_id: parse_id(x.get(1)?)?,
-            claim_id: parse_id(x.get(2)?)?,
-            execution_id: parse_id(x.get(3)?)?,
-            polarity: x.get(4)?,
-            body_hash: parse_hash(x.get(5)?)?,
+            event_id: parse_id(row_text(x, 1)?)?,
+            claim_id: parse_id(row_text(x, 2)?)?,
+            execution_id: parse_id(row_text(x, 3)?)?,
+            polarity: row_text(x, 4)?,
+            body_hash: parse_hash(row_text(x, 5)?)?,
         })
     })?;
-    r.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| IndexError::CorruptIndex)
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM claims")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
+    Ok(rows)
 }
 fn query_registrations(c: &Connection) -> Result<Vec<IndexArtifactRegistration>, IndexError> {
     let mut s=c.prepare("SELECT event_sequence,event_id,registration_id,run_id,cas_hash,media_type,size,sensitivity,source_kind,source_id,body_hash FROM artifact_registrations ORDER BY event_sequence,registration_id")?;
@@ -2111,20 +3532,23 @@ fn query_registrations(c: &Connection) -> Result<Vec<IndexArtifactRegistration>,
         Ok(IndexArtifactRegistration {
             event_sequence: u64::try_from(x.get::<_, i64>(0)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            event_id: parse_id(x.get(1)?)?,
-            registration_id: parse_id(x.get(2)?)?,
-            run_id: parse_id(x.get(3)?)?,
-            cas_hash: parse_hash(x.get(4)?)?,
-            media_type: x.get(5)?,
+            event_id: parse_id(row_text(x, 1)?)?,
+            registration_id: parse_id(row_text(x, 2)?)?,
+            run_id: parse_id(row_text(x, 3)?)?,
+            cas_hash: parse_hash(row_text(x, 4)?)?,
+            media_type: row_text(x, 5)?,
             size: u64::try_from(x.get::<_, i64>(6)?).map_err(|_| rusqlite::Error::InvalidQuery)?,
-            sensitivity: x.get(7)?,
-            source_kind: x.get(8)?,
-            source_id: x.get(9)?,
-            body_hash: parse_hash(x.get(10)?)?,
+            sensitivity: row_text(x, 7)?,
+            source_kind: row_text(x, 8)?,
+            source_id: row_text(x, 9)?,
+            body_hash: parse_hash(row_text(x, 10)?)?,
         })
     })?;
-    r.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| IndexError::CorruptIndex)
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM artifact_registrations")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
+    Ok(rows)
 }
 fn query_sources(c: &Connection) -> Result<Vec<IndexSnapshotSource>, IndexError> {
     let mut s=c.prepare("SELECT event_sequence,event_id,snapshot_id,artifact_id,registration_id,path,content_hash,cas_hash,line_count FROM snapshot_source_index ORDER BY snapshot_id,path,artifact_id")?;
@@ -2132,19 +3556,22 @@ fn query_sources(c: &Connection) -> Result<Vec<IndexSnapshotSource>, IndexError>
         Ok(IndexSnapshotSource {
             event_sequence: u64::try_from(x.get::<_, i64>(0)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            event_id: parse_id(x.get(1)?)?,
-            snapshot_id: parse_id(x.get(2)?)?,
-            artifact_id: parse_id(x.get(3)?)?,
-            registration_id: parse_id(x.get(4)?)?,
-            path: x.get(5)?,
-            content_hash: parse_hash(x.get(6)?)?,
-            cas_hash: parse_hash(x.get(7)?)?,
+            event_id: parse_id(row_text(x, 1)?)?,
+            snapshot_id: parse_id(row_text(x, 2)?)?,
+            artifact_id: parse_id(row_text(x, 3)?)?,
+            registration_id: parse_id(row_text(x, 4)?)?,
+            path: row_text(x, 5)?,
+            content_hash: parse_hash(row_text(x, 6)?)?,
+            cas_hash: parse_hash(row_text(x, 7)?)?,
             line_count: u64::try_from(x.get::<_, i64>(8)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
         })
     })?;
-    r.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| IndexError::CorruptIndex)
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM snapshot_source_index")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
+    Ok(rows)
 }
 fn query_findings(c: &Connection) -> Result<Vec<IndexFinding>, IndexError> {
     let mut s=c.prepare("SELECT event_sequence,event_id,finding_id,body_hash,projection_status FROM projected_findings ORDER BY event_sequence,finding_id")?;
@@ -2152,80 +3579,521 @@ fn query_findings(c: &Connection) -> Result<Vec<IndexFinding>, IndexError> {
         Ok(IndexFinding {
             event_sequence: u64::try_from(x.get::<_, i64>(0)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            event_id: parse_id(x.get(1)?)?,
-            finding_id: parse_id(x.get(2)?)?,
-            body_hash: parse_hash(x.get(3)?)?,
-            projection_status: x.get(4)?,
+            event_id: parse_id(row_text(x, 1)?)?,
+            finding_id: parse_id(row_text(x, 2)?)?,
+            body_hash: parse_hash(row_text(x, 3)?)?,
+            projection_status: row_text(x, 4)?,
         })
     })?;
-    r.collect::<rusqlite::Result<Vec<_>>>()
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM projected_findings")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
+    Ok(rows)
+}
+
+fn exact_json_value(text: &str) -> Result<serde_json::Value, IndexError> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| IndexError::CorruptIndex)?;
+    let canonical = canonical_json(&value).map_err(|_| IndexError::CorruptIndex)?;
+    if canonical != text.as_bytes() {
+        return Err(IndexError::CorruptIndex);
+    }
+    Ok(value)
+}
+
+fn exact_id_array(text: &str) -> Result<Vec<StableId>, IndexError> {
+    validate_canonical_ids(text)?;
+    serde_json::from_str::<Vec<String>>(text)
+        .map_err(|_| IndexError::CorruptIndex)?
+        .into_iter()
+        .map(|value| StableId::parse(value).map_err(|_| IndexError::CorruptIndex))
+        .collect()
+}
+
+fn object_with_fields(
+    entries: impl IntoIterator<Item = (&'static str, serde_json::Value)>,
+) -> serde_json::Value {
+    serde_json::Value::Object(
+        entries
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+    )
+}
+
+fn exact_component_object(
+    text: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>, IndexError> {
+    exact_json_value(text)?
+        .as_object()
+        .cloned()
+        .ok_or(IndexError::CorruptIndex)
+}
+
+fn validate_review_plan_row(
+    row: &IndexReviewPlan,
+    validation_source: D1ValidationSource<'_>,
+) -> Result<(), IndexError> {
+    if row.planner_policy_version != PlannerPolicyV1::VERSION
+        || row.planner_policy_hash
+            != PlannerPolicyV1::baseline()
+                .hash()
+                .map_err(|_| IndexError::CorruptIndex)?
+        || row.budget_canonical_json.len() > 50
+        || ContentHash::sha256(row.budget_canonical_json.as_bytes()) != row.budget_hash
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    let budget = exact_component_object(&row.budget_canonical_json)?;
+    let risks = exact_json_value(&row.risk_breakdown_canonical_json)?;
+    let waves = exact_json_value(&row.waves_canonical_json)?;
+    let deferred = exact_json_value(&row.deferred_canonical_json)?;
+
+    let full = object_with_fields([
+        ("budget", serde_json::Value::Object(budget.clone())),
+        ("deferred", deferred.clone()),
+        ("id", serde_json::Value::String(row.plan_id.to_string())),
+        (
+            "planner_input_hash",
+            serde_json::Value::String(row.planner_input_hash.to_string()),
+        ),
+        (
+            "planner_policy_hash",
+            serde_json::Value::String(row.planner_policy_hash.to_string()),
+        ),
+        (
+            "planner_policy_version",
+            serde_json::Value::String(row.planner_policy_version.clone()),
+        ),
+        ("risk_breakdown", risks),
+        (
+            "snapshot_id",
+            serde_json::Value::String(row.snapshot_id.to_string()),
+        ),
+        (
+            "universe_id",
+            serde_json::Value::String(row.universe_id.to_string()),
+        ),
+        ("waves", waves.clone()),
+    ]);
+    let full_bytes = canonical_json(&full).map_err(|_| IndexError::CorruptIndex)?;
+    if ContentHash::sha256(&full_bytes) != row.body_hash {
+        return Err(IndexError::CorruptIndex);
+    }
+    let deferred_ids = deferred
+        .as_array()
+        .ok_or(IndexError::CorruptIndex)?
+        .iter()
+        .map(|value| value.get("id").cloned().ok_or(IndexError::CorruptIndex))
+        .collect::<Result<Vec<_>, _>>()?;
+    let identity = object_with_fields([
+        ("budget", serde_json::Value::Object(budget)),
+        ("deferred_ids", serde_json::Value::Array(deferred_ids)),
+        (
+            "planner_input_hash",
+            serde_json::Value::String(row.planner_input_hash.to_string()),
+        ),
+        (
+            "planner_policy_hash",
+            serde_json::Value::String(row.planner_policy_hash.to_string()),
+        ),
+        (
+            "planner_policy_version",
+            serde_json::Value::String(row.planner_policy_version.clone()),
+        ),
+        (
+            "snapshot_id",
+            serde_json::Value::String(row.snapshot_id.to_string()),
+        ),
+        (
+            "universe_id",
+            serde_json::Value::String(row.universe_id.to_string()),
+        ),
+        ("waves", waves),
+    ]);
+    let identity_hash =
+        ContentHash::sha256(&canonical_json(&identity).map_err(|_| IndexError::CorruptIndex)?);
+    if identity_hash != row.identity_body_hash
+        || StableId::parse(format!("plan:{identity_hash}")).map_err(|_| IndexError::CorruptIndex)?
+            != row.plan_id
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    match validation_source {
+        #[cfg(test)]
+        D1ValidationSource::Aggregate(aggregate) => {
+            let decoded = ReviewPlan::from_canonical_bytes(&full_bytes, aggregate)
+                .map_err(|_| IndexError::CorruptIndex)?;
+            if decoded
+                .canonical_bytes()
+                .map_err(|_| IndexError::CorruptIndex)?
+                != full_bytes
+                || decoded.id() != &row.plan_id
+                || decoded.universe_id() != &row.universe_id
+                || decoded.snapshot_id() != &row.snapshot_id
+                || decoded.planner_input_hash() != &row.planner_input_hash
+                || decoded.planner_policy_hash() != &row.planner_policy_hash
+                || decoded
+                    .identity_body_hash()
+                    .map_err(|_| IndexError::CorruptIndex)?
+                    != row.identity_body_hash
+            {
+                return Err(IndexError::CorruptIndex);
+            }
+        }
+        D1ValidationSource::StreamingJournal(_) => {}
+    }
+    Ok(())
+}
+
+fn validate_context_row(
+    c: &Connection,
+    row: &IndexContextEnvelope,
+    validation_source: D1ValidationSource<'_>,
+) -> Result<(), IndexError> {
+    if row.context_policy_version != ContextPolicyV1::VERSION
+        || row.context_policy_canonical_json.as_bytes()
+            != ContextPolicyV1::baseline()
+                .canonical_bytes()
+                .map_err(|_| IndexError::CorruptIndex)?
+        || ContentHash::sha256(row.context_policy_canonical_json.as_bytes())
+            != row.context_policy_hash
+        || row.envelope_id
+            != StableId::parse(format!("context-envelope:{}", row.projection_hash))
+                .map_err(|_| IndexError::CorruptIndex)?
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    exact_json_value(&row.candidate_ids_canonical_json)?;
+    exact_json_value(&row.obligation_ids_canonical_json)?;
+    let included = exact_json_value(&row.included_sources_canonical_json)?;
+    let excluded = exact_json_value(&row.excluded_sources_canonical_json)?;
+    exact_json_value(&row.unknowns_canonical_json)?;
+    exact_json_value(&row.assumptions_canonical_json)?;
+    let losses = exact_json_value(&row.losses_canonical_json)?;
+    let candidate_ids = exact_id_array(&row.candidate_ids_canonical_json)?;
+    let obligation_ids = exact_id_array(&row.obligation_ids_canonical_json)?;
+    let included_typed: Vec<reviewgraphen_core::SourceArtifactRef> =
+        serde_json::from_str(&row.included_sources_canonical_json)
+            .map_err(|_| IndexError::CorruptIndex)?;
+    let excluded_typed: Vec<reviewgraphen_core::ExcludedSourceRef> =
+        serde_json::from_str(&row.excluded_sources_canonical_json)
+            .map_err(|_| IndexError::CorruptIndex)?;
+    let unknowns_typed: Vec<reviewgraphen_core::EnvelopeUnknown> =
+        serde_json::from_str(&row.unknowns_canonical_json).map_err(|_| IndexError::CorruptIndex)?;
+    let losses_typed: Vec<reviewgraphen_core::EnvelopeLoss> =
+        serde_json::from_str(&row.losses_canonical_json).map_err(|_| IndexError::CorruptIndex)?;
+    let assumptions_typed: Vec<String> = serde_json::from_str(&row.assumptions_canonical_json)
+        .map_err(|_| IndexError::CorruptIndex)?;
+    if canonical_json(&included_typed).map_err(|_| IndexError::CorruptIndex)?
+        != row.included_sources_canonical_json.as_bytes()
+        || canonical_json(&excluded_typed).map_err(|_| IndexError::CorruptIndex)?
+            != row.excluded_sources_canonical_json.as_bytes()
+        || canonical_json(&unknowns_typed).map_err(|_| IndexError::CorruptIndex)?
+            != row.unknowns_canonical_json.as_bytes()
+        || canonical_json(&losses_typed).map_err(|_| IndexError::CorruptIndex)?
+            != row.losses_canonical_json.as_bytes()
+        || canonical_json(&assumptions_typed).map_err(|_| IndexError::CorruptIndex)?
+            != row.assumptions_canonical_json.as_bytes()
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    if obligation_ids.len() != 1
+        || !assumptions_typed.is_empty()
+        || candidate_ids.iter().any(|id| id.kind() != "file")
+        || obligation_ids.iter().any(|id| id.kind() != "obligation")
+        || included_typed
+            .windows(2)
+            .any(|pair| pair[0].artifact_id() >= pair[1].artifact_id())
+        || excluded_typed
+            .windows(2)
+            .any(|pair| pair[0].artifact_id() >= pair[1].artifact_id())
+        || unknowns_typed.len() > ContextPolicyV1::baseline().max_unknowns()
+        || losses_typed.len() > ContextPolicyV1::baseline().max_losses()
+        || included_typed.iter().any(|source| {
+            source.registration_id().kind() != "registration"
+                || source.artifact_id().kind() != "file"
+                || !source.content_hash().to_string().starts_with("sha256:")
+                || !source.cas_hash().to_string().starts_with("sha256:")
+                || !source.excerpt_hash().to_string().starts_with("sha256:")
+                || source.excerpt_byte_length()
+                    > u64::try_from(ContextPolicyV1::baseline().max_excerpt_bytes())
+                        .unwrap_or(u64::MAX)
+        })
+        || unknowns_typed.iter().any(|unknown| {
+            !matches!(
+                unknown.description(),
+                "context_unknown:unresolved_seed_reference"
+                    | "context_unknown:unresolved_relation_endpoint"
+                    | "context_unknown:unresolved_review_context_member"
+                    | "context_unknown:unresolved_invariant_scope"
+            )
+        })
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    validate_context_groups(
+        c,
+        &obligation_ids[0],
+        &candidate_ids,
+        &included,
+        &excluded,
+        &losses,
+    )?;
+    let normalized = included
+        .as_array()
+        .ok_or(IndexError::CorruptIndex)?
+        .iter()
+        .map(|source| {
+            source
+                .get("artifact_id")
+                .and_then(serde_json::Value::as_str)
+                .map(|value| serde_json::Value::String(value.to_owned()))
+                .ok_or(IndexError::CorruptIndex)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let normalized = String::from_utf8(
+        canonical_json(&serde_json::Value::Array(normalized))
+            .map_err(|_| IndexError::CorruptIndex)?,
+    )
+    .map_err(|_| IndexError::CorruptIndex)?;
+    let full = context_full_body_bytes(row, &normalized)?;
+    if ContentHash::sha256(&full) != row.body_hash {
+        return Err(IndexError::CorruptIndex);
+    }
+    match validation_source {
+        #[cfg(test)]
+        D1ValidationSource::Aggregate(aggregate) => {
+            let decoded = ReviewContextEnvelope::from_canonical_bytes(&full, aggregate)
+                .map_err(|_| IndexError::CorruptIndex)?;
+            if decoded
+                .canonical_bytes()
+                .map_err(|_| IndexError::CorruptIndex)?
+                != full
+                || decoded.id() != &row.envelope_id
+                || decoded.snapshot_id() != &row.snapshot_id
+                || decoded.projection_policy_version() != row.context_policy_version
+                || decoded.context_policy_hash() != &row.context_policy_hash
+                || decoded.projection_hash() != &row.projection_hash
+            {
+                return Err(IndexError::CorruptIndex);
+            }
+        }
+        D1ValidationSource::StreamingJournal(_) => {}
+    }
+    let identity = context_identity_body_bytes(row)?;
+    if ContentHash::sha256(&identity) != row.projection_hash {
+        return Err(IndexError::CorruptIndex);
+    }
+    Ok(())
+}
+
+fn json_string(value: &str) -> Result<String, IndexError> {
+    String::from_utf8(canonical_json(&value).map_err(|_| IndexError::CorruptIndex)?)
         .map_err(|_| IndexError::CorruptIndex)
 }
-fn query_context_envelopes(c: &Connection) -> Result<Vec<IndexContextEnvelope>, IndexError> {
-    let mut s=c.prepare("SELECT event_sequence,event_id,envelope_id,obligation_id,projection_hash,source_ids_canonical_json,loss_ids_canonical_json,body_hash FROM context_envelopes ORDER BY event_sequence,envelope_id")?;
+
+fn context_full_body_bytes(
+    row: &IndexContextEnvelope,
+    normalized_included_ids: &str,
+) -> Result<Vec<u8>, IndexError> {
+    let text = format!(
+        "{{\"assumptions\":{},\"candidate_source_ids\":{},\"context_policy\":{},\"context_policy_hash\":{},\"excluded_sources\":{},\"id\":{},\"included_sources\":{},\"losses\":{},\"normalized_included_source_ids\":{},\"obligation_ids\":{},\"projection_hash\":{},\"projection_policy_version\":{},\"snapshot_id\":{},\"unknowns\":{}}}",
+        row.assumptions_canonical_json,
+        row.candidate_ids_canonical_json,
+        row.context_policy_canonical_json,
+        json_string(&row.context_policy_hash.to_string())?,
+        row.excluded_sources_canonical_json,
+        json_string(&row.envelope_id.to_string())?,
+        row.included_sources_canonical_json,
+        row.losses_canonical_json,
+        normalized_included_ids,
+        row.obligation_ids_canonical_json,
+        json_string(&row.projection_hash.to_string())?,
+        json_string(&row.context_policy_version)?,
+        json_string(&row.snapshot_id.to_string())?,
+        row.unknowns_canonical_json,
+    );
+    Ok(text.into_bytes())
+}
+
+fn context_identity_body_bytes(row: &IndexContextEnvelope) -> Result<Vec<u8>, IndexError> {
+    let text = format!(
+        "{{\"assumptions\":{},\"candidate_source_ids\":{},\"context_policy\":{},\"context_policy_hash\":{},\"excluded_sources\":{},\"included_sources\":{},\"losses\":{},\"obligation_ids\":{},\"snapshot_id\":{},\"unknowns\":{}}}",
+        row.assumptions_canonical_json,
+        row.candidate_ids_canonical_json,
+        row.context_policy_canonical_json,
+        json_string(&row.context_policy_hash.to_string())?,
+        row.excluded_sources_canonical_json,
+        row.included_sources_canonical_json,
+        row.losses_canonical_json,
+        row.obligation_ids_canonical_json,
+        json_string(&row.snapshot_id.to_string())?,
+        row.unknowns_canonical_json,
+    );
+    Ok(text.into_bytes())
+}
+
+fn validate_context_groups(
+    c: &Connection,
+    obligation_id: &StableId,
+    candidate_ids: &[StableId],
+    included: &serde_json::Value,
+    excluded: &serde_json::Value,
+    losses: &serde_json::Value,
+) -> Result<(), IndexError> {
+    let property: String = c
+        .query_row(
+            "SELECT property_id FROM obligations WHERE obligation_id=?1",
+            [obligation_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|_| IndexError::CorruptIndex)?;
+    let included_ids = source_artifact_ids(included)?;
+    let excluded_ids = source_artifact_ids(excluded)?;
+    let union = included_ids
+        .union(&excluded_ids)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !included_ids.is_disjoint(&excluded_ids)
+        || union != candidate_ids.iter().cloned().collect::<BTreeSet<_>>()
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    for loss in losses.as_array().ok_or(IndexError::CorruptIndex)? {
+        let object = loss.as_object().ok_or(IndexError::CorruptIndex)?;
+        if object.len() != 4
+            || object.get("severity").and_then(serde_json::Value::as_str) != Some("low")
+        {
+            return Err(IndexError::CorruptIndex);
+        }
+        let properties = object
+            .get("affected_properties")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(IndexError::CorruptIndex)?;
+        if properties.len() != 1 || properties[0].as_str() != Some(&property) {
+            return Err(IndexError::CorruptIndex);
+        }
+        let sources = object
+            .get("source_ids")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(IndexError::CorruptIndex)?;
+        if sources.is_empty() {
+            return Err(IndexError::CorruptIndex);
+        }
+        let mut prior: Option<StableId> = None;
+        for source in sources {
+            let source = StableId::parse(source.as_str().ok_or(IndexError::CorruptIndex)?)
+                .map_err(|_| IndexError::CorruptIndex)?;
+            if prior.as_ref().is_some_and(|value| value >= &source) {
+                return Err(IndexError::CorruptIndex);
+            }
+            prior = Some(source);
+        }
+    }
+    Ok(())
+}
+
+fn source_artifact_ids(value: &serde_json::Value) -> Result<BTreeSet<StableId>, IndexError> {
+    let mut ids = BTreeSet::new();
+    for source in value.as_array().ok_or(IndexError::CorruptIndex)? {
+        let id = StableId::parse(
+            source
+                .get("artifact_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(IndexError::CorruptIndex)?,
+        )
+        .map_err(|_| IndexError::CorruptIndex)?;
+        if !ids.insert(id) {
+            return Err(IndexError::CorruptIndex);
+        }
+    }
+    Ok(ids)
+}
+fn query_context_envelopes(
+    c: &Connection,
+    validation_source: Option<D1ValidationSource<'_>>,
+) -> Result<Vec<IndexContextEnvelope>, IndexError> {
+    let mut s=c.prepare("SELECT event_sequence,event_id,envelope_id,snapshot_id,context_policy_version,context_policy_hash,candidate_ids_canonical_json,obligation_ids_canonical_json,context_policy_canonical_json,included_sources_canonical_json,excluded_sources_canonical_json,unknowns_canonical_json,assumptions_canonical_json,losses_canonical_json,projection_hash,body_hash FROM context_envelopes ORDER BY event_sequence,envelope_id")?;
     let r = s.query_map([], |x| {
         Ok(IndexContextEnvelope {
             event_sequence: u64::try_from(x.get::<_, i64>(0)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            event_id: parse_id(x.get(1)?)?,
-            envelope_id: parse_id(x.get(2)?)?,
-            obligation_id: parse_id(x.get(3)?)?,
-            projection_hash: parse_hash(x.get(4)?)?,
-            source_ids_canonical_json: x.get(5)?,
-            loss_ids_canonical_json: x.get(6)?,
-            body_hash: parse_hash(x.get(7)?)?,
+            event_id: parse_id(row_text(x, 1)?)?,
+            envelope_id: parse_id(row_text(x, 2)?)?,
+            snapshot_id: parse_id(row_text(x, 3)?)?,
+            context_policy_version: row_text(x, 4)?,
+            context_policy_hash: parse_hash(row_text(x, 5)?)?,
+            candidate_ids_canonical_json: row_text(x, 6)?,
+            obligation_ids_canonical_json: row_text(x, 7)?,
+            context_policy_canonical_json: row_text(x, 8)?,
+            included_sources_canonical_json: row_text(x, 9)?,
+            excluded_sources_canonical_json: row_text(x, 10)?,
+            unknowns_canonical_json: row_text(x, 11)?,
+            assumptions_canonical_json: row_text(x, 12)?,
+            losses_canonical_json: row_text(x, 13)?,
+            projection_hash: parse_hash(row_text(x, 14)?)?,
+            body_hash: parse_hash(row_text(x, 15)?)?,
         })
     })?;
-    let rows = r
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| IndexError::CorruptIndex)?;
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM context_envelopes")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
+    let validation_source = if rows.is_empty() {
+        None
+    } else {
+        Some(validation_source.ok_or(IndexError::CorruptIndex)?)
+    };
     for row in &rows {
-        validate_canonical_ids(&row.source_ids_canonical_json)?;
-        validate_canonical_ids(&row.loss_ids_canonical_json)?;
+        validate_context_row(
+            c,
+            row,
+            validation_source.expect("nonempty rows require a validation source"),
+        )?;
     }
     Ok(rows)
 }
-fn query_review_plans(c: &Connection) -> Result<Vec<IndexReviewPlan>, IndexError> {
-    let mut s=c.prepare("SELECT event_sequence,event_id,plan_id,run_id,budget_hash,policy_hash,body_hash FROM review_plans ORDER BY event_sequence,plan_id")?;
+fn query_review_plans(
+    c: &Connection,
+    validation_source: Option<D1ValidationSource<'_>>,
+) -> Result<Vec<IndexReviewPlan>, IndexError> {
+    let mut s=c.prepare("SELECT event_sequence,event_id,plan_id,universe_id,snapshot_id,planner_input_hash,planner_policy_version,planner_policy_hash,budget_canonical_json,budget_hash,risk_breakdown_canonical_json,waves_canonical_json,deferred_canonical_json,identity_body_hash,body_hash FROM review_plans ORDER BY event_sequence,plan_id")?;
     let r = s.query_map([], |x| {
         Ok(IndexReviewPlan {
             event_sequence: u64::try_from(x.get::<_, i64>(0)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            event_id: parse_id(x.get(1)?)?,
-            plan_id: parse_id(x.get(2)?)?,
-            run_id: parse_id(x.get(3)?)?,
-            budget_hash: parse_hash(x.get(4)?)?,
-            policy_hash: parse_hash(x.get(5)?)?,
-            body_hash: parse_hash(x.get(6)?)?,
+            event_id: parse_id(row_text(x, 1)?)?,
+            plan_id: parse_id(row_text(x, 2)?)?,
+            universe_id: parse_id(row_text(x, 3)?)?,
+            snapshot_id: parse_id(row_text(x, 4)?)?,
+            planner_input_hash: parse_hash(row_text(x, 5)?)?,
+            planner_policy_version: row_text(x, 6)?,
+            planner_policy_hash: parse_hash(row_text(x, 7)?)?,
+            budget_canonical_json: row_text(x, 8)?,
+            budget_hash: parse_hash(row_text(x, 9)?)?,
+            risk_breakdown_canonical_json: row_text(x, 10)?,
+            waves_canonical_json: row_text(x, 11)?,
+            deferred_canonical_json: row_text(x, 12)?,
+            identity_body_hash: parse_hash(row_text(x, 13)?)?,
+            body_hash: parse_hash(row_text(x, 14)?)?,
         })
     })?;
-    r.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| IndexError::CorruptIndex)
-}
-fn query_executions(c: &Connection) -> Result<Vec<IndexExecution>, IndexError> {
-    let mut s=c.prepare("SELECT event_sequence,event_id,execution_id,reviewer_id,envelope_id,outcome,raw_registration_id,raw_hash,obligation_ids_canonical_json,claim_ids_canonical_json,body_hash FROM executions ORDER BY event_sequence,execution_id")?;
-    let r = s.query_map([], |x| {
-        Ok(IndexExecution {
-            event_sequence: u64::try_from(x.get::<_, i64>(0)?)
-                .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            event_id: parse_id(x.get(1)?)?,
-            execution_id: parse_id(x.get(2)?)?,
-            reviewer_id: x.get(3)?,
-            envelope_id: parse_id(x.get(4)?)?,
-            outcome: x.get(5)?,
-            raw_registration_id: parse_id(x.get(6)?)?,
-            raw_hash: parse_hash(x.get(7)?)?,
-            obligation_ids_canonical_json: x.get(8)?,
-            claim_ids_canonical_json: x.get(9)?,
-            body_hash: parse_hash(x.get(10)?)?,
-        })
-    })?;
-    let rows = r
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| IndexError::CorruptIndex)?;
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM review_plans")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
+    let validation_source = if rows.is_empty() {
+        None
+    } else {
+        Some(validation_source.ok_or(IndexError::CorruptIndex)?)
+    };
     for row in &rows {
-        validate_canonical_ids(&row.obligation_ids_canonical_json)?;
-        validate_canonical_ids(&row.claim_ids_canonical_json)?;
+        validate_review_plan_row(
+            row,
+            validation_source.expect("nonempty rows require a validation source"),
+        )?;
     }
     Ok(rows)
 }
@@ -2234,9 +4102,12 @@ fn query_executions(c: &Connection) -> Result<Vec<IndexExecution>, IndexError> {
 mod tests {
     use super::*;
     use reviewgraphen_core::{
-        EventCommand, EventLog, Evidence, EvidenceDetails, MvpRulePack, ObligationLifecycle,
-        PlanBudget, ProgramSpace, Provenance, ReviewAggregate, SourceRef, plan,
+        ArtifactRegistered, ArtifactSensitivity, ArtifactSource, EventCommand, EventLog, Evidence,
+        EvidenceDetails, MvpRulePack, ObligationLifecycle, PlanBudget, ProgramSpace, Provenance,
+        ReviewAggregate, SnapshotSourceRecordEntry, SnapshotSourcesRecorded, SourceRef, plan,
+        prepare_context,
     };
+    use serde_json::Value;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::Path;
     use std::{
@@ -2244,6 +4115,116 @@ mod tests {
         sync::mpsc,
         time::Duration,
     };
+
+    type IndexMutation = Box<dyn Fn(&Connection)>;
+
+    #[test]
+    fn exact_fd_read_admits_before_allocating_and_returns_exact_capacity() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"D1v2").unwrap();
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let bytes = read_fd_exact_with_retained(file.reopen().unwrap().into(), 4, 5, 9).unwrap();
+        assert_eq!(bytes, b"D1v2");
+        assert_eq!(bytes.capacity(), 4);
+
+        assert!(matches!(
+            read_fd_exact_with_retained(file.reopen().unwrap().into(), 4, 5, 8),
+            Err(IndexError::Incomplete {
+                limit: 8,
+                observed: 9
+            })
+        ));
+        assert!(matches!(
+            read_fd_exact_with_retained(file.reopen().unwrap().into(), 3, 0, 9),
+            Err(IndexError::Incomplete {
+                limit: 3,
+                observed: 4
+            })
+        ));
+    }
+
+    #[test]
+    fn build_connection_peak_is_refused_before_sqlite_open() {
+        let retained = 777;
+        let exact = retained + 3 * PAGE_SIZE + 1024;
+        let base = IndexLimits {
+            max_rows: 1,
+            max_serialized_bytes: PAGE_SIZE,
+            max_working_bytes: exact,
+            max_query_bytes: 1,
+            max_statement_bytes: 1,
+        };
+        preflight_build_connection(base, retained).unwrap();
+        assert!(matches!(
+            preflight_build_connection(
+                IndexLimits {
+                    max_working_bytes: exact - 1,
+                    ..base
+                },
+                retained,
+            ),
+            Err(IndexError::Incomplete { limit, observed })
+                if limit == exact - 1 && observed == exact
+        ));
+    }
+
+    #[test]
+    fn every_persisted_family_maps_structural_plus_one_through_actual_rebuild() {
+        fn family_json(kind: &str, elements: usize, depth: usize) -> Vec<u8> {
+            let mut json = format!("{{\"payload\":{{\"type\":\"{kind}\",\"padding\":").into_bytes();
+            json.extend(std::iter::repeat_n(b'[', depth));
+            for element in 0..elements {
+                if element != 0 {
+                    json.push(b',');
+                }
+                json.push(b'0');
+            }
+            json.extend(std::iter::repeat_n(b']', depth));
+            json.extend_from_slice(b"}}\n");
+            json
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index, _) = v2_fixture(&root);
+        let run_directory = std::fs::read_dir(root.path().join("runs"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let log = run_directory.join("logs.jsonl");
+        for kind in [
+            "obligation_transition",
+            "claim_proposed",
+            "evidence_recorded",
+            "evidence_bound",
+            "verification_recorded",
+            "decision_recorded",
+            "finding_recorded",
+            "run_genesis_manifest",
+            "artifact_registered",
+            "snapshot_sources_recorded",
+            "review_plan_recorded",
+            "context_envelope_projected",
+        ] {
+            for (line, expected_limit) in [
+                (family_json(kind, 65_534, 1), 65_536),
+                (family_json(kind, 1, 127), 128),
+            ] {
+                std::fs::write(&log, line).unwrap();
+                let result = index.rebuild(&journal, &cas);
+                assert!(
+                    matches!(
+                        result,
+                        Err(IndexError::Incomplete { limit, observed })
+                            if limit == expected_limit && observed == expected_limit + 1
+                    ),
+                    "{kind}: {result:?}"
+                );
+            }
+        }
+    }
 
     fn v2_fixture<'a>(
         root: &'a StoreRoot,
@@ -2289,8 +4270,215 @@ mod tests {
         (journal, cas, index, transition)
     }
 
+    fn d1_index_fixture<'a>(
+        root: &'a StoreRoot,
+    ) -> (EventJournal<'a>, CasStore<'a>, DerivedIndex<'a>) {
+        let source_bytes = BTreeMap::from([
+            (
+                "src/checkout_controller.rs",
+                b"controller line\n".repeat(100),
+            ),
+            (
+                "src/payment_repository.rs",
+                b"repository line\n".repeat(100),
+            ),
+        ]);
+        d1_index_fixture_with_sources(root, "run:index-d1", source_bytes)
+    }
+
+    fn d1_index_fixture_with_sources<'a>(
+        root: &'a StoreRoot,
+        run: &str,
+        source_bytes: BTreeMap<&'static str, Vec<u8>>,
+    ) -> (EventJournal<'a>, CasStore<'a>, DerivedIndex<'a>) {
+        let run_id = StableId::parse(run).unwrap();
+        let mut value: Value = serde_json::from_slice(include_bytes!(
+            "../../../examples/double-submit-payment/program-space.json"
+        ))
+        .unwrap();
+        let mut contains = value["relations"].as_array().unwrap()[0].clone();
+        contains["id"] = Value::String("relation:index-file-contains-payment-charge".to_owned());
+        contains["kind"] = Value::String("contains".to_owned());
+        contains["source_id"] = Value::String("file:payment-repository".to_owned());
+        contains["target_ids"] = serde_json::json!(["function:payment-charge"]);
+        contains["directed"] = Value::Bool(true);
+        value["relations"].as_array_mut().unwrap().push(contains);
+        if source_bytes.contains_key("src/auxiliary_repository.rs") {
+            let mut auxiliary = value["artifacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|artifact| artifact["id"] == "file:payment-repository")
+                .unwrap()
+                .clone();
+            auxiliary["id"] = Value::String("file:auxiliary-repository".to_owned());
+            auxiliary["label"] = Value::String("src/auxiliary_repository.rs".to_owned());
+            auxiliary["location"]["path"] = Value::String("src/auxiliary_repository.rs".to_owned());
+            value["artifacts"].as_array_mut().unwrap().push(auxiliary);
+            let mut auxiliary_contains = value["relations"].as_array().unwrap()[0].clone();
+            auxiliary_contains["id"] =
+                Value::String("relation:index-auxiliary-contains-payment-charge".to_owned());
+            auxiliary_contains["kind"] = Value::String("contains".to_owned());
+            auxiliary_contains["source_id"] = Value::String("file:auxiliary-repository".to_owned());
+            auxiliary_contains["target_ids"] = serde_json::json!(["function:payment-charge"]);
+            auxiliary_contains["directed"] = Value::Bool(true);
+            value["relations"]
+                .as_array_mut()
+                .unwrap()
+                .push(auxiliary_contains);
+        }
+        let test = value["artifacts"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|artifact| artifact["id"] == "test:double-submit")
+            .unwrap();
+        test["location"]["start_line"] = Value::Null;
+        test["location"]["end_line"] = Value::Null;
+        for artifact in value["artifacts"].as_array_mut().unwrap() {
+            if artifact["kind"] == "file" {
+                let path = artifact["location"]["path"].as_str().unwrap();
+                artifact["content_hash"] =
+                    Value::String(ContentHash::sha256(&source_bytes[path]).to_string());
+            }
+        }
+        let program: ProgramSpace = serde_json::from_value(value).unwrap();
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let aggregate = ReviewAggregate::new(program.clone(), universe, obligations).unwrap();
+        let mut log = EventLog::new(run_id.clone(), aggregate).unwrap();
+        let genesis = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let cas = CasStore::open(root).unwrap();
+        let genesis_hash = CasHash::parse(ContentHash::sha256(&genesis).to_string()).unwrap();
+        cas.put(
+            &genesis_hash,
+            Some(u64::try_from(genesis.len()).unwrap()),
+            genesis.as_slice(),
+        )
+        .unwrap();
+
+        let mut entries = Vec::new();
+        let mut bytes_by_id = BTreeMap::new();
+        for artifact in program
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+        {
+            let path = artifact.location.as_ref().unwrap().path.clone();
+            let bytes = source_bytes[path.as_str()].clone();
+            let hash = ContentHash::sha256(&bytes);
+            let source = ArtifactSource::SnapshotIngest {
+                run_id: run_id.clone(),
+                snapshot_id: program.snapshot_id().clone(),
+                adapter_id: "index-d1-fixture@1".to_owned(),
+            };
+            let registration_id = StableId::derived(
+                "registration",
+                &BTreeMap::from([
+                    ("run_id".to_owned(), Value::String(run_id.to_string())),
+                    ("cas_hash".to_owned(), Value::String(hash.to_string())),
+                    (
+                        "media_type".to_owned(),
+                        Value::String("application/octet-stream".to_owned()),
+                    ),
+                    (
+                        "sensitivity".to_owned(),
+                        Value::String("workspace_source".to_owned()),
+                    ),
+                    ("source".to_owned(), serde_json::to_value(&source).unwrap()),
+                ]),
+            )
+            .unwrap();
+            log.append(EventCommand::artifact_registered(
+                ArtifactRegistered::new(
+                    run_id.clone(),
+                    registration_id.clone(),
+                    hash.clone(),
+                    "application/octet-stream",
+                    u64::try_from(bytes.len()).unwrap(),
+                    ArtifactSensitivity::WorkspaceSource,
+                    source,
+                )
+                .unwrap(),
+            ))
+            .unwrap();
+            entries.push(
+                SnapshotSourceRecordEntry::new(
+                    artifact.id.clone(),
+                    path,
+                    hash.clone(),
+                    registration_id,
+                    hash,
+                    u64::try_from(bytes.iter().filter(|byte| **byte == b'\n').count()).unwrap() + 1,
+                )
+                .unwrap(),
+            );
+            bytes_by_id.insert(artifact.id.clone(), bytes);
+        }
+        entries.sort_by(|left, right| left.path().cmp(right.path()));
+        log.append(EventCommand::snapshot_sources_recorded(
+            SnapshotSourcesRecorded::new(program.snapshot_id().clone(), entries).unwrap(),
+        ))
+        .unwrap();
+        let review_plan = plan(log.aggregate(), PlanBudget::new(16, 2).unwrap()).unwrap();
+        log.append(EventCommand::review_plan_recorded(review_plan))
+            .unwrap();
+        let obligation = log.aggregate().obligations().next().unwrap().id().clone();
+        let mut session = prepare_context(log.aggregate(), obligation).unwrap();
+        while let Some(request) = session.next_source_request().unwrap() {
+            session
+                .submit_source(&request, &bytes_by_id[request.artifact_id()])
+                .unwrap();
+        }
+        log.append(EventCommand::context_envelope_projected(
+            session.finish().unwrap(),
+        ))
+        .unwrap();
+
+        let identity =
+            JournalIdentity::new(run_id, super::super::JournalGenesis::V2(genesis)).unwrap();
+        let events = log.envelopes().cloned().collect::<Vec<_>>();
+        let journal = EventJournal::initialize_v2(root, identity, events[0].clone()).unwrap();
+        let mut writer = journal.writer().unwrap();
+        for event in events.into_iter().skip(1) {
+            writer.append(event).unwrap();
+        }
+        drop(writer);
+        let index = DerivedIndex::open(root).unwrap();
+        (journal, cas, index)
+    }
+
+    fn terminal_aggregate(journal: &EventJournal<'_>) -> ReviewAggregate {
+        let reader = journal.reader().unwrap();
+        let identity = reader.identity().clone();
+        reader.with_locked_snapshot(|events, _, _| {
+            let view = EventEnvelope::validated_view(
+                identity.version(),
+                &identity.run_id,
+                identity.core_genesis(),
+                events,
+            )
+            .unwrap();
+            let reviewgraphen_core::EventStreamGenesis::V2(bytes) = identity.core_genesis() else {
+                unreachable!()
+            };
+            let initial = RunGenesisSnapshot::from_canonical_bytes(bytes)
+                .unwrap()
+                .rebuild_aggregate()
+                .unwrap();
+            let mut projection = OfflineProjectionState::new(&view, initial).unwrap();
+            for event in view.events() {
+                projection.apply(event).unwrap();
+            }
+            projection.aggregate().clone()
+        })
+    }
+
     #[test]
-    fn schema_v1_projection_refuses_d1_payload_as_rebuild_required() {
+    fn schema_v2_projection_accepts_both_d1_payload_tags() {
         let program = ProgramSpace::from_json_slice(include_bytes!(
             "../../../examples/double-submit-payment/program-space.json"
         ))
@@ -2299,12 +4487,766 @@ mod tests {
         let aggregate = ReviewAggregate::new(program, universe, obligations).unwrap();
         let review_plan = plan(&aggregate, PlanBudget::new(16, 2).unwrap()).unwrap();
 
+        assert_eq!(
+            payload_kind_decoded(&DecodedPayload::ReviewPlanRecorded(review_plan)).unwrap(),
+            "review_plan_recorded"
+        );
+    }
+
+    #[test]
+    fn plan_budget_minimum_and_maximum_have_exact_bytes_and_hashes() {
+        for (budget, expected) in [
+            (
+                PlanBudget::new(1, 1).unwrap(),
+                r#"{"max_obligations_per_wave":1,"max_waves":1}"#,
+            ),
+            (
+                PlanBudget::new(1024, 2048).unwrap(),
+                r#"{"max_obligations_per_wave":2048,"max_waves":1024}"#,
+            ),
+        ] {
+            let bytes = canonical_json(&budget).unwrap();
+            assert_eq!(bytes, expected.as_bytes());
+            assert!(bytes.len() <= 50);
+            assert_eq!(
+                ContentHash::sha256(&bytes),
+                ContentHash::sha256(expected.as_bytes())
+            );
+        }
+        assert_eq!(
+            canonical_json(&PlanBudget::new(1024, 2048).unwrap())
+                .unwrap()
+                .len(),
+            50
+        );
+        for mutation in [
+            r#"{"max_waves":1,"max_obligations_per_wave":1}"#,
+            r#"{"max_obligations_per_wave":1,"max_waves":1 }"#,
+            r#"{"max_obligations_per_wave":0,"max_waves":1}"#,
+            r#"{"extra":1,"max_obligations_per_wave":1,"max_waves":1}"#,
+        ] {
+            let rejected = (|| -> Result<(), IndexError> {
+                let object = exact_component_object(mutation)?;
+                if object.len() != 2 {
+                    return Err(IndexError::CorruptIndex);
+                }
+                let per_wave = object
+                    .get("max_obligations_per_wave")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or(IndexError::CorruptIndex)?;
+                let waves = object
+                    .get("max_waves")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or(IndexError::CorruptIndex)?;
+                PlanBudget::new(waves, per_wave).map_err(|_| IndexError::CorruptIndex)?;
+                Ok(())
+            })();
+            assert!(
+                matches!(rejected, Err(IndexError::CorruptIndex)),
+                "{mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn d1_plan_and_context_rebuild_query_complete_v2_rows_deterministically() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index) = d1_index_fixture(&root);
+        let reader = journal.reader().unwrap();
+        let identity = reader.identity().clone();
+        let aggregate = match identity.core_genesis() {
+            reviewgraphen_core::EventStreamGenesis::V2(bytes) => {
+                RunGenesisSnapshot::from_canonical_bytes(bytes)
+                    .unwrap()
+                    .rebuild_aggregate()
+                    .unwrap()
+            }
+            reviewgraphen_core::EventStreamGenesis::V1(_) => unreachable!(),
+            reviewgraphen_core::EventStreamGenesis::V2Verified(_) => unreachable!(),
+        };
+        reader.with_locked_snapshot(|events, _, _| {
+            let view = EventEnvelope::validated_view(
+                identity.version(),
+                &identity.run_id,
+                identity.core_genesis(),
+                events,
+            )
+            .unwrap();
+            for event in view.events() {
+                match event.payload() {
+                    DecodedPayload::ReviewPlanRecorded(plan) => {
+                        projected_review_plan(event.envelope(), plan).unwrap();
+                    }
+                    DecodedPayload::ContextEnvelopeProjected(context) => {
+                        projected_context_envelope(event.envelope(), context).unwrap();
+                    }
+                    _ => {}
+                }
+            }
+        });
+        drop(reader);
+        let first_receipt = index.rebuild(&journal, &cas).unwrap();
+        let first = index.snapshot_current(&journal).unwrap();
+        assert_eq!(first.marker.sqlite_user_version, 2);
+        assert_eq!(first.marker.index_schema_version, 2);
+        assert_eq!(
+            first.marker.projection_contract_version,
+            "reviewgraphen.index_projection.v2"
+        );
+        assert_eq!(first.review_plans.len(), 1);
+        assert_eq!(first.context_envelopes.len(), 1);
+        let plan = &first.review_plans[0];
+        assert_eq!(
+            plan.budget_hash,
+            ContentHash::sha256(plan.budget_canonical_json.as_bytes())
+        );
+        assert_eq!(plan.planner_policy_version, PlannerPolicyV1::VERSION);
+        validate_review_plan_row(plan, D1ValidationSource::Aggregate(&aggregate)).unwrap();
+        let context = &first.context_envelopes[0];
+        assert_eq!(
+            context.context_policy_hash,
+            ContentHash::sha256(context.context_policy_canonical_json.as_bytes())
+        );
+        assert!(
+            exact_json_value(&context.losses_canonical_json)
+                .unwrap()
+                .is_array()
+        );
+
+        let connection =
+            deserialize_read_only(index.read_active_image().unwrap(), index.limits()).unwrap();
+        let executions: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='executions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(executions, 0);
+        drop(connection);
+
+        std::fs::remove_file(root.path().join(INDEX_DIR).join(ACTIVE_FILE)).unwrap();
+        let second_receipt = index.rebuild(&journal, &cas).unwrap();
+        let second = index.snapshot_current(&journal).unwrap();
+        assert_eq!(first_receipt.event_count, second_receipt.event_count);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn core_strict_boundaries_reject_self_consistently_rehashed_d1_rows() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index) = d1_index_fixture(&root);
+        index.rebuild(&journal, &cas).unwrap();
+        let snapshot = index.snapshot_current(&journal).unwrap();
+        let aggregate = terminal_aggregate(&journal);
+
+        let mut plan_row = snapshot.review_plans[0].clone();
+        let mut waves = exact_json_value(&plan_row.waves_canonical_json).unwrap();
+        waves.as_array_mut().unwrap()[0]["obligation_ids"] = serde_json::json!([]);
+        plan_row.waves_canonical_json = String::from_utf8(canonical_json(&waves).unwrap()).unwrap();
+        let deferred = exact_json_value(&plan_row.deferred_canonical_json).unwrap();
+        let budget = exact_json_value(&plan_row.budget_canonical_json).unwrap();
+        let identity = object_with_fields([
+            ("budget", budget.clone()),
+            (
+                "deferred_ids",
+                Value::Array(
+                    deferred
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|value| value["id"].clone())
+                        .collect(),
+                ),
+            ),
+            (
+                "planner_input_hash",
+                Value::String(plan_row.planner_input_hash.to_string()),
+            ),
+            (
+                "planner_policy_hash",
+                Value::String(plan_row.planner_policy_hash.to_string()),
+            ),
+            (
+                "planner_policy_version",
+                Value::String(plan_row.planner_policy_version.clone()),
+            ),
+            (
+                "snapshot_id",
+                Value::String(plan_row.snapshot_id.to_string()),
+            ),
+            (
+                "universe_id",
+                Value::String(plan_row.universe_id.to_string()),
+            ),
+            ("waves", waves.clone()),
+        ]);
+        plan_row.identity_body_hash = ContentHash::sha256(&canonical_json(&identity).unwrap());
+        plan_row.plan_id =
+            StableId::parse(format!("plan:{}", plan_row.identity_body_hash)).unwrap();
+        let full = object_with_fields([
+            ("budget", budget),
+            ("deferred", deferred),
+            ("id", Value::String(plan_row.plan_id.to_string())),
+            (
+                "planner_input_hash",
+                Value::String(plan_row.planner_input_hash.to_string()),
+            ),
+            (
+                "planner_policy_hash",
+                Value::String(plan_row.planner_policy_hash.to_string()),
+            ),
+            (
+                "planner_policy_version",
+                Value::String(plan_row.planner_policy_version.clone()),
+            ),
+            (
+                "risk_breakdown",
+                exact_json_value(&plan_row.risk_breakdown_canonical_json).unwrap(),
+            ),
+            (
+                "snapshot_id",
+                Value::String(plan_row.snapshot_id.to_string()),
+            ),
+            (
+                "universe_id",
+                Value::String(plan_row.universe_id.to_string()),
+            ),
+            ("waves", waves),
+        ]);
+        plan_row.body_hash = ContentHash::sha256(&canonical_json(&full).unwrap());
         assert!(matches!(
-            payload_kind_decoded(&DecodedPayload::ReviewPlanRecorded(review_plan)),
+            validate_review_plan_row(&plan_row, D1ValidationSource::Aggregate(&aggregate)),
+            Err(IndexError::CorruptIndex)
+        ));
+
+        let mut context_row = snapshot.context_envelopes[0].clone();
+        let mut included = exact_json_value(&context_row.included_sources_canonical_json).unwrap();
+        included.as_array_mut().unwrap()[0]["excerpt"] =
+            serde_json::json!({"end_line":101,"start_line":1});
+        context_row.included_sources_canonical_json =
+            String::from_utf8(canonical_json(&included).unwrap()).unwrap();
+        context_row.projection_hash =
+            ContentHash::sha256(&context_identity_body_bytes(&context_row).unwrap());
+        context_row.envelope_id =
+            StableId::parse(format!("context-envelope:{}", context_row.projection_hash)).unwrap();
+        let normalized = String::from_utf8(
+            canonical_json(&Value::Array(
+                included
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|source| source["artifact_id"].clone())
+                    .collect(),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        context_row.body_hash =
+            ContentHash::sha256(&context_full_body_bytes(&context_row, &normalized).unwrap());
+        let connection =
+            deserialize_read_only(index.read_active_image().unwrap(), index.limits()).unwrap();
+        assert!(matches!(
+            validate_context_row(
+                &connection,
+                &context_row,
+                D1ValidationSource::Aggregate(&aggregate),
+            ),
+            Err(IndexError::CorruptIndex)
+        ));
+    }
+
+    #[test]
+    fn schema_v1_image_is_rebuild_required_and_never_migrated_in_place() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index, _) = v2_fixture(&root);
+        let legacy = Connection::open_in_memory().unwrap();
+        legacy
+            .pragma_update(None, "page_size", i64::try_from(PAGE_SIZE).unwrap())
+            .unwrap();
+        legacy.pragma_update(None, "user_version", 1).unwrap();
+        legacy
+            .execute_batch("CREATE TABLE legacy_rows(value TEXT) STRICT; INSERT INTO legacy_rows VALUES('must-not-migrate');")
+            .unwrap();
+        let legacy_bytes = legacy.serialize(MAIN_DB).unwrap().to_vec();
+        let active = root.path().join(INDEX_DIR).join(ACTIVE_FILE);
+        std::fs::write(&active, legacy_bytes).unwrap();
+        std::fs::set_permissions(&active, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(matches!(
+            index.snapshot_current(&journal),
             Err(IndexError::RebuildRequired {
                 found: 1,
                 required: 2
             })
+        ));
+
+        index.rebuild(&journal, &cas).unwrap();
+        let snapshot = index.snapshot_current(&journal).unwrap();
+        assert_eq!(snapshot.marker.index_schema_version, 2);
+        let rebuilt =
+            deserialize_read_only(index.read_active_image().unwrap(), index.limits()).unwrap();
+        let legacy_tables: i64 = rebuilt
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='legacy_rows'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy_tables, 0);
+    }
+
+    #[test]
+    fn locked_journal_rejects_every_sqlite_event_and_d1_hash_preimage_mutation() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index) = d1_index_fixture(&root);
+        let mutations: Vec<IndexMutation> = vec![
+            Box::new(|connection| {
+                connection
+                    .pragma_update(None, "foreign_keys", false)
+                    .unwrap();
+                connection
+                    .execute("UPDATE events SET sequence=1001 WHERE sequence=1", [])
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .pragma_update(None, "foreign_keys", false)
+                    .unwrap();
+                connection
+                    .execute(
+                        "UPDATE events SET event_id='event:index-spliced' WHERE sequence=1",
+                        [],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE events SET schema='reviewgraphen.review_event.v1' WHERE sequence=1",
+                        [],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE events SET event_hash=?1 WHERE sequence=1",
+                        [ContentHash::sha256(b"mutated-event").to_string()],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE events SET payload_hash=?1 WHERE sequence=1",
+                        [ContentHash::sha256(b"mutated-payload").to_string()],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE events SET payload_kind='artifact_registered' WHERE sequence=1",
+                        [],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute("UPDATE events SET actor='spliced' WHERE sequence=1", [])
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute("UPDATE events SET logical_time=999 WHERE sequence=1", [])
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE review_plans SET identity_body_hash=?1",
+                        [ContentHash::sha256(b"mutated-plan-identity").to_string()],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE review_plans SET body_hash=?1",
+                        [ContentHash::sha256(b"mutated-plan-body").to_string()],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE review_plans SET budget_hash=?1",
+                        [ContentHash::sha256(b"mutated-budget").to_string()],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE review_plans SET deferred_canonical_json='[{\"id\":\"obligation:bad\",\"reason\":\"unknown\"}]'",
+                        [],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE context_envelopes SET projection_hash=?1",
+                        [ContentHash::sha256(b"mutated-context-identity").to_string()],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE context_envelopes SET body_hash=?1",
+                        [ContentHash::sha256(b"mutated-context-body").to_string()],
+                    )
+                    .unwrap();
+            }),
+            Box::new(|connection| {
+                connection
+                    .execute(
+                        "UPDATE context_envelopes SET losses_canonical_json='[] '",
+                        [],
+                    )
+                    .unwrap();
+            }),
+        ];
+        for (mutation_index, mutation) in mutations.into_iter().enumerate() {
+            index.rebuild(&journal, &cas).unwrap();
+            mutate_active_image(&index, |connection| mutation(connection));
+            let result = index.snapshot_current(&journal);
+            assert!(
+                matches!(result, Err(IndexError::CorruptIndex)),
+                "mutation {mutation_index}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn d1_combined_working_set_exact_peak_plus_one_and_overflow_are_typed() {
+        let discovery_workspace = tempfile::tempdir().unwrap();
+        let discovery_root =
+            StoreRoot::open(discovery_workspace.path(), StoreLimits::default()).unwrap();
+        let (discovery_journal, discovery_cas, discovery_index) = d1_index_fixture(&discovery_root);
+        discovery_index
+            .rebuild(&discovery_journal, &discovery_cas)
+            .unwrap();
+        let image = discovery_index.read_active_image().unwrap();
+        let image_limit = u64::try_from(image.len()).unwrap();
+        let connection = deserialize_read_only(image, discovery_index.limits()).unwrap();
+        let marker = index_marker_from_connection(&connection, discovery_index.limits()).unwrap();
+        let query_limit =
+            preflight_query_budget(&connection, &marker, discovery_index.limits()).unwrap();
+        let main_bytes = u64::try_from(
+            connection
+                .pragma_query_value::<i64, _>(None, "page_count", |row| row.get(0))
+                .unwrap(),
+        )
+        .unwrap()
+            * PAGE_SIZE;
+        let compare_tuple = event_compare_tuple_bytes(&connection).unwrap();
+        drop(connection);
+        let mut reader = discovery_journal
+            .index_reader(StoreLimits::default().max_index_working_bytes)
+            .unwrap();
+        let identity = reader.identity().clone();
+        let retained =
+            streaming_journal_retained(&reader, &identity, discovery_index.limits()).unwrap();
+        let certificate = reader
+            .with_locked_prefix::<IndexError>(|_, _| Ok(()))
+            .unwrap();
+        let scan_peak =
+            retained + certificate.line_buffer_capacity + certificate.canonical_scratch_capacity;
+        let genesis_tuple_bound = identity
+            .v2_genesis_backing()
+            .map_or(0, |bytes| u64::try_from(bytes.len()).unwrap());
+        let insert_peak = scan_peak + certificate.line_buffer_capacity.max(genesis_tuple_bound) * 2;
+        drop(reader);
+        let deserialize_peak = retained + image_limit * 2 + 1024;
+        let query_peak = scan_peak + main_bytes + 1024 + query_limit + compare_tuple;
+        let cache_admission_peak = insert_peak + image_limit * 3 + 1024;
+        let exact_working = scan_peak
+            .max(insert_peak)
+            .max(deserialize_peak)
+            .max(query_peak)
+            .max(cache_admission_peak);
+        let exact_workspace = tempfile::tempdir().unwrap();
+        let exact_root = StoreRoot::open(
+            exact_workspace.path(),
+            StoreLimits {
+                max_index_serialized_bytes: image_limit,
+                max_index_query_bytes: image_limit,
+                max_index_working_bytes: exact_working,
+                ..StoreLimits::default()
+            },
+        )
+        .unwrap();
+        let (exact_journal, exact_cas, exact_index) = d1_index_fixture(&exact_root);
+        exact_index.rebuild(&exact_journal, &exact_cas).unwrap();
+        assert_eq!(
+            exact_index
+                .snapshot_current(&exact_journal)
+                .unwrap()
+                .review_plans
+                .len(),
+            1
+        );
+
+        let lower_workspace = tempfile::tempdir().unwrap();
+        let lower_root = StoreRoot::open(
+            lower_workspace.path(),
+            StoreLimits {
+                max_index_serialized_bytes: image_limit,
+                max_index_query_bytes: image_limit,
+                max_index_working_bytes: exact_working - 1,
+                ..StoreLimits::default()
+            },
+        )
+        .unwrap();
+        let (lower_journal, lower_cas, lower_index) = d1_index_fixture(&lower_root);
+        let lower_result = lower_index.rebuild(&lower_journal, &lower_cas);
+        let lower_debug = format!("{lower_result:?}");
+        assert!(
+            matches!(
+                lower_result,
+                Err(IndexError::Incomplete {
+                    limit,
+                    observed
+                }) if limit == exact_working - 1 && observed == exact_working
+            ),
+            "{lower_debug}"
+        );
+
+        let limits = IndexLimits::try_from(StoreLimits::default()).unwrap();
+        assert!(matches!(
+            query_cache_reservation_with_journal(limits, u64::MAX),
+            Err(IndexError::Incomplete {
+                observed: u64::MAX,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn candidate_reread_peak_is_isolated_exact_and_one_byte_low() {
+        // G, J_meta, candidate image, reconstructed main, query cache,
+        // snapshot reservation, and T_compare are all independently nonzero.
+        let components = [101, 103, 4096, 4096, 1024, 307, 71];
+        let exact = components.into_iter().sum();
+        assert_eq!(
+            admit_candidate_reread_peak(components, exact).unwrap(),
+            exact
+        );
+        assert!(matches!(
+            admit_candidate_reread_peak(components, exact - 1),
+            Err(IndexError::Incomplete { limit, observed })
+                if limit == exact - 1 && observed == exact
+        ));
+        assert!(matches!(
+            admit_candidate_reread_peak([u64::MAX, 1, 0, 0, 0, 0, 0], u64::MAX),
+            Err(IndexError::Incomplete {
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })
+        ));
+    }
+
+    #[test]
+    fn context_losses_preserve_multiple_full_groups_and_reject_bad_properties() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let mut giant = b"controller line\n".repeat(100);
+        giant.extend(std::iter::repeat_n(b'x', 300_000));
+        let sources = BTreeMap::from([
+            ("src/checkout_controller.rs", giant),
+            (
+                "src/payment_repository.rs",
+                b"repository line\n".repeat(80_000),
+            ),
+            (
+                "src/auxiliary_repository.rs",
+                b"auxiliary line\n".repeat(80_000),
+            ),
+        ]);
+        let (journal, cas, index) =
+            d1_index_fixture_with_sources(&root, "run:index-d1-losses", sources);
+        index.rebuild(&journal, &cas).unwrap();
+        let snapshot = index.snapshot_current(&journal).unwrap();
+        let row = snapshot.context_envelopes.first().unwrap();
+        let losses: Vec<reviewgraphen_core::EnvelopeLoss> =
+            serde_json::from_str(&row.losses_canonical_json).unwrap();
+        assert!(losses.len() >= 2);
+        assert!(
+            losses
+                .windows(2)
+                .all(|pair| pair[0].description() != pair[1].description())
+        );
+        assert!(losses.iter().any(|loss| {
+            loss.description() == "context_loss:artifact_bytes_cap" && loss.source_ids().len() >= 2
+        }));
+        let raw_losses = exact_json_value(&row.losses_canonical_json).unwrap();
+        assert!(raw_losses.as_array().unwrap().iter().all(|loss| {
+            loss.as_object()
+                .is_some_and(|object| !object.contains_key("id") && object.len() == 4)
+        }));
+
+        for replacement in [serde_json::json!([]), serde_json::json!(["p:a", "p:b"])] {
+            index.rebuild(&journal, &cas).unwrap();
+            mutate_active_image(&index, |connection| {
+                let mut losses: Value = connection
+                    .query_row(
+                        "SELECT losses_canonical_json FROM context_envelopes",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map(|text| serde_json::from_str(&text).unwrap())
+                    .unwrap();
+                losses.as_array_mut().unwrap()[0]["affected_properties"] = replacement;
+                let canonical = String::from_utf8(canonical_json(&losses).unwrap()).unwrap();
+                connection
+                    .execute(
+                        "UPDATE context_envelopes SET losses_canonical_json=?1",
+                        [canonical],
+                    )
+                    .unwrap();
+            });
+            assert!(matches!(
+                index.snapshot_current(&journal),
+                Err(IndexError::CorruptIndex)
+            ));
+        }
+    }
+
+    #[test]
+    fn schema_v2_ddl_checks_duplicates_closed_values_and_event_foreign_keys() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index) = d1_index_fixture(&root);
+        index.rebuild(&journal, &cas).unwrap();
+        let image = index.read_active_image().unwrap();
+        let length = image.len();
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .deserialize_read_exact(MAIN_DB, Cursor::new(image), length, false)
+            .unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        for sql in [
+            "UPDATE review_plans SET planner_policy_version='scheduler.other@1'",
+            "UPDATE context_envelopes SET context_policy_version='context.other@1'",
+            "UPDATE events SET payload_kind='review_execution_recorded' WHERE sequence=1",
+        ] {
+            assert!(matches!(
+                connection.execute(sql, []).map_err(map_sql),
+                Err(IndexError::ProjectionContractViolation)
+            ));
+        }
+        assert!(matches!(
+            connection
+                .execute(
+                    "INSERT INTO review_plans SELECT * FROM review_plans LIMIT 1",
+                    [],
+                )
+                .map_err(map_sql),
+            Err(IndexError::DuplicateIndexKey)
+        ));
+        assert!(matches!(
+            connection
+                .execute(
+                    "INSERT INTO obligation_lifecycle(event_sequence,event_id,obligation_id,next_lifecycle) SELECT 999,'event:missing',obligation_id,'generated' FROM obligations LIMIT 1",
+                    [],
+                )
+                .map_err(map_sql),
+            Err(IndexError::ProjectionContractViolation)
+        ));
+    }
+
+    #[test]
+    fn d1_aggregate_row_limit_accepts_exact_and_refuses_the_next_row_atomically() {
+        let discovery_workspace = tempfile::tempdir().unwrap();
+        let discovery_root =
+            StoreRoot::open(discovery_workspace.path(), StoreLimits::default()).unwrap();
+        let (discovery_journal, discovery_cas, discovery_index) = d1_index_fixture(&discovery_root);
+        discovery_index
+            .rebuild(&discovery_journal, &discovery_cas)
+            .unwrap();
+        let connection = deserialize_read_only(
+            discovery_index.read_active_image().unwrap(),
+            discovery_index.limits(),
+        )
+        .unwrap();
+        let tables = [
+            "index_meta",
+            "events",
+            "program_objects",
+            "program_relations",
+            "universe",
+            "obligations",
+            "obligation_lifecycle",
+            "claims",
+            "artifact_registrations",
+            "snapshot_source_index",
+            "review_plans",
+            "context_envelopes",
+            "unreconciled_authority_records",
+            "projected_findings",
+        ];
+        let exact_rows = tables.iter().fold(0_u64, |total, table| {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            total + u64::try_from(count).unwrap()
+        });
+        assert!(exact_rows > 1);
+
+        let exact_workspace = tempfile::tempdir().unwrap();
+        let exact_root = StoreRoot::open(
+            exact_workspace.path(),
+            StoreLimits {
+                max_index_rows: exact_rows,
+                ..StoreLimits::default()
+            },
+        )
+        .unwrap();
+        let (exact_journal, exact_cas, exact_index) = d1_index_fixture(&exact_root);
+        exact_index.rebuild(&exact_journal, &exact_cas).unwrap();
+
+        let lower_workspace = tempfile::tempdir().unwrap();
+        let lower_root = StoreRoot::open(
+            lower_workspace.path(),
+            StoreLimits {
+                max_index_rows: exact_rows - 1,
+                ..StoreLimits::default()
+            },
+        )
+        .unwrap();
+        let (lower_journal, lower_cas, lower_index) = d1_index_fixture(&lower_root);
+        assert!(matches!(
+            lower_index.rebuild(&lower_journal, &lower_cas),
+            Err(IndexError::Incomplete {
+                limit,
+                observed
+            }) if limit == exact_rows - 1 && observed == exact_rows
+        ));
+        assert!(matches!(
+            lower_index.read_active_image(),
+            Err(IndexError::Missing)
         ));
     }
 
@@ -2324,10 +5266,11 @@ mod tests {
         assert_eq!(first.event_count, second.event_count);
         assert_eq!(snapshot, index.snapshot_current(&journal).unwrap());
         journal.writer().unwrap().append(transition).unwrap();
-        assert!(matches!(
-            index.snapshot_current(&journal),
-            Err(IndexError::CommittedIndexStale { .. })
-        ));
+        let stale = index.snapshot_current(&journal);
+        assert!(
+            matches!(stale, Err(IndexError::CommittedIndexStale { .. })),
+            "unexpected stale result: {stale:?}"
+        );
     }
 
     fn assert_no_sqlite_sidecars(directory: &Path) {
@@ -2388,7 +5331,7 @@ mod tests {
         let index = DerivedIndex::open(&root).unwrap();
         assert!(matches!(
             index.rebuild(&journal, &cas),
-            Err(IndexError::ProjectionContractViolation)
+            Err(IndexError::Store(StoreError::MissingArtifact))
         ));
         assert!(matches!(
             index.read_active_image(),
@@ -2534,6 +5477,7 @@ mod tests {
             &discovery_connection,
             discovery_index.limits(),
             build_cache_reservation(discovery_index.limits()).unwrap(),
+            None,
         )
         .unwrap();
         let serialized =
@@ -2576,6 +5520,7 @@ mod tests {
             &query_connection,
             exact_index.limits(),
             query_cache_reservation(exact_index.limits()).unwrap(),
+            None,
         )
         .unwrap();
         assert_eq!(exact_snapshot.marker.event_count, 1);
@@ -2600,6 +5545,7 @@ mod tests {
                 &query_connection,
                 too_small_query,
                 query_cache_reservation(too_small_query).unwrap(),
+                None,
             ),
             Err(IndexError::Incomplete {
                 limit,
@@ -2646,7 +5592,78 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
+        let events_ddl: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='table' AND name='events'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(events_ddl.contains("'review_plan_recorded'"));
+        assert!(events_ddl.contains("'context_envelope_projected'"));
+        assert!(!events_ddl.contains("review_execution_recorded"));
+        let table_columns = |table: &str| {
+            let mut statement = connection
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap();
+            statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert_eq!(
+            table_columns("review_plans"),
+            [
+                "event_sequence",
+                "event_id",
+                "plan_id",
+                "universe_id",
+                "snapshot_id",
+                "planner_input_hash",
+                "planner_policy_version",
+                "planner_policy_hash",
+                "budget_canonical_json",
+                "budget_hash",
+                "risk_breakdown_canonical_json",
+                "waves_canonical_json",
+                "deferred_canonical_json",
+                "identity_body_hash",
+                "body_hash",
+            ]
+        );
+        assert_eq!(
+            table_columns("context_envelopes"),
+            [
+                "event_sequence",
+                "event_id",
+                "envelope_id",
+                "snapshot_id",
+                "context_policy_version",
+                "context_policy_hash",
+                "candidate_ids_canonical_json",
+                "obligation_ids_canonical_json",
+                "context_policy_canonical_json",
+                "included_sources_canonical_json",
+                "excluded_sources_canonical_json",
+                "unknowns_canonical_json",
+                "assumptions_canonical_json",
+                "losses_canonical_json",
+                "projection_hash",
+                "body_hash",
+            ]
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='executions'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
         let image = serialize_connection(&connection, index.limits()).unwrap();
         assert!(!image.is_empty());
         assert_eq!(image.len() % PAGE_SIZE as usize, 0);
@@ -2654,7 +5671,7 @@ mod tests {
         let reopened: i64 = readonly
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(reopened, 1);
+        assert_eq!(reopened, 2);
         assert!(
             readonly
                 .execute_batch("CREATE TABLE forbidden (id INTEGER)")
@@ -2904,6 +5921,32 @@ mod tests {
     }
 
     #[test]
+    fn candidate_marker_tuple_is_checked_before_projected_row_validation() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let index = DerivedIndex::open(&root).unwrap();
+        let connection = index.new_in_memory_connection().unwrap();
+        insert_v1_metadata(&connection);
+        let expected = index_marker_from_connection(&connection, index.limits()).unwrap();
+        connection
+            .execute(
+                "UPDATE index_meta SET run_id='run:wrong-candidate-marker'",
+                [],
+            )
+            .unwrap();
+        connection.execute("DROP TABLE events", []).unwrap();
+        let image = serialize_connection(&connection, index.limits()).unwrap();
+        let lock = index.lock_exclusive().unwrap();
+        index.inject_publish_fault(PublishFault::AfterValidation);
+        assert!(matches!(
+            index.publish_image_locked(image, &expected, None, 0),
+            Err(IndexError::CorruptIndex)
+        ));
+        assert!(index.take_publish_fault(PublishFault::AfterValidation));
+        lock.verify_unchanged().unwrap();
+    }
+
+    #[test]
     fn publication_failpoints_preserve_old_before_rename_and_report_uncertain_after() {
         let run = StableId::parse("run:index-publish-failpoint").unwrap();
         let tail = ContentHash::sha256(b"tail");
@@ -2912,6 +5955,7 @@ mod tests {
             PublishFault::BeforeCandidateSync,
             PublishFault::AfterCandidateLinkBeforeDirectorySync,
             PublishFault::AfterCandidateSync,
+            PublishFault::AfterImageDropBeforeCandidateRead,
             PublishFault::AfterValidation,
             PublishFault::AfterRename,
             PublishFault::AfterActiveVerify,
@@ -2922,6 +5966,7 @@ mod tests {
                     | PublishFault::BeforeCandidateSync
                     | PublishFault::AfterCandidateLinkBeforeDirectorySync
                     | PublishFault::AfterCandidateSync
+                    | PublishFault::AfterImageDropBeforeCandidateRead
                     | PublishFault::AfterValidation
             );
             let workspace = tempfile::tempdir().unwrap();
@@ -3170,7 +6215,7 @@ mod tests {
         let tail = ContentHash::sha256(b"tail");
         connection
             .execute(
-                "INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,1,'reviewgraphen.index_projection.v1','reviewgraphen.review_event.v1','v1_event_metadata_only',?1,?2,0,?3,1)",
+                "INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,2,'reviewgraphen.index_projection.v2','reviewgraphen.review_event.v1','v1_event_metadata_only',?1,?2,0,?3,1)",
                 rusqlite::params![run.to_string(), genesis.to_string(), tail.to_string()],
             )
             .unwrap();
@@ -3206,7 +6251,7 @@ mod tests {
         let (journal, cas, index, _) = v2_fixture(&root);
         let mutations: [fn(&Connection); 3] = [
             |connection: &Connection| {
-                connection.pragma_update(None, "user_version", 2).unwrap();
+                connection.pragma_update(None, "user_version", 3).unwrap();
             },
             |connection: &Connection| {
                 connection
@@ -3253,10 +6298,11 @@ mod tests {
             &connection,
             index.limits(),
             build_cache_reservation(index.limits()).unwrap(),
+            None,
         )
         .unwrap();
         assert_eq!(snapshot.marker.projection_mode, "v1_event_metadata_only");
-        assert_eq!(snapshot.marker.sqlite_user_version, 1);
+        assert_eq!(snapshot.marker.sqlite_user_version, 2);
         assert_eq!(snapshot.events.len(), 1);
         assert!(snapshot.program_objects.is_empty());
         connection
@@ -3270,6 +6316,7 @@ mod tests {
                 &connection,
                 index.limits(),
                 build_cache_reservation(index.limits()).unwrap(),
+                None,
             ),
             Err(IndexError::CorruptIndex)
         ));
@@ -3290,6 +6337,7 @@ mod tests {
                 &connection,
                 index.limits(),
                 build_cache_reservation(index.limits()).unwrap(),
+                None,
             ),
             Err(IndexError::CorruptIndex)
         ));
@@ -3314,6 +6362,7 @@ mod tests {
                 &connection,
                 index.limits(),
                 build_cache_reservation(index.limits()).unwrap(),
+                None,
             ),
             Err(IndexError::Incomplete { limit: 1, .. })
         ));
@@ -3326,7 +6375,7 @@ mod tests {
         let index = DerivedIndex::open(&root).unwrap();
         let connection = index.new_in_memory_connection().unwrap();
         let hash = ContentHash::sha256(b"index-v2-corruption").to_string();
-        connection.execute("INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,1,'reviewgraphen.index_projection.v1','reviewgraphen.review_event.v2','v2_domain','run:index-v2-corruption',?1,1,?1,1)", [&hash]).unwrap();
+        connection.execute("INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,2,'reviewgraphen.index_projection.v2','reviewgraphen.review_event.v2','v2_domain','run:index-v2-corruption',?1,1,?1,1)", [&hash]).unwrap();
         connection.execute("INSERT INTO events(sequence,event_id,schema,event_hash,payload_hash,payload_kind,actor,logical_time) VALUES(1,'event:index-v2-corruption','reviewgraphen.review_event.v2',?1,?1,'run_genesis_manifest','system',1)", [&hash]).unwrap();
         connection.execute("INSERT INTO program_objects(object_id,object_kind,body_hash) VALUES('node:index-v2-corruption','node',?1)", [&hash]).unwrap();
         connection.execute("INSERT INTO universe(singleton,universe_id,snapshot_id,profile_id,rule_set_hash,extractor_set_hash,policy_version,rule_pack_version,body_hash) VALUES(1,'universe:index-v2-corruption','snapshot:index-v2-corruption','profile',?1,?1,'policy','pack',?1)", [&hash]).unwrap();
@@ -3336,6 +6385,7 @@ mod tests {
                 &connection,
                 index.limits(),
                 build_cache_reservation(index.limits()).unwrap(),
+                None,
             ),
             Err(IndexError::CorruptIndex)
         ));

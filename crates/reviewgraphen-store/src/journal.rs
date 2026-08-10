@@ -22,6 +22,7 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
     os::fd::AsFd,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -44,27 +45,34 @@ const APPEND_PENDING_BYTES: &[u8] = b"reviewgraphen.append-pending.v1\n";
 pub enum JournalGenesis {
     /// Historical V1 stream identity.
     V1(ContentHash),
-    /// Exact canonical `RunGenesisSnapshot` bytes for a V2 stream.
+    /// Input form for exact canonical `RunGenesisSnapshot` bytes.  `JournalIdentity::new`
+    /// consumes this vector and normalizes it to the shared representation
+    /// below, so a durable identity never retains two full genesis buffers.
     V2(Vec<u8>),
+    /// Shared, immutable exact V2 genesis backing. This variant is primarily
+    /// useful when identities are cloned for concurrent readers.
+    V2Shared(Arc<[u8]>),
 }
 
 impl JournalGenesis {
     fn version(&self) -> EventContractVersion {
         match self {
             Self::V1(_) => EventContractVersion::V1,
-            Self::V2(_) => EventContractVersion::V2,
+            Self::V2(_) | Self::V2Shared(_) => EventContractVersion::V2,
         }
     }
     fn hash(&self) -> ContentHash {
         match self {
             Self::V1(hash) => hash.clone(),
             Self::V2(bytes) => ContentHash::sha256(bytes),
+            Self::V2Shared(bytes) => ContentHash::sha256(bytes),
         }
     }
     fn core_genesis(&self) -> EventStreamGenesis<'_> {
         match self {
             Self::V1(hash) => EventStreamGenesis::V1(hash),
             Self::V2(bytes) => EventStreamGenesis::V2(bytes),
+            Self::V2Shared(bytes) => EventStreamGenesis::V2(bytes),
         }
     }
 }
@@ -74,6 +82,7 @@ impl JournalGenesis {
 pub struct JournalIdentity {
     pub run_id: StableId,
     pub genesis: JournalGenesis,
+    verified_v2: Option<Arc<reviewgraphen_core::VerifiedV2Genesis>>,
 }
 
 impl JournalIdentity {
@@ -81,12 +90,27 @@ impl JournalIdentity {
         if run_id.kind() != "run" {
             return Err(JournalError::Identity("journal requires a run StableId"));
         }
-        if let JournalGenesis::V2(bytes) = &genesis {
+        // The public Vec input is intentionally consumed here. Subsequent
+        // reader/writer identity clones share exactly one immutable backing.
+        let genesis = match genesis {
+            JournalGenesis::V2(bytes) => JournalGenesis::V2Shared(Arc::from(bytes)),
+            other => other,
+        };
+        let verified_v2 = if let JournalGenesis::V2Shared(bytes) = &genesis {
             // Strict decoding here means no path can initialize a V2 journal
             // with merely hash-shaped, noncanonical genesis bytes.
-            let _ = reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes(bytes)?;
-        }
-        Ok(Self { run_id, genesis })
+            Some(Arc::new(
+                reviewgraphen_core::VerifiedV2Genesis::from_canonical_bytes(&run_id, bytes)
+                    .map_err(map_bounded_domain_error)?,
+            ))
+        } else {
+            None
+        };
+        Ok(Self {
+            run_id,
+            genesis,
+            verified_v2,
+        })
     }
     #[must_use]
     pub fn version(&self) -> EventContractVersion {
@@ -99,6 +123,55 @@ impl JournalIdentity {
     #[allow(dead_code)] // Consumed by the following derived-index C-3 unit.
     pub(crate) fn core_genesis(&self) -> EventStreamGenesis<'_> {
         self.genesis.core_genesis()
+    }
+
+    pub(crate) fn verified_core_genesis(&self) -> Result<EventStreamGenesis<'_>, JournalError> {
+        match (&self.genesis, &self.verified_v2) {
+            (JournalGenesis::V1(hash), None) => Ok(EventStreamGenesis::V1(hash)),
+            (JournalGenesis::V2Shared(bytes), Some(verified))
+                if verified.run_id() == &self.run_id
+                    && verified.genesis_hash() == &ContentHash::sha256(bytes) =>
+            {
+                Ok(EventStreamGenesis::V2Verified(verified.as_ref()))
+            }
+            _ => Err(JournalError::Identity(
+                "journal identity no longer matches its verified genesis",
+            )),
+        }
+    }
+
+    /// The V2 canonical genesis shares one immutable allocation among all
+    /// lock-held readers and writers. V1 deliberately has no byte backing.
+    #[must_use]
+    #[allow(dead_code)] // The index migration consumes this shared backing.
+    pub(crate) fn v2_genesis_backing(&self) -> Option<&Arc<[u8]>> {
+        match &self.genesis {
+            JournalGenesis::V2Shared(bytes) => Some(bytes),
+            JournalGenesis::V1(_) | JournalGenesis::V2(_) => None,
+        }
+    }
+
+    fn local_metadata_capacity(&self) -> usize {
+        self.run_id.allocated_bytes()
+            + match &self.genesis {
+                JournalGenesis::V1(hash) => hash.allocated_bytes(),
+                JournalGenesis::V2(_) | JournalGenesis::V2Shared(_) => 0,
+            }
+    }
+
+    fn shared_certificate_capacity(&self) -> usize {
+        self.verified_v2.as_ref().map_or(0, |verified| {
+            verified
+                .allocated_bytes()
+                .saturating_add(std::mem::size_of::<usize>() * 2)
+        })
+    }
+
+    pub(crate) fn cloned_local_metadata_capacity(&self) -> Result<u64, JournalError> {
+        u64::try_from(self.local_metadata_capacity()).map_err(|_| JournalError::Incomplete {
+            limit: u64::MAX,
+            observed: u64::MAX,
+        })
     }
 }
 
@@ -219,6 +292,42 @@ pub struct JournalReader {
     identity: JournalIdentity,
     limits: JournalLimits,
     state: ScanState,
+}
+
+/// Compact, lock-bound summary of one fully confirmed journal prefix.  It
+/// contains no envelopes, decoded payloads, raw JSONL bytes, or torn suffix.
+#[allow(dead_code)] // Wired by the in-flight index streaming migration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PrefixCertificate {
+    pub(crate) confirmed_offset: u64,
+    pub(crate) tail_hash: ContentHash,
+    pub(crate) event_count: u64,
+    pub(crate) line_buffer_capacity: u64,
+    pub(crate) canonical_scratch_capacity: u64,
+}
+
+/// A shared-lock journal reader reserved for derived-index construction.  It
+/// intentionally has no `events()` API: callers must consume each envelope
+/// in the bounded streaming callback and retain only their own compact
+/// projection state.
+#[allow(dead_code)] // Wired by the in-flight index streaming migration.
+pub(crate) struct IndexJournalReader {
+    #[allow(dead_code)] // Holds the shared journal lock for the replay.
+    file: File,
+    identity: JournalIdentity,
+    limits: JournalLimits,
+    working_limit: u64,
+    completed_receipts: Vec<(RecoveryIntent, RecoveryCompletion)>,
+}
+
+/// Distinguishes a corrupt/bounded durable input from a projection callback
+/// failure without forcing the journal module to depend on the index error
+/// type.
+#[allow(dead_code)] // Wired by the in-flight index streaming migration.
+#[derive(Debug)]
+pub(crate) enum IndexReplayError<E> {
+    Journal(JournalError),
+    Visitor(E),
 }
 pub struct JournalWriter {
     file: File,
@@ -401,6 +510,129 @@ impl<'a> EventJournal<'a> {
     }
 
     pub fn reader(&self) -> Result<JournalReader, JournalError> {
+        self.reader_with_working_limit(None)
+    }
+
+    /// Opens the index-only streaming reader. Unlike the public materialized
+    /// reader, this
+    /// path never materializes the raw file, an envelope vector, a start
+    /// offset vector, a `ValidatedEventView`, or a torn suffix. New derived
+    /// index code must use this entry point.
+    #[allow(dead_code)] // Kept beside legacy reader_for_index until index migration lands.
+    pub(crate) fn index_reader(
+        &self,
+        working_limit: u64,
+    ) -> Result<IndexJournalReader, JournalError> {
+        if let Some(bytes) = self.identity.v2_genesis_backing() {
+            reviewgraphen_core::preflight_index_genesis_json_structure(bytes)
+                .map_err(map_bounded_domain_error)?;
+        }
+        let fd = self.open_file(false)?;
+        fs::flock(&fd, FlockOperation::LockShared).map_err(StoreError::Io)?;
+        let file = File::from(fd);
+        self.refuse_pending_markers()?;
+        let (intents, completions) = self.recovery_dirs()?;
+        let genesis = self
+            .identity
+            .v2_genesis_backing()
+            .map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+        let original_identity = self.identity.cloned_local_metadata_capacity()?;
+        let future_index_identity = original_identity;
+        let reader_identity = u64::try_from(
+            self.identity
+                .local_metadata_capacity()
+                .checked_add(self.identity.shared_certificate_capacity())
+                .ok_or(JournalError::Incomplete {
+                    limit: working_limit,
+                    observed: u64::MAX,
+                })?,
+        )
+        .map_err(|_| JournalError::Incomplete {
+            limit: working_limit,
+            observed: u64::MAX,
+        })?;
+        let canonical_scratch = self.limits.max_event_line_bytes.saturating_sub(1);
+        let fixed = genesis
+            .checked_add(original_identity)
+            .and_then(|value| value.checked_add(future_index_identity))
+            .and_then(|value| value.checked_add(reader_identity))
+            .and_then(|value| value.checked_add(self.limits.max_event_line_bytes))
+            .and_then(|value| value.checked_add(canonical_scratch))
+            .ok_or(JournalError::Incomplete {
+                limit: working_limit,
+                observed: u64::MAX,
+            })?;
+        limit(fixed, working_limit)?;
+        let mut receipt_count = 0;
+        let mut receipt_bytes = 0;
+        let (intent_count, intent_max) = index_receipt_inventory(
+            &intents,
+            self.limits,
+            &mut receipt_count,
+            &mut receipt_bytes,
+        )?;
+        let (completion_count, completion_max) = index_receipt_inventory(
+            &completions,
+            self.limits,
+            &mut receipt_count,
+            &mut receipt_bytes,
+        )?;
+        preflight_index_recovery_audit(
+            intent_count,
+            completion_count,
+            intent_max.max(completion_max),
+            receipt_bytes,
+            fixed,
+            working_limit,
+        )?;
+        let intent_names = receipt_names_exact(&intents, self.limits, intent_count)?;
+        let completion_names = receipt_names_exact(&completions, self.limits, completion_count)?;
+        let audit = recovery_audit_from_names(
+            &intents,
+            &completions,
+            &self.identity,
+            self.limits,
+            intent_names,
+            completion_names,
+            receipt_count,
+            receipt_bytes,
+        )?;
+        sync_recovery_dirs(&intents, &completions)?;
+        if let Some(intent) = audit.pending {
+            if self.identity.version() == EventContractVersion::V2 && intent.good_offset == 0 {
+                return Err(JournalError::V2GenesisRequired);
+            }
+            return Err(JournalError::CorruptNeedsRecovery {
+                good_offset: intent.good_offset,
+                auto_recoverable: true,
+            });
+        }
+        let reader = IndexJournalReader {
+            file,
+            identity: self.identity.clone(),
+            limits: self.limits,
+            working_limit,
+            completed_receipts: audit.completed,
+        };
+        let requested = reader
+            .retained_metadata_capacity()?
+            .checked_add(original_identity)
+            .and_then(|value| value.checked_add(future_index_identity))
+            .and_then(|value| value.checked_add(genesis))
+            .and_then(|value| value.checked_add(self.limits.max_event_line_bytes))
+            .and_then(|value| value.checked_add(canonical_scratch))
+            .ok_or(JournalError::Incomplete {
+                limit: working_limit,
+                observed: u64::MAX,
+            })?;
+        limit(requested, working_limit)?;
+        Ok(reader)
+    }
+
+    fn reader_with_working_limit(
+        &self,
+        working_limit: Option<u64>,
+    ) -> Result<JournalReader, JournalError> {
         let fd = self.open_file(false)?;
         fs::flock(&fd, FlockOperation::LockShared).map_err(StoreError::Io)?;
         let mut file = File::from(fd);
@@ -418,7 +650,8 @@ impl<'a> EventJournal<'a> {
             });
         }
         validate_completed_receipts(&mut file, &self.identity, self.limits, &audit.completed)?;
-        let state = scan(&mut file, &self.identity, self.limits, true)?;
+        let state =
+            scan_with_working_limit(&mut file, &self.identity, self.limits, true, working_limit)?;
         Ok(JournalReader {
             file,
             identity: self.identity.clone(),
@@ -809,6 +1042,100 @@ impl JournalReader {
     }
 }
 
+impl IndexJournalReader {
+    #[must_use]
+    #[allow(dead_code)] // Used by the index migration.
+    pub(crate) fn identity(&self) -> &JournalIdentity {
+        &self.identity
+    }
+
+    /// Exact requested capacities retained by the lock-held receipt metadata.
+    /// The shared V2 genesis backing is reported separately by
+    /// `v2_genesis_backing` and must be charged only once by the caller.
+    pub(crate) fn retained_metadata_capacity(&self) -> Result<u64, JournalError> {
+        let vector = self
+            .completed_receipts
+            .capacity()
+            .checked_mul(std::mem::size_of::<(RecoveryIntent, RecoveryCompletion)>())
+            .ok_or(JournalError::Incomplete {
+                limit: self.working_limit,
+                observed: u64::MAX,
+            })?;
+        let heap =
+            self.completed_receipts
+                .iter()
+                .try_fold(0usize, |used, (intent, completion)| {
+                    let next = intent
+                        .recovery_id
+                        .allocated_bytes()
+                        .checked_add(intent.run_id.allocated_bytes())
+                        .and_then(|value| value.checked_add(intent.genesis_hash.allocated_bytes()))
+                        .and_then(|value| value.checked_add(intent.nonce.capacity()))
+                        .and_then(|value| {
+                            value.checked_add(intent.discarded_hash.allocated_bytes())
+                        })
+                        .and_then(|value| value.checked_add(intent.pre_tail_hash.allocated_bytes()))
+                        .and_then(|value| value.checked_add(intent.actor.capacity()))
+                        .and_then(|value| value.checked_add(intent.tool_version.capacity()))
+                        .and_then(|value| {
+                            value.checked_add(completion.recovery_id.allocated_bytes())
+                        })
+                        .and_then(|value| {
+                            value.checked_add(completion.post_file_hash.allocated_bytes())
+                        })
+                        .ok_or(JournalError::Incomplete {
+                            limit: self.working_limit,
+                            observed: u64::MAX,
+                        })?;
+                    used.checked_add(next).ok_or(JournalError::Incomplete {
+                        limit: self.working_limit,
+                        observed: u64::MAX,
+                    })
+                })?;
+        let identity = self
+            .identity
+            .local_metadata_capacity()
+            .checked_add(self.identity.shared_certificate_capacity())
+            .ok_or(JournalError::Incomplete {
+                limit: self.working_limit,
+                observed: u64::MAX,
+            })?;
+        u64::try_from(
+            vector
+                .checked_add(heap)
+                .and_then(|value| value.checked_add(identity))
+                .ok_or(JournalError::Incomplete {
+                    limit: self.working_limit,
+                    observed: u64::MAX,
+                })?,
+        )
+        .map_err(|_| JournalError::Incomplete {
+            limit: self.working_limit,
+            observed: u64::MAX,
+        })
+    }
+
+    /// Replays the confirmed JSONL prefix once while its shared lock remains
+    /// held. The callback receives one locally validated, canonical envelope
+    /// at a time and must not retain it. A complete compact certificate is
+    /// returned only after the physical EOF, hash chain, V2 genesis manifest,
+    /// and every durable recovery checkpoint agree.
+    #[allow(dead_code)] // Used by the index migration.
+    pub(crate) fn with_locked_prefix<E>(
+        &mut self,
+        visitor: impl FnMut(&EventEnvelope, u64) -> Result<(), E>,
+    ) -> Result<PrefixCertificate, IndexReplayError<E>> {
+        scan_index_prefix(
+            &mut self.file,
+            &self.identity,
+            self.limits,
+            self.working_limit,
+            &self.completed_receipts,
+            visitor,
+        )
+    }
+}
+
 impl JournalWriter {
     /// Appends exactly one canonical JSON object and newline after validating
     /// the entire candidate prefix through core.  A failure before durable
@@ -1095,13 +1422,301 @@ fn injected_io_error(operation: &'static str) -> std::io::Error {
     std::io::Error::other(format!("test-only injected {operation} failure"))
 }
 
+fn map_bounded_domain_error(error: reviewgraphen_core::DomainError) -> JournalError {
+    match error {
+        reviewgraphen_core::DomainError::Incomplete {
+            limit, observed, ..
+        } => JournalError::Incomplete {
+            limit: u64::try_from(limit).unwrap_or(u64::MAX),
+            observed: u64::try_from(observed).unwrap_or(u64::MAX),
+        },
+        other => JournalError::Domain(other),
+    }
+}
+
+fn map_event_decode_error(
+    error: reviewgraphen_core::DomainError,
+    good_offset: u64,
+) -> JournalError {
+    match error {
+        reviewgraphen_core::DomainError::Incomplete { .. } => map_bounded_domain_error(error),
+        _ => JournalError::CorruptNeedsRecovery {
+            good_offset,
+            auto_recoverable: false,
+        },
+    }
+}
+
+fn map_index_event_decode_error<E>(
+    error: reviewgraphen_core::DomainError,
+    good_offset: u64,
+) -> IndexReplayError<E> {
+    IndexReplayError::Journal(map_event_decode_error(error, good_offset))
+}
+
+/// One-pass, fixed-buffer journal validation for the derived-index path.
+/// This intentionally has no recovery/torn-tail output: an incomplete final
+/// line is an obstruction, never a copied suffix for this read-only caller.
+#[allow(dead_code)] // Reached from IndexJournalReader during index migration.
+fn scan_index_prefix<E>(
+    file: &mut File,
+    identity: &JournalIdentity,
+    limits: JournalLimits,
+    working_limit: u64,
+    completed_receipts: &[(RecoveryIntent, RecoveryCompletion)],
+    mut visitor: impl FnMut(&EventEnvelope, u64) -> Result<(), E>,
+) -> Result<PrefixCertificate, IndexReplayError<E>> {
+    // The index path owns exactly one fixed physical-line buffer and one
+    // explicitly pre-reserved canonical destination. Core's
+    // closed decoder applies its independent structural limits; its transient
+    // allocations are not a store-owned retained buffer. The certificate
+    // reports the exact maximum canonical writer capacity to the index so it
+    // can include that scratch in its own stage accounting.
+    let canonical_scratch = limits.max_event_line_bytes.saturating_sub(1);
+    let fixed_buffers = limits
+        .max_event_line_bytes
+        .checked_add(canonical_scratch)
+        .ok_or_else(|| {
+            IndexReplayError::Journal(JournalError::Incomplete {
+                limit: working_limit,
+                observed: u64::MAX,
+            })
+        })?;
+    if fixed_buffers > working_limit {
+        return Err(IndexReplayError::Journal(JournalError::Incomplete {
+            limit: working_limit,
+            observed: fixed_buffers,
+        }));
+    }
+    let line_capacity = usize::try_from(limits.max_event_line_bytes).map_err(|_| {
+        IndexReplayError::Journal(JournalError::Incomplete {
+            limit: limits.max_event_line_bytes,
+            observed: u64::MAX,
+        })
+    })?;
+    let mut line = Vec::new();
+    line.try_reserve_exact(line_capacity).map_err(|_| {
+        IndexReplayError::Journal(JournalError::Incomplete {
+            limit: working_limit,
+            observed: limits.max_event_line_bytes,
+        })
+    })?;
+
+    let mut wanted = std::collections::BTreeMap::new();
+    for (intent, completion) in completed_receipts {
+        if wanted
+            .insert(intent.good_offset, (intent, completion))
+            .is_some()
+        {
+            return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
+                name: receipt_name(&intent.recovery_id),
+            }));
+        }
+    }
+    let mut digest = Sha256::new();
+    let mut offset = 0_u64;
+    let mut count = 0_u64;
+    let mut tail = chain_genesis(identity);
+    let canonical_scratch_capacity = canonical_scratch;
+    if let Some((intent, completion)) = wanted.remove(&0)
+        && (intent.pre_tail_hash != tail || completion.post_file_hash != ContentHash::sha256(b""))
+    {
+        return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
+            name: receipt_name(&intent.recovery_id),
+        }));
+    }
+
+    file.seek(SeekFrom::Start(0))
+        .map_err(JournalError::from)
+        .map_err(IndexReplayError::Journal)?;
+    let mut read_buf = [0_u8; 8192];
+    loop {
+        let read = file
+            .read(&mut read_buf)
+            .map_err(JournalError::from)
+            .map_err(IndexReplayError::Journal)?;
+        if read == 0 {
+            break;
+        }
+        for byte in &read_buf[..read] {
+            offset = offset.checked_add(1).ok_or_else(|| {
+                IndexReplayError::Journal(JournalError::Incomplete {
+                    limit: limits.max_replay_bytes,
+                    observed: u64::MAX,
+                })
+            })?;
+            limit(offset, limits.max_replay_bytes).map_err(IndexReplayError::Journal)?;
+            if *byte != b'\n' {
+                let next = line.len().checked_add(1).ok_or_else(|| {
+                    IndexReplayError::Journal(JournalError::Incomplete {
+                        limit: limits.max_event_line_bytes,
+                        observed: u64::MAX,
+                    })
+                })?;
+                let next_u64 = u64::try_from(next).map_err(|_| {
+                    IndexReplayError::Journal(JournalError::Incomplete {
+                        limit: limits.max_event_line_bytes,
+                        observed: u64::MAX,
+                    })
+                })?;
+                limit(next_u64.saturating_add(1), limits.max_event_line_bytes)
+                    .map_err(IndexReplayError::Journal)?;
+                // `line` was pre-reserved at the physical maximum; this
+                // cannot grow and so cannot allocate after admission.
+                line.push(*byte);
+                continue;
+            }
+
+            let physical_len = u64::try_from(line.len())
+                .ok()
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| {
+                    IndexReplayError::Journal(JournalError::Incomplete {
+                        limit: limits.max_event_line_bytes,
+                        observed: u64::MAX,
+                    })
+                })?;
+            limit(physical_len, limits.max_event_line_bytes).map_err(IndexReplayError::Journal)?;
+            count = count.checked_add(1).ok_or_else(|| {
+                IndexReplayError::Journal(JournalError::Incomplete {
+                    limit: limits.max_events,
+                    observed: u64::MAX,
+                })
+            })?;
+            limit(count, limits.max_events).map_err(IndexReplayError::Journal)?;
+
+            let event_start = offset.checked_sub(physical_len).ok_or_else(|| {
+                IndexReplayError::Journal(JournalError::Incomplete {
+                    limit: limits.max_replay_bytes,
+                    observed: u64::MAX,
+                })
+            })?;
+            let event = EventEnvelope::from_json_slice_for_index(&line)
+                .map_err(|error| map_index_event_decode_error(error, event_start))?;
+            let canonical = event
+                .canonical_bytes_for_index(usize::try_from(canonical_scratch).map_err(|_| {
+                    IndexReplayError::Journal(JournalError::Incomplete {
+                        limit: working_limit,
+                        observed: u64::MAX,
+                    })
+                })?)
+                .map_err(JournalError::from)
+                .map_err(IndexReplayError::Journal)?;
+            if canonical != line {
+                return Err(IndexReplayError::Journal(
+                    JournalError::CorruptNeedsRecovery {
+                        good_offset: event_start,
+                        auto_recoverable: false,
+                    },
+                ));
+            }
+            event.validate().map_err(|_| {
+                IndexReplayError::Journal(JournalError::CorruptNeedsRecovery {
+                    good_offset: event_start,
+                    auto_recoverable: false,
+                })
+            })?;
+            if event
+                .contract_version()
+                .map_err(JournalError::from)
+                .map_err(IndexReplayError::Journal)?
+                != identity.version()
+                || event.run_id() != &identity.run_id
+                || event.genesis_hash() != &identity.genesis_hash()
+                || event.sequence() != count
+                || event.previous_event_hash() != &tail
+            {
+                return Err(IndexReplayError::Journal(
+                    JournalError::CorruptNeedsRecovery {
+                        good_offset: event_start,
+                        auto_recoverable: false,
+                    },
+                ));
+            }
+            if count == 1 && identity.version() == EventContractVersion::V2 {
+                EventEnvelope::validated_view(
+                    identity.version(),
+                    &identity.run_id,
+                    identity
+                        .verified_core_genesis()
+                        .map_err(IndexReplayError::Journal)?,
+                    std::slice::from_ref(&event),
+                )
+                .map_err(|_| {
+                    IndexReplayError::Journal(JournalError::CorruptNeedsRecovery {
+                        good_offset: event_start,
+                        auto_recoverable: false,
+                    })
+                })?;
+            }
+            digest.update(&line);
+            digest.update(b"\n");
+            tail = event.event_hash().clone();
+            let boundary = event_start.checked_add(physical_len).ok_or_else(|| {
+                IndexReplayError::Journal(JournalError::Incomplete {
+                    limit: limits.max_replay_bytes,
+                    observed: u64::MAX,
+                })
+            })?;
+            if let Some((intent, completion)) = wanted.remove(&boundary) {
+                let actual = ContentHash::parse(format!("sha256:{:x}", digest.clone().finalize()))
+                    .map_err(JournalError::from)
+                    .map_err(IndexReplayError::Journal)?;
+                if intent.pre_tail_hash != tail || completion.post_file_hash != actual {
+                    return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
+                        name: receipt_name(&intent.recovery_id),
+                    }));
+                }
+            }
+            visitor(&event, boundary).map_err(IndexReplayError::Visitor)?;
+            line.clear();
+        }
+    }
+    if !line.is_empty() {
+        // The index never keeps a torn suffix. It only reports its exact
+        // confirmed boundary for the explicit recovery workflow.
+        return Err(IndexReplayError::Journal(
+            JournalError::CorruptNeedsRecovery {
+                good_offset: offset.saturating_sub(u64::try_from(line.len()).unwrap_or(u64::MAX)),
+                auto_recoverable: true,
+            },
+        ));
+    }
+    if identity.version() == EventContractVersion::V2 && count == 0 {
+        return Err(IndexReplayError::Journal(JournalError::V2GenesisRequired));
+    }
+    if let Some((_, (intent, _))) = wanted.into_iter().next() {
+        return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
+            name: receipt_name(&intent.recovery_id),
+        }));
+    }
+    Ok(PrefixCertificate {
+        confirmed_offset: offset,
+        tail_hash: tail,
+        event_count: count,
+        line_buffer_capacity: u64::try_from(line.capacity()).unwrap_or(u64::MAX),
+        canonical_scratch_capacity,
+    })
+}
+
 fn scan(
     file: &mut File,
     identity: &JournalIdentity,
     limits: JournalLimits,
     reject_empty_v2: bool,
 ) -> Result<ScanState, JournalError> {
-    let state = scan_with_torn(file, identity, limits, reject_empty_v2)?;
+    scan_with_working_limit(file, identity, limits, reject_empty_v2, None)
+}
+
+fn scan_with_working_limit(
+    file: &mut File,
+    identity: &JournalIdentity,
+    limits: JournalLimits,
+    reject_empty_v2: bool,
+    working_limit: Option<u64>,
+) -> Result<ScanState, JournalError> {
+    let state =
+        scan_with_torn_and_working_limit(file, identity, limits, reject_empty_v2, working_limit)?;
     if let Some(torn) = &state.torn {
         return Err(JournalError::CorruptNeedsRecovery {
             good_offset: torn.good_offset,
@@ -1116,6 +1731,16 @@ fn scan_with_torn(
     identity: &JournalIdentity,
     limits: JournalLimits,
     reject_empty_v2: bool,
+) -> Result<ScanState, JournalError> {
+    scan_with_torn_and_working_limit(file, identity, limits, reject_empty_v2, None)
+}
+
+fn scan_with_torn_and_working_limit(
+    file: &mut File,
+    identity: &JournalIdentity,
+    limits: JournalLimits,
+    reject_empty_v2: bool,
+    working_limit: Option<u64>,
 ) -> Result<ScanState, JournalError> {
     file.seek(SeekFrom::Start(0))?;
     let mut bytes = Vec::new();
@@ -1136,9 +1761,42 @@ fn scan_with_torn(
                 observed: u64::MAX,
             })?;
         limit(observed, limits.max_replay_bytes)?;
+        let needed = bytes.len().checked_add(n).ok_or(JournalError::Incomplete {
+            limit: working_limit.unwrap_or(limits.max_replay_bytes),
+            observed: u64::MAX,
+        })?;
+        if needed > bytes.capacity() {
+            let prospective = u64::try_from(needed).map_err(|_| JournalError::Incomplete {
+                limit: working_limit.unwrap_or(limits.max_replay_bytes),
+                observed: u64::MAX,
+            })?;
+            if working_limit.is_some_and(|limit| prospective > limit) {
+                return Err(JournalError::Incomplete {
+                    limit: working_limit.expect("checked Some"),
+                    observed: prospective,
+                });
+            }
+            bytes
+                .try_reserve_exact(needed - bytes.capacity())
+                .map_err(|_| JournalError::Incomplete {
+                    limit: working_limit.unwrap_or(limits.max_replay_bytes),
+                    observed: prospective,
+                })?;
+        }
         bytes.extend_from_slice(&buf[..n]);
     }
-    scan_bytes(&bytes, identity, limits, reject_empty_v2)
+    let raw_capacity = u64::try_from(bytes.capacity()).map_err(|_| JournalError::Incomplete {
+        limit: limits.max_replay_bytes,
+        observed: u64::MAX,
+    })?;
+    scan_bytes_with_accounting(
+        &bytes,
+        raw_capacity,
+        identity,
+        limits,
+        reject_empty_v2,
+        working_limit,
+    )
 }
 
 fn scan_bytes(
@@ -1147,10 +1805,27 @@ fn scan_bytes(
     limits: JournalLimits,
     reject_empty_v2: bool,
 ) -> Result<ScanState, JournalError> {
+    let raw_capacity = u64::try_from(bytes.len()).map_err(|_| JournalError::Incomplete {
+        limit: limits.max_replay_bytes,
+        observed: u64::MAX,
+    })?;
+    scan_bytes_with_accounting(bytes, raw_capacity, identity, limits, reject_empty_v2, None)
+}
+
+fn scan_bytes_with_accounting(
+    bytes: &[u8],
+    raw_capacity: u64,
+    identity: &JournalIdentity,
+    limits: JournalLimits,
+    reject_empty_v2: bool,
+    working_limit: Option<u64>,
+) -> Result<ScanState, JournalError> {
     let mut events = Vec::new();
     let mut starts = Vec::new();
     let mut good = 0u64;
     let mut start = 0usize;
+    let mut canonical_scratch_capacity = 0_u64;
+    let mut event_heap_capacity = 0_u64;
     while let Some(relative) = bytes[start..].iter().position(|byte| *byte == b'\n') {
         let end = start + relative;
         let next = end + 1;
@@ -1170,18 +1845,96 @@ fn scan_bytes(
             })?;
         // Refuse the +1 event before parsing/allocating its decoded payload.
         limit(next_count, limits.max_events)?;
-        let event = EventEnvelope::from_json_slice(&bytes[start..end]).map_err(|_| {
-            JournalError::CorruptNeedsRecovery {
-                good_offset: good,
-                auto_recoverable: false,
+        if events.len() == events.capacity() {
+            let prospective_vector = events
+                .len()
+                .checked_add(1)
+                .and_then(|count| count.checked_mul(std::mem::size_of::<EventEnvelope>()))
+                .and_then(|bytes| u64::try_from(bytes).ok())
+                .ok_or(JournalError::Incomplete {
+                    limit: working_limit.unwrap_or(limits.max_replay_bytes),
+                    observed: u64::MAX,
+                })?;
+            let line = u64::try_from(end - start).map_err(|_| JournalError::Incomplete {
+                limit: working_limit.unwrap_or(limits.max_replay_bytes),
+                observed: u64::MAX,
+            })?;
+            let reservation = raw_capacity
+                .checked_add(event_heap_capacity)
+                .and_then(|value| value.checked_add(prospective_vector))
+                .and_then(|value| value.checked_add(line))
+                .and_then(|value| value.checked_add(line.checked_mul(2)?))
+                .ok_or(JournalError::Incomplete {
+                    limit: working_limit.unwrap_or(limits.max_replay_bytes),
+                    observed: u64::MAX,
+                })?;
+            if working_limit.is_some_and(|limit| reservation > limit) {
+                return Err(JournalError::Incomplete {
+                    limit: working_limit.expect("checked Some"),
+                    observed: reservation,
+                });
             }
+            events
+                .try_reserve_exact(1)
+                .map_err(|_| JournalError::Incomplete {
+                    limit: working_limit.unwrap_or(limits.max_replay_bytes),
+                    observed: reservation,
+                })?;
+        }
+        let retained_vector = events
+            .capacity()
+            .checked_mul(std::mem::size_of::<EventEnvelope>())
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or(JournalError::Incomplete {
+                limit: working_limit.unwrap_or(limits.max_replay_bytes),
+                observed: u64::MAX,
+            })?;
+        let line = u64::try_from(end - start).map_err(|_| JournalError::Incomplete {
+            limit: working_limit.unwrap_or(limits.max_replay_bytes),
+            observed: u64::MAX,
         })?;
-        if event.canonical_bytes().map_err(JournalError::Domain)? != bytes[start..end] {
+        let reservation = raw_capacity
+            .checked_add(event_heap_capacity)
+            .and_then(|value| value.checked_add(retained_vector))
+            .and_then(|value| value.checked_add(line))
+            .and_then(|value| value.checked_add(line.checked_mul(2)?))
+            .ok_or(JournalError::Incomplete {
+                limit: working_limit.unwrap_or(limits.max_replay_bytes),
+                observed: u64::MAX,
+            })?;
+        if working_limit.is_some_and(|limit| reservation > limit) {
+            return Err(JournalError::Incomplete {
+                limit: working_limit.expect("checked Some"),
+                observed: reservation,
+            });
+        }
+        let event = EventEnvelope::from_json_slice(&bytes[start..end])
+            .map_err(|error| map_event_decode_error(error, good))?;
+        let canonical = event.canonical_bytes().map_err(JournalError::Domain)?;
+        canonical_scratch_capacity =
+            canonical_scratch_capacity.max(u64::try_from(canonical.capacity()).map_err(|_| {
+                JournalError::Incomplete {
+                    limit: limits.max_replay_bytes,
+                    observed: u64::MAX,
+                }
+            })?);
+        if canonical != bytes[start..end] {
             return Err(JournalError::CorruptNeedsRecovery {
                 good_offset: good,
                 auto_recoverable: false,
             });
         }
+        event_heap_capacity = event_heap_capacity
+            .checked_add(u64::try_from(event.allocated_bytes()).map_err(|_| {
+                JournalError::Incomplete {
+                    limit: working_limit.unwrap_or(limits.max_replay_bytes),
+                    observed: u64::MAX,
+                }
+            })?)
+            .ok_or(JournalError::Incomplete {
+                limit: working_limit.unwrap_or(limits.max_replay_bytes),
+                observed: u64::MAX,
+            })?;
         starts.push(u64::try_from(start).map_err(|_| JournalError::Incomplete {
             limit: limits.max_replay_bytes,
             observed: u64::MAX,
@@ -1274,7 +2027,7 @@ fn validate_prefix(
     let _ = EventEnvelope::validated_view(
         identity.version(),
         &identity.run_id,
-        identity.genesis.core_genesis(),
+        identity.verified_core_genesis()?,
         events,
     )?;
     Ok(())
@@ -1671,10 +2424,41 @@ fn recovery_audit(
     identity: &JournalIdentity,
     limits: JournalLimits,
 ) -> Result<RecoveryAudit, JournalError> {
-    let mut intents_by_id = Vec::new();
     let mut count = 0u64;
     let mut scanned = 0u64;
-    for name in receipt_names(intents, limits, &mut count, &mut scanned)? {
+    let intent_names = receipt_names(intents, limits, &mut count, &mut scanned)?;
+    let completion_names = receipt_names(completions, limits, &mut count, &mut scanned)?;
+    recovery_audit_from_names(
+        intents,
+        completions,
+        identity,
+        limits,
+        intent_names,
+        completion_names,
+        count,
+        scanned,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recovery_audit_from_names(
+    intents: &OwnedFd,
+    completions: &OwnedFd,
+    identity: &JournalIdentity,
+    limits: JournalLimits,
+    intent_names: Vec<String>,
+    completion_names: Vec<String>,
+    count: u64,
+    scanned: u64,
+) -> Result<RecoveryAudit, JournalError> {
+    let mut intents_by_id = Vec::new();
+    intents_by_id
+        .try_reserve_exact(intent_names.len())
+        .map_err(|_| JournalError::Incomplete {
+            limit: limits.max_receipt_scan_bytes,
+            observed: u64::MAX,
+        })?;
+    for name in intent_names {
         let intent = read_receipt::<RecoveryIntent>(intents, &name, limits)?
             .ok_or_else(|| JournalError::ReceiptCorruption { name: name.clone() })?;
         validate_intent_shape(&intent, &name, identity, limits)?;
@@ -1688,7 +2472,13 @@ fn recovery_audit(
         intents_by_id.push(intent);
     }
     let mut completed = Vec::new();
-    for name in receipt_names(completions, limits, &mut count, &mut scanned)? {
+    completed
+        .try_reserve_exact(completion_names.len())
+        .map_err(|_| JournalError::Incomplete {
+            limit: limits.max_receipt_scan_bytes,
+            observed: u64::MAX,
+        })?;
+    for name in completion_names {
         let completion = read_receipt::<RecoveryCompletion>(completions, &name, limits)?
             .ok_or_else(|| JournalError::ReceiptCorruption { name: name.clone() })?;
         if name != receipt_name(&completion.recovery_id)
@@ -1728,6 +2518,67 @@ fn recovery_audit(
         receipt_files: count,
         receipt_scan_bytes: scanned,
     })
+}
+
+/// Admit the largest store-visible recovery-audit shape before any receipt is
+/// read or deserialized. The final retained-metadata check remains exact; this
+/// conservative pass accounts for temporary receipt bytes, canonical scratch,
+/// both audit vectors, the cloned completed intent, and discovered names.
+fn preflight_index_recovery_audit(
+    intent_count: usize,
+    completion_count: usize,
+    max_receipt: u64,
+    receipt_bytes: u64,
+    fixed: u64,
+    working_limit: u64,
+) -> Result<(), JournalError> {
+    let names = intent_count.saturating_add(completion_count);
+    let name_heap = u64::try_from(names)
+        .unwrap_or(u64::MAX)
+        .checked_mul(69)
+        .ok_or(JournalError::Incomplete {
+            limit: working_limit,
+            observed: u64::MAX,
+        })?;
+    let intent_layout = u64::try_from(intent_count)
+        .unwrap_or(u64::MAX)
+        .checked_mul(u64::try_from(std::mem::size_of::<RecoveryIntent>()).unwrap_or(u64::MAX))
+        .ok_or(JournalError::Incomplete {
+            limit: working_limit,
+            observed: u64::MAX,
+        })?;
+    let completed_layout = u64::try_from(completion_count)
+        .unwrap_or(u64::MAX)
+        .checked_mul(
+            u64::try_from(std::mem::size_of::<(RecoveryIntent, RecoveryCompletion)>())
+                .unwrap_or(u64::MAX),
+        )
+        .ok_or(JournalError::Incomplete {
+            limit: working_limit,
+            observed: u64::MAX,
+        })?;
+    let name_layout = u64::try_from(names)
+        .unwrap_or(u64::MAX)
+        .checked_mul(u64::try_from(std::mem::size_of::<String>()).unwrap_or(u64::MAX))
+        .ok_or(JournalError::Incomplete {
+            limit: working_limit,
+            observed: u64::MAX,
+        })?;
+    let requested = fixed
+        // Parsed fields are a subset of their canonical receipt bytes; a
+        // completed pair additionally clones its corresponding intent.
+        .checked_add(receipt_bytes.saturating_mul(2))
+        // One raw receipt and one canonicalization destination coexist.
+        .and_then(|value| value.checked_add(max_receipt.saturating_mul(2)))
+        .and_then(|value| value.checked_add(intent_layout))
+        .and_then(|value| value.checked_add(completed_layout))
+        .and_then(|value| value.checked_add(name_layout))
+        .and_then(|value| value.checked_add(name_heap))
+        .ok_or(JournalError::Incomplete {
+            limit: working_limit,
+            observed: u64::MAX,
+        })?;
+    limit(requested, working_limit)
 }
 
 /// A receipt discovered by an audit is not trusted merely because a directory
@@ -1931,6 +2782,88 @@ fn receipt_names(
     Ok(names)
 }
 
+fn index_receipt_inventory(
+    dir: &OwnedFd,
+    limits: JournalLimits,
+    count: &mut u64,
+    scanned: &mut u64,
+) -> Result<(usize, u64), JournalError> {
+    let mut entries = Dir::new(dup(dir).map_err(StoreError::Io)?).map_err(StoreError::Io)?;
+    let mut local_count = 0_usize;
+    let mut maximum = 0_u64;
+    for entry in &mut entries {
+        let entry = entry.map_err(StoreError::Io)?;
+        let name = entry.file_name().to_string_lossy();
+        if name == "." || name == ".." {
+            continue;
+        }
+        if !valid_receipt_name(&name) {
+            return Err(JournalError::ReceiptCorruption {
+                name: name.into_owned(),
+            });
+        }
+        *count = count.checked_add(1).ok_or(JournalError::Incomplete {
+            limit: limits.max_receipt_files,
+            observed: u64::MAX,
+        })?;
+        limit(*count, limits.max_receipt_files)?;
+        local_count = local_count.checked_add(1).ok_or(JournalError::Incomplete {
+            limit: limits.max_receipt_files,
+            observed: u64::MAX,
+        })?;
+        let stat =
+            fs::statat(dir, name.as_ref(), AtFlags::SYMLINK_NOFOLLOW).map_err(StoreError::Io)?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_size < 0 {
+            return Err(JournalError::ReceiptCorruption {
+                name: name.into_owned(),
+            });
+        }
+        let size = u64::try_from(stat.st_size).map_err(|_| JournalError::ReceiptCorruption {
+            name: name.into_owned(),
+        })?;
+        limit(size, limits.max_receipt_bytes)?;
+        *scanned = scanned.checked_add(size).ok_or(JournalError::Incomplete {
+            limit: limits.max_receipt_scan_bytes,
+            observed: u64::MAX,
+        })?;
+        limit(*scanned, limits.max_receipt_scan_bytes)?;
+        maximum = maximum.max(size);
+    }
+    Ok((local_count, maximum))
+}
+
+fn receipt_names_exact(
+    dir: &OwnedFd,
+    limits: JournalLimits,
+    expected: usize,
+) -> Result<Vec<String>, JournalError> {
+    let mut entries = Dir::new(dup(dir).map_err(StoreError::Io)?).map_err(StoreError::Io)?;
+    let mut names = Vec::new();
+    names
+        .try_reserve_exact(expected)
+        .map_err(|_| JournalError::Incomplete {
+            limit: limits.max_receipt_files,
+            observed: u64::MAX,
+        })?;
+    for entry in &mut entries {
+        let entry = entry.map_err(StoreError::Io)?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name != "." && name != ".." {
+            if !valid_receipt_name(&name) || names.len() == expected {
+                return Err(JournalError::ReceiptCorruption { name });
+            }
+            names.push(name);
+        }
+    }
+    if names.len() != expected {
+        return Err(JournalError::ReceiptCorruption {
+            name: "recovery directory changed during index admission".to_owned(),
+        });
+    }
+    names.sort_unstable();
+    Ok(names)
+}
+
 fn valid_receipt_name(name: &str) -> bool {
     name.len() == 69
         && name.ends_with(".json")
@@ -2108,6 +3041,202 @@ mod tests {
         fixture_event_for("run:journal-test")
     }
 
+    #[test]
+    fn verified_genesis_certificate_refuses_public_identity_mutation() {
+        let (identity, _) = fixture_event();
+        assert!(matches!(
+            identity.verified_core_genesis().unwrap(),
+            EventStreamGenesis::V2Verified(_)
+        ));
+
+        let mut changed_run = identity.clone();
+        changed_run.run_id = StableId::parse("run:changed-after-verification").unwrap();
+        assert!(matches!(
+            changed_run.verified_core_genesis(),
+            Err(JournalError::Identity(_))
+        ));
+
+        let mut changed_bytes = identity;
+        let JournalGenesis::V2Shared(bytes) = &mut changed_bytes.genesis else {
+            unreachable!()
+        };
+        Arc::make_mut(bytes)[0] ^= 1;
+        assert!(matches!(
+            changed_bytes.verified_core_genesis(),
+            Err(JournalError::Identity(_))
+        ));
+    }
+
+    #[test]
+    fn index_stream_replays_one_line_at_a_time_and_identity_shares_genesis_backing() {
+        let (_workspace, root) = root();
+        let (identity, event) = fixture_event();
+        let identity_clone = identity.clone();
+        assert!(Arc::ptr_eq(
+            identity.v2_genesis_backing().expect("V2 genesis backing"),
+            identity_clone
+                .v2_genesis_backing()
+                .expect("V2 genesis backing"),
+        ));
+
+        let journal = open_fixture(&root, identity);
+        journal.writer().unwrap().append(event).unwrap();
+        let ordinary = journal.reader().unwrap();
+        let expected_offset = ordinary.confirmed_offset();
+        let expected_tail = ordinary.tail_hash().clone();
+        drop(ordinary);
+
+        let mut streamed = journal
+            .index_reader(root.limits().max_index_working_bytes)
+            .unwrap();
+        let mut seen = 0_u64;
+        let certificate = streamed
+            .with_locked_prefix::<()>(|envelope: &EventEnvelope, boundary| {
+                seen += 1;
+                assert_eq!(envelope.sequence(), seen);
+                assert!(boundary <= expected_offset);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(seen, certificate.event_count);
+        assert_eq!(certificate.confirmed_offset, expected_offset);
+        assert_eq!(certificate.tail_hash, expected_tail);
+        assert_eq!(
+            certificate.line_buffer_capacity,
+            root.limits().max_event_line_bytes
+        );
+    }
+
+    #[test]
+    fn index_stream_maps_event_structure_cap_to_incomplete_not_corruption() {
+        fn family_json(kind: &str, elements: usize, depth: usize) -> Vec<u8> {
+            let mut json = format!("{{\"payload\":{{\"type\":\"{kind}\",\"padding\":").into_bytes();
+            json.extend(std::iter::repeat_n(b'[', depth));
+            for element in 0..elements {
+                if element != 0 {
+                    json.push(b',');
+                }
+                json.push(b'0');
+            }
+            json.extend(std::iter::repeat_n(b']', depth));
+            json.extend_from_slice(b"}}\n");
+            json
+        }
+
+        for kind in [
+            "obligation_transition",
+            "claim_proposed",
+            "evidence_recorded",
+            "evidence_bound",
+            "verification_recorded",
+            "decision_recorded",
+            "finding_recorded",
+            "run_genesis_manifest",
+            "artifact_registered",
+            "snapshot_sources_recorded",
+            "review_plan_recorded",
+            "context_envelope_projected",
+        ] {
+            for line in [family_json(kind, 65_533, 1), family_json(kind, 1, 126)] {
+                let (_workspace, root) = root();
+                let (identity, _) = fixture_event();
+                let journal = open_fixture(&root, identity);
+                std::fs::write(log_path(&root), line).unwrap();
+                let mut reader = journal
+                    .index_reader(root.limits().max_index_working_bytes)
+                    .unwrap();
+                let result = reader.with_locked_prefix::<()>(|_, _| Ok(()));
+                assert!(
+                    matches!(
+                        result,
+                        Err(IndexReplayError::Journal(
+                            JournalError::CorruptNeedsRecovery { .. }
+                        ))
+                    ),
+                    "exact structural cap for {kind}: {result:?}"
+                );
+            }
+            for (line, expected_limit) in [
+                (family_json(kind, 65_534, 1), 65_536),
+                (family_json(kind, 1, 127), 128),
+            ] {
+                let (_workspace, root) = root();
+                let (identity, _) = fixture_event();
+                let journal = open_fixture(&root, identity);
+                std::fs::write(log_path(&root), line).unwrap();
+                let mut reader = journal
+                    .index_reader(root.limits().max_index_working_bytes)
+                    .unwrap();
+                let result = reader.with_locked_prefix::<()>(|_, _| Ok(()));
+                assert!(
+                    matches!(
+                        result,
+                        Err(IndexReplayError::Journal(JournalError::Incomplete {
+                            limit,
+                            observed,
+                        })) if limit == expected_limit && observed == expected_limit + 1
+                    ),
+                    "{kind}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn index_reader_maps_genesis_structure_plus_one_before_typed_decode() {
+        fn array_json(elements: usize) -> Arc<[u8]> {
+            let mut json = Vec::with_capacity(elements.saturating_mul(2).saturating_add(8));
+            json.extend_from_slice(b"{\"a\":[");
+            for element in 0..elements {
+                if element != 0 {
+                    json.push(b',');
+                }
+                json.push(b'0');
+            }
+            json.extend_from_slice(b"]}");
+            Arc::from(json)
+        }
+        fn depth_json(depth: usize) -> Arc<[u8]> {
+            let mut json = Vec::with_capacity(depth.saturating_mul(2).saturating_add(1));
+            json.extend(std::iter::repeat_n(b'[', depth));
+            json.push(b'0');
+            json.extend(std::iter::repeat_n(b']', depth));
+            Arc::from(json)
+        }
+        let (_workspace, root) = root();
+        let (identity, _) = fixture_event();
+        let mut journal = open_fixture(&root, identity);
+        journal.identity.genesis = JournalGenesis::V2Shared(array_json(1_048_575));
+        journal.identity.verified_v2 = None;
+        assert!(
+            journal
+                .index_reader(root.limits().max_index_working_bytes)
+                .is_ok()
+        );
+        journal.identity.genesis = JournalGenesis::V2Shared(array_json(1_048_576));
+        assert!(matches!(
+            journal.index_reader(root.limits().max_index_working_bytes),
+            Err(JournalError::Incomplete {
+                limit: 1_048_576,
+                observed: 1_048_577,
+            })
+        ));
+        journal.identity.genesis = JournalGenesis::V2Shared(depth_json(128));
+        assert!(
+            journal
+                .index_reader(root.limits().max_index_working_bytes)
+                .is_ok()
+        );
+        journal.identity.genesis = JournalGenesis::V2Shared(depth_json(129));
+        assert!(matches!(
+            journal.index_reader(root.limits().max_index_working_bytes),
+            Err(JournalError::Incomplete {
+                limit: 128,
+                observed: 129,
+            })
+        ));
+    }
+
     fn d1_fixture() -> (JournalIdentity, Vec<EventEnvelope>) {
         let run_id = StableId::parse("run:journal-d1").unwrap();
         let source_bytes = BTreeMap::from([
@@ -2243,7 +3372,7 @@ mod tests {
     /// manifest as production.  The fixture event is deliberately sequence
     /// two, so append and recovery tests never exercise an empty V2 log.
     fn first_manifest(identity: &JournalIdentity) -> EventEnvelope {
-        let JournalGenesis::V2(bytes) = &identity.genesis else {
+        let JournalGenesis::V2Shared(bytes) = &identity.genesis else {
             panic!("journal test fixture is V2");
         };
         let aggregate = reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes(bytes)
@@ -2590,7 +3719,7 @@ mod tests {
     fn a_later_chain_failure_reports_the_start_of_that_complete_line() {
         let (identity, _) = fixture_event();
         let genesis = first_manifest(&identity);
-        let JournalGenesis::V2(bytes) = &identity.genesis else {
+        let JournalGenesis::V2Shared(bytes) = &identity.genesis else {
             panic!("fixture is V2")
         };
         let aggregate = reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes(bytes)
@@ -3047,6 +4176,131 @@ mod tests {
             }) if limit == context_len - 1 && observed == context_len
         ));
         assert_eq!(std::fs::read(small_log_path).unwrap(), before);
+    }
+
+    fn rehash_event_value(event: &mut Value) {
+        let schema = event["schema"].as_str().unwrap().to_owned();
+        let run = event["run_id"].as_str().unwrap().to_owned();
+        let genesis = event["genesis_hash"].as_str().unwrap().to_owned();
+        let sequence = event["sequence"].as_u64().unwrap();
+        let actor = event["actor"].as_str().unwrap().to_owned();
+        let logical_time = event["logical_time"].as_u64().unwrap();
+        let payload_hash = event["payload_hash"].as_str().unwrap().to_owned();
+        let previous = event["previous_event_hash"].as_str().unwrap().to_owned();
+        let id = StableId::derived(
+            "event",
+            &BTreeMap::from([
+                ("actor".to_owned(), Value::String(actor.clone())),
+                ("genesis_hash".to_owned(), Value::String(genesis.clone())),
+                ("logical_time".to_owned(), Value::from(logical_time)),
+                (
+                    "payload_hash".to_owned(),
+                    Value::String(payload_hash.clone()),
+                ),
+                (
+                    "previous_event_hash".to_owned(),
+                    Value::String(previous.clone()),
+                ),
+                ("run".to_owned(), Value::String(run.clone())),
+                ("schema".to_owned(), Value::String(schema.clone())),
+                ("sequence".to_owned(), Value::from(sequence)),
+            ]),
+        )
+        .unwrap();
+        event["id"] = Value::String(id.to_string());
+        let hash = ContentHash::sha256(
+            &canonical_json(&BTreeMap::from([
+                ("actor".to_owned(), Value::String(actor)),
+                ("event_id".to_owned(), Value::String(id.to_string())),
+                ("genesis_hash".to_owned(), Value::String(genesis)),
+                ("logical_time".to_owned(), Value::from(logical_time)),
+                ("payload_hash".to_owned(), Value::String(payload_hash)),
+                ("previous_event_hash".to_owned(), Value::String(previous)),
+                ("run".to_owned(), Value::String(run)),
+                ("schema".to_owned(), Value::String(schema)),
+                ("sequence".to_owned(), Value::from(sequence)),
+            ]))
+            .unwrap(),
+        );
+        event["event_hash"] = Value::String(hash.to_string());
+    }
+
+    #[test]
+    fn changed_previous_hash_with_a_rehashed_successor_chain_is_rejected() {
+        let (identity, events) = d1_fixture();
+        let (_workspace, root) = root();
+        let journal =
+            EventJournal::initialize_v2(&root, identity.clone(), events[0].clone()).unwrap();
+        let mut values = events
+            .iter()
+            .map(|event| serde_json::to_value(event).unwrap())
+            .collect::<Vec<_>>();
+        values[2]["previous_event_hash"] =
+            Value::String(ContentHash::sha256(b"spliced predecessor").to_string());
+        rehash_event_value(&mut values[2]);
+        for index in 3..values.len() {
+            values[index]["previous_event_hash"] = values[index - 1]["event_hash"].clone();
+            rehash_event_value(&mut values[index]);
+        }
+        let mut bytes = Vec::new();
+        for value in values {
+            bytes.extend(canonical_json(&value).unwrap());
+            bytes.push(b'\n');
+        }
+        std::fs::write(log_path_for(&root, &identity.run_id), bytes).unwrap();
+        assert!(matches!(
+            journal.reader(),
+            Err(JournalError::CorruptNeedsRecovery {
+                auto_recoverable: false,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn physical_d1_outer_line_preparse_has_exact_and_configured_boundaries() {
+        const EXACT: usize = 1_048_576;
+        for (length, configured, expected_incomplete) in [
+            (EXACT, EXACT as u64, false),
+            (EXACT, (EXACT - 1) as u64, true),
+            (EXACT + 1, EXACT as u64, true),
+            (EXACT + 1, (EXACT + 1) as u64, false),
+        ] {
+            let (identity, events) = d1_fixture();
+            let (_workspace, root) = root();
+            let limits = JournalLimits {
+                max_event_line_bytes: configured,
+                max_replay_bytes: (EXACT + 1) as u64,
+                ..JournalLimits::from_store(root.limits())
+            };
+            let journal = EventJournal::initialize_v2_with_limits(
+                &root,
+                identity.clone(),
+                events[0].clone(),
+                limits,
+            )
+            .unwrap();
+            let mut physical = vec![b' '; length];
+            physical[0] = b'{';
+            physical[length - 1] = b'\n';
+            std::fs::write(log_path_for(&root, &identity.run_id), physical).unwrap();
+            let result = journal.reader();
+            if expected_incomplete {
+                assert!(matches!(
+                    result,
+                    Err(JournalError::Incomplete { limit, observed })
+                        if limit == configured && observed == length as u64
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(JournalError::CorruptNeedsRecovery {
+                        auto_recoverable: false,
+                        ..
+                    })
+                ));
+            }
+        }
     }
 
     #[test]

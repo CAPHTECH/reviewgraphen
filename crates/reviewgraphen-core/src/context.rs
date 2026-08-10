@@ -384,6 +384,80 @@ pub struct ReviewContextEnvelope {
     projection_hash: ContentHash,
 }
 impl ReviewContextEnvelope {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        fn id_set_bytes(values: &BTreeSet<StableId>) -> usize {
+            values
+                .len()
+                .saturating_mul(std::mem::size_of::<StableId>())
+                .saturating_add(values.iter().map(StableId::allocated_bytes).sum::<usize>())
+        }
+        fn string_set_bytes(values: &BTreeSet<String>) -> usize {
+            values
+                .len()
+                .saturating_mul(std::mem::size_of::<String>())
+                .saturating_add(values.iter().map(String::capacity).sum::<usize>())
+        }
+        let included = self.included_sources.iter().fold(
+            self.included_sources
+                .capacity()
+                .saturating_mul(std::mem::size_of::<SourceArtifactRef>()),
+            |total, source| {
+                total
+                    .saturating_add(source.registration_id.allocated_bytes())
+                    .saturating_add(source.artifact_id.allocated_bytes())
+                    .saturating_add(source.content_hash.allocated_bytes())
+                    .saturating_add(source.cas_hash.allocated_bytes())
+                    .saturating_add(source.excerpt_hash.allocated_bytes())
+            },
+        );
+        let excluded = self.excluded_sources.iter().fold(
+            self.excluded_sources
+                .capacity()
+                .saturating_mul(std::mem::size_of::<ExcludedSourceRef>()),
+            |total, source| total.saturating_add(source.artifact_id.allocated_bytes()),
+        );
+        let unknowns = self.unknowns.iter().fold(
+            self.unknowns
+                .capacity()
+                .saturating_mul(std::mem::size_of::<EnvelopeUnknown>()),
+            |total, unknown| {
+                total
+                    .saturating_add(unknown.description.capacity())
+                    .saturating_add(id_set_bytes(&unknown.source_ids))
+            },
+        );
+        let assumptions = self
+            .assumptions
+            .capacity()
+            .saturating_mul(std::mem::size_of::<String>())
+            .saturating_add(self.assumptions.iter().map(String::capacity).sum::<usize>());
+        let losses = self.losses.iter().fold(
+            self.losses
+                .capacity()
+                .saturating_mul(std::mem::size_of::<EnvelopeLoss>()),
+            |total, loss| {
+                total
+                    .saturating_add(loss.description.capacity())
+                    .saturating_add(string_set_bytes(&loss.affected_properties))
+                    .saturating_add(id_set_bytes(&loss.source_ids))
+            },
+        );
+        self.id
+            .allocated_bytes()
+            .saturating_add(id_set_bytes(&self.obligation_ids))
+            .saturating_add(self.snapshot_id.allocated_bytes())
+            .saturating_add(self.projection_policy_version.capacity())
+            .saturating_add(self.context_policy_hash.allocated_bytes())
+            .saturating_add(id_set_bytes(&self.candidate_source_ids))
+            .saturating_add(included)
+            .saturating_add(id_set_bytes(&self.normalized_included_source_ids))
+            .saturating_add(excluded)
+            .saturating_add(unknowns)
+            .saturating_add(assumptions)
+            .saturating_add(losses)
+            .saturating_add(self.projection_hash.allocated_bytes())
+    }
+
     pub(crate) fn from_event_bytes(input: &[u8]) -> ContextResult<Self> {
         if input.len() > MAX_BODY {
             return Err(

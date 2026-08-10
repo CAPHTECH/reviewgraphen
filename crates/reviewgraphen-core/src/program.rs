@@ -20,6 +20,18 @@ pub struct SourceRef {
 }
 
 impl SourceRef {
+    fn allocated_bytes(&self) -> usize {
+        self.kind
+            .capacity()
+            .saturating_add(self.locator.capacity())
+            .saturating_add(self.revision.as_ref().map_or(0, String::capacity))
+            .saturating_add(
+                self.content_hash
+                    .as_ref()
+                    .map_or(0, ContentHash::allocated_bytes),
+            )
+            .saturating_add(self.source_local_id.as_ref().map_or(0, String::capacity))
+    }
     /// Creates a source reference after enforcing the input-contract source kinds.
     pub fn new(
         kind: impl Into<String>,
@@ -100,6 +112,12 @@ pub struct Provenance {
 }
 
 impl Provenance {
+    fn allocated_bytes(&self) -> usize {
+        self.source
+            .allocated_bytes()
+            .saturating_add(self.extraction_method.capacity())
+            .saturating_add(self.tool_version.as_ref().map_or(0, String::capacity))
+    }
     /// Creates provenance eligible for a canonical Program fact or review evidence.
     pub fn accepted_deterministic(
         source: SourceRef,
@@ -827,6 +845,61 @@ impl EvidenceDetails {
 }
 
 impl Evidence {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        fn value_bytes(value: &Value) -> usize {
+            match value {
+                Value::String(value) => value.capacity(),
+                Value::Array(values) => values
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Value>())
+                    .saturating_add(values.iter().map(value_bytes).sum::<usize>()),
+                Value::Object(values) => values.iter().fold(
+                    values
+                        .len()
+                        .saturating_mul(std::mem::size_of::<(String, Value)>()),
+                    |total, (key, value)| {
+                        total
+                            .saturating_add(key.capacity())
+                            .saturating_add(value_bytes(value))
+                    },
+                ),
+                _ => 0,
+            }
+        }
+        let targets = self
+            .target_ids
+            .len()
+            .saturating_mul(std::mem::size_of::<StableId>())
+            .saturating_add(
+                self.target_ids
+                    .iter()
+                    .map(StableId::allocated_bytes)
+                    .sum::<usize>(),
+            );
+        let attributes = self.attributes.iter().fold(
+            self.attributes
+                .len()
+                .saturating_mul(std::mem::size_of::<(String, Value)>()),
+            |total, (key, value)| {
+                total
+                    .saturating_add(key.capacity())
+                    .saturating_add(value_bytes(value))
+            },
+        );
+        self.id
+            .allocated_bytes()
+            .saturating_add(self.kind.capacity())
+            .saturating_add(targets)
+            .saturating_add(self.artifact_ref.as_ref().map_or(0, String::capacity))
+            .saturating_add(
+                self.content_hash
+                    .as_ref()
+                    .map_or(0, ContentHash::allocated_bytes),
+            )
+            .saturating_add(attributes)
+            .saturating_add(self.provenance.allocated_bytes())
+            .saturating_add(self.snapshot_id.allocated_bytes())
+    }
     /// Creates review-event evidence bound to the snapshot where it was observed.
     pub fn new(
         id: StableId,
