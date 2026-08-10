@@ -1,7 +1,7 @@
 # ReviewGraphen Documentation Index
 
 > Status: Draft v0.1  
-> Updated: 2026-08-07
+> Updated: 2026-08-10
 
 ## 1. 目的別の読み順
 
@@ -84,6 +84,7 @@
 | [`adr/0018-d2-execution-claim-report-and-index-v3.md`](adr/0018-d2-execution-claim-report-and-index-v3.md) | D2 execution/claim atomicity、report v2、derived-index schema v3のAccepted設計契約。 |
 | [`adr/0019-replayed-v2-run-session.md`](adr/0019-replayed-v2-run-session.md) | admission-bound V2 replay session、durability uncertainty、exact replay count/byte limits。 |
 | [`adr/0020-minimal-deterministic-fake-runtime.md`](adr/0020-minimal-deterministic-fake-runtime.md) | admission-bound deterministic fake D2 runtime と crash/resume 境界。 |
+| [`adr/0021-m4-evidence-bound-verification.md`](adr/0021-m4-evidence-bound-verification.md) | M4のD2 claim authority bridge、固定verifier、human admission、index v4/report v3のAccepted設計契約。 |
 
 ## 4. Schemaと参照シナリオ
 
