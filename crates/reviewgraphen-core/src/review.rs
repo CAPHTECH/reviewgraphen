@@ -2242,6 +2242,82 @@ impl ReviewAggregate {
         self.validate()
     }
 
+    /// Validates the complete authority-free closure of a D2 execution that
+    /// will remain an offline shadow.  Unlike `record_execution`, this does
+    /// not insert execution or claim state and therefore cannot confer review
+    /// authority or resume capability.
+    pub(crate) fn validate_offline_execution_shadow(
+        &self,
+        expected_run_id: &StableId,
+        execution: &ExecutionRecord,
+        claims: &[ExecutionClaimV2],
+    ) -> Result<()> {
+        execution.validate_shape()?;
+        let obligation = execution
+            .obligation_ids()
+            .iter()
+            .next()
+            .and_then(|id| self.obligations.get(id))
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "offline execution shadow",
+                owner_id: execution.id().clone(),
+                reference: execution
+                    .obligation_ids()
+                    .iter()
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| execution.id().clone()),
+            })?;
+        if obligation.lifecycle() != ObligationLifecycle::InProgress {
+            return Err(DomainError::Validation(
+                "an offline D2 execution shadow requires an in_progress obligation".to_owned(),
+            ));
+        }
+        let registration = self
+            .registered_artifacts
+            .get(execution.raw_artifact_registration_id())
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "offline execution shadow",
+                owner_id: execution.id().clone(),
+                reference: execution.raw_artifact_registration_id().clone(),
+            })?;
+        if registration.run_id() != expected_run_id
+            || registration.cas_hash() != execution.raw_artifact_hash()
+            || registration.sensitivity() != ArtifactSensitivity::Sensitive
+            || !matches!(
+                registration.source(),
+                ArtifactSource::ReviewerExecution {
+                    run_id,
+                    execution_id,
+                    reviewer_id,
+                } if run_id == expected_run_id
+                    && execution_id == execution.id()
+                    && reviewer_id == execution.reviewer_id()
+            )
+        {
+            return Err(DomainError::Validation(
+                "offline D2 execution shadow raw registration closure mismatch".to_owned(),
+            ));
+        }
+        self.validate_execution_closure(execution)?;
+        let claim_ids = claims
+            .iter()
+            .map(|claim| claim.id().clone())
+            .collect::<BTreeSet<_>>();
+        if claim_ids.len() != claims.len()
+            || claim_ids != *execution.parsed_claim_ids()
+            || execution.outcome().is_structured() == claims.is_empty()
+        {
+            return Err(DomainError::Validation(
+                "offline D2 execution shadow claim set/outcome mismatch".to_owned(),
+            ));
+        }
+        for claim in claims {
+            self.validate_execution_claim_closure_with(execution, claim)?;
+        }
+        Ok(())
+    }
+
     fn validate_execution_closure(&self, execution: &ExecutionRecord) -> Result<()> {
         let plan =
             self.plans

@@ -125,7 +125,7 @@ impl IndexLimits {
 }
 
 /// The singleton, tail-bound marker persisted in every derived image.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexMarker {
     pub index_schema_version: u64,
     pub sqlite_user_version: u64,
@@ -155,7 +155,7 @@ impl IndexMarker {
 }
 
 /// Typed envelope metadata retained by the derived index.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexEvent {
     pub sequence: u64,
     pub event_id: StableId,
@@ -168,7 +168,7 @@ pub struct IndexEvent {
 }
 
 /// Offline-only authority metadata.  It is never accepted state.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexShadow {
     pub event_sequence: u64,
     pub event_id: StableId,
@@ -178,13 +178,13 @@ pub struct IndexShadow {
     pub authority_reconciled: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexProgramObject {
     pub object_id: StableId,
     pub object_kind: String,
     pub body_hash: ContentHash,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexProgramRelation {
     pub relation_id: StableId,
     pub relation_kind: String,
@@ -192,7 +192,7 @@ pub struct IndexProgramRelation {
     pub target_ids_canonical_json: String,
     pub body_hash: ContentHash,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexUniverse {
     pub universe_id: StableId,
     pub snapshot_id: StableId,
@@ -203,7 +203,7 @@ pub struct IndexUniverse {
     pub rule_pack_version: String,
     pub body_hash: ContentHash,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexObligation {
     pub obligation_id: StableId,
     pub target_kind: String,
@@ -212,14 +212,14 @@ pub struct IndexObligation {
     pub lifecycle: String,
     pub body_hash: ContentHash,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexObligationLifecycle {
     pub event_sequence: u64,
     pub event_id: StableId,
     pub obligation_id: StableId,
     pub next_lifecycle: String,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexClaim {
     pub event_sequence: u64,
     pub event_id: StableId,
@@ -240,7 +240,7 @@ pub struct IndexClaim {
     pub identity_body_hash: ContentHash,
     pub body_hash: ContentHash,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexExecution {
     pub event_sequence: u64,
     pub event_id: StableId,
@@ -269,7 +269,7 @@ pub struct IndexExecution {
     pub identity_body_hash: ContentHash,
     pub body_hash: ContentHash,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexArtifactRegistration {
     pub event_sequence: u64,
     pub event_id: StableId,
@@ -283,7 +283,7 @@ pub struct IndexArtifactRegistration {
     pub source_id: String,
     pub body_hash: ContentHash,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexSnapshotSource {
     pub event_sequence: u64,
     pub event_id: StableId,
@@ -295,7 +295,7 @@ pub struct IndexSnapshotSource {
     pub cas_hash: ContentHash,
     pub line_count: u64,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexContextEnvelope {
     pub event_sequence: u64,
     pub event_id: StableId,
@@ -314,7 +314,7 @@ pub struct IndexContextEnvelope {
     pub projection_hash: ContentHash,
     pub body_hash: ContentHash,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexReviewPlan {
     pub event_sequence: u64,
     pub event_id: StableId,
@@ -332,7 +332,7 @@ pub struct IndexReviewPlan {
     pub identity_body_hash: ContentHash,
     pub body_hash: ContentHash,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexFinding {
     pub event_sequence: u64,
     pub event_id: StableId,
@@ -343,7 +343,7 @@ pub struct IndexFinding {
 
 /// A deterministic, complete projection of every currently representable
 /// index table. Empty vectors are meaningful for V1 metadata-only streams.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexSnapshot {
     pub marker: IndexMarker,
     pub events: Vec<IndexEvent>,

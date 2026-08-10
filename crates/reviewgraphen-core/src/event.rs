@@ -12,7 +12,7 @@ use crate::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, value::RawValue};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 
 /// The immutable wire contract carried by every envelope in a stream.
@@ -2013,12 +2013,25 @@ fn validate_v2_completed_transition(
     aggregate: &ReviewAggregate,
     payload: &PersistedPayload,
 ) -> Result<()> {
+    validate_v2_completed_transition_with_shadow(version, aggregate, &BTreeSet::new(), payload)
+}
+
+/// Offline projection preserves D2 executions as unreconciled shadows, so a
+/// subsequent lifecycle event needs the already shape-validated structured
+/// scope without treating the execution as accepted state.
+fn validate_v2_completed_transition_with_shadow(
+    version: EventContractVersion,
+    aggregate: &ReviewAggregate,
+    shadow_structured_execution_obligations: &BTreeSet<StableId>,
+    payload: &PersistedPayload,
+) -> Result<()> {
     if version == EventContractVersion::V2
         && let PersistedPayload::ObligationTransition {
             obligation_id,
             next: ObligationLifecycle::Completed,
         } = payload
         && !aggregate.has_structured_execution(obligation_id)
+        && !shadow_structured_execution_obligations.contains(obligation_id)
     {
         return Err(DomainError::Validation(
             "v2 completed lifecycle requires an earlier structured D2 execution".to_owned(),
@@ -2952,6 +2965,11 @@ pub struct OfflineProjectionState {
     projected_findings: BTreeMap<StableId, Finding>,
     projected_finding_metadata: BTreeMap<StableId, ProjectedFindingMetadata>,
     projected_context_metadata: BTreeMap<StableId, ProjectedContextEnvelopeMetadata>,
+    /// Structured D2 execution scope retained only to validate the later
+    /// authority-free lifecycle transition while the execution itself remains
+    /// an offline shadow.  This never promotes the execution or its claims
+    /// into accepted aggregate state.
+    shadow_structured_execution_obligations: BTreeSet<StableId>,
     unreconciled_order: Vec<StableId>,
 }
 
@@ -2987,6 +3005,7 @@ impl OfflineProjectionState {
             projected_findings: BTreeMap::new(),
             projected_finding_metadata: BTreeMap::new(),
             projected_context_metadata: BTreeMap::new(),
+            shadow_structured_execution_obligations: BTreeSet::new(),
             unreconciled_order: Vec::new(),
         })
     }
@@ -3018,6 +3037,7 @@ impl OfflineProjectionState {
             projected_findings: BTreeMap::new(),
             projected_finding_metadata: BTreeMap::new(),
             projected_context_metadata: BTreeMap::new(),
+            shadow_structured_execution_obligations: BTreeSet::new(),
             unreconciled_order: Vec::new(),
         })
     }
@@ -3136,7 +3156,12 @@ impl OfflineProjectionState {
             }
         };
         reject_v2_legacy_execution_payload(self.version, &payload)?;
-        validate_v2_completed_transition(self.version, &self.aggregate, &payload)?;
+        validate_v2_completed_transition_with_shadow(
+            self.version,
+            &self.aggregate,
+            &self.shadow_structured_execution_obligations,
+            &payload,
+        )?;
         reject_duplicate_d1_record(&self.aggregate, &payload)?;
         payload.validate_for_enclosing_run(&self.run_id)?;
         let mut next = self.aggregate.clone();
@@ -3190,6 +3215,12 @@ impl OfflineProjectionState {
             let mut candidate = self.shadow_candidate()?;
             apply(&mut candidate, &payload, actor, &self.run_id, None)?;
             candidate.validate()?;
+        } else if let PersistedPayload::ReviewExecutionRecorded(recorded) = &payload {
+            self.aggregate.validate_offline_execution_shadow(
+                &self.run_id,
+                &recorded.execution,
+                &recorded.claims,
+            )?;
         }
         let metadata = UnreconciledRecordMetadata {
             kind,
@@ -3199,6 +3230,15 @@ impl OfflineProjectionState {
         };
         self.unreconciled_records.insert(id.clone(), payload);
         self.unreconciled_metadata.insert(id.clone(), metadata);
+        if let Some(PersistedPayload::ReviewExecutionRecorded(ReviewExecutionRecorded {
+            execution,
+            ..
+        })) = self.unreconciled_records.get(&id)
+            && execution.outcome().is_structured()
+        {
+            self.shadow_structured_execution_obligations
+                .extend(execution.obligation_ids().iter().cloned());
+        }
         self.unreconciled_order.push(id.clone());
         self.advance_offline_cursor(envelope)?;
         Ok(false)
@@ -5866,10 +5906,7 @@ mod tests {
                 DecodedPayload::ObligationTransition {
                     next: ObligationLifecycle::Completed,
                     ..
-                } => {
-                    assert!(offline.apply(event).is_err());
-                    break;
-                }
+                } => assert!(offline.apply(event).unwrap()),
                 _ => {
                     offline.apply(event).unwrap();
                 }
@@ -5892,8 +5929,291 @@ mod tests {
                 .find(|obligation| obligation.id() == &obligation_id)
                 .unwrap()
                 .lifecycle(),
-            ObligationLifecycle::InProgress
+            ObligationLifecycle::Completed
         );
+    }
+
+    #[test]
+    fn offline_completed_requires_a_prior_well_formed_structured_shadow_for_the_same_obligation() {
+        let (mut nonstructured, initial, plan, obligation_id, envelope, sources) = d2_log();
+        append_d2_attempt(
+            &mut nonstructured,
+            &plan,
+            &obligation_id,
+            &envelope,
+            &sources,
+            1,
+            crate::ExecutionOutcome::ProviderFailure {
+                retryable: false,
+                diagnostic: "nonstructured shadow".to_owned(),
+            },
+        );
+        let completed = forged_envelope(
+            EventContractVersion::V2,
+            nonstructured.run_id().clone(),
+            nonstructured.genesis_hash().clone(),
+            nonstructured.next_sequence().unwrap(),
+            nonstructured.tail_hash().clone(),
+            PersistedPayload::ObligationTransition {
+                obligation_id: obligation_id.clone(),
+                next: ObligationLifecycle::Completed,
+            },
+        );
+        let mut nonstructured_envelopes = nonstructured.envelopes().cloned().collect::<Vec<_>>();
+        nonstructured_envelopes.push(completed);
+        let genesis = RunGenesisSnapshot::from_aggregate(&initial)
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            nonstructured.run_id(),
+            EventStreamGenesis::V2(&genesis),
+            &nonstructured_envelopes,
+        )
+        .unwrap();
+        let mut offline = OfflineProjectionState::new(&view, initial.clone()).unwrap();
+        for event in &view.events()[..view.events().len() - 1] {
+            offline.apply(event).unwrap();
+        }
+        assert!(offline.apply(view.events().last().unwrap()).is_err());
+
+        let (mut wrong_scope, initial, plan, obligation_id, envelope, sources) = d2_log();
+        append_d2_attempt(
+            &mut wrong_scope,
+            &plan,
+            &obligation_id,
+            &envelope,
+            &sources,
+            1,
+            crate::ExecutionOutcome::Structured,
+        );
+        let other_obligation = initial
+            .obligations()
+            .find(|candidate| candidate.id() != &obligation_id)
+            .unwrap()
+            .id()
+            .clone();
+        let completed_other = forged_envelope(
+            EventContractVersion::V2,
+            wrong_scope.run_id().clone(),
+            wrong_scope.genesis_hash().clone(),
+            wrong_scope.next_sequence().unwrap(),
+            wrong_scope.tail_hash().clone(),
+            PersistedPayload::ObligationTransition {
+                obligation_id: other_obligation,
+                next: ObligationLifecycle::Completed,
+            },
+        );
+        let mut wrong_scope_envelopes = wrong_scope.envelopes().cloned().collect::<Vec<_>>();
+        wrong_scope_envelopes.push(completed_other);
+        let genesis = RunGenesisSnapshot::from_aggregate(&initial)
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            wrong_scope.run_id(),
+            EventStreamGenesis::V2(&genesis),
+            &wrong_scope_envelopes,
+        )
+        .unwrap();
+        let mut offline = OfflineProjectionState::new(&view, initial.clone()).unwrap();
+        for event in &view.events()[..view.events().len() - 1] {
+            offline.apply(event).unwrap();
+        }
+        assert!(offline.apply(view.events().last().unwrap()).is_err());
+
+        let completed = forged_envelope(
+            EventContractVersion::V2,
+            wrong_scope.run_id().clone(),
+            wrong_scope.genesis_hash().clone(),
+            wrong_scope.next_sequence().unwrap(),
+            wrong_scope.tail_hash().clone(),
+            PersistedPayload::ObligationTransition {
+                obligation_id: obligation_id.clone(),
+                next: ObligationLifecycle::Completed,
+            },
+        );
+        let duplicate = forged_envelope(
+            EventContractVersion::V2,
+            wrong_scope.run_id().clone(),
+            wrong_scope.genesis_hash().clone(),
+            wrong_scope.next_sequence().unwrap() + 1,
+            completed.event_hash.clone(),
+            PersistedPayload::ObligationTransition {
+                obligation_id,
+                next: ObligationLifecycle::Completed,
+            },
+        );
+        let mut duplicate_envelopes = wrong_scope.envelopes().cloned().collect::<Vec<_>>();
+        duplicate_envelopes.extend([completed, duplicate]);
+        let view = EventEnvelope::validated_view(
+            EventContractVersion::V2,
+            wrong_scope.run_id(),
+            EventStreamGenesis::V2(&genesis),
+            &duplicate_envelopes,
+        )
+        .unwrap();
+        let mut offline = OfflineProjectionState::new(&view, initial).unwrap();
+        for event in &view.events()[..view.events().len() - 1] {
+            offline.apply(event).unwrap();
+        }
+        assert!(offline.apply(view.events().last().unwrap()).is_err());
+    }
+
+    #[test]
+    fn offline_structured_shadow_requires_claim_source_and_plan_closure_before_unlock() {
+        for tamper in [
+            "plan",
+            "wave",
+            "envelope",
+            "raw_registration",
+            "claim_property",
+            "claim_target",
+            "claim_source",
+        ] {
+            let (mut log, initial, review_plan, obligation_id, envelope, source_by_id) = d2_log();
+            let wave = review_plan
+                .waves()
+                .iter()
+                .find(|wave| wave.obligation_ids().contains(&obligation_id))
+                .unwrap();
+            let plan_id = if tamper == "plan" {
+                id("plan:forged-offline-shadow")
+            } else {
+                review_plan.id().clone()
+            };
+            let input = crate::ExecutionRecordInput::fake(
+                plan_id,
+                if tamper == "wave" {
+                    id("schedule-wave:forged-offline-shadow")
+                } else {
+                    wave.id().clone()
+                },
+                obligation_id.clone(),
+                if tamper == "envelope" {
+                    id("context-envelope:forged-offline-shadow")
+                } else {
+                    envelope.id().clone()
+                },
+                envelope.snapshot_id().clone(),
+                1,
+            )
+            .unwrap();
+            let raw = format!("{{\"fixture\":\"offline-{tamper}\"}}").into_bytes();
+            let registration = ArtifactRegistered::reviewer_execution(
+                log.run_id().clone(),
+                input.execution_id().unwrap(),
+                crate::execution::FAKE_REVIEWER_ID,
+                ContentHash::sha256(&raw),
+                "application/json",
+                u64::try_from(raw.len()).unwrap(),
+            )
+            .unwrap();
+            if tamper != "raw_registration" {
+                log.append(EventCommand::artifact_registered(registration.clone()))
+                    .unwrap();
+            }
+            let obligation = log
+                .aggregate()
+                .obligations()
+                .find(|value| value.id() == &obligation_id)
+                .unwrap();
+            let source_ids = if tamper == "claim_source" {
+                BTreeSet::from([id("file:forged-offline-shadow-source")])
+            } else {
+                envelope.normalized_included_source_ids().clone()
+            };
+            let claim = crate::ExecutionClaimInputV2::new(
+                if tamper == "claim_property" {
+                    "property:forged-offline-shadow"
+                } else {
+                    obligation.property_id()
+                },
+                if tamper == "claim_target" {
+                    BTreeSet::from([id("function:forged-offline-shadow-target")])
+                } else {
+                    obligation.normalized_target_refs().clone()
+                },
+                ClaimPolarity::IssuePresent,
+                "offline shadow closure fixture",
+                source_ids,
+                BTreeSet::new(),
+                BTreeSet::new(),
+                None,
+            )
+            .unwrap();
+            let bundle = ValidatedExecutionBundle::fake(
+                input,
+                &registration,
+                raw,
+                source_by_id.values().collect(),
+                vec![claim],
+                crate::ExecutionOutcome::Structured,
+            )
+            .unwrap();
+            let (recorded, _) = bundle.into_parts();
+            let execution_event = EventEnvelope::new(
+                EventContractVersion::V2,
+                log.run_id().clone(),
+                log.genesis_hash().clone(),
+                log.next_sequence().unwrap(),
+                SYSTEM_ACTOR,
+                log.next_sequence().unwrap(),
+                log.tail_hash().clone(),
+                PersistedPayload::ReviewExecutionRecorded(recorded),
+            )
+            .unwrap();
+            let completed_event = EventEnvelope::new(
+                EventContractVersion::V2,
+                log.run_id().clone(),
+                log.genesis_hash().clone(),
+                log.next_sequence().unwrap() + 1,
+                SYSTEM_ACTOR,
+                log.next_sequence().unwrap() + 1,
+                execution_event.event_hash.clone(),
+                PersistedPayload::ObligationTransition {
+                    obligation_id: obligation_id.clone(),
+                    next: ObligationLifecycle::Completed,
+                },
+            )
+            .unwrap();
+            let mut envelopes = log.envelopes().cloned().collect::<Vec<_>>();
+            envelopes.extend([execution_event, completed_event]);
+            let genesis = RunGenesisSnapshot::from_aggregate(&initial)
+                .unwrap()
+                .canonical_bytes()
+                .unwrap();
+            let view = EventEnvelope::validated_view(
+                EventContractVersion::V2,
+                log.run_id(),
+                EventStreamGenesis::V2(&genesis),
+                &envelopes,
+            )
+            .unwrap();
+            let mut offline = OfflineProjectionState::new(&view, initial).unwrap();
+            for event in &view.events()[..view.events().len() - 2] {
+                offline.apply(event).unwrap();
+            }
+            assert!(
+                offline
+                    .apply(&view.events()[view.events().len() - 2])
+                    .is_err()
+            );
+            assert!(offline.apply(view.events().last().unwrap()).is_err());
+            assert_eq!(offline.aggregate().executions().count(), 0);
+            assert_eq!(offline.aggregate().execution_claims().count(), 0);
+            assert_eq!(
+                offline
+                    .aggregate()
+                    .obligations()
+                    .find(|value| value.id() == &obligation_id)
+                    .unwrap()
+                    .lifecycle(),
+                ObligationLifecycle::InProgress
+            );
+        }
     }
 
     #[test]
