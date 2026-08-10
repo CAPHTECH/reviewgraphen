@@ -1,8 +1,9 @@
 use crate::context::context_domain_error;
 use crate::{
-    ArtifactRegistered, ArtifactSensitivity, ArtifactSource, ContentHash, DomainError, Evidence,
-    ExecutionClaimV2, ExecutionRecord, ProgramSpace, Result, ReviewContextEnvelope, ReviewPlan,
-    RunGenesisManifest, SnapshotSourcesRecorded, StableId, UniverseDescriptor, VersionTuple,
+    ArtifactRegistered, ArtifactRegisteredV3, ArtifactSensitivity, ArtifactSource,
+    ArtifactSourceV3, ContentHash, DomainError, Evidence, ExecutionClaimV2, ExecutionRecord,
+    ProgramSpace, Result, ReviewContextEnvelope, ReviewPlan, RunGenesisManifest,
+    SnapshotSourcesRecorded, StableId, UniverseDescriptor, VersionTuple,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1533,6 +1534,8 @@ pub struct ReviewAggregate {
     #[serde(skip)]
     registered_artifacts: BTreeMap<StableId, ArtifactRegistered>,
     #[serde(skip)]
+    registered_artifacts_v3: BTreeMap<StableId, ArtifactRegisteredV3>,
+    #[serde(skip)]
     snapshot_sources: BTreeMap<StableId, SnapshotSourcesRecorded>,
     #[serde(skip)]
     plans: BTreeMap<StableId, ReviewPlan>,
@@ -1564,14 +1567,149 @@ pub struct ContextSourceRegistration {
     pub source: ArtifactSource,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ArtifactRegistrationRef<'a> {
+    V2(&'a ArtifactRegistered),
+    V3(&'a ArtifactRegisteredV3),
+}
+
+impl<'a> ArtifactRegistrationRef<'a> {
+    fn run_id(self) -> &'a StableId {
+        match self {
+            Self::V2(value) => value.run_id(),
+            Self::V3(value) => value.run_id(),
+        }
+    }
+
+    pub(crate) fn cas_hash(self) -> &'a ContentHash {
+        match self {
+            Self::V2(value) => value.cas_hash(),
+            Self::V3(value) => value.cas_hash(),
+        }
+    }
+
+    fn media_type(self) -> &'a str {
+        match self {
+            Self::V2(value) => value.media_type(),
+            Self::V3(value) => value.media_type(),
+        }
+    }
+
+    pub(crate) fn size(self) -> u64 {
+        match self {
+            Self::V2(value) => value.size(),
+            Self::V3(value) => value.size(),
+        }
+    }
+
+    pub(crate) fn sensitivity(self) -> ArtifactSensitivity {
+        match self {
+            Self::V2(value) => value.sensitivity(),
+            Self::V3(value) => value.sensitivity(),
+        }
+    }
+
+    pub(crate) fn is_snapshot_ingest(self, snapshot_id: &StableId) -> bool {
+        match self {
+            Self::V2(value) => matches!(
+                value.source(),
+                ArtifactSource::SnapshotIngest {
+                    snapshot_id: registered,
+                    adapter_id,
+                    ..
+                } if registered == snapshot_id && !adapter_id.trim().is_empty()
+            ),
+            Self::V3(value) => matches!(
+                value.source(),
+                ArtifactSourceV3::SnapshotIngest {
+                    snapshot_id: registered,
+                    adapter_id,
+                    ..
+                } if registered == snapshot_id && !adapter_id.trim().is_empty()
+            ),
+        }
+    }
+
+    fn is_reviewer_execution(
+        self,
+        run_id: &StableId,
+        execution_id: &StableId,
+        reviewer_id: &str,
+    ) -> bool {
+        match self {
+            Self::V2(value) => matches!(
+                value.source(),
+                ArtifactSource::ReviewerExecution {
+                    run_id: registered_run,
+                    execution_id: registered_execution,
+                    reviewer_id: registered_reviewer,
+                } if registered_run == run_id
+                    && registered_execution == execution_id
+                    && registered_reviewer == reviewer_id
+            ),
+            Self::V3(value) => matches!(
+                value.source(),
+                ArtifactSourceV3::ReviewerExecution {
+                    run_id: registered_run,
+                    execution_id: registered_execution,
+                    reviewer_id: registered_reviewer,
+                } if registered_run == run_id
+                    && registered_execution == execution_id
+                    && registered_reviewer == reviewer_id
+            ),
+        }
+    }
+
+    fn snapshot_source_projection(self) -> Option<ArtifactSource> {
+        match self {
+            Self::V2(value) => Some(value.source().clone()),
+            Self::V3(value) => match value.source() {
+                ArtifactSourceV3::SnapshotIngest {
+                    adapter_id,
+                    run_id,
+                    snapshot_id,
+                } => Some(ArtifactSource::SnapshotIngest {
+                    run_id: run_id.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                    adapter_id: adapter_id.clone(),
+                }),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// Read-only durable progress for one fake execution identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RawArtifactRegistration {
+    V2(ArtifactRegistered),
+    V3(Box<ArtifactRegisteredV3>),
+}
+
+impl RawArtifactRegistration {
+    #[must_use]
+    pub fn registration_id(&self) -> &StableId {
+        match self {
+            Self::V2(value) => value.registration_id(),
+            Self::V3(value) => value.registration_id(),
+        }
+    }
+}
+
 /// Read-only durable progress for one fake execution identity.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FakeAttemptState {
     None,
-    RawRegistered { registration: ArtifactRegistered },
+    RawRegistered {
+        registration: RawArtifactRegistration,
+    },
     AmbiguousRawRegistrations,
-    ExecutionRecorded { execution: ExecutionRecord },
-    Completed { execution: ExecutionRecord },
+    ExecutionRecorded {
+        execution: ExecutionRecord,
+    },
+    Completed {
+        execution: ExecutionRecord,
+    },
 }
 
 impl ReviewAggregate {
@@ -1611,6 +1749,7 @@ impl ReviewAggregate {
             findings: BTreeMap::new(),
             genesis_manifest: None,
             registered_artifacts: BTreeMap::new(),
+            registered_artifacts_v3: BTreeMap::new(),
             snapshot_sources: BTreeMap::new(),
             plans: BTreeMap::new(),
             envelopes: BTreeMap::new(),
@@ -1895,8 +2034,7 @@ impl ReviewAggregate {
                     reference: execution.raw_artifact_registration_id().clone(),
                 })?;
             let registration = self
-                .registered_artifacts
-                .get(execution.raw_artifact_registration_id())
+                .artifact_registration(execution.raw_artifact_registration_id())
                 .ok_or_else(|| DomainError::DanglingReference {
                     owner: "execution raw size",
                     owner_id: execution.id().clone(),
@@ -1995,11 +2133,47 @@ impl ReviewAggregate {
             ));
         }
         let id = registration.registration_id().clone();
-        if self.registered_artifacts.contains_key(&id) {
+        if self.registered_artifacts.contains_key(&id)
+            || self.registered_artifacts_v3.contains_key(&id)
+        {
             return Err(DomainError::IdCollision { id });
         }
         self.registered_artifacts.insert(id, registration);
         Ok(())
+    }
+
+    pub(crate) fn register_artifact_v3(
+        &mut self,
+        expected_run_id: &StableId,
+        registration: ArtifactRegisteredV3,
+    ) -> Result<()> {
+        if registration.run_id() != expected_run_id {
+            return Err(DomainError::Validation(
+                "v3 artifact registration must bind the enclosing event run".to_owned(),
+            ));
+        }
+        let id = registration.registration_id().clone();
+        if self.registered_artifacts.contains_key(&id)
+            || self.registered_artifacts_v3.contains_key(&id)
+        {
+            return Err(DomainError::IdCollision { id });
+        }
+        self.registered_artifacts_v3.insert(id, registration);
+        Ok(())
+    }
+
+    pub(crate) fn artifact_registration(
+        &self,
+        id: &StableId,
+    ) -> Option<ArtifactRegistrationRef<'_>> {
+        self.registered_artifacts
+            .get(id)
+            .map(ArtifactRegistrationRef::V2)
+            .or_else(|| {
+                self.registered_artifacts_v3
+                    .get(id)
+                    .map(ArtifactRegistrationRef::V3)
+            })
     }
 
     pub(crate) fn record_snapshot_sources(
@@ -2034,8 +2208,7 @@ impl ReviewAggregate {
             .iter()
             .map(|entry| {
                 let registration = self
-                    .registered_artifacts
-                    .get(entry.registration_id())
+                    .artifact_registration(entry.registration_id())
                     .ok_or_else(|| DomainError::DanglingReference {
                         owner: "snapshot source",
                         owner_id: entry.artifact_id().clone(),
@@ -2049,14 +2222,7 @@ impl ReviewAggregate {
                     });
                 }
                 if registration.sensitivity() != crate::ArtifactSensitivity::WorkspaceSource
-                    || !matches!(
-                        registration.source(),
-                        crate::ArtifactSource::SnapshotIngest {
-                            run_id: _,
-                            snapshot_id,
-                            adapter_id,
-                        } if snapshot_id == sources.snapshot_id() && !adapter_id.trim().is_empty()
-                    )
+                    || !registration.is_snapshot_ingest(sources.snapshot_id())
                 {
                     return Err(DomainError::Validation(
                         "snapshot source registrations must be workspace-source snapshot-ingest artifacts"
@@ -2191,8 +2357,7 @@ impl ReviewAggregate {
             ));
         }
         let registration = self
-            .registered_artifacts
-            .get(execution.raw_artifact_registration_id())
+            .artifact_registration(execution.raw_artifact_registration_id())
             .ok_or_else(|| DomainError::DanglingReference {
                 owner: "execution",
                 owner_id: execution.id().clone(),
@@ -2202,15 +2367,10 @@ impl ReviewAggregate {
             || registration.cas_hash() != execution.raw_artifact_hash()
             || registration.size() != expected_raw_size
             || registration.sensitivity() != ArtifactSensitivity::Sensitive
-            || !matches!(
-                registration.source(),
-                ArtifactSource::ReviewerExecution {
-                    run_id,
-                    execution_id,
-                    reviewer_id,
-                } if run_id == expected_run_id
-                    && execution_id == execution.id()
-                    && reviewer_id == execution.reviewer_id()
+            || !registration.is_reviewer_execution(
+                expected_run_id,
+                execution.id(),
+                execution.reviewer_id(),
             )
         {
             return Err(DomainError::Validation(
@@ -2274,8 +2434,7 @@ impl ReviewAggregate {
             ));
         }
         let registration = self
-            .registered_artifacts
-            .get(execution.raw_artifact_registration_id())
+            .artifact_registration(execution.raw_artifact_registration_id())
             .ok_or_else(|| DomainError::DanglingReference {
                 owner: "offline execution shadow",
                 owner_id: execution.id().clone(),
@@ -2284,15 +2443,10 @@ impl ReviewAggregate {
         if registration.run_id() != expected_run_id
             || registration.cas_hash() != execution.raw_artifact_hash()
             || registration.sensitivity() != ArtifactSensitivity::Sensitive
-            || !matches!(
-                registration.source(),
-                ArtifactSource::ReviewerExecution {
-                    run_id,
-                    execution_id,
-                    reviewer_id,
-                } if run_id == expected_run_id
-                    && execution_id == execution.id()
-                    && reviewer_id == execution.reviewer_id()
+            || !registration.is_reviewer_execution(
+                expected_run_id,
+                execution.id(),
+                execution.reviewer_id(),
             )
         {
             return Err(DomainError::Validation(
@@ -3060,6 +3214,7 @@ impl ReviewAggregate {
 
     /// Internal context-builder lookup; registrations are event-derived
     /// metadata and remain unavailable as a general mutation surface.
+    #[cfg(test)]
     pub(crate) fn registered_artifact(&self, id: &StableId) -> Option<&ArtifactRegistered> {
         self.registered_artifacts.get(id)
     }
@@ -3092,14 +3247,16 @@ impl ReviewAggregate {
             .find(|entry| entry.artifact_id() == artifact_id)
             .ok_or_else(missing)?;
         let registration = self
-            .registered_artifacts
-            .get(entry.registration_id())
+            .artifact_registration(entry.registration_id())
             .ok_or_else(missing)?;
         if registration.cas_hash() != entry.cas_hash()
-            || !matches!(registration.source(), ArtifactSource::SnapshotIngest { snapshot_id: registered_snapshot, .. } if registered_snapshot == snapshot_id)
+            || !registration.is_snapshot_ingest(snapshot_id)
         {
             return Err(missing());
         }
+        let source = registration
+            .snapshot_source_projection()
+            .ok_or_else(missing)?;
         Ok(ContextSourceRegistration {
             artifact_id: entry.artifact_id().clone(),
             registration_id: entry.registration_id().clone(),
@@ -3109,7 +3266,7 @@ impl ReviewAggregate {
             size: registration.size(),
             media_type: registration.media_type().to_owned(),
             sensitivity: registration.sensitivity(),
-            source: registration.source().clone(),
+            source,
         })
     }
 
@@ -3133,19 +3290,28 @@ impl ReviewAggregate {
                 }
             };
         }
-        let mut registrations = self
-            .registered_artifacts
-            .values()
-            .filter(|registration| matches!(registration.source(), ArtifactSource::ReviewerExecution { execution_id: recorded, .. } if recorded == execution_id));
-        let Some(registration) = registrations.next() else {
-            return FakeAttemptState::None;
-        };
-        if registrations.next().is_some() {
-            FakeAttemptState::AmbiguousRawRegistrations
-        } else {
-            FakeAttemptState::RawRegistered {
-                registration: registration.clone(),
+        let mut matched = None;
+        for registration in self.registered_artifacts.values() {
+            if matches!(registration.source(), ArtifactSource::ReviewerExecution { execution_id: recorded, .. } if recorded == execution_id)
+            {
+                if matched.is_some() {
+                    return FakeAttemptState::AmbiguousRawRegistrations;
+                }
+                matched = Some(RawArtifactRegistration::V2(registration.clone()));
             }
+        }
+        for registration in self.registered_artifacts_v3.values() {
+            if matches!(registration.source(), ArtifactSourceV3::ReviewerExecution { execution_id: recorded, .. } if recorded == execution_id)
+            {
+                if matched.is_some() {
+                    return FakeAttemptState::AmbiguousRawRegistrations;
+                }
+                matched = Some(RawArtifactRegistration::V3(Box::new(registration.clone())));
+            }
+        }
+        match matched {
+            Some(registration) => FakeAttemptState::RawRegistered { registration },
+            None => FakeAttemptState::None,
         }
     }
 
@@ -3158,6 +3324,12 @@ impl ReviewAggregate {
             .values()
             .filter(|registration| registration.cas_hash() == cas_hash)
             .count()
+            .saturating_add(
+                self.registered_artifacts_v3
+                    .values()
+                    .filter(|registration| registration.cas_hash() == cas_hash)
+                    .count(),
+            )
     }
 
     /// Internal exact obligation lookup used by deterministic projections.

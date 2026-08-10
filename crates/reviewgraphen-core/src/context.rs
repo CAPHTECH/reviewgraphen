@@ -4,10 +4,11 @@
 //! aggregate supplies accepted metadata; this module never opens a CAS object
 //! or a workspace path.
 
+#[cfg(test)]
+use crate::ArtifactRegistered;
 use crate::{
-    Artifact, ArtifactRegistered, ArtifactSensitivity, ArtifactSource, ContentHash, DomainError,
-    Obligation, ProgramSpace, Result, ReviewAggregate, Severity, SnapshotSourceRecordEntry,
-    StableId,
+    Artifact, ArtifactSensitivity, ContentHash, DomainError, Obligation, ProgramSpace, Result,
+    ReviewAggregate, Severity, SnapshotSourceRecordEntry, StableId,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -987,7 +988,7 @@ impl BuiltContextProjection {
 struct Candidate {
     artifact: Artifact,
     source: SnapshotSourceRecordEntry,
-    registration: ArtifactRegistered,
+    registration_size: u64,
     rank: (u8, usize, usize, StableId),
     exclusion: Option<ExclusionReason>,
     anchors: Vec<(u64, u64, StableId)>,
@@ -1191,7 +1192,7 @@ impl ContextBuildSession {
             }
             if let Some(reason) = metadata_exclusion(
                 self.included.len(),
-                candidate.registration.size(),
+                candidate.registration_size,
                 self.resolved_bytes,
             )? {
                 self.exclude(candidate.artifact.id.clone(), reason);
@@ -1203,7 +1204,7 @@ impl ContextBuildSession {
                 registration_id: candidate.source.registration_id().clone(),
                 content_hash: candidate.source.content_hash().clone(),
                 cas_hash: candidate.source.cas_hash().clone(),
-                expected_length: candidate.registration.size(),
+                expected_length: candidate.registration_size,
                 line_count: candidate.source.line_count(),
                 ordinal: self.index,
                 digest: self.session_digest.clone(),
@@ -1456,7 +1457,7 @@ fn candidates(
                 DomainError::Validation("missing source entry for candidate".to_owned())
             })?;
         let registration = aggregate
-            .registered_artifact(source.registration_id())
+            .artifact_registration(source.registration_id())
             .ok_or_else(|| {
                 DomainError::Validation("missing candidate artifact registration".to_owned())
             })?;
@@ -1464,7 +1465,7 @@ fn candidates(
             || artifact.content_hash.as_ref() != Some(source.content_hash())
             || registration.cas_hash() != source.cas_hash()
             || registration.sensitivity() != ArtifactSensitivity::WorkspaceSource
-            || !matches!(registration.source(), ArtifactSource::SnapshotIngest { snapshot_id, .. } if snapshot_id == snapshot)
+            || !registration.is_snapshot_ingest(snapshot)
         {
             return Err(DomainError::Validation(
                 "candidate metadata closure does not match accepted snapshot artifact".to_owned(),
@@ -1474,7 +1475,7 @@ fn candidates(
         out.push(Candidate {
             artifact: (*artifact).clone(),
             source: source.clone(),
-            registration: registration.clone(),
+            registration_size: registration.size(),
             rank: (1, usize::MAX, usize::MAX, artifact.id.clone()),
             exclusion: None,
             anchors: Vec::new(),
@@ -2350,7 +2351,7 @@ fn manifest_digest(
         out.push(b"],\"registration_id\":")?;
         out.text(&candidate.source.registration_id().to_string())?;
         out.push(b",\"size\":")?;
-        out.number(candidate.registration.size())?;
+        out.number(candidate.registration_size)?;
         out.push(b"}")?;
     }
     out.push(b"],\"obligation_id\":")?;

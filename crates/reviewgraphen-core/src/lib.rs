@@ -37,13 +37,14 @@ pub use context::{
 pub use coverage::{Coverage, CoverageMeasure, Ratio};
 pub use error::{DomainError, PlanningError, Result};
 pub use event::{
-    ArtifactRegistered, ArtifactSensitivity, ArtifactSource, DecodedPayload, Event,
-    EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
-    EventReplayLimits, EventStreamGenesis, EventViewAccounting, EvidenceBindingAdmission,
-    OfflineProjectionState, ProjectedContextEnvelopeMetadata, ProjectedFindingMetadata,
-    RunGenesisManifest, RunGenesisSnapshot, SnapshotSourceRecordEntry, SnapshotSourcesRecorded,
-    UnreconciledRecordKind, UnreconciledRecordMetadata, ValidatedEvent, ValidatedEventView,
-    VerificationAdmission, VerifiedV2Genesis, preflight_index_genesis_json_structure,
+    ArtifactRegistered, ArtifactRegisteredV3, ArtifactSensitivity, ArtifactSource,
+    ArtifactSourceV3, DecodedPayload, Event, EventAdmissions, EventCommand, EventContractVersion,
+    EventEnvelope, EventLog, EventReplayLimits, EventStreamGenesis, EventViewAccounting,
+    EvidenceBindingAdmission, OfflineProjectionState, ProjectedContextEnvelopeMetadata,
+    ProjectedFindingMetadata, RunGenesisManifest, RunGenesisManifestV3, RunGenesisSnapshot,
+    SnapshotSourceRecordEntry, SnapshotSourcesRecorded, UnreconciledRecordKind,
+    UnreconciledRecordMetadata, ValidatedEvent, ValidatedEventView, VerificationAdmission,
+    VerifiedV2Genesis, VerifierArtifactRoleV3, preflight_index_genesis_json_structure,
 };
 pub use execution::{
     AbstentionReason, ExecutionClaimInputV2, ExecutionClaimV2, ExecutionOutcome, ExecutionRecord,
@@ -81,8 +82,8 @@ pub use review::{
     ClaimAuthorKind, ClaimDisposition, ClaimPolarity, ContextSourceRegistration, Decision,
     DecisionAdmission, DecisionAuthority, DecisionOutcome, EvidenceBinding, EvidenceRelation,
     FakeAttemptState, Finding, FindingStatus, FindingTrace, Freshness, LegacyClaimV1, Obligation,
-    ObligationLifecycle, ReviewAggregate, ReviewClaim, ReviewStatus, TrustedHumanAdmission,
-    Verification, VerificationOutcome,
+    ObligationLifecycle, RawArtifactRegistration, ReviewAggregate, ReviewClaim, ReviewStatus,
+    TrustedHumanAdmission, Verification, VerificationOutcome,
 };
 pub use source::{SnapshotSourceBundle, SnapshotSourceEntry};
 pub use synthesize::{

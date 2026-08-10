@@ -105,4 +105,8 @@ pub enum DomainError {
     /// An event sequence was not append-only or replayable.
     #[error("invalid event sequence: {0}")]
     EventSequence(String),
+
+    /// Event-v3 authority state was routed through a legacy replay surface.
+    #[error("event-v3 authority replay is required for {operation}")]
+    EventV3AuthorityReplayRequired { operation: &'static str },
 }

@@ -1206,6 +1206,10 @@ impl<'a> DerivedIndex<'a> {
                             self.limits,
                         )?;
                     }
+                    DecodedPayload::RunGenesisManifestV3(_)
+                    | DecodedPayload::ArtifactRegisteredV3(_) => {
+                        return Err(IndexError::ProjectionContractViolation);
+                    }
                     }
                 }
                 Ok(())
@@ -2663,7 +2667,13 @@ fn payload_kind_decoded(payload: &DecodedPayload) -> Result<&'static str, IndexE
         DecodedPayload::DecisionRecorded(_) => "decision_recorded",
         DecodedPayload::FindingRecorded(_) => "finding_recorded",
         DecodedPayload::RunGenesisManifest(_) => "run_genesis_manifest",
+        DecodedPayload::RunGenesisManifestV3(_) => {
+            return Err(IndexError::ProjectionContractViolation);
+        }
         DecodedPayload::ArtifactRegistered(_) => "artifact_registered",
+        DecodedPayload::ArtifactRegisteredV3(_) => {
+            return Err(IndexError::ProjectionContractViolation);
+        }
         DecodedPayload::SnapshotSourcesRecorded(_) => "snapshot_sources_recorded",
         DecodedPayload::ReviewPlanRecorded(_) => "review_plan_recorded",
         DecodedPayload::ContextEnvelopeProjected(_) => "context_envelope_projected",
@@ -6058,6 +6068,7 @@ mod tests {
             }
             reviewgraphen_core::EventStreamGenesis::V1(_) => unreachable!(),
             reviewgraphen_core::EventStreamGenesis::V2Verified(_) => unreachable!(),
+            reviewgraphen_core::EventStreamGenesis::V3(_) => unreachable!(),
         };
         reader.with_locked_snapshot(|events, _, _| {
             let view = EventEnvelope::validated_view(

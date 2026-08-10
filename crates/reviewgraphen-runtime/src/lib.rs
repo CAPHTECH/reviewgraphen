@@ -5,8 +5,8 @@
 
 use reviewgraphen_core::{
     ArtifactRegistered, ContentHash, ContextSourceRegistration, ExecutionOutcome,
-    ExecutionRecordInput, FakeAttemptState, ObligationLifecycle, ReviewContextEnvelope, StableId,
-    ValidatedExecutionBundle,
+    ExecutionRecordInput, FakeAttemptState, ObligationLifecycle, RawArtifactRegistration,
+    ReviewContextEnvelope, StableId, ValidatedExecutionBundle,
 };
 #[cfg(test)]
 use reviewgraphen_reviewer::parse_fake_reviewer_output;
@@ -55,6 +55,8 @@ pub enum RuntimeError {
     AmbiguousRawRegistration,
     #[error("attempt already has durable progress and must resume")]
     ResumeRequired,
+    #[error("event-v3 raw registration requires authority-aware v3 replay")]
+    V3AuthorityReplayRequired,
 }
 
 pub struct PreparedFakeAttempt<'a> {
@@ -344,6 +346,7 @@ pub fn resume_fake_attempt(
         FakeAttemptState::None => run_fresh_fake_attempt(session, root, reviewer, selection)
             .map(|execution| FakeAttemptRunResult::Fresh(Box::new(execution))),
         FakeAttemptState::RawRegistered { registration } => {
+            let registration = require_v2_raw_registration(registration)?;
             resume_raw_registered(session, root, selection, input, execution_id, registration)
                 .map(FakeAttemptRunResult::Resumed)
         }
@@ -365,6 +368,15 @@ pub fn resume_fake_attempt(
                 completion_receipt: None,
             }))
         }
+    }
+}
+
+fn require_v2_raw_registration(
+    registration: RawArtifactRegistration,
+) -> Result<ArtifactRegistered, RuntimeError> {
+    match registration {
+        RawArtifactRegistration::V2(registration) => Ok(registration),
+        RawArtifactRegistration::V3(_) => Err(RuntimeError::V3AuthorityReplayRequired),
     }
 }
 
@@ -820,10 +832,10 @@ fn line_count(bytes: &[u8]) -> u64 {
 mod tests {
     use super::*;
     use reviewgraphen_core::{
-        AbstentionReason, ArtifactRegistered, ArtifactSensitivity, ArtifactSource, DecodedPayload,
-        EventAdmissions, EventCommand, EventLog, MalformedOutputReason, MvpRulePack, PlanBudget,
-        ProgramSpace, ReviewAggregate, SnapshotSourceRecordEntry, SnapshotSourcesRecorded, plan,
-        prepare_context,
+        AbstentionReason, ArtifactRegistered, ArtifactRegisteredV3, ArtifactSensitivity,
+        ArtifactSource, ArtifactSourceV3, DecodedPayload, EventAdmissions, EventCommand, EventLog,
+        MalformedOutputReason, MvpRulePack, PlanBudget, ProgramSpace, ReviewAggregate,
+        SnapshotSourceRecordEntry, SnapshotSourcesRecorded, plan, prepare_context,
     };
     use reviewgraphen_reviewer::{FakeFixture, FixtureKey, ReviewerOutcome};
     use reviewgraphen_store::{
@@ -835,6 +847,30 @@ mod tests {
 
     fn id(value: &str) -> StableId {
         StableId::parse(value).unwrap()
+    }
+
+    #[test]
+    fn v3_raw_registration_requires_the_typed_authority_replay_boundary() {
+        let run_id = id("run:runtime-v3-refusal");
+        let execution_id = id("execution:runtime-v3-refusal");
+        let raw = b"v3 raw";
+        let registration = ArtifactRegisteredV3::new(
+            run_id,
+            ContentHash::sha256(raw),
+            "application/json",
+            u64::try_from(raw.len()).unwrap(),
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id,
+                reviewer_id: reviewgraphen_core::FAKE_REVIEWER_ID.to_owned(),
+                run_id: id("run:runtime-v3-refusal"),
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            require_v2_raw_registration(RawArtifactRegistration::V3(Box::new(registration))),
+            Err(RuntimeError::V3AuthorityReplayRequired)
+        ));
     }
 
     fn build_context(

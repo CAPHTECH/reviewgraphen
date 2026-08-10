@@ -1,6 +1,7 @@
 use crate::{
-    ArtifactRegistered, ArtifactSensitivity, ArtifactSource, ClaimAuthorKind, ClaimDisposition,
-    ClaimPolarity, ContentHash, DomainError, Result, ReviewStatus, StableId,
+    ArtifactRegistered, ArtifactRegisteredV3, ArtifactSensitivity, ArtifactSource,
+    ArtifactSourceV3, ClaimAuthorKind, ClaimDisposition, ClaimPolarity, ContentHash, DomainError,
+    Result, ReviewStatus, StableId,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap};
 use std::collections::{BTreeMap, BTreeSet};
@@ -750,7 +751,7 @@ impl ExecutionRecord {
     }
     fn from_input(
         input: ExecutionRecordInput,
-        registration: &ArtifactRegistered,
+        registration_id: &StableId,
         raw_hash: ContentHash,
         parsed_claim_ids: BTreeSet<StableId>,
         outcome: ExecutionOutcome,
@@ -770,7 +771,7 @@ impl ExecutionRecord {
             prompt_template_version: FIXTURE_PROMPT_TEMPLATE_VERSION.to_owned(),
             provider: None,
             raw_artifact_hash: raw_hash,
-            raw_artifact_registration_id: registration.registration_id().clone(),
+            raw_artifact_registration_id: registration_id.clone(),
             reviewer_id: FAKE_REVIEWER_ID.to_owned(),
             reviewer_kind: FAKE_REVIEWER_KIND.to_owned(),
             snapshot_id: input.snapshot_id,
@@ -1593,6 +1594,74 @@ pub struct ValidatedExecutionBundle {
     working_peak: usize,
 }
 
+#[derive(Clone, Copy)]
+enum ReviewerRegistrationRef<'a> {
+    V2(&'a ArtifactRegistered),
+    V3(&'a ArtifactRegisteredV3),
+}
+
+impl<'a> ReviewerRegistrationRef<'a> {
+    fn registration_id(self) -> &'a StableId {
+        match self {
+            Self::V2(value) => value.registration_id(),
+            Self::V3(value) => value.registration_id(),
+        }
+    }
+
+    fn cas_hash(self) -> &'a ContentHash {
+        match self {
+            Self::V2(value) => value.cas_hash(),
+            Self::V3(value) => value.cas_hash(),
+        }
+    }
+
+    fn size(self) -> u64 {
+        match self {
+            Self::V2(value) => value.size(),
+            Self::V3(value) => value.size(),
+        }
+    }
+
+    fn sensitivity(self) -> ArtifactSensitivity {
+        match self {
+            Self::V2(value) => value.sensitivity(),
+            Self::V3(value) => value.sensitivity(),
+        }
+    }
+
+    fn allocated_bytes(self) -> usize {
+        match self {
+            Self::V2(value) => value.allocated_bytes(),
+            Self::V3(value) => value.allocated_bytes(),
+        }
+    }
+
+    fn is_fake_reviewer_execution(self, execution_id: &StableId) -> bool {
+        match self {
+            Self::V2(value) => matches!(
+                value.source(),
+                ArtifactSource::ReviewerExecution {
+                    run_id,
+                    execution_id: source_execution,
+                    reviewer_id,
+                } if run_id == value.run_id()
+                    && source_execution == execution_id
+                    && reviewer_id == FAKE_REVIEWER_ID
+            ),
+            Self::V3(value) => matches!(
+                value.source(),
+                ArtifactSourceV3::ReviewerExecution {
+                    run_id,
+                    execution_id: source_execution,
+                    reviewer_id,
+                } if run_id == value.run_id()
+                    && source_execution == execution_id
+                    && reviewer_id == FAKE_REVIEWER_ID
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResolvedSourceBufferAccounting {
     len: usize,
@@ -1669,6 +1738,35 @@ impl ValidatedExecutionBundle {
         )
     }
 
+    pub fn fake_v3(
+        input: ExecutionRecordInput,
+        registration: &ArtifactRegisteredV3,
+        raw_reviewer_bytes: Vec<u8>,
+        resolved_source_buffers: Vec<&Vec<u8>>,
+        claim_inputs: Vec<ExecutionClaimInputV2>,
+        outcome: ExecutionOutcome,
+    ) -> Result<Self> {
+        let mut accounting = Vec::with_capacity(resolved_source_buffers.capacity());
+        for source in resolved_source_buffers {
+            accounting.push(ResolvedSourceBufferAccounting::new(
+                source.len(),
+                source.capacity(),
+            )?);
+        }
+        for source in &accounting {
+            source.validate()?;
+        }
+        Self::fake_with_limit(
+            input,
+            ReviewerRegistrationRef::V3(registration),
+            raw_reviewer_bytes,
+            accounting,
+            claim_inputs,
+            outcome,
+            MAX_D2_WORKING_BYTES,
+        )
+    }
+
     pub fn fake_from_source_accounting(
         input: ExecutionRecordInput,
         registration: &ArtifactRegistered,
@@ -1682,7 +1780,7 @@ impl ValidatedExecutionBundle {
         }
         Self::fake_with_limit(
             input,
-            registration,
+            ReviewerRegistrationRef::V2(registration),
             raw_reviewer_bytes,
             resolved_source_buffers,
             claim_inputs,
@@ -1694,7 +1792,7 @@ impl ValidatedExecutionBundle {
     #[allow(clippy::too_many_arguments)]
     fn fake_with_limit(
         input: ExecutionRecordInput,
-        registration: &ArtifactRegistered,
+        registration: ReviewerRegistrationRef<'_>,
         raw_reviewer_bytes: Vec<u8>,
         resolved_source_buffers: Vec<ResolvedSourceBufferAccounting>,
         claim_inputs: Vec<ExecutionClaimInputV2>,
@@ -1759,8 +1857,13 @@ impl ValidatedExecutionBundle {
         claims.sort_by(|left, right| left.id().cmp(right.id()));
         let parsed_claim_ids = claims.iter().map(|claim| claim.id().clone()).collect();
         let raw_hash = ContentHash::sha256(&raw_reviewer_bytes);
-        let execution =
-            ExecutionRecord::from_input(input, registration, raw_hash, parsed_claim_ids, outcome)?;
+        let execution = ExecutionRecord::from_input(
+            input,
+            registration.registration_id(),
+            raw_hash,
+            parsed_claim_ids,
+            outcome,
+        )?;
         let bundle = ReviewExecutionRecorded { claims, execution };
         bundle.validate_shape()?;
         let raw_closure = ReviewerRawClosure::from_bytes(&bundle, &raw_reviewer_bytes)?;
@@ -1894,7 +1997,7 @@ fn outcome_capacity(outcome: &ExecutionOutcome) -> usize {
 
 fn reviewer_preflight_working(
     input: &ExecutionRecordInput,
-    registration: &ArtifactRegistered,
+    registration: ReviewerRegistrationRef<'_>,
     raw_reviewer_bytes: &Vec<u8>,
     resolved_source_buffers: &Vec<ResolvedSourceBufferAccounting>,
     claim_inputs: &Vec<ExecutionClaimInputV2>,
@@ -1934,7 +2037,7 @@ struct ReviewerPostAllocations<'a> {
     source_bytes: usize,
     raw_bytes: usize,
     resolved_source_buffers: &'a Vec<ResolvedSourceBufferAccounting>,
-    registration: &'a ArtifactRegistered,
+    registration: ReviewerRegistrationRef<'a>,
     raw_closure: &'a ReviewerRawClosure,
     bundle: &'a ReviewExecutionRecorded,
     execution_bytes: &'a Vec<u8>,
@@ -1977,7 +2080,7 @@ fn reviewer_post_working(allocations: &ReviewerPostAllocations<'_>) -> Result<us
 }
 
 fn validate_raw_registration(
-    registration: &ArtifactRegistered,
+    registration: ReviewerRegistrationRef<'_>,
     execution_id: &StableId,
     raw_bytes: &[u8],
 ) -> Result<()> {
@@ -1989,16 +2092,7 @@ fn validate_raw_registration(
     if registration.cas_hash() != &ContentHash::sha256(raw_bytes)
         || registration.size() != size
         || registration.sensitivity() != ArtifactSensitivity::Sensitive
-        || !matches!(
-            registration.source(),
-            ArtifactSource::ReviewerExecution {
-                run_id,
-                execution_id: source_execution,
-                reviewer_id,
-            } if run_id == registration.run_id()
-                && source_execution == execution_id
-                && reviewer_id == FAKE_REVIEWER_ID
-        )
+        || !registration.is_fake_reviewer_execution(execution_id)
     {
         return Err(DomainError::Validation(
             "D2 raw registration must exactly bind bytes, sensitive handling, run, execution, and reviewer"
