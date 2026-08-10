@@ -857,6 +857,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "reviewgraphen-report"
+version = "0.1.0"
+dependencies = [
+ "jsonschema",
+ "reviewgraphen-core",
+ "reviewgraphen-reviewer",
+ "reviewgraphen-runtime",
+ "reviewgraphen-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "reviewgraphen-reviewer"
 version = "0.1.0"
 dependencies = [

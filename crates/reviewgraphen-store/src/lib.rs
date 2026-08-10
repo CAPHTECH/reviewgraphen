@@ -12,9 +12,9 @@ mod journal;
 #[cfg(target_os = "linux")]
 pub use index::{
     DerivedIndex, IndexArtifactRegistration, IndexClaim, IndexContextEnvelope, IndexError,
-    IndexEvent, IndexFinding, IndexLimits, IndexMarker, IndexObligation, IndexObligationLifecycle,
-    IndexProgramObject, IndexProgramRelation, IndexRebuildReceipt, IndexReviewPlan, IndexShadow,
-    IndexSnapshot, IndexSnapshotSource, IndexUniverse,
+    IndexEvent, IndexExecution, IndexFinding, IndexLimits, IndexMarker, IndexObligation,
+    IndexObligationLifecycle, IndexProgramObject, IndexProgramRelation, IndexRebuildReceipt,
+    IndexReviewPlan, IndexShadow, IndexSnapshot, IndexSnapshotSource, IndexUniverse,
 };
 #[cfg(target_os = "linux")]
 pub use journal::{

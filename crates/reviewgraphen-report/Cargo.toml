@@ -1,0 +1,25 @@
+[package]
+name = "reviewgraphen-report"
+description = "Source-bound ReviewGraphen report v2 projection"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+reviewgraphen-core = { path = "../reviewgraphen-core" }
+reviewgraphen-store = { path = "../reviewgraphen-store" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer" }
+reviewgraphen-runtime = { path = "../reviewgraphen-runtime" }
+serde_json.workspace = true
+tempfile.workspace = true
