@@ -10,6 +10,7 @@ mod coverage;
 mod error;
 mod event;
 mod id;
+mod planning;
 mod program;
 mod projection;
 mod review;
@@ -26,7 +27,7 @@ mod m1_tests;
 
 pub use canonical::{CanonicalJson, canonical_hash, canonical_json, canonical_json_value};
 pub use coverage::{Coverage, CoverageMeasure, Ratio};
-pub use error::{DomainError, Result};
+pub use error::{DomainError, PlanningError, Result};
 pub use event::{
     ArtifactRegistered, ArtifactSensitivity, ArtifactSource, DecodedPayload, Event,
     EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
@@ -36,6 +37,9 @@ pub use event::{
     VerificationAdmission,
 };
 pub use id::{ContentHash, IdRegistry, StableId, VersionTuple};
+pub use planning::{
+    DeferralReason, PlanBudget, PlannerPolicyV1, ReviewPlan, RiskDescriptor, ScheduleWave, plan,
+};
 pub use program::{
     AdapterDescriptor, AdapterStatus, Artifact, CapabilityDeclaration, CapabilityState, Evidence,
     EvidenceAdmission, EvidenceDetails, EvidenceSnapshotAdmission, Extraction, InformationLoss,

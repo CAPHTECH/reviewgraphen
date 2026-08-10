@@ -1,12 +1,44 @@
 use crate::StableId;
 use thiserror::Error;
 
+/// Closed failure categories emitted by deterministic D1 planning.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum PlanningError {
+    #[error("input obligation lifecycle is not generated")]
+    NonGenerated,
+    #[error("input weight is not finite and positive")]
+    InvalidWeight,
+    #[error("dependency graph contains a cycle")]
+    Cycle,
+    #[error("input contains a duplicate dependency")]
+    DuplicateDependency,
+    #[error("input contains a duplicate obligation")]
+    DuplicateObligation,
+    #[error("input ID kind is invalid")]
+    InvalidIdKind,
+    #[error("invalid fixed planning budget")]
+    InvalidBudget,
+    #[error("invalid planning input")]
+    InvalidInput,
+}
+
 /// Result type used by the validated ReviewGraphen domain boundary.
 pub type Result<T> = std::result::Result<T, DomainError>;
 
 /// Typed failures for invalid canonical state or illegal domain operations.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DomainError {
+    /// A closed deterministic D1 planning failure.
+    #[error("planning failure: {0}")]
+    Planning(PlanningError),
+
+    /// A bounded deterministic operation could not represent its complete input.
+    #[error("{operation} exceeds limit {limit} (observed {observed})")]
+    Incomplete {
+        operation: &'static str,
+        limit: usize,
+        observed: usize,
+    },
     /// An ID does not follow the stable `kind:payload` grammar.
     #[error("invalid stable ID `{value}`: {reason}")]
     InvalidId { value: String, reason: String },
