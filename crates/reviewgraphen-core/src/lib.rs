@@ -49,7 +49,7 @@ pub use execution::{
     ExecutionRecordInput, FAKE_REVIEWER_ID, FAKE_REVIEWER_KIND, FIXTURE_PROMPT_TEMPLATE_VERSION,
     MAX_D2_RAW_REVIEWER_BYTES, MAX_D2_RESOLVED_SOURCE_BYTES, MAX_D2_WORKING_BYTES,
     MalformedOutputReason, NO_TOOLS_POLICY_VERSION, NO_TOOLS_SYSTEM_PROMPT_VERSION,
-    ValidatedExecutionBundle,
+    ResolvedSourceBufferAccounting, ValidatedExecutionBundle,
 };
 pub use id::{ContentHash, IdRegistry, StableId, VersionTuple};
 pub use planning::{

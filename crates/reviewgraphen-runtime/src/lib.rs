@@ -1,16 +1,22 @@
-//! Deterministic prepare-only D2 fake runtime.
+//! Deterministic ADR 0020 D2 fake runtime.
 //!
-//! This crate deliberately stops before reviewer invocation and every durable
-//! mutation. ADR 0020 reserves those later steps behind the same replayed V2
-//! session boundary.
+//! Preparation, one fake reviewer invocation, and the ordered durable writes
+//! run behind the same replayed V2 session boundary.
 
 use reviewgraphen_core::{
-    ContentHash, ExecutionRecordInput, FakeAttemptState, ObligationLifecycle, StableId,
+    ArtifactRegistered, ContentHash, ExecutionOutcome, ExecutionRecordInput, FakeAttemptState,
+    ObligationLifecycle, StableId, ValidatedExecutionBundle,
 };
 use reviewgraphen_reviewer::{
-    ResolvedSourceInput, ResolvedSourceMetadata, ReviewerRequest, ReviewerRequestPreflight,
+    ClaimProposalScope, FakeReviewer, ParsedReviewerOutput, ResolvedSourceInput,
+    ResolvedSourceMetadata, Reviewer, ReviewerRequest, ReviewerRequestPreflight,
+    parse_fake_reviewer_output,
 };
-use reviewgraphen_store::{CasHash, CasReader, ReplayedV2RunSession, StoreError, StoreRoot};
+use reviewgraphen_store::{
+    CasHash, CasReader, CasReceipt, CasStore, JournalAppendReceipt, ReplayedV2RunSession,
+    StoreError, StoreRoot,
+};
+use std::io::Cursor;
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,6 +42,10 @@ pub enum RuntimeError {
     Selection(&'static str),
     #[error("CAS source closure does not match its retained record")]
     SourceClosure,
+    #[error("runtime store root does not match the replayed session root")]
+    StoreRootMismatch,
+    #[error("pre-existing raw CAS object has no durable registration: {hash}")]
+    OrphanRawCas { hash: ContentHash },
     #[error("attempt already has durable progress and must resume")]
     ResumeRequired,
 }
@@ -44,6 +54,190 @@ pub struct PreparedFakeAttempt<'a> {
     request: ReviewerRequest<'a>,
     input: ExecutionRecordInput,
     execution_id: StableId,
+}
+
+#[derive(Debug)]
+pub struct FakeAttemptExecution {
+    pub execution_id: StableId,
+    pub raw_registration: ArtifactRegistered,
+    pub raw_receipt: CasReceipt,
+    pub registration_receipt: JournalAppendReceipt,
+    pub execution_receipt: JournalAppendReceipt,
+    pub completion_receipt: Option<JournalAppendReceipt>,
+    pub outcome: ExecutionOutcome,
+}
+
+pub fn run_fresh_fake_attempt(
+    session: &mut ReplayedV2RunSession,
+    root: &StoreRoot,
+    reviewer: &FakeReviewer,
+    selection: FakeAttemptSelection,
+) -> Result<FakeAttemptExecution, RuntimeError> {
+    if !session.matches_store_root(root)? {
+        return Err(RuntimeError::StoreRootMismatch);
+    }
+    let obligation_id = selection.obligation_id.clone();
+    let expected_tail = session.tail_hash()?.clone();
+    let (input, execution_id, raw, parsed, source_accounting, run_id) = {
+        let prepared = prepare_fake_attempt(session, root, selection)?;
+        if !matches!(
+            session
+                .aggregate()?
+                .fake_attempt_state(prepared.execution_id()),
+            FakeAttemptState::None
+        ) || session.tail_hash()? != &expected_tail
+        {
+            return Err(RuntimeError::ResumeRequired);
+        }
+        let obligation = session
+            .aggregate()?
+            .obligations()
+            .find(|item| item.id() == &obligation_id)
+            .ok_or(RuntimeError::Selection("unknown obligation"))?;
+        let scope = ClaimProposalScope::new(
+            obligation.id().clone(),
+            obligation.property_id(),
+            obligation.normalized_target_refs().clone(),
+        )?;
+        let response = reviewer.review(prepared.request())?;
+        let (raw, declared_outcome) = response.into_parts();
+        // A provider failure is adapter metadata, not reviewer-authored JSON:
+        // no output body is available to parse in that case. Every other fake
+        // outcome still derives from the bounded, canonical raw artifact.
+        let parsed = match declared_outcome {
+            reviewgraphen_reviewer::ReviewerOutcome::ProviderFailure {
+                retryable,
+                diagnostic,
+            } => ParsedReviewerOutput::provider_failure(retryable, diagnostic)?,
+            reviewgraphen_reviewer::ReviewerOutcome::Structured
+            | reviewgraphen_reviewer::ReviewerOutcome::Abstained { .. }
+            | reviewgraphen_reviewer::ReviewerOutcome::Malformed { .. } => {
+                parse_fake_reviewer_output(
+                    &raw,
+                    prepared.request(),
+                    prepared.execution_id(),
+                    &scope,
+                )?
+            }
+        };
+        (
+            prepared.input().clone(),
+            prepared.execution_id().clone(),
+            raw,
+            parsed,
+            prepared.request().source_buffer_accounting()?,
+            session.run_id()?.clone(),
+        )
+    };
+    if !matches!(
+        session.aggregate()?.fake_attempt_state(&execution_id),
+        FakeAttemptState::None
+    ) || session.tail_hash()? != &expected_tail
+    {
+        return Err(RuntimeError::ResumeRequired);
+    }
+    let (claims, outcome) = parsed_into_execution(parsed)?;
+    let hash = ContentHash::sha256(&raw);
+    let cas_hash = CasHash::parse(hash.to_string())?;
+    let store = CasStore::open(root)?;
+    let raw_receipt = store.put(
+        &cas_hash,
+        Some(u64::try_from(raw.len()).unwrap_or(u64::MAX)),
+        Cursor::new(&raw),
+    )?;
+    if raw_receipt.existed
+        && session
+            .aggregate()?
+            .artifact_registration_count_for_cas_hash(&hash)
+            == 0
+    {
+        return Err(RuntimeError::OrphanRawCas { hash });
+    }
+    let registration = ArtifactRegistered::reviewer_execution(
+        run_id,
+        execution_id.clone(),
+        reviewgraphen_core::FAKE_REVIEWER_ID,
+        hash,
+        "application/json",
+        u64::try_from(raw.len()).unwrap_or(u64::MAX),
+    )?;
+    let registration_receipt = session.append_command(
+        reviewgraphen_core::EventCommand::artifact_registered(registration.clone()),
+    )?;
+    let structured = outcome.is_structured();
+    let bundle = ValidatedExecutionBundle::fake_from_source_accounting(
+        input,
+        &registration,
+        raw,
+        source_accounting,
+        claims,
+        outcome.clone(),
+    )?;
+    let execution_receipt = session.append_command(
+        reviewgraphen_core::EventCommand::review_execution_recorded(bundle),
+    )?;
+    let completion_receipt = if structured {
+        let obligation_id = session
+            .aggregate()?
+            .executions()
+            .find(|item| item.id() == &execution_id)
+            .and_then(|item| item.obligation_ids().iter().next())
+            .cloned()
+            .ok_or(RuntimeError::Selection(
+                "recorded execution has no obligation",
+            ))?;
+        Some(
+            session.append_command(reviewgraphen_core::EventCommand::obligation_transition(
+                obligation_id,
+                ObligationLifecycle::Completed,
+            ))?,
+        )
+    } else {
+        None
+    };
+    Ok(FakeAttemptExecution {
+        execution_id,
+        raw_registration: registration,
+        raw_receipt,
+        registration_receipt,
+        execution_receipt,
+        completion_receipt,
+        outcome,
+    })
+}
+
+fn parsed_into_execution(
+    parsed: ParsedReviewerOutput,
+) -> Result<
+    (
+        Vec<reviewgraphen_core::ExecutionClaimInputV2>,
+        ExecutionOutcome,
+    ),
+    RuntimeError,
+> {
+    Ok(match parsed {
+        ParsedReviewerOutput::Structured { claims, .. } => (
+            claims.into_iter().map(|claim| claim.into_input()).collect(),
+            ExecutionOutcome::Structured,
+        ),
+        ParsedReviewerOutput::Abstained { reason, detail, .. } => {
+            (Vec::new(), ExecutionOutcome::Abstained { reason, detail })
+        }
+        ParsedReviewerOutput::Malformed { reason, diagnostic } => (
+            Vec::new(),
+            ExecutionOutcome::Malformed { reason, diagnostic },
+        ),
+        ParsedReviewerOutput::ProviderFailure {
+            retryable,
+            diagnostic,
+        } => (
+            Vec::new(),
+            ExecutionOutcome::ProviderFailure {
+                retryable,
+                diagnostic,
+            },
+        ),
+    })
 }
 
 impl<'a> PreparedFakeAttempt<'a> {
@@ -211,11 +405,11 @@ fn line_count(bytes: &[u8]) -> u64 {
 mod tests {
     use super::*;
     use reviewgraphen_core::{
-        ArtifactRegistered, ArtifactSensitivity, ArtifactSource, EventAdmissions, EventCommand,
-        EventLog, ExecutionClaimInputV2, ExecutionOutcome, MvpRulePack, PlanBudget, ProgramSpace,
-        ReviewAggregate, SnapshotSourceRecordEntry, SnapshotSourcesRecorded,
-        ValidatedExecutionBundle, plan, prepare_context,
+        AbstentionReason, ArtifactRegistered, ArtifactSensitivity, ArtifactSource, EventAdmissions,
+        EventCommand, EventLog, MalformedOutputReason, MvpRulePack, PlanBudget, ProgramSpace,
+        ReviewAggregate, SnapshotSourceRecordEntry, SnapshotSourcesRecorded, plan, prepare_context,
     };
+    use reviewgraphen_reviewer::{FakeFixture, FixtureKey, ReviewerOutcome};
     use reviewgraphen_store::{
         CasStore, EventJournal, JournalGenesis, JournalIdentity, StoreLimits,
     };
@@ -347,17 +541,20 @@ mod tests {
         let plan = plan(log.aggregate(), PlanBudget::new(16, 16).unwrap()).unwrap();
         log.append(EventCommand::review_plan_recorded(plan.clone()))
             .unwrap();
-        let (obligation_id, built) = plan
+        let mut eligible_contexts = plan
             .waves()
             .iter()
             .flat_map(|wave| wave.obligation_ids())
-            .find_map(|candidate| {
+            .filter_map(|candidate| {
                 let built = build_context(log.aggregate(), candidate.clone(), &by_id);
                 (!built.envelope().normalized_included_source_ids().is_empty())
                     .then(|| (candidate.clone(), built))
-            })
-            .unwrap();
+            });
+        let (obligation_id, built) = eligible_contexts.next().unwrap();
+        let (issue_absent_obligation_id, issue_absent_built) = eligible_contexts.next().unwrap();
         let replay_admission = build_context(log.aggregate(), obligation_id.clone(), &by_id);
+        let issue_absent_replay_admission =
+            build_context(log.aggregate(), issue_absent_obligation_id.clone(), &by_id);
         log.append(EventCommand::obligation_transition(
             obligation_id.clone(),
             ObligationLifecycle::Planned,
@@ -368,12 +565,29 @@ mod tests {
             ObligationLifecycle::InProgress,
         ))
         .unwrap();
+        log.append(EventCommand::obligation_transition(
+            issue_absent_obligation_id.clone(),
+            ObligationLifecycle::Planned,
+        ))
+        .unwrap();
+        log.append(EventCommand::obligation_transition(
+            issue_absent_obligation_id.clone(),
+            ObligationLifecycle::InProgress,
+        ))
+        .unwrap();
         let envelope = built.envelope().clone();
         log.append(EventCommand::context_envelope_projected(built))
             .unwrap();
         let context_event = log.events().last().unwrap().envelope().clone();
+        let issue_absent_envelope = issue_absent_built.envelope().clone();
+        log.append(EventCommand::context_envelope_projected(issue_absent_built))
+            .unwrap();
+        let issue_absent_context_event = log.events().last().unwrap().envelope().clone();
         let admissions = EventAdmissions::default()
-            .with_context_projections(vec![(context_event, replay_admission)])
+            .with_context_projections(vec![
+                (context_event, replay_admission),
+                (issue_absent_context_event, issue_absent_replay_admission),
+            ])
             .unwrap();
 
         let workspace = tempfile::tempdir().unwrap();
@@ -396,6 +610,13 @@ mod tests {
             .waves()
             .iter()
             .find(|wave| wave.obligation_ids().contains(&obligation_id))
+            .unwrap()
+            .id()
+            .clone();
+        let issue_absent_wave_id = plan
+            .waves()
+            .iter()
+            .find(|wave| wave.obligation_ids().contains(&issue_absent_obligation_id))
             .unwrap()
             .id()
             .clone();
@@ -424,6 +645,13 @@ mod tests {
             wave_id: wave_id.clone(),
             envelope_id: envelope.id().clone(),
             obligation_id: obligation_id.clone(),
+            attempt: 1,
+        };
+        let issue_absent_selection = FakeAttemptSelection {
+            plan_id: plan.id().clone(),
+            wave_id: issue_absent_wave_id,
+            envelope_id: issue_absent_envelope.id().clone(),
+            obligation_id: issue_absent_obligation_id,
             attempt: 1,
         };
         for selection in [
@@ -506,72 +734,392 @@ mod tests {
         assert_eq!(session.tail_hash().unwrap(), &tail_before_prepare);
         drop(repeated);
 
-        let input = prepared.input().clone();
-        let execution_id = prepared.execution_id().clone();
         drop(prepared);
-        let raw = br#"{"fixture":"resume"}"#.to_vec();
-        let registration = ArtifactRegistered::reviewer_execution(
-            run_id,
-            execution_id.clone(),
+        let store = CasStore::open(&root).unwrap();
+        let alternate_workspace = tempfile::tempdir().unwrap();
+        let alternate_root =
+            StoreRoot::open(alternate_workspace.path(), StoreLimits::default()).unwrap();
+        let mismatch_reviewer = FakeReviewer::new(vec![]).unwrap();
+        let event_count_before_mismatch = session.event_count().unwrap();
+        assert!(matches!(
+            run_fresh_fake_attempt(
+                &mut session,
+                &alternate_root,
+                &mismatch_reviewer,
+                valid_selection.clone(),
+            ),
+            Err(RuntimeError::StoreRootMismatch)
+        ));
+        assert_eq!(session.event_count().unwrap(), event_count_before_mismatch);
+        assert!(!alternate_root.path().join("artifacts").exists());
+        let attempt_one = prepare_fake_attempt(&session, &root, valid_selection.clone()).unwrap();
+        let attempt_one_execution_id = attempt_one.execution_id().clone();
+        drop(attempt_one);
+        let orphan_raw = format!(
+            "{{\"abstention\":{{\"detail\":\"orphaned raw bytes\",\"reason\":\"insufficient_context\"}},\"claims\":[],\"execution_id\":\"{attempt_one_execution_id}\",\"schema\":\"reviewgraphen.reviewer_output.v1\"}}"
+        )
+        .into_bytes();
+        let orphan_hash = ContentHash::sha256(&orphan_raw);
+        store
+            .put(
+                &CasHash::parse(orphan_hash.to_string()).unwrap(),
+                Some(u64::try_from(orphan_raw.len()).unwrap()),
+                Cursor::new(&orphan_raw),
+            )
+            .unwrap();
+        let orphan_reviewer = FakeReviewer::new(vec![(
+            FixtureKey::new(
+                envelope.obligation_ids().clone(),
+                envelope.snapshot_id().clone(),
+            )
+            .unwrap(),
+            FakeFixture::new(
+                orphan_raw,
+                ReviewerOutcome::Abstained {
+                    reason: AbstentionReason::InsufficientContext,
+                    detail: "orphaned raw bytes".to_owned(),
+                },
+            )
+            .unwrap(),
+        )])
+        .unwrap();
+        let event_count_before_orphan = session.event_count().unwrap();
+        assert!(matches!(
+            run_fresh_fake_attempt(
+                &mut session,
+                &root,
+                &orphan_reviewer,
+                valid_selection.clone(),
+            ),
+            Err(RuntimeError::OrphanRawCas { hash }) if hash == orphan_hash
+        ));
+        assert_eq!(session.event_count().unwrap(), event_count_before_orphan);
+        assert_eq!(
+            session
+                .aggregate()
+                .unwrap()
+                .artifact_registration_count_for_cas_hash(&orphan_hash),
+            0
+        );
+
+        let dedupe_raw = format!(
+            "{{\"abstention\":{{\"detail\":\"fixture needs another source\",\"reason\":\"insufficient_context\"}},\"claims\":[],\"execution_id\":\"{attempt_one_execution_id}\",\"schema\":\"reviewgraphen.reviewer_output.v1\"}}"
+        )
+        .into_bytes();
+        let dedupe_hash = ContentHash::sha256(&dedupe_raw);
+        store
+            .put(
+                &CasHash::parse(dedupe_hash.to_string()).unwrap(),
+                Some(u64::try_from(dedupe_raw.len()).unwrap()),
+                Cursor::new(&dedupe_raw),
+            )
+            .unwrap();
+        let prior_registration = ArtifactRegistered::reviewer_execution(
+            run_id.clone(),
+            id("execution:prior-deduplication"),
             reviewgraphen_core::FAKE_REVIEWER_ID,
-            ContentHash::sha256(&raw),
+            dedupe_hash.clone(),
             "application/json",
-            u64::try_from(raw.len()).unwrap(),
+            u64::try_from(dedupe_raw.len()).unwrap(),
         )
         .unwrap();
         session
-            .append_command(EventCommand::artifact_registered(registration.clone()))
+            .append_command(EventCommand::artifact_registered(prior_registration))
             .unwrap();
-        assert!(matches!(
-            prepare_fake_attempt(&session, &root, valid_selection.clone()),
-            Err(RuntimeError::ResumeRequired)
-        ));
-
+        assert_eq!(
+            session
+                .aggregate()
+                .unwrap()
+                .artifact_registration_count_for_cas_hash(&dedupe_hash),
+            1
+        );
+        for attempt in 1..=4 {
+            let selection = FakeAttemptSelection {
+                attempt,
+                ..valid_selection.clone()
+            };
+            let prepared = prepare_fake_attempt(&session, &root, selection.clone()).unwrap();
+            let execution_id = prepared.execution_id().clone();
+            drop(prepared);
+            let (raw, declared_outcome, expected_outcome) = match attempt {
+                1 => {
+                    let detail = "fixture needs another source".to_owned();
+                    (
+                        format!(
+                            "{{\"abstention\":{{\"detail\":\"{detail}\",\"reason\":\"insufficient_context\"}},\"claims\":[],\"execution_id\":\"{execution_id}\",\"schema\":\"reviewgraphen.reviewer_output.v1\"}}"
+                        )
+                        .into_bytes(),
+                        ReviewerOutcome::Abstained {
+                            reason: AbstentionReason::InsufficientContext,
+                            detail: detail.clone(),
+                        },
+                        ExecutionOutcome::Abstained {
+                            reason: AbstentionReason::InsufficientContext,
+                            detail,
+                        },
+                    )
+                }
+                2 => (
+                    b"{}".to_vec(),
+                    ReviewerOutcome::Malformed {
+                        reason: MalformedOutputReason::SchemaViolation,
+                        diagnostic: "fixture malformed declaration".to_owned(),
+                    },
+                    ExecutionOutcome::Malformed {
+                        reason: MalformedOutputReason::SchemaViolation,
+                        diagnostic: "reviewer output semantic preflight failed".to_owned(),
+                    },
+                ),
+                3 | 4 => {
+                    let retryable = attempt == 4;
+                    let diagnostic = if retryable {
+                        "fixture transient provider failure"
+                    } else {
+                        "fixture permanent provider failure"
+                    }
+                    .to_owned();
+                    (
+                        b"provider failure without reviewer output".to_vec(),
+                        ReviewerOutcome::ProviderFailure {
+                            retryable,
+                            diagnostic: diagnostic.clone(),
+                        },
+                        ExecutionOutcome::ProviderFailure {
+                            retryable,
+                            diagnostic,
+                        },
+                    )
+                }
+                _ => unreachable!("four explicit non-structured fixtures"),
+            };
+            let reviewer = FakeReviewer::new(vec![(
+                FixtureKey::new(
+                    envelope.obligation_ids().clone(),
+                    envelope.snapshot_id().clone(),
+                )
+                .unwrap(),
+                FakeFixture::new(raw, declared_outcome).unwrap(),
+            )])
+            .unwrap();
+            let event_count_before = session.event_count().unwrap();
+            let executed =
+                run_fresh_fake_attempt(&mut session, &root, &reviewer, selection.clone()).unwrap();
+            assert_eq!(executed.execution_id, execution_id);
+            // Attempt one deliberately reuses a separately registered raw
+            // artifact; attempts three and four share the provider adapter's
+            // no-output diagnostic bytes.
+            assert_eq!(executed.raw_receipt.existed, matches!(attempt, 1 | 4));
+            assert_eq!(executed.outcome, expected_outcome);
+            assert!(executed.completion_receipt.is_none());
+            assert_eq!(
+                executed.registration_receipt.sequence + 1,
+                executed.execution_receipt.sequence
+            );
+            assert_eq!(session.event_count().unwrap(), event_count_before + 2);
+            let aggregate = session.aggregate().unwrap();
+            let recorded = aggregate
+                .executions()
+                .find(|item| item.id() == &execution_id)
+                .unwrap();
+            assert_eq!(recorded.outcome(), &expected_outcome);
+            assert_eq!(
+                aggregate
+                    .execution_claims()
+                    .filter(|claim| claim.execution_id() == &execution_id)
+                    .count(),
+                0
+            );
+            assert_eq!(
+                aggregate
+                    .obligations()
+                    .find(|item| item.id() == &obligation_id)
+                    .unwrap()
+                    .lifecycle(),
+                ObligationLifecycle::InProgress
+            );
+            assert!(matches!(
+                prepare_fake_attempt(&session, &root, selection),
+                Err(RuntimeError::ResumeRequired)
+            ));
+        }
+        let structured_selection = FakeAttemptSelection {
+            attempt: 5,
+            ..valid_selection.clone()
+        };
+        let prepared = prepare_fake_attempt(&session, &root, structured_selection.clone()).unwrap();
+        let execution_id = prepared.execution_id().clone();
+        drop(prepared);
         let obligation = session
             .aggregate()
             .unwrap()
             .obligations()
             .find(|item| item.id() == &obligation_id)
             .unwrap();
-        let claims = vec![
-            ExecutionClaimInputV2::new(
-                obligation.property_id(),
-                obligation.normalized_target_refs().clone(),
-                reviewgraphen_core::ClaimPolarity::IssueAbsent,
-                "fixture found no issue within the bounded projection",
-                envelope.normalized_included_source_ids().clone(),
-                Default::default(),
-                Default::default(),
-                Some(1.0),
+        let target = obligation
+            .normalized_target_refs()
+            .iter()
+            .next()
+            .unwrap()
+            .clone();
+        let source = envelope
+            .normalized_included_source_ids()
+            .iter()
+            .next()
+            .unwrap()
+            .clone();
+        let raw = format!(
+            "{{\"abstention\":null,\"claims\":[{{\"assumptions\":[],\"candidate_confidence\":1.0,\"polarity\":\"issue_present\",\"property_id\":\"{}\",\"requested_evidence\":[],\"source_ids\":[\"{}\"],\"summary\":\"fixture issue present\",\"target_refs\":[\"{}\"]}}],\"execution_id\":\"{}\",\"schema\":\"reviewgraphen.reviewer_output.v1\"}}",
+            obligation.property_id(), source, target, execution_id
+        ).into_bytes();
+        let reviewer = FakeReviewer::new(vec![(
+            FixtureKey::new(
+                envelope.obligation_ids().clone(),
+                envelope.snapshot_id().clone(),
             )
             .unwrap(),
-        ];
-        let source_buffers = by_id.values().collect::<Vec<_>>();
-        let bundle = ValidatedExecutionBundle::fake(
-            input,
-            &registration,
-            raw,
-            source_buffers,
-            claims,
-            ExecutionOutcome::Structured,
+            FakeFixture::new(raw, ReviewerOutcome::Structured).unwrap(),
+        )])
+        .unwrap();
+        let event_count_before = session.event_count().unwrap();
+        let tail_before_execution = session.tail_hash().unwrap().clone();
+        let executed =
+            run_fresh_fake_attempt(&mut session, &root, &reviewer, structured_selection.clone())
+                .unwrap();
+        assert_eq!(executed.execution_id, execution_id);
+        assert!(executed.completion_receipt.is_some());
+        assert_eq!(
+            executed.registration_receipt.sequence + 1,
+            executed.execution_receipt.sequence
+        );
+        assert_eq!(
+            executed.execution_receipt.sequence + 1,
+            executed.completion_receipt.as_ref().unwrap().sequence
+        );
+        assert_eq!(executed.raw_registration.run_id(), &run_id);
+        assert_eq!(executed.raw_registration.size(), executed.raw_receipt.size);
+        assert_eq!(
+            executed.raw_registration.cas_hash().to_string(),
+            executed.raw_receipt.hash.to_string()
+        );
+        assert!(matches!(
+            executed.raw_registration.source(),
+            ArtifactSource::ReviewerExecution { execution_id: id, reviewer_id, .. }
+                if id == &execution_id && reviewer_id == reviewgraphen_core::FAKE_REVIEWER_ID
+        ));
+        assert_eq!(session.event_count().unwrap(), event_count_before + 3);
+        assert_ne!(session.tail_hash().unwrap(), &tail_before_execution);
+        let execution = session
+            .aggregate()
+            .unwrap()
+            .executions()
+            .find(|item| item.id() == &execution_id)
+            .unwrap();
+        assert_eq!(execution.id(), &execution_id);
+        assert!(matches!(execution.outcome(), ExecutionOutcome::Structured));
+        let claim = session
+            .aggregate()
+            .unwrap()
+            .execution_claims()
+            .next()
+            .unwrap();
+        assert_eq!(claim.execution_id(), &execution_id);
+        assert_eq!(
+            claim.polarity(),
+            reviewgraphen_core::ClaimPolarity::IssuePresent
+        );
+        assert_eq!(claim.summary(), "fixture issue present");
+        assert!(claim.source_ids().contains(&source));
+        assert!(claim.target_refs().contains(&target));
+        assert!(reviewer.descriptor().tool_calls().is_empty());
+        assert!(matches!(
+            prepare_fake_attempt(&session, &root, structured_selection),
+            Err(RuntimeError::ResumeRequired)
+        ));
+
+        let prepared =
+            prepare_fake_attempt(&session, &root, issue_absent_selection.clone()).unwrap();
+        let issue_absent_execution_id = prepared.execution_id().clone();
+        drop(prepared);
+        let issue_absent_obligation = session
+            .aggregate()
+            .unwrap()
+            .obligations()
+            .find(|item| item.id() == &issue_absent_selection.obligation_id)
+            .unwrap();
+        let issue_absent_target = issue_absent_obligation
+            .normalized_target_refs()
+            .iter()
+            .next()
+            .unwrap()
+            .clone();
+        let issue_absent_source = issue_absent_envelope
+            .normalized_included_source_ids()
+            .iter()
+            .next()
+            .unwrap()
+            .clone();
+        let issue_absent_raw = format!(
+            "{{\"abstention\":null,\"claims\":[{{\"assumptions\":[],\"candidate_confidence\":1.0,\"polarity\":\"issue_absent\",\"property_id\":\"{}\",\"requested_evidence\":[],\"source_ids\":[\"{}\"],\"summary\":\"fixture issue absent\",\"target_refs\":[\"{}\"]}}],\"execution_id\":\"{}\",\"schema\":\"reviewgraphen.reviewer_output.v1\"}}",
+            issue_absent_obligation.property_id(),
+            issue_absent_source,
+            issue_absent_target,
+            issue_absent_execution_id
+        )
+        .into_bytes();
+        let issue_absent_reviewer = FakeReviewer::new(vec![(
+            FixtureKey::new(
+                issue_absent_envelope.obligation_ids().clone(),
+                issue_absent_envelope.snapshot_id().clone(),
+            )
+            .unwrap(),
+            FakeFixture::new(issue_absent_raw, ReviewerOutcome::Structured).unwrap(),
+        )])
+        .unwrap();
+        let issue_absent_event_count = session.event_count().unwrap();
+        let issue_absent_executed = run_fresh_fake_attempt(
+            &mut session,
+            &root,
+            &issue_absent_reviewer,
+            issue_absent_selection.clone(),
         )
         .unwrap();
-        session
-            .append_command(EventCommand::review_execution_recorded(bundle))
-            .unwrap();
         assert!(matches!(
-            prepare_fake_attempt(&session, &root, valid_selection.clone()),
-            Err(RuntimeError::ResumeRequired)
+            issue_absent_executed.outcome,
+            ExecutionOutcome::Structured
         ));
-        session
-            .append_command(EventCommand::obligation_transition(
-                obligation_id,
-                ObligationLifecycle::Completed,
-            ))
+        assert_eq!(
+            issue_absent_executed.registration_receipt.sequence + 1,
+            issue_absent_executed.execution_receipt.sequence
+        );
+        assert_eq!(
+            issue_absent_executed.execution_receipt.sequence + 1,
+            issue_absent_executed
+                .completion_receipt
+                .as_ref()
+                .unwrap()
+                .sequence
+        );
+        assert_eq!(session.event_count().unwrap(), issue_absent_event_count + 3);
+        let issue_absent_claim = session
+            .aggregate()
+            .unwrap()
+            .execution_claims()
+            .find(|claim| claim.execution_id() == &issue_absent_execution_id)
             .unwrap();
-        assert!(matches!(
-            prepare_fake_attempt(&session, &root, valid_selection),
-            Err(RuntimeError::ResumeRequired)
-        ));
+        assert_eq!(
+            issue_absent_claim.polarity(),
+            reviewgraphen_core::ClaimPolarity::IssueAbsent
+        );
+        assert_eq!(issue_absent_claim.summary(), "fixture issue absent");
+        assert_eq!(
+            session
+                .aggregate()
+                .unwrap()
+                .obligations()
+                .find(|item| item.id() == &issue_absent_selection.obligation_id)
+                .unwrap()
+                .lifecycle(),
+            ObligationLifecycle::Completed
+        );
     }
 }

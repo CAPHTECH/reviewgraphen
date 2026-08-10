@@ -1593,6 +1593,56 @@ pub struct ValidatedExecutionBundle {
     working_peak: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedSourceBufferAccounting {
+    len: usize,
+    capacity: usize,
+}
+
+impl ResolvedSourceBufferAccounting {
+    /// Creates a checked, opaque accounting record for one retained source
+    /// buffer. Length can never exceed the allocation capacity.
+    pub fn new(len: usize, capacity: usize) -> Result<Self> {
+        require_len(
+            len,
+            MAX_D2_RESOLVED_SOURCE_BYTES,
+            "D2 resolved source buffer length",
+        )?;
+        require_len(
+            capacity,
+            MAX_D2_WORKING_BYTES,
+            "D2 resolved source buffer capacity",
+        )?;
+        if len > capacity {
+            return Err(DomainError::Incomplete {
+                operation: "D2 resolved source buffer length",
+                limit: capacity,
+                observed: len,
+            });
+        }
+        Ok(Self { len, capacity })
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[must_use]
+    pub const fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    fn validate(&self) -> Result<()> {
+        Self::new(self.len, self.capacity).map(|_| ())
+    }
+}
+
 impl ValidatedExecutionBundle {
     pub fn fake(
         input: ExecutionRecordInput,
@@ -1602,6 +1652,34 @@ impl ValidatedExecutionBundle {
         claim_inputs: Vec<ExecutionClaimInputV2>,
         outcome: ExecutionOutcome,
     ) -> Result<Self> {
+        let mut accounting = Vec::with_capacity(resolved_source_buffers.capacity());
+        for source in resolved_source_buffers {
+            accounting.push(ResolvedSourceBufferAccounting::new(
+                source.len(),
+                source.capacity(),
+            )?);
+        }
+        Self::fake_from_source_accounting(
+            input,
+            registration,
+            raw_reviewer_bytes,
+            accounting,
+            claim_inputs,
+            outcome,
+        )
+    }
+
+    pub fn fake_from_source_accounting(
+        input: ExecutionRecordInput,
+        registration: &ArtifactRegistered,
+        raw_reviewer_bytes: Vec<u8>,
+        resolved_source_buffers: Vec<ResolvedSourceBufferAccounting>,
+        claim_inputs: Vec<ExecutionClaimInputV2>,
+        outcome: ExecutionOutcome,
+    ) -> Result<Self> {
+        for source in &resolved_source_buffers {
+            source.validate()?;
+        }
         Self::fake_with_limit(
             input,
             registration,
@@ -1618,7 +1696,7 @@ impl ValidatedExecutionBundle {
         input: ExecutionRecordInput,
         registration: &ArtifactRegistered,
         raw_reviewer_bytes: Vec<u8>,
-        resolved_source_buffers: Vec<&Vec<u8>>,
+        resolved_source_buffers: Vec<ResolvedSourceBufferAccounting>,
         claim_inputs: Vec<ExecutionClaimInputV2>,
         outcome: ExecutionOutcome,
         working_limit: usize,
@@ -1818,7 +1896,7 @@ fn reviewer_preflight_working(
     input: &ExecutionRecordInput,
     registration: &ArtifactRegistered,
     raw_reviewer_bytes: &Vec<u8>,
-    resolved_source_buffers: &Vec<&Vec<u8>>,
+    resolved_source_buffers: &Vec<ResolvedSourceBufferAccounting>,
     claim_inputs: &Vec<ExecutionClaimInputV2>,
     outcome: &ExecutionOutcome,
 ) -> Result<usize> {
@@ -1827,7 +1905,7 @@ fn reviewer_preflight_working(
         raw_reviewer_bytes.capacity(),
         checked_working_mul(
             resolved_source_buffers.capacity(),
-            std::mem::size_of::<&Vec<u8>>(),
+            std::mem::size_of::<ResolvedSourceBufferAccounting>(),
         )?,
         checked_working_mul(
             claim_inputs.capacity(),
@@ -1855,7 +1933,7 @@ fn reviewer_preflight_working(
 struct ReviewerPostAllocations<'a> {
     source_bytes: usize,
     raw_bytes: usize,
-    resolved_source_buffers: &'a Vec<&'a Vec<u8>>,
+    resolved_source_buffers: &'a Vec<ResolvedSourceBufferAccounting>,
     registration: &'a ArtifactRegistered,
     raw_closure: &'a ReviewerRawClosure,
     bundle: &'a ReviewExecutionRecorded,
@@ -1871,7 +1949,7 @@ fn reviewer_post_working(allocations: &ReviewerPostAllocations<'_>) -> Result<us
         allocations.raw_bytes,
         checked_working_mul(
             allocations.resolved_source_buffers.capacity(),
-            std::mem::size_of::<&Vec<u8>>(),
+            std::mem::size_of::<ResolvedSourceBufferAccounting>(),
         )?,
         allocations.registration.allocated_bytes(),
         allocations.raw_closure.allocated_bytes(),
@@ -2374,6 +2452,55 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn source_buffer_accounting_is_checked_opaque_and_matches_real_buffer_peak() {
+        assert!(matches!(
+            ResolvedSourceBufferAccounting::new(1, 0),
+            Err(DomainError::Incomplete {
+                operation: "D2 resolved source buffer length",
+                limit: 0,
+                observed: 1,
+            })
+        ));
+        let exact = ResolvedSourceBufferAccounting::new(5, 5).unwrap();
+        assert_eq!(exact.len(), 5);
+        assert_eq!(exact.capacity(), 5);
+
+        let raw = b"accounting";
+        let input = fixture_input(1);
+        let registration = raw_registration(&input, raw);
+        let mut source = Vec::with_capacity(16);
+        source.extend_from_slice(b"source");
+        let from_real = ValidatedExecutionBundle::fake(
+            input.clone(),
+            &registration,
+            raw.to_vec(),
+            vec![&source],
+            vec![],
+            ExecutionOutcome::ProviderFailure {
+                retryable: false,
+                diagnostic: "fixture".to_owned(),
+            },
+        )
+        .unwrap();
+        let from_accounting = ValidatedExecutionBundle::fake_from_source_accounting(
+            input,
+            &registration,
+            raw.to_vec(),
+            vec![ResolvedSourceBufferAccounting::new(source.len(), source.capacity()).unwrap()],
+            vec![],
+            ExecutionOutcome::ProviderFailure {
+                retryable: false,
+                diagnostic: "fixture".to_owned(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            from_accounting.working_peak_bytes(),
+            from_real.working_peak_bytes()
+        );
     }
 
     #[test]

@@ -841,6 +841,20 @@ pub struct StoreRoot {
     fd: OwnedFd,
     display_path: PathBuf,
     limits: StoreLimits,
+    identity: StoreRootIdentity,
+}
+
+/// Immutable identity of the admitted store directory held by `StoreRoot`.
+///
+/// The fields intentionally remain opaque: callers may compare identities but
+/// cannot turn one into a path or capability.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoreRootIdentity {
+    device: u64,
+    inode: u64,
+    owner_uid: u32,
+    owner_gid: u32,
+    mode: u32,
 }
 
 impl StoreRoot {
@@ -907,7 +921,8 @@ impl StoreRoot {
             Mode::empty(),
         )?;
         verify_owner(&fd, &display_path)?;
-        let mode = Mode::from_raw_mode(fs::fstat(&fd)?.st_mode).as_raw_mode() & 0o7777;
+        let admitted_stat = fs::fstat(&fd)?;
+        let mode = Mode::from_raw_mode(admitted_stat.st_mode).as_raw_mode() & 0o7777;
         if mode != 0o700 {
             return Err(StoreError::InsecureMode { path: display_path });
         }
@@ -915,6 +930,13 @@ impl StoreRoot {
             fd,
             display_path,
             limits,
+            identity: StoreRootIdentity {
+                device: admitted_stat.st_dev,
+                inode: admitted_stat.st_ino,
+                owner_uid: admitted_stat.st_uid,
+                owner_gid: admitted_stat.st_gid,
+                mode,
+            },
         })
     }
 
@@ -934,6 +956,12 @@ impl StoreRoot {
     #[must_use]
     pub const fn limits(&self) -> StoreLimits {
         self.limits
+    }
+
+    /// Opaque identity of the directory descriptor admitted at open time.
+    #[must_use]
+    pub const fn identity(&self) -> &StoreRootIdentity {
+        &self.identity
     }
 
     /// Internal root descriptor for FD-relative store operations.

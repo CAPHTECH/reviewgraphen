@@ -4,7 +4,7 @@
 //! complete, core-validated chain while holding the OS lock that protects the
 //! bytes.  Projection and authority reconciliation remain core/index work.
 
-use super::{StoreError, StoreRoot, open_or_create_dir, verify_fd_kind_mode};
+use super::{StoreError, StoreRoot, StoreRootIdentity, open_or_create_dir, verify_fd_kind_mode};
 use reviewgraphen_core::{
     ContentHash, EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
     EventReplayLimits, EventStreamGenesis, StableId, canonical_json,
@@ -337,6 +337,7 @@ pub(crate) enum IndexReplayError<E> {
 pub struct ReplayedV2RunSession {
     writer: JournalWriter,
     log: EventLog,
+    store_root_identity: StoreRootIdentity,
     state: ReplayedV2RunSessionState,
 }
 
@@ -347,6 +348,10 @@ enum ReplayedV2RunSessionState {
 }
 
 impl ReplayedV2RunSession {
+    pub fn run_id(&self) -> Result<&StableId, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.run_id())
+    }
     pub fn aggregate(&self) -> Result<&reviewgraphen_core::ReviewAggregate, JournalError> {
         self.require_healthy()?;
         Ok(self.log.aggregate())
@@ -354,6 +359,21 @@ impl ReplayedV2RunSession {
     pub fn tail_hash(&self) -> Result<&ContentHash, JournalError> {
         self.require_healthy()?;
         Ok(self.log.tail_hash())
+    }
+    pub fn event_count(&self) -> Result<usize, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.events().len())
+    }
+    /// Opaque identity of the admitted store root that owns this session.
+    pub fn store_root_identity(&self) -> Result<&StoreRootIdentity, JournalError> {
+        self.require_healthy()?;
+        Ok(&self.store_root_identity)
+    }
+    /// Tests whether a caller-supplied root is the exact admitted directory
+    /// descriptor identity for this session.
+    pub fn matches_store_root(&self, root: &StoreRoot) -> Result<bool, JournalError> {
+        self.require_healthy()?;
+        Ok(self.store_root_identity == *root.identity())
     }
 
     /// Stages core validation first, appends the exact staged envelope while
@@ -477,6 +497,7 @@ impl<'a> EventJournal<'a> {
         Ok(ReplayedV2RunSession {
             writer,
             log,
+            store_root_identity: self.root.identity().clone(),
             state: ReplayedV2RunSessionState::Healthy,
         })
     }

@@ -1,6 +1,6 @@
 use crate::context::context_domain_error;
 use crate::{
-    ArtifactRegistered, ArtifactSensitivity, ArtifactSource, DomainError, Evidence,
+    ArtifactRegistered, ArtifactSensitivity, ArtifactSource, ContentHash, DomainError, Evidence,
     ExecutionClaimV2, ExecutionRecord, ProgramSpace, Result, ReviewContextEnvelope, ReviewPlan,
     RunGenesisManifest, SnapshotSourcesRecorded, StableId, UniverseDescriptor, VersionTuple,
 };
@@ -3061,6 +3061,17 @@ impl ReviewAggregate {
             .cloned()
             .map(|registration| FakeAttemptState::RawRegistered { registration })
             .unwrap_or(FakeAttemptState::None)
+    }
+
+    /// Counts durable registrations in this run that reference one exact CAS
+    /// hash. This is intentionally a scalar read-only projection: callers
+    /// cannot enumerate registrations or obtain an admission/mutation handle.
+    #[must_use]
+    pub fn artifact_registration_count_for_cas_hash(&self, cas_hash: &ContentHash) -> usize {
+        self.registered_artifacts
+            .values()
+            .filter(|registration| registration.cas_hash() == cas_hash)
+            .count()
     }
 
     /// Internal exact obligation lookup used by deterministic projections.

@@ -6,7 +6,7 @@
 
 use reviewgraphen_core::{
     AbstentionReason, ClaimPolarity, ContentHash, ExecutionClaimInputV2, MalformedOutputReason,
-    ReviewContextEnvelope, StableId,
+    ResolvedSourceBufferAccounting, ReviewContextEnvelope, StableId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -405,6 +405,20 @@ impl<'a> ReviewerRequest<'a> {
     #[must_use]
     pub fn source_count(&self) -> usize {
         self.resolved_sources.len()
+    }
+
+    /// Trusted execution accounting only; source bytes remain inaccessible.
+    pub fn source_buffer_accounting(&self) -> Result<Vec<ResolvedSourceBufferAccounting>> {
+        self.resolved_sources
+            .iter()
+            .map(|source| {
+                ResolvedSourceBufferAccounting::new(
+                    source.artifact_bytes.len(),
+                    source.artifact_bytes.capacity(),
+                )
+                .map_err(|_| ReviewerError::Validation("resolved source buffer accounting"))
+            })
+            .collect()
     }
 
     #[must_use]
