@@ -4,10 +4,17 @@
 //! complete, core-validated chain while holding the OS lock that protects the
 //! bytes.  Projection and authority reconciliation remain core/index work.
 
-use super::{StoreError, StoreRoot, StoreRootIdentity, open_or_create_dir, verify_fd_kind_mode};
+use super::{
+    CasHash, CasReader, StoreError, StoreRoot, StoreRootIdentity, open_or_create_dir,
+    verify_fd_kind_mode,
+};
 use reviewgraphen_core::{
-    ContentHash, EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
-    EventReplayLimits, EventStreamGenesis, StableId, canonical_json,
+    AuthorityArtifactResolverV3, AuthorityReplayBasisV3, AuthorityTrustRootsV3, ContentHash,
+    DecisionInputV3, EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
+    EventReplayLimits, EventStreamGenesis, ExternalWitnessAdmissionV3, FixtureExecutionReceiptV1,
+    StableId, ValidatedArtifactRegistrationV3, ValidatedDecisionV3, ValidatedFindingV3,
+    ValidatedVerificationBundleV3, VerificationBundleReceiptV3,
+    VerificationBundleResumeAuthorityV3, VerifierArtifactRoleV3, canonical_json,
 };
 use rustix::{
     fd::OwnedFd,
@@ -40,6 +47,9 @@ const COMPLETIONS_DIR: &str = "completions";
 /// a recovery receipt.
 const APPEND_PENDING_MARKER: &str = "append.pending";
 const APPEND_PENDING_BYTES: &[u8] = b"reviewgraphen.append-pending.v1\n";
+const BUNDLE_PENDING_MARKER: &str = "verification-bundle.pending.json";
+const BUNDLE_PENDING_STAGE: &str = "verification-bundle.pending.stage";
+const BUNDLE_MARKER_SCHEMA: &str = "reviewgraphen.verification_bundle_append.v1";
 
 /// Immutable material which determines the event-chain genesis sentinel.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +63,11 @@ pub enum JournalGenesis {
     /// Shared, immutable exact V2 genesis backing. This variant is primarily
     /// useful when identities are cloned for concurrent readers.
     V2Shared(Arc<[u8]>),
+    /// Input form for exact canonical V3 `RunGenesisSnapshot` bytes.
+    V3(Vec<u8>),
+    /// Shared, immutable exact V3 genesis backing retained by a verified
+    /// journal identity.
+    V3Shared(Arc<[u8]>),
 }
 
 impl JournalGenesis {
@@ -60,6 +75,7 @@ impl JournalGenesis {
         match self {
             Self::V1(_) => EventContractVersion::V1,
             Self::V2(_) | Self::V2Shared(_) => EventContractVersion::V2,
+            Self::V3(_) | Self::V3Shared(_) => EventContractVersion::V3,
         }
     }
     fn hash(&self) -> ContentHash {
@@ -67,6 +83,8 @@ impl JournalGenesis {
             Self::V1(hash) => hash.clone(),
             Self::V2(bytes) => ContentHash::sha256(bytes),
             Self::V2Shared(bytes) => ContentHash::sha256(bytes),
+            Self::V3(bytes) => ContentHash::sha256(bytes),
+            Self::V3Shared(bytes) => ContentHash::sha256(bytes),
         }
     }
     fn core_genesis(&self) -> EventStreamGenesis<'_> {
@@ -74,6 +92,8 @@ impl JournalGenesis {
             Self::V1(hash) => EventStreamGenesis::V1(hash),
             Self::V2(bytes) => EventStreamGenesis::V2(bytes),
             Self::V2Shared(bytes) => EventStreamGenesis::V2(bytes),
+            Self::V3(bytes) => EventStreamGenesis::V3(bytes),
+            Self::V3Shared(bytes) => EventStreamGenesis::V3(bytes),
         }
     }
 }
@@ -84,6 +104,13 @@ pub struct JournalIdentity {
     pub run_id: StableId,
     pub genesis: JournalGenesis,
     verified_v2: Option<Arc<reviewgraphen_core::VerifiedV2Genesis>>,
+    verified_v3: Option<Arc<VerifiedV3GenesisIdentity>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct VerifiedV3GenesisIdentity {
+    run_id: StableId,
+    genesis_hash: ContentHash,
 }
 
 impl JournalIdentity {
@@ -95,6 +122,7 @@ impl JournalIdentity {
         // reader/writer identity clones share exactly one immutable backing.
         let genesis = match genesis {
             JournalGenesis::V2(bytes) => JournalGenesis::V2Shared(Arc::from(bytes)),
+            JournalGenesis::V3(bytes) => JournalGenesis::V3Shared(Arc::from(bytes)),
             other => other,
         };
         let verified_v2 = if let JournalGenesis::V2Shared(bytes) = &genesis {
@@ -107,10 +135,28 @@ impl JournalIdentity {
         } else {
             None
         };
+        let verified_v3 = if let JournalGenesis::V3Shared(bytes) = &genesis {
+            // V3 has no public reusable certificate type. Strictly decode its
+            // canonical snapshot now and retain its exact immutable hash.
+            EventEnvelope::validated_view(
+                EventContractVersion::V3,
+                &run_id,
+                EventStreamGenesis::V3(bytes),
+                &[],
+            )
+            .map_err(map_bounded_domain_error)?;
+            Some(Arc::new(VerifiedV3GenesisIdentity {
+                run_id: run_id.clone(),
+                genesis_hash: ContentHash::sha256(bytes),
+            }))
+        } else {
+            None
+        };
         Ok(Self {
             run_id,
             genesis,
             verified_v2,
+            verified_v3,
         })
     }
     #[must_use]
@@ -127,13 +173,19 @@ impl JournalIdentity {
     }
 
     pub(crate) fn verified_core_genesis(&self) -> Result<EventStreamGenesis<'_>, JournalError> {
-        match (&self.genesis, &self.verified_v2) {
-            (JournalGenesis::V1(hash), None) => Ok(EventStreamGenesis::V1(hash)),
-            (JournalGenesis::V2Shared(bytes), Some(verified))
+        match (&self.genesis, &self.verified_v2, &self.verified_v3) {
+            (JournalGenesis::V1(hash), None, None) => Ok(EventStreamGenesis::V1(hash)),
+            (JournalGenesis::V2Shared(bytes), Some(verified), None)
                 if verified.run_id() == &self.run_id
                     && verified.genesis_hash() == &ContentHash::sha256(bytes) =>
             {
                 Ok(EventStreamGenesis::V2Verified(verified.as_ref()))
+            }
+            (JournalGenesis::V3Shared(bytes), None, Some(verified))
+                if verified.run_id == self.run_id
+                    && verified.genesis_hash == ContentHash::sha256(bytes) =>
+            {
+                Ok(EventStreamGenesis::V3(bytes))
             }
             _ => Err(JournalError::Identity(
                 "journal identity no longer matches its verified genesis",
@@ -148,7 +200,10 @@ impl JournalIdentity {
     pub(crate) fn v2_genesis_backing(&self) -> Option<&Arc<[u8]>> {
         match &self.genesis {
             JournalGenesis::V2Shared(bytes) => Some(bytes),
-            JournalGenesis::V1(_) | JournalGenesis::V2(_) => None,
+            JournalGenesis::V1(_)
+            | JournalGenesis::V2(_)
+            | JournalGenesis::V3(_)
+            | JournalGenesis::V3Shared(_) => None,
         }
     }
 
@@ -156,16 +211,26 @@ impl JournalIdentity {
         self.run_id.allocated_bytes()
             + match &self.genesis {
                 JournalGenesis::V1(hash) => hash.allocated_bytes(),
-                JournalGenesis::V2(_) | JournalGenesis::V2Shared(_) => 0,
+                JournalGenesis::V2(_)
+                | JournalGenesis::V2Shared(_)
+                | JournalGenesis::V3(_)
+                | JournalGenesis::V3Shared(_) => 0,
             }
     }
 
     fn shared_certificate_capacity(&self) -> usize {
-        self.verified_v2.as_ref().map_or(0, |verified| {
+        let v2 = self.verified_v2.as_ref().map_or(0, |verified| {
             verified
                 .allocated_bytes()
                 .saturating_add(std::mem::size_of::<usize>() * 2)
-        })
+        });
+        v2.saturating_add(self.verified_v3.as_ref().map_or(0, |verified| {
+            verified
+                .run_id
+                .allocated_bytes()
+                .saturating_add(verified.genesis_hash.allocated_bytes())
+                .saturating_add(std::mem::size_of::<usize>() * 2)
+        }))
     }
 
     pub(crate) fn cloned_local_metadata_capacity(&self) -> Result<u64, JournalError> {
@@ -218,6 +283,16 @@ pub enum JournalError {
     Missing,
     #[error("V1 journals are read-only and cannot be initialized or appended")]
     V1ReadOnly,
+    #[error("V3 journals are writable only through a roots-bound replay session")]
+    V3ReplaySessionRequired,
+    #[error("verification bundle append stopped after {durable_stage:?}")]
+    BundleAppendInterrupted {
+        durable_stage: VerificationBundleDurableStageV3,
+    },
+    #[error("verification bundle resume authority does not match this session or durable prefix")]
+    BundleResumeAuthorityMismatch,
+    #[error("journal has a partially durable verification bundle and permits resume only")]
+    SessionResumeRequired,
     #[error(
         "journal needs recovery at byte offset {good_offset}; auto_recoverable={auto_recoverable}"
     )]
@@ -225,13 +300,11 @@ pub enum JournalError {
         good_offset: u64,
         auto_recoverable: bool,
     },
-    #[error("V2 durable logs require a sequence-one RunGenesisManifest")]
+    #[error("V2/V3 durable logs require a sequence-one RunGenesisManifest")]
     V2GenesisRequired,
     #[error("journal writer is poisoned after failed durable rollback")]
     Poisoned,
-    #[error(
-        "replayed V2 session cannot expose state after uncertain durable append acknowledgement"
-    )]
+    #[error("replayed session cannot expose state after uncertain durable append acknowledgement")]
     SessionUncertain,
     #[error("journal receipt collision or invalid receipt at {name}")]
     ReceiptCorruption { name: String },
@@ -247,6 +320,129 @@ pub struct JournalAppendReceipt {
     pub tail_offset: u64,
 }
 
+/// Exact count of ordered bundle events known durable at an interrupted
+/// append boundary. It is descriptive state, never append authority.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationBundleDurableStageV3 {
+    confirmed_events: u64,
+    expected_events: u64,
+}
+
+impl VerificationBundleDurableStageV3 {
+    #[must_use]
+    pub const fn confirmed_events(self) -> u64 {
+        self.confirmed_events
+    }
+
+    #[must_use]
+    pub const fn expected_events(self) -> u64 {
+        self.expected_events
+    }
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct VerificationBundlePendingMarkerV3 {
+    schema: String,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    pre_tail_hash: ContentHash,
+    pre_offset: u64,
+    bundle_digest: ContentHash,
+    expected_event_ids: Vec<StableId>,
+    expected_event_hashes: Vec<ContentHash>,
+    expected_envelopes: Vec<serde_json::Value>,
+    expected_count: u64,
+}
+
+impl VerificationBundlePendingMarkerV3 {
+    fn new(
+        identity: &JournalIdentity,
+        state: &ScanState,
+        envelopes: &[EventEnvelope],
+    ) -> Result<Self, JournalError> {
+        let expected_envelopes = envelopes
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| reviewgraphen_core::DomainError::Json(error.to_string()))?;
+        let bundle_digest = ContentHash::sha256(&canonical_json(&expected_envelopes)?);
+        Ok(Self {
+            schema: BUNDLE_MARKER_SCHEMA.to_owned(),
+            run_id: identity.run_id.clone(),
+            genesis_hash: identity.genesis_hash(),
+            pre_tail_hash: state.tail_hash.clone(),
+            pre_offset: state.confirmed_offset,
+            bundle_digest,
+            expected_event_ids: envelopes
+                .iter()
+                .map(|envelope| envelope.id().clone())
+                .collect(),
+            expected_event_hashes: envelopes
+                .iter()
+                .map(|envelope| envelope.event_hash().clone())
+                .collect(),
+            expected_envelopes,
+            expected_count: u64::try_from(envelopes.len()).map_err(|_| {
+                JournalError::Incomplete {
+                    limit: 3,
+                    observed: u64::MAX,
+                }
+            })?,
+        })
+    }
+
+    fn validate(
+        &self,
+        identity: &JournalIdentity,
+        limits: JournalLimits,
+    ) -> Result<(), JournalError> {
+        let expected =
+            usize::try_from(self.expected_count).map_err(|_| JournalError::ReceiptCorruption {
+                name: BUNDLE_PENDING_MARKER.to_owned(),
+            })?;
+        if self.schema != BUNDLE_MARKER_SCHEMA
+            || self.run_id != identity.run_id
+            || self.genesis_hash != identity.genesis_hash()
+            || expected == 0
+            || expected > 3
+            || self.expected_event_ids.len() != expected
+            || self.expected_event_hashes.len() != expected
+            || self.expected_envelopes.len() != expected
+            || self.pre_offset > limits.max_replay_bytes
+            || self.bundle_digest != ContentHash::sha256(&canonical_json(&self.expected_envelopes)?)
+        {
+            return Err(JournalError::ReceiptCorruption {
+                name: BUNDLE_PENDING_MARKER.to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    fn envelopes(&self, limits: JournalLimits) -> Result<Vec<EventEnvelope>, JournalError> {
+        self.expected_envelopes
+            .iter()
+            .zip(&self.expected_event_ids)
+            .zip(&self.expected_event_hashes)
+            .map(|((value, id), hash)| {
+                let bytes = canonical_json(value)?;
+                limit(
+                    u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                    limits.max_event_line_bytes.saturating_sub(1),
+                )?;
+                let envelope = EventEnvelope::from_json_slice(&bytes)?;
+                if envelope.id() != id || envelope.event_hash() != hash {
+                    return Err(JournalError::ReceiptCorruption {
+                        name: BUNDLE_PENDING_MARKER.to_owned(),
+                    });
+                }
+                Ok(envelope)
+            })
+            .collect()
+    }
+}
+
 /// Intent written before mutating a torn tail.  The serialized form is
 /// canonical and create-only, so a recovery operation itself is auditable.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -255,10 +451,25 @@ pub struct RecoveryIntent {
     pub recovery_id: StableId,
     pub run_id: StableId,
     pub genesis_hash: ContentHash,
-    /// A kernel-generated nonce makes every recovery attempt a new receipt.
+    /// Generic recovery uses a kernel nonce. Bundle recovery uses a
+    /// domain-separated deterministic digest so retries name the same pair.
     pub nonce: String,
     pub good_offset: u64,
     pub discarded_hash: ContentHash,
+    /// Present for bundle-tail recovery. Historical V1/V2 receipts omit these
+    /// fields byte-for-byte, preserving their canonical receipt schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discarded_offset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discarded_len: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_digest: Option<ContentHash>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_pre_offset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_recovery_kind: Option<String>,
     pub pre_tail_hash: ContentHash,
     pub actor: String,
     pub tool_version: String,
@@ -341,6 +552,80 @@ pub struct ReplayedV2RunSession {
     state: ReplayedV2RunSessionState,
 }
 
+/// A lock-held V3 log whose authority state was rebuilt exclusively from the
+/// canonical journal prefix, exact FD-relative CAS bytes, and host trust
+/// roots.  Its fields are private so neither the mutable log nor its writer
+/// can escape this authority boundary.
+pub struct ReplayedV3RunSession<'root, 'roots> {
+    writer: JournalWriter,
+    log: EventLog,
+    resolver: JournalAuthorityResolverV3<'root>,
+    roots: &'roots AuthorityTrustRootsV3,
+    store_root_identity: StoreRootIdentity,
+    state: ReplayedV3RunSessionState,
+}
+
+/// A lock-held V3 session recovered at a partially durable verification
+/// bundle. It deliberately exposes no read, mint, registration, decision,
+/// finding, or ordinary append surface: the only legal transition is the
+/// exact sealed resume operation.
+pub struct RecoveredVerificationBundleV3Session<'root, 'roots> {
+    session: ReplayedV3RunSession<'root, 'roots>,
+    marker: VerificationBundlePendingMarkerV3,
+    confirmed_events: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplayedV3RunSessionState {
+    Healthy,
+    ResumeOnly,
+    Uncertain,
+}
+
+/// Durable receipt for one atomic, possibly multi-event verification bundle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct V3VerificationBundleAppendReceipt {
+    authority: VerificationBundleReceiptV3,
+    journal: Vec<JournalAppendReceipt>,
+}
+
+impl V3VerificationBundleAppendReceipt {
+    #[must_use]
+    pub fn authority(&self) -> &VerificationBundleReceiptV3 {
+        &self.authority
+    }
+
+    #[must_use]
+    pub fn journal(&self) -> &[JournalAppendReceipt] {
+        &self.journal
+    }
+}
+
+struct JournalAuthorityResolverV3<'a> {
+    reader: CasReader<'a>,
+}
+
+impl AuthorityArtifactResolverV3 for JournalAuthorityResolverV3<'_> {
+    fn read_exact(
+        &self,
+        cas_hash: &ContentHash,
+        destination: &mut [u8],
+    ) -> reviewgraphen_core::Result<()> {
+        let hash = CasHash::parse(cas_hash.as_str().to_owned()).map_err(|error| {
+            reviewgraphen_core::DomainError::Validation(format!(
+                "authority CAS hash is not admissible: {error}"
+            ))
+        })?;
+        self.reader
+            .read_exact_slice(&hash, destination)
+            .map_err(|error| {
+                reviewgraphen_core::DomainError::Validation(format!(
+                    "authority CAS resolution failed: {error}"
+                ))
+            })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReplayedV2RunSessionState {
     Healthy,
@@ -412,6 +697,393 @@ impl ReplayedV2RunSession {
     }
 }
 
+impl ReplayedV3RunSession<'_, '_> {
+    pub fn run_id(&self) -> Result<&StableId, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.run_id())
+    }
+
+    pub fn aggregate(&self) -> Result<&reviewgraphen_core::ReviewAggregate, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.aggregate())
+    }
+
+    pub fn tail_hash(&self) -> Result<&ContentHash, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.tail_hash())
+    }
+
+    pub fn event_count(&self) -> Result<usize, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.events().len())
+    }
+
+    pub fn store_root_identity(&self) -> Result<&StoreRootIdentity, JournalError> {
+        self.require_healthy()?;
+        Ok(&self.store_root_identity)
+    }
+
+    pub fn matches_store_root(&self, root: &StoreRoot) -> Result<bool, JournalError> {
+        self.require_healthy()?;
+        Ok(self.store_root_identity == *root.identity())
+    }
+
+    pub fn claim_assessment(
+        &self,
+        claim_id: &StableId,
+    ) -> Result<Option<&reviewgraphen_core::ClaimAssessmentV3>, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.claim_assessment_v3(claim_id))
+    }
+
+    pub fn evidence_count(&self) -> Result<usize, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.evidence_v3().count())
+    }
+
+    pub fn evidence_binding_count(&self) -> Result<usize, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.evidence_bindings_v3().count())
+    }
+
+    pub fn verification_count(&self) -> Result<usize, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.verifications_v3().count())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_static_verifier_artifact_registration(
+        &self,
+        claim_id: StableId,
+        role: VerifierArtifactRoleV3,
+        cas_hash: ContentHash,
+        size: u64,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedArtifactRegistrationV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.prepare_static_verifier_artifact_registration_v3(
+            claim_id,
+            role,
+            cas_hash,
+            size,
+            &self.resolver,
+            self.roots,
+            basis,
+        )?)
+    }
+
+    pub fn append_authority_registration(
+        &mut self,
+        validated: ValidatedArtifactRegistrationV3,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.require_healthy()?;
+        let (mut candidate, mut next_basis) = self.checked_candidate(basis)?;
+        let first = candidate.events().len();
+        candidate.append_authority_registration_v3(validated, &mut next_basis)?;
+        let mut receipts = self.commit_candidate(candidate, next_basis, first, basis)?;
+        receipts
+            .pop()
+            .ok_or(JournalError::Identity("authority append produced no event"))
+    }
+
+    pub fn execute_fixture_harness(
+        &self,
+        claim_id: &StableId,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<FixtureExecutionReceiptV1, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.execute_fixture_harness_v1(claim_id, basis)?)
+    }
+
+    pub fn prepare_external_fixture_witness_registration(
+        &self,
+        receipt: &mut FixtureExecutionReceiptV1,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedArtifactRegistrationV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.prepare_external_fixture_witness_registration_v3(
+            receipt,
+            &self.resolver,
+            basis,
+        )?)
+    }
+
+    pub fn prepare_fixture_verifier_output_registration(
+        &self,
+        receipt: &mut FixtureExecutionReceiptV1,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedArtifactRegistrationV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.prepare_fixture_verifier_output_registration_v3(
+            receipt,
+            &self.resolver,
+            basis,
+        )?)
+    }
+
+    pub fn admit_external_fixture_witness(
+        &self,
+        receipt: &mut FixtureExecutionReceiptV1,
+        witness_registration_id: &StableId,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ExternalWitnessAdmissionV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.admit_external_witness_v3(
+            receipt,
+            witness_registration_id,
+            &self.resolver,
+            basis,
+        )?)
+    }
+
+    pub fn mint_fixture_verification_bundle(
+        &self,
+        admission: ExternalWitnessAdmissionV3,
+        output_registration_id: &StableId,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedVerificationBundleV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.mint_fixture_verification_bundle_v3(
+            admission,
+            output_registration_id,
+            &self.resolver,
+            basis,
+        )?)
+    }
+
+    pub fn mint_static_verification_bundle(
+        &self,
+        claim_id: &StableId,
+        input_registration_id: &StableId,
+        output_registration_id: &StableId,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedVerificationBundleV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.mint_static_verification_bundle_v3(
+            claim_id,
+            input_registration_id,
+            output_registration_id,
+            &self.resolver,
+            self.roots,
+            basis,
+        )?)
+    }
+
+    pub fn append_verification_bundle(
+        &mut self,
+        bundle: ValidatedVerificationBundleV3,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<V3VerificationBundleAppendReceipt, JournalError> {
+        self.require_healthy()?;
+        let (mut candidate, mut next_basis) = self.checked_candidate(basis)?;
+        let first = candidate.events().len();
+        let authority = candidate.append_verification_bundle_v3(bundle, &mut next_basis)?;
+        let suffix = candidate.events()[first..]
+            .iter()
+            .map(|event| event.envelope().clone())
+            .collect::<Vec<_>>();
+        let journal = match self.writer.append_verification_bundle_suffix(&suffix) {
+            Ok(receipts) => receipts,
+            Err(error @ JournalError::BundleAppendInterrupted { .. }) => {
+                self.state = ReplayedV3RunSessionState::ResumeOnly;
+                return Err(error);
+            }
+            Err(_) if self.writer.append_durability == AppendDurability::Uncertain => {
+                self.state = ReplayedV3RunSessionState::Uncertain;
+                return Err(JournalError::SessionUncertain);
+            }
+            Err(error) => return Err(error),
+        };
+        self.log = candidate;
+        *basis = next_basis;
+        Ok(V3VerificationBundleAppendReceipt { authority, journal })
+    }
+
+    pub fn mint_decision(
+        &self,
+        claim_id: &StableId,
+        input: DecisionInputV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedDecisionV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .mint_decision_v3(claim_id, input, self.roots, basis)?)
+    }
+
+    pub fn append_decision(
+        &mut self,
+        validated: ValidatedDecisionV3,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.require_healthy()?;
+        let (mut candidate, mut next_basis) = self.checked_candidate(basis)?;
+        let first = candidate.events().len();
+        candidate.append_decision_v3(validated, &mut next_basis)?;
+        let mut receipts = self.commit_candidate(candidate, next_basis, first, basis)?;
+        receipts
+            .pop()
+            .ok_or(JournalError::Identity("decision append produced no event"))
+    }
+
+    pub fn mint_finding(
+        &self,
+        claim_id: &StableId,
+        projection_descriptor_id: &str,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedFindingV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .mint_finding_v3(claim_id, projection_descriptor_id, basis)?)
+    }
+
+    pub fn append_finding(
+        &mut self,
+        validated: ValidatedFindingV3,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.require_healthy()?;
+        let (mut candidate, mut next_basis) = self.checked_candidate(basis)?;
+        let first = candidate.events().len();
+        candidate.append_finding_v3(validated, &mut next_basis)?;
+        let mut receipts = self.commit_candidate(candidate, next_basis, first, basis)?;
+        receipts
+            .pop()
+            .ok_or(JournalError::Identity("finding append produced no event"))
+    }
+
+    fn checked_candidate(
+        &self,
+        supplied: &AuthorityReplayBasisV3,
+    ) -> Result<(EventLog, AuthorityReplayBasisV3), JournalError> {
+        let (candidate, replayed) = self.replay_candidate()?;
+        if !same_authority_basis(supplied, &replayed) {
+            return Err(reviewgraphen_core::DomainError::AuthorityReplayBasisMismatch.into());
+        }
+        Ok((candidate, replayed))
+    }
+
+    fn replay_candidate(&self) -> Result<(EventLog, AuthorityReplayBasisV3), JournalError> {
+        let JournalGenesis::V3Shared(genesis) = &self.writer.identity.genesis else {
+            return Err(JournalError::Identity(
+                "V3 session lost its verified genesis",
+            ));
+        };
+        Ok(EventLog::replay_validated_v3_prefix(
+            self.writer.identity.run_id.clone(),
+            genesis,
+            &self.writer.state.events,
+            &self.resolver,
+            self.roots,
+            EventReplayLimits::new(
+                self.writer.limits.max_events,
+                self.writer.limits.max_replay_bytes,
+            ),
+        )?)
+    }
+
+    fn commit_candidate(
+        &mut self,
+        candidate: EventLog,
+        next_basis: AuthorityReplayBasisV3,
+        first: usize,
+        supplied: &mut AuthorityReplayBasisV3,
+    ) -> Result<Vec<JournalAppendReceipt>, JournalError> {
+        self.writer.refuse_bundle_resume_gate()?;
+        let suffix = candidate.events()[first..]
+            .iter()
+            .map(|event| event.envelope().clone())
+            .collect::<Vec<_>>();
+        let receipts = match self.writer.append_batch(&suffix) {
+            Ok(receipts) => receipts,
+            Err(_) if self.writer.append_durability == AppendDurability::Uncertain => {
+                self.state = ReplayedV3RunSessionState::Uncertain;
+                return Err(JournalError::SessionUncertain);
+            }
+            Err(error) => return Err(error),
+        };
+        self.log = candidate;
+        *supplied = next_basis;
+        Ok(receipts)
+    }
+
+    fn require_healthy(&self) -> Result<(), JournalError> {
+        match self.state {
+            ReplayedV3RunSessionState::Healthy => self.writer.refuse_bundle_resume_gate(),
+            ReplayedV3RunSessionState::ResumeOnly => Err(JournalError::SessionResumeRequired),
+            ReplayedV3RunSessionState::Uncertain => Err(JournalError::SessionUncertain),
+        }
+    }
+}
+
+impl<'root, 'roots> RecoveredVerificationBundleV3Session<'root, 'roots> {
+    #[must_use]
+    pub fn durable_stage(&self) -> VerificationBundleDurableStageV3 {
+        VerificationBundleDurableStageV3 {
+            confirmed_events: u64::try_from(self.confirmed_events).unwrap_or(u64::MAX),
+            expected_events: self.marker.expected_count,
+        }
+    }
+
+    /// Consumes this resume-only session and the one-shot core authority. A
+    /// healthy ordinary session is returned only after the exact missing
+    /// suffix and marker cleanup are durably confirmed.
+    pub fn resume_verification_bundle(
+        mut self,
+        authority: VerificationBundleResumeAuthorityV3,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<
+        (
+            ReplayedV3RunSession<'root, 'roots>,
+            V3VerificationBundleAppendReceipt,
+        ),
+        JournalError,
+    > {
+        let (mut candidate, mut next_basis) = self.session.checked_candidate(basis)?;
+        let first = candidate.events().len();
+        let authority_receipt = candidate
+            .resume_verification_bundle_v3(&mut next_basis, authority)
+            .map_err(map_bundle_resume_domain_error)?;
+        let suffix = candidate.events()[first..]
+            .iter()
+            .map(|event| event.envelope().clone())
+            .collect::<Vec<_>>();
+        let journal = match self.session.writer.resume_verification_bundle_suffix(
+            &self.marker,
+            &suffix,
+            self.confirmed_events,
+        ) {
+            Ok(receipts) => receipts,
+            Err(error @ JournalError::BundleAppendInterrupted { .. }) => return Err(error),
+            Err(_) if self.session.writer.append_durability == AppendDurability::Uncertain => {
+                return Err(JournalError::SessionUncertain);
+            }
+            Err(error) => return Err(error),
+        };
+        self.session.log = candidate;
+        *basis = next_basis;
+        Ok((
+            self.session,
+            V3VerificationBundleAppendReceipt {
+                authority: authority_receipt,
+                journal,
+            },
+        ))
+    }
+}
+
+fn same_authority_basis(left: &AuthorityReplayBasisV3, right: &AuthorityReplayBasisV3) -> bool {
+    left.basis_digest() == right.basis_digest()
+        && left.confirmed_tail_hash() == right.confirmed_tail_hash()
+        && left.confirmed_event_count() == right.confirmed_event_count()
+        && left.run_id() == right.run_id()
+        && left.genesis_hash() == right.genesis_hash()
+        && left.policy_revision_hash() == right.policy_revision_hash()
+        && left.authority_entry_count() == right.authority_entry_count()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AppendDurability {
     Confirmed,
@@ -446,6 +1118,9 @@ enum AppendFault {
     RollbackSync,
     IntentPublish,
     ClearMarkerDirectorySync,
+    BundleAfterDurableLine1,
+    BundleAfterDurableLine2,
+    BundleStageSync,
 }
 
 #[cfg(test)]
@@ -453,6 +1128,10 @@ enum AppendFault {
 enum RecoveryFault {
     MarkerLogSync,
     ClearMarkerDirectorySync,
+    BundleAfterIntent,
+    BundleAfterTruncateSync,
+    BundleAfterCompletion,
+    BundleAfterMarkerUnlink,
 }
 
 #[derive(Clone, Debug)]
@@ -476,7 +1155,368 @@ struct RecoveryAudit {
     receipt_scan_bytes: u64,
 }
 
+struct BundlePendingInspection {
+    marker: VerificationBundlePendingMarkerV3,
+    planned: Vec<EventEnvelope>,
+    pre_state: ScanState,
+    current_state: ScanState,
+    confirmed_events: usize,
+    discarded: Vec<u8>,
+}
+
 impl<'a> EventJournal<'a> {
+    fn inspect_bundle_pending_locked(
+        &self,
+        file: &mut File,
+    ) -> Result<Option<BundlePendingInspection>, JournalError> {
+        let Some(marker) = read_bundle_pending(&self.run, &self.identity, self.limits)? else {
+            return Ok(None);
+        };
+        let planned = marker.envelopes(self.limits)?;
+        let mut current_state = scan_with_torn(file, &self.identity, self.limits, true)?;
+        let mut discarded = Vec::new();
+        if let Some(torn) = current_state.torn.take() {
+            if torn.good_offset < marker.pre_offset {
+                return Err(JournalError::ReceiptCorruption {
+                    name: BUNDLE_PENDING_MARKER.to_owned(),
+                });
+            }
+            current_state.confirmed_offset = torn.good_offset;
+            discarded = torn.discarded;
+        }
+        let pre_bytes = read_prefix(file, marker.pre_offset)?;
+        let pre_state = scan_bytes(&pre_bytes, &self.identity, self.limits, true)?;
+        if pre_state.torn.is_some()
+            || pre_state.confirmed_offset != marker.pre_offset
+            || pre_state.tail_hash != marker.pre_tail_hash
+            || current_state.events.len() < pre_state.events.len()
+        {
+            return Err(JournalError::ReceiptCorruption {
+                name: BUNDLE_PENDING_MARKER.to_owned(),
+            });
+        }
+        let confirmed = current_state.events.len() - pre_state.events.len();
+        if confirmed > planned.len() {
+            return Err(JournalError::ReceiptCorruption {
+                name: BUNDLE_PENDING_MARKER.to_owned(),
+            });
+        }
+        for (actual, expected) in current_state.events[pre_state.events.len()..]
+            .iter()
+            .zip(&planned)
+        {
+            if actual.id() != expected.id()
+                || actual.event_hash() != expected.event_hash()
+                || actual.canonical_bytes()? != expected.canonical_bytes()?
+            {
+                return Err(JournalError::BundleResumeAuthorityMismatch);
+            }
+        }
+        let mut complete_candidate = pre_state.events.clone();
+        complete_candidate.extend(planned.iter().cloned());
+        validate_prefix(&self.identity, &complete_candidate)?;
+        Ok(Some(BundlePendingInspection {
+            marker,
+            planned,
+            pre_state,
+            current_state,
+            confirmed_events: confirmed,
+            discarded,
+        }))
+    }
+
+    fn clear_bundle_pending_after_receipt(
+        &self,
+        _marker: Option<&VerificationBundlePendingMarkerV3>,
+        _confirmed: u64,
+    ) -> Result<(), JournalError> {
+        for name in [BUNDLE_PENDING_STAGE, BUNDLE_PENDING_MARKER] {
+            if bundle_file_exists(&self.run, name)? {
+                fs::unlinkat(&self.run, name, AtFlags::empty()).map_err(StoreError::Io)?;
+            }
+        }
+        #[cfg(test)]
+        if self.take_recovery_fault(RecoveryFault::BundleAfterMarkerUnlink) {
+            // Recreate the exact gate before reporting the simulated lost
+            // directory-fsync acknowledgement. The next recovery therefore
+            // exercises the same durable receipt instead of silently
+            // treating an unacknowledged cleanup as complete.
+            if let Some(marker) = _marker {
+                publish_bundle_file(&self.run, BUNDLE_PENDING_MARKER, &canonical_json(marker)?)?;
+            }
+            publish_bundle_file(
+                &self.run,
+                BUNDLE_PENDING_STAGE,
+                format!("{_confirmed}\n").as_bytes(),
+            )?;
+            fs::fsync(&self.run).map_err(StoreError::Io)?;
+            return Err(JournalError::Io(injected_io_error(
+                "bundle recovery after marker unlink",
+            )));
+        }
+        fs::fsync(&self.run).map_err(StoreError::Io)?;
+        Ok(())
+    }
+
+    fn validate_pending_bundle_recovery_context(
+        &self,
+        file: &mut File,
+        intent: &RecoveryIntent,
+    ) -> Result<(), JournalError> {
+        let name = receipt_name(&intent.recovery_id);
+        let kind = intent
+            .bundle_recovery_kind
+            .as_deref()
+            .ok_or_else(|| JournalError::ReceiptCorruption { name: name.clone() })?;
+        if kind == "stage-only" {
+            let expected_digest = ContentHash::sha256(b"reviewgraphen.bundle-stage-only.v1");
+            let marker_absent =
+                read_bundle_pending(&self.run, &self.identity, self.limits)?.is_none();
+            let stage_present = bundle_file_exists(&self.run, BUNDLE_PENDING_STAGE)?;
+            let actual_len = file.metadata()?.len();
+            if !marker_absent
+                || !stage_present
+                || read_bundle_stage(&self.run, 3)? != 0
+                || intent.bundle_digest.as_ref() != Some(&expected_digest)
+                || intent.bundle_pre_offset != Some(intent.good_offset)
+                || intent.discarded_offset.is_some()
+                || intent.discarded_len.is_some()
+                || intent.pre_size.is_some()
+                || intent.discarded_hash != ContentHash::sha256(b"")
+                || actual_len != intent.good_offset
+            {
+                return Err(JournalError::ReceiptCorruption { name });
+            }
+            let state = scan_with_torn(file, &self.identity, self.limits, true)?;
+            if state.torn.is_some()
+                || state.confirmed_offset != intent.good_offset
+                || state.tail_hash != intent.pre_tail_hash
+            {
+                return Err(JournalError::ReceiptCorruption { name });
+            }
+            return Ok(());
+        }
+
+        let inspection = self
+            .inspect_bundle_pending_locked(file)?
+            .ok_or_else(|| JournalError::ReceiptCorruption { name: name.clone() })?;
+        if intent.bundle_digest.as_ref() != Some(&inspection.marker.bundle_digest)
+            || intent.bundle_pre_offset != Some(inspection.marker.pre_offset)
+            || intent.good_offset != inspection.current_state.confirmed_offset
+            || intent.pre_tail_hash != inspection.current_state.tail_hash
+        {
+            return Err(JournalError::ReceiptCorruption { name });
+        }
+        let actual_len = file.metadata()?.len();
+        let expected_kind = if intent.discarded_len.is_some() {
+            "torn"
+        } else if inspection.confirmed_events == 0 {
+            "confirmed-zero-cleanup"
+        } else if inspection.confirmed_events == inspection.planned.len() {
+            "already-complete-cleanup"
+        } else {
+            return Err(JournalError::ReceiptCorruption { name });
+        };
+        if kind != expected_kind {
+            return Err(JournalError::ReceiptCorruption { name });
+        }
+        match (
+            intent.discarded_offset,
+            intent.discarded_len,
+            intent.pre_size,
+        ) {
+            (Some(offset), Some(len), Some(pre_size)) => {
+                if kind != "torn"
+                    || offset != intent.good_offset
+                    || len == 0
+                    || offset.checked_add(len) != Some(pre_size)
+                    || (actual_len != pre_size && actual_len != intent.good_offset)
+                {
+                    return Err(JournalError::ReceiptCorruption { name });
+                }
+                if actual_len == pre_size {
+                    let suffix =
+                        read_suffix(file, intent.good_offset, self.limits.max_replay_bytes)?;
+                    if suffix.len() as u64 != len
+                        || ContentHash::sha256(&suffix) != intent.discarded_hash
+                    {
+                        return Err(JournalError::ReceiptCorruption { name });
+                    }
+                }
+            }
+            (None, None, None) => {
+                if kind == "torn"
+                    || !inspection.discarded.is_empty()
+                    || intent.discarded_hash != ContentHash::sha256(b"")
+                    || actual_len != intent.good_offset
+                {
+                    return Err(JournalError::ReceiptCorruption { name });
+                }
+            }
+            _ => return Err(JournalError::ReceiptCorruption { name }),
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn publish_bundle_recovery_receipt_locked(
+        &self,
+        file: &mut File,
+        intents: &OwnedFd,
+        completions: &OwnedFd,
+        audit: &RecoveryAudit,
+        state: &ScanState,
+        discarded: &[u8],
+        marker: Option<&VerificationBundlePendingMarkerV3>,
+        recovery_kind: &'static str,
+    ) -> Result<JournalRecoveryReceipt, JournalError> {
+        let discarded_hash = ContentHash::sha256(discarded);
+        let discarded_len =
+            u64::try_from(discarded.len()).map_err(|_| JournalError::Incomplete {
+                limit: self.limits.max_replay_bytes,
+                observed: u64::MAX,
+            })?;
+        let bundle_digest = marker.map_or_else(
+            || ContentHash::sha256(b"reviewgraphen.bundle-stage-only.v1"),
+            |marker| marker.bundle_digest.clone(),
+        );
+        let bundle_pre_offset = marker.map_or(state.confirmed_offset, |marker| marker.pre_offset);
+        let nonce = bundle_recovery_nonce(
+            &self.identity,
+            &bundle_digest,
+            bundle_pre_offset,
+            state.confirmed_offset,
+            &discarded_hash,
+            discarded_len,
+            recovery_kind,
+        )?;
+        let recovery_id = recovery_id(
+            &self.identity.run_id,
+            &self.identity.genesis_hash(),
+            state.confirmed_offset,
+            &discarded_hash,
+            &nonce,
+        )?;
+        let bundle_range = (discarded_len != 0).then_some((
+            state.confirmed_offset,
+            discarded_len,
+            state
+                .confirmed_offset
+                .checked_add(discarded_len)
+                .ok_or(JournalError::Incomplete {
+                    limit: self.limits.max_replay_bytes,
+                    observed: u64::MAX,
+                })?,
+        ));
+        let intent = RecoveryIntent {
+            recovery_id: recovery_id.clone(),
+            run_id: self.identity.run_id.clone(),
+            genesis_hash: self.identity.genesis_hash(),
+            nonce,
+            good_offset: state.confirmed_offset,
+            discarded_hash,
+            discarded_offset: bundle_range.map(|range| range.0),
+            discarded_len: bundle_range.map(|range| range.1),
+            pre_size: bundle_range.map(|range| range.2),
+            bundle_digest: Some(bundle_digest),
+            bundle_pre_offset: Some(bundle_pre_offset),
+            bundle_recovery_kind: Some(recovery_kind.to_owned()),
+            pre_tail_hash: state.tail_hash.clone(),
+            actor: "reviewgraphen-store".to_owned(),
+            tool_version: format!("bundle-recovery:{recovery_kind}"),
+            timestamp_unix_seconds: 0,
+        };
+        let completion = RecoveryCompletion {
+            recovery_id,
+            post_file_hash: ContentHash::sha256(&read_prefix(file, state.confirmed_offset)?),
+        };
+        validate_proposed_recovery_lineage(audit, &intent)?;
+        for (known_intent, known_completion) in &audit.completed {
+            if same_bundle_recovery_lineage(known_intent, &intent)
+                && known_completion != &completion
+            {
+                return Err(JournalError::ReceiptCorruption {
+                    name: receipt_name(&known_intent.recovery_id),
+                });
+            }
+        }
+        let name = receipt_name(&intent.recovery_id);
+        let existing_intent = read_receipt::<RecoveryIntent>(intents, &name, self.limits)?;
+        let existing_completion =
+            read_receipt::<RecoveryCompletion>(completions, &name, self.limits)?;
+        if existing_completion.is_some() && existing_intent.is_none() {
+            return Err(JournalError::ReceiptCorruption { name });
+        }
+        if existing_intent
+            .as_ref()
+            .is_some_and(|existing| existing != &intent)
+            || existing_completion
+                .as_ref()
+                .is_some_and(|existing| existing != &completion)
+        {
+            return Err(JournalError::ReceiptCorruption { name });
+        }
+        let mut added = Vec::with_capacity(2);
+        if existing_intent.is_none() {
+            added.push(receipt_bytes(&intent)?);
+        }
+        if existing_completion.is_none() {
+            added.push(receipt_bytes(&completion)?);
+        }
+        reserve_recovery_capacity(audit, self.limits, &added)?;
+        if existing_intent.is_none() {
+            publish_receipt_with_limits(intents, &name, &intent, self.limits)?;
+            #[cfg(test)]
+            if self.take_recovery_fault(RecoveryFault::BundleAfterIntent) {
+                return Err(JournalError::Io(injected_io_error(
+                    "bundle recovery after intent",
+                )));
+            }
+        }
+        // The immutable intent, including the exact discarded range and
+        // pre-truncate size, is durable before the first log mutation.
+        if let Some(pre_size) = intent.pre_size {
+            let actual_len = file.metadata()?.len();
+            if actual_len != pre_size && actual_len != state.confirmed_offset {
+                return Err(JournalError::ReceiptCorruption { name });
+            }
+            if actual_len == pre_size {
+                let suffix =
+                    read_suffix(file, state.confirmed_offset, self.limits.max_replay_bytes)?;
+                if suffix.len() as u64 != discarded_len
+                    || ContentHash::sha256(&suffix) != intent.discarded_hash
+                {
+                    return Err(JournalError::ReceiptCorruption { name });
+                }
+                file.set_len(state.confirmed_offset)?;
+                file.seek(SeekFrom::Start(state.confirmed_offset))?;
+                file.sync_data()?;
+                #[cfg(test)]
+                if self.take_recovery_fault(RecoveryFault::BundleAfterTruncateSync) {
+                    return Err(JournalError::Io(injected_io_error(
+                        "bundle recovery after truncate sync",
+                    )));
+                }
+            } else {
+                file.sync_data()?;
+            }
+        }
+        if existing_completion.is_none() {
+            publish_receipt_with_limits(completions, &name, &completion, self.limits)?;
+            #[cfg(test)]
+            if self.take_recovery_fault(RecoveryFault::BundleAfterCompletion) {
+                return Err(JournalError::Io(injected_io_error(
+                    "bundle recovery after completion",
+                )));
+            }
+        }
+        Ok(JournalRecoveryReceipt {
+            intent,
+            completion,
+            resumed: existing_intent.is_some(),
+        })
+    }
+
     /// Acquires the exclusive writer lock and returns a narrow, staged V2
     /// command session. No mutable EventLog or unchecked envelope escapes.
     pub fn replayed_v2_session(
@@ -500,6 +1540,170 @@ impl<'a> EventJournal<'a> {
             store_root_identity: self.root.identity().clone(),
             state: ReplayedV2RunSessionState::Healthy,
         })
+    }
+
+    /// Acquires the exclusive journal lock, replays the complete V3 prefix
+    /// against exact CAS bytes and these host roots, and returns the opaque
+    /// replay basis alongside the only writable V3 session surface.
+    pub fn replayed_v3_session<'roots>(
+        &self,
+        roots: &'roots AuthorityTrustRootsV3,
+    ) -> Result<(ReplayedV3RunSession<'a, 'roots>, AuthorityReplayBasisV3), JournalError> {
+        if self.identity.version() != EventContractVersion::V3 {
+            return Err(JournalError::Identity("V3 replay requires a V3 journal"));
+        }
+        let writer = self.writer_v3()?;
+        let JournalGenesis::V3Shared(genesis) = &writer.identity.genesis else {
+            return Err(JournalError::Identity(
+                "V3 replay requires verified genesis bytes",
+            ));
+        };
+        let resolver = JournalAuthorityResolverV3 {
+            reader: CasReader::open_existing(self.root)?,
+        };
+        let (log, basis) = EventLog::replay_validated_v3_prefix(
+            writer.identity.run_id.clone(),
+            genesis,
+            &writer.state.events,
+            &resolver,
+            roots,
+            EventReplayLimits::new(writer.limits.max_events, writer.limits.max_replay_bytes),
+        )?;
+        Ok((
+            ReplayedV3RunSession {
+                writer,
+                log,
+                resolver,
+                roots,
+                store_root_identity: self.root.identity().clone(),
+                state: ReplayedV3RunSessionState::Healthy,
+            },
+            basis,
+        ))
+    }
+
+    /// Recovers a partially durable verification bundle under one exclusive
+    /// lock and asks core to seal the exact missing suffix. Stage zero and an
+    /// already-complete plan never produce resume authority.
+    pub fn recover_verification_bundle_resume<'roots>(
+        &self,
+        roots: &'roots AuthorityTrustRootsV3,
+    ) -> Result<
+        (
+            RecoveredVerificationBundleV3Session<'a, 'roots>,
+            AuthorityReplayBasisV3,
+            VerificationBundleResumeAuthorityV3,
+        ),
+        JournalError,
+    > {
+        if self.identity.version() != EventContractVersion::V3 {
+            return Err(JournalError::Identity("V3 recovery requires a V3 journal"));
+        }
+        let fd = self.open_file(true)?;
+        fs::flock(&fd, FlockOperation::LockExclusive).map_err(StoreError::Io)?;
+        let mut file = File::from(fd);
+        if marker_exists(&self.run, APPEND_PENDING_MARKER, APPEND_PENDING_BYTES)? {
+            return Err(JournalError::SessionUncertain);
+        }
+        let (intents, completions) = self.recovery_dirs()?;
+        let audit = recovery_audit(&intents, &completions, &self.identity, self.limits)?;
+        sync_recovery_dirs(&intents, &completions)?;
+        validate_completed_receipts(&mut file, &self.identity, self.limits, &audit.completed)?;
+        if let Some(intent) = audit.pending {
+            return Err(JournalError::CorruptNeedsRecovery {
+                good_offset: intent.good_offset,
+                auto_recoverable: true,
+            });
+        }
+        let inspection = self
+            .inspect_bundle_pending_locked(&mut file)?
+            .ok_or(JournalError::BundleResumeAuthorityMismatch)?;
+        if inspection.confirmed_events == 0
+            || inspection.confirmed_events >= inspection.planned.len()
+        {
+            return Err(JournalError::BundleResumeAuthorityMismatch);
+        }
+        let confirmed = u64::try_from(inspection.confirmed_events)
+            .map_err(|_| JournalError::BundleResumeAuthorityMismatch)?;
+        if !inspection.discarded.is_empty() {
+            let _ = self.publish_bundle_recovery_receipt_locked(
+                &mut file,
+                &intents,
+                &completions,
+                &audit,
+                &inspection.current_state,
+                &inspection.discarded,
+                Some(&inspection.marker),
+                "torn",
+            )?;
+        }
+        persist_bundle_stage_file(&self.run, confirmed)?;
+
+        let JournalGenesis::V3Shared(genesis) = &self.identity.genesis else {
+            return Err(JournalError::Identity(
+                "V3 replay requires verified genesis bytes",
+            ));
+        };
+        let resolver = JournalAuthorityResolverV3 {
+            reader: CasReader::open_existing(self.root)?,
+        };
+        let replay_limits =
+            EventReplayLimits::new(self.limits.max_events, self.limits.max_replay_bytes);
+        let (pre_log, pre_basis) = EventLog::replay_validated_v3_prefix(
+            self.identity.run_id.clone(),
+            genesis,
+            &inspection.pre_state.events,
+            &resolver,
+            roots,
+            replay_limits,
+        )?;
+        let (current_log, current_basis) = EventLog::replay_validated_v3_prefix(
+            self.identity.run_id.clone(),
+            genesis,
+            &inspection.current_state.events,
+            &resolver,
+            roots,
+            replay_limits,
+        )?;
+        let authority = EventLog::recover_verification_bundle_resume_authority_v3(
+            &pre_log,
+            &pre_basis,
+            &current_log,
+            &current_basis,
+            &inspection.planned,
+            &resolver,
+            roots,
+        )
+        .map_err(map_bundle_resume_domain_error)?;
+        let writer = JournalWriter {
+            file,
+            identity: self.identity.clone(),
+            limits: self.limits,
+            state: inspection.current_state,
+            intents,
+            completions,
+            run: dup(&self.run).map_err(StoreError::Io)?,
+            poisoned: false,
+            append_durability: AppendDurability::Confirmed,
+            #[cfg(test)]
+            faults: std::collections::VecDeque::new(),
+        };
+        Ok((
+            RecoveredVerificationBundleV3Session {
+                session: ReplayedV3RunSession {
+                    writer,
+                    log: current_log,
+                    resolver,
+                    roots,
+                    store_root_identity: self.root.identity().clone(),
+                    state: ReplayedV3RunSessionState::Healthy,
+                },
+                marker: inspection.marker,
+                confirmed_events: inspection.confirmed_events,
+            },
+            current_basis,
+            authority,
+        ))
     }
     pub fn open(root: &'a StoreRoot, identity: JournalIdentity) -> Result<Self, JournalError> {
         Self::open_with_limits(root, identity, JournalLimits::from_store(root.limits()))
@@ -564,6 +1768,60 @@ impl<'a> EventJournal<'a> {
         // name; the manifest event remains the authoritative run binding.
         let run_name = run_dir_name(&identity.run_id);
         let run = open_or_create_dir(&runs, &run_name, "run directory")?;
+        let recovery = open_or_create_dir(&run, RECOVERY_DIR, "run recovery directory")?;
+        let _ = open_or_create_dir(&recovery, INTENTS_DIR, "recovery intent directory")?;
+        let _ = open_or_create_dir(&recovery, COMPLETIONS_DIR, "recovery completion directory")?;
+        publish_initial_log(&run, &line, &identity, limits)?;
+        Self::open_with_limits(root, identity, limits)
+    }
+
+    /// Creates a V3 journal only after strict canonical genesis validation and
+    /// validation of the complete sequence-one manifest prefix.
+    pub fn initialize_v3(
+        root: &'a StoreRoot,
+        identity: JournalIdentity,
+        first_manifest_envelope: EventEnvelope,
+    ) -> Result<Self, JournalError> {
+        Self::initialize_v3_with_limits(
+            root,
+            identity,
+            first_manifest_envelope,
+            JournalLimits::from_store(root.limits()),
+        )
+    }
+
+    pub fn initialize_v3_with_limits(
+        root: &'a StoreRoot,
+        identity: JournalIdentity,
+        first_manifest_envelope: EventEnvelope,
+        limits: JournalLimits,
+    ) -> Result<Self, JournalError> {
+        if identity.version() != EventContractVersion::V3 {
+            return Err(JournalError::Identity(
+                "V3 initialization requires V3 genesis",
+            ));
+        }
+        validate_limits(limits)?;
+        validate_prefix(&identity, std::slice::from_ref(&first_manifest_envelope))?;
+        let mut line = first_manifest_envelope.canonical_bytes()?;
+        line.push(b'\n');
+        limit(
+            u64::try_from(line.len()).map_err(|_| JournalError::Incomplete {
+                limit: limits.max_event_line_bytes,
+                observed: u64::MAX,
+            })?,
+            limits.max_event_line_bytes,
+        )?;
+        limit(1, limits.max_events)?;
+        limit(
+            u64::try_from(line.len()).map_err(|_| JournalError::Incomplete {
+                limit: limits.max_replay_bytes,
+                observed: u64::MAX,
+            })?,
+            limits.max_replay_bytes,
+        )?;
+        let runs = open_or_create_dir(root.fd(), RUNS_DIR, "runs directory")?;
+        let run = open_or_create_dir(&runs, &run_dir_name(&identity.run_id), "run directory")?;
         let recovery = open_or_create_dir(&run, RECOVERY_DIR, "run recovery directory")?;
         let _ = open_or_create_dir(&recovery, INTENTS_DIR, "recovery intent directory")?;
         let _ = open_or_create_dir(&recovery, COMPLETIONS_DIR, "recovery completion directory")?;
@@ -699,6 +1957,13 @@ impl<'a> EventJournal<'a> {
             fixed,
             working_limit,
         )?;
+        // Directory stream offsets belong to the open file description and
+        // are shared by dup(2). Reopen both directories before the exact-name
+        // pass so a non-empty, already inventoried receipt set cannot appear
+        // empty merely because the first bounded scan reached EOF.
+        drop(intents);
+        drop(completions);
+        let (intents, completions) = self.recovery_dirs()?;
         let intent_names = receipt_names_exact(&intents, self.limits, intent_count)?;
         let completion_names = receipt_names_exact(&completions, self.limits, completion_count)?;
         let audit = recovery_audit_from_names(
@@ -713,7 +1978,7 @@ impl<'a> EventJournal<'a> {
         )?;
         sync_recovery_dirs(&intents, &completions)?;
         if let Some(intent) = audit.pending {
-            if self.identity.version() == EventContractVersion::V2 && intent.good_offset == 0 {
+            if self.identity.version() != EventContractVersion::V1 && intent.good_offset == 0 {
                 return Err(JournalError::V2GenesisRequired);
             }
             return Err(JournalError::CorruptNeedsRecovery {
@@ -755,7 +2020,7 @@ impl<'a> EventJournal<'a> {
         let audit = recovery_audit(&intents, &completions, &self.identity, self.limits)?;
         sync_recovery_dirs(&intents, &completions)?;
         if let Some(intent) = audit.pending.clone() {
-            if self.identity.version() == EventContractVersion::V2 && intent.good_offset == 0 {
+            if self.identity.version() != EventContractVersion::V1 && intent.good_offset == 0 {
                 return Err(JournalError::V2GenesisRequired);
             }
             return Err(JournalError::CorruptNeedsRecovery {
@@ -774,9 +2039,22 @@ impl<'a> EventJournal<'a> {
         })
     }
     pub fn writer(&self) -> Result<JournalWriter, JournalError> {
-        if self.identity.version() == EventContractVersion::V1 {
-            return Err(JournalError::V1ReadOnly);
+        match self.identity.version() {
+            EventContractVersion::V1 => return Err(JournalError::V1ReadOnly),
+            EventContractVersion::V3 => return Err(JournalError::V3ReplaySessionRequired),
+            EventContractVersion::V2 => {}
         }
+        self.writer_locked()
+    }
+
+    fn writer_v3(&self) -> Result<JournalWriter, JournalError> {
+        if self.identity.version() != EventContractVersion::V3 {
+            return Err(JournalError::Identity("V3 writer requires a V3 journal"));
+        }
+        self.writer_locked()
+    }
+
+    fn writer_locked(&self) -> Result<JournalWriter, JournalError> {
         let fd = self.open_file(true)?;
         fs::flock(&fd, FlockOperation::LockExclusive).map_err(StoreError::Io)?;
         let mut file = File::from(fd);
@@ -806,6 +2084,91 @@ impl<'a> EventJournal<'a> {
             faults: std::collections::VecDeque::new(),
         })
     }
+
+    /// Runs canonical tail recovery and then reopens a roots-bound V3
+    /// session. The reopen necessarily revalidates the entire recovered
+    /// prefix and all authority CAS objects before returning state.
+    pub fn recover_replayed_v3_session<'roots>(
+        &self,
+        actor: impl Into<String>,
+        tool_version: impl Into<String>,
+        roots: &'roots AuthorityTrustRootsV3,
+    ) -> Result<
+        (
+            JournalRecoveryReceipt,
+            ReplayedV3RunSession<'a, 'roots>,
+            AuthorityReplayBasisV3,
+        ),
+        JournalError,
+    > {
+        if self.identity.version() != EventContractVersion::V3 {
+            return Err(JournalError::Identity("V3 recovery requires a V3 journal"));
+        }
+        let actor = actor.into();
+        let tool_version = tool_version.into();
+        validate_recovery_actor(&actor, &tool_version)?;
+        let fd = self.open_file(true)?;
+        fs::flock(&fd, FlockOperation::LockExclusive).map_err(StoreError::Io)?;
+        let mut file = File::from(fd);
+        let (intents, completions) = self.recovery_dirs()?;
+        let receipt =
+            self.recover_with_locked_file(&mut file, &intents, &completions, actor, tool_version)?;
+
+        // The same open-file-description lock remains held through the
+        // recovered-prefix audit, roots/CAS replay, and session construction.
+        self.refuse_pending_markers()?;
+        let audit = recovery_audit(&intents, &completions, &self.identity, self.limits)?;
+        sync_recovery_dirs(&intents, &completions)?;
+        validate_completed_receipts(&mut file, &self.identity, self.limits, &audit.completed)?;
+        if let Some(intent) = audit.pending {
+            return Err(JournalError::CorruptNeedsRecovery {
+                good_offset: intent.good_offset,
+                auto_recoverable: true,
+            });
+        }
+        let state = scan(&mut file, &self.identity, self.limits, true)?;
+        let writer = JournalWriter {
+            file,
+            identity: self.identity.clone(),
+            limits: self.limits,
+            state,
+            intents,
+            completions,
+            run: dup(&self.run).map_err(StoreError::Io)?,
+            poisoned: false,
+            append_durability: AppendDurability::Confirmed,
+            #[cfg(test)]
+            faults: std::collections::VecDeque::new(),
+        };
+        let JournalGenesis::V3Shared(genesis) = &writer.identity.genesis else {
+            return Err(JournalError::Identity(
+                "V3 replay requires verified genesis bytes",
+            ));
+        };
+        let resolver = JournalAuthorityResolverV3 {
+            reader: CasReader::open_existing(self.root)?,
+        };
+        let (log, basis) = EventLog::replay_validated_v3_prefix(
+            writer.identity.run_id.clone(),
+            genesis,
+            &writer.state.events,
+            &resolver,
+            roots,
+            EventReplayLimits::new(writer.limits.max_events, writer.limits.max_replay_bytes),
+        )?;
+        Ok((
+            receipt,
+            ReplayedV3RunSession {
+                writer,
+                log,
+                resolver,
+                roots,
+                store_root_identity: self.root.identity().clone(),
+                state: ReplayedV3RunSessionState::Healthy,
+            },
+            basis,
+        ))
+    }
     pub fn recover(
         &self,
         actor: impl Into<String>,
@@ -816,19 +2179,23 @@ impl<'a> EventJournal<'a> {
         }
         let actor = actor.into();
         let tool_version = tool_version.into();
-        if actor.trim().is_empty()
-            || tool_version.trim().is_empty()
-            || actor.len() > 1024
-            || tool_version.len() > 1024
-        {
-            return Err(JournalError::Identity(
-                "recovery actor and tool version must be non-empty",
-            ));
-        }
+        validate_recovery_actor(&actor, &tool_version)?;
         let fd = self.open_file(true)?;
         fs::flock(&fd, FlockOperation::LockExclusive).map_err(StoreError::Io)?;
         let mut file = File::from(fd);
         let (intents, completions) = self.recovery_dirs()?;
+        self.recover_with_locked_file(&mut file, &intents, &completions, actor, tool_version)
+    }
+
+    #[allow(clippy::needless_borrow)] // Preserves the moved legacy recovery body verbatim.
+    fn recover_with_locked_file(
+        &self,
+        mut file: &mut File,
+        intents: &OwnedFd,
+        completions: &OwnedFd,
+        actor: String,
+        tool_version: String,
+    ) -> Result<JournalRecoveryReceipt, JournalError> {
         let audit = recovery_audit(&intents, &completions, &self.identity, self.limits)?;
         sync_recovery_dirs(&intents, &completions)?;
         validate_completed_receipts(&mut file, &self.identity, self.limits, &audit.completed)?;
@@ -840,9 +2207,47 @@ impl<'a> EventJournal<'a> {
                     name: receipt_name(&intent.recovery_id),
                 });
             }
+            if intent.bundle_recovery_kind.is_none() {
+                let active_bundle_good =
+                    if let Some(inspection) = self.inspect_bundle_pending_locked(file)? {
+                        Some((
+                            inspection.current_state.confirmed_offset,
+                            inspection.marker.bundle_digest,
+                        ))
+                    } else if bundle_file_exists(&self.run, BUNDLE_PENDING_STAGE)? {
+                        let state = scan_with_torn(file, &self.identity, self.limits, true)?;
+                        Some((
+                            state.confirmed_offset,
+                            ContentHash::sha256(b"reviewgraphen.bundle-stage-only.v1"),
+                        ))
+                    } else {
+                        None
+                    };
+                if let Some((good_offset, digest)) = active_bundle_good {
+                    let mut active_lineage = intent.clone();
+                    active_lineage.good_offset = good_offset;
+                    active_lineage.bundle_digest = Some(digest);
+                    if recovery_inventory_conflicts(&intent, &active_lineage) {
+                        return Err(JournalError::ReceiptCorruption {
+                            name: receipt_name(&intent.recovery_id),
+                        });
+                    }
+                }
+            }
+            if intent.bundle_recovery_kind.is_some() {
+                self.validate_pending_bundle_recovery_context(file, &intent)?;
+            }
             let actual_len = file.metadata()?.len();
             limit(actual_len, self.limits.max_replay_bytes)?;
             if actual_len < intent.good_offset {
+                return Err(JournalError::ReceiptCorruption {
+                    name: receipt_name(&intent.recovery_id),
+                });
+            }
+            if let Some(pre_size) = intent.pre_size
+                && actual_len != pre_size
+                && actual_len != intent.good_offset
+            {
                 return Err(JournalError::ReceiptCorruption {
                     name: receipt_name(&intent.recovery_id),
                 });
@@ -865,7 +2270,11 @@ impl<'a> EventJournal<'a> {
             if actual_len > intent.good_offset {
                 let suffix =
                     read_suffix(&mut file, intent.good_offset, self.limits.max_replay_bytes)?;
-                if ContentHash::sha256(&suffix) != intent.discarded_hash {
+                if ContentHash::sha256(&suffix) != intent.discarded_hash
+                    || intent
+                        .discarded_len
+                        .is_some_and(|expected| expected != suffix.len() as u64)
+                {
                     return Err(JournalError::ReceiptCorruption {
                         name: receipt_name(&intent.recovery_id),
                     });
@@ -891,11 +2300,157 @@ impl<'a> EventJournal<'a> {
                 &completion,
                 self.limits,
             )?;
+            #[cfg(test)]
+            if intent.bundle_recovery_kind.is_some()
+                && self.take_recovery_fault(RecoveryFault::BundleAfterCompletion)
+            {
+                return Err(JournalError::Io(injected_io_error(
+                    "bundle recovery after completion",
+                )));
+            }
+            match intent.bundle_recovery_kind.as_deref() {
+                Some("stage-only") => {
+                    if read_bundle_pending(&self.run, &self.identity, self.limits)?.is_some()
+                        || read_bundle_stage(&self.run, 3)? != 0
+                    {
+                        return Err(JournalError::ReceiptCorruption {
+                            name: BUNDLE_PENDING_STAGE.to_owned(),
+                        });
+                    }
+                    self.clear_bundle_pending_after_receipt(None, 0)?;
+                }
+                Some(kind @ ("torn" | "confirmed-zero-cleanup" | "already-complete-cleanup")) => {
+                    let inspection =
+                        self.inspect_bundle_pending_locked(file)?.ok_or_else(|| {
+                            JournalError::ReceiptCorruption {
+                                name: BUNDLE_PENDING_MARKER.to_owned(),
+                            }
+                        })?;
+                    if intent.bundle_digest.as_ref() != Some(&inspection.marker.bundle_digest)
+                        || intent.bundle_pre_offset != Some(inspection.marker.pre_offset)
+                    {
+                        return Err(JournalError::ReceiptCorruption {
+                            name: receipt_name(&intent.recovery_id),
+                        });
+                    }
+                    let confirmed = u64::try_from(inspection.confirmed_events)
+                        .map_err(|_| JournalError::BundleResumeAuthorityMismatch)?;
+                    persist_bundle_stage_file(&self.run, confirmed)?;
+                    let cleanup_expected = match kind {
+                        "confirmed-zero-cleanup" => inspection.confirmed_events == 0,
+                        "already-complete-cleanup" => {
+                            inspection.confirmed_events == inspection.planned.len()
+                        }
+                        "torn" => {
+                            inspection.confirmed_events == 0
+                                || inspection.confirmed_events == inspection.planned.len()
+                        }
+                        _ => unreachable!(),
+                    };
+                    if cleanup_expected {
+                        self.clear_bundle_pending_after_receipt(
+                            Some(&inspection.marker),
+                            confirmed,
+                        )?;
+                    } else if kind != "torn" {
+                        return Err(JournalError::ReceiptCorruption {
+                            name: receipt_name(&intent.recovery_id),
+                        });
+                    }
+                }
+                Some(_) => {
+                    return Err(JournalError::ReceiptCorruption {
+                        name: receipt_name(&intent.recovery_id),
+                    });
+                }
+                None => {}
+            }
             self.clear_append_marker_if_present()?;
             return Ok(JournalRecoveryReceipt {
                 intent,
                 completion,
                 resumed: true,
+            });
+        }
+        if read_bundle_pending(&self.run, &self.identity, self.limits)?.is_none()
+            && bundle_file_exists(&self.run, BUNDLE_PENDING_STAGE)?
+        {
+            if read_bundle_stage(&self.run, 3)? != 0 {
+                return Err(JournalError::ReceiptCorruption {
+                    name: BUNDLE_PENDING_STAGE.to_owned(),
+                });
+            }
+            let stage_only = scan_with_torn(file, &self.identity, self.limits, true)?;
+            if stage_only.torn.is_some() {
+                return Err(JournalError::ReceiptCorruption {
+                    name: BUNDLE_PENDING_STAGE.to_owned(),
+                });
+            }
+            let receipt = self.publish_bundle_recovery_receipt_locked(
+                file,
+                intents,
+                completions,
+                &audit,
+                &stage_only,
+                &[],
+                None,
+                "stage-only",
+            )?;
+            self.clear_bundle_pending_after_receipt(None, 0)?;
+            return Ok(receipt);
+        }
+        if let Some(inspection) = self.inspect_bundle_pending_locked(file)? {
+            let confirmed = u64::try_from(inspection.confirmed_events).unwrap_or(u64::MAX);
+            let partial = inspection.confirmed_events > 0
+                && inspection.confirmed_events < inspection.planned.len();
+            if partial && inspection.discarded.is_empty() {
+                // The authoritative journal already ends on a confirmed
+                // event boundary. Re-deriving an advisory stage performs no
+                // log mutation and must not mint a new recovery receipt on
+                // every operator retry.
+                persist_bundle_stage_file(&self.run, confirmed)?;
+                return Err(JournalError::BundleAppendInterrupted {
+                    durable_stage: VerificationBundleDurableStageV3 {
+                        confirmed_events: confirmed,
+                        expected_events: inspection.marker.expected_count,
+                    },
+                });
+            }
+            let recovery_kind = if !inspection.discarded.is_empty() {
+                "torn"
+            } else if inspection.confirmed_events == 0 {
+                "confirmed-zero-cleanup"
+            } else if inspection.confirmed_events == inspection.planned.len() {
+                "already-complete-cleanup"
+            } else {
+                return Err(JournalError::ReceiptCorruption {
+                    name: BUNDLE_PENDING_MARKER.to_owned(),
+                });
+            };
+            let receipt = self.publish_bundle_recovery_receipt_locked(
+                file,
+                intents,
+                completions,
+                &audit,
+                &inspection.current_state,
+                &inspection.discarded,
+                Some(&inspection.marker),
+                recovery_kind,
+            )?;
+            // A torn suffix reaches this point only after its exact intent,
+            // truncate sync, and completion are durable.
+            persist_bundle_stage_file(&self.run, confirmed)?;
+            if inspection.confirmed_events == 0
+                || inspection.confirmed_events == inspection.planned.len()
+            {
+                self.clear_bundle_pending_after_receipt(Some(&inspection.marker), confirmed)?;
+                return Ok(receipt);
+            }
+            return Err(JournalError::BundleAppendInterrupted {
+                durable_stage: VerificationBundleDurableStageV3 {
+                    confirmed_events: confirmed,
+                    expected_events: inspection.marker.expected_count,
+                },
             });
         }
         // If a process died after durable append but before unlinking the
@@ -931,6 +2486,12 @@ impl<'a> EventJournal<'a> {
                     nonce,
                     good_offset: marker_state.confirmed_offset,
                     discarded_hash,
+                    discarded_offset: None,
+                    discarded_len: None,
+                    pre_size: None,
+                    bundle_digest: None,
+                    bundle_pre_offset: None,
+                    bundle_recovery_kind: None,
                     pre_tail_hash: marker_state.tail_hash,
                     actor: actor.clone(),
                     tool_version: tool_version.clone(),
@@ -939,6 +2500,7 @@ impl<'a> EventJournal<'a> {
                         .map_err(|_| JournalError::Identity("system time before Unix epoch"))?
                         .as_secs(),
                 };
+                validate_proposed_recovery_lineage(&audit, &intent)?;
                 let completion = RecoveryCompletion {
                     recovery_id: intent.recovery_id.clone(),
                     post_file_hash: ContentHash::sha256(&read_prefix(
@@ -998,6 +2560,12 @@ impl<'a> EventJournal<'a> {
             nonce,
             good_offset: torn.good_offset,
             discarded_hash,
+            discarded_offset: None,
+            discarded_len: None,
+            pre_size: None,
+            bundle_digest: None,
+            bundle_pre_offset: None,
+            bundle_recovery_kind: None,
             pre_tail_hash: torn.pre_tail_hash,
             actor,
             tool_version,
@@ -1006,6 +2574,7 @@ impl<'a> EventJournal<'a> {
                 .map_err(|_| JournalError::Identity("system time before Unix epoch"))?
                 .as_secs(),
         };
+        validate_proposed_recovery_lineage(&audit, &proposed_intent)?;
         let proposed_completion = RecoveryCompletion {
             recovery_id,
             post_file_hash: ContentHash::sha256(&read_prefix(&mut file, torn.good_offset)?),
@@ -1077,6 +2646,11 @@ impl<'a> EventJournal<'a> {
         open_verified_log(&self.run, writable)
     }
     fn refuse_pending_markers(&self) -> Result<(), JournalError> {
+        if read_bundle_pending(&self.run, &self.identity, self.limits)?.is_some()
+            || bundle_file_exists(&self.run, BUNDLE_PENDING_STAGE)?
+        {
+            return Err(JournalError::SessionResumeRequired);
+        }
         if marker_exists(&self.run, APPEND_PENDING_MARKER, APPEND_PENDING_BYTES)? {
             return Err(JournalError::CorruptNeedsRecovery {
                 good_offset: 0,
@@ -1189,6 +2763,22 @@ impl IndexJournalReader {
                         .and_then(|value| {
                             value.checked_add(intent.discarded_hash.allocated_bytes())
                         })
+                        .and_then(|value| {
+                            value.checked_add(
+                                intent
+                                    .bundle_digest
+                                    .as_ref()
+                                    .map_or(0, ContentHash::allocated_bytes),
+                            )
+                        })
+                        .and_then(|value| {
+                            value.checked_add(
+                                intent
+                                    .bundle_recovery_kind
+                                    .as_ref()
+                                    .map_or(0, String::capacity),
+                            )
+                        })
                         .and_then(|value| value.checked_add(intent.pre_tail_hash.allocated_bytes()))
                         .and_then(|value| value.checked_add(intent.actor.capacity()))
                         .and_then(|value| value.checked_add(intent.tool_version.capacity()))
@@ -1252,6 +2842,15 @@ impl IndexJournalReader {
 }
 
 impl JournalWriter {
+    fn refuse_bundle_resume_gate(&self) -> Result<(), JournalError> {
+        if read_bundle_pending(&self.run, &self.identity, self.limits)?.is_some()
+            || bundle_file_exists(&self.run, BUNDLE_PENDING_STAGE)?
+        {
+            return Err(JournalError::SessionResumeRequired);
+        }
+        Ok(())
+    }
+
     /// Appends exactly one canonical JSON object and newline after validating
     /// the entire candidate prefix through core.  A failure before durable
     /// confirmation rolls back to the previously scanned byte offset.
@@ -1259,17 +2858,26 @@ impl JournalWriter {
         &mut self,
         envelope: EventEnvelope,
     ) -> Result<JournalAppendReceipt, JournalError> {
-        if self.poisoned {
+        self.append_batch(std::slice::from_ref(&envelope))?
+            .pop()
+            .ok_or(JournalError::Identity("append batch produced no event"))
+    }
+
+    fn append_verification_bundle_suffix(
+        &mut self,
+        envelopes: &[EventEnvelope],
+    ) -> Result<Vec<JournalAppendReceipt>, JournalError> {
+        if self.poisoned || self.append_durability == AppendDurability::Uncertain {
             return Err(JournalError::Poisoned);
         }
-        if self.append_durability == AppendDurability::Uncertain {
-            return Err(JournalError::Poisoned);
+        if envelopes.is_empty() || envelopes.len() > 3 {
+            return Err(JournalError::Identity(
+                "verification bundle must contain one to three events",
+            ));
         }
-        let mut line = envelope.canonical_bytes()?;
-        line.push(b'\n');
-        limit(line.len() as u64, self.limits.max_event_line_bytes)?;
+        self.refuse_bundle_resume_gate()?;
         let mut candidate = self.state.events.clone();
-        candidate.push(envelope.clone());
+        candidate.extend(envelopes.iter().cloned());
         limit(
             u64::try_from(candidate.len()).map_err(|_| JournalError::Incomplete {
                 limit: self.limits.max_events,
@@ -1277,11 +2885,306 @@ impl JournalWriter {
             })?,
             self.limits.max_events,
         )?;
+        let mut lines = Vec::new();
+        let mut candidate_end = self.state.confirmed_offset;
+        for envelope in envelopes {
+            let mut line = envelope.canonical_bytes()?;
+            line.push(b'\n');
+            let line_len = u64::try_from(line.len()).map_err(|_| JournalError::Incomplete {
+                limit: self.limits.max_event_line_bytes,
+                observed: u64::MAX,
+            })?;
+            limit(line_len, self.limits.max_event_line_bytes)?;
+            candidate_end =
+                candidate_end
+                    .checked_add(line_len)
+                    .ok_or(JournalError::Incomplete {
+                        limit: self.limits.max_replay_bytes,
+                        observed: u64::MAX,
+                    })?;
+            limit(candidate_end, self.limits.max_replay_bytes)?;
+            lines.push(line);
+        }
+        validate_prefix(&self.identity, &candidate)?;
+        let marker =
+            VerificationBundlePendingMarkerV3::new(&self.identity, &self.state, envelopes)?;
+        self.publish_bundle_pending(&marker)?;
+
+        self.append_bundle_lines(envelopes, lines, &marker, 0)
+    }
+
+    fn resume_verification_bundle_suffix(
+        &mut self,
+        marker: &VerificationBundlePendingMarkerV3,
+        envelopes: &[EventEnvelope],
+        already_confirmed: usize,
+    ) -> Result<Vec<JournalAppendReceipt>, JournalError> {
+        if self.poisoned || self.append_durability == AppendDurability::Uncertain {
+            return Err(JournalError::Poisoned);
+        }
+        let planned = marker.envelopes(self.limits)?;
+        let suffix_matches = planned.get(already_confirmed..).is_some_and(|expected| {
+            expected.len() == envelopes.len()
+                && expected.iter().zip(envelopes).all(|(left, right)| {
+                    left.id() == right.id()
+                        && left.event_hash() == right.event_hash()
+                        && left.canonical_bytes().ok() == right.canonical_bytes().ok()
+                })
+        });
+        if already_confirmed == 0 || already_confirmed >= planned.len() || !suffix_matches {
+            return Err(JournalError::BundleResumeAuthorityMismatch);
+        }
+        let mut candidate = self.state.events.clone();
+        candidate.extend(envelopes.iter().cloned());
+        validate_prefix(&self.identity, &candidate)?;
+        let mut lines = Vec::new();
+        let mut candidate_end = self.state.confirmed_offset;
+        for envelope in envelopes {
+            let mut line = envelope.canonical_bytes()?;
+            line.push(b'\n');
+            let line_len = u64::try_from(line.len()).map_err(|_| JournalError::Incomplete {
+                limit: self.limits.max_event_line_bytes,
+                observed: u64::MAX,
+            })?;
+            limit(line_len, self.limits.max_event_line_bytes)?;
+            candidate_end =
+                candidate_end
+                    .checked_add(line_len)
+                    .ok_or(JournalError::Incomplete {
+                        limit: self.limits.max_replay_bytes,
+                        observed: u64::MAX,
+                    })?;
+            limit(candidate_end, self.limits.max_replay_bytes)?;
+            lines.push(line);
+        }
+        self.append_bundle_lines(envelopes, lines, marker, already_confirmed)
+    }
+
+    fn append_bundle_lines(
+        &mut self,
+        envelopes: &[EventEnvelope],
+        lines: Vec<Vec<u8>>,
+        marker: &VerificationBundlePendingMarkerV3,
+        already_confirmed: usize,
+    ) -> Result<Vec<JournalAppendReceipt>, JournalError> {
+        let mut receipts = Vec::new();
+        for (index, (envelope, line)) in envelopes.iter().zip(lines).enumerate() {
+            let pre = self.state.confirmed_offset;
+            let audit = recovery_audit(
+                &self.intents,
+                &self.completions,
+                &self.identity,
+                self.limits,
+            )?;
+            sync_recovery_dirs(&self.intents, &self.completions)?;
+            let rollback_sizes =
+                rollback_receipt_size_bound(&self.identity, pre, &self.state.tail_hash)?;
+            reserve_recovery_capacity(&audit, self.limits, &rollback_sizes)?;
+            self.file.seek(SeekFrom::Start(pre))?;
+            if let Err(error) = self.write_candidate(&line) {
+                let intent = match self.record_rollback_intent(pre) {
+                    Ok(intent) => intent,
+                    Err(_) => {
+                        self.poisoned = true;
+                        self.append_durability = AppendDurability::Uncertain;
+                        return Err(JournalError::SessionUncertain);
+                    }
+                };
+                if self.rollback(pre).is_err() || self.complete_rollback_intent(&intent).is_err() {
+                    self.poisoned = true;
+                    self.append_durability = AppendDurability::Uncertain;
+                    return Err(JournalError::SessionUncertain);
+                }
+                if already_confirmed == 0 && index == 0 {
+                    if self.clear_bundle_pending().is_err() {
+                        self.poisoned = true;
+                        self.append_durability = AppendDurability::Uncertain;
+                        return Err(JournalError::SessionUncertain);
+                    }
+                    return Err(JournalError::Io(error));
+                }
+                return Err(JournalError::BundleAppendInterrupted {
+                    durable_stage: VerificationBundleDurableStageV3 {
+                        confirmed_events: u64::try_from(already_confirmed + index)
+                            .unwrap_or(u64::MAX),
+                        expected_events: marker.expected_count,
+                    },
+                });
+            }
+
+            self.state.confirmed_offset = pre
+                .checked_add(u64::try_from(line.len()).unwrap_or(u64::MAX))
+                .ok_or(JournalError::Incomplete {
+                    limit: self.limits.max_replay_bytes,
+                    observed: u64::MAX,
+                })?;
+            self.state.tail_hash = envelope.event_hash().clone();
+            self.state.events.push(envelope.clone());
+            let confirmed = u64::try_from(already_confirmed + index + 1).unwrap_or(u64::MAX);
+            if let Err(error) = self.persist_bundle_stage(confirmed) {
+                self.poisoned = true;
+                self.append_durability = AppendDurability::Uncertain;
+                return Err(error);
+            }
+            receipts.push(JournalAppendReceipt {
+                sequence: envelope.sequence(),
+                event_hash: envelope.event_hash().clone(),
+                tail_offset: self.state.confirmed_offset,
+            });
+            #[cfg(test)]
+            if (confirmed == 1 && self.take_fault(AppendFault::BundleAfterDurableLine1))
+                || (confirmed == 2 && self.take_fault(AppendFault::BundleAfterDurableLine2))
+            {
+                return Err(JournalError::BundleAppendInterrupted {
+                    durable_stage: VerificationBundleDurableStageV3 {
+                        confirmed_events: confirmed,
+                        expected_events: marker.expected_count,
+                    },
+                });
+            }
+        }
+        if let Err(error) = self.clear_bundle_pending() {
+            self.poisoned = true;
+            self.append_durability = AppendDurability::Uncertain;
+            return Err(error);
+        }
+        Ok(receipts)
+    }
+
+    fn publish_bundle_pending(
+        &mut self,
+        marker: &VerificationBundlePendingMarkerV3,
+    ) -> Result<(), JournalError> {
+        let bytes = canonical_json(marker)?;
+        let expected_bound = self
+            .limits
+            .max_event_line_bytes
+            .checked_mul(marker.expected_count)
+            .and_then(|value| value.checked_add(64 * 1024))
+            .ok_or(JournalError::Incomplete {
+                limit: self.limits.max_replay_bytes,
+                observed: u64::MAX,
+            })?;
+        limit(
+            u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            expected_bound.min(self.limits.max_replay_bytes),
+        )?;
+        if let Err(error) = publish_bundle_file(&self.run, BUNDLE_PENDING_MARKER, &bytes) {
+            self.poisoned = true;
+            self.append_durability = AppendDurability::Uncertain;
+            return Err(error);
+        }
+        if let Err(error) = publish_bundle_file(&self.run, BUNDLE_PENDING_STAGE, b"0\n") {
+            self.poisoned = true;
+            self.append_durability = AppendDurability::Uncertain;
+            return Err(error);
+        }
+        if let Err(error) = fs::fsync(&self.run).map_err(StoreError::Io) {
+            self.poisoned = true;
+            self.append_durability = AppendDurability::Uncertain;
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    fn persist_bundle_stage(&mut self, confirmed: u64) -> Result<(), JournalError> {
+        #[cfg(test)]
+        if self.take_fault(AppendFault::BundleStageSync) {
+            return Err(JournalError::Io(injected_io_error("bundle stage sync")));
+        }
+        persist_bundle_stage_file(&self.run, confirmed)
+    }
+
+    fn clear_bundle_pending(&mut self) -> Result<(), JournalError> {
+        #[cfg(test)]
+        if self.take_fault(AppendFault::ClearMarkerDirectorySync) {
+            return Err(JournalError::Io(injected_io_error(
+                "bundle marker directory sync",
+            )));
+        }
+        for name in [BUNDLE_PENDING_STAGE, BUNDLE_PENDING_MARKER] {
+            fs::unlinkat(&self.run, name, AtFlags::empty()).map_err(StoreError::Io)?;
+        }
+        fs::fsync(&self.run).map_err(StoreError::Io)?;
+        Ok(())
+    }
+
+    /// Atomically appends one closed suffix under one pending marker and one
+    /// `sync_data`. Kept private so V3 callers cannot bypass the sealed core
+    /// transaction APIs with arbitrary envelopes.
+    fn append_batch(
+        &mut self,
+        envelopes: &[EventEnvelope],
+    ) -> Result<Vec<JournalAppendReceipt>, JournalError> {
+        if self.poisoned {
+            return Err(JournalError::Poisoned);
+        }
+        if self.append_durability == AppendDurability::Uncertain {
+            return Err(JournalError::Poisoned);
+        }
+        self.refuse_bundle_resume_gate()?;
+        if envelopes.is_empty() {
+            return Err(JournalError::Identity("append batch must not be empty"));
+        }
+        let candidate_count = self.state.events.len().checked_add(envelopes.len()).ok_or(
+            JournalError::Incomplete {
+                limit: self.limits.max_events,
+                observed: u64::MAX,
+            },
+        )?;
+        limit(
+            u64::try_from(candidate_count).map_err(|_| JournalError::Incomplete {
+                limit: self.limits.max_events,
+                observed: u64::MAX,
+            })?,
+            self.limits.max_events,
+        )?;
+        let mut bytes = Vec::new();
+        let mut relative_ends = Vec::new();
+        relative_ends
+            .try_reserve_exact(envelopes.len())
+            .map_err(|_| JournalError::Incomplete {
+                limit: self.limits.max_replay_bytes,
+                observed: u64::MAX,
+            })?;
+        for envelope in envelopes {
+            let mut line = envelope.canonical_bytes()?;
+            line.push(b'\n');
+            let line_len = u64::try_from(line.len()).map_err(|_| JournalError::Incomplete {
+                limit: self.limits.max_event_line_bytes,
+                observed: u64::MAX,
+            })?;
+            limit(line_len, self.limits.max_event_line_bytes)?;
+            let admitted_total = u64::try_from(bytes.len())
+                .ok()
+                .and_then(|current| current.checked_add(line_len))
+                .and_then(|relative| self.state.confirmed_offset.checked_add(relative))
+                .ok_or(JournalError::Incomplete {
+                    limit: self.limits.max_replay_bytes,
+                    observed: u64::MAX,
+                })?;
+            limit(admitted_total, self.limits.max_replay_bytes)?;
+            bytes
+                .try_reserve_exact(line.len())
+                .map_err(|_| JournalError::Incomplete {
+                    limit: self.limits.max_replay_bytes,
+                    observed: admitted_total,
+                })?;
+            bytes.extend_from_slice(&line);
+            relative_ends.push(u64::try_from(bytes.len()).map_err(|_| {
+                JournalError::Incomplete {
+                    limit: self.limits.max_replay_bytes,
+                    observed: u64::MAX,
+                }
+            })?);
+        }
+        let mut candidate = self.state.events.clone();
+        candidate.extend(envelopes.iter().cloned());
         let candidate_end = self
             .state
             .confirmed_offset
             .checked_add(
-                u64::try_from(line.len()).map_err(|_| JournalError::Incomplete {
+                u64::try_from(bytes.len()).map_err(|_| JournalError::Incomplete {
                     limit: self.limits.max_replay_bytes,
                     observed: u64::MAX,
                 })?,
@@ -1308,7 +3211,7 @@ impl JournalWriter {
         reserve_recovery_capacity(&audit, self.limits, &rollback_sizes)?;
         self.record_append_marker()?;
         self.file.seek(SeekFrom::Start(pre))?;
-        let write_result = self.write_candidate(&line);
+        let write_result = self.write_candidate(&bytes);
         if let Err(error) = write_result {
             // Publish the exact suffix *before* attempting the destructive
             // rollback.  Thus a crash after any unacknowledged write/flush/
@@ -1338,18 +3241,12 @@ impl JournalWriter {
             }
             return Err(JournalError::Io(error));
         }
-        self.state.confirmed_offset = pre
-            .checked_add(
-                u64::try_from(line.len()).map_err(|_| JournalError::Incomplete {
-                    limit: u64::MAX,
-                    observed: u64::MAX,
-                })?,
-            )
-            .ok_or(JournalError::Incomplete {
-                limit: u64::MAX,
-                observed: u64::MAX,
-            })?;
-        self.state.tail_hash = envelope.event_hash().clone();
+        self.state.confirmed_offset = candidate_end;
+        self.state.tail_hash = envelopes
+            .last()
+            .ok_or(JournalError::Identity("append batch must not be empty"))?
+            .event_hash()
+            .clone();
         self.state.events = candidate;
         if let Err(error) = self.clear_append_marker() {
             // The event reached sync_data. Never leave this writer pointing
@@ -1358,11 +3255,22 @@ impl JournalWriter {
             self.append_durability = AppendDurability::Uncertain;
             return Err(error);
         }
-        Ok(JournalAppendReceipt {
-            sequence: envelope.sequence(),
-            event_hash: envelope.event_hash().clone(),
-            tail_offset: self.state.confirmed_offset,
-        })
+        envelopes
+            .iter()
+            .zip(relative_ends)
+            .map(|(envelope, relative_end)| {
+                Ok(JournalAppendReceipt {
+                    sequence: envelope.sequence(),
+                    event_hash: envelope.event_hash().clone(),
+                    tail_offset: pre
+                        .checked_add(relative_end)
+                        .ok_or(JournalError::Incomplete {
+                            limit: self.limits.max_replay_bytes,
+                            observed: u64::MAX,
+                        })?,
+                })
+            })
+            .collect()
     }
     #[must_use]
     pub fn events(&self) -> &[EventEnvelope] {
@@ -1437,6 +3345,12 @@ impl JournalWriter {
             nonce,
             good_offset: pre,
             discarded_hash,
+            discarded_offset: None,
+            discarded_len: None,
+            pre_size: None,
+            bundle_digest: None,
+            bundle_pre_offset: None,
+            bundle_recovery_kind: None,
             pre_tail_hash: self.state.tail_hash.clone(),
             actor: "reviewgraphen-store".to_owned(),
             tool_version: "append-rollback".to_owned(),
@@ -1445,6 +3359,13 @@ impl JournalWriter {
                 .map_err(|_| JournalError::Identity("system time before Unix epoch"))?
                 .as_secs(),
         };
+        let audit = recovery_audit(
+            &self.intents,
+            &self.completions,
+            &self.identity,
+            self.limits,
+        )?;
+        validate_proposed_recovery_lineage(&audit, &intent)?;
         let name = receipt_name(&recovery_id);
         match read_receipt::<RecoveryIntent>(&self.intents, &name, self.limits)? {
             Some(existing)
@@ -1470,6 +3391,13 @@ impl JournalWriter {
     }
 
     fn complete_rollback_intent(&mut self, intent: &RecoveryIntent) -> Result<(), JournalError> {
+        let audit = recovery_audit(
+            &self.intents,
+            &self.completions,
+            &self.identity,
+            self.limits,
+        )?;
+        validate_proposed_recovery_lineage(&audit, intent)?;
         if self.file.metadata()?.len() != intent.good_offset {
             return Err(JournalError::ReceiptCorruption {
                 name: receipt_name(&intent.recovery_id),
@@ -1548,6 +3476,168 @@ fn injected_io_error(operation: &'static str) -> std::io::Error {
     std::io::Error::other(format!("test-only injected {operation} failure"))
 }
 
+fn publish_bundle_file(run: &OwnedFd, name: &str, bytes: &[u8]) -> Result<(), JournalError> {
+    let fd = fs::openat(
+        run,
+        name,
+        OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::from_raw_mode(0o600),
+    )
+    .map_err(StoreError::Io)?;
+    verify_fd_kind_mode(
+        &fd,
+        "verification bundle marker",
+        FileType::RegularFile,
+        0o600,
+    )?;
+    let mut file = File::from(fd);
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn persist_bundle_stage_file(run: &OwnedFd, confirmed: u64) -> Result<(), JournalError> {
+    if confirmed > 3 {
+        return Err(JournalError::ReceiptCorruption {
+            name: BUNDLE_PENDING_STAGE.to_owned(),
+        });
+    }
+    let fd = fs::openat(
+        run,
+        BUNDLE_PENDING_STAGE,
+        OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::from_raw_mode(0o600),
+    )
+    .map_err(StoreError::Io)?;
+    verify_fd_kind_mode(&fd, "bundle append stage", FileType::RegularFile, 0o600)?;
+    let mut file = File::from(fd);
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(format!("{confirmed}\n").as_bytes())?;
+    file.set_len(2)?;
+    file.sync_all()?;
+    fs::fsync(run).map_err(StoreError::Io)?;
+    Ok(())
+}
+
+fn bundle_file_exists(run: &OwnedFd, name: &str) -> Result<bool, JournalError> {
+    match fs::statat(run, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => {
+            if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+                || stat.st_mode & 0o7777 != 0o600
+            {
+                return Err(JournalError::ReceiptCorruption {
+                    name: name.to_owned(),
+                });
+            }
+            Ok(true)
+        }
+        Err(Errno::NOENT) => Ok(false),
+        Err(error) => Err(StoreError::Io(error).into()),
+    }
+}
+
+fn read_bundle_pending(
+    run: &OwnedFd,
+    identity: &JournalIdentity,
+    limits: JournalLimits,
+) -> Result<Option<VerificationBundlePendingMarkerV3>, JournalError> {
+    let marker_exists = bundle_file_exists(run, BUNDLE_PENDING_MARKER)?;
+    if !marker_exists {
+        return Ok(None);
+    }
+    let fd = fs::openat(
+        run,
+        BUNDLE_PENDING_MARKER,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(StoreError::Io)?;
+    verify_fd_kind_mode(
+        &fd,
+        "verification bundle marker",
+        FileType::RegularFile,
+        0o600,
+    )?;
+    let size = u64::try_from(fs::fstat(&fd).map_err(StoreError::Io)?.st_size).map_err(|_| {
+        JournalError::ReceiptCorruption {
+            name: BUNDLE_PENDING_MARKER.to_owned(),
+        }
+    })?;
+    let marker_limit = limits
+        .max_event_line_bytes
+        .checked_mul(3)
+        .and_then(|value| value.checked_add(64 * 1024))
+        .unwrap_or(u64::MAX)
+        .min(limits.max_replay_bytes);
+    limit(size, marker_limit)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(usize::try_from(size).map_err(|_| JournalError::Incomplete {
+            limit: marker_limit,
+            observed: size,
+        })?)
+        .map_err(|_| JournalError::Incomplete {
+            limit: marker_limit,
+            observed: size,
+        })?;
+    File::from(fd).read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len()).ok() != Some(size) {
+        return Err(JournalError::ReceiptCorruption {
+            name: BUNDLE_PENDING_MARKER.to_owned(),
+        });
+    }
+    let marker: VerificationBundlePendingMarkerV3 =
+        serde_json::from_slice(&bytes).map_err(|_| JournalError::ReceiptCorruption {
+            name: BUNDLE_PENDING_MARKER.to_owned(),
+        })?;
+    if canonical_json(&marker)? != bytes {
+        return Err(JournalError::ReceiptCorruption {
+            name: BUNDLE_PENDING_MARKER.to_owned(),
+        });
+    }
+    marker.validate(identity, limits)?;
+    Ok(Some(marker))
+}
+
+fn read_bundle_stage(run: &OwnedFd, expected: u64) -> Result<u64, JournalError> {
+    if !bundle_file_exists(run, BUNDLE_PENDING_STAGE)? {
+        // The immutable plan marker is published first and removed last. A
+        // missing stage file means stage-zero publication or interrupted
+        // cleanup; recovery derives the authoritative stage from the log.
+        return Ok(0);
+    }
+    let fd = fs::openat(
+        run,
+        BUNDLE_PENDING_STAGE,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(StoreError::Io)?;
+    verify_fd_kind_mode(
+        &fd,
+        "verification bundle stage",
+        FileType::RegularFile,
+        0o600,
+    )?;
+    let mut bytes = Vec::new();
+    File::from(fd).take(4).read_to_end(&mut bytes)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| JournalError::ReceiptCorruption {
+        name: BUNDLE_PENDING_STAGE.to_owned(),
+    })?;
+    let confirmed = text
+        .strip_suffix('\n')
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| JournalError::ReceiptCorruption {
+            name: BUNDLE_PENDING_STAGE.to_owned(),
+        })?;
+    if confirmed > expected {
+        return Err(JournalError::ReceiptCorruption {
+            name: BUNDLE_PENDING_STAGE.to_owned(),
+        });
+    }
+    Ok(confirmed)
+}
+
 fn map_bounded_domain_error(error: reviewgraphen_core::DomainError) -> JournalError {
     match error {
         reviewgraphen_core::DomainError::Incomplete {
@@ -1558,6 +3648,28 @@ fn map_bounded_domain_error(error: reviewgraphen_core::DomainError) -> JournalEr
         },
         other => JournalError::Domain(other),
     }
+}
+
+fn map_bundle_resume_domain_error(error: reviewgraphen_core::DomainError) -> JournalError {
+    match error {
+        reviewgraphen_core::DomainError::BundleResumeAuthorityMismatch => {
+            JournalError::BundleResumeAuthorityMismatch
+        }
+        other => map_bounded_domain_error(other),
+    }
+}
+
+fn validate_recovery_actor(actor: &str, tool_version: &str) -> Result<(), JournalError> {
+    if actor.trim().is_empty()
+        || tool_version.trim().is_empty()
+        || actor.len() > 1024
+        || tool_version.len() > 1024
+    {
+        return Err(JournalError::Identity(
+            "recovery actor and tool version must be non-empty",
+        ));
+    }
+    Ok(())
 }
 
 fn map_event_decode_error(
@@ -1628,28 +3740,25 @@ fn scan_index_prefix<E>(
         })
     })?;
 
-    let mut wanted = std::collections::BTreeMap::new();
-    for (intent, completion) in completed_receipts {
-        if wanted
-            .insert(intent.good_offset, (intent, completion))
-            .is_some()
-        {
-            return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
-                name: receipt_name(&intent.recovery_id),
-            }));
-        }
-    }
+    // The audit canonicalizes by (good_offset, recovery_id). A single cursor
+    // validates contiguous same-offset groups without another heap-backed
+    // map/vector projection in the index replay working set.
+    let mut receipt_cursor = 0_usize;
     let mut digest = Sha256::new();
     let mut offset = 0_u64;
     let mut count = 0_u64;
     let mut tail = chain_genesis(identity);
     let canonical_scratch_capacity = canonical_scratch;
-    if let Some((intent, completion)) = wanted.remove(&0)
-        && (intent.pre_tail_hash != tail || completion.post_file_hash != ContentHash::sha256(b""))
-    {
-        return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
-            name: receipt_name(&intent.recovery_id),
-        }));
+    while let Some((intent, completion)) = completed_receipts.get(receipt_cursor) {
+        if intent.good_offset != 0 {
+            break;
+        }
+        if intent.pre_tail_hash != tail || completion.post_file_hash != ContentHash::sha256(b"") {
+            return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
+                name: receipt_name(&intent.recovery_id),
+            }));
+        }
+        receipt_cursor += 1;
     }
 
     file.seek(SeekFrom::Start(0))
@@ -1784,14 +3893,32 @@ fn scan_index_prefix<E>(
                     observed: u64::MAX,
                 })
             })?;
-            if let Some((intent, completion)) = wanted.remove(&boundary) {
+            if completed_receipts
+                .get(receipt_cursor)
+                .is_some_and(|(intent, _)| intent.good_offset < boundary)
+            {
+                let (intent, _) = &completed_receipts[receipt_cursor];
+                return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
+                    name: receipt_name(&intent.recovery_id),
+                }));
+            }
+            if completed_receipts
+                .get(receipt_cursor)
+                .is_some_and(|(intent, _)| intent.good_offset == boundary)
+            {
                 let actual = ContentHash::parse(format!("sha256:{:x}", digest.clone().finalize()))
                     .map_err(JournalError::from)
                     .map_err(IndexReplayError::Journal)?;
-                if intent.pre_tail_hash != tail || completion.post_file_hash != actual {
-                    return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
-                        name: receipt_name(&intent.recovery_id),
-                    }));
+                while let Some((intent, completion)) = completed_receipts.get(receipt_cursor) {
+                    if intent.good_offset != boundary {
+                        break;
+                    }
+                    if intent.pre_tail_hash != tail || completion.post_file_hash != actual {
+                        return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
+                            name: receipt_name(&intent.recovery_id),
+                        }));
+                    }
+                    receipt_cursor += 1;
                 }
             }
             visitor(&event, boundary).map_err(IndexReplayError::Visitor)?;
@@ -1808,10 +3935,10 @@ fn scan_index_prefix<E>(
             },
         ));
     }
-    if identity.version() == EventContractVersion::V2 && count == 0 {
+    if identity.version() != EventContractVersion::V1 && count == 0 {
         return Err(IndexReplayError::Journal(JournalError::V2GenesisRequired));
     }
-    if let Some((_, (intent, _))) = wanted.into_iter().next() {
+    if let Some((intent, _)) = completed_receipts.get(receipt_cursor) {
         return Err(IndexReplayError::Journal(JournalError::ReceiptCorruption {
             name: receipt_name(&intent.recovery_id),
         }));
@@ -2113,7 +4240,7 @@ fn scan_bytes_with_accounting(
         None
     };
     if tail.is_some() {
-        if reject_empty_v2 && identity.version() == EventContractVersion::V2 && events.is_empty() {
+        if reject_empty_v2 && identity.version() != EventContractVersion::V1 && events.is_empty() {
             return Err(JournalError::V2GenesisRequired);
         }
         let tail_hash = events.last().map_or_else(
@@ -2127,7 +4254,7 @@ fn scan_bytes_with_accounting(
             torn: tail,
         });
     }
-    if reject_empty_v2 && identity.version() == EventContractVersion::V2 && events.is_empty() {
+    if reject_empty_v2 && identity.version() != EventContractVersion::V1 && events.is_empty() {
         return Err(JournalError::V2GenesisRequired);
     }
     let tail_hash = events.last().map_or_else(
@@ -2478,6 +4605,130 @@ fn recovery_nonce() -> Result<String, JournalError> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+fn bundle_recovery_nonce(
+    identity: &JournalIdentity,
+    bundle_digest: &ContentHash,
+    bundle_pre_offset: u64,
+    good_offset: u64,
+    discarded_hash: &ContentHash,
+    discarded_len: u64,
+    recovery_kind: &str,
+) -> Result<String, JournalError> {
+    let bindings = std::collections::BTreeMap::from([
+        (
+            "domain".to_owned(),
+            serde_json::Value::String("reviewgraphen.bundle-recovery.v1".to_owned()),
+        ),
+        (
+            "run_id".to_owned(),
+            serde_json::Value::String(identity.run_id.to_string()),
+        ),
+        (
+            "genesis_hash".to_owned(),
+            serde_json::Value::String(identity.genesis_hash().to_string()),
+        ),
+        (
+            "bundle_digest".to_owned(),
+            serde_json::Value::String(bundle_digest.to_string()),
+        ),
+        (
+            "bundle_pre_offset".to_owned(),
+            serde_json::Value::Number(bundle_pre_offset.into()),
+        ),
+        (
+            "good_offset".to_owned(),
+            serde_json::Value::Number(good_offset.into()),
+        ),
+        (
+            "discarded_offset".to_owned(),
+            serde_json::Value::Number(good_offset.into()),
+        ),
+        (
+            "discarded_len".to_owned(),
+            serde_json::Value::Number(discarded_len.into()),
+        ),
+        (
+            "discarded_hash".to_owned(),
+            serde_json::Value::String(discarded_hash.to_string()),
+        ),
+        (
+            "cleanup_kind".to_owned(),
+            serde_json::Value::String(recovery_kind.to_owned()),
+        ),
+    ]);
+    Ok(ContentHash::sha256(&canonical_json(&bindings)?)
+        .as_str()
+        .trim_start_matches("sha256:")
+        .to_owned())
+}
+
+fn same_bundle_recovery_lineage(left: &RecoveryIntent, right: &RecoveryIntent) -> bool {
+    left.bundle_digest.is_some()
+        && right.bundle_digest.is_some()
+        && left.run_id == right.run_id
+        && left.genesis_hash == right.genesis_hash
+        && left.bundle_digest == right.bundle_digest
+        && left.bundle_pre_offset == right.bundle_pre_offset
+        && left.good_offset == right.good_offset
+        && left.discarded_offset == right.discarded_offset
+        && left.discarded_len == right.discarded_len
+        && left.pre_size == right.pre_size
+        && left.bundle_recovery_kind == right.bundle_recovery_kind
+}
+
+fn bundle_discard_ranges_overlap(left: &RecoveryIntent, right: &RecoveryIntent) -> bool {
+    match (
+        left.discarded_offset,
+        left.pre_size,
+        right.discarded_offset,
+        right.pre_size,
+    ) {
+        (Some(left_start), Some(left_end), Some(right_start), Some(right_end)) => {
+            left_start < right_end && right_start < left_end
+        }
+        _ => false,
+    }
+}
+
+/// Pure inventory predicate shared by audit, recovery, and rollback paths.
+/// Exact bundle intents are idempotent; every other legacy/mixed duplicate,
+/// same-lineage mismatch, or overlapping destructive range conflicts.
+fn recovery_inventory_conflicts(existing: &RecoveryIntent, proposed: &RecoveryIntent) -> bool {
+    if existing.good_offset != proposed.good_offset
+        && !bundle_discard_ranges_overlap(existing, proposed)
+    {
+        return false;
+    }
+    let both_bundle = existing.bundle_digest.is_some() && proposed.bundle_digest.is_some();
+    if !both_bundle {
+        return existing.good_offset == proposed.good_offset;
+    }
+    if same_bundle_recovery_lineage(existing, proposed) {
+        return existing != proposed;
+    }
+    bundle_discard_ranges_overlap(existing, proposed)
+}
+
+fn validate_proposed_recovery_lineage(
+    audit: &RecoveryAudit,
+    proposed: &RecoveryIntent,
+) -> Result<(), JournalError> {
+    if let Some(existing) = audit
+        .pending
+        .iter()
+        .chain(audit.completed.iter().map(|(intent, _)| intent))
+        .find(|existing| {
+            existing.recovery_id != proposed.recovery_id
+                && recovery_inventory_conflicts(existing, proposed)
+        })
+    {
+        return Err(JournalError::ReceiptCorruption {
+            name: receipt_name(&existing.recovery_id),
+        });
+    }
+    Ok(())
+}
+
 fn read_receipt<T: for<'de> Deserialize<'de> + Serialize>(
     dir: &OwnedFd,
     name: &str,
@@ -2626,6 +4877,17 @@ fn recovery_audit_from_names(
             .clone();
         completed.push((intent, completion));
     }
+    for (index, (intent, _)) in completed.iter().enumerate() {
+        for (other, _) in &completed[index + 1..] {
+            if recovery_inventory_conflicts(intent, other)
+                || recovery_inventory_conflicts(other, intent)
+            {
+                return Err(JournalError::ReceiptCorruption {
+                    name: "duplicate or overlapping recovery lineage".to_owned(),
+                });
+            }
+        }
+    }
     let mut pending = None;
     for intent in intents_by_id {
         if !completed
@@ -2638,6 +4900,23 @@ fn recovery_audit_from_names(
             });
         }
     }
+    if let Some(pending_intent) = &pending {
+        for (completed_intent, _) in &completed {
+            if recovery_inventory_conflicts(completed_intent, pending_intent)
+                || recovery_inventory_conflicts(pending_intent, completed_intent)
+            {
+                return Err(JournalError::ReceiptCorruption {
+                    name: "pending recovery conflicts with completed lineage".to_owned(),
+                });
+            }
+        }
+    }
+    completed.sort_by(|left, right| {
+        left.0
+            .good_offset
+            .cmp(&right.0.good_offset)
+            .then_with(|| left.0.recovery_id.cmp(&right.0.recovery_id))
+    });
     Ok(RecoveryAudit {
         pending,
         completed,
@@ -2792,6 +5071,12 @@ fn rollback_receipt_size_bound(
         // width is no greater than u64::MAX above.
         good_offset: pre_tail_offset,
         discarded_hash,
+        discarded_offset: None,
+        discarded_len: None,
+        pre_size: None,
+        bundle_digest: None,
+        bundle_pre_offset: None,
+        bundle_recovery_kind: None,
         pre_tail_hash: pre_tail_hash.clone(),
         actor: "reviewgraphen-store".to_owned(),
         tool_version: "append-rollback".to_owned(),
@@ -3004,10 +5289,72 @@ fn validate_intent_shape(
     identity: &JournalIdentity,
     limits: JournalLimits,
 ) -> Result<(), JournalError> {
+    let bundle_range_valid = match (
+        intent.discarded_offset,
+        intent.discarded_len,
+        intent.pre_size,
+    ) {
+        (None, None, None) => true,
+        (Some(offset), Some(len), Some(pre_size)) => {
+            offset == intent.good_offset
+                && len > 0
+                && offset.checked_add(len) == Some(pre_size)
+                && pre_size <= limits.max_replay_bytes
+        }
+        _ => false,
+    };
+    let bundle_identity_valid = match (
+        &intent.bundle_digest,
+        intent.bundle_pre_offset,
+        intent.bundle_recovery_kind.as_deref(),
+    ) {
+        (None, None, None) => true,
+        (Some(digest), Some(pre_offset), Some(kind)) => {
+            let discarded_len = intent.discarded_len.unwrap_or(0);
+            let expected_nonce = bundle_recovery_nonce(
+                identity,
+                digest,
+                pre_offset,
+                intent.good_offset,
+                &intent.discarded_hash,
+                discarded_len,
+                kind,
+            )?;
+            let range_matches_kind = if kind == "torn" {
+                intent.discarded_offset == Some(intent.good_offset)
+                    && intent.discarded_len.is_some_and(|len| len > 0)
+                    && intent.pre_size
+                        == intent
+                            .discarded_len
+                            .and_then(|len| intent.good_offset.checked_add(len))
+            } else {
+                intent.discarded_offset.is_none()
+                    && intent.discarded_len.is_none()
+                    && intent.pre_size.is_none()
+                    && intent.discarded_hash == ContentHash::sha256(b"")
+            };
+            let stage_only_matches = kind != "stage-only"
+                || (digest == &ContentHash::sha256(b"reviewgraphen.bundle-stage-only.v1")
+                    && pre_offset == intent.good_offset);
+            let provenance_matches = intent.actor == "reviewgraphen-store"
+                && intent.tool_version == format!("bundle-recovery:{kind}")
+                && intent.timestamp_unix_seconds == 0;
+            pre_offset <= intent.good_offset
+                && matches!(
+                    kind,
+                    "torn" | "stage-only" | "confirmed-zero-cleanup" | "already-complete-cleanup"
+                )
+                && range_matches_kind
+                && stage_only_matches
+                && provenance_matches
+                && intent.nonce == expected_nonce
+        }
+        _ => false,
+    };
     if intent.recovery_id.kind() != "recovery"
         || intent.run_id != identity.run_id
         || intent.genesis_hash != identity.genesis_hash()
-        || (identity.version() == EventContractVersion::V2 && intent.good_offset == 0)
+        || (identity.version() != EventContractVersion::V1 && intent.good_offset == 0)
         || intent.nonce.len() != 64
         || !intent.nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
         || intent.actor.is_empty()
@@ -3015,6 +5362,8 @@ fn validate_intent_shape(
         || intent.tool_version.is_empty()
         || intent.tool_version.len() > 1024
         || intent.good_offset > limits.max_replay_bytes
+        || !bundle_range_valid
+        || !bundle_identity_valid
         || receipt_name(&intent.recovery_id) != name
         || recovery_id(
             &intent.run_id,
@@ -3126,13 +5475,19 @@ fn publish_receipt<T: Serialize + for<'de> Deserialize<'de> + Eq>(
 mod tests {
     use super::*;
     use reviewgraphen_core::{
-        ArtifactRegistered, ArtifactSensitivity, ArtifactSource, EventCommand, EventLog,
-        MvpRulePack, ObligationLifecycle, PlanBudget, ProgramSpace, ReviewAggregate,
-        SnapshotSourceRecordEntry, SnapshotSourcesRecorded, plan, prepare_context,
+        ArtifactRegistered, ArtifactRegisteredV3, ArtifactSensitivity, ArtifactSource,
+        ArtifactSourceV3, AssessmentDispositionV3, AssessmentReviewStatusV3, AuthorityTrustRootsV3,
+        ClaimPolarity, EventCommand, EventLog, ExecutionClaimInputV2, ExecutionOutcome,
+        ExecutionRecordInput, FAKE_REVIEWER_ID, FIXTURE_DESCRIPTOR_ID, FIXTURE_HARNESS_ID,
+        FIXTURE_HARNESS_REVISION, FIXTURE_HARNESS_SOURCE_HASH, FIXTURE_MEDIA_TYPE,
+        FIXTURE_PROCEDURE_ID, FIXTURE_TEST_ARTIFACT_ID, FIXTURE_WITNESS_HASH,
+        HarnessTrustRootInputV3, M4_PROPERTY_ID, MvpRulePack, ObligationLifecycle, PlanBudget,
+        ProgramSpace, ReviewAggregate, SnapshotSourceRecordEntry, SnapshotSourcesRecorded,
+        ValidatedExecutionBundle, plan, prepare_context,
     };
     use serde_json::Value;
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         os::unix::fs::PermissionsExt,
         sync::{Arc, Barrier, mpsc},
     };
@@ -3165,6 +5520,772 @@ mod tests {
     }
     fn fixture_event() -> (JournalIdentity, EventEnvelope) {
         fixture_event_for("run:journal-test")
+    }
+
+    fn v3_fixture(
+        root: &StoreRoot,
+    ) -> (
+        JournalIdentity,
+        EventEnvelope,
+        AuthorityTrustRootsV3,
+        Vec<u8>,
+    ) {
+        let program = ProgramSpace::from_json_slice(include_bytes!(
+            "../../../examples/double-submit-payment/program-space.json"
+        ))
+        .unwrap();
+        let repository_id = program.repository_id().clone();
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let aggregate = ReviewAggregate::new(program, universe, obligations).unwrap();
+        let run_id = StableId::parse("run:journal-v3-test").unwrap();
+        let log = EventLog::new_v3(run_id.clone(), aggregate).unwrap();
+        let genesis = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let genesis_hash = ContentHash::sha256(&genesis);
+        let cas_hash = CasHash::parse(genesis_hash.to_string()).unwrap();
+        super::super::CasStore::open(root)
+            .unwrap()
+            .put(
+                &cas_hash,
+                Some(u64::try_from(genesis.len()).unwrap()),
+                genesis.as_slice(),
+            )
+            .unwrap();
+        let roots = AuthorityTrustRootsV3::new(
+            ContentHash::sha256(b"journal-v3-policy"),
+            repository_id,
+            ContentHash::parse("sha256:1111111111111111").unwrap(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        (
+            JournalIdentity::new(run_id, JournalGenesis::V3(genesis.clone())).unwrap(),
+            log.envelopes().next().unwrap().clone(),
+            roots,
+            genesis,
+        )
+    }
+
+    fn put_test_cas(root: &StoreRoot, bytes: &[u8]) {
+        let hash = CasHash::parse(ContentHash::sha256(bytes).to_string()).unwrap();
+        super::super::CasStore::open(root)
+            .unwrap()
+            .put(&hash, Some(bytes.len() as u64), bytes)
+            .unwrap();
+    }
+
+    fn public_v3_fixture_journal<'a>(
+        root: &'a StoreRoot,
+        run: &str,
+    ) -> (EventJournal<'a>, AuthorityTrustRootsV3, StableId) {
+        let mut input: Value = serde_json::from_slice(include_bytes!(
+            "../../../examples/double-submit-payment/program-space.json"
+        ))
+        .unwrap();
+        let mut contains = input["relations"][0].clone();
+        contains["id"] = Value::String("relation:file-contains-payment-charge".to_owned());
+        contains["kind"] = Value::String("contains".to_owned());
+        contains["source_id"] = Value::String("file:payment-repository".to_owned());
+        contains["target_ids"] = serde_json::json!(["function:payment-charge"]);
+        contains["directed"] = Value::Bool(true);
+        input["relations"].as_array_mut().unwrap().push(contains);
+        let test = input["artifacts"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|artifact| artifact["id"] == reviewgraphen_core::FIXTURE_TEST_ARTIFACT_ID)
+            .unwrap();
+        test["location"]["start_line"] = Value::Null;
+        test["location"]["end_line"] = Value::Null;
+        let invariant = input["invariants"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|invariant| invariant["property_id"] == M4_PROPERTY_ID)
+            .unwrap();
+        invariant["scope_ids"] = serde_json::json!(["context:payment", "context:ui-event"]);
+        let bytes_by_path = BTreeMap::from([
+            ("src/checkout_controller.rs", b"checkout\n".repeat(40)),
+            ("src/payment_repository.rs", b"repository\n".repeat(40)),
+        ]);
+        for artifact in input["artifacts"].as_array_mut().unwrap() {
+            if artifact["kind"] == "file" {
+                let path = artifact["location"]["path"].as_str().unwrap();
+                artifact["content_hash"] =
+                    Value::String(ContentHash::sha256(&bytes_by_path[path]).to_string());
+            }
+        }
+        let repository_source_hash =
+            ContentHash::parse(input["source"]["content_hash"].as_str().unwrap().to_owned())
+                .unwrap();
+        let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&input).unwrap()).unwrap();
+        let repository_id = program.repository_id().clone();
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let aggregate = ReviewAggregate::new(program, universe, obligations).unwrap();
+        let run_id = StableId::parse(run).unwrap();
+        let mut log = EventLog::new_v3(run_id.clone(), aggregate).unwrap();
+        let snapshot_id = log.aggregate().program().snapshot_id().clone();
+        let files = log
+            .aggregate()
+            .program()
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut entries = Vec::new();
+        let mut source_by_id = BTreeMap::new();
+        for artifact in files {
+            let path = artifact.location.as_ref().unwrap().path.clone();
+            let bytes = bytes_by_path[path.as_str()].clone();
+            put_test_cas(root, &bytes);
+            let hash = ContentHash::sha256(&bytes);
+            let registration = ArtifactRegisteredV3::new(
+                run_id.clone(),
+                hash.clone(),
+                "text/plain",
+                bytes.len() as u64,
+                ArtifactSensitivity::WorkspaceSource,
+                ArtifactSourceV3::SnapshotIngest {
+                    adapter_id: "store-v3-e2e-fixture".to_owned(),
+                    run_id: run_id.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                },
+            )
+            .unwrap();
+            entries.push(
+                SnapshotSourceRecordEntry::new(
+                    artifact.id.clone(),
+                    path,
+                    hash.clone(),
+                    registration.registration_id().clone(),
+                    hash,
+                    bytes.iter().filter(|byte| **byte == b'\n').count() as u64 + 1,
+                )
+                .unwrap(),
+            );
+            source_by_id.insert(artifact.id, bytes);
+            log.append(EventCommand::artifact_registered_v3(registration))
+                .unwrap();
+        }
+        entries.sort_by(|left, right| left.path().cmp(right.path()));
+        log.append(EventCommand::snapshot_sources_recorded(
+            SnapshotSourcesRecorded::new(snapshot_id, entries).unwrap(),
+        ))
+        .unwrap();
+        let review_plan = plan(log.aggregate(), PlanBudget::new(16, 16).unwrap()).unwrap();
+        log.append(EventCommand::review_plan_recorded(review_plan.clone()))
+            .unwrap();
+        let (obligation_id, built) = review_plan
+            .waves()
+            .iter()
+            .flat_map(|wave| wave.obligation_ids())
+            .find_map(|candidate| {
+                let obligation = log
+                    .aggregate()
+                    .obligations()
+                    .find(|obligation| obligation.id() == candidate)?;
+                if obligation.property_id() != M4_PROPERTY_ID {
+                    return None;
+                }
+                let mut context = prepare_context(log.aggregate(), candidate.clone()).ok()?;
+                while let Some(request) = context.next_source_request().ok()? {
+                    context
+                        .submit_source(&request, &source_by_id[request.artifact_id()])
+                        .ok()?;
+                }
+                let built = context.finish().ok()?;
+                (!built.envelope().normalized_included_source_ids().is_empty())
+                    .then(|| (candidate.clone(), built))
+            })
+            .unwrap();
+        log.append(EventCommand::obligation_transition(
+            obligation_id.clone(),
+            ObligationLifecycle::Planned,
+        ))
+        .unwrap();
+        log.append(EventCommand::obligation_transition(
+            obligation_id.clone(),
+            ObligationLifecycle::InProgress,
+        ))
+        .unwrap();
+        let envelope = built.envelope().clone();
+        log.append(EventCommand::context_envelope_projected(built))
+            .unwrap();
+
+        let wave = review_plan
+            .waves()
+            .iter()
+            .find(|wave| wave.obligation_ids().contains(&obligation_id))
+            .unwrap();
+        let execution_input = ExecutionRecordInput::fake(
+            review_plan.id().clone(),
+            wave.id().clone(),
+            obligation_id.clone(),
+            envelope.id().clone(),
+            envelope.snapshot_id().clone(),
+            1,
+        )
+        .unwrap();
+        let execution_id = execution_input.execution_id().unwrap();
+        let raw = br#"{"attempt":1,"fixture":true,"version":3}"#.to_vec();
+        put_test_cas(root, &raw);
+        let raw_registration = ArtifactRegisteredV3::new(
+            run_id.clone(),
+            ContentHash::sha256(&raw),
+            "application/json",
+            raw.len() as u64,
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id,
+                reviewer_id: FAKE_REVIEWER_ID.to_owned(),
+                run_id: run_id.clone(),
+            },
+        )
+        .unwrap();
+        log.append(EventCommand::artifact_registered_v3(
+            raw_registration.clone(),
+        ))
+        .unwrap();
+        let obligation = log
+            .aggregate()
+            .obligations()
+            .find(|obligation| obligation.id() == &obligation_id)
+            .unwrap();
+        let claim = ExecutionClaimInputV2::new(
+            obligation.property_id(),
+            obligation.normalized_target_refs().clone(),
+            ClaimPolarity::IssuePresent,
+            "store public V3 fixture demonstrates a duplicate submit",
+            envelope.normalized_included_source_ids().clone(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            Some(1.0),
+        )
+        .unwrap();
+        let source_buffers = source_by_id.values().collect::<Vec<_>>();
+        let execution = ValidatedExecutionBundle::fake_v3(
+            execution_input,
+            &raw_registration,
+            raw,
+            source_buffers,
+            vec![claim],
+            ExecutionOutcome::Structured,
+        )
+        .unwrap();
+        let claim_id = execution.claims()[0].id().clone();
+        log.append(EventCommand::review_execution_recorded(execution))
+            .unwrap();
+
+        let policy = ContentHash::sha256(b"store-public-v3-fixture-policy");
+        let claim_record = log
+            .aggregate()
+            .execution_claims()
+            .find(|claim| claim.id() == &claim_id)
+            .unwrap();
+        let roots = AuthorityTrustRootsV3::new(
+            policy.clone(),
+            repository_id.clone(),
+            repository_source_hash.clone(),
+            vec![HarnessTrustRootInputV3 {
+                policy_revision_hash: policy,
+                repository_id,
+                repository_source_hash,
+                harness_id: FIXTURE_HARNESS_ID.to_owned(),
+                harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+                harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH).unwrap(),
+                test_artifact_id: StableId::parse(FIXTURE_TEST_ARTIFACT_ID).unwrap(),
+                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH).unwrap(),
+                result_size: 145,
+                result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+                result_sensitivity: ArtifactSensitivity::CanonicalState,
+                run_id: log.run_id().clone(),
+                genesis_hash: log.genesis_hash().clone(),
+                snapshot_id: log.aggregate().program().snapshot_id().clone(),
+                universe_id: log.aggregate().universe().id().clone(),
+                property_id: M4_PROPERTY_ID.to_owned(),
+                claim_id: claim_id.clone(),
+                claim_body_hash: claim_record.body_hash().unwrap(),
+            }],
+            Vec::new(),
+        )
+        .unwrap();
+        let genesis = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        put_test_cas(root, &genesis);
+        let identity = JournalIdentity::new(run_id, JournalGenesis::V3(genesis)).unwrap();
+        let manifest = log.events()[0].envelope().clone();
+        let journal = EventJournal::initialize_v3(root, identity, manifest).unwrap();
+        let prefix = log.events()[1..]
+            .iter()
+            .map(|event| event.envelope().clone())
+            .collect::<Vec<_>>();
+        let mut writer = journal.writer_v3().unwrap();
+        writer.append_batch(&prefix).unwrap();
+        drop(writer);
+        (journal, roots, claim_id)
+    }
+
+    #[test]
+    fn v3_identity_initialize_and_roots_bound_replay_return_opaque_basis() {
+        let (_workspace, root) = root();
+        let (identity, manifest, roots, genesis) = v3_fixture(&root);
+        assert!(matches!(
+            identity.verified_core_genesis().unwrap(),
+            EventStreamGenesis::V3(bytes) if bytes == genesis.as_slice()
+        ));
+        let mut changed_run = identity.clone();
+        changed_run.run_id = StableId::parse("run:v3-changed-after-verification").unwrap();
+        assert!(matches!(
+            changed_run.verified_core_genesis(),
+            Err(JournalError::Identity(_))
+        ));
+        let mut changed_bytes = identity.clone();
+        let JournalGenesis::V3Shared(bytes) = &mut changed_bytes.genesis else {
+            unreachable!()
+        };
+        Arc::make_mut(bytes)[0] ^= 1;
+        assert!(matches!(
+            changed_bytes.verified_core_genesis(),
+            Err(JournalError::Identity(_))
+        ));
+        let journal = EventJournal::initialize_v3(&root, identity, manifest).unwrap();
+        assert!(matches!(
+            journal.writer(),
+            Err(JournalError::V3ReplaySessionRequired)
+        ));
+
+        let (session, basis) = journal.replayed_v3_session(&roots).unwrap();
+        assert_eq!(session.event_count().unwrap(), 1);
+        assert_eq!(basis.confirmed_event_count(), 1);
+        assert_eq!(session.tail_hash().unwrap(), basis.confirmed_tail_hash());
+        assert_eq!(session.run_id().unwrap(), basis.run_id());
+        assert!(session.matches_store_root(&root).unwrap());
+    }
+
+    #[test]
+    fn v3_replay_refuses_wrong_repository_root_and_missing_cas() {
+        let (_workspace, admitted_root) = root();
+        let (identity, manifest, _roots, _genesis) = v3_fixture(&admitted_root);
+        let wrong_roots = AuthorityTrustRootsV3::new(
+            ContentHash::sha256(b"journal-v3-policy"),
+            identity.run_id.clone(),
+            ContentHash::parse("sha256:1111111111111111").unwrap(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(wrong_roots.is_err());
+        let wrong_roots = AuthorityTrustRootsV3::new(
+            ContentHash::sha256(b"journal-v3-policy"),
+            StableId::parse("repository:wrong").unwrap(),
+            ContentHash::parse("sha256:1111111111111111").unwrap(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let journal = EventJournal::initialize_v3(&admitted_root, identity, manifest).unwrap();
+        assert!(journal.replayed_v3_session(&wrong_roots).is_err());
+
+        let (_workspace, missing_root) = root();
+        let program = ProgramSpace::from_json_slice(include_bytes!(
+            "../../../examples/double-submit-payment/program-space.json"
+        ))
+        .unwrap();
+        let repository_id = program.repository_id().clone();
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let aggregate = ReviewAggregate::new(program, universe, obligations).unwrap();
+        let run_id = StableId::parse("run:journal-v3-missing-cas").unwrap();
+        let log = EventLog::new_v3(run_id.clone(), aggregate).unwrap();
+        let genesis = log
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        let identity = JournalIdentity::new(run_id, JournalGenesis::V3(genesis)).unwrap();
+        let missing = EventJournal::initialize_v3(
+            &missing_root,
+            identity,
+            log.envelopes().next().unwrap().clone(),
+        )
+        .unwrap();
+        let roots = AuthorityTrustRootsV3::new(
+            ContentHash::sha256(b"journal-v3-policy"),
+            repository_id,
+            ContentHash::parse("sha256:1111111111111111").unwrap(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(missing.replayed_v3_session(&roots).is_err());
+    }
+
+    #[test]
+    fn v3_session_refuses_a_basis_from_another_roots_bound_session() {
+        let (_workspace, root) = root();
+        let (identity, manifest, first_roots, _genesis) = v3_fixture(&root);
+        let journal = EventJournal::initialize_v3(&root, identity, manifest).unwrap();
+        let (first_session, first_basis) = journal.replayed_v3_session(&first_roots).unwrap();
+        drop(first_session);
+        let second_roots = AuthorityTrustRootsV3::new(
+            ContentHash::sha256(b"journal-v3-other-policy"),
+            StableId::parse("repository:double-submit-payment").unwrap(),
+            ContentHash::parse("sha256:1111111111111111").unwrap(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let (second_session, second_basis) = journal.replayed_v3_session(&second_roots).unwrap();
+        assert!(matches!(
+            second_session.checked_candidate(&first_basis),
+            Err(JournalError::Domain(
+                reviewgraphen_core::DomainError::AuthorityReplayBasisMismatch
+            ))
+        ));
+        assert!(second_session.checked_candidate(&second_basis).is_ok());
+    }
+
+    #[test]
+    fn v3_session_marker_gate_rejects_every_nonresume_surface_and_raw_append_bypass() {
+        let (_workspace, root) = root();
+        let (identity, manifest, roots, _genesis) = v3_fixture(&root);
+        let journal = EventJournal::initialize_v3(&root, identity, manifest).unwrap();
+        let (mut session, basis) = journal.replayed_v3_session(&roots).unwrap();
+        publish_bundle_file(&session.writer.run, BUNDLE_PENDING_STAGE, b"0\n").unwrap();
+        assert!(matches!(
+            session.run_id(),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        assert!(matches!(
+            session.aggregate(),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        assert!(matches!(
+            session.tail_hash(),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        assert!(matches!(
+            session.event_count(),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        assert!(matches!(
+            session.store_root_identity(),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        assert!(matches!(
+            session.matches_store_root(&root),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        assert!(matches!(
+            session.mint_finding(
+                &StableId::parse("claim:blocked-by-resume").unwrap(),
+                "projection:test",
+                &basis,
+            ),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        assert!(matches!(
+            session.execute_fixture_harness(
+                &StableId::parse("claim:blocked-by-resume").unwrap(),
+                &basis,
+            ),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        assert!(matches!(
+            session.claim_assessment(&StableId::parse("claim:blocked-by-resume").unwrap()),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        assert!(matches!(
+            session.evidence_count(),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        assert!(matches!(
+            session.writer.append_batch(&[]),
+            Err(JournalError::SessionResumeRequired)
+        ));
+
+        fs::unlinkat(&session.writer.run, BUNDLE_PENDING_STAGE, AtFlags::empty()).unwrap();
+        session.state = ReplayedV3RunSessionState::ResumeOnly;
+        assert!(matches!(
+            session.run_id(),
+            Err(JournalError::SessionResumeRequired)
+        ));
+    }
+
+    #[test]
+    fn bundle_resume_error_mapping_preserves_resource_and_normative_domain_errors() {
+        assert!(matches!(
+            map_bundle_resume_domain_error(
+                reviewgraphen_core::DomainError::BundleResumeAuthorityMismatch
+            ),
+            JournalError::BundleResumeAuthorityMismatch
+        ));
+        assert!(matches!(
+            map_bundle_resume_domain_error(reviewgraphen_core::DomainError::Incomplete {
+                operation: "resume-test",
+                limit: 7,
+                observed: 8,
+            }),
+            JournalError::Incomplete {
+                limit: 7,
+                observed: 8
+            }
+        ));
+        assert!(matches!(
+            map_bundle_resume_domain_error(reviewgraphen_core::DomainError::AlreadyComplete),
+            JournalError::Domain(reviewgraphen_core::DomainError::AlreadyComplete)
+        ));
+    }
+
+    #[test]
+    fn public_v3_fixture_bundle_recovers_line_synced_partial_suffix_end_to_end() {
+        for (index, fault, expected_stage) in [
+            (0_u8, AppendFault::BundleAfterDurableLine1, 1_u64),
+            (1, AppendFault::BundleAfterDurableLine2, 2),
+            (2, AppendFault::BundleStageSync, 1),
+        ] {
+            let (_workspace, root) = root();
+            let run = format!("run:store-public-v3-e2e-{index}");
+            let (journal, roots, claim_id) = public_v3_fixture_journal(&root, &run);
+            let (mut session, mut basis) = journal.replayed_v3_session(&roots).unwrap();
+            let mut fixture = session.execute_fixture_harness(&claim_id, &basis).unwrap();
+            let witness_bytes = fixture.witness_bytes().to_vec();
+            let result_bytes = fixture.fixture_result_bytes().to_vec();
+            put_test_cas(&root, &witness_bytes);
+            put_test_cas(&root, &result_bytes);
+
+            let witness = session
+                .prepare_external_fixture_witness_registration(&mut fixture, &basis)
+                .unwrap();
+            let witness_id = witness.registration_id().clone();
+            session
+                .append_authority_registration(witness, &mut basis)
+                .unwrap();
+            let output = session
+                .prepare_fixture_verifier_output_registration(&mut fixture, &basis)
+                .unwrap();
+            let output_id = output.registration_id().clone();
+            session
+                .append_authority_registration(output, &mut basis)
+                .unwrap();
+            let admission = session
+                .admit_external_fixture_witness(&mut fixture, &witness_id, &basis)
+                .unwrap();
+            let bundle = session
+                .mint_fixture_verification_bundle(admission, &output_id, &basis)
+                .unwrap();
+            let before_digest = basis.basis_digest().clone();
+            let before_tail = basis.confirmed_tail_hash().clone();
+            let before_events = basis.confirmed_event_count();
+            session.writer.inject_faults([fault]);
+            let interrupted = session.append_verification_bundle(bundle, &mut basis);
+            if fault == AppendFault::BundleStageSync {
+                assert!(matches!(interrupted, Err(JournalError::SessionUncertain)));
+                assert!(matches!(
+                    session.run_id(),
+                    Err(JournalError::SessionUncertain)
+                ));
+            } else {
+                assert!(matches!(
+                    interrupted,
+                    Err(JournalError::BundleAppendInterrupted { durable_stage })
+                        if durable_stage.confirmed_events() == expected_stage
+                            && durable_stage.expected_events() == 3
+                ));
+                assert!(matches!(
+                    session.run_id(),
+                    Err(JournalError::SessionResumeRequired)
+                ));
+            }
+            assert_eq!(basis.basis_digest(), &before_digest);
+            assert_eq!(basis.confirmed_tail_hash(), &before_tail);
+            assert_eq!(basis.confirmed_event_count(), before_events);
+            drop(session);
+
+            let (intents, completions) = journal.recovery_dirs().unwrap();
+            let audit_before =
+                recovery_audit(&intents, &completions, &journal.identity, journal.limits).unwrap();
+            for _ in 0..2 {
+                assert!(matches!(
+                    journal.recover("test", "partial-no-mutation"),
+                    Err(JournalError::BundleAppendInterrupted { durable_stage })
+                        if durable_stage.confirmed_events() == expected_stage
+                ));
+            }
+            let (after_intents, after_completions) = journal.recovery_dirs().unwrap();
+            let audit_after = recovery_audit(
+                &after_intents,
+                &after_completions,
+                &journal.identity,
+                journal.limits,
+            )
+            .unwrap();
+            assert_eq!(audit_after.receipt_files, audit_before.receipt_files);
+            assert_eq!(
+                audit_after.receipt_scan_bytes,
+                audit_before.receipt_scan_bytes
+            );
+            assert_eq!(audit_after.completed.len(), audit_before.completed.len());
+
+            let wrong_roots = AuthorityTrustRootsV3::new(
+                ContentHash::sha256(b"wrong-store-public-v3-fixture-policy"),
+                StableId::parse("repository:double-submit-payment").unwrap(),
+                ContentHash::parse("sha256:1111111111111111").unwrap(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .unwrap();
+            assert!(
+                journal
+                    .recover_verification_bundle_resume(&wrong_roots)
+                    .is_err()
+            );
+
+            if index == 0 {
+                let witness_hash =
+                    CasHash::parse(ContentHash::sha256(&witness_bytes).to_string()).unwrap();
+                let object = root
+                    .path()
+                    .join("artifacts")
+                    .join("sha256")
+                    .join(witness_hash.prefix())
+                    .join(witness_hash.hex());
+                let missing = object.with_extension("missing-for-recovery-test");
+                std::fs::rename(&object, &missing).unwrap();
+                assert!(journal.recover_verification_bundle_resume(&roots).is_err());
+                std::fs::rename(&missing, &object).unwrap();
+            }
+
+            let (recovered, mut current_basis, authority) =
+                journal.recover_verification_bundle_resume(&roots).unwrap();
+            assert_eq!(recovered.durable_stage().confirmed_events(), expected_stage);
+            assert_eq!(recovered.durable_stage().expected_events(), 3);
+            assert_eq!(
+                current_basis.confirmed_event_count(),
+                before_events + expected_stage
+            );
+            let (healthy, receipt) = recovered
+                .resume_verification_bundle(authority, &mut current_basis)
+                .unwrap();
+            assert_eq!(receipt.journal().len(), (3 - expected_stage) as usize);
+            assert_ne!(current_basis.basis_digest(), &before_digest);
+            assert_eq!(healthy.evidence_count().unwrap(), 1);
+            assert_eq!(healthy.evidence_binding_count().unwrap(), 1);
+            assert_eq!(healthy.verification_count().unwrap(), 1);
+            drop(healthy);
+
+            assert!(matches!(
+                journal.recover_verification_bundle_resume(&roots),
+                Err(JournalError::BundleResumeAuthorityMismatch)
+            ));
+            let (replayed, replayed_basis) = journal.replayed_v3_session(&roots).unwrap();
+            assert_eq!(replayed.evidence_count().unwrap(), 1);
+            assert_eq!(replayed.evidence_binding_count().unwrap(), 1);
+            assert_eq!(replayed.verification_count().unwrap(), 1);
+            assert_eq!(
+                replayed_basis.confirmed_event_count(),
+                current_basis.confirmed_event_count()
+            );
+            let assessment = replayed.claim_assessment(&claim_id).unwrap().unwrap();
+            assert_eq!(assessment.disposition(), AssessmentDispositionV3::Supported);
+            assert_eq!(
+                assessment.review_status(),
+                AssessmentReviewStatusV3::Unreviewed
+            );
+        }
+    }
+
+    #[test]
+    fn v3_initialize_limits_and_manifest_cursor_are_exact() {
+        let (_workspace, exact_root) = root();
+        let (identity, manifest, _roots, _genesis) = v3_fixture(&exact_root);
+        let line_len = u64::try_from(manifest.canonical_bytes().unwrap().len() + 1).unwrap();
+        let mut exact = JournalLimits::from_store(exact_root.limits());
+        exact.max_event_line_bytes = line_len;
+        exact.max_events = 1;
+        exact.max_replay_bytes = line_len;
+        EventJournal::initialize_v3_with_limits(
+            &exact_root,
+            identity.clone(),
+            manifest.clone(),
+            exact,
+        )
+        .unwrap();
+
+        let (_workspace, small_root) = root();
+        let (small_identity, small_manifest, _roots, _genesis) = v3_fixture(&small_root);
+        let mut small = JournalLimits::from_store(small_root.limits());
+        small.max_event_line_bytes = line_len - 1;
+        small.max_events = 1;
+        small.max_replay_bytes = line_len;
+        assert!(matches!(
+            EventJournal::initialize_v3_with_limits(
+                &small_root,
+                small_identity,
+                small_manifest,
+                small,
+            ),
+            Err(JournalError::Incomplete { limit, observed })
+                if limit == line_len - 1 && observed == line_len
+        ));
+
+        let (_workspace, bad_root) = root();
+        let (bad_identity, bad_manifest, bad_roots, _genesis) = v3_fixture(&bad_root);
+        let bad_run_id = bad_identity.run_id.clone();
+        let bad_journal =
+            EventJournal::initialize_v3(&bad_root, bad_identity, bad_manifest.clone()).unwrap();
+        let mut value = serde_json::to_value(bad_manifest).unwrap();
+        value["sequence"] = Value::from(2_u64);
+        let mut bytes = canonical_json(&value).unwrap();
+        bytes.push(b'\n');
+        std::fs::write(
+            bad_root
+                .path()
+                .join(RUNS_DIR)
+                .join(run_dir_name(&bad_run_id))
+                .join(JOURNAL_FILE),
+            bytes,
+        )
+        .unwrap();
+        assert!(bad_journal.replayed_v3_session(&bad_roots).is_err());
+    }
+
+    #[test]
+    fn v3_authority_resolver_rehashes_the_exact_cas_object() {
+        let (_workspace, root) = root();
+        let (identity, manifest, roots, genesis) = v3_fixture(&root);
+        let journal = EventJournal::initialize_v3(&root, identity, manifest).unwrap();
+        let genesis_hash = ContentHash::sha256(&genesis);
+        let hash = CasHash::parse(genesis_hash.to_string()).unwrap();
+        let object = root
+            .path()
+            .join("artifacts")
+            .join("sha256")
+            .join(hash.prefix())
+            .join(hash.hex());
+        let mut corrupt = genesis.clone();
+        corrupt[0] ^= 1;
+        std::fs::write(object, &corrupt).unwrap();
+        let resolver = JournalAuthorityResolverV3 {
+            reader: CasReader::open_existing(&root).unwrap(),
+        };
+        let mut destination = vec![0_u8; corrupt.len()];
+        assert!(
+            resolver
+                .read_exact(&genesis_hash, &mut destination)
+                .is_err()
+        );
+        // Genesis replay remains bound to the identity's verified immutable
+        // bytes; authority artifact reads use the resolver exercised above.
+        assert!(journal.replayed_v3_session(&roots).is_ok());
     }
 
     #[test]
@@ -3518,6 +6639,901 @@ mod tests {
         EventJournal::initialize_v2(root, identity, genesis).unwrap()
     }
 
+    fn three_transition_events(identity: &JournalIdentity) -> Vec<EventEnvelope> {
+        let JournalGenesis::V2Shared(bytes) = &identity.genesis else {
+            panic!("transition fixture requires V2 genesis");
+        };
+        let aggregate = reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes(bytes)
+            .unwrap()
+            .rebuild_aggregate()
+            .unwrap();
+        let mut log = EventLog::new(identity.run_id.clone(), aggregate).unwrap();
+        let obligations = log
+            .aggregate()
+            .obligations()
+            .take(3)
+            .map(|obligation| obligation.id().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(obligations.len(), 3);
+        for obligation in obligations {
+            log.append(EventCommand::obligation_transition(
+                obligation,
+                ObligationLifecycle::Planned,
+            ))
+            .unwrap();
+        }
+        log.envelopes().skip(1).cloned().collect()
+    }
+
+    #[test]
+    fn verification_bundle_marker_records_exact_durable_stages_and_blocks_normal_reopen() {
+        for (fault, expected) in [
+            (AppendFault::BundleAfterDurableLine1, 1_u64),
+            (AppendFault::BundleAfterDurableLine2, 2_u64),
+        ] {
+            let (_workspace, root) = root();
+            let (identity, _) = fixture_event();
+            let events = three_transition_events(&identity);
+            let journal = open_fixture(&root, identity);
+            let mut writer = journal.writer().unwrap();
+            writer.inject_faults([fault]);
+            let result = writer.append_verification_bundle_suffix(&events);
+            assert!(matches!(
+                result,
+                Err(JournalError::BundleAppendInterrupted { durable_stage })
+                    if durable_stage.confirmed_events() == expected
+                        && durable_stage.expected_events() == 3
+            ));
+            assert_eq!(read_bundle_stage(&writer.run, 3).unwrap(), expected);
+            assert_eq!(
+                writer.events().len(),
+                usize::try_from(expected + 1).unwrap()
+            );
+            drop(writer);
+            assert!(matches!(
+                journal.reader(),
+                Err(JournalError::SessionResumeRequired)
+            ));
+            assert!(matches!(
+                journal.recover("test", "bundle-stage"),
+                Err(JournalError::BundleAppendInterrupted { durable_stage })
+                    if durable_stage.confirmed_events() == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn verification_bundle_pre_sync_rolls_back_and_post_sync_requires_recovery() {
+        let (_workspace, pre_root) = root();
+        let (identity, _) = fixture_event();
+        let events = three_transition_events(&identity);
+        let journal = open_fixture(&pre_root, identity);
+        let mut writer = journal.writer().unwrap();
+        writer.inject_faults([AppendFault::PartialWrite]);
+        assert!(matches!(
+            writer.append_verification_bundle_suffix(&events),
+            Err(JournalError::Io(_))
+        ));
+        assert_eq!(writer.events().len(), 1);
+        assert!(
+            read_bundle_pending(&writer.run, &writer.identity, writer.limits)
+                .unwrap()
+                .is_none()
+        );
+        drop(writer);
+        assert_eq!(journal.reader().unwrap().events().len(), 1);
+
+        let (_workspace, post_root) = root();
+        let (identity, _) = fixture_event();
+        let events = three_transition_events(&identity);
+        let journal = open_fixture(&post_root, identity);
+        let mut writer = journal.writer().unwrap();
+        writer.inject_faults([AppendFault::ClearMarkerDirectorySync]);
+        assert!(writer.append_verification_bundle_suffix(&events).is_err());
+        assert_eq!(writer.append_durability, AppendDurability::Uncertain);
+        assert_eq!(read_bundle_stage(&writer.run, 3).unwrap(), 3);
+        drop(writer);
+        journal.recover("test", "bundle-post-sync").unwrap();
+        assert_eq!(journal.reader().unwrap().events().len(), 4);
+    }
+
+    #[test]
+    fn verification_bundle_stage_sync_uncertainty_never_exposes_state() {
+        let (_workspace, staged_root) = root();
+        let (identity, _) = fixture_event();
+        let events = three_transition_events(&identity);
+        let journal = open_fixture(&staged_root, identity);
+        let mut writer = journal.writer().unwrap();
+        writer.inject_faults([AppendFault::BundleStageSync]);
+        assert!(writer.append_verification_bundle_suffix(&events).is_err());
+        assert_eq!(writer.append_durability, AppendDurability::Uncertain);
+        drop(writer);
+        assert!(journal.reader().is_err());
+    }
+
+    #[test]
+    fn bundle_torn_recovery_publishes_exact_intent_before_mutation_and_is_idempotent() {
+        for fault in [
+            RecoveryFault::BundleAfterIntent,
+            RecoveryFault::BundleAfterTruncateSync,
+        ] {
+            let (_workspace, root) = root();
+            let (identity, _) = fixture_event();
+            let events = three_transition_events(&identity);
+            let journal = open_fixture(&root, identity);
+            let mut writer = journal.writer().unwrap();
+            writer.inject_faults([AppendFault::BundleAfterDurableLine1]);
+            assert!(matches!(
+                writer.append_verification_bundle_suffix(&events),
+                Err(JournalError::BundleAppendInterrupted { .. })
+            ));
+            let good_offset = writer.state.confirmed_offset;
+            drop(writer);
+
+            let torn = &events[1].canonical_bytes().unwrap()[..11];
+            let mut log = std::fs::OpenOptions::new()
+                .append(true)
+                .open(log_path(&root))
+                .unwrap();
+            log.write_all(torn).unwrap();
+            log.sync_data().unwrap();
+            drop(log);
+            let pre_size = std::fs::metadata(log_path(&root)).unwrap().len();
+
+            // Inspection computes the exact discarded range but is physically
+            // pure; no truncate is permitted before a durable intent.
+            let fd = journal.open_file(true).unwrap();
+            fs::flock(&fd, FlockOperation::LockExclusive).unwrap();
+            let mut locked = File::from(fd);
+            let inspected = journal
+                .inspect_bundle_pending_locked(&mut locked)
+                .unwrap()
+                .unwrap();
+            assert_eq!(inspected.discarded, torn);
+            assert_eq!(locked.metadata().unwrap().len(), pre_size);
+            drop(locked);
+
+            journal.inject_recovery_faults([fault]);
+            assert!(matches!(
+                journal.recover("test", "bundle-torn"),
+                Err(JournalError::Io(_))
+            ));
+            let (intents, completions) = journal.recovery_dirs().unwrap();
+            let audit =
+                recovery_audit(&intents, &completions, &journal.identity, journal.limits).unwrap();
+            let intent = audit.pending.unwrap();
+            assert_eq!(intent.good_offset, good_offset);
+            assert_eq!(intent.discarded_offset, Some(good_offset));
+            assert_eq!(intent.discarded_len, Some(torn.len() as u64));
+            assert_eq!(intent.pre_size, Some(pre_size));
+            assert_eq!(intent.discarded_hash, ContentHash::sha256(torn));
+            let physical = std::fs::metadata(log_path(&root)).unwrap().len();
+            if fault == RecoveryFault::BundleAfterIntent {
+                assert_eq!(physical, pre_size);
+            } else {
+                assert_eq!(physical, good_offset);
+            }
+
+            // The generic receipt recovery completes the exact same intent;
+            // the next pass derives stage one from marker + journal.
+            journal.recover("ignored", "ignored").unwrap();
+            let (completed_intents, completed_completions) = journal.recovery_dirs().unwrap();
+            let completed = recovery_audit(
+                &completed_intents,
+                &completed_completions,
+                &journal.identity,
+                journal.limits,
+            )
+            .unwrap();
+            assert_eq!(completed.completed.len(), 1);
+            assert_eq!(completed.receipt_files, 2);
+            for _ in 0..2 {
+                assert!(matches!(
+                    journal.recover("test", "bundle-stage"),
+                    Err(JournalError::BundleAppendInterrupted { durable_stage })
+                        if durable_stage.confirmed_events() == 1
+                ));
+            }
+            let (retried_intents, retried_completions) = journal.recovery_dirs().unwrap();
+            let retried = recovery_audit(
+                &retried_intents,
+                &retried_completions,
+                &journal.identity,
+                journal.limits,
+            )
+            .unwrap();
+            assert_eq!(retried.receipt_files, completed.receipt_files);
+            assert_eq!(retried.receipt_scan_bytes, completed.receipt_scan_bytes);
+            assert_eq!(retried.completed, completed.completed);
+            assert!(matches!(
+                journal.reader(),
+                Err(JournalError::SessionResumeRequired)
+            ));
+        }
+    }
+
+    #[test]
+    fn advisory_bundle_stage_is_rebuilt_and_stage_zero_remnant_is_audited() {
+        let (_workspace, staged_root) = root();
+        let (identity, _) = fixture_event();
+        let events = three_transition_events(&identity);
+        let journal = open_fixture(&staged_root, identity);
+        let mut writer = journal.writer().unwrap();
+        writer.inject_faults([AppendFault::BundleAfterDurableLine1]);
+        assert!(writer.append_verification_bundle_suffix(&events).is_err());
+        drop(writer);
+        std::fs::write(
+            journal_dir(&staged_root).join(BUNDLE_PENDING_STAGE),
+            b"torn",
+        )
+        .unwrap();
+        assert!(matches!(
+            journal.recover("test", "advisory-stage"),
+            Err(JournalError::BundleAppendInterrupted { durable_stage })
+                if durable_stage.confirmed_events() == 1
+        ));
+        assert_eq!(read_bundle_stage(&journal.run, 3).unwrap(), 1);
+
+        let (_workspace, clean_root) = root();
+        let (identity, _) = fixture_event();
+        let clean = open_fixture(&clean_root, identity);
+        publish_bundle_file(&clean.run, BUNDLE_PENDING_STAGE, b"0\n").unwrap();
+        assert!(matches!(
+            clean.reader(),
+            Err(JournalError::SessionResumeRequired)
+        ));
+        clean.recover("test", "stage-remnant").unwrap();
+        assert!(!bundle_file_exists(&clean.run, BUNDLE_PENDING_STAGE).unwrap());
+        assert_eq!(clean.reader().unwrap().events().len(), 1);
+    }
+
+    #[test]
+    fn bundle_cleanup_retries_reuse_one_deterministic_receipt_pair() {
+        for cleanup_case in ["stage-only", "confirmed-zero", "already-complete"] {
+            for fault in [
+                RecoveryFault::BundleAfterIntent,
+                RecoveryFault::BundleAfterCompletion,
+                RecoveryFault::BundleAfterMarkerUnlink,
+            ] {
+                let (_workspace, root) = root();
+                let (identity, _) = fixture_event();
+                let JournalGenesis::V2Shared(genesis) = &identity.genesis else {
+                    unreachable!()
+                };
+                put_test_cas(&root, genesis);
+                let events = three_transition_events(&identity);
+                let journal = open_fixture(&root, identity);
+
+                match cleanup_case {
+                    "stage-only" => {
+                        publish_bundle_file(&journal.run, BUNDLE_PENDING_STAGE, b"0\n").unwrap();
+                        fs::fsync(&journal.run).unwrap();
+                    }
+                    "confirmed-zero" => {
+                        let mut writer = journal.writer().unwrap();
+                        let marker = VerificationBundlePendingMarkerV3::new(
+                            &writer.identity,
+                            &writer.state,
+                            &events,
+                        )
+                        .unwrap();
+                        writer.publish_bundle_pending(&marker).unwrap();
+                    }
+                    "already-complete" => {
+                        let mut writer = journal.writer().unwrap();
+                        writer.inject_faults([AppendFault::ClearMarkerDirectorySync]);
+                        assert!(writer.append_verification_bundle_suffix(&events).is_err());
+                    }
+                    _ => unreachable!(),
+                }
+
+                if fault == RecoveryFault::BundleAfterIntent {
+                    // Cross both create-only receipt boundaries separately so
+                    // the final retry begins with one completed pair.
+                    journal.inject_recovery_faults([
+                        RecoveryFault::BundleAfterIntent,
+                        RecoveryFault::BundleAfterCompletion,
+                    ]);
+                    assert!(matches!(
+                        journal.recover("ignored", "ignored"),
+                        Err(JournalError::Io(_))
+                    ));
+                    assert!(matches!(
+                        journal.recover("ignored-again", "ignored-again"),
+                        Err(JournalError::Io(_))
+                    ));
+                } else {
+                    journal.inject_recovery_faults([fault]);
+                    assert!(matches!(
+                        journal.recover("ignored", "ignored"),
+                        Err(JournalError::Io(_))
+                    ));
+                }
+
+                let (before_intents, before_completions) = journal.recovery_dirs().unwrap();
+                let before = recovery_audit(
+                    &before_intents,
+                    &before_completions,
+                    &journal.identity,
+                    journal.limits,
+                )
+                .unwrap();
+                assert!(before.pending.is_none());
+                assert_eq!(before.completed.len(), 1);
+                assert_eq!(before.receipt_files, 2);
+
+                let recovered = journal
+                    .recover("different-actor", "different-tool")
+                    .unwrap();
+                assert!(recovered.resumed);
+                let (after_intents, after_completions) = journal.recovery_dirs().unwrap();
+                let after = recovery_audit(
+                    &after_intents,
+                    &after_completions,
+                    &journal.identity,
+                    journal.limits,
+                )
+                .unwrap();
+                assert_eq!(after.receipt_files, before.receipt_files);
+                assert_eq!(after.receipt_scan_bytes, before.receipt_scan_bytes);
+                assert_eq!(after.completed, before.completed);
+
+                let expected_events = if cleanup_case == "already-complete" {
+                    4
+                } else {
+                    1
+                };
+                assert_eq!(journal.reader().unwrap().events().len(), expected_events);
+                let cas = super::super::CasStore::open(&root).unwrap();
+                let index = super::super::DerivedIndex::open(&root).unwrap();
+                let rebuilt = index.rebuild(&journal, &cas).unwrap();
+                assert_eq!(rebuilt.event_count, expected_events as u64);
+                assert_eq!(
+                    index.snapshot_current(&journal).unwrap().marker.event_count,
+                    expected_events as u64
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn foreign_bundle_receipts_are_rejected_before_any_recovery_mutation() {
+        fn inventory(path: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+            let mut entries = std::fs::read_dir(path)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    (
+                        entry.file_name().to_string_lossy().into_owned(),
+                        std::fs::read(entry.path()).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            entries
+        }
+
+        for completed in [false, true] {
+            let mutations: &[&str] = if completed {
+                &[
+                    "nonce",
+                    "digest",
+                    "range",
+                    "hash",
+                    "actor",
+                    "tool",
+                    "timestamp",
+                ]
+            } else {
+                &[
+                    "nonce",
+                    "kind",
+                    "digest",
+                    "range",
+                    "hash",
+                    "actor",
+                    "tool",
+                    "timestamp",
+                ]
+            };
+            for mutation in mutations {
+                let (_workspace, root) = root();
+                let (identity, _) = fixture_event();
+                let events = three_transition_events(&identity);
+                let journal = open_fixture(&root, identity);
+                let mut writer = journal.writer().unwrap();
+                let marker = VerificationBundlePendingMarkerV3::new(
+                    &writer.identity,
+                    &writer.state,
+                    &events,
+                )
+                .unwrap();
+                let good_offset = writer.state.confirmed_offset;
+                let pre_tail_hash = writer.state.tail_hash.clone();
+                writer.publish_bundle_pending(&marker).unwrap();
+                drop(writer);
+
+                let discarded = b"{";
+                let mut log = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(log_path(&root))
+                    .unwrap();
+                log.write_all(discarded).unwrap();
+                log.sync_data().unwrap();
+                drop(log);
+                let physical_size = std::fs::metadata(log_path(&root)).unwrap().len();
+
+                let mut bundle_digest = marker.bundle_digest.clone();
+                let mut kind = "torn";
+                let mut discarded_hash = ContentHash::sha256(discarded);
+                let mut discarded_len = 1_u64;
+                let mut discarded_offset = Some(good_offset);
+                let mut pre_size = Some(physical_size);
+                if *mutation == "kind" {
+                    kind = "confirmed-zero-cleanup";
+                    discarded_hash = ContentHash::sha256(b"");
+                    discarded_len = 0;
+                    discarded_offset = None;
+                    pre_size = None;
+                } else if *mutation == "digest" {
+                    bundle_digest = ContentHash::sha256(b"foreign bundle");
+                } else if *mutation == "range" {
+                    discarded_len = 2;
+                    pre_size = good_offset.checked_add(discarded_len);
+                } else if *mutation == "hash" {
+                    discarded_hash = ContentHash::sha256(b"foreign discarded bytes");
+                }
+                let mut nonce = bundle_recovery_nonce(
+                    &journal.identity,
+                    &bundle_digest,
+                    marker.pre_offset,
+                    good_offset,
+                    &discarded_hash,
+                    discarded_len,
+                    kind,
+                )
+                .unwrap();
+                if *mutation == "nonce" {
+                    nonce = "a".repeat(64);
+                }
+                let recovery_id = recovery_id(
+                    &journal.identity.run_id,
+                    &journal.identity.genesis_hash(),
+                    good_offset,
+                    &discarded_hash,
+                    &nonce,
+                )
+                .unwrap();
+                let intent = RecoveryIntent {
+                    recovery_id: recovery_id.clone(),
+                    run_id: journal.identity.run_id.clone(),
+                    genesis_hash: journal.identity.genesis_hash(),
+                    nonce,
+                    good_offset,
+                    discarded_hash,
+                    discarded_offset,
+                    discarded_len: (discarded_len != 0).then_some(discarded_len),
+                    pre_size,
+                    bundle_digest: Some(bundle_digest),
+                    bundle_pre_offset: Some(marker.pre_offset),
+                    bundle_recovery_kind: Some(kind.to_owned()),
+                    pre_tail_hash,
+                    actor: if *mutation == "actor" {
+                        "foreign-actor".to_owned()
+                    } else {
+                        "reviewgraphen-store".to_owned()
+                    },
+                    tool_version: if *mutation == "tool" {
+                        "bundle-recovery:foreign".to_owned()
+                    } else {
+                        format!("bundle-recovery:{kind}")
+                    },
+                    timestamp_unix_seconds: u64::from(*mutation == "timestamp"),
+                };
+                let completion = RecoveryCompletion {
+                    recovery_id: recovery_id.clone(),
+                    post_file_hash: ContentHash::sha256(
+                        &std::fs::read(log_path(&root)).unwrap()[..good_offset as usize],
+                    ),
+                };
+                let (intents, completions) = journal.recovery_dirs().unwrap();
+                publish_receipt(&intents, &receipt_name(&recovery_id), &intent).unwrap();
+                if completed {
+                    publish_receipt(&completions, &receipt_name(&recovery_id), &completion)
+                        .unwrap();
+                }
+                drop(intents);
+                drop(completions);
+
+                let run = journal_dir(&root);
+                let intents_path = run.join(RECOVERY_DIR).join(INTENTS_DIR);
+                let completions_path = run.join(RECOVERY_DIR).join(COMPLETIONS_DIR);
+                let before_intents = inventory(&intents_path);
+                let before_completions = inventory(&completions_path);
+                let before_log = std::fs::read(log_path(&root)).unwrap();
+                let before_marker = std::fs::read(run.join(BUNDLE_PENDING_MARKER)).unwrap();
+                let before_stage = std::fs::read(run.join(BUNDLE_PENDING_STAGE)).unwrap();
+
+                assert!(matches!(
+                    journal.recover("operator", "foreign-receipt-test"),
+                    Err(JournalError::ReceiptCorruption { .. })
+                ));
+                assert_eq!(inventory(&intents_path), before_intents);
+                assert_eq!(inventory(&completions_path), before_completions);
+                assert_eq!(std::fs::read(log_path(&root)).unwrap(), before_log);
+                assert_eq!(
+                    std::fs::read(run.join(BUNDLE_PENDING_MARKER)).unwrap(),
+                    before_marker
+                );
+                assert_eq!(
+                    std::fs::read(run.join(BUNDLE_PENDING_STAGE)).unwrap(),
+                    before_stage
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn distinct_bundle_lineages_may_share_a_tail_and_remain_indexable() {
+        let (_workspace, root) = root();
+        let (identity, _) = fixture_event();
+        let JournalGenesis::V2Shared(genesis) = &identity.genesis else {
+            unreachable!()
+        };
+        put_test_cas(&root, genesis);
+        let events = three_transition_events(&identity);
+        let journal = open_fixture(&root, identity);
+
+        let mut first_writer = journal.writer().unwrap();
+        let first_marker = VerificationBundlePendingMarkerV3::new(
+            &first_writer.identity,
+            &first_writer.state,
+            &events,
+        )
+        .unwrap();
+        let shared_offset = first_writer.state.confirmed_offset;
+        first_writer.publish_bundle_pending(&first_marker).unwrap();
+        drop(first_writer);
+        let first = journal.recover("ignored", "ignored").unwrap();
+
+        let mut second_writer = journal.writer().unwrap();
+        let second_marker = VerificationBundlePendingMarkerV3::new(
+            &second_writer.identity,
+            &second_writer.state,
+            &events[..1],
+        )
+        .unwrap();
+        assert_ne!(first_marker.bundle_digest, second_marker.bundle_digest);
+        assert_eq!(second_writer.state.confirmed_offset, shared_offset);
+        second_writer
+            .publish_bundle_pending(&second_marker)
+            .unwrap();
+        drop(second_writer);
+        let second = journal.recover("also-ignored", "also-ignored").unwrap();
+
+        assert_eq!(first.intent.good_offset, shared_offset);
+        assert_eq!(second.intent.good_offset, shared_offset);
+        assert!(!same_bundle_recovery_lineage(&first.intent, &second.intent));
+        assert_ne!(first.intent.recovery_id, second.intent.recovery_id);
+        let (intents, completions) = journal.recovery_dirs().unwrap();
+        let audit =
+            recovery_audit(&intents, &completions, &journal.identity, journal.limits).unwrap();
+        assert!(audit.pending.is_none());
+        assert_eq!(audit.completed.len(), 2);
+        assert_eq!(audit.receipt_files, 4);
+        assert_eq!(journal.reader().unwrap().events().len(), 1);
+
+        let cas = super::super::CasStore::open(&root).unwrap();
+        let index = super::super::DerivedIndex::open(&root).unwrap();
+        let rebuilt = index.rebuild(&journal, &cas).unwrap();
+        assert_eq!(rebuilt.event_count, 1);
+        assert_eq!(
+            index.snapshot_current(&journal).unwrap().marker.event_count,
+            1
+        );
+
+        let genesis_bytes = journal
+            .identity
+            .v2_genesis_backing()
+            .expect("V2 genesis backing");
+        let original_identity = journal.identity.cloned_local_metadata_capacity().unwrap();
+        let reader_identity = u64::try_from(
+            journal
+                .identity
+                .local_metadata_capacity()
+                .checked_add(journal.identity.shared_certificate_capacity())
+                .unwrap(),
+        )
+        .unwrap();
+        let canonical_scratch = journal.limits.max_event_line_bytes - 1;
+        let fixed = u64::try_from(genesis_bytes.len())
+            .unwrap()
+            .checked_add(original_identity * 2)
+            .and_then(|value| value.checked_add(reader_identity))
+            .and_then(|value| value.checked_add(journal.limits.max_event_line_bytes))
+            .and_then(|value| value.checked_add(canonical_scratch))
+            .unwrap();
+        let run = journal_dir(&root);
+        let receipt_sizes = [INTENTS_DIR, COMPLETIONS_DIR]
+            .into_iter()
+            .flat_map(|directory| {
+                std::fs::read_dir(run.join(RECOVERY_DIR).join(directory))
+                    .unwrap()
+                    .map(|entry| entry.unwrap().metadata().unwrap().len())
+            })
+            .collect::<Vec<_>>();
+        let receipt_bytes = receipt_sizes.iter().sum::<u64>();
+        let max_receipt = *receipt_sizes.iter().max().unwrap();
+        let names = 4_u64;
+        let preflight = fixed
+            .checked_add(receipt_bytes * 2)
+            .and_then(|value| value.checked_add(max_receipt * 2))
+            .and_then(|value| value.checked_add(2 * std::mem::size_of::<RecoveryIntent>() as u64))
+            .and_then(|value| {
+                value.checked_add(
+                    2 * std::mem::size_of::<(RecoveryIntent, RecoveryCompletion)>() as u64,
+                )
+            })
+            .and_then(|value| value.checked_add(names * std::mem::size_of::<String>() as u64))
+            .and_then(|value| value.checked_add(names * 69))
+            .unwrap();
+        let generous = root.limits().max_index_working_bytes;
+        let accounted_reader = journal.index_reader(generous).unwrap();
+        let final_peak = accounted_reader
+            .retained_metadata_capacity()
+            .unwrap()
+            .checked_add(original_identity * 2)
+            .and_then(|value| value.checked_add(genesis_bytes.len() as u64))
+            .and_then(|value| value.checked_add(journal.limits.max_event_line_bytes))
+            .and_then(|value| value.checked_add(canonical_scratch))
+            .unwrap();
+        let exact = preflight.max(final_peak);
+        drop(accounted_reader);
+        let mut exact_reader = journal.index_reader(exact).unwrap();
+        assert_eq!(
+            exact_reader
+                .with_locked_prefix::<()>(|_, _| Ok(()))
+                .unwrap()
+                .event_count,
+            1
+        );
+        assert!(matches!(
+            journal.index_reader(exact - 1),
+            Err(JournalError::Incomplete { limit, .. }) if limit == exact - 1
+        ));
+
+        let mut retained_reader = journal.index_reader(generous).unwrap();
+        let before = retained_reader.retained_metadata_capacity().unwrap();
+        let intent = &mut retained_reader.completed_receipts[0].0;
+        let old_digest = intent.bundle_digest.as_ref().unwrap().allocated_bytes();
+        let old_kind = intent.bundle_recovery_kind.as_ref().unwrap().capacity();
+        intent.bundle_digest =
+            Some(ContentHash::parse(format!("sha256:{}", "a".repeat(128))).unwrap());
+        intent.bundle_recovery_kind = Some("x".repeat(97));
+        let expected_delta = intent.bundle_digest.as_ref().unwrap().allocated_bytes()
+            + intent.bundle_recovery_kind.as_ref().unwrap().capacity()
+            - old_digest
+            - old_kind;
+        assert_eq!(
+            retained_reader.retained_metadata_capacity().unwrap() - before,
+            expected_delta as u64
+        );
+    }
+
+    #[test]
+    fn mixed_legacy_and_bundle_lineages_refuse_both_directions_without_changes() {
+        for completed in [false, true] {
+            // An existing generic lineage must block a bundle cleanup at the
+            // same tail before either receipt publication or gate cleanup.
+            let (_workspace, first_root) = root();
+            let (identity, _) = fixture_event();
+            let events = three_transition_events(&identity);
+            let journal = open_fixture(&first_root, identity);
+            let mut writer = journal.writer().unwrap();
+            let marker =
+                VerificationBundlePendingMarkerV3::new(&writer.identity, &writer.state, &events)
+                    .unwrap();
+            let good = writer.state.confirmed_offset;
+            let tail = writer.state.tail_hash.clone();
+            writer.publish_bundle_pending(&marker).unwrap();
+            drop(writer);
+            let generic = intent_for(&journal, good, b"", tail, 1);
+            let completion = RecoveryCompletion {
+                recovery_id: generic.recovery_id.clone(),
+                post_file_hash: ContentHash::sha256(&std::fs::read(log_path(&first_root)).unwrap()),
+            };
+            let (intents, completions) = journal.recovery_dirs().unwrap();
+            publish_receipt(&intents, &receipt_name(&generic.recovery_id), &generic).unwrap();
+            if completed {
+                publish_receipt(
+                    &completions,
+                    &receipt_name(&completion.recovery_id),
+                    &completion,
+                )
+                .unwrap();
+            }
+            drop(intents);
+            drop(completions);
+            let before_receipts = raw_recovery_inventory(&first_root);
+            let before_log = std::fs::read(log_path(&first_root)).unwrap();
+            let run = journal_dir(&first_root);
+            let before_marker = std::fs::read(run.join(BUNDLE_PENDING_MARKER)).unwrap();
+            let before_stage = std::fs::read(run.join(BUNDLE_PENDING_STAGE)).unwrap();
+            assert!(matches!(
+                journal.recover("operator", "mixed-lineage"),
+                Err(JournalError::ReceiptCorruption { .. })
+            ));
+            assert_eq!(raw_recovery_inventory(&first_root), before_receipts);
+            assert_eq!(std::fs::read(log_path(&first_root)).unwrap(), before_log);
+            assert_eq!(
+                std::fs::read(run.join(BUNDLE_PENDING_MARKER)).unwrap(),
+                before_marker
+            );
+            assert_eq!(
+                std::fs::read(run.join(BUNDLE_PENDING_STAGE)).unwrap(),
+                before_stage
+            );
+
+            // An existing bundle lineage must likewise block generic torn
+            // recovery at the same tail. Pending bundle recovery remains the
+            // sole operation and completed bundle history conflicts with a
+            // fresh legacy proposal.
+            let (_workspace, reverse_root) = root();
+            let (identity, _) = fixture_event();
+            let reverse = open_fixture(&reverse_root, identity);
+            publish_bundle_file(&reverse.run, BUNDLE_PENDING_STAGE, b"0\n").unwrap();
+            if completed {
+                reverse.recover("ignored", "ignored").unwrap();
+            } else {
+                reverse.inject_recovery_faults([RecoveryFault::BundleAfterIntent]);
+                assert!(matches!(
+                    reverse.recover("ignored", "ignored"),
+                    Err(JournalError::Io(_))
+                ));
+            }
+            let mut log = std::fs::OpenOptions::new()
+                .append(true)
+                .open(log_path(&reverse_root))
+                .unwrap();
+            log.write_all(b"{").unwrap();
+            log.sync_data().unwrap();
+            drop(log);
+            let before_receipts = raw_recovery_inventory(&reverse_root);
+            let before_log = std::fs::read(log_path(&reverse_root)).unwrap();
+            let stage_before =
+                std::fs::read(journal_dir(&reverse_root).join(BUNDLE_PENDING_STAGE)).ok();
+            assert!(matches!(
+                reverse.recover("operator", "mixed-lineage"),
+                Err(JournalError::ReceiptCorruption { .. })
+            ));
+            assert_eq!(raw_recovery_inventory(&reverse_root), before_receipts);
+            assert_eq!(std::fs::read(log_path(&reverse_root)).unwrap(), before_log);
+            assert_eq!(
+                std::fs::read(journal_dir(&reverse_root).join(BUNDLE_PENDING_STAGE)).ok(),
+                stage_before
+            );
+        }
+    }
+
+    #[test]
+    fn verification_bundle_resume_appends_only_the_exact_missing_suffix_once() {
+        let (_workspace, root) = root();
+        let (identity, _) = fixture_event();
+        let events = three_transition_events(&identity);
+        let journal = open_fixture(&root, identity);
+        let mut writer = journal.writer().unwrap();
+        writer.inject_faults([AppendFault::BundleAfterDurableLine1]);
+        assert!(matches!(
+            writer.append_verification_bundle_suffix(&events),
+            Err(JournalError::BundleAppendInterrupted { .. })
+        ));
+        let marker = read_bundle_pending(&writer.run, &writer.identity, writer.limits)
+            .unwrap()
+            .unwrap();
+        let before = writer.events().len();
+        assert!(matches!(
+            writer.resume_verification_bundle_suffix(&marker, &events[2..], 1),
+            Err(JournalError::BundleResumeAuthorityMismatch)
+        ));
+        assert_eq!(writer.events().len(), before);
+
+        let receipts = writer
+            .resume_verification_bundle_suffix(&marker, &events[1..], 1)
+            .unwrap();
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(writer.events().len(), 4);
+        assert!(
+            read_bundle_pending(&writer.run, &writer.identity, writer.limits)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            writer
+                .resume_verification_bundle_suffix(&marker, &events[1..], 1)
+                .is_err()
+        );
+        assert_eq!(writer.events().len(), 4);
+    }
+
+    #[test]
+    fn repeated_partial_recovery_keeps_receipts_stable_and_resumed_index_current() {
+        let (_workspace, root) = root();
+        let (identity, _) = fixture_event();
+        let JournalGenesis::V2Shared(genesis) = &identity.genesis else {
+            unreachable!()
+        };
+        put_test_cas(&root, genesis);
+        let events = three_transition_events(&identity);
+        let journal = open_fixture(&root, identity);
+        let mut writer = journal.writer().unwrap();
+        writer.inject_faults([AppendFault::BundleAfterDurableLine1]);
+        assert!(matches!(
+            writer.append_verification_bundle_suffix(&events),
+            Err(JournalError::BundleAppendInterrupted { .. })
+        ));
+        drop(writer);
+        let (intents, completions) = journal.recovery_dirs().unwrap();
+        let before =
+            recovery_audit(&intents, &completions, &journal.identity, journal.limits).unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                journal.recover("test", "no-mutation-partial"),
+                Err(JournalError::BundleAppendInterrupted { durable_stage })
+                    if durable_stage.confirmed_events() == 1
+            ));
+        }
+        let (after_intents, after_completions) = journal.recovery_dirs().unwrap();
+        let after = recovery_audit(
+            &after_intents,
+            &after_completions,
+            &journal.identity,
+            journal.limits,
+        )
+        .unwrap();
+        assert_eq!(after.receipt_files, before.receipt_files);
+        assert_eq!(after.receipt_scan_bytes, before.receipt_scan_bytes);
+        assert_eq!(after.completed.len(), before.completed.len());
+
+        let mut writer = JournalWriter {
+            file: {
+                let fd = journal.open_file(true).unwrap();
+                fs::flock(&fd, FlockOperation::LockExclusive).unwrap();
+                File::from(fd)
+            },
+            identity: journal.identity.clone(),
+            limits: journal.limits,
+            state: scan_bytes(
+                &std::fs::read(log_path(&root)).unwrap(),
+                &journal.identity,
+                journal.limits,
+                true,
+            )
+            .unwrap(),
+            intents,
+            completions,
+            run: dup(&journal.run).unwrap(),
+            poisoned: false,
+            append_durability: AppendDurability::Confirmed,
+            faults: std::collections::VecDeque::new(),
+        };
+        let marker = read_bundle_pending(&writer.run, &writer.identity, writer.limits)
+            .unwrap()
+            .unwrap();
+        writer
+            .resume_verification_bundle_suffix(&marker, &events[1..], 1)
+            .unwrap();
+        drop(writer);
+
+        let cas = super::super::CasStore::open(&root).unwrap();
+        let index = super::super::DerivedIndex::open(&root).unwrap();
+        let rebuilt = index.rebuild(&journal, &cas).unwrap();
+        assert_eq!(rebuilt.event_count, 4);
+        assert_eq!(
+            index.snapshot_current(&journal).unwrap().marker.event_count,
+            4
+        );
+    }
+
     fn root() -> (tempfile::TempDir, StoreRoot) {
         let workspace = tempfile::tempdir().unwrap();
         let root = StoreRoot::open(workspace.path(), super::super::StoreLimits::default()).unwrap();
@@ -3528,6 +7544,26 @@ mod tests {
         root.path()
             .join(RUNS_DIR)
             .join(run_dir_name(&StableId::parse("run:journal-test").unwrap()))
+    }
+
+    fn raw_recovery_inventory(root: &StoreRoot) -> Vec<(String, Vec<u8>)> {
+        let run = journal_dir(root).join(RECOVERY_DIR);
+        let mut entries = [INTENTS_DIR, COMPLETIONS_DIR]
+            .into_iter()
+            .flat_map(|directory| {
+                std::fs::read_dir(run.join(directory))
+                    .unwrap()
+                    .map(move |entry| {
+                        let entry = entry.unwrap();
+                        (
+                            format!("{directory}/{}", entry.file_name().to_string_lossy()),
+                            std::fs::read(entry.path()).unwrap(),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
     }
 
     fn create_empty_v2_layout(root: &StoreRoot, identity: &JournalIdentity) {
@@ -3622,6 +7658,12 @@ mod tests {
             nonce,
             good_offset,
             discarded_hash,
+            discarded_offset: None,
+            discarded_len: None,
+            pre_size: None,
+            bundle_digest: None,
+            bundle_pre_offset: None,
+            bundle_recovery_kind: None,
             pre_tail_hash,
             actor: "test".to_owned(),
             tool_version: "reviewgraphen-store@1".to_owned(),
@@ -4185,6 +8227,12 @@ mod tests {
             nonce,
             good_offset: torn.good_offset,
             discarded_hash,
+            discarded_offset: None,
+            discarded_len: None,
+            pre_size: None,
+            bundle_digest: None,
+            bundle_pre_offset: None,
+            bundle_recovery_kind: None,
             pre_tail_hash: torn.pre_tail_hash,
             actor: "actor".to_owned(),
             tool_version: "test".to_owned(),
@@ -4881,5 +8929,35 @@ mod tests {
             drop(writer);
             assert_eq!(reader_rx.recv().unwrap(), 1);
         });
+    }
+
+    #[test]
+    fn v3_recovery_replay_returns_with_the_same_exclusive_lock_held() {
+        let (_workspace, root) = root();
+        let (identity, manifest, roots, _genesis) = v3_fixture(&root);
+        let run_id = identity.run_id.clone();
+        let journal = EventJournal::initialize_v3(&root, identity, manifest).unwrap();
+        let path = root
+            .path()
+            .join(RUNS_DIR)
+            .join(run_dir_name(&run_id))
+            .join(JOURNAL_FILE);
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        file.write_all(b"{").unwrap();
+        file.sync_data().unwrap();
+        drop(file);
+
+        let (receipt, session, basis) = journal
+            .recover_replayed_v3_session("test", "v3-lock", &roots)
+            .unwrap();
+        assert_eq!(receipt.intent.run_id, run_id);
+        assert_eq!(session.event_count().unwrap(), 1);
+        assert_eq!(basis.confirmed_event_count(), 1);
+        let blocked_reader = journal.open_file(false).unwrap();
+        assert!(fs::flock(&blocked_reader, FlockOperation::NonBlockingLockShared).is_err());
+        let blocked_writer = journal.open_file(true).unwrap();
+        assert!(fs::flock(&blocked_writer, FlockOperation::NonBlockingLockExclusive).is_err());
+        drop(session);
+        fs::flock(&blocked_reader, FlockOperation::NonBlockingLockShared).unwrap();
     }
 }

@@ -19,8 +19,9 @@ pub use index::{
 #[cfg(target_os = "linux")]
 pub use journal::{
     EventJournal, JournalAppendReceipt, JournalError, JournalGenesis, JournalIdentity,
-    JournalLimits, JournalReader, JournalRecoveryReceipt, JournalWriter, RecoveryCompletion,
-    RecoveryIntent, ReplayedV2RunSession,
+    JournalLimits, JournalReader, JournalRecoveryReceipt, JournalWriter,
+    RecoveredVerificationBundleV3Session, RecoveryCompletion, RecoveryIntent, ReplayedV2RunSession,
+    ReplayedV3RunSession, V3VerificationBundleAppendReceipt, VerificationBundleDurableStageV3,
 };
 
 #[cfg(target_os = "linux")]
@@ -220,6 +221,57 @@ impl<'a> CasReader<'a> {
         let mut bytes = Vec::new();
         self.read_into(hash, None, &mut bytes)?;
         Ok(bytes)
+    }
+
+    /// Fills an already-sized caller buffer from one descriptor-relative CAS
+    /// object.  This is the allocation-free authority-replay seam: neither
+    /// the resolver nor the store may replace core's admitted destination.
+    pub(crate) fn read_exact_slice(
+        &self,
+        hash: &CasHash,
+        destination: &mut [u8],
+    ) -> Result<(), StoreError> {
+        let parent = fs::openat(
+            &self.sha256,
+            hash.prefix(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(map_artifact_open_error)?;
+        verify_artifact_fd(&parent, FileType::Directory, 0o700)?;
+        let entry = fs::statat(&parent, hash.hex(), AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(map_artifact_open_error)?;
+        verify_artifact_stat(&entry, FileType::RegularFile, 0o600)?;
+        let fd = fs::openat(
+            &parent,
+            hash.hex(),
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(map_artifact_open_error)?;
+        verify_artifact_fd(&fd, FileType::RegularFile, 0o600)?;
+        let opened = fs::fstat(&fd)?;
+        if opened.st_dev != entry.st_dev || opened.st_ino != entry.st_ino {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        let observed_size =
+            u64::try_from(opened.st_size).map_err(|_| StoreError::CorruptedArtifact)?;
+        if observed_size > self.root.limits.max_object_bytes
+            || usize::try_from(observed_size).ok() != Some(destination.len())
+        {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        let mut file = std::fs::File::from(fd);
+        file.read_exact(destination).map_err(StoreError::Stream)?;
+        let mut trailing = [0_u8; 1];
+        if file.read(&mut trailing).map_err(StoreError::Stream)? != 0 {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        let actual = CasHash::parse(format!("sha256:{:x}", Sha256::digest(&*destination)))?;
+        if &actual != hash {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        Ok(())
     }
 
     /// Reads a verified object into caller-owned storage. The caller can
