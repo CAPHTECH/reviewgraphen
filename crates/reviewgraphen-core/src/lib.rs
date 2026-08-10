@@ -6,6 +6,7 @@
 //! and staleness propagation milestones.
 
 mod canonical;
+mod context;
 mod coverage;
 mod error;
 mod event;
@@ -26,6 +27,11 @@ extern crate self as reviewgraphen_core;
 mod m1_tests;
 
 pub use canonical::{CanonicalJson, canonical_hash, canonical_json, canonical_json_value};
+pub use context::{
+    BuiltContextProjection, ContextBuildSession, ContextError, ContextPolicyV1,
+    ContextSourceRequest, EnvelopeLoss, EnvelopeUnknown, ExcerptRange, ExcludedSourceRef,
+    ExclusionReason, ReviewContextEnvelope, SourceArtifactRef, prepare_context,
+};
 pub use coverage::{Coverage, CoverageMeasure, Ratio};
 pub use error::{DomainError, PlanningError, Result};
 pub use event::{

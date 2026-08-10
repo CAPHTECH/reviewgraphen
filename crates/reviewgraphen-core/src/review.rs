@@ -2521,6 +2521,45 @@ impl ReviewAggregate {
         self.obligations.values()
     }
 
+    /// Internal context-builder lookup; registrations are event-derived
+    /// metadata and remain unavailable as a general mutation surface.
+    pub(crate) fn registered_artifact(&self, id: &StableId) -> Option<&ArtifactRegistered> {
+        self.registered_artifacts.get(id)
+    }
+
+    /// Internal context-builder lookup for the exact snapshot source closure.
+    pub(crate) fn snapshot_sources_for(
+        &self,
+        snapshot_id: &StableId,
+    ) -> Option<&SnapshotSourcesRecorded> {
+        self.snapshot_sources.get(snapshot_id)
+    }
+
+    /// Internal exact obligation lookup used by deterministic projections.
+    pub(crate) fn obligation(&self, id: &StableId) -> Option<&Obligation> {
+        self.obligations.get(id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_context_metadata_for_test(
+        &mut self,
+        registrations: Vec<ArtifactRegistered>,
+        sources: SnapshotSourcesRecorded,
+    ) {
+        self.registered_artifacts = registrations
+            .into_iter()
+            .map(|registration| (registration.registration_id().clone(), registration))
+            .collect();
+        self.snapshot_sources
+            .insert(sources.snapshot_id().clone(), sources);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_snapshot_sources_for_test(&mut self, sources: SnapshotSourcesRecorded) {
+        self.snapshot_sources
+            .insert(sources.snapshot_id().clone(), sources);
+    }
+
     /// Claims in stable ID order.
     pub fn claims(&self) -> impl Iterator<Item = &ReviewClaim> {
         self.claims.values()
