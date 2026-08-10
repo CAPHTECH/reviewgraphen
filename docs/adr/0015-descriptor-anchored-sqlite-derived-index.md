@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-09
+- Amended: 2026-08-10 by ADR 0017's store-visible working-capacity boundary.
 - Scope: the SQLite implementation required by ADR 0014 §7, including its
   dependency features, in-memory build, serialized-file publication, read-only
   query reconstruction, locks, bounds, schema guards, and restart behavior.
@@ -11,15 +12,16 @@
 > D1 schema version 2, its exact plan/context columns and hash preimages, and
 > the version-1 rebuild boundary are closed by
 > [ADR 0017](0017-d1-derived-index-schema-v2.md). This ADR remains normative
-> for the descriptor-relative SQLite, locking, bounds, and publication
-> boundary.
+> for the descriptor-relative SQLite, locking, and publication boundary. ADR
+> 0017 narrows `max_index_working_bytes` to exact store-visible capacities and
+> records core allocator heap/RSS as a separate accepted limitation.
 
 ## Context
 
 ADR 0007 makes the append-only event stream canonical and SQLite a disposable,
 rebuildable query projection. ADR 0014 requires a V2 index to be rebuilt from
-hash-verified genesis bytes, a confirmed JSONL prefix, and core's
-`ValidatedEventView` plus `OfflineProjectionState`. An offline store cannot
+hash-verified genesis bytes, a confirmed JSONL prefix, and core's validated
+semantic replay. An offline store cannot
 mint `EventAdmissions`, and SQLite must never become an alternative authority
 source.
 
@@ -190,7 +192,7 @@ accidental lock-entry replacement cannot silently become supported behavior.
 ```text
 max_index_rows                 aggregate rows across every table
 max_index_serialized_bytes     main DB image and active-file byte limit
-max_index_working_bytes        store-owned simultaneous image/read/result bytes
+max_index_working_bytes        store-visible simultaneous buffer/image/result capacities
 max_index_query_bytes          total returned IndexSnapshot payload bytes
 max_index_statement_bytes      UTF-8 bytes in any one SQL statement
 ```
@@ -237,8 +239,11 @@ the corresponding store bounds. Each static DDL/DML/query statement is
 checked against `max_index_statement_bytes` before prepare; dynamically
 constructed SQL is forbidden.
 
-`max_index_working_bytes` is enforced on explicit ownership stages, before
-allocation and again as buffers become materialized. During serialize, the
+`max_index_working_bytes` is enforced on explicit store-visible ownership
+stages, before store buffer allocation and again as buffers become
+materialized. It does not measure allocator metadata, standard-library map
+nodes, serde transients, or exact process RSS; ADR 0017 §6 owns that boundary
+and its named limitation. During serialize, the
 build connection's main image/cache, SQLite's serialized view, and the owned
 publication `Vec` are charged as `3 * image + configured build cache`. The
 connection is dropped before publication takes ownership of that `Vec`.
@@ -259,24 +264,28 @@ MEMORY` is mandatory, so a sort or temporary table cannot create an ambient
 file. Exceeding any bound is a typed incomplete operation, never a truncated
 successful index or query.
 
-For schema-version-2 current queries, the lock-held canonical journal view is
-store-owned working state, not an input exempt from this budget. ADR 0017 §6
-defines its raw, decoded, validation-scratch, and comparison charges and the
-stage peaks in which they coexist with the deserialized main image, configured
-cache, and complete-result reservation. The query cache reservation is reduced
-by that retained journal charge; `max_replay_bytes` does not enlarge or replace
-`max_index_working_bytes`.
+For schema-version-2 current queries, the lock-held canonical journal's raw
+buffer, compact comparison metadata, store-owned scratch, and comparison tuple
+are store-visible working state, not inputs exempt from this budget. ADR 0017
+§6 defines their charges and the stage peaks in which they coexist with the
+deserialized main image, configured cache, and complete-result reservation.
+Core typed decode/replay remains independently bounded by journal and schema
+structural limits; it is not included in this exact store-visible capacity
+sum. `max_replay_bytes` does not enlarge `max_index_working_bytes` or become an
+allocator heap reservation.
 
 ### 6. In-memory rebuild
 
 After acquiring exclusive index lock then journal shared lock, rebuild:
 
-1. obtains exactly the complete confirmed event slice, byte offset, and tail
-   hash from `JournalReader::with_locked_snapshot`;
-2. constructs one complete `ValidatedEventView` over that same confirmed
-   slice: V1 uses the identity's V1 genesis hash; V2 first reads and rehashes
-   the manifest's genesis object through `CasStore`, strictly decodes the
-   exact `RunGenesisSnapshot` bytes, then supplies those bytes to core;
+1. obtains the confirmed byte offset and tail hash under the journal lock, then
+   validates the prefix with one or more line-at-a-time passes bounded as ADR
+   0017 §6 requires; it does not materialize an unbounded whole-prefix typed
+   view;
+2. V1 uses the identity's V1 genesis hash. V2 reads and rehashes the manifest's
+   genesis object through `CasStore`, strictly decodes the exact
+   `RunGenesisSnapshot` bytes, and supplies those bytes to streaming core
+   semantic replay;
 3. opens only an in-memory SQLite connection with
    `SQLITE_OPEN_READ_WRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NO_MUTEX`,
    applies the fixed pragmas/limits, creates the fixed schema, and starts one
@@ -285,17 +294,17 @@ After acquiring exclusive index lock then journal shared lock, rebuild:
 5. writes the singleton marker including the exact event count; and
 6. runs all validation before commit and serialization.
 
-For V1, `ValidatedEventView` validates only the homogeneous V1 chain and the
-closed payload shape. Rebuild writes the validated envelope fields to `events`
-and writes no baseline/domain/shadow/finding row. It does **not** construct or
-call `OfflineProjectionState`; V1 has neither verified V2 genesis bytes nor the
+For V1, the bounded pass validates only the homogeneous V1 chain and the closed
+payload shape. Rebuild writes the validated envelope fields to `events` and
+writes no baseline/domain/shadow/finding row. It does **not** construct or call
+`OfflineProjectionState`; V1 has neither verified V2 genesis bytes nor the
 execution/source closure required for an honest domain projection. A full
 domain index requires import into a fresh V2 run.
 
 For V2, rebuild seeds the typed ProgramSpace/universe/obligation baseline from
-the already verified genesis snapshot. It constructs exactly one
-`OfflineProjectionState` from that validated V2 view, applies every view event
-exactly once and in sequence under §7, then requires
+the already verified genesis snapshot. It constructs exactly one streaming
+`OfflineProjectionState`, applies every event exactly once and in sequence
+under §7, then requires
 `OfflineProjectionState::is_complete()` to be true and its `tail_hash()` to
 equal the reader's locked tail hash. A false completion check, tail mismatch,
 skipped event, repeated apply, or apply past the view is a hard projection
@@ -506,19 +515,29 @@ unconditional DDL and projection invariant for every v0.1 rebuild.
 
 ### 9. Serialize and bounded FD-relative candidate write
 
-After validation, rebuild commits the in-memory transaction, verifies
-autocommit state, and calls `Connection::serialize(DatabaseName::Main)`. It
-checks the returned image length before copying or writing it, accounts the
-serialize-stage main/cache/view/owned-copy peak against
-`max_index_working_bytes`, drops the connection, and only then moves the owned
-image into publication. It requires length to be
-nonzero, at most `max_index_serialized_bytes`, page-aligned, and consistent
-with the checked SQLite page count.
+After validation, rebuild commits the in-memory transaction and verifies
+autocommit state. Before calling `Connection::serialize(DatabaseName::Main)`,
+it reads the checked `page_count`, multiplies it by the fixed `page_size`,
+requires that expected image size to be nonzero, page-aligned, and no greater
+than `max_index_serialized_bytes`, and admits the complete serialize peak from
+ADR 0017 §6. That peak reserves the reconstructed main/cache plus both an
+expected-size serialized view and expected-size owned copy, together with any
+still-live `G`/compact journal metadata. Overflow or an over-budget peak fails
+before `Connection::serialize` can allocate.
+
+Only after that admission does rebuild call `Connection::serialize`. The
+returned length must equal the preflight `page_count * page_size`; inequality
+is a projection failure. Before copying the view, rebuild rechecks the already
+admitted peak, then creates the owned image, drops the connection, and only
+then moves the image into publication.
 
 The store writes those bytes with `write_all` to the anonymous candidate FD,
-verifies the actual file length and SHA-256 by bounded descriptor reads,
-deserializes that exact reread image into a fresh read-only in-memory
-connection, and reruns marker, `foreign_key_check`, `integrity_check`, and
+fsyncs it, and verifies the actual file length and SHA-256 by bounded
+descriptor reads. It then drops the owned publication image before opening or
+allocating the candidate reread image; those two full images may never overlap.
+The store deserializes that exact fresh reread image into a read-only in-memory
+connection under ADR 0017's `candidate_reread_peak`, and reruns marker,
+`foreign_key_check`, `integrity_check`, and
 typed `IndexSnapshot` queries before publication. This reread first requires
 `PRAGMA user_version` to equal 1 and to equal the singleton
 `index_meta.index_schema_version`. SQLite never observes the candidate FD or
@@ -584,7 +603,7 @@ opens the active entry descriptor-relatively with no-follow checks, rejects a
 negative or over-limit `st_size`, and performs one bounded exact read: at most
 `max_index_serialized_bytes + 1` bytes are observed so an oversized image is
 typed `Incomplete`, never truncated. It confirms EOF, unchanged FD identity,
-and the working-memory budget.
+and the store-visible working-capacity budget.
 
 It then opens only an in-memory connection with
 `SQLITE_OPEN_READ_WRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NO_MUTEX`—these
@@ -679,9 +698,13 @@ nested IDs are corruption, not deduplicated. Two rebuilds are deterministic
 when these complete typed snapshots compare equal; raw SQLite byte equality
 is not required.
 
-The builder and query accumulator charge every returned string byte, hash/ID
-byte, vector element, and fixed-width scalar against `max_index_query_bytes`
-with checked arithmetic before pushing it. Limit exhaustion returns no partial
+Before the first owned row decode, the query executes fixed count/UTF-8-byte
+preflight SQL for every result column, computes checked result-vector layouts,
+checks `max_index_query_bytes` and ADR 0017's complete store-visible overlap
+peak, and reserves the vectors. Iteration reads SQLite text/blob columns as
+borrowed `ValueRef`, checks the preflight length, and reserves exact destination
+capacity before copy, ID/hash parse, or push. Calling `row.get::<String>` before
+that admission is forbidden. Limit exhaustion returns no partial
 `IndexSnapshot`.
 
 ## Consequences
@@ -699,8 +722,9 @@ with checked arithmetic before pushing it. Limit exhaustion returns no partial
 
 ### Negative
 
-- Rebuild needs enough bounded memory for an in-memory SQLite image and its
-  serialized representation.
+- Rebuild needs enough bounded store-visible capacity for an in-memory SQLite
+  image and its serialized representation. Core semantic replay also consumes
+  structurally bounded allocator memory not measured by this ADR.
 - Query reads and deserializes the complete active image instead of relying on
   demand paging from a filesystem DB.
 - Shared query/exclusive rebuild locking serializes publication against long
@@ -745,7 +769,8 @@ contract. Complete ordered `IndexSnapshot` equality is.
    operation takes index lock before journal shared lock and verifies the lock
    inode before/after flock and before return.
 4. Every numeric conversion and size/count/page operation is checked; row,
-   image, working-memory, statement, and result limits never truncate success.
+   image, store-visible working-capacity, statement, and result limits never
+   truncate success. This is not an exact allocator heap/RSS assertion.
 5. `max_index_rows` is aggregate across all tables and counts the singleton
    marker and every physical row; the schema has no junction tables.
 6. V1 passes homogeneous chain/shape validation and writes event metadata only,
@@ -789,9 +814,9 @@ exhaustive typed arm.
    deserializes, and yields an equal complete `IndexSnapshot` after
    delete/rebuild. Every other known typed projection arm is exercised by a
    direct fail-closed test until its event admission becomes legal.
-2. V1 passes `ValidatedEventView` homogeneous chain/shape validation, produces
-   event metadata only, never constructs `OfflineProjectionState`, and cannot
-   synthesize a V2 domain baseline.
+2. V1 passes bounded line-at-a-time homogeneous chain/shape validation,
+   produces event metadata only, never constructs `OfflineProjectionState`,
+   and cannot synthesize a V2 domain baseline.
 3. Every authority event remains `authority_reconciled = 0`; a finding remains
    `shadow_only`; no verified/accepted/human-accepted state is fabricated.
 4. Every legal V2 payload is applied exactly once and exercises its expected
@@ -802,8 +827,15 @@ exhaustive typed arm.
 6. A single SQL statement one byte over `max_index_statement_bytes` is refused
    before prepare; exact-bound statements, image bytes, rows, and query returns
    are accepted, while `limit + 1` is typed incomplete. Schema-version-2 query
-   working-set exact-bound and `limit + 1` coverage includes ADR 0017's retained
-   lock-held journal view.
+   store-visible working-set exact-bound and `limit + 1` coverage includes ADR
+   0017's raw journal buffer, compact metadata, store scratch, and comparison
+   tuple. Core high-fan-out/depth fixtures verify their independent structural
+   caps without claiming exact allocator heap/RSS accounting. Serialize tests
+   prove page-count admission occurs before `Connection::serialize`; query
+   tests prove count/UTF-8 preflight and reservation occur before owned row
+   decode. Candidate tests prove the publication image is dropped after
+   write/fsync and before reread allocation, then exercise ADR 0017's complete
+   candidate-reread peak.
 7. Fixed page size, calculated `max_page_count`, `temp_store=MEMORY`, cache
    bound, SQLite limits, checked `i64` conversions, and `PRAGMA user_version =
    index_meta.index_schema_version = 1` are read-back tested before DDL, after

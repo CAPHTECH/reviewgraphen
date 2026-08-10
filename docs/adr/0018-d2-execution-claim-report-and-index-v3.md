@@ -456,8 +456,10 @@ The v3 `IndexSnapshot` adds complete `executions` ordered by
 identity, hash, array/map canonical bytes, outcome/claim pairing, registration
 closure, same-event atomicity, and plan/envelope/obligation/property/source
 relationships. `max_index_rows` counts both tables; every returned byte and
-element counts toward `max_index_query_bytes`; ADR 0017's journal view,
-deserialize/query peak formulas and `max_index_working_bytes` apply unchanged.
+element counts toward `max_index_query_bytes`; ADR 0017's amended compact
+journal metadata and exact store-visible deserialize/query peak formulas apply
+unchanged. Its allocator-opaque core replay limitation also remains explicit;
+D2 does not broaden `max_index_working_bytes` into a heap/RSS claim.
 Exact-limit and limit+1 fixtures include nonempty D2 tables. No partial
 snapshot is returned.
 
