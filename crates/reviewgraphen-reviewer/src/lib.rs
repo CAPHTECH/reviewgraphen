@@ -197,6 +197,16 @@ pub struct ReviewerRequestPreflight {
     construction_peak_bytes: u64,
 }
 
+/// Reviewer-owned admission for recovering a raw artifact that was registered
+/// before its execution record. The runtime supplies the allocator-granted
+/// raw-buffer capacity after materializing its source request and before
+/// opening the raw CAS object.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReviewerRawResumePreflight {
+    raw_buffer_capacity: usize,
+    working_bytes: u64,
+}
+
 impl ReviewerRequestPreflight {
     /// Checks source count/order/identity and all bounded-memory charges
     /// without opening or retaining any CAS source bytes.
@@ -268,6 +278,18 @@ impl ReviewerRequestPreflight {
     #[must_use]
     pub fn construction_peak_bytes(&self) -> u64 {
         self.construction_peak_bytes
+    }
+}
+
+impl ReviewerRawResumePreflight {
+    #[must_use]
+    pub fn raw_buffer_capacity(&self) -> usize {
+        self.raw_buffer_capacity
+    }
+
+    #[must_use]
+    pub fn working_bytes(&self) -> u64 {
+        self.working_bytes
     }
 }
 
@@ -430,6 +452,83 @@ impl<'a> ReviewerRequest<'a> {
     pub fn construction_peak_bytes(&self) -> u64 {
         self.construction_peak_bytes
     }
+
+    /// Admits the declared raw-artifact reservation after the source request
+    /// is fully materialized. This happens before allocating the raw buffer.
+    pub fn admit_raw_resume_requested(
+        &self,
+        scope: &ClaimProposalScope,
+        declared_raw_bytes: u64,
+    ) -> Result<ReviewerRawResumePreflight> {
+        let requested_capacity = usize::try_from(declared_raw_bytes).map_err(|_| {
+            incomplete(
+                "D2 raw reviewer bytes",
+                MAX_D2_RAW_REVIEWER_BYTES as u64,
+                declared_raw_bytes,
+            )
+        })?;
+        raw_resume_admission(
+            self.retained_working_bytes,
+            scope,
+            declared_raw_bytes,
+            requested_capacity,
+        )
+    }
+
+    /// Rechecks raw-artifact admission against the allocator-granted capacity
+    /// immediately after reservation and before the raw CAS object is opened.
+    pub fn admit_raw_resume_actual(
+        &self,
+        scope: &ClaimProposalScope,
+        declared_raw_bytes: u64,
+        raw_buffer_capacity: usize,
+    ) -> Result<ReviewerRawResumePreflight> {
+        raw_resume_admission(
+            self.retained_working_bytes,
+            scope,
+            declared_raw_bytes,
+            raw_buffer_capacity,
+        )
+    }
+}
+
+fn raw_resume_admission(
+    retained_working_bytes: u64,
+    scope: &ClaimProposalScope,
+    declared_raw_bytes: u64,
+    raw_buffer_capacity: usize,
+) -> Result<ReviewerRawResumePreflight> {
+    let operation = "D2 reviewer raw-resume working bytes";
+    let limit = MAX_D2_WORKING_BYTES as u64;
+    let capacity = usize_u64(raw_buffer_capacity, operation, limit)?;
+    if declared_raw_bytes > MAX_D2_RAW_REVIEWER_BYTES as u64 {
+        return Err(incomplete(
+            "D2 raw reviewer bytes",
+            MAX_D2_RAW_REVIEWER_BYTES as u64,
+            declared_raw_bytes,
+        ));
+    }
+    if capacity < declared_raw_bytes {
+        return Err(ReviewerError::Validation(
+            "actual raw buffer capacity is below declared raw bytes",
+        ));
+    }
+    let working_bytes = [
+        retained_working_bytes,
+        scope.allocated_bytes()?,
+        u64::try_from(std::mem::size_of::<Vec<u8>>())
+            .map_err(|_| incomplete(operation, limit, u64::MAX))?,
+        capacity,
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, value| {
+        checked_add(total, value, operation, limit)
+    })?;
+    require_u64(working_bytes, limit, operation)?;
+    Ok(ReviewerRawResumePreflight {
+        raw_buffer_capacity,
+        working_bytes,
+    })
 }
 
 fn reviewer_request_accounting(
@@ -778,6 +877,7 @@ impl ReviewerResponse {
             "D2 raw reviewer bytes",
         )?;
         outcome.validate()?;
+        validate_provider_failure_wire(&raw_artifact, &outcome)?;
         let retained = checked_add(
             std::mem::size_of::<Self>() as u64,
             usize_u64(
@@ -1040,6 +1140,14 @@ struct RawReviewerOutput {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+struct RawProviderFailure {
+    diagnostic: String,
+    kind: String,
+    retryable: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct RawAbstention {
     detail: String,
     reason: AbstentionReason,
@@ -1095,6 +1203,31 @@ fn push_json_string(out: &mut Vec<u8>, value: &str) -> Result<()> {
     }
     out.push(b'"');
     Ok(())
+}
+
+fn canonical_provider_failure(decoded: &RawProviderFailure, raw_len: usize) -> Result<Vec<u8>> {
+    require_text(
+        &decoded.diagnostic,
+        MAX_OUTCOME_TEXT_BYTES,
+        "D2 outcome diagnostic",
+    )?;
+    let mut out = Vec::new();
+    // The scanner proves the canonical form cannot exceed the input wire
+    // length. Reserve that exact bound up front so canonicalization cannot
+    // grow a second buffer after parser admission.
+    out.try_reserve_exact(raw_len).map_err(|_| {
+        incomplete(
+            "D2 reviewer canonical writer bytes",
+            MAX_D2_RAW_REVIEWER_BYTES as u64,
+            raw_len as u64,
+        )
+    })?;
+    out.extend_from_slice(b"{\"diagnostic\":");
+    push_json_string(&mut out, &decoded.diagnostic)?;
+    out.extend_from_slice(b",\"kind\":\"provider_failure\",\"retryable\":");
+    out.extend_from_slice(if decoded.retryable { b"true" } else { b"false" });
+    out.push(b'}');
+    Ok(out)
 }
 
 fn write_string_array(out: &mut Vec<u8>, values: &[String]) -> Result<()> {
@@ -1237,6 +1370,20 @@ struct OutputPreflight {
     decoded_bytes: usize,
     string_count: usize,
     array_slots: usize,
+}
+
+/// Allocation-free classification of the two closed fake wire shapes.  The
+/// classification itself never deserializes a provider body; serde runs only
+/// after the matching peak-memory admission has succeeded.
+#[derive(Clone, Copy)]
+enum WirePreflight {
+    ProviderFailure(ProviderFailurePreflight),
+    Reviewer(OutputPreflight),
+}
+
+#[derive(Clone, Copy)]
+struct ProviderFailurePreflight {
+    decoded_bytes: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -1634,6 +1781,37 @@ impl<'a> OutputScanner<'a> {
         Ok(())
     }
 
+    fn provider_failure(
+        &mut self,
+    ) -> std::result::Result<ProviderFailurePreflight, MalformedOutputReason> {
+        self.token(b"{")?;
+        self.key(b"diagnostic")?;
+        self.string(MAX_OUTCOME_TEXT_BYTES, true)?;
+        self.token(b",")?;
+        self.key(b"kind")?;
+        self.string_exact(b"provider_failure")?;
+        self.token(b",")?;
+        self.key(b"retryable")?;
+        if self.raw.get(self.position..self.position + 4) == Some(b"true") {
+            self.position += 4;
+        } else if self.raw.get(self.position..self.position + 5) == Some(b"false") {
+            self.position += 5;
+        } else {
+            return self.fail(MalformedOutputReason::SchemaViolation);
+        }
+        if self.raw.get(self.position) == Some(&b',') {
+            self.trailing_field()?;
+            unreachable!("trailing_field always returns an error");
+        }
+        self.token(b"}")?;
+        if self.position != self.raw.len() {
+            return self.fail(MalformedOutputReason::SchemaViolation);
+        }
+        Ok(ProviderFailurePreflight {
+            decoded_bytes: self.decoded_bytes,
+        })
+    }
+
     fn abstention(&mut self) -> std::result::Result<bool, MalformedOutputReason> {
         if self.raw.get(self.position..self.position + 4) == Some(b"null") {
             self.position += 4;
@@ -1768,15 +1946,35 @@ fn preflight_reviewer_output(
     })
 }
 
+fn preflight_fake_reviewer_output(
+    raw: &[u8],
+) -> std::result::Result<WirePreflight, MalformedOutputReason> {
+    // Both accepted schemas have a fixed first key. Inspecting it directly is
+    // allocation-free and keeps a provider-shaped body out of serde until its
+    // own admission has been calculated.
+    if raw.starts_with(b"{\"diagnostic\"") {
+        if std::str::from_utf8(raw).is_err() {
+            return Err(MalformedOutputReason::SchemaViolation);
+        }
+        let mut scanner = OutputScanner::new(raw);
+        return scanner
+            .provider_failure()
+            .map(WirePreflight::ProviderFailure);
+    }
+    preflight_reviewer_output(raw).map(WirePreflight::Reviewer)
+}
+
 fn parser_stage_required(
     request: &ReviewerRequest<'_>,
     scope: &ClaimProposalScope,
     raw_len: usize,
+    raw_capacity: usize,
     preflight: OutputPreflight,
 ) -> Result<u64> {
     let operation = "D2 reviewer parser/decode/proposal working bytes";
     let limit = MAX_D2_WORKING_BYTES as u64;
     let raw = usize_u64(raw_len, operation, limit)?;
+    let raw_capacity = usize_u64(raw_capacity, operation, limit)?;
     let dto = preflight_dto_capacity_upper_bound(raw_len, preflight)?;
     let canonical = raw;
     let proposal_per_claim = checked_add(
@@ -1797,12 +1995,51 @@ fn parser_stage_required(
     [
         request.retained_working_bytes(),
         scope.allocated_bytes()?,
-        raw,
+        raw_capacity,
         dto,
         canonical,
         proposals,
         output,
         96,
+    ]
+    .into_iter()
+    .try_fold(0_u64, |used, value| {
+        checked_add(used, value, operation, limit)
+    })
+}
+
+fn provider_parser_stage_required(
+    request: &ReviewerRequest<'_>,
+    scope: &ClaimProposalScope,
+    raw_len: usize,
+    raw_capacity: usize,
+    preflight: ProviderFailurePreflight,
+) -> Result<u64> {
+    let operation = "D2 reviewer parser/decode/proposal working bytes";
+    let limit = MAX_D2_WORKING_BYTES as u64;
+    let raw = usize_u64(raw_len, operation, limit)?;
+    let raw_capacity = usize_u64(raw_capacity, operation, limit)?;
+    // serde can retain escaped wire backing and allocate decoded diagnostic
+    // storage. Both are bounded by scanner observations; the canonical writer
+    // reserves at most the raw length.
+    let dto = [
+        raw,
+        usize_u64(preflight.decoded_bytes, operation, limit)?,
+        u64::try_from(std::mem::size_of::<RawProviderFailure>())
+            .map_err(|_| incomplete(operation, limit, u64::MAX))?,
+    ]
+    .into_iter()
+    .try_fold(0_u64, |used, value| {
+        checked_add(used, value, operation, limit)
+    })?;
+    [
+        request.retained_working_bytes(),
+        scope.allocated_bytes()?,
+        raw_capacity,
+        dto,
+        raw,
+        u64::try_from(std::mem::size_of::<ParsedReviewerOutput>())
+            .map_err(|_| incomplete(operation, limit, u64::MAX))?,
     ]
     .into_iter()
     .try_fold(0_u64, |used, value| {
@@ -1854,9 +2091,26 @@ fn admit_parser_stage(
     request: &ReviewerRequest<'_>,
     scope: &ClaimProposalScope,
     raw_len: usize,
+    raw_capacity: usize,
     preflight: OutputPreflight,
 ) -> Result<()> {
-    let required = parser_stage_required(request, scope, raw_len, preflight)?;
+    let required = parser_stage_required(request, scope, raw_len, raw_capacity, preflight)?;
+    require_u64(
+        required,
+        MAX_D2_WORKING_BYTES as u64,
+        "D2 reviewer parser/decode/proposal working bytes",
+    )
+}
+
+fn admit_provider_parser_stage(
+    request: &ReviewerRequest<'_>,
+    scope: &ClaimProposalScope,
+    raw_len: usize,
+    raw_capacity: usize,
+    preflight: ProviderFailurePreflight,
+) -> Result<()> {
+    let required =
+        provider_parser_stage_required(request, scope, raw_len, raw_capacity, preflight)?;
     require_u64(
         required,
         MAX_D2_WORKING_BYTES as u64,
@@ -1867,7 +2121,7 @@ fn admit_parser_stage(
 fn admit_malformed_stage(
     request: &ReviewerRequest<'_>,
     scope: &ClaimProposalScope,
-    raw_len: usize,
+    raw_capacity: usize,
 ) -> Result<()> {
     let operation = "D2 reviewer malformed-output working bytes";
     let limit = MAX_D2_WORKING_BYTES as u64;
@@ -1877,7 +2131,7 @@ fn admit_malformed_stage(
     let observed = [
         request.retained_working_bytes(),
         scope.allocated_bytes()?,
-        usize_u64(raw_len, operation, limit)?,
+        usize_u64(raw_capacity, operation, limit)?,
         diagnostic,
         output,
     ]
@@ -1888,6 +2142,7 @@ fn admit_malformed_stage(
     require_u64(observed, limit, operation)
 }
 
+#[cfg(test)]
 fn decoded_dto_capacity(decoded: &RawReviewerOutput) -> Result<u64> {
     let operation = "D2 reviewer parser/decode/proposal working bytes";
     let limit = MAX_D2_WORKING_BYTES as u64;
@@ -1986,29 +2241,6 @@ fn decoded_dto_capacity(decoded: &RawReviewerOutput) -> Result<u64> {
     Ok(used)
 }
 
-fn admit_observed_decode_stage(
-    request: &ReviewerRequest<'_>,
-    scope: &ClaimProposalScope,
-    raw_len: usize,
-    decoded: &RawReviewerOutput,
-) -> Result<()> {
-    let operation = "D2 reviewer parser/decode/proposal working bytes";
-    let limit = MAX_D2_WORKING_BYTES as u64;
-    let scope = scope.allocated_bytes()?;
-    let observed = [
-        request.retained_working_bytes(),
-        usize_u64(raw_len, operation, limit)?,
-        decoded_dto_capacity(decoded)?,
-        usize_u64(raw_len, operation, limit)?,
-        scope,
-    ]
-    .into_iter()
-    .try_fold(0_u64, |used, value| {
-        checked_add(used, value, operation, limit)
-    })?;
-    require_u64(observed, limit, operation)
-}
-
 fn strict_ids(
     values: Vec<StableId>,
     limit: usize,
@@ -2056,26 +2288,68 @@ pub fn parse_fake_reviewer_output(
     expected_execution_id: &StableId,
     scope: &ClaimProposalScope,
 ) -> Result<ParsedReviewerOutput> {
+    parse_fake_reviewer_output_with_capacity(raw, raw.len(), request, expected_execution_id, scope)
+}
+
+/// Strictly parses a fake-reviewer wire body using the allocator-granted
+/// capacity of its retained raw buffer. Callers that own a `Vec<u8>` must pass
+/// its `capacity()`, not merely its visible length, so admission accounts for
+/// all live raw backing before serde or canonicalization allocates.
+pub fn parse_fake_reviewer_output_with_capacity(
+    raw: &[u8],
+    raw_capacity: usize,
+    request: &ReviewerRequest<'_>,
+    expected_execution_id: &StableId,
+    scope: &ClaimProposalScope,
+) -> Result<ParsedReviewerOutput> {
     require_len(
         raw.len(),
         MAX_D2_RAW_REVIEWER_BYTES,
         "D2 raw reviewer bytes",
     )?;
-    let preflight = match preflight_reviewer_output(raw) {
+    if raw_capacity < raw.len() {
+        return Err(ReviewerError::Validation(
+            "raw buffer capacity is below raw reviewer bytes",
+        ));
+    }
+    let preflight = match preflight_fake_reviewer_output(raw) {
         Ok(value) => value,
         Err(reason) => {
-            admit_malformed_stage(request, scope, raw.len())?;
+            admit_malformed_stage(request, scope, raw_capacity)?;
             return Ok(malformed(
                 reason,
                 "reviewer output semantic preflight failed",
             ));
         }
     };
-    admit_parser_stage(request, scope, raw.len(), preflight)?;
+    let preflight = match preflight {
+        WirePreflight::ProviderFailure(preflight) => {
+            admit_provider_parser_stage(request, scope, raw.len(), raw_capacity, preflight)?;
+            let provider: RawProviderFailure = match serde_json::from_slice(raw) {
+                Ok(value) => value,
+                Err(_) => {
+                    return Ok(malformed(
+                        MalformedOutputReason::SchemaViolation,
+                        "provider failure output schema validation failed",
+                    ));
+                }
+            };
+            let canonical = canonical_provider_failure(&provider, raw.len())?;
+            if canonical.as_slice() != raw {
+                return Ok(malformed(
+                    MalformedOutputReason::SchemaViolation,
+                    "provider failure output is not canonical JSON",
+                ));
+            }
+            return ParsedReviewerOutput::provider_failure(provider.retryable, provider.diagnostic);
+        }
+        WirePreflight::Reviewer(preflight) => preflight,
+    };
+    admit_parser_stage(request, scope, raw.len(), raw_capacity, preflight)?;
     let decoded: RawReviewerOutput = match serde_json::from_slice(raw) {
         Ok(value) => value,
         Err(_) => {
-            admit_malformed_stage(request, scope, raw.len())?;
+            admit_malformed_stage(request, scope, raw_capacity)?;
             let reason = MalformedOutputReason::SchemaViolation;
             return Ok(malformed(
                 reason,
@@ -2083,7 +2357,6 @@ pub fn parse_fake_reviewer_output(
             ));
         }
     };
-    admit_observed_decode_stage(request, scope, raw.len(), &decoded)?;
     let canonical = canonical_reviewer_output(&decoded, raw.len())?;
     if canonical.as_slice() != raw {
         return Ok(malformed(
@@ -2322,6 +2595,7 @@ impl FakeFixture {
             "D2 raw reviewer bytes",
         )?;
         outcome.validate()?;
+        validate_provider_failure_wire(&raw_artifact, &outcome)?;
         Ok(Self {
             raw_artifact,
             outcome,
@@ -2340,6 +2614,30 @@ impl FakeFixture {
             MAX_D2_WORKING_BYTES as u64,
         )
     }
+}
+
+fn validate_provider_failure_wire(raw: &[u8], outcome: &ReviewerOutcome) -> Result<()> {
+    let ReviewerOutcome::ProviderFailure {
+        retryable,
+        diagnostic,
+    } = outcome
+    else {
+        return Ok(());
+    };
+    let canonical = canonical_provider_failure(
+        &RawProviderFailure {
+            diagnostic: diagnostic.clone(),
+            kind: "provider_failure".to_owned(),
+            retryable: *retryable,
+        },
+        raw.len(),
+    )?;
+    if canonical.as_slice() != raw {
+        return Err(ReviewerError::Validation(
+            "provider failure fixture outcome does not match canonical raw artifact",
+        ));
+    }
+    Ok(())
 }
 
 /// Fixture lookup is keyed only by immutable envelope metadata. Source content
@@ -2968,8 +3266,9 @@ mod tests {
         let preflight = preflight_reviewer_output(&raw).unwrap();
         let original = request.retained_working_bytes;
         let scope_value = parser_scope(&envelope);
-        let fixed =
-            parser_stage_required(&request, &scope_value, raw.len(), preflight).unwrap() - original;
+        let fixed = parser_stage_required(&request, &scope_value, raw.len(), raw.len(), preflight)
+            .unwrap()
+            - original;
         request.retained_working_bytes = MAX_D2_WORKING_BYTES as u64 - fixed;
         assert!(matches!(
             parse_fake_reviewer_output(&raw, &request, &execution, &parser_scope(&envelope))
@@ -2990,6 +3289,90 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn capacity_aware_parser_admits_exact_and_refuses_plus_one_or_overflow_for_provider_and_general_wires()
+     {
+        let (envelope, sources, _) = source_fixture();
+        let execution = id("execution:parser-capacity-wire-shapes");
+        let source = envelope
+            .normalized_included_source_ids()
+            .iter()
+            .next()
+            .unwrap();
+        let cases = [
+            (
+                structured_raw(&execution, source),
+                "general",
+                false,
+            ),
+            (
+                br#"{"diagnostic":"fixture provider failure","kind":"provider_failure","retryable":true}"#.to_vec(),
+                "provider",
+                true,
+            ),
+        ];
+        for (raw, name, provider) in cases {
+            let mut request = ReviewerRequest::new(&envelope, sources.clone()).unwrap();
+            let scope = parser_scope(&envelope);
+            let preflight = preflight_fake_reviewer_output(&raw).unwrap();
+            let retained = request.retained_working_bytes;
+            let fixed = match preflight {
+                WirePreflight::Reviewer(value) => {
+                    parser_stage_required(&request, &scope, raw.len(), raw.len(), value).unwrap()
+                }
+                WirePreflight::ProviderFailure(value) => {
+                    provider_parser_stage_required(&request, &scope, raw.len(), raw.len(), value)
+                        .unwrap()
+                }
+            } - retained;
+            request.retained_working_bytes = MAX_D2_WORKING_BYTES as u64 - fixed;
+            let exact = parse_fake_reviewer_output_with_capacity(
+                &raw,
+                raw.len(),
+                &request,
+                &execution,
+                &scope,
+            )
+            .unwrap();
+            assert_eq!(
+                matches!(exact, ParsedReviewerOutput::ProviderFailure { .. }),
+                provider,
+                "{name}"
+            );
+            assert!(
+                matches!(
+                    parse_fake_reviewer_output_with_capacity(
+                        &raw,
+                        raw.len() + 1,
+                        &request,
+                        &execution,
+                        &scope,
+                    ),
+                    Err(ReviewerError::Incomplete { limit, observed, .. })
+                        if limit == MAX_D2_WORKING_BYTES as u64
+                            && observed == MAX_D2_WORKING_BYTES as u64 + 1
+                ),
+                "{name}"
+            );
+            assert!(
+                matches!(
+                    parse_fake_reviewer_output_with_capacity(
+                        &raw,
+                        usize::MAX,
+                        &request,
+                        &execution,
+                        &scope,
+                    ),
+                    Err(ReviewerError::Incomplete {
+                        observed: u64::MAX,
+                        ..
+                    })
+                ),
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -3456,6 +3839,29 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn raw_resume_preflight_requires_allocator_granted_raw_capacity_before_reads() {
+        let (envelope, inputs, _) = source_fixture();
+        let request = ReviewerRequest::new(&envelope, inputs).unwrap();
+        let scope = parser_scope(&envelope);
+        let admitted = request.admit_raw_resume_requested(&scope, 97).unwrap();
+        assert_eq!(admitted.raw_buffer_capacity(), 97);
+        assert!(admitted.working_bytes() >= request.retained_working_bytes());
+        assert!(matches!(
+            request.admit_raw_resume_actual(&scope, 97, 96),
+            Err(ReviewerError::Validation(
+                "actual raw buffer capacity is below declared raw bytes"
+            ))
+        ));
+        assert!(matches!(
+            request.admit_raw_resume_requested(&scope, (MAX_D2_RAW_REVIEWER_BYTES + 1) as u64,),
+            Err(ReviewerError::Incomplete {
+                operation: "D2 raw reviewer bytes",
+                ..
+            })
+        ));
+    }
+
     fn inputs_to_metadata(inputs: &[ResolvedSourceInput]) -> Vec<ResolvedSourceMetadata> {
         inputs.iter().map(ResolvedSourceMetadata::from).collect()
     }
@@ -3465,7 +3871,8 @@ mod tests {
         let (envelope, inputs, key) = source_fixture();
         let request = ReviewerRequest::new(&envelope, inputs).unwrap();
         let fixture = FakeFixture::new(
-            b"raw".to_vec(),
+            b"{\"diagnostic\":\"transient\",\"kind\":\"provider_failure\",\"retryable\":true}"
+                .to_vec(),
             ReviewerOutcome::ProviderFailure {
                 retryable: true,
                 diagnostic: "transient".to_owned(),

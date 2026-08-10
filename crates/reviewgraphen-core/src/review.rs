@@ -1569,6 +1569,7 @@ pub struct ContextSourceRegistration {
 pub enum FakeAttemptState {
     None,
     RawRegistered { registration: ArtifactRegistered },
+    AmbiguousRawRegistrations,
     ExecutionRecorded { execution: ExecutionRecord },
     Completed { execution: ExecutionRecord },
 }
@@ -3040,11 +3041,12 @@ impl ReviewAggregate {
     /// ID. It has no replay admission or mutation capability.
     pub fn fake_attempt_state(&self, execution_id: &StableId) -> FakeAttemptState {
         if let Some(execution) = self.executions.get(execution_id) {
-            let completed = execution.obligation_ids().iter().all(|id| {
-                self.obligations.get(id).is_some_and(|obligation| {
-                    obligation.lifecycle() == ObligationLifecycle::Completed
-                })
-            });
+            let completed = execution.outcome().is_structured()
+                && execution.obligation_ids().iter().all(|id| {
+                    self.obligations.get(id).is_some_and(|obligation| {
+                        obligation.lifecycle() == ObligationLifecycle::Completed
+                    })
+                });
             return if completed {
                 FakeAttemptState::Completed {
                     execution: execution.clone(),
@@ -3055,12 +3057,20 @@ impl ReviewAggregate {
                 }
             };
         }
-        self.registered_artifacts
+        let mut registrations = self
+            .registered_artifacts
             .values()
-            .find(|registration| matches!(registration.source(), ArtifactSource::ReviewerExecution { execution_id: recorded, .. } if recorded == execution_id))
-            .cloned()
-            .map(|registration| FakeAttemptState::RawRegistered { registration })
-            .unwrap_or(FakeAttemptState::None)
+            .filter(|registration| matches!(registration.source(), ArtifactSource::ReviewerExecution { execution_id: recorded, .. } if recorded == execution_id));
+        let Some(registration) = registrations.next() else {
+            return FakeAttemptState::None;
+        };
+        if registrations.next().is_some() {
+            FakeAttemptState::AmbiguousRawRegistrations
+        } else {
+            FakeAttemptState::RawRegistered {
+                registration: registration.clone(),
+            }
+        }
     }
 
     /// Counts durable registrations in this run that reference one exact CAS
