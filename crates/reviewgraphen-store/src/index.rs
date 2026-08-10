@@ -23,7 +23,7 @@ use rustix::{
     process::{getegid, geteuid},
     rand::{GetRandomFlags, getrandom},
 };
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
@@ -40,8 +40,8 @@ const INDEX_DIR: &str = "indexes";
 const LOCK_FILE: &str = "index.lock";
 const ACTIVE_FILE: &str = "reviewgraphen.sqlite";
 const PAGE_SIZE: u64 = 4096;
-const INDEX_SCHEMA_VERSION: u32 = 2;
-const PROJECTION_CONTRACT_VERSION: &str = "reviewgraphen.index_projection.v2";
+const INDEX_SCHEMA_VERSION: u32 = 3;
+const PROJECTION_CONTRACT_VERSION: &str = "reviewgraphen.index_projection.v3";
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -225,7 +225,48 @@ pub struct IndexClaim {
     pub event_id: StableId,
     pub claim_id: StableId,
     pub execution_id: StableId,
+    pub obligation_ids_canonical_json: String,
+    pub property_id: String,
+    pub target_refs_canonical_json: String,
     pub polarity: String,
+    pub disposition: String,
+    pub summary: String,
+    pub source_ids_canonical_json: String,
+    pub assumptions_canonical_json: String,
+    pub requested_evidence_canonical_json: String,
+    pub candidate_confidence_canonical_json: String,
+    pub author_kind: String,
+    pub review_status: String,
+    pub identity_body_hash: ContentHash,
+    pub body_hash: ContentHash,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IndexExecution {
+    pub event_sequence: u64,
+    pub event_id: StableId,
+    pub execution_id: StableId,
+    pub plan_id: StableId,
+    pub wave_id: StableId,
+    pub snapshot_id: StableId,
+    pub envelope_id: StableId,
+    pub obligation_ids_canonical_json: String,
+    pub reviewer_kind: String,
+    pub reviewer_id: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub model_revision: Option<String>,
+    pub system_prompt_version: String,
+    pub prompt_template_version: String,
+    pub inference_settings_canonical_json: String,
+    pub tool_policy_version: String,
+    pub tool_calls_canonical_json: String,
+    pub attempt: u32,
+    pub raw_registration_id: StableId,
+    pub raw_hash: ContentHash,
+    pub parsed_claim_ids_canonical_json: String,
+    pub outcome_kind: String,
+    pub outcome_canonical_json: String,
+    pub identity_body_hash: ContentHash,
     pub body_hash: ContentHash,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -313,6 +354,7 @@ pub struct IndexSnapshot {
     pub universe: Option<IndexUniverse>,
     pub obligations: Vec<IndexObligation>,
     pub obligation_lifecycle: Vec<IndexObligationLifecycle>,
+    pub executions: Vec<IndexExecution>,
     pub claims: Vec<IndexClaim>,
     pub artifact_registrations: Vec<IndexArtifactRegistration>,
     pub snapshot_sources: Vec<IndexSnapshotSource>,
@@ -1032,6 +1074,12 @@ impl<'a> DerivedIndex<'a> {
                 let event = envelope
                     .decode_for_streaming_projection()
                     .map_err(|_| IndexError::ProjectionContractViolation)?;
+                // A D2 execution is one domain-atomic unit: validate every
+                // pre-existing reference before admitting even its envelope
+                // row to the disposable projection.
+                if let DecodedPayload::ReviewExecutionRecorded { execution, claims } = event.payload() {
+                    prevalidate_execution_domain(&transaction, envelope, execution, claims)?;
+                }
                 reserve_row(&mut rows, self.limits)?;
                 insert_event(
                     &transaction,
@@ -1107,13 +1155,10 @@ impl<'a> DerivedIndex<'a> {
                         }
                         expected_lifecycles.insert(obligation_id.clone(), serialized_enum(next)?);
                     }
-                    DecodedPayload::ClaimProposed(claim) => insert_claim(
-                        &transaction,
-                        envelope,
-                        claim,
-                        &mut rows,
-                        self.limits,
-                    )?,
+                    // `ClaimProposed` is a legacy-v1 payload. V1 is metadata
+                    // only and V2 D2 claims exist solely inside their atomic
+                    // execution event, so neither has a narrow claim row.
+                    DecodedPayload::ClaimProposed(_) => {}
                     DecodedPayload::RunGenesisManifest(manifest) => {
                         insert_registration(
                             &transaction,
@@ -1151,11 +1196,15 @@ impl<'a> DerivedIndex<'a> {
                         &mut rows,
                         self.limits,
                     )?,
-                    DecodedPayload::ReviewExecutionRecorded { .. } => {
-                        return Err(IndexError::RebuildRequired {
-                            found: INDEX_SCHEMA_VERSION,
-                            required: 3,
-                        });
+                    DecodedPayload::ReviewExecutionRecorded { execution, claims } => {
+                        insert_execution_and_claims(
+                            &transaction,
+                            envelope,
+                            execution,
+                            claims,
+                            &mut rows,
+                            self.limits,
+                        )?;
                     }
                     }
                 }
@@ -1325,7 +1374,7 @@ fn configure_connection(
         "PRAGMA journal_mode = MEMORY",
         "PRAGMA locking_mode = EXCLUSIVE",
         "PRAGMA trusted_schema = OFF",
-        "PRAGMA user_version = 2",
+        "PRAGMA user_version = 3",
     ] {
         checked_batch(connection, statement, limits)?;
     }
@@ -1435,8 +1484,8 @@ fn create_schema(connection: &Connection, limits: IndexLimits) -> Result<(), Ind
     const DDL: &str = r#"
 CREATE TABLE index_meta (
  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
- index_schema_version INTEGER NOT NULL CHECK (index_schema_version = 2),
- projection_contract_version TEXT NOT NULL CHECK (projection_contract_version = 'reviewgraphen.index_projection.v2'),
+ index_schema_version INTEGER NOT NULL CHECK (index_schema_version = 3),
+ projection_contract_version TEXT NOT NULL CHECK (projection_contract_version = 'reviewgraphen.index_projection.v3'),
  event_contract_version TEXT NOT NULL CHECK (event_contract_version IN ('reviewgraphen.review_event.v1','reviewgraphen.review_event.v2')),
  projection_mode TEXT NOT NULL CHECK (projection_mode IN ('v1_event_metadata_only','v2_domain')),
  run_id TEXT NOT NULL, genesis_hash TEXT NOT NULL,
@@ -1448,7 +1497,7 @@ CREATE TABLE events (
  sequence INTEGER PRIMARY KEY CHECK (sequence > 0), event_id TEXT NOT NULL UNIQUE,
  schema TEXT NOT NULL CHECK (schema IN ('reviewgraphen.review_event.v1','reviewgraphen.review_event.v2')),
  event_hash TEXT NOT NULL, payload_hash TEXT NOT NULL,
- payload_kind TEXT NOT NULL CHECK (payload_kind IN ('obligation_transition','claim_proposed','evidence_recorded','evidence_bound','verification_recorded','decision_recorded','finding_recorded','run_genesis_manifest','artifact_registered','snapshot_sources_recorded','review_plan_recorded','context_envelope_projected')),
+ payload_kind TEXT NOT NULL CHECK (payload_kind IN ('obligation_transition','claim_proposed','evidence_recorded','evidence_bound','verification_recorded','decision_recorded','finding_recorded','run_genesis_manifest','artifact_registered','snapshot_sources_recorded','review_plan_recorded','context_envelope_projected','review_execution_recorded')),
  actor TEXT NOT NULL, logical_time INTEGER NOT NULL CHECK (logical_time >= 0), UNIQUE(sequence,event_id)
 ) STRICT;
 CREATE TABLE program_objects (object_id TEXT PRIMARY KEY, object_kind TEXT NOT NULL, body_hash TEXT NOT NULL) STRICT;
@@ -1456,7 +1505,47 @@ CREATE TABLE program_relations (relation_id TEXT PRIMARY KEY, relation_kind TEXT
 CREATE TABLE universe (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), universe_id TEXT NOT NULL UNIQUE, snapshot_id TEXT NOT NULL, profile_id TEXT NOT NULL, rule_set_hash TEXT NOT NULL, extractor_set_hash TEXT NOT NULL, policy_version TEXT NOT NULL, rule_pack_version TEXT NOT NULL, body_hash TEXT NOT NULL) STRICT;
 CREATE TABLE obligations (obligation_id TEXT PRIMARY KEY, target_kind TEXT NOT NULL CHECK(target_kind IN ('node','relation','path','invariant','subgraph')), target_ids_canonical_json TEXT NOT NULL, property_id TEXT NOT NULL, lifecycle TEXT NOT NULL CHECK(lifecycle IN ('generated','planned','in_progress','completed','stale','superseded','cancelled')), body_hash TEXT NOT NULL) STRICT;
 CREATE TABLE obligation_lifecycle (event_sequence INTEGER NOT NULL, event_id TEXT NOT NULL, obligation_id TEXT NOT NULL, next_lifecycle TEXT NOT NULL CHECK(next_lifecycle IN ('generated','planned','in_progress','completed','stale','superseded','cancelled')), PRIMARY KEY(event_sequence, obligation_id), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
-CREATE TABLE claims (event_sequence INTEGER NOT NULL, event_id TEXT NOT NULL, claim_id TEXT NOT NULL UNIQUE, execution_id TEXT NOT NULL, polarity TEXT NOT NULL CHECK(polarity IN ('issue_present','issue_absent','inconclusive','not_applicable','conflict')), body_hash TEXT NOT NULL, PRIMARY KEY(event_sequence,claim_id), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
+CREATE TABLE executions (
+ event_sequence INTEGER NOT NULL CHECK (event_sequence > 0), event_id TEXT NOT NULL,
+ execution_id TEXT NOT NULL UNIQUE, plan_id TEXT NOT NULL, wave_id TEXT NOT NULL,
+ snapshot_id TEXT NOT NULL, envelope_id TEXT NOT NULL, obligation_ids_canonical_json TEXT NOT NULL,
+ reviewer_kind TEXT NOT NULL CHECK (reviewer_kind = 'fake'),
+ reviewer_id TEXT NOT NULL CHECK (reviewer_id = 'reviewgraphen.fake_reviewer@1'),
+ provider TEXT, model TEXT, model_revision TEXT,
+ system_prompt_version TEXT NOT NULL CHECK (system_prompt_version = 'reviewgraphen.system.no_tools@1'),
+ prompt_template_version TEXT NOT NULL CHECK (prompt_template_version = 'fixture@1'),
+ inference_settings_canonical_json TEXT NOT NULL CHECK (inference_settings_canonical_json = '{}'),
+ tool_policy_version TEXT NOT NULL CHECK (tool_policy_version = 'reviewgraphen.tool_policy.none@1'),
+ tool_calls_canonical_json TEXT NOT NULL CHECK (tool_calls_canonical_json = '[]'),
+ attempt INTEGER NOT NULL CHECK (attempt > 0), raw_registration_id TEXT NOT NULL,
+ raw_hash TEXT NOT NULL, parsed_claim_ids_canonical_json TEXT NOT NULL,
+ outcome_kind TEXT NOT NULL CHECK (outcome_kind IN ('structured','abstained','malformed','provider_failure')),
+ outcome_canonical_json TEXT NOT NULL, identity_body_hash TEXT NOT NULL, body_hash TEXT NOT NULL,
+ PRIMARY KEY (event_sequence, execution_id),
+ FOREIGN KEY (event_sequence, event_id) REFERENCES events (sequence, event_id),
+ FOREIGN KEY (plan_id) REFERENCES review_plans (plan_id),
+ FOREIGN KEY (envelope_id) REFERENCES context_envelopes (envelope_id),
+ FOREIGN KEY (raw_registration_id) REFERENCES artifact_registrations (registration_id),
+ CHECK (provider IS NULL AND model IS NULL AND model_revision IS NULL),
+ CHECK (attempt <= 4294967295)
+) STRICT;
+CREATE TABLE claims (
+ event_sequence INTEGER NOT NULL CHECK (event_sequence > 0), event_id TEXT NOT NULL,
+ claim_id TEXT NOT NULL UNIQUE, execution_id TEXT NOT NULL,
+ obligation_ids_canonical_json TEXT NOT NULL, property_id TEXT NOT NULL,
+ target_refs_canonical_json TEXT NOT NULL,
+ polarity TEXT NOT NULL CHECK (polarity IN ('issue_present','issue_absent','inconclusive','not_applicable','conflict')),
+ disposition TEXT NOT NULL CHECK (disposition = 'proposed'), summary TEXT NOT NULL,
+ source_ids_canonical_json TEXT NOT NULL, assumptions_canonical_json TEXT NOT NULL,
+ requested_evidence_canonical_json TEXT NOT NULL,
+ candidate_confidence_canonical_json TEXT NOT NULL,
+ author_kind TEXT NOT NULL CHECK (author_kind = 'ai'),
+ review_status TEXT NOT NULL CHECK (review_status = 'unreviewed'),
+ identity_body_hash TEXT NOT NULL, body_hash TEXT NOT NULL,
+ PRIMARY KEY (event_sequence, claim_id),
+ FOREIGN KEY (event_sequence, event_id) REFERENCES events (sequence, event_id),
+ FOREIGN KEY (execution_id) REFERENCES executions (execution_id)
+) STRICT;
 CREATE TABLE artifact_registrations (event_sequence INTEGER NOT NULL, event_id TEXT NOT NULL, registration_id TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL, cas_hash TEXT NOT NULL, media_type TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), sensitivity TEXT NOT NULL CHECK(sensitivity IN ('canonical_state','workspace_source','sensitive')), source_kind TEXT NOT NULL CHECK(source_kind IN ('run_genesis','snapshot_ingest','reviewer_execution')), source_id TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(event_sequence,registration_id), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
 CREATE TABLE snapshot_source_index (event_sequence INTEGER NOT NULL, event_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, artifact_id TEXT NOT NULL, registration_id TEXT NOT NULL, path TEXT NOT NULL, content_hash TEXT NOT NULL, cas_hash TEXT NOT NULL, line_count INTEGER NOT NULL CHECK(line_count >= 0), PRIMARY KEY(snapshot_id,path,artifact_id), FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)) STRICT;
 CREATE TABLE review_plans (
@@ -1601,9 +1690,9 @@ fn deserialize_read_only_with_journal(
     // No pragma mutation, limit installation, or schema/table access may
     // precede the disposable schema-version decision.
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version == 1 {
+    if version == 1 || version == 2 {
         return Err(IndexError::RebuildRequired {
-            found: 1,
+            found: u32::try_from(version).map_err(|_| IndexError::CorruptIndex)?,
             required: INDEX_SCHEMA_VERSION,
         });
     }
@@ -1951,7 +2040,7 @@ fn insert_index_marker(
     event_count: u64,
 ) -> Result<(), IndexError> {
     tx.execute(
-        "INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,2,'reviewgraphen.index_projection.v2',?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,3,'reviewgraphen.index_projection.v3',?1,?2,?3,?4,?5,?6,?7)",
         rusqlite::params![
             version.schema(),
             mode,
@@ -2097,15 +2186,249 @@ fn insert_baseline(
     Ok(())
 }
 
-fn insert_claim(
+fn canonical_string_set(values: &BTreeSet<String>) -> Result<String, IndexError> {
+    String::from_utf8(canonical_json(values).map_err(|_| IndexError::ProjectionContractViolation)?)
+        .map_err(|_| IndexError::ProjectionContractViolation)
+}
+
+/// Checks the whole D2 reference closure against rows already projected by
+/// earlier journal events. This runs before body construction, row admission,
+/// or an INSERT; SQLite foreign keys remain a backstop rather than the domain
+/// validator for an atomic execution event.
+fn prevalidate_execution_domain(
     tx: &rusqlite::Transaction<'_>,
     event: &EventEnvelope,
-    claim: &reviewgraphen_core::ReviewClaim,
+    execution: &reviewgraphen_core::ExecutionRecord,
+    claims: &[reviewgraphen_core::ExecutionClaimV2],
+) -> Result<(), IndexError> {
+    let missing = || IndexError::ProjectionContractViolation;
+    let (plan_snapshot, waves): (String, String) = tx
+        .query_row(
+            "SELECT snapshot_id,waves_canonical_json FROM review_plans WHERE plan_id=?1",
+            [execution.plan_id().to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| missing())?;
+    let plan_snapshot = parse_id(plan_snapshot)?;
+    let waves: Vec<WaveWire> = exact_typed_json(&waves)?;
+    let wave = waves
+        .iter()
+        .find(|candidate| {
+            wave_id(execution.plan_id(), candidate)
+                .as_ref()
+                .is_ok_and(|id| id == execution.wave_id())
+        })
+        .ok_or_else(missing)?;
+    let wave_ids = wave.obligation_ids.iter().cloned().collect::<BTreeSet<_>>();
+
+    let (envelope_snapshot, envelope_obligations, envelope_sources): (String, String, String) = tx
+        .query_row(
+            "SELECT snapshot_id,obligation_ids_canonical_json,included_sources_canonical_json FROM context_envelopes WHERE envelope_id=?1",
+            [execution.envelope_id().to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|_| missing())?;
+    let envelope_snapshot = parse_id(envelope_snapshot)?;
+    let envelope_ids = exact_id_set(&envelope_obligations)?;
+    let sources: Vec<reviewgraphen_core::SourceArtifactRef> = exact_typed_json(&envelope_sources)?;
+    let source_ids = sources
+        .iter()
+        .map(|source| source.artifact_id().clone())
+        .collect::<BTreeSet<_>>();
+
+    let (raw_hash, sensitivity, source): (String, String, String) = tx
+        .query_row(
+            "SELECT cas_hash,sensitivity,source_id FROM artifact_registrations WHERE registration_id=?1",
+            [execution.raw_artifact_registration_id().to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|_| missing())?;
+    let raw_hash = parse_hash(raw_hash)?;
+    let sensitivity: reviewgraphen_core::ArtifactSensitivity = parse_closed_enum(&sensitivity)?;
+    let source: reviewgraphen_core::ArtifactSource = exact_typed_json(&source)?;
+
+    if plan_snapshot != *execution.snapshot_id()
+        || envelope_snapshot != *execution.snapshot_id()
+        || envelope_ids != *execution.obligation_ids()
+        || !execution.obligation_ids().is_subset(&wave_ids)
+        || raw_hash != *execution.raw_artifact_hash()
+        || sensitivity != reviewgraphen_core::ArtifactSensitivity::Sensitive
+        || !matches!(source, reviewgraphen_core::ArtifactSource::ReviewerExecution { run_id, execution_id, reviewer_id } if run_id == *event.run_id() && execution_id == *execution.id() && reviewer_id == execution.reviewer_id())
+    {
+        return Err(missing());
+    }
+
+    let claim_ids = claims
+        .iter()
+        .map(|claim| claim.id().clone())
+        .collect::<BTreeSet<_>>();
+    if claim_ids.len() != claims.len() || claim_ids != *execution.parsed_claim_ids() {
+        return Err(missing());
+    }
+    for claim in claims {
+        let obligation_id = claim.obligation_ids().iter().next().ok_or_else(missing)?;
+        let (property_id, targets): (String, String) = tx
+            .query_row(
+                "SELECT property_id,target_ids_canonical_json FROM obligations WHERE obligation_id=?1",
+                [obligation_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|_| missing())?;
+        let targets = exact_id_set(&targets)?;
+        if claim.execution_id() != execution.id()
+            || claim.obligation_ids() != execution.obligation_ids()
+            || claim.property_id() != property_id
+            || !claim.target_refs().is_subset(&targets)
+            || !claim.source_ids().is_subset(&source_ids)
+        {
+            return Err(missing());
+        }
+    }
+    if (execution.outcome().is_structured() && claims.is_empty())
+        || (!execution.outcome().is_structured() && !claims.is_empty())
+    {
+        return Err(missing());
+    }
+    Ok(())
+}
+
+/// D2's execution and all of its claims are one canonical event.  SQLite is
+/// only a projection, but it keeps the same all-or-nothing seam as the event:
+/// every row is precomputed and validated before the first INSERT and both
+/// tables are written through the caller's single transaction.
+fn insert_execution_and_claims(
+    tx: &rusqlite::Transaction<'_>,
+    event: &EventEnvelope,
+    execution: &reviewgraphen_core::ExecutionRecord,
+    claims: &[reviewgraphen_core::ExecutionClaimV2],
     rows: &mut u64,
     limits: IndexLimits,
 ) -> Result<(), IndexError> {
+    prevalidate_execution_domain(tx, event, execution, claims)?;
+    let obligation_ids = canonical_ids(execution.obligation_ids().iter().cloned())?;
+    let inference_settings = String::from_utf8(
+        canonical_json(execution.inference_settings())
+            .map_err(|_| IndexError::ProjectionContractViolation)?,
+    )
+    .map_err(|_| IndexError::ProjectionContractViolation)?;
+    let parsed_claim_ids = canonical_ids(execution.parsed_claim_ids().iter().cloned())?;
+    let outcome = String::from_utf8(
+        canonical_json(execution.outcome()).map_err(|_| IndexError::ProjectionContractViolation)?,
+    )
+    .map_err(|_| IndexError::ProjectionContractViolation)?;
+    let outcome_kind = match execution.outcome() {
+        reviewgraphen_core::ExecutionOutcome::Structured => "structured",
+        reviewgraphen_core::ExecutionOutcome::Abstained { .. } => "abstained",
+        reviewgraphen_core::ExecutionOutcome::Malformed { .. } => "malformed",
+        reviewgraphen_core::ExecutionOutcome::ProviderFailure { .. } => "provider_failure",
+    };
+
+    // Construct each complete canonical body before reserving the first row,
+    // so a malformed claim cannot leave an execution-only projection behind.
+    let mut projected_claims = Vec::new();
+    projected_claims
+        .try_reserve_exact(claims.len())
+        .map_err(|_| IndexError::Incomplete {
+            limit: limits.max_rows,
+            observed: u64::MAX,
+        })?;
+    for claim in claims {
+        let projected = IndexClaim {
+            event_sequence: event.sequence(),
+            event_id: event.id().clone(),
+            claim_id: claim.id().clone(),
+            execution_id: claim.execution_id().clone(),
+            obligation_ids_canonical_json: canonical_ids(claim.obligation_ids().iter().cloned())?,
+            property_id: claim.property_id().to_owned(),
+            target_refs_canonical_json: canonical_ids(claim.target_refs().iter().cloned())?,
+            polarity: serialized_enum(&claim.polarity())?,
+            disposition: serialized_enum(&claim.disposition())?,
+            summary: claim.summary().to_owned(),
+            source_ids_canonical_json: canonical_ids(claim.source_ids().iter().cloned())?,
+            assumptions_canonical_json: canonical_string_set(claim.assumptions())?,
+            requested_evidence_canonical_json: canonical_string_set(claim.requested_evidence())?,
+            candidate_confidence_canonical_json: String::from_utf8(
+                canonical_json(&claim.candidate_confidence())
+                    .map_err(|_| IndexError::ProjectionContractViolation)?,
+            )
+            .map_err(|_| IndexError::ProjectionContractViolation)?,
+            author_kind: serialized_enum(&claim.author_kind())?,
+            review_status: serialized_enum(&claim.review_status())?,
+            identity_body_hash: claim
+                .identity_body_hash()
+                .map_err(|_| IndexError::ProjectionContractViolation)?,
+            body_hash: claim
+                .body_hash()
+                .map_err(|_| IndexError::ProjectionContractViolation)?,
+        };
+        if projected.execution_id != *execution.id()
+            || projected.obligation_ids_canonical_json != obligation_ids
+        {
+            return Err(IndexError::ProjectionContractViolation);
+        }
+        projected_claims.push(projected);
+    }
+    if projected_claims
+        .iter()
+        .map(|claim| claim.claim_id.clone())
+        .collect::<BTreeSet<_>>()
+        != *execution.parsed_claim_ids()
+        || projected_claims
+            .windows(2)
+            .any(|pair| pair[0].claim_id >= pair[1].claim_id)
+    {
+        return Err(IndexError::ProjectionContractViolation);
+    }
+
+    let projected_execution = IndexExecution {
+        event_sequence: event.sequence(),
+        event_id: event.id().clone(),
+        execution_id: execution.id().clone(),
+        plan_id: execution.plan_id().clone(),
+        wave_id: execution.wave_id().clone(),
+        snapshot_id: execution.snapshot_id().clone(),
+        envelope_id: execution.envelope_id().clone(),
+        obligation_ids_canonical_json: obligation_ids,
+        reviewer_kind: execution.reviewer_kind().to_owned(),
+        reviewer_id: execution.reviewer_id().to_owned(),
+        provider: execution.provider().map(str::to_owned),
+        model: execution.model().map(str::to_owned),
+        model_revision: execution.model_revision().map(str::to_owned),
+        system_prompt_version: execution.system_prompt_version().to_owned(),
+        prompt_template_version: execution.prompt_template_version().to_owned(),
+        inference_settings_canonical_json: inference_settings,
+        tool_policy_version: execution.tool_policy_version().to_owned(),
+        tool_calls_canonical_json: "[]".to_owned(),
+        attempt: execution.attempt(),
+        raw_registration_id: execution.raw_artifact_registration_id().clone(),
+        raw_hash: execution.raw_artifact_hash().clone(),
+        parsed_claim_ids_canonical_json: parsed_claim_ids,
+        outcome_kind: outcome_kind.to_owned(),
+        outcome_canonical_json: outcome,
+        identity_body_hash: execution
+            .identity_body_hash()
+            .map_err(|_| IndexError::ProjectionContractViolation)?,
+        body_hash: execution
+            .body_hash()
+            .map_err(|_| IndexError::ProjectionContractViolation)?,
+    };
+
     reserve_row(rows, limits)?;
-    tx.execute("INSERT INTO claims(event_sequence,event_id,claim_id,execution_id,polarity,body_hash) VALUES(?1,?2,?3,?4,?5,?6)", rusqlite::params![to_i64(event.sequence())?,event.id().to_string(),claim.id().to_string(),claim.execution_id().to_string(),serialized_enum(&claim.polarity())?,body_hash(claim)?.to_string()]).map_err(map_sql)?;
+    for _ in &projected_claims {
+        reserve_row(rows, limits)?;
+    }
+    tx.execute(
+        "INSERT INTO executions(event_sequence,event_id,execution_id,plan_id,wave_id,snapshot_id,envelope_id,obligation_ids_canonical_json,reviewer_kind,reviewer_id,provider,model,model_revision,system_prompt_version,prompt_template_version,inference_settings_canonical_json,tool_policy_version,tool_calls_canonical_json,attempt,raw_registration_id,raw_hash,parsed_claim_ids_canonical_json,outcome_kind,outcome_canonical_json,identity_body_hash,body_hash) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)",
+        rusqlite::params![to_i64(projected_execution.event_sequence)?, projected_execution.event_id.to_string(), projected_execution.execution_id.to_string(), projected_execution.plan_id.to_string(), projected_execution.wave_id.to_string(), projected_execution.snapshot_id.to_string(), projected_execution.envelope_id.to_string(), projected_execution.obligation_ids_canonical_json, projected_execution.reviewer_kind, projected_execution.reviewer_id, projected_execution.provider, projected_execution.model, projected_execution.model_revision, projected_execution.system_prompt_version, projected_execution.prompt_template_version, projected_execution.inference_settings_canonical_json, projected_execution.tool_policy_version, projected_execution.tool_calls_canonical_json, i64::from(projected_execution.attempt), projected_execution.raw_registration_id.to_string(), projected_execution.raw_hash.to_string(), projected_execution.parsed_claim_ids_canonical_json, projected_execution.outcome_kind, projected_execution.outcome_canonical_json, projected_execution.identity_body_hash.to_string(), projected_execution.body_hash.to_string()],
+    )
+    .map_err(map_sql)?;
+    for claim in projected_claims {
+        tx.execute(
+            "INSERT INTO claims(event_sequence,event_id,claim_id,execution_id,obligation_ids_canonical_json,property_id,target_refs_canonical_json,polarity,disposition,summary,source_ids_canonical_json,assumptions_canonical_json,requested_evidence_canonical_json,candidate_confidence_canonical_json,author_kind,review_status,identity_body_hash,body_hash) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+            rusqlite::params![to_i64(claim.event_sequence)?, claim.event_id.to_string(), claim.claim_id.to_string(), claim.execution_id.to_string(), claim.obligation_ids_canonical_json, claim.property_id, claim.target_refs_canonical_json, claim.polarity, claim.disposition, claim.summary, claim.source_ids_canonical_json, claim.assumptions_canonical_json, claim.requested_evidence_canonical_json, claim.candidate_confidence_canonical_json, claim.author_kind, claim.review_status, claim.identity_body_hash.to_string(), claim.body_hash.to_string()],
+        )
+        .map_err(map_sql)?;
+    }
     Ok(())
 }
 
@@ -2344,12 +2667,7 @@ fn payload_kind_decoded(payload: &DecodedPayload) -> Result<&'static str, IndexE
         DecodedPayload::SnapshotSourcesRecorded(_) => "snapshot_sources_recorded",
         DecodedPayload::ReviewPlanRecorded(_) => "review_plan_recorded",
         DecodedPayload::ContextEnvelopeProjected(_) => "context_envelope_projected",
-        DecodedPayload::ReviewExecutionRecorded { .. } => {
-            return Err(IndexError::RebuildRequired {
-                found: INDEX_SCHEMA_VERSION,
-                required: 3,
-            });
-        }
+        DecodedPayload::ReviewExecutionRecorded { .. } => "review_execution_recorded",
     })
 }
 
@@ -2365,7 +2683,8 @@ fn validate_offline_classification(
             | DecodedPayload::VerificationRecorded(_)
             | DecodedPayload::DecisionRecorded(_)
             | DecodedPayload::FindingRecorded(_)
-            | DecodedPayload::ContextEnvelopeProjected(_),
+            | DecodedPayload::ContextEnvelopeProjected(_)
+            | DecodedPayload::ReviewExecutionRecorded { .. },
         )
         | (
             true,
@@ -2374,8 +2693,7 @@ fn validate_offline_classification(
             | DecodedPayload::RunGenesisManifest(_)
             | DecodedPayload::ArtifactRegistered(_)
             | DecodedPayload::SnapshotSourcesRecorded(_)
-            | DecodedPayload::ReviewPlanRecorded(_)
-            | DecodedPayload::ReviewExecutionRecorded { .. },
+            | DecodedPayload::ReviewPlanRecorded(_),
         ) => Ok(()),
         _ => Err(IndexError::ProjectionContractViolation),
     }
@@ -2477,8 +2795,11 @@ fn map_index_replay(error: IndexReplayError<IndexError>) -> IndexError {
 struct StreamingSnapshotComparator<'a> {
     snapshot: &'a IndexSnapshot,
     event_index: usize,
+    registration_index: usize,
     plan_index: usize,
     context_index: usize,
+    execution_index: usize,
+    claim_index: usize,
     schema: &'static str,
 }
 
@@ -2487,8 +2808,11 @@ impl<'a> StreamingSnapshotComparator<'a> {
         Self {
             snapshot,
             event_index: 0,
+            registration_index: 0,
             plan_index: 0,
             context_index: 0,
+            execution_index: 0,
+            claim_index: 0,
             schema: version.schema(),
         }
     }
@@ -2507,6 +2831,12 @@ impl<'a> StreamingSnapshotComparator<'a> {
         }
         self.event_index += 1;
         match validated.payload() {
+            DecodedPayload::RunGenesisManifest(manifest) => {
+                self.compare_registration(envelope, manifest.genesis_artifact())?;
+            }
+            DecodedPayload::ArtifactRegistered(registration) => {
+                self.compare_registration(envelope, registration)?;
+            }
             DecodedPayload::ReviewPlanRecorded(plan) => {
                 let actual = self
                     .snapshot
@@ -2547,15 +2877,80 @@ impl<'a> StreamingSnapshotComparator<'a> {
                 }
                 self.context_index += 1;
             }
+            DecodedPayload::ReviewExecutionRecorded { execution, claims } => {
+                let actual = self
+                    .snapshot
+                    .executions
+                    .get(self.execution_index)
+                    .ok_or(IndexError::CorruptIndex)?;
+                if actual.event_sequence != envelope.sequence()
+                    || actual.event_id != *envelope.id()
+                    || validate_execution_row(actual)? != *execution
+                    || actual.body_hash
+                        != ContentHash::sha256(
+                            &execution
+                                .canonical_bytes()
+                                .map_err(|_| IndexError::CorruptIndex)?,
+                        )
+                {
+                    return Err(IndexError::CorruptIndex);
+                }
+                self.execution_index += 1;
+                for claim in claims {
+                    let actual = self
+                        .snapshot
+                        .claims
+                        .get(self.claim_index)
+                        .ok_or(IndexError::CorruptIndex)?;
+                    if actual.event_sequence != envelope.sequence()
+                        || actual.event_id != *envelope.id()
+                        || validate_claim_row(actual)? != *claim
+                        || actual.body_hash
+                            != ContentHash::sha256(
+                                &claim
+                                    .canonical_bytes()
+                                    .map_err(|_| IndexError::CorruptIndex)?,
+                            )
+                    {
+                        return Err(IndexError::CorruptIndex);
+                    }
+                    self.claim_index += 1;
+                }
+            }
             _ => {}
         }
         Ok(())
     }
 
+    fn compare_registration(
+        &mut self,
+        envelope: &EventEnvelope,
+        registration: &reviewgraphen_core::ArtifactRegistered,
+    ) -> Result<(), IndexError> {
+        let actual = self
+            .snapshot
+            .artifact_registrations
+            .get(self.registration_index)
+            .ok_or(IndexError::CorruptIndex)?;
+        let canonical = canonical_json(registration).map_err(|_| IndexError::CorruptIndex)?;
+        if actual.event_sequence != envelope.sequence()
+            || actual.event_id != *envelope.id()
+            || validate_registration_row(actual)? != *registration
+            || actual.body_hash != ContentHash::sha256(&canonical)
+        {
+            return Err(IndexError::CorruptIndex);
+        }
+        self.registration_index += 1;
+        Ok(())
+    }
+
     fn finish(self) -> Result<(), IndexError> {
         if self.event_index != self.snapshot.events.len()
+            || self.registration_index != self.snapshot.artifact_registrations.len()
             || self.plan_index != self.snapshot.review_plans.len()
             || self.context_index != self.snapshot.context_envelopes.len()
+            || self.execution_index != self.snapshot.executions.len()
+            || self.claim_index != self.snapshot.claims.len()
         {
             return Err(IndexError::CorruptIndex);
         }
@@ -2702,9 +3097,9 @@ fn index_marker_from_connection(
     limits: IndexLimits,
 ) -> Result<IndexMarker, IndexError> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version == 1 {
+    if version == 1 || version == 2 {
         return Err(IndexError::RebuildRequired {
-            found: 1,
+            found: u32::try_from(version).map_err(|_| IndexError::CorruptIndex)?,
             required: INDEX_SCHEMA_VERSION,
         });
     }
@@ -2738,9 +3133,9 @@ fn snapshot_from_connection_with_journal(
     validation_source: Option<D1ValidationSource<'_>>,
 ) -> Result<IndexSnapshot, IndexError> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version == 1 {
+    if version == 1 || version == 2 {
         return Err(IndexError::RebuildRequired {
-            found: 1,
+            found: u32::try_from(version).map_err(|_| IndexError::CorruptIndex)?,
             required: INDEX_SCHEMA_VERSION,
         });
     }
@@ -2779,6 +3174,7 @@ fn snapshot_from_connection_with_journal(
             "SELECT COUNT(*) FROM universe",
             "SELECT COUNT(*) FROM obligations",
             "SELECT COUNT(*) FROM obligation_lifecycle",
+            "SELECT COUNT(*) FROM executions",
             "SELECT COUNT(*) FROM claims",
             "SELECT COUNT(*) FROM artifact_registrations",
             "SELECT COUNT(*) FROM snapshot_source_index",
@@ -2918,11 +3314,22 @@ fn snapshot_from_connection_with_journal(
     let universe = query_universe(connection)?;
     let obligations = query_obligations(connection)?;
     let obligation_lifecycle = query_obligation_lifecycle(connection)?;
+    let executions = query_executions(connection)?;
     let claims = query_claims(connection)?;
     let artifact_registrations = query_registrations(connection)?;
     let snapshot_sources = query_sources(connection)?;
     let context_envelopes = query_context_envelopes(connection, validation_source)?;
     let review_plans = query_review_plans(connection, validation_source)?;
+    validate_d2_projection_closure(
+        &events,
+        &obligations,
+        &artifact_registrations,
+        &context_envelopes,
+        &review_plans,
+        &executions,
+        &claims,
+        &marker,
+    )?;
     text_admission.finish()?;
     let snapshot = IndexSnapshot {
         marker,
@@ -2934,6 +3341,7 @@ fn snapshot_from_connection_with_journal(
         universe,
         obligations,
         obligation_lifecycle,
+        executions,
         claims,
         artifact_registrations,
         snapshot_sources,
@@ -3112,7 +3520,52 @@ fn snapshot_query_budget(snapshot: &IndexSnapshot, limits: IndexLimits) -> Resul
                 row.event_id.as_str(),
                 row.claim_id.as_str(),
                 row.execution_id.as_str(),
+                row.obligation_ids_canonical_json.as_str(),
+                row.property_id.as_str(),
+                row.target_refs_canonical_json.as_str(),
                 row.polarity.as_str(),
+                row.disposition.as_str(),
+                row.summary.as_str(),
+                row.source_ids_canonical_json.as_str(),
+                row.assumptions_canonical_json.as_str(),
+                row.requested_evidence_canonical_json.as_str(),
+                row.candidate_confidence_canonical_json.as_str(),
+                row.author_kind.as_str(),
+                row.review_status.as_str(),
+                row.identity_body_hash.as_str(),
+                row.body_hash.as_str(),
+            ],
+        )?;
+    }
+    charge_rows(&mut used, limits, &snapshot.executions)?;
+    for row in &snapshot.executions {
+        charge_texts(
+            &mut used,
+            limits,
+            [
+                row.event_id.as_str(),
+                row.execution_id.as_str(),
+                row.plan_id.as_str(),
+                row.wave_id.as_str(),
+                row.snapshot_id.as_str(),
+                row.envelope_id.as_str(),
+                row.obligation_ids_canonical_json.as_str(),
+                row.reviewer_kind.as_str(),
+                row.reviewer_id.as_str(),
+                row.provider.as_deref().unwrap_or(""),
+                row.model.as_deref().unwrap_or(""),
+                row.model_revision.as_deref().unwrap_or(""),
+                row.system_prompt_version.as_str(),
+                row.prompt_template_version.as_str(),
+                row.inference_settings_canonical_json.as_str(),
+                row.tool_policy_version.as_str(),
+                row.tool_calls_canonical_json.as_str(),
+                row.raw_registration_id.as_str(),
+                row.raw_hash.as_str(),
+                row.parsed_claim_ids_canonical_json.as_str(),
+                row.outcome_kind.as_str(),
+                row.outcome_canonical_json.as_str(),
+                row.identity_body_hash.as_str(),
                 row.body_hash.as_str(),
             ],
         )?;
@@ -3281,7 +3734,11 @@ fn preflight_query_budget_details(
             vector_row_cost::<IndexObligationLifecycle>(),
         ),
         (
-            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(claim_id AS BLOB))+length(CAST(execution_id AS BLOB))+length(CAST(polarity AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM claims",
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(execution_id AS BLOB))+length(CAST(plan_id AS BLOB))+length(CAST(wave_id AS BLOB))+length(CAST(snapshot_id AS BLOB))+length(CAST(envelope_id AS BLOB))+length(CAST(obligation_ids_canonical_json AS BLOB))+length(CAST(reviewer_kind AS BLOB))+length(CAST(reviewer_id AS BLOB))+COALESCE(length(CAST(provider AS BLOB)),0)+COALESCE(length(CAST(model AS BLOB)),0)+COALESCE(length(CAST(model_revision AS BLOB)),0)+length(CAST(system_prompt_version AS BLOB))+length(CAST(prompt_template_version AS BLOB))+length(CAST(inference_settings_canonical_json AS BLOB))+length(CAST(tool_policy_version AS BLOB))+length(CAST(tool_calls_canonical_json AS BLOB))+length(CAST(raw_registration_id AS BLOB))+length(CAST(raw_hash AS BLOB))+length(CAST(parsed_claim_ids_canonical_json AS BLOB))+length(CAST(outcome_kind AS BLOB))+length(CAST(outcome_canonical_json AS BLOB))+length(CAST(identity_body_hash AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM executions",
+            vector_row_cost::<IndexExecution>(),
+        ),
+        (
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(event_id AS BLOB))+length(CAST(claim_id AS BLOB))+length(CAST(execution_id AS BLOB))+length(CAST(obligation_ids_canonical_json AS BLOB))+length(CAST(property_id AS BLOB))+length(CAST(target_refs_canonical_json AS BLOB))+length(CAST(polarity AS BLOB))+length(CAST(disposition AS BLOB))+length(CAST(summary AS BLOB))+length(CAST(source_ids_canonical_json AS BLOB))+length(CAST(assumptions_canonical_json AS BLOB))+length(CAST(requested_evidence_canonical_json AS BLOB))+length(CAST(candidate_confidence_canonical_json AS BLOB))+length(CAST(author_kind AS BLOB))+length(CAST(review_status AS BLOB))+length(CAST(identity_body_hash AS BLOB))+length(CAST(body_hash AS BLOB))),0) FROM claims",
             vector_row_cost::<IndexClaim>(),
         ),
         (
@@ -3413,6 +3870,14 @@ fn row_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<String> {
     Ok(owned)
 }
 
+fn row_optional_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<String>> {
+    match row.get_ref(index)? {
+        rusqlite::types::ValueRef::Null => Ok(None),
+        rusqlite::types::ValueRef::Text(_) => row_text(row, index).map(Some),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+
 fn reserved_query_vec<T>(connection: &Connection, sql: &'static str) -> Result<Vec<T>, IndexError> {
     let count: i64 = connection
         .query_row(sql, [], |row| row.get(0))
@@ -3520,8 +3985,49 @@ fn query_obligation_lifecycle(c: &Connection) -> Result<Vec<IndexObligationLifec
     }
     Ok(rows)
 }
+fn query_executions(c: &Connection) -> Result<Vec<IndexExecution>, IndexError> {
+    let mut s = c.prepare("SELECT event_sequence,event_id,execution_id,plan_id,wave_id,snapshot_id,envelope_id,obligation_ids_canonical_json,reviewer_kind,reviewer_id,provider,model,model_revision,system_prompt_version,prompt_template_version,inference_settings_canonical_json,tool_policy_version,tool_calls_canonical_json,attempt,raw_registration_id,raw_hash,parsed_claim_ids_canonical_json,outcome_kind,outcome_canonical_json,identity_body_hash,body_hash FROM executions ORDER BY event_sequence,execution_id")?;
+    let r = s.query_map([], |x| {
+        Ok(IndexExecution {
+            event_sequence: u64::try_from(x.get::<_, i64>(0)?)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            event_id: parse_id(row_text(x, 1)?)?,
+            execution_id: parse_id(row_text(x, 2)?)?,
+            plan_id: parse_id(row_text(x, 3)?)?,
+            wave_id: parse_id(row_text(x, 4)?)?,
+            snapshot_id: parse_id(row_text(x, 5)?)?,
+            envelope_id: parse_id(row_text(x, 6)?)?,
+            obligation_ids_canonical_json: row_text(x, 7)?,
+            reviewer_kind: row_text(x, 8)?,
+            reviewer_id: row_text(x, 9)?,
+            provider: row_optional_text(x, 10)?,
+            model: row_optional_text(x, 11)?,
+            model_revision: row_optional_text(x, 12)?,
+            system_prompt_version: row_text(x, 13)?,
+            prompt_template_version: row_text(x, 14)?,
+            inference_settings_canonical_json: row_text(x, 15)?,
+            tool_policy_version: row_text(x, 16)?,
+            tool_calls_canonical_json: row_text(x, 17)?,
+            attempt: u32::try_from(x.get::<_, i64>(18)?)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            raw_registration_id: parse_id(row_text(x, 19)?)?,
+            raw_hash: parse_hash(row_text(x, 20)?)?,
+            parsed_claim_ids_canonical_json: row_text(x, 21)?,
+            outcome_kind: row_text(x, 22)?,
+            outcome_canonical_json: row_text(x, 23)?,
+            identity_body_hash: parse_hash(row_text(x, 24)?)?,
+            body_hash: parse_hash(row_text(x, 25)?)?,
+        })
+    })?;
+    let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM executions")?;
+    for row in r {
+        rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
+    }
+    Ok(rows)
+}
+
 fn query_claims(c: &Connection) -> Result<Vec<IndexClaim>, IndexError> {
-    let mut s=c.prepare("SELECT event_sequence,event_id,claim_id,execution_id,polarity,body_hash FROM claims ORDER BY event_sequence,claim_id")?;
+    let mut s=c.prepare("SELECT event_sequence,event_id,claim_id,execution_id,obligation_ids_canonical_json,property_id,target_refs_canonical_json,polarity,disposition,summary,source_ids_canonical_json,assumptions_canonical_json,requested_evidence_canonical_json,candidate_confidence_canonical_json,author_kind,review_status,identity_body_hash,body_hash FROM claims ORDER BY event_sequence,claim_id")?;
     let r = s.query_map([], |x| {
         Ok(IndexClaim {
             event_sequence: u64::try_from(x.get::<_, i64>(0)?)
@@ -3529,8 +4035,20 @@ fn query_claims(c: &Connection) -> Result<Vec<IndexClaim>, IndexError> {
             event_id: parse_id(row_text(x, 1)?)?,
             claim_id: parse_id(row_text(x, 2)?)?,
             execution_id: parse_id(row_text(x, 3)?)?,
-            polarity: row_text(x, 4)?,
-            body_hash: parse_hash(row_text(x, 5)?)?,
+            obligation_ids_canonical_json: row_text(x, 4)?,
+            property_id: row_text(x, 5)?,
+            target_refs_canonical_json: row_text(x, 6)?,
+            polarity: row_text(x, 7)?,
+            disposition: row_text(x, 8)?,
+            summary: row_text(x, 9)?,
+            source_ids_canonical_json: row_text(x, 10)?,
+            assumptions_canonical_json: row_text(x, 11)?,
+            requested_evidence_canonical_json: row_text(x, 12)?,
+            candidate_confidence_canonical_json: row_text(x, 13)?,
+            author_kind: row_text(x, 14)?,
+            review_status: row_text(x, 15)?,
+            identity_body_hash: parse_hash(row_text(x, 16)?)?,
+            body_hash: parse_hash(row_text(x, 17)?)?,
         })
     })?;
     let mut rows = reserved_query_vec(c, "SELECT COUNT(*) FROM claims")?;
@@ -3538,6 +4056,431 @@ fn query_claims(c: &Connection) -> Result<Vec<IndexClaim>, IndexError> {
         rows.push(row.map_err(|_| IndexError::CorruptIndex)?);
     }
     Ok(rows)
+}
+
+fn exact_typed_json<T>(text: &str) -> Result<T, IndexError>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let value: T = serde_json::from_str(text).map_err(|_| IndexError::CorruptIndex)?;
+    if canonical_json(&value).map_err(|_| IndexError::CorruptIndex)? != text.as_bytes() {
+        return Err(IndexError::CorruptIndex);
+    }
+    Ok(value)
+}
+
+fn exact_id_set(text: &str) -> Result<BTreeSet<StableId>, IndexError> {
+    let ids: Vec<StableId> = exact_typed_json(text)?;
+    let set = ids.iter().cloned().collect::<BTreeSet<_>>();
+    if set.len() != ids.len() || canonical_ids(set.iter().cloned())?.as_bytes() != text.as_bytes() {
+        return Err(IndexError::CorruptIndex);
+    }
+    Ok(set)
+}
+
+#[derive(Serialize)]
+struct ExecutionBody<'a> {
+    attempt: u32,
+    envelope_id: &'a StableId,
+    id: &'a StableId,
+    inference_settings: &'a BTreeMap<String, String>,
+    model: Option<&'a str>,
+    model_revision: Option<&'a str>,
+    obligation_ids: &'a BTreeSet<StableId>,
+    outcome: &'a reviewgraphen_core::ExecutionOutcome,
+    parsed_claim_ids: &'a BTreeSet<StableId>,
+    plan_id: &'a StableId,
+    prompt_template_version: &'a str,
+    provider: Option<&'a str>,
+    raw_artifact_hash: &'a ContentHash,
+    raw_artifact_registration_id: &'a StableId,
+    reviewer_id: &'a str,
+    reviewer_kind: &'a str,
+    snapshot_id: &'a StableId,
+    system_prompt_version: &'a str,
+    tool_calls: &'a [()],
+    tool_policy_version: &'a str,
+    wave_id: &'a StableId,
+}
+
+#[derive(Serialize)]
+struct ClaimBody<'a> {
+    assumptions: &'a BTreeSet<String>,
+    author_kind: reviewgraphen_core::ClaimAuthorKind,
+    candidate_confidence: Option<f64>,
+    disposition: reviewgraphen_core::ClaimDisposition,
+    execution_id: &'a StableId,
+    id: &'a StableId,
+    obligation_ids: &'a BTreeSet<StableId>,
+    polarity: reviewgraphen_core::ClaimPolarity,
+    property_id: &'a str,
+    requested_evidence: &'a BTreeSet<String>,
+    review_status: reviewgraphen_core::ReviewStatus,
+    source_ids: &'a BTreeSet<StableId>,
+    summary: &'a str,
+    target_refs: &'a BTreeSet<StableId>,
+}
+
+#[derive(Serialize)]
+struct RegistrationBody<'a> {
+    cas_hash: &'a ContentHash,
+    media_type: &'a str,
+    registration_id: &'a StableId,
+    run_id: &'a StableId,
+    sensitivity: reviewgraphen_core::ArtifactSensitivity,
+    size: u64,
+    source: &'a reviewgraphen_core::ArtifactSource,
+}
+
+#[derive(Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WaveWire {
+    obligation_ids: Vec<StableId>,
+    wave_index: u32,
+}
+
+#[derive(Serialize)]
+struct WaveIdentity<'a> {
+    ids: &'a [StableId],
+    plan_id: &'a StableId,
+    wave_index: u32,
+}
+
+fn wave_id(plan_id: &StableId, wave: &WaveWire) -> Result<StableId, IndexError> {
+    let identity = canonical_json(&WaveIdentity {
+        ids: &wave.obligation_ids,
+        plan_id,
+        wave_index: wave.wave_index,
+    })
+    .map_err(|_| IndexError::CorruptIndex)?;
+    StableId::parse(format!("schedule-wave:{}", ContentHash::sha256(&identity)))
+        .map_err(|_| IndexError::CorruptIndex)
+}
+
+fn parse_closed_enum<T: DeserializeOwned>(value: &str) -> Result<T, IndexError> {
+    let json = canonical_json(&value).map_err(|_| IndexError::CorruptIndex)?;
+    serde_json::from_slice(&json).map_err(|_| IndexError::CorruptIndex)
+}
+
+fn validate_execution_row(
+    row: &IndexExecution,
+) -> Result<reviewgraphen_core::ExecutionRecord, IndexError> {
+    let obligation_ids = exact_id_set(&row.obligation_ids_canonical_json)?;
+    let parsed_claim_ids = exact_id_set(&row.parsed_claim_ids_canonical_json)?;
+    let inference_settings: BTreeMap<String, String> =
+        exact_typed_json(&row.inference_settings_canonical_json)?;
+    let tool_calls: Vec<()> = exact_typed_json(&row.tool_calls_canonical_json)?;
+    if !tool_calls.is_empty()
+        || row.provider.is_some()
+        || row.model.is_some()
+        || row.model_revision.is_some()
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    let outcome: reviewgraphen_core::ExecutionOutcome =
+        exact_typed_json(&row.outcome_canonical_json)?;
+    let expected_kind = match outcome {
+        reviewgraphen_core::ExecutionOutcome::Structured => "structured",
+        reviewgraphen_core::ExecutionOutcome::Abstained { .. } => "abstained",
+        reviewgraphen_core::ExecutionOutcome::Malformed { .. } => "malformed",
+        reviewgraphen_core::ExecutionOutcome::ProviderFailure { .. } => "provider_failure",
+    };
+    if row.outcome_kind != expected_kind {
+        return Err(IndexError::CorruptIndex);
+    }
+    let body = canonical_json(&ExecutionBody {
+        attempt: row.attempt,
+        envelope_id: &row.envelope_id,
+        id: &row.execution_id,
+        inference_settings: &inference_settings,
+        model: row.model.as_deref(),
+        model_revision: row.model_revision.as_deref(),
+        obligation_ids: &obligation_ids,
+        outcome: &outcome,
+        parsed_claim_ids: &parsed_claim_ids,
+        plan_id: &row.plan_id,
+        prompt_template_version: &row.prompt_template_version,
+        provider: row.provider.as_deref(),
+        raw_artifact_hash: &row.raw_hash,
+        raw_artifact_registration_id: &row.raw_registration_id,
+        reviewer_id: &row.reviewer_id,
+        reviewer_kind: &row.reviewer_kind,
+        snapshot_id: &row.snapshot_id,
+        system_prompt_version: &row.system_prompt_version,
+        tool_calls: &tool_calls,
+        tool_policy_version: &row.tool_policy_version,
+        wave_id: &row.wave_id,
+    })
+    .map_err(|_| IndexError::CorruptIndex)?;
+    let execution: reviewgraphen_core::ExecutionRecord =
+        serde_json::from_slice(&body).map_err(|_| IndexError::CorruptIndex)?;
+    if execution
+        .canonical_bytes()
+        .map_err(|_| IndexError::CorruptIndex)?
+        != body
+        || execution
+            .identity_body_hash()
+            .map_err(|_| IndexError::CorruptIndex)?
+            != row.identity_body_hash
+        || execution
+            .body_hash()
+            .map_err(|_| IndexError::CorruptIndex)?
+            != row.body_hash
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    Ok(execution)
+}
+
+fn validate_claim_row(
+    row: &IndexClaim,
+) -> Result<reviewgraphen_core::ExecutionClaimV2, IndexError> {
+    let obligation_ids = exact_id_set(&row.obligation_ids_canonical_json)?;
+    let target_refs = exact_id_set(&row.target_refs_canonical_json)?;
+    let source_ids = exact_id_set(&row.source_ids_canonical_json)?;
+    let assumptions: BTreeSet<String> = exact_typed_json(&row.assumptions_canonical_json)?;
+    let requested_evidence: BTreeSet<String> =
+        exact_typed_json(&row.requested_evidence_canonical_json)?;
+    let confidence: Option<f64> = exact_typed_json(&row.candidate_confidence_canonical_json)?;
+    let polarity = parse_closed_enum(&row.polarity)?;
+    let disposition = parse_closed_enum(&row.disposition)?;
+    let author_kind = parse_closed_enum(&row.author_kind)?;
+    let review_status = parse_closed_enum(&row.review_status)?;
+    let body = canonical_json(&ClaimBody {
+        assumptions: &assumptions,
+        author_kind,
+        candidate_confidence: confidence,
+        disposition,
+        execution_id: &row.execution_id,
+        id: &row.claim_id,
+        obligation_ids: &obligation_ids,
+        polarity,
+        property_id: &row.property_id,
+        requested_evidence: &requested_evidence,
+        review_status,
+        source_ids: &source_ids,
+        summary: &row.summary,
+        target_refs: &target_refs,
+    })
+    .map_err(|_| IndexError::CorruptIndex)?;
+    let claim: reviewgraphen_core::ExecutionClaimV2 =
+        serde_json::from_slice(&body).map_err(|_| IndexError::CorruptIndex)?;
+    if claim
+        .canonical_bytes()
+        .map_err(|_| IndexError::CorruptIndex)?
+        != body
+        || claim
+            .identity_body_hash()
+            .map_err(|_| IndexError::CorruptIndex)?
+            != row.identity_body_hash
+        || claim.body_hash().map_err(|_| IndexError::CorruptIndex)? != row.body_hash
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    Ok(claim)
+}
+
+fn validate_registration_row(
+    row: &IndexArtifactRegistration,
+) -> Result<reviewgraphen_core::ArtifactRegistered, IndexError> {
+    let source: reviewgraphen_core::ArtifactSource = exact_typed_json(&row.source_id)?;
+    let sensitivity = parse_closed_enum(&row.sensitivity)?;
+    if serialized_enum(&sensitivity)? != row.sensitivity
+        || artifact_source_kind(&source)? != row.source_kind
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    let body = canonical_json(&RegistrationBody {
+        cas_hash: &row.cas_hash,
+        media_type: &row.media_type,
+        registration_id: &row.registration_id,
+        run_id: &row.run_id,
+        sensitivity,
+        size: row.size,
+        source: &source,
+    })
+    .map_err(|_| IndexError::CorruptIndex)?;
+    // Reconstruct through the public constructor, not serde.  This binds the
+    // derived registration ID to every source/media/hash/sensitivity input.
+    let registration = reviewgraphen_core::ArtifactRegistered::new(
+        row.run_id.clone(),
+        row.registration_id.clone(),
+        row.cas_hash.clone(),
+        row.media_type.clone(),
+        row.size,
+        sensitivity,
+        source,
+    )
+    .map_err(|_| IndexError::CorruptIndex)?;
+    let canonical = canonical_json(&registration).map_err(|_| IndexError::CorruptIndex)?;
+    if canonical != body || ContentHash::sha256(&body) != row.body_hash {
+        return Err(IndexError::CorruptIndex);
+    }
+    Ok(registration)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_d2_projection_closure(
+    events: &[IndexEvent],
+    obligations: &[IndexObligation],
+    registrations: &[IndexArtifactRegistration],
+    envelopes: &[IndexContextEnvelope],
+    plans: &[IndexReviewPlan],
+    executions: &[IndexExecution],
+    claims: &[IndexClaim],
+    marker: &IndexMarker,
+) -> Result<(), IndexError> {
+    let event_by_sequence = events
+        .iter()
+        .map(|event| (event.sequence, event))
+        .collect::<BTreeMap<_, _>>();
+    let obligation_by_id = obligations
+        .iter()
+        .map(|obligation| (&obligation.obligation_id, obligation))
+        .collect::<BTreeMap<_, _>>();
+    let mut registration_by_id = BTreeMap::new();
+    for registration in registrations {
+        let typed = validate_registration_row(registration)?;
+        if registration_by_id
+            .insert(registration.registration_id.clone(), typed)
+            .is_some()
+        {
+            return Err(IndexError::CorruptIndex);
+        }
+    }
+    let envelope_by_id = envelopes
+        .iter()
+        .map(|envelope| (&envelope.envelope_id, envelope))
+        .collect::<BTreeMap<_, _>>();
+    let plan_by_id = plans
+        .iter()
+        .map(|plan| (&plan.plan_id, plan))
+        .collect::<BTreeMap<_, _>>();
+    let mut execution_by_id = BTreeMap::new();
+    let mut execution_events = BTreeSet::new();
+    let mut typed_executions = BTreeMap::new();
+    for row in executions {
+        let event = event_by_sequence
+            .get(&row.event_sequence)
+            .ok_or(IndexError::CorruptIndex)?;
+        if event.event_id != row.event_id
+            || event.payload_kind != "review_execution_recorded"
+            || !execution_events.insert((row.event_sequence, row.event_id.clone()))
+            || execution_by_id.insert(&row.execution_id, row).is_some()
+        {
+            return Err(IndexError::CorruptIndex);
+        }
+        let execution = validate_execution_row(row)?;
+        let plan = plan_by_id
+            .get(execution.plan_id())
+            .ok_or(IndexError::CorruptIndex)?;
+        let envelope = envelope_by_id
+            .get(execution.envelope_id())
+            .ok_or(IndexError::CorruptIndex)?;
+        let envelope_ids = exact_id_set(&envelope.obligation_ids_canonical_json)?;
+        let waves: Vec<WaveWire> = exact_typed_json(&plan.waves_canonical_json)?;
+        let wave = waves
+            .iter()
+            .find(|wave| {
+                wave_id(execution.plan_id(), wave)
+                    .as_ref()
+                    .is_ok_and(|id| id == execution.wave_id())
+            })
+            .ok_or(IndexError::CorruptIndex)?;
+        let wave_ids = wave.obligation_ids.iter().cloned().collect::<BTreeSet<_>>();
+        if plan.snapshot_id != *execution.snapshot_id()
+            || envelope.snapshot_id != *execution.snapshot_id()
+            || envelope_ids != *execution.obligation_ids()
+            || !execution.obligation_ids().is_subset(&wave_ids)
+        {
+            return Err(IndexError::CorruptIndex);
+        }
+        let registration = registration_by_id
+            .get(execution.raw_artifact_registration_id())
+            .ok_or(IndexError::CorruptIndex)?;
+        if registration.cas_hash() != execution.raw_artifact_hash()
+            || registration.sensitivity() != reviewgraphen_core::ArtifactSensitivity::Sensitive
+            || !matches!(registration.source(), reviewgraphen_core::ArtifactSource::ReviewerExecution { run_id, execution_id, reviewer_id } if run_id == &marker.run_id && execution_id == execution.id() && reviewer_id == execution.reviewer_id())
+        {
+            return Err(IndexError::CorruptIndex);
+        }
+        typed_executions.insert(row.execution_id.clone(), execution);
+    }
+    if execution_events.len() != executions.len()
+        || events
+            .iter()
+            .filter(|event| event.payload_kind == "review_execution_recorded")
+            .count()
+            != executions.len()
+    {
+        return Err(IndexError::CorruptIndex);
+    }
+    let mut claims_by_execution = BTreeMap::<StableId, BTreeSet<StableId>>::new();
+    for row in claims {
+        let event = event_by_sequence
+            .get(&row.event_sequence)
+            .ok_or(IndexError::CorruptIndex)?;
+        let execution = typed_executions
+            .get(&row.execution_id)
+            .ok_or(IndexError::CorruptIndex)?;
+        if event.event_id != row.event_id
+            || row.event_sequence
+                != executions
+                    .iter()
+                    .find(|candidate| candidate.execution_id == row.execution_id)
+                    .ok_or(IndexError::CorruptIndex)?
+                    .event_sequence
+            || row.event_id
+                != executions
+                    .iter()
+                    .find(|candidate| candidate.execution_id == row.execution_id)
+                    .ok_or(IndexError::CorruptIndex)?
+                    .event_id
+        {
+            return Err(IndexError::CorruptIndex);
+        }
+        let claim = validate_claim_row(row)?;
+        let obligation_id = execution
+            .obligation_ids()
+            .iter()
+            .next()
+            .ok_or(IndexError::CorruptIndex)?;
+        let obligation = obligation_by_id
+            .get(obligation_id)
+            .ok_or(IndexError::CorruptIndex)?;
+        let target_ids = exact_id_set(&obligation.target_ids_canonical_json)?;
+        let envelope = envelope_by_id
+            .get(execution.envelope_id())
+            .ok_or(IndexError::CorruptIndex)?;
+        let sources: Vec<reviewgraphen_core::SourceArtifactRef> =
+            exact_typed_json(&envelope.included_sources_canonical_json)?;
+        let source_ids = sources
+            .iter()
+            .map(|source| source.artifact_id().clone())
+            .collect::<BTreeSet<_>>();
+        if claim.execution_id() != execution.id()
+            || claim.obligation_ids() != execution.obligation_ids()
+            || claim.property_id() != obligation.property_id
+            || !claim.target_refs().is_subset(&target_ids)
+            || !claim.source_ids().is_subset(&source_ids)
+            || !claims_by_execution
+                .entry(row.execution_id.clone())
+                .or_default()
+                .insert(row.claim_id.clone())
+        {
+            return Err(IndexError::CorruptIndex);
+        }
+    }
+    for (id, execution) in typed_executions {
+        let actual = claims_by_execution.remove(&id).unwrap_or_default();
+        if actual != *execution.parsed_claim_ids()
+            || (execution.outcome().is_structured() && actual.is_empty())
+            || (!execution.outcome().is_structured() && !actual.is_empty())
+        {
+            return Err(IndexError::CorruptIndex);
+        }
+    }
+    Ok(())
 }
 fn query_registrations(c: &Connection) -> Result<Vec<IndexArtifactRegistration>, IndexError> {
     let mut s=c.prepare("SELECT event_sequence,event_id,registration_id,run_id,cas_hash,media_type,size,sensitivity,source_kind,source_id,body_hash FROM artifact_registrations ORDER BY event_sequence,registration_id")?;
@@ -4133,7 +5076,7 @@ mod tests {
     type IndexMutation = Box<dyn Fn(&Connection)>;
 
     #[test]
-    fn schema_v2_refuses_d2_execution_projection_with_typed_v3_rebuild() {
+    fn schema_v3_accepts_d2_execution_payload_kind() {
         let input = ExecutionRecordInput::fake(
             StableId::parse("plan:fixture").unwrap(),
             StableId::parse("schedule-wave:fixture").unwrap(),
@@ -4177,13 +5120,381 @@ mod tests {
             execution: bundle.execution().clone(),
             claims: bundle.claims().to_vec(),
         };
+        assert_eq!(
+            payload_kind_decoded(&payload).unwrap(),
+            "review_execution_recorded"
+        );
+    }
+
+    #[test]
+    fn schema_v3_projects_atomic_d2_execution_and_full_claim_rows() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index) = d2_index_fixture(&root);
+        index.rebuild(&journal, &cas).unwrap();
+        let first = index.snapshot_current(&journal).unwrap();
+        assert_eq!(first.marker.sqlite_user_version, 3);
+        assert_eq!(first.executions.len(), 1);
+        assert_eq!(first.claims.len(), 1);
+        let execution = &first.executions[0];
+        let claim = &first.claims[0];
+        assert_eq!(execution.event_sequence, claim.event_sequence);
+        assert_eq!(execution.event_id, claim.event_id);
+        assert_eq!(execution.execution_id, claim.execution_id);
+        assert_eq!(execution.reviewer_kind, "fake");
+        assert_eq!(execution.inference_settings_canonical_json, "{}");
+        assert_eq!(execution.tool_calls_canonical_json, "[]");
+        assert_eq!(execution.outcome_kind, "structured");
+        assert_eq!(claim.disposition, "proposed");
+        assert_eq!(claim.author_kind, "ai");
+        assert_eq!(claim.review_status, "unreviewed");
+        assert_eq!(claim.candidate_confidence_canonical_json, "null");
+        let image = index.read_active_image().unwrap();
+        let connection = deserialize_read_only(image, index.limits()).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM executions", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM claims", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        drop(connection);
+        std::fs::remove_file(root.path().join(INDEX_DIR).join(ACTIVE_FILE)).unwrap();
+        index.rebuild(&journal, &cas).unwrap();
+        assert_eq!(first, index.snapshot_current(&journal).unwrap());
+    }
+
+    #[test]
+    fn schema_v3_rejects_d2_claim_tamper_and_same_event_atomicity_breaks() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index) = d2_index_fixture(&root);
+        index.rebuild(&journal, &cas).unwrap();
+        for mutation in ["UPDATE claims SET summary='tampered'", "DELETE FROM claims"] {
+            index.rebuild(&journal, &cas).unwrap();
+            mutate_active_image(&index, |connection| {
+                connection.execute_batch(mutation).unwrap();
+            });
+            assert!(
+                matches!(
+                    index.snapshot_current(&journal),
+                    Err(IndexError::CorruptIndex)
+                ),
+                "{mutation}"
+            );
+        }
+        index.rebuild(&journal, &cas).unwrap();
+        mutate_active_image(&index, |connection| {
+            connection
+                .pragma_update(None, "foreign_keys", false)
+                .unwrap();
+            connection
+                .execute("UPDATE claims SET event_sequence=1", [])
+                .unwrap();
+        });
         assert!(matches!(
-            payload_kind_decoded(&payload),
-            Err(IndexError::RebuildRequired {
-                found: 2,
-                required: 3
-            })
+            index.snapshot_current(&journal),
+            Err(IndexError::CorruptIndex)
         ));
+    }
+
+    #[test]
+    fn schema_v3_d2_rows_accept_exact_aggregate_limit_and_refuse_plus_one_atomically() {
+        let discovery_workspace = tempfile::tempdir().unwrap();
+        let discovery_root =
+            StoreRoot::open(discovery_workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index) = d2_index_fixture(&discovery_root);
+        index.rebuild(&journal, &cas).unwrap();
+        let connection =
+            deserialize_read_only(index.read_active_image().unwrap(), index.limits()).unwrap();
+        let tables = [
+            "index_meta",
+            "events",
+            "program_objects",
+            "program_relations",
+            "universe",
+            "obligations",
+            "obligation_lifecycle",
+            "executions",
+            "claims",
+            "artifact_registrations",
+            "snapshot_source_index",
+            "review_plans",
+            "context_envelopes",
+            "unreconciled_authority_records",
+            "projected_findings",
+        ];
+        let exact_rows = tables
+            .iter()
+            .try_fold(0_u64, |total, table| {
+                let count: i64 = connection
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })
+                    .map_err(map_sql)?;
+                total
+                    .checked_add(u64::try_from(count).map_err(|_| IndexError::IntegerOutOfRange)?)
+                    .ok_or(IndexError::IntegerOutOfRange)
+            })
+            .unwrap();
+        assert!(exact_rows > 2);
+        drop(connection);
+        let exact_workspace = tempfile::tempdir().unwrap();
+        let exact_root = StoreRoot::open(
+            exact_workspace.path(),
+            StoreLimits {
+                max_index_rows: exact_rows,
+                ..StoreLimits::default()
+            },
+        )
+        .unwrap();
+        let (exact_journal, exact_cas, exact_index) = d2_index_fixture(&exact_root);
+        exact_index.rebuild(&exact_journal, &exact_cas).unwrap();
+        let low_workspace = tempfile::tempdir().unwrap();
+        let low_root = StoreRoot::open(
+            low_workspace.path(),
+            StoreLimits {
+                max_index_rows: exact_rows - 1,
+                ..StoreLimits::default()
+            },
+        )
+        .unwrap();
+        let (low_journal, low_cas, low_index) = d2_index_fixture(&low_root);
+        assert!(matches!(
+            low_index.rebuild(&low_journal, &low_cas),
+            Err(IndexError::Incomplete { limit, observed }) if limit == exact_rows - 1 && observed == exact_rows
+        ));
+        assert!(matches!(
+            low_index.snapshot_current(&low_journal),
+            Err(IndexError::Missing)
+        ));
+    }
+
+    fn d2_execution_payload(
+        journal: &EventJournal<'_>,
+    ) -> (
+        EventEnvelope,
+        reviewgraphen_core::ExecutionRecord,
+        Vec<reviewgraphen_core::ExecutionClaimV2>,
+    ) {
+        let reader = journal.reader().unwrap();
+        reader.with_locked_snapshot(|events, _, _| {
+            events
+                .iter()
+                .find_map(|event| {
+                    match event.decode_for_streaming_projection().unwrap().payload() {
+                        DecodedPayload::ReviewExecutionRecorded { execution, claims } => {
+                            Some((event.clone(), execution.clone(), claims.to_vec()))
+                        }
+                        _ => None,
+                    }
+                })
+                .unwrap()
+        })
+    }
+
+    #[test]
+    fn d2_insert_prevalidates_every_domain_reference_before_any_row_reservation() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index) = d2_index_fixture(&root);
+        index.rebuild(&journal, &cas).unwrap();
+        let (event, execution, claims) = d2_execution_payload(&journal);
+        let mutations: [fn(&Connection); 6] = [
+            |connection| {
+                connection.execute("DELETE FROM review_plans", []).unwrap();
+            },
+            |connection| {
+                connection
+                    .execute("UPDATE review_plans SET waves_canonical_json='[]'", [])
+                    .unwrap();
+            },
+            |connection| {
+                connection
+                    .execute("DELETE FROM context_envelopes", [])
+                    .unwrap();
+            },
+            |connection| {
+                connection
+                    .execute(
+                        "DELETE FROM artifact_registrations WHERE sensitivity='sensitive'",
+                        [],
+                    )
+                    .unwrap();
+            },
+            |connection| {
+                connection
+                    .execute("UPDATE obligations SET property_id='property:tampered'", [])
+                    .unwrap();
+            },
+            |connection| {
+                connection
+                    .execute(
+                        "UPDATE context_envelopes SET included_sources_canonical_json='[]'",
+                        [],
+                    )
+                    .unwrap();
+            },
+        ];
+        for mutation in mutations {
+            index.rebuild(&journal, &cas).unwrap();
+            let image = index.read_active_image().unwrap();
+            let mut connection = Connection::open_in_memory().unwrap();
+            connection
+                .deserialize_read_exact(MAIN_DB, Cursor::new(image.clone()), image.len(), false)
+                .unwrap();
+            connection.execute("DELETE FROM claims", []).unwrap();
+            connection.execute("DELETE FROM executions", []).unwrap();
+            mutation(&connection);
+            let transaction = connection.transaction().unwrap();
+            let mut rows = 0;
+            assert!(matches!(
+                insert_execution_and_claims(
+                    &transaction,
+                    &event,
+                    &execution,
+                    &claims,
+                    &mut rows,
+                    index.limits(),
+                ),
+                Err(IndexError::ProjectionContractViolation)
+            ));
+            assert_eq!(rows, 0);
+            assert_eq!(
+                transaction
+                    .query_row("SELECT COUNT(*) FROM executions", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                transaction
+                    .query_row("SELECT COUNT(*) FROM claims", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            transaction.rollback().unwrap();
+        }
+    }
+
+    fn coherent_claim_body_hash(row: &IndexClaim) -> ContentHash {
+        let obligation_ids = exact_id_set(&row.obligation_ids_canonical_json).unwrap();
+        let target_refs = exact_id_set(&row.target_refs_canonical_json).unwrap();
+        let source_ids = exact_id_set(&row.source_ids_canonical_json).unwrap();
+        let assumptions = exact_typed_json(&row.assumptions_canonical_json).unwrap();
+        let requested_evidence = exact_typed_json(&row.requested_evidence_canonical_json).unwrap();
+        let confidence = exact_typed_json(&row.candidate_confidence_canonical_json).unwrap();
+        let polarity = parse_closed_enum(&row.polarity).unwrap();
+        let disposition = parse_closed_enum(&row.disposition).unwrap();
+        let author_kind = parse_closed_enum(&row.author_kind).unwrap();
+        let review_status = parse_closed_enum(&row.review_status).unwrap();
+        ContentHash::sha256(
+            &canonical_json(&ClaimBody {
+                assumptions: &assumptions,
+                author_kind,
+                candidate_confidence: confidence,
+                disposition,
+                execution_id: &row.execution_id,
+                id: &row.claim_id,
+                obligation_ids: &obligation_ids,
+                polarity,
+                property_id: &row.property_id,
+                requested_evidence: &requested_evidence,
+                review_status,
+                source_ids: &source_ids,
+                summary: &row.summary,
+                target_refs: &target_refs,
+            })
+            .unwrap(),
+        )
+    }
+
+    fn coherent_registration_body_hash(row: &IndexArtifactRegistration) -> ContentHash {
+        let source = exact_typed_json(&row.source_id).unwrap();
+        let sensitivity = parse_closed_enum(&row.sensitivity).unwrap();
+        ContentHash::sha256(
+            &canonical_json(&RegistrationBody {
+                cas_hash: &row.cas_hash,
+                media_type: &row.media_type,
+                registration_id: &row.registration_id,
+                run_id: &row.run_id,
+                sensitivity,
+                size: row.size,
+                source: &source,
+            })
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn d2_journal_comparator_rejects_coherently_rehashed_claim_and_registration_rows() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index) = d2_index_fixture(&root);
+        index.rebuild(&journal, &cas).unwrap();
+        let snapshot = index.snapshot_current(&journal).unwrap();
+
+        let mut claim = snapshot.claims[0].clone();
+        claim.candidate_confidence_canonical_json = "0.5".to_owned();
+        claim.body_hash = coherent_claim_body_hash(&claim);
+        mutate_active_image(&index, |connection| {
+            connection
+                .execute(
+                    "UPDATE claims SET candidate_confidence_canonical_json=?1,body_hash=?2",
+                    rusqlite::params![
+                        claim.candidate_confidence_canonical_json,
+                        claim.body_hash.to_string()
+                    ],
+                )
+                .unwrap();
+        });
+        assert!(matches!(
+            index.snapshot_current(&journal),
+            Err(IndexError::CorruptIndex)
+        ));
+
+        for (media_type, size) in [
+            ("application/x-tampered", None),
+            ("application/json", Some(99_u64)),
+        ] {
+            index.rebuild(&journal, &cas).unwrap();
+            let mut registration = snapshot
+                .artifact_registrations
+                .iter()
+                .find(|row| row.sensitivity == "sensitive")
+                .unwrap()
+                .clone();
+            registration.media_type = media_type.to_owned();
+            if let Some(size) = size {
+                registration.size = size;
+            }
+            registration.body_hash = coherent_registration_body_hash(&registration);
+            mutate_active_image(&index, |connection| {
+                connection
+                    .execute(
+                        "UPDATE artifact_registrations SET media_type=?1,size=?2,body_hash=?3 WHERE registration_id=?4",
+                        rusqlite::params![
+                            registration.media_type,
+                            to_i64(registration.size).unwrap(),
+                            registration.body_hash.to_string(),
+                            registration.registration_id.to_string(),
+                        ],
+                    )
+                    .unwrap();
+            });
+            assert!(matches!(
+                index.snapshot_current(&journal),
+                Err(IndexError::CorruptIndex)
+            ));
+        }
     }
 
     #[test]
@@ -4351,13 +5662,38 @@ mod tests {
                 b"repository line\n".repeat(100),
             ),
         ]);
-        d1_index_fixture_with_sources(root, "run:index-d1", source_bytes)
+        index_fixture_with_sources(root, "run:index-d1", source_bytes, false)
     }
 
     fn d1_index_fixture_with_sources<'a>(
         root: &'a StoreRoot,
         run: &str,
         source_bytes: BTreeMap<&'static str, Vec<u8>>,
+    ) -> (EventJournal<'a>, CasStore<'a>, DerivedIndex<'a>) {
+        index_fixture_with_sources(root, run, source_bytes, false)
+    }
+
+    fn d2_index_fixture<'a>(
+        root: &'a StoreRoot,
+    ) -> (EventJournal<'a>, CasStore<'a>, DerivedIndex<'a>) {
+        let source_bytes = BTreeMap::from([
+            (
+                "src/checkout_controller.rs",
+                b"controller line\n".repeat(100),
+            ),
+            (
+                "src/payment_repository.rs",
+                b"repository line\n".repeat(100),
+            ),
+        ]);
+        index_fixture_with_sources(root, "run:index-d2", source_bytes, true)
+    }
+
+    fn index_fixture_with_sources<'a>(
+        root: &'a StoreRoot,
+        run: &str,
+        source_bytes: BTreeMap<&'static str, Vec<u8>>,
+        include_d2: bool,
     ) -> (EventJournal<'a>, CasStore<'a>, DerivedIndex<'a>) {
         let run_id = StableId::parse(run).unwrap();
         let mut value: Value = serde_json::from_slice(include_bytes!(
@@ -4505,6 +5841,94 @@ mod tests {
             session.finish().unwrap(),
         ))
         .unwrap();
+
+        if include_d2 {
+            let obligation = log.aggregate().obligations().next().unwrap().id().clone();
+            log.append(EventCommand::obligation_transition(
+                obligation.clone(),
+                ObligationLifecycle::Planned,
+            ))
+            .unwrap();
+            log.append(EventCommand::obligation_transition(
+                obligation.clone(),
+                ObligationLifecycle::InProgress,
+            ))
+            .unwrap();
+            let plan = log.aggregate().review_plans().next().unwrap().clone();
+            let envelope = log.aggregate().context_envelopes().next().unwrap().clone();
+            let wave = plan
+                .waves()
+                .iter()
+                .find(|wave| wave.obligation_ids().contains(&obligation))
+                .unwrap();
+            let input = ExecutionRecordInput::fake(
+                plan.id().clone(),
+                wave.id().clone(),
+                obligation.clone(),
+                envelope.id().clone(),
+                program.snapshot_id().clone(),
+                1,
+            )
+            .unwrap();
+            let raw = b"{\"schema\":\"reviewgraphen.reviewer_output.v1\",\"claims\":[]}".to_vec();
+            let raw_hash = ContentHash::sha256(&raw);
+            let raw_cas = CasHash::parse(raw_hash.to_string()).unwrap();
+            cas.put(
+                &raw_cas,
+                Some(u64::try_from(raw.len()).unwrap()),
+                Cursor::new(raw.as_slice()),
+            )
+            .unwrap();
+            let registration = ArtifactRegistered::reviewer_execution(
+                run_id.clone(),
+                input.execution_id().unwrap(),
+                "reviewgraphen.fake_reviewer@1",
+                raw_hash,
+                "application/json",
+                u64::try_from(raw.len()).unwrap(),
+            )
+            .unwrap();
+            log.append(EventCommand::artifact_registered(registration.clone()))
+                .unwrap();
+            let target = log
+                .aggregate()
+                .obligations()
+                .next()
+                .unwrap()
+                .normalized_target_refs()
+                .iter()
+                .next()
+                .unwrap()
+                .clone();
+            let source = envelope
+                .normalized_included_source_ids()
+                .iter()
+                .next()
+                .unwrap()
+                .clone();
+            let claim = ExecutionClaimInputV2::new(
+                log.aggregate().obligations().next().unwrap().property_id(),
+                BTreeSet::from([target]),
+                reviewgraphen_core::ClaimPolarity::IssueAbsent,
+                "fixture structured no-issue claim",
+                BTreeSet::from([source]),
+                BTreeSet::new(),
+                BTreeSet::new(),
+                None,
+            )
+            .unwrap();
+            let bundle = ValidatedExecutionBundle::fake(
+                input,
+                &registration,
+                raw,
+                Vec::new(),
+                vec![claim],
+                ExecutionOutcome::Structured,
+            )
+            .unwrap();
+            log.append(EventCommand::review_execution_recorded(bundle))
+                .unwrap();
+        }
 
         let identity =
             JournalIdentity::new(run_id, super::super::JournalGenesis::V2(genesis)).unwrap();
@@ -4658,14 +6082,16 @@ mod tests {
         drop(reader);
         let first_receipt = index.rebuild(&journal, &cas).unwrap();
         let first = index.snapshot_current(&journal).unwrap();
-        assert_eq!(first.marker.sqlite_user_version, 2);
-        assert_eq!(first.marker.index_schema_version, 2);
+        assert_eq!(first.marker.sqlite_user_version, 3);
+        assert_eq!(first.marker.index_schema_version, 3);
         assert_eq!(
             first.marker.projection_contract_version,
-            "reviewgraphen.index_projection.v2"
+            "reviewgraphen.index_projection.v3"
         );
         assert_eq!(first.review_plans.len(), 1);
         assert_eq!(first.context_envelopes.len(), 1);
+        assert!(first.executions.is_empty());
+        assert!(first.claims.is_empty());
         let plan = &first.review_plans[0];
         assert_eq!(
             plan.budget_hash,
@@ -4693,7 +6119,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(executions, 0);
+        assert_eq!(executions, 1);
         drop(connection);
 
         std::fs::remove_file(root.path().join(INDEX_DIR).join(ACTIVE_FILE)).unwrap();
@@ -4849,13 +6275,13 @@ mod tests {
             index.snapshot_current(&journal),
             Err(IndexError::RebuildRequired {
                 found: 1,
-                required: 2
+                required: 3
             })
         ));
 
         index.rebuild(&journal, &cas).unwrap();
         let snapshot = index.snapshot_current(&journal).unwrap();
-        assert_eq!(snapshot.marker.index_schema_version, 2);
+        assert_eq!(snapshot.marker.index_schema_version, 3);
         let rebuilt =
             deserialize_read_only(index.read_active_image().unwrap(), index.limits()).unwrap();
         let legacy_tables: i64 = rebuilt
@@ -4866,6 +6292,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(legacy_tables, 0);
+    }
+
+    #[test]
+    fn schema_v2_image_is_rebuild_required_and_never_upcast_in_place() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index, _) = v2_fixture(&root);
+        index.rebuild(&journal, &cas).unwrap();
+        mutate_active_image(&index, |connection| {
+            connection.pragma_update(None, "user_version", 2).unwrap();
+        });
+        assert!(matches!(
+            index.snapshot_current(&journal),
+            Err(IndexError::RebuildRequired {
+                found: 2,
+                required: 3
+            })
+        ));
+        index.rebuild(&journal, &cas).unwrap();
+        assert_eq!(
+            index
+                .snapshot_current(&journal)
+                .unwrap()
+                .marker
+                .index_schema_version,
+            3
+        );
     }
 
     #[test]
@@ -5109,6 +6562,102 @@ mod tests {
     }
 
     #[test]
+    fn d2_nonempty_query_and_store_visible_working_peaks_are_exact_plus_one() {
+        let discovery_workspace = tempfile::tempdir().unwrap();
+        let discovery_root =
+            StoreRoot::open(discovery_workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, cas, index) = d2_index_fixture(&discovery_root);
+        index.rebuild(&journal, &cas).unwrap();
+        let image = index.read_active_image().unwrap();
+        let image_limit = u64::try_from(image.len()).unwrap();
+        let connection = deserialize_read_only(image, index.limits()).unwrap();
+        let marker = index_marker_from_connection(&connection, index.limits()).unwrap();
+        let query_limit = preflight_query_budget(&connection, &marker, index.limits()).unwrap();
+        assert!(query_limit > 1);
+        let too_small_query = IndexLimits {
+            max_query_bytes: query_limit - 1,
+            ..index.limits()
+        };
+        assert!(matches!(
+            snapshot_from_connection_with_journal(&connection, too_small_query, 0, 0, 0, None),
+            Err(IndexError::Incomplete { limit, observed })
+                if limit == query_limit - 1 && observed == query_limit
+        ));
+        let main_bytes = u64::try_from(
+            connection
+                .pragma_query_value::<i64, _>(None, "page_count", |row| row.get(0))
+                .unwrap(),
+        )
+        .unwrap()
+            * PAGE_SIZE;
+        let compare_tuple = event_compare_tuple_bytes(&connection).unwrap();
+        drop(connection);
+        let mut reader = journal
+            .index_reader(StoreLimits::default().max_index_working_bytes)
+            .unwrap();
+        let identity = reader.identity().clone();
+        let retained = streaming_journal_retained(&reader, &identity, index.limits()).unwrap();
+        let certificate = reader
+            .with_locked_prefix::<IndexError>(|_, _| Ok(()))
+            .unwrap();
+        let scan_peak =
+            retained + certificate.line_buffer_capacity + certificate.canonical_scratch_capacity;
+        let genesis_tuple_bound = identity
+            .v2_genesis_backing()
+            .map_or(0, |bytes| u64::try_from(bytes.len()).unwrap());
+        let insert_peak = scan_peak + certificate.line_buffer_capacity.max(genesis_tuple_bound) * 2;
+        let deserialize_peak = retained + image_limit * 2 + 1024;
+        let query_peak = scan_peak + main_bytes + 1024 + query_limit + compare_tuple;
+        let cache_admission_peak = insert_peak + image_limit * 3 + 1024;
+        let exact_working = scan_peak
+            .max(insert_peak)
+            .max(deserialize_peak)
+            .max(query_peak)
+            .max(cache_admission_peak);
+        drop(reader);
+
+        let exact_workspace = tempfile::tempdir().unwrap();
+        let exact_root = StoreRoot::open(
+            exact_workspace.path(),
+            StoreLimits {
+                max_index_serialized_bytes: image_limit,
+                max_index_query_bytes: query_limit,
+                max_index_working_bytes: exact_working,
+                ..StoreLimits::default()
+            },
+        )
+        .unwrap();
+        let (exact_journal, exact_cas, exact_index) = d2_index_fixture(&exact_root);
+        exact_index.rebuild(&exact_journal, &exact_cas).unwrap();
+        assert_eq!(
+            exact_index
+                .snapshot_current(&exact_journal)
+                .unwrap()
+                .executions
+                .len(),
+            1
+        );
+
+        let low_workspace = tempfile::tempdir().unwrap();
+        let low_root = StoreRoot::open(
+            low_workspace.path(),
+            StoreLimits {
+                max_index_serialized_bytes: image_limit,
+                max_index_query_bytes: query_limit,
+                max_index_working_bytes: exact_working - 1,
+                ..StoreLimits::default()
+            },
+        )
+        .unwrap();
+        let (low_journal, low_cas, low_index) = d2_index_fixture(&low_root);
+        assert!(matches!(
+            low_index.rebuild(&low_journal, &low_cas),
+            Err(IndexError::Incomplete { limit, observed })
+                if limit == exact_working - 1 && observed == exact_working
+        ));
+    }
+
+    #[test]
     fn candidate_reread_peak_is_isolated_exact_and_one_byte_low() {
         // G, J_meta, candidate image, reconstructed main, query cache,
         // snapshot reservation, and T_compare are all independently nonzero.
@@ -5199,7 +6748,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v2_ddl_checks_duplicates_closed_values_and_event_foreign_keys() {
+    fn schema_v3_ddl_checks_duplicates_closed_values_and_event_foreign_keys() {
         let workspace = tempfile::tempdir().unwrap();
         let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
         let (journal, cas, index) = d1_index_fixture(&root);
@@ -5216,7 +6765,7 @@ mod tests {
         for sql in [
             "UPDATE review_plans SET planner_policy_version='scheduler.other@1'",
             "UPDATE context_envelopes SET context_policy_version='context.other@1'",
-            "UPDATE events SET payload_kind='review_execution_recorded' WHERE sequence=1",
+            "UPDATE events SET payload_kind='unknown_payload' WHERE sequence=1",
         ] {
             assert!(matches!(
                 connection.execute(sql, []).map_err(map_sql),
@@ -5660,7 +7209,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         let events_ddl: String = connection
             .query_row(
                 "SELECT sql FROM sqlite_schema WHERE type='table' AND name='events'",
@@ -5670,7 +7219,7 @@ mod tests {
             .unwrap();
         assert!(events_ddl.contains("'review_plan_recorded'"));
         assert!(events_ddl.contains("'context_envelope_projected'"));
-        assert!(!events_ddl.contains("review_execution_recorded"));
+        assert!(events_ddl.contains("review_execution_recorded"));
         let table_columns = |table: &str| {
             let mut statement = connection
                 .prepare(&format!("PRAGMA table_info({table})"))
@@ -5730,7 +7279,7 @@ mod tests {
                     |row| row.get::<_, i64>(0),
                 )
                 .unwrap(),
-            0
+            1
         );
         let image = serialize_connection(&connection, index.limits()).unwrap();
         assert!(!image.is_empty());
@@ -5739,7 +7288,7 @@ mod tests {
         let reopened: i64 = readonly
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(reopened, 2);
+        assert_eq!(reopened, 3);
         assert!(
             readonly
                 .execute_batch("CREATE TABLE forbidden (id INTEGER)")
@@ -6283,7 +7832,7 @@ mod tests {
         let tail = ContentHash::sha256(b"tail");
         connection
             .execute(
-                "INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,2,'reviewgraphen.index_projection.v2','reviewgraphen.review_event.v1','v1_event_metadata_only',?1,?2,0,?3,1)",
+                "INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,3,'reviewgraphen.index_projection.v3','reviewgraphen.review_event.v1','v1_event_metadata_only',?1,?2,0,?3,1)",
                 rusqlite::params![run.to_string(), genesis.to_string(), tail.to_string()],
             )
             .unwrap();
@@ -6319,7 +7868,7 @@ mod tests {
         let (journal, cas, index, _) = v2_fixture(&root);
         let mutations: [fn(&Connection); 3] = [
             |connection: &Connection| {
-                connection.pragma_update(None, "user_version", 3).unwrap();
+                connection.pragma_update(None, "user_version", 4).unwrap();
             },
             |connection: &Connection| {
                 connection
@@ -6370,7 +7919,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(snapshot.marker.projection_mode, "v1_event_metadata_only");
-        assert_eq!(snapshot.marker.sqlite_user_version, 2);
+        assert_eq!(snapshot.marker.sqlite_user_version, 3);
         assert_eq!(snapshot.events.len(), 1);
         assert!(snapshot.program_objects.is_empty());
         connection
@@ -6443,7 +7992,7 @@ mod tests {
         let index = DerivedIndex::open(&root).unwrap();
         let connection = index.new_in_memory_connection().unwrap();
         let hash = ContentHash::sha256(b"index-v2-corruption").to_string();
-        connection.execute("INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,2,'reviewgraphen.index_projection.v2','reviewgraphen.review_event.v2','v2_domain','run:index-v2-corruption',?1,1,?1,1)", [&hash]).unwrap();
+        connection.execute("INSERT INTO index_meta(singleton,index_schema_version,projection_contract_version,event_contract_version,projection_mode,run_id,genesis_hash,confirmed_offset,tail_hash,event_count) VALUES(1,3,'reviewgraphen.index_projection.v3','reviewgraphen.review_event.v2','v2_domain','run:index-v2-corruption',?1,1,?1,1)", [&hash]).unwrap();
         connection.execute("INSERT INTO events(sequence,event_id,schema,event_hash,payload_hash,payload_kind,actor,logical_time) VALUES(1,'event:index-v2-corruption','reviewgraphen.review_event.v2',?1,?1,'run_genesis_manifest','system',1)", [&hash]).unwrap();
         connection.execute("INSERT INTO program_objects(object_id,object_kind,body_hash) VALUES('node:index-v2-corruption','node',?1)", [&hash]).unwrap();
         connection.execute("INSERT INTO universe(singleton,universe_id,snapshot_id,profile_id,rule_set_hash,extractor_set_hash,policy_version,rule_pack_version,body_hash) VALUES(1,'universe:index-v2-corruption','snapshot:index-v2-corruption','profile',?1,?1,'policy','pack',?1)", [&hash]).unwrap();
