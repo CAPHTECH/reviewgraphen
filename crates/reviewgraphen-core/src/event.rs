@@ -13879,7 +13879,7 @@ pub(crate) enum HistoricalSourceRecordValueV4<'a> {
 pub(crate) struct HistoricalSourceRecordProjectionV4<'a> {
     kind: HistoricalSourceRecordKindV4,
     id: &'a StableId,
-    body_hash: ContentHash,
+    body_hash: &'a ContentHash,
     pinned_active_or_current: bool,
     value: HistoricalSourceRecordValueV4<'a>,
 }
@@ -13892,8 +13892,8 @@ impl<'a> HistoricalSourceRecordProjectionV4<'a> {
     pub(crate) const fn id(&self) -> &'a StableId {
         self.id
     }
-    pub(crate) const fn body_hash(&self) -> &ContentHash {
-        &self.body_hash
+    pub(crate) const fn body_hash(&self) -> &'a ContentHash {
+        self.body_hash
     }
     pub(crate) const fn pinned_active_or_current(&self) -> bool {
         self.pinned_active_or_current
@@ -13992,16 +13992,211 @@ fn insert_historical_record_key_v4<'a>(
 /// values borrow the replay aggregate/bundle and cannot outlive or mutate it.
 #[allow(dead_code)] // consumed by the following M6 reducer slice
 pub(crate) struct HistoricalPrefixProjectionV4<'a> {
+    run_id: &'a StableId,
     tail_hash: &'a ContentHash,
+    program_space: &'a ProgramSpace,
     records: Vec<HistoricalSourceRecordBorrowV4<'a>>,
     coverage: crate::coverage::HistoricalCoverageSnapshotV4,
     coverage_body_hash: ContentHash,
+    working_reservation_bytes: usize,
+}
+
+/// Allocation-free admission facts for one immutable V4 history projection.
+/// This borrows the replayed log only long enough for M6 to combine its exact
+/// source peak with the already-sealed target and mapping inputs.  It exposes
+/// neither a record collection nor an append/replay capability.
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+pub(crate) struct HistoricalPrefixAdmissionV4<'a> {
+    log: &'a EventLogV4,
+    program_space: &'a ProgramSpace,
+    record_count: usize,
+    record_id_bytes: usize,
+    replay_record_id_bytes: usize,
+    working_reservation_bytes: usize,
+}
+
+/// One replay-owned historical record observed during M6's allocation-free
+/// admission pass.  Unlike [`HistoricalSourceRecordProjectionV4`], this
+/// carries no derived body hash or coverage snapshot and therefore cannot
+/// materialize HPP-owned state before the combined working reservation wins.
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+pub(crate) struct HistoricalSourceRecordAdmissionV4<'a> {
+    kind: HistoricalSourceRecordKindV4,
+    id: &'a StableId,
+    pinned_active_or_current: bool,
+    value: HistoricalSourceRecordValueV4<'a>,
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+impl<'a> HistoricalSourceRecordAdmissionV4<'a> {
+    pub(crate) const fn kind(&self) -> HistoricalSourceRecordKindV4 {
+        self.kind
+    }
+    pub(crate) const fn id(&self) -> &'a StableId {
+        self.id
+    }
+    pub(crate) const fn pinned_active_or_current(&self) -> bool {
+        self.pinned_active_or_current
+    }
+    pub(crate) const fn value(&self) -> &HistoricalSourceRecordValueV4<'a> {
+        &self.value
+    }
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+impl HistoricalPrefixAdmissionV4<'_> {
+    pub(crate) const fn program_space(&self) -> &ProgramSpace {
+        self.program_space
+    }
+
+    pub(crate) fn universe_obligation_ids(&self) -> &std::collections::BTreeSet<StableId> {
+        self.log.aggregate.universe().obligation_ids()
+    }
+
+    pub(crate) const fn record_count(&self) -> usize {
+        self.record_count
+    }
+
+    /// Upper image of the IDs cloned by M6's historical inventory.  All
+    /// replay-owned record IDs are exact; the derived coverage ID is charged
+    /// at its independently enforced canonical-event maximum because deriving
+    /// it would itself materialize the coverage numerator sets.
+    pub(crate) const fn record_id_bytes(&self) -> usize {
+        self.record_id_bytes
+    }
+
+    /// Dynamic ID bytes for replay-owned records only.  The derived coverage
+    /// record is included by [`Self::record_id_bytes`] with its bounded
+    /// synthetic ID, but cannot be a predecessor of a replay-owned source
+    /// record and must not be multiplied into M6 dependency accounting.
+    pub(crate) const fn replay_record_id_bytes(&self) -> usize {
+        self.replay_record_id_bytes
+    }
+
+    pub(crate) const fn working_reservation_bytes(&self) -> usize {
+        self.working_reservation_bytes
+    }
+
+    /// Visits every replay-owned source record without allocating the HPP
+    /// record vector, coverage snapshot, canonical body hashes, or inventory
+    /// maps.  The synthetic coverage record is deliberately omitted: its
+    /// bounded, source-independent reference shape is charged separately by
+    /// M6 after this pass.
+    pub(crate) fn try_visit_replay_records<E>(
+        &self,
+        mut visitor: impl FnMut(HistoricalSourceRecordAdmissionV4<'_>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
+        let log = self.log;
+        macro_rules! emit {
+            ($kind:ident, $id:expr, $value:expr, $pinned:expr) => {
+                visitor(HistoricalSourceRecordAdmissionV4 {
+                    kind: HistoricalSourceRecordKindV4::$kind,
+                    id: $id,
+                    pinned_active_or_current: $pinned,
+                    value: HistoricalSourceRecordValueV4::$kind($value),
+                })?
+            };
+        }
+        for value in log.aggregate.obligations() {
+            emit!(Obligation, value.id(), value, false);
+        }
+        for value in log.aggregate.review_plans() {
+            emit!(ReviewPlan, value.id(), value, false);
+        }
+        for value in log.aggregate.context_envelopes() {
+            emit!(ContextEnvelope, value.id(), value, false);
+        }
+        for value in log.aggregate.executions() {
+            emit!(Execution, value.id(), value, false);
+        }
+        for value in log.aggregate.execution_claims() {
+            emit!(Claim, value.id(), value, false);
+        }
+        for value in log.v3_aggregate.assessments.values() {
+            emit!(ClaimAssessment, value.claim_id(), value, false);
+        }
+        for value in log.v3_aggregate.registrations.values() {
+            emit!(
+                ArtifactRegistrationV3,
+                value.registration_id(),
+                value,
+                false
+            );
+        }
+        for value in log.v4_registrations.values() {
+            emit!(ArtifactRegistrationV4, value.id(), value, false);
+        }
+        for value in log.v3_aggregate.evidence.values() {
+            emit!(Evidence, value.id(), value, false);
+        }
+        for value in log.v3_aggregate.bindings.values() {
+            emit!(EvidenceBinding, value.id(), value, false);
+        }
+        for value in log.v3_aggregate.verifications.values() {
+            emit!(Verification, value.id(), value, false);
+        }
+        for value in log.v3_aggregate.decisions.values() {
+            let pinned = log
+                .v3_aggregate
+                .assessments
+                .values()
+                .any(|assessment| assessment.active_decision_id() == Some(value.id()));
+            emit!(Decision, value.id(), value, pinned);
+        }
+        for value in log.v3_aggregate.findings.values() {
+            let pinned = log
+                .v3_aggregate
+                .assessments
+                .values()
+                .any(|assessment| assessment.current_finding_id() == Some(value.id()));
+            emit!(Finding, value.id(), value, pinned);
+        }
+        for value in log.v4_gluing_descriptors.values() {
+            emit!(GluingInputDescriptor, value.id(), value, false);
+        }
+        let bundle = log
+            .m5_bundle
+            .as_ref()
+            .expect("historical admission has M5 bundle");
+        emit!(ContextCover, bundle.cover().id(), bundle.cover(), false);
+        for value in bundle.sections() {
+            emit!(Section, value.id(), value, false);
+        }
+        for value in bundle.restrictions() {
+            emit!(Restriction, value.id(), value, false);
+        }
+        emit!(
+            GluingAttempt,
+            bundle.attempt().id(),
+            bundle.attempt(),
+            false
+        );
+        if let Some(value) = bundle.global_candidate() {
+            emit!(GlobalCandidate, value.projection_id(), value, false);
+        }
+        if let Some(value) = bundle.obstruction() {
+            emit!(GluingObstruction, value.id(), value, false);
+        }
+        Ok(())
+    }
 }
 
 #[allow(dead_code)] // consumed by the following M6 reducer slice
 impl HistoricalPrefixProjectionV4<'_> {
+    pub(crate) fn run_id(&self) -> &StableId {
+        self.run_id
+    }
     pub(crate) fn tail_hash(&self) -> &ContentHash {
         self.tail_hash
+    }
+    pub(crate) fn program_space(&self) -> &ProgramSpace {
+        self.program_space
+    }
+    pub(crate) fn coverage(&self) -> &crate::coverage::HistoricalCoverageSnapshotV4 {
+        &self.coverage
+    }
+    pub(crate) const fn working_reservation_bytes(&self) -> usize {
+        self.working_reservation_bytes
     }
     pub(crate) fn record_count(&self) -> usize {
         self.records.len() + 1
@@ -14014,7 +14209,7 @@ impl HistoricalPrefixProjectionV4<'_> {
             visitor(HistoricalSourceRecordProjectionV4 {
                 kind: record.kind,
                 id: record.id,
-                body_hash: record.body_hash.clone(),
+                body_hash: &record.body_hash,
                 pinned_active_or_current: record.pinned_active_or_current,
                 value: record.value,
             });
@@ -14022,10 +14217,35 @@ impl HistoricalPrefixProjectionV4<'_> {
         visitor(HistoricalSourceRecordProjectionV4 {
             kind: HistoricalSourceRecordKindV4::Coverage,
             id: self.coverage.id(),
-            body_hash: self.coverage_body_hash.clone(),
+            body_hash: &self.coverage_body_hash,
             pinned_active_or_current: false,
             value: HistoricalSourceRecordValueV4::Coverage(&self.coverage),
         });
+    }
+
+    /// Fallible counterpart of [`Self::visit_records`].  M6 uses this to
+    /// propagate a typed reduction refusal without manufacturing a sentinel
+    /// historical member or accepting a partial assessment.
+    pub(crate) fn try_visit_records<E>(
+        &self,
+        mut visitor: impl FnMut(HistoricalSourceRecordProjectionV4<'_>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
+        for record in &self.records {
+            visitor(HistoricalSourceRecordProjectionV4 {
+                kind: record.kind,
+                id: record.id,
+                body_hash: &record.body_hash,
+                pinned_active_or_current: record.pinned_active_or_current,
+                value: record.value,
+            })?;
+        }
+        visitor(HistoricalSourceRecordProjectionV4 {
+            kind: HistoricalSourceRecordKindV4::Coverage,
+            id: self.coverage.id(),
+            body_hash: &self.coverage_body_hash,
+            pinned_active_or_current: false,
+            value: HistoricalSourceRecordValueV4::Coverage(&self.coverage),
+        })
     }
 }
 
@@ -15016,6 +15236,172 @@ impl EventLogV4 {
         self.historical_prefix_projection_v4_with_limit(MAX_V5_REPLAY_WORKING_BYTES)
     }
 
+    /// Counts and charges the complete V4 historical topology without
+    /// materializing its record, coverage, canonical, or dependency helper
+    /// collections.  M6 calls this before it reserves its own inventory and
+    /// before it asks this log to construct the borrowed projection.
+    #[allow(dead_code)] // consumed by the following M6 reducer slice
+    pub(crate) fn historical_prefix_admission_v4(&self) -> Result<HistoricalPrefixAdmissionV4<'_>> {
+        let record_count = self.historical_source_record_count_v4()?;
+        let record_id_bytes = self.historical_source_record_id_bytes_v4()?;
+        let replay_record_id_bytes = record_id_bytes.checked_sub(MAX_D1_EVENT_LINE_BYTES).ok_or(
+            DomainError::Incomplete {
+                operation: "event-v4 historical replay record ID bytes",
+                limit: MAX_V5_REPLAY_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            },
+        )?;
+        let working_reservation_bytes = usize::try_from(
+            self.historical_projection_working_oracle_v4(record_count)?
+                .admit(MAX_V5_REPLAY_WORKING_BYTES)?,
+        )
+        .map_err(|_| DomainError::Incomplete {
+            operation: "event-v4 historical projection working bytes",
+            limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+        Ok(HistoricalPrefixAdmissionV4 {
+            log: self,
+            program_space: self.aggregate.program(),
+            record_count,
+            record_id_bytes,
+            replay_record_id_bytes,
+            working_reservation_bytes,
+        })
+    }
+
+    fn historical_source_record_count_v4(&self) -> Result<usize> {
+        let bundle = self
+            .m5_bundle
+            .as_ref()
+            .ok_or(DomainError::IncompleteSourceM5Baseline)?;
+        let counts = [
+            self.aggregate.obligations().count(),
+            self.aggregate.review_plans().count(),
+            self.aggregate.context_envelopes().count(),
+            self.aggregate.executions().count(),
+            self.aggregate.execution_claims().count(),
+            self.v3_aggregate.assessments.len(),
+            self.v3_aggregate.registrations.len(),
+            self.v4_registrations.len(),
+            self.v3_aggregate.evidence.len(),
+            self.v3_aggregate.bindings.len(),
+            self.v3_aggregate.verifications.len(),
+            self.v3_aggregate.decisions.len(),
+            self.v3_aggregate.findings.len(),
+            self.v4_gluing_descriptors.len(),
+            1,
+            bundle.sections().len(),
+            bundle.restrictions().len(),
+            1,
+            usize::from(bundle.global_candidate().is_some()),
+            usize::from(bundle.obstruction().is_some()),
+            1,
+        ];
+        let record_count = counts.into_iter().try_fold(0_usize, |total, count| {
+            total.checked_add(count).ok_or(DomainError::Incomplete {
+                operation: "event-v4 historical source record count",
+                limit: MAX_V4_HISTORICAL_SOURCE_RECORDS,
+                observed: usize::MAX,
+            })
+        })?;
+        if record_count > MAX_V4_HISTORICAL_SOURCE_RECORDS {
+            return Err(DomainError::Incomplete {
+                operation: "event-v4 historical source record count",
+                limit: MAX_V4_HISTORICAL_SOURCE_RECORDS,
+                observed: record_count,
+            });
+        }
+        Ok(record_count)
+    }
+
+    fn historical_source_record_id_bytes_v4(&self) -> Result<usize> {
+        let bundle = self
+            .m5_bundle
+            .as_ref()
+            .ok_or(DomainError::IncompleteSourceM5Baseline)?;
+        let operation = "event-v4 historical source record ID bytes";
+        let mut total = 0_usize;
+        let mut add_id = |id: &StableId| {
+            total = total
+                .checked_add(id.allocated_bytes())
+                .ok_or(DomainError::Incomplete {
+                    operation,
+                    limit: MAX_V5_REPLAY_WORKING_BYTES as usize,
+                    observed: usize::MAX,
+                })?;
+            Ok::<(), DomainError>(())
+        };
+        for value in self.aggregate.obligations() {
+            add_id(value.id())?;
+        }
+        for value in self.aggregate.review_plans() {
+            add_id(value.id())?;
+        }
+        for value in self.aggregate.context_envelopes() {
+            add_id(value.id())?;
+        }
+        for value in self.aggregate.executions() {
+            add_id(value.id())?;
+        }
+        for value in self.aggregate.execution_claims() {
+            add_id(value.id())?;
+        }
+        for value in self.v3_aggregate.assessments.values() {
+            add_id(value.claim_id())?;
+        }
+        for value in self.v3_aggregate.registrations.values() {
+            add_id(value.registration_id())?;
+        }
+        for value in self.v4_registrations.values() {
+            add_id(value.id())?;
+        }
+        for value in self.v3_aggregate.evidence.values() {
+            add_id(value.id())?;
+        }
+        for value in self.v3_aggregate.bindings.values() {
+            add_id(value.id())?;
+        }
+        for value in self.v3_aggregate.verifications.values() {
+            add_id(value.id())?;
+        }
+        for value in self.v3_aggregate.decisions.values() {
+            add_id(value.id())?;
+        }
+        for value in self.v3_aggregate.findings.values() {
+            add_id(value.id())?;
+        }
+        for value in self.v4_gluing_descriptors.values() {
+            add_id(value.id())?;
+        }
+        add_id(bundle.cover().id())?;
+        for value in bundle.sections() {
+            add_id(value.id())?;
+        }
+        for value in bundle.restrictions() {
+            add_id(value.id())?;
+        }
+        add_id(bundle.attempt().id())?;
+        if let Some(value) = bundle.global_candidate() {
+            add_id(value.projection_id())?;
+        }
+        if let Some(value) = bundle.obstruction() {
+            add_id(value.id())?;
+        }
+        // The coverage StableId does not yet exist until the only permitted
+        // coverage reducer runs. Its canonical identity is independently
+        // capped by the v4 event maximum, which is an allocation-free upper
+        // image of the inventory's one cloned ID.
+        total = total
+            .checked_add(MAX_D1_EVENT_LINE_BYTES)
+            .ok_or(DomainError::Incomplete {
+                operation,
+                limit: MAX_V5_REPLAY_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?;
+        Ok(total)
+    }
+
     #[allow(dead_code)] // consumed by the following M6 reducer slice
     fn historical_projection_working_oracle_v4(
         &self,
@@ -15381,7 +15767,7 @@ impl EventLogV4 {
     }
 
     #[allow(dead_code)] // production entry uses the fixed limit; tests pin the seam
-    fn historical_prefix_projection_v4_with_limit(
+    pub(crate) fn historical_prefix_projection_v4_with_limit(
         &self,
         working_limit: u64,
     ) -> Result<HistoricalPrefixProjectionV4<'_>> {
@@ -15392,46 +15778,17 @@ impl EventLogV4 {
 
         // Count-only preflight. No record vector, ID set, canonical buffer, or
         // coverage numerator is allocated before this inclusive bound.
-        let counts = [
-            self.aggregate.obligations().count(),
-            self.aggregate.review_plans().count(),
-            self.aggregate.context_envelopes().count(),
-            self.aggregate.executions().count(),
-            self.aggregate.execution_claims().count(),
-            self.v3_aggregate.assessments.len(),
-            self.v3_aggregate.registrations.len(),
-            self.v4_registrations.len(),
-            self.v3_aggregate.evidence.len(),
-            self.v3_aggregate.bindings.len(),
-            self.v3_aggregate.verifications.len(),
-            self.v3_aggregate.decisions.len(),
-            self.v3_aggregate.findings.len(),
-            self.v4_gluing_descriptors.len(),
-            1,
-            bundle.sections().len(),
-            bundle.restrictions().len(),
-            1,
-            usize::from(bundle.global_candidate().is_some()),
-            usize::from(bundle.obstruction().is_some()),
-            1,
-        ];
-        let record_count = counts.into_iter().try_fold(0_usize, |total, count| {
-            total.checked_add(count).ok_or(DomainError::Incomplete {
-                operation: "event-v4 historical source record count",
-                limit: MAX_V4_HISTORICAL_SOURCE_RECORDS,
-                observed: usize::MAX,
-            })
-        })?;
-        if record_count > MAX_V4_HISTORICAL_SOURCE_RECORDS {
-            return Err(DomainError::Incomplete {
-                operation: "event-v4 historical source record count",
-                limit: MAX_V4_HISTORICAL_SOURCE_RECORDS,
-                observed: record_count,
-            });
-        }
+        let record_count = self.historical_source_record_count_v4()?;
 
-        self.historical_projection_working_oracle_v4(record_count)?
-            .admit(working_limit)?;
+        let working_reservation_bytes = usize::try_from(
+            self.historical_projection_working_oracle_v4(record_count)?
+                .admit(working_limit)?,
+        )
+        .map_err(|_| DomainError::Incomplete {
+            operation: "event-v4 historical projection working bytes",
+            limit: usize::try_from(working_limit).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
 
         #[cfg(test)]
         HISTORICAL_PROJECTION_MATERIALIZATIONS_V4.with(|count| count.set(count.get() + 1));
@@ -15648,10 +16005,13 @@ impl EventLogV4 {
             ));
         }
         Ok(HistoricalPrefixProjectionV4 {
+            run_id: &self.run_id,
             tail_hash: &self.tail_hash,
+            program_space: self.aggregate.program(),
             records,
             coverage,
             coverage_body_hash,
+            working_reservation_bytes,
         })
     }
 
@@ -18298,13 +18658,26 @@ pub struct EventLogV5 {
 /// closed V5 planning prefix.  It contains no append authority.
 #[doc(hidden)]
 pub struct V5PreIncrementalProjection<'a> {
+    #[allow(dead_code)] // consumed by the following M6 staleness reducer slice
+    aggregate: &'a ReviewAggregate,
     program_space: &'a ProgramSpace,
     universe: &'a UniverseDescriptor,
     plan: &'a ReviewPlan,
     registrations: &'a [ArtifactRegisteredV3],
+    registration_capacity: usize,
+    run_id: &'a StableId,
+    tail_hash: &'a ContentHash,
 }
 
 impl<'a> V5PreIncrementalProjection<'a> {
+    /// Core-only aggregate seam for the M6 historical reducer. This remains
+    /// crate-private so a target predecessor cannot be repurposed as a
+    /// general mutable/replay authority or public record enumerator.
+    #[allow(dead_code)] // consumed by the following M6 staleness reducer slice
+    pub(crate) fn aggregate(&self) -> &'a ReviewAggregate {
+        self.aggregate
+    }
+
     pub fn program_space(&self) -> &'a ProgramSpace {
         self.program_space
     }
@@ -18320,6 +18693,65 @@ impl<'a> V5PreIncrementalProjection<'a> {
     pub fn registrations(&self) -> &'a [ArtifactRegisteredV3] {
         self.registrations
     }
+
+    pub(crate) fn run_id(&self) -> &'a StableId {
+        self.run_id
+    }
+
+    pub(crate) fn tail_hash(&self) -> &'a ContentHash {
+        self.tail_hash
+    }
+
+    /// Exact portable retained ownership of the replayed pre-incremental
+    /// target state.  This intentionally includes the aggregate's plan copy,
+    /// the separately retained plan, registration vector capacity and scalar
+    /// run/tail backing; M6 must charge all of them before source HPP exists.
+    pub(crate) fn retained_bytes_for_m6(&self) -> Result<usize> {
+        let aggregate = usize::try_from(self.aggregate.retained_bytes_v3()?).map_err(|_| {
+            DomainError::Incomplete {
+                operation: "event-v5 pre-incremental target retained bytes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            }
+        })?;
+        let registration_slots = self
+            .registration_capacity
+            .checked_mul(std::mem::size_of::<ArtifactRegisteredV3>())
+            .ok_or(DomainError::Incomplete {
+                operation: "event-v5 pre-incremental target registration slots",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let registration_values = self
+            .registrations
+            .iter()
+            .try_fold(0_usize, |total, value| {
+                total
+                    .checked_add(value.allocated_bytes())
+                    .ok_or(DomainError::Incomplete {
+                        operation: "event-v5 pre-incremental target registration bytes",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })
+            })?;
+        [
+            std::mem::size_of::<ReplayedV5PreIncrementalState>(),
+            aggregate,
+            self.plan.allocated_bytes(),
+            registration_slots,
+            registration_values,
+            self.run_id.allocated_bytes(),
+            self.tail_hash.allocated_bytes(),
+        ]
+        .into_iter()
+        .try_fold(0_usize, |total, value| {
+            total.checked_add(value).ok_or(DomainError::Incomplete {
+                operation: "event-v5 pre-incremental target retained bytes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+        })
+    }
 }
 
 /// Owned backing for one fully replayed target predecessor.  Store retains
@@ -18330,15 +18762,21 @@ pub struct ReplayedV5PreIncrementalState {
     aggregate: ReviewAggregate,
     plan: ReviewPlan,
     registrations: Vec<ArtifactRegisteredV3>,
+    run_id: StableId,
+    tail_hash: ContentHash,
 }
 
 impl ReplayedV5PreIncrementalState {
     pub fn projection(&self) -> V5PreIncrementalProjection<'_> {
         V5PreIncrementalProjection {
+            aggregate: &self.aggregate,
             program_space: self.aggregate.program(),
             universe: self.aggregate.universe(),
             plan: &self.plan,
             registrations: &self.registrations,
+            registration_capacity: self.registrations.capacity(),
+            run_id: &self.run_id,
+            tail_hash: &self.tail_hash,
         }
     }
 }
@@ -18778,6 +19216,8 @@ impl EventLogV5 {
                     aggregate,
                     plan,
                     registrations,
+                    run_id: self.run_id.clone(),
+                    tail_hash: self.tail_hash().clone(),
                 });
             }
         }
@@ -27038,6 +27478,24 @@ mod tests {
     }
 
     #[test]
+    fn v5_pre_incremental_retained_oracle_charges_registration_spare_capacity() {
+        let complete = complete_planned_v5();
+        let mut state = complete
+            .replay_pre_incremental_state_for_store()
+            .expect("complete target replay");
+        let before_capacity = state.registrations.capacity();
+        let before = state.projection().retained_bytes_for_m6().unwrap();
+        state.registrations.reserve(32);
+        let after_capacity = state.registrations.capacity();
+        let after = state.projection().retained_bytes_for_m6().unwrap();
+        assert!(after_capacity > before_capacity);
+        assert_eq!(
+            after - before,
+            (after_capacity - before_capacity) * std::mem::size_of::<ArtifactRegisteredV3>()
+        );
+    }
+
+    #[test]
     fn v5_bootstrap_is_homogeneous_and_rejects_v4_upcast() {
         let v5 = EventLogV5::from_bootstrap_request(v4_bootstrap_request()).expect("v5 bootstrap");
         assert_eq!(v5.envelopes().len(), 1);
@@ -31511,10 +31969,30 @@ mod tests {
             .historical_prefix_projection_v4()
             .expect("complete historical projection")
             .record_count();
+        let historical_admission = complete_log
+            .historical_prefix_admission_v4()
+            .expect("allocation-free historical admission");
+        assert_eq!(historical_admission.record_count(), historical_record_count);
+        assert!(historical_admission.record_id_bytes() > 0);
+        HISTORICAL_PROJECTION_MATERIALIZATIONS_V4.with(|count| count.set(0));
+        let mut raw_record_count = 0_usize;
+        historical_admission
+            .try_visit_replay_records(|_| {
+                raw_record_count += 1;
+                Ok::<(), ()>(())
+            })
+            .expect("allocation-free raw historical visitor");
+        assert_eq!(raw_record_count + 1, historical_admission.record_count());
+        HISTORICAL_PROJECTION_MATERIALIZATIONS_V4.with(|count| assert_eq!(count.get(), 0));
         let historical_oracle = complete_log
             .historical_projection_working_oracle_v4(historical_record_count)
             .expect("historical working oracle");
         let exact_historical_working_bytes = historical_oracle.total().expect("oracle total");
+        assert_eq!(
+            historical_admission.working_reservation_bytes(),
+            usize::try_from(exact_historical_working_bytes).unwrap(),
+            "M6 must use the same source-only oracle that guards HPP materialization"
+        );
         assert!(exact_historical_working_bytes <= MAX_V5_REPLAY_WORKING_BYTES);
         HISTORICAL_PROJECTION_MATERIALIZATIONS_V4.with(|count| count.set(0));
         assert!(matches!(

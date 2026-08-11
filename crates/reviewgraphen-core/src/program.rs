@@ -2498,6 +2498,34 @@ impl IncrementalFactsV1 {
 
 pub(crate) struct ProgramSpaceStreamingRef<'a>(&'a ProgramSpace);
 
+/// Allocation-free canonical view of the exact accepted Program-fact ID set.
+/// M6 seals its mapping domain using the same stable-ID ordering as
+/// [`ProgramSpace::known_ids`], without first cloning that set merely to
+/// compare a sealed phase with the pinned source/target ProgramSpaces.
+struct ProgramKnownIdsStreamingRef<'a>(&'a ProgramSpace);
+
+impl Serialize for ProgramKnownIdsStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut count = 0_usize;
+        self.0
+            .try_visit_known_ids_sorted(|_| {
+                count = count
+                    .checked_add(1)
+                    .ok_or("ProgramSpace known-ID count overflow")?;
+                Ok::<(), &'static str>(())
+            })
+            .map_err(serde::ser::Error::custom)?;
+        let mut sequence = serializer.serialize_seq(Some(count))?;
+        self.0
+            .try_visit_known_ids_sorted(|id| sequence.serialize_element(id))
+            .map_err(serde::ser::Error::custom)?;
+        sequence.end()
+    }
+}
+
 struct SourceRefStreamingRef<'a>(&'a SourceRef);
 
 impl Serialize for SourceRefStreamingRef<'_> {
@@ -3571,6 +3599,106 @@ impl ProgramSpace {
             ids.insert(limitation.id.clone());
         }
         ids
+    }
+
+    /// Visits the exact Program-fact domain without allocating a cloned
+    /// `BTreeSet`.  Internal bounded reducers use this for their first-pass
+    /// admission accounting; public callers retain the owned `known_ids`
+    /// convenience API above.
+    pub(crate) fn visit_known_ids(&self, mut visit: impl FnMut(&StableId)) {
+        visit(&self.repository_id);
+        visit(&self.snapshot_id);
+        for artifact in &self.artifacts {
+            visit(&artifact.id);
+        }
+        for relation in &self.relations {
+            visit(&relation.id);
+        }
+        for context in &self.contexts {
+            visit(&context.id);
+        }
+        for invariant in &self.invariants {
+            visit(&invariant.id);
+        }
+        for limitation in &self.extraction.limitations {
+            visit(&limitation.id);
+        }
+    }
+
+    /// Visits the exact `known_ids()` set in its canonical `BTreeSet` order
+    /// without allocating a temporary set.  ProgramSpace construction already
+    /// keeps each source family ID-sorted; this seven-way merge also removes a
+    /// (malformed-but-defensively-handled) cross-family duplicate exactly as
+    /// `known_ids()` would.
+    pub(crate) fn try_visit_known_ids_sorted<E>(
+        &self,
+        mut visit: impl FnMut(&StableId) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
+        let mut repository = Some(&self.repository_id);
+        let mut snapshot = Some(&self.snapshot_id);
+        let mut artifacts = self.artifacts.iter();
+        let mut relations = self.relations.iter();
+        let mut contexts = self.contexts.iter();
+        let mut invariants = self.invariants.iter();
+        let mut limitations = self.extraction.limitations.iter();
+        let mut artifact = artifacts.next().map(|value| &value.id);
+        let mut relation = relations.next().map(|value| &value.id);
+        let mut context = contexts.next().map(|value| &value.id);
+        let mut invariant = invariants.next().map(|value| &value.id);
+        let mut limitation = limitations.next().map(|value| &value.id);
+
+        loop {
+            let mut candidate = repository;
+            for value in [snapshot, artifact, relation, context, invariant, limitation] {
+                if value.is_some_and(|value| candidate.is_none_or(|best| value < best)) {
+                    candidate = value;
+                }
+            }
+            let Some(candidate) = candidate else {
+                return Ok(());
+            };
+            visit(candidate)?;
+            if repository == Some(candidate) {
+                repository = None;
+            }
+            if snapshot == Some(candidate) {
+                snapshot = None;
+            }
+            if artifact == Some(candidate) {
+                artifact = artifacts.next().map(|value| &value.id);
+            }
+            if relation == Some(candidate) {
+                relation = relations.next().map(|value| &value.id);
+            }
+            if context == Some(candidate) {
+                context = contexts.next().map(|value| &value.id);
+            }
+            if invariant == Some(candidate) {
+                invariant = invariants.next().map(|value| &value.id);
+            }
+            if limitation == Some(candidate) {
+                limitation = limitations.next().map(|value| &value.id);
+            }
+        }
+    }
+
+    /// Returns the count and canonical digest of the exact Program-fact ID
+    /// domain without allocating a cloned `BTreeSet`.  This is the phase
+    /// binding used by M6 before it materializes the historical projection.
+    pub(crate) fn m6_known_id_domain(&self) -> Result<(usize, ContentHash)> {
+        let mut count = 0_usize;
+        self.try_visit_known_ids_sorted(|_| {
+            count = count.checked_add(1).ok_or(DomainError::Incomplete {
+                operation: "M6 ProgramSpace domain count",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+            Ok::<(), DomainError>(())
+        })?;
+        Ok((
+            count,
+            crate::canonical::compact_json_sha256_streaming(&ProgramKnownIdsStreamingRef(self))?,
+        ))
     }
 
     /// Returns imported evidence IDs only.

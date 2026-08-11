@@ -6,9 +6,14 @@
 //! structural preservation is audit evidence and never becomes a native M4
 //! verification, human decision, finding, gluing authority, or gate credit.
 
+use crate::event::{
+    HistoricalPrefixAdmissionV4, HistoricalPrefixProjectionV4, HistoricalSourceRecordKindV4,
+    HistoricalSourceRecordProjectionV4, HistoricalSourceRecordValueV4, V5PreIncrementalProjection,
+};
 use crate::{
-    AuthorityReplayBasisV4, ContentHash, DomainError, EventLogV4, EventLogV5,
-    M5CompletedGluingProfileV4, Obligation, ProgramSpace, ReviewAggregate, StableId,
+    ArtifactSourceV3, ArtifactSourceV4, AuthorityReplayBasisV4, ContentHash, DecisionOutcomeV3,
+    DomainError, EventLogV4, EventLogV5, FindingStatusV3, M5CompletedGluingProfileV4, Obligation,
+    ProgramSpace, ReviewAggregate, StableId, VerificationOutcomeV3,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -34,6 +39,7 @@ pub const MAX_M6_CORRESPONDENCE_SIDE_IDS: usize = 64;
 pub const MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS: usize = 64;
 pub const MAX_M6_CORRESPONDENCE_DTO_BYTES: usize = 1_048_576;
 pub const MAX_M6_CORRESPONDENCE_WORKING_BYTES: usize = 536_870_912;
+pub const MAX_M6_STALENESS_WORKING_BYTES: usize = 536_870_912;
 
 pub type M6Result<T> = std::result::Result<T, M6Error>;
 
@@ -49,6 +55,8 @@ pub enum M6Error {
     InvalidMapping(&'static str),
     #[error("invalid M6 obligation universe: {0}")]
     InvalidObligationUniverse(&'static str),
+    #[error("invalid M6 historical staleness topology: {0}")]
+    InvalidHistoricalTopology(&'static str),
     #[error("missing accepted M6 {kind} fact for {object_id}")]
     MissingAcceptedMappingFact {
         kind: &'static str,
@@ -478,6 +486,33 @@ impl IncrementalSourceClosureV5 {
         &self.input
     }
 
+    // These deliberately remain crate-private.  They bind the reducer input
+    // to an already validated dual-run proof; they do not expose a way to
+    // manufacture or amend that proof.
+    pub(crate) fn source_tail_hash(&self) -> &ContentHash {
+        &self.input.source_tail_hash
+    }
+
+    pub(crate) fn target_predecessor_tail_hash(&self) -> &ContentHash {
+        &self.input.target_predecessor_tail_hash
+    }
+
+    pub(crate) fn source_snapshot_id(&self) -> &StableId {
+        &self.input.source_snapshot_id
+    }
+
+    pub(crate) fn target_snapshot_id(&self) -> &StableId {
+        &self.input.target_snapshot_id
+    }
+
+    pub(crate) fn source_universe_id(&self) -> &StableId {
+        &self.input.source_universe_id
+    }
+
+    pub(crate) fn target_universe_id(&self) -> &StableId {
+        &self.input.target_universe_id
+    }
+
     pub fn body_hash(&self) -> M6Result<ContentHash> {
         body_hash(self)
     }
@@ -875,18 +910,21 @@ struct ProgramMappingWireV5 {
 
 impl ProgramMappingV5 {
     fn allocated_bytes(&self) -> usize {
-        fn records(values: &[IdBodyHashV5]) -> usize {
-            std::mem::size_of_val(values).saturating_add(
-                values
-                    .iter()
-                    .map(|value| {
-                        value
-                            .id
-                            .allocated_bytes()
-                            .saturating_add(value.body_hash.allocated_bytes())
-                    })
-                    .sum::<usize>(),
-            )
+        fn records(values: &Vec<IdBodyHashV5>) -> usize {
+            values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<IdBodyHashV5>())
+                .saturating_add(
+                    values
+                        .iter()
+                        .map(|value| {
+                            value
+                                .id
+                                .allocated_bytes()
+                                .saturating_add(value.body_hash.allocated_bytes())
+                        })
+                        .sum::<usize>(),
+                )
         }
         [
             std::mem::size_of::<Self>(),
@@ -3635,6 +3673,9 @@ impl M6MappingPhaseV5 {
     pub fn mappings(&self) -> &[ProgramMappingV5] {
         &self.mappings
     }
+    fn mappings_capacity(&self) -> usize {
+        self.mappings.capacity()
+    }
     pub fn morphism(&self) -> &ChangeMorphismV5 {
         &self.morphism
     }
@@ -4901,18 +4942,21 @@ impl ObligationCorrespondenceEntryV5 {
     }
 
     fn allocated_bytes(&self) -> usize {
-        let records = |values: &[IdBodyHashV5]| {
-            std::mem::size_of_val(values).saturating_add(
-                values
-                    .iter()
-                    .map(|record| {
-                        record
-                            .id
-                            .allocated_bytes()
-                            .saturating_add(record.body_hash.allocated_bytes())
-                    })
-                    .sum::<usize>(),
-            )
+        let records = |values: &Vec<IdBodyHashV5>| {
+            values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<IdBodyHashV5>())
+                .saturating_add(
+                    values
+                        .iter()
+                        .map(|record| {
+                            record
+                                .id
+                                .allocated_bytes()
+                                .saturating_add(record.body_hash.allocated_bytes())
+                        })
+                        .sum::<usize>(),
+                )
         };
         [
             std::mem::size_of::<Self>(),
@@ -5247,6 +5291,1731 @@ impl ObligationCorrespondenceV5 {
     }
 }
 
+/// A `(kind, id)` key is required because claim assessments deliberately use
+/// their claim ID; collapsing it with a claim would lose an ADR 0023 source
+/// record.  This is input-only and carries no event or append authority.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct HistoricalRecordKeyV5<'a> {
+    pub(crate) kind: HistoricalSourceRecordKindV4,
+    pub(crate) id: &'a StableId,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct OwnedHistoricalRecordKeyV5 {
+    kind: HistoricalSourceRecordKindV4,
+    id: StableId,
+}
+
+/// Typed source body retained for an actual-successor predicate.  The reducer
+/// must compare this concrete DTO, never a generic JSON rendering, prose, or
+/// inferred StableId set.
+#[derive(Clone)]
+pub(crate) struct HistoricalRecordDescriptorV5<'a> {
+    key: HistoricalRecordKeyV5<'a>,
+    body_hash: Option<&'a ContentHash>,
+    pinned_active_or_current: bool,
+    value: HistoricalSourceRecordValueV4<'a>,
+}
+
+/// Inventory-wide, typed reverse indexes over the one pinned historical
+/// prefix.  This is deliberately not a generic `StableId -> JSON` map: every
+/// entry records the source record kind that owns the referenced ID, which is
+/// essential for the claim/claim-assessment same-ID case.
+struct HistoricalSourceInventoryV5 {
+    program_ids: BTreeSet<StableId>,
+    record_keys: BTreeSet<OwnedHistoricalRecordKeyV5>,
+    plans_for_obligation: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
+    claims_for_evidence: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
+    bindings_for_evidence: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
+    v4_registrations_for_descriptor: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
+    section_traces_for_descriptor: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
+    coverage_contributors: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
+    coverage_obligation_for_claim: BTreeMap<StableId, StableId>,
+}
+
+/// Borrow-only lookup surface shared by the real retained inventory and the
+/// allocation-free admission scanner.  It keeps the descriptor's explicit
+/// predecessor vocabulary in one place while ensuring the first pass never
+/// clones a StableId merely to count it.
+trait HistoricalInventoryViewV5 {
+    fn is_program_id(&self, id: &StableId) -> bool;
+    fn visit_plans_for_obligations(
+        &self,
+        ids: &BTreeSet<StableId>,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    );
+    fn visit_claims_for_evidence(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    );
+    fn visit_bindings_for_evidence(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    );
+    fn visit_v4_registrations_for_descriptor(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    );
+    fn visit_section_traces_for_descriptor(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    );
+    fn visit_typed_trace_sources(
+        &self,
+        ids: &[StableId],
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    );
+    fn visit_coverage_contributors(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    );
+}
+
+impl HistoricalSourceInventoryV5 {
+    fn new(
+        source: &HistoricalPrefixProjectionV4<'_>,
+        source_program: &ProgramSpace,
+    ) -> M6Result<Self> {
+        let mut value = Self {
+            program_ids: source_program.known_ids(),
+            record_keys: BTreeSet::new(),
+            plans_for_obligation: BTreeMap::new(),
+            claims_for_evidence: BTreeMap::new(),
+            bindings_for_evidence: BTreeMap::new(),
+            v4_registrations_for_descriptor: BTreeMap::new(),
+            section_traces_for_descriptor: BTreeMap::new(),
+            coverage_contributors: BTreeMap::new(),
+            coverage_obligation_for_claim: BTreeMap::new(),
+        };
+        source.try_visit_records(|record| {
+            let descriptor = HistoricalRecordDescriptorV5::from_projection(record);
+            let key = OwnedHistoricalRecordKeyV5 {
+                kind: descriptor.key().kind,
+                id: descriptor.key().id.clone(),
+            };
+            if !value.record_keys.insert(key.clone()) {
+                return Err(M6Error::InvalidSourceClosure(
+                    "duplicate historical source (kind,id) inventory key",
+                ));
+            }
+            match descriptor.typed_body() {
+                HistoricalSourceRecordValueV4::ReviewPlan(plan) => {
+                    for wave in plan.waves() {
+                        for id in wave.obligation_ids() {
+                            value
+                                .plans_for_obligation
+                                .entry(id.clone())
+                                .or_default()
+                                .insert(key.clone());
+                        }
+                    }
+                }
+                HistoricalSourceRecordValueV4::Claim(claim)
+                    if claim.obligation_ids().len() == 1 =>
+                {
+                    // The coverage reducer accepts only one-obligation claims
+                    // in the selected plan closure.  Index no claim outside
+                    // an actual numerator; its plan/envelope/execution chain
+                    // must not contaminate a coverage source closure.
+                    let id = claim
+                        .obligation_ids()
+                        .iter()
+                        .next()
+                        .expect("one obligation checked above");
+                    let coverage = source.coverage();
+                    let contributes = coverage.evidence_supported_obligation_ids().contains(id)
+                        || coverage.verified_obligation_ids().contains(id)
+                        || coverage.fresh_obligation_ids().contains(id)
+                        || coverage.human_accepted_obligation_ids().contains(id);
+                    if contributes {
+                        value
+                            .coverage_obligation_for_claim
+                            .insert(claim.id().clone(), id.clone());
+                        value
+                            .coverage_contributors
+                            .entry(id.clone())
+                            .or_default()
+                            .insert(key.clone());
+                    }
+                }
+                HistoricalSourceRecordValueV4::ClaimAssessment(assessment) => {
+                    if let Some(obligation_id) = value
+                        .coverage_obligation_for_claim
+                        .get(assessment.claim_id())
+                        .filter(|id| {
+                            source
+                                .coverage()
+                                .human_accepted_obligation_ids()
+                                .contains(*id)
+                        })
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key.clone());
+                    }
+                }
+                HistoricalSourceRecordValueV4::EvidenceBinding(binding) => {
+                    let contributes = value
+                        .coverage_obligation_for_claim
+                        .get(binding.claim_id())
+                        .is_some_and(|id| {
+                            source
+                                .coverage()
+                                .evidence_supported_obligation_ids()
+                                .contains(id)
+                        })
+                        && binding.relation() == crate::EvidenceRelationV3::Reproduces;
+                    if !contributes {
+                        return Ok::<(), M6Error>(());
+                    }
+                    value
+                        .claims_for_evidence
+                        .entry(binding.evidence_id().clone())
+                        .or_default()
+                        .insert(OwnedHistoricalRecordKeyV5 {
+                            kind: HistoricalSourceRecordKindV4::Claim,
+                            id: binding.claim_id().clone(),
+                        });
+                    value
+                        .bindings_for_evidence
+                        .entry(binding.evidence_id().clone())
+                        .or_default()
+                        .insert(key.clone());
+                    if let Some(obligation_id) =
+                        value.coverage_obligation_for_claim.get(binding.claim_id())
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key.clone());
+                    }
+                }
+                HistoricalSourceRecordValueV4::Evidence(_) => {}
+                HistoricalSourceRecordValueV4::Verification(verification) => {
+                    if let Some(obligation_id) = value
+                        .coverage_obligation_for_claim
+                        .get(verification.claim_id())
+                        .filter(|id| source.coverage().verified_obligation_ids().contains(*id))
+                        .filter(|_| verification.outcome() == VerificationOutcomeV3::Passed)
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key.clone());
+                    }
+                }
+                HistoricalSourceRecordValueV4::Decision(decision) => {
+                    if let Some(obligation_id) = value
+                        .coverage_obligation_for_claim
+                        .get(decision.claim_id())
+                        .filter(|id| {
+                            source
+                                .coverage()
+                                .human_accepted_obligation_ids()
+                                .contains(*id)
+                        })
+                        .filter(|_| decision.outcome() == DecisionOutcomeV3::Accept)
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key.clone());
+                    }
+                }
+                HistoricalSourceRecordValueV4::Finding(finding) => {
+                    if let Some(obligation_id) = value
+                        .coverage_obligation_for_claim
+                        .get(finding.claim_id())
+                        .filter(|id| {
+                            source
+                                .coverage()
+                                .human_accepted_obligation_ids()
+                                .contains(*id)
+                        })
+                        .filter(|_| finding.status() == FindingStatusV3::Accepted)
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key.clone());
+                    }
+                }
+                HistoricalSourceRecordValueV4::ArtifactRegistrationV4(registration) => {
+                    if let ArtifactSourceV4::GluingInput { descriptor_id, .. } =
+                        registration.source()
+                    {
+                        value
+                            .v4_registrations_for_descriptor
+                            .entry(descriptor_id.clone())
+                            .or_default()
+                            .insert(key);
+                    }
+                }
+                HistoricalSourceRecordValueV4::Section(section) => {
+                    let traces = value
+                        .section_traces_for_descriptor
+                        .entry(section.projection_input_descriptor_id().clone())
+                        .or_default();
+                    traces.insert(OwnedHistoricalRecordKeyV5 {
+                        kind: HistoricalSourceRecordKindV4::ClaimAssessment,
+                        id: section.projection_claim_assessment_id().clone(),
+                    });
+                    for (kind, ids) in [
+                        (
+                            HistoricalSourceRecordKindV4::EvidenceBinding,
+                            section.projection_binding_ids(),
+                        ),
+                        (
+                            HistoricalSourceRecordKindV4::Evidence,
+                            section.projection_evidence_ids(),
+                        ),
+                        (
+                            HistoricalSourceRecordKindV4::Verification,
+                            section.projection_verification_ids(),
+                        ),
+                        (
+                            HistoricalSourceRecordKindV4::Decision,
+                            section.projection_decision_ids(),
+                        ),
+                        (
+                            HistoricalSourceRecordKindV4::Finding,
+                            section.projection_finding_ids(),
+                        ),
+                    ] {
+                        for id in ids {
+                            traces.insert(OwnedHistoricalRecordKeyV5 {
+                                kind,
+                                id: id.clone(),
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Ok::<(), M6Error>(())
+        })?;
+        // Evidence is listed before bindings in the canonical inventory.
+        // Resolve its coverage ownership only after the complete binding
+        // reverse index exists; this is a second borrow-only scan, not an
+        // inferred StableId relation.
+        source.try_visit_records(|record| {
+            let descriptor = HistoricalRecordDescriptorV5::from_projection(record);
+            if let HistoricalSourceRecordValueV4::Evidence(evidence) = descriptor.typed_body()
+                && let Some(claims) = value.claims_for_evidence.get(evidence.id())
+            {
+                for claim_key in claims {
+                    if let Some(obligation_id) =
+                        value.coverage_obligation_for_claim.get(&claim_key.id)
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(OwnedHistoricalRecordKeyV5 {
+                                kind: descriptor.key().kind,
+                                id: descriptor.key().id.clone(),
+                            });
+                    }
+                }
+            }
+            Ok::<(), M6Error>(())
+        })?;
+        Ok(value)
+    }
+
+    fn is_program_id(&self, id: &StableId) -> bool {
+        self.program_ids.contains(id)
+    }
+
+    fn visit_plans_for_obligations(
+        &self,
+        ids: &BTreeSet<StableId>,
+        mut visit: impl FnMut(&OwnedHistoricalRecordKeyV5),
+    ) {
+        for id in ids {
+            if let Some(keys) = self.plans_for_obligation.get(id) {
+                for key in keys {
+                    visit(key);
+                }
+            }
+        }
+    }
+
+    fn visit_claims_for_evidence(
+        &self,
+        id: &StableId,
+        mut visit: impl FnMut(&OwnedHistoricalRecordKeyV5),
+    ) {
+        if let Some(keys) = self.claims_for_evidence.get(id) {
+            for key in keys {
+                visit(key);
+            }
+        }
+    }
+
+    fn visit_bindings_for_evidence(
+        &self,
+        id: &StableId,
+        mut visit: impl FnMut(&OwnedHistoricalRecordKeyV5),
+    ) {
+        if let Some(keys) = self.bindings_for_evidence.get(id) {
+            for key in keys {
+                visit(key);
+            }
+        }
+    }
+
+    fn visit_v4_registrations_for_descriptor(
+        &self,
+        id: &StableId,
+        mut visit: impl FnMut(&OwnedHistoricalRecordKeyV5),
+    ) {
+        if let Some(keys) = self.v4_registrations_for_descriptor.get(id) {
+            for key in keys {
+                visit(key);
+            }
+        }
+    }
+
+    fn visit_section_traces_for_descriptor(
+        &self,
+        id: &StableId,
+        mut visit: impl FnMut(&OwnedHistoricalRecordKeyV5),
+    ) {
+        if let Some(keys) = self.section_traces_for_descriptor.get(id) {
+            for key in keys {
+                visit(key);
+            }
+        }
+    }
+
+    fn visit_typed_trace_sources(
+        &self,
+        ids: &[StableId],
+        mut visit: impl FnMut(&OwnedHistoricalRecordKeyV5),
+    ) {
+        // A decision's `source_ids` is audit provenance, not a generic
+        // dependency list.  Only actual inventory members of the explicitly
+        // allowed M4 trace kinds may enter this closure.
+        for id in ids {
+            for kind in [
+                HistoricalSourceRecordKindV4::Claim,
+                HistoricalSourceRecordKindV4::EvidenceBinding,
+                HistoricalSourceRecordKindV4::Evidence,
+                HistoricalSourceRecordKindV4::Verification,
+            ] {
+                let key = OwnedHistoricalRecordKeyV5 {
+                    kind,
+                    id: id.clone(),
+                };
+                if self.record_keys.contains(&key) {
+                    // `key` is only a transient lookup.  Visit the canonical
+                    // owned key in the inventory so no reverse-lookup Vec or
+                    // StableId clone survives this traversal.
+                    if let Some(existing) = self.record_keys.get(&key) {
+                        visit(existing);
+                    }
+                }
+            }
+        }
+    }
+
+    fn visit_coverage_contributors(
+        &self,
+        id: &StableId,
+        mut visit: impl FnMut(&OwnedHistoricalRecordKeyV5),
+    ) {
+        if let Some(keys) = self.coverage_contributors.get(id) {
+            for key in keys {
+                visit(key);
+            }
+        }
+    }
+}
+
+impl HistoricalInventoryViewV5 for HistoricalSourceInventoryV5 {
+    fn is_program_id(&self, id: &StableId) -> bool {
+        self.is_program_id(id)
+    }
+    fn visit_plans_for_obligations(
+        &self,
+        ids: &BTreeSet<StableId>,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_plans_for_obligations(ids, |key| visit(key.kind, &key.id));
+    }
+    fn visit_claims_for_evidence(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_claims_for_evidence(id, |key| visit(key.kind, &key.id));
+    }
+    fn visit_bindings_for_evidence(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_bindings_for_evidence(id, |key| visit(key.kind, &key.id));
+    }
+    fn visit_v4_registrations_for_descriptor(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_v4_registrations_for_descriptor(id, |key| visit(key.kind, &key.id));
+    }
+    fn visit_section_traces_for_descriptor(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_section_traces_for_descriptor(id, |key| visit(key.kind, &key.id));
+    }
+    fn visit_typed_trace_sources(
+        &self,
+        ids: &[StableId],
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_typed_trace_sources(ids, |key| visit(key.kind, &key.id));
+    }
+    fn visit_coverage_contributors(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_coverage_contributors(id, |key| visit(key.kind, &key.id));
+    }
+}
+
+/// Allocation-free counterpart of the retained inventory.  Its lookup
+/// methods rescan the immutable V4 replay values instead of building maps;
+/// admission is cold-path work and must prove the real sparse reference count
+/// before the HPP/vector allocation is allowed.
+struct HistoricalAdmissionInventoryV5<'a> {
+    source: &'a HistoricalPrefixAdmissionV4<'a>,
+}
+
+impl HistoricalAdmissionInventoryV5<'_> {
+    fn visit_records(
+        &self,
+        mut visit: impl FnMut(crate::event::HistoricalSourceRecordAdmissionV4<'_>),
+    ) {
+        match self.source.try_visit_replay_records(|record| {
+            visit(record);
+            Ok::<(), std::convert::Infallible>(())
+        }) {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+    }
+}
+
+impl HistoricalInventoryViewV5 for HistoricalAdmissionInventoryV5<'_> {
+    fn is_program_id(&self, id: &StableId) -> bool {
+        let mut found = false;
+        self.source
+            .program_space()
+            .visit_known_ids(|candidate| found |= candidate == id);
+        found
+    }
+
+    fn visit_plans_for_obligations(
+        &self,
+        ids: &BTreeSet<StableId>,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_records(|record| {
+            if let HistoricalSourceRecordValueV4::ReviewPlan(plan) = record.value()
+                && plan
+                    .waves()
+                    .iter()
+                    .flat_map(|wave| wave.obligation_ids())
+                    .any(|id| ids.contains(id))
+            {
+                visit(HistoricalSourceRecordKindV4::ReviewPlan, plan.id());
+            }
+        });
+    }
+
+    fn visit_claims_for_evidence(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_records(|record| {
+            if let HistoricalSourceRecordValueV4::EvidenceBinding(binding) = record.value()
+                && binding.evidence_id() == id
+            {
+                visit(HistoricalSourceRecordKindV4::Claim, binding.claim_id());
+            }
+        });
+    }
+
+    fn visit_bindings_for_evidence(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_records(|record| {
+            if let HistoricalSourceRecordValueV4::EvidenceBinding(binding) = record.value()
+                && binding.evidence_id() == id
+            {
+                visit(HistoricalSourceRecordKindV4::EvidenceBinding, binding.id());
+            }
+        });
+    }
+
+    fn visit_v4_registrations_for_descriptor(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_records(|record| {
+            if let HistoricalSourceRecordValueV4::ArtifactRegistrationV4(registration) = record.value()
+                && matches!(registration.source(), ArtifactSourceV4::GluingInput { descriptor_id, .. } if descriptor_id == id)
+            {
+                visit(HistoricalSourceRecordKindV4::ArtifactRegistrationV4, registration.id());
+            }
+        });
+    }
+
+    fn visit_section_traces_for_descriptor(
+        &self,
+        id: &StableId,
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_records(|record| {
+            let HistoricalSourceRecordValueV4::Section(section) = record.value() else {
+                return;
+            };
+            if section.projection_input_descriptor_id() != id {
+                return;
+            }
+            visit(
+                HistoricalSourceRecordKindV4::ClaimAssessment,
+                section.projection_claim_assessment_id(),
+            );
+            for (kind, ids) in [
+                (
+                    HistoricalSourceRecordKindV4::EvidenceBinding,
+                    section.projection_binding_ids(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Evidence,
+                    section.projection_evidence_ids(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Verification,
+                    section.projection_verification_ids(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Decision,
+                    section.projection_decision_ids(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Finding,
+                    section.projection_finding_ids(),
+                ),
+            ] {
+                for member in ids {
+                    visit(kind, member);
+                }
+            }
+        });
+    }
+
+    fn visit_typed_trace_sources(
+        &self,
+        ids: &[StableId],
+        visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        for id in ids {
+            self.visit_records(|record| {
+                if record.id() != id {
+                    return;
+                }
+                if matches!(
+                    record.kind(),
+                    HistoricalSourceRecordKindV4::Claim
+                        | HistoricalSourceRecordKindV4::EvidenceBinding
+                        | HistoricalSourceRecordKindV4::Evidence
+                        | HistoricalSourceRecordKindV4::Verification
+                ) {
+                    visit(record.kind(), record.id());
+                }
+            });
+        }
+    }
+
+    fn visit_coverage_contributors(
+        &self,
+        _id: &StableId,
+        _visit: &mut dyn FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        // Coverage is handled as one bounded aggregate below; invoking this
+        // scan per denominator member would turn an O(records) source into an
+        // artificial O(records*denominator) admission cost.
+    }
+}
+
+impl<'a> HistoricalRecordDescriptorV5<'a> {
+    fn from_admission(value: crate::event::HistoricalSourceRecordAdmissionV4<'a>) -> Self {
+        Self {
+            key: HistoricalRecordKeyV5 {
+                kind: value.kind(),
+                id: value.id(),
+            },
+            body_hash: None,
+            pinned_active_or_current: value.pinned_active_or_current(),
+            value: *value.value(),
+        }
+    }
+    fn from_projection(value: HistoricalSourceRecordProjectionV4<'a>) -> Self {
+        Self {
+            key: HistoricalRecordKeyV5 {
+                kind: value.kind(),
+                id: value.id(),
+            },
+            // The hash is borrowed from the one pinned projection.  ContentHash
+            // owns its canonical string; copying it here would allocate once
+            // for the projection and again for each descriptor traversal.
+            body_hash: Some(value.body_hash()),
+            pinned_active_or_current: value.pinned_active_or_current(),
+            value: *value.value(),
+        }
+    }
+    pub(crate) const fn key(&self) -> HistoricalRecordKeyV5<'a> {
+        self.key
+    }
+    pub(crate) const fn body_hash(&self) -> &ContentHash {
+        match self.body_hash {
+            Some(value) => value,
+            None => panic!("historical admission descriptor has no body hash"),
+        }
+    }
+    pub(crate) const fn pinned_active_or_current(&self) -> bool {
+        self.pinned_active_or_current
+    }
+    pub(crate) const fn typed_body(&self) -> HistoricalSourceRecordValueV4<'a> {
+        self.value
+    }
+
+    /// Visits direct ProgramSpace dependencies only.  Each source DTO kind is
+    /// intentionally listed here; `source_ids` are not treated as a generic
+    /// substitute for semantic dependencies.
+    fn visit_direct_program_ids(
+        &self,
+        inventory: &impl HistoricalInventoryViewV5,
+        mut visit: impl FnMut(&'a StableId),
+    ) {
+        // StableId kinds are namespace labels, not an M6 semantic classifier:
+        // accepted ProgramSpace artifacts intentionally include file, test,
+        // repository, snapshot and language-specific IDs.  An explicit field
+        // becomes a Program dependency only if it is a member of this exact
+        // pinned ProgramSpace inventory.
+        let program = |id: &'a StableId, visit: &mut dyn FnMut(&'a StableId)| {
+            if inventory.is_program_id(id) {
+                visit(id);
+            }
+        };
+        match self.value {
+            HistoricalSourceRecordValueV4::Obligation(v) => {
+                for id in v
+                    .normalized_target_refs()
+                    .iter()
+                    .chain(v.normalized_context_ids())
+                    .chain(v.normalized_source_ids())
+                    .chain(v.generator_ids())
+                {
+                    program(id, &mut visit);
+                }
+            }
+            HistoricalSourceRecordValueV4::ContextEnvelope(v) => {
+                for id in v
+                    .candidate_source_ids()
+                    .iter()
+                    .chain(v.normalized_included_source_ids())
+                {
+                    program(id, &mut visit);
+                }
+            }
+            HistoricalSourceRecordValueV4::Claim(v) => {
+                for id in v.target_refs().iter().chain(v.source_ids()) {
+                    program(id, &mut visit);
+                }
+            }
+            HistoricalSourceRecordValueV4::Evidence(v) => {
+                for id in v.subject_ids() {
+                    program(id, &mut visit);
+                }
+            }
+            HistoricalSourceRecordValueV4::ArtifactRegistrationV3(v) => match v.source() {
+                ArtifactSourceV3::SnapshotIngest { snapshot_id, .. } => {
+                    program(snapshot_id, &mut visit);
+                }
+                ArtifactSourceV3::ExternalHarnessWitness {
+                    repository_id,
+                    snapshot_id,
+                    test_artifact_id,
+                    ..
+                } => {
+                    for id in [repository_id, snapshot_id, test_artifact_id] {
+                        program(id, &mut visit);
+                    }
+                }
+                ArtifactSourceV3::RunGenesis { .. }
+                | ArtifactSourceV3::ReviewerExecution { .. }
+                | ArtifactSourceV3::VerifierArtifact { .. } => {}
+            },
+            HistoricalSourceRecordValueV4::ArtifactRegistrationV4(v) => match v.source() {
+                ArtifactSourceV4::SnapshotIngest { snapshot_id, .. } => {
+                    program(snapshot_id, &mut visit);
+                }
+                ArtifactSourceV4::ExternalHarnessWitness {
+                    repository_id,
+                    snapshot_id,
+                    test_artifact_id,
+                    ..
+                } => {
+                    for id in [repository_id, snapshot_id, test_artifact_id] {
+                        program(id, &mut visit);
+                    }
+                }
+                ArtifactSourceV4::GluingInput {
+                    context_id,
+                    repository_id,
+                    snapshot_id,
+                    ..
+                } => {
+                    for id in [context_id, repository_id, snapshot_id] {
+                        program(id, &mut visit);
+                    }
+                }
+                ArtifactSourceV4::RunGenesis { .. }
+                | ArtifactSourceV4::ReviewerExecution { .. }
+                | ArtifactSourceV4::VerifierArtifact { .. } => {}
+            },
+            HistoricalSourceRecordValueV4::GluingInputDescriptor(v) => {
+                for id in std::iter::once(v.context_id()).chain(v.qualification_source_ids()) {
+                    program(id, &mut visit);
+                }
+            }
+            HistoricalSourceRecordValueV4::ContextCover(v) => {
+                for id in v
+                    .cover_domain_ids()
+                    .iter()
+                    .chain(v.projection_required_context_ids())
+                {
+                    program(id, &mut visit);
+                }
+            }
+            HistoricalSourceRecordValueV4::Section(v) => {
+                for id in [v.context_id(), v.projection_invariant_id()] {
+                    program(id, &mut visit);
+                }
+                for id in v.projection_qualification_source_ids() {
+                    program(id, &mut visit);
+                }
+            }
+            HistoricalSourceRecordValueV4::Restriction(v) => {
+                for id in v
+                    .projection_context_pair()
+                    .iter()
+                    .chain(v.projection_overlap_member_ids())
+                    .chain(v.projection_qualification_source_ids())
+                {
+                    program(id, &mut visit);
+                }
+            }
+            HistoricalSourceRecordValueV4::GlobalCandidate(v) => {
+                program(v.projection_invariant_id(), &mut visit);
+                for id in v.projection_qualification_source_ids() {
+                    program(id, &mut visit);
+                }
+            }
+            HistoricalSourceRecordValueV4::GluingAttempt(v) => {
+                program(v.projection_invariant_id(), &mut visit);
+            }
+            HistoricalSourceRecordValueV4::GluingObstruction(v) => {
+                for id in v
+                    .projection_conflicting_context_ids()
+                    .iter()
+                    .chain(v.projection_overlap_member_ids())
+                    .chain(std::iter::once(v.projection_affected_invariant_id()))
+                    .chain(v.projection_blocks())
+                {
+                    program(id, &mut visit);
+                }
+            }
+            HistoricalSourceRecordValueV4::ReviewPlan(_)
+            | HistoricalSourceRecordValueV4::Execution(_)
+            | HistoricalSourceRecordValueV4::ClaimAssessment(_)
+            | HistoricalSourceRecordValueV4::EvidenceBinding(_)
+            | HistoricalSourceRecordValueV4::Verification(_)
+            | HistoricalSourceRecordValueV4::Decision(_)
+            | HistoricalSourceRecordValueV4::Finding(_)
+            | HistoricalSourceRecordValueV4::Coverage(_) => {}
+        }
+    }
+
+    /// Required predecessor records, expressed by explicit DTO fields.
+    /// Ownership back-references in the M5 bundle are intentionally omitted.
+    fn visit_required_records(
+        &self,
+        inventory: &impl HistoricalInventoryViewV5,
+        mut visit: impl FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        let mut emit = |kind, id: &StableId| visit(kind, id);
+        match self.value {
+            HistoricalSourceRecordValueV4::Obligation(v) => {
+                for id in v.normalized_depends_on() {
+                    emit(HistoricalSourceRecordKindV4::Obligation, id);
+                }
+            }
+            HistoricalSourceRecordValueV4::ReviewPlan(v) => {
+                for wave in v.waves() {
+                    for id in wave.obligation_ids() {
+                        emit(HistoricalSourceRecordKindV4::Obligation, id);
+                    }
+                }
+            }
+            HistoricalSourceRecordValueV4::ContextEnvelope(v) => {
+                for id in v.obligation_ids() {
+                    emit(HistoricalSourceRecordKindV4::Obligation, id);
+                }
+                // Envelopes have no plan field.  The only legal association is
+                // the inventory's actual plan/wave membership, never an ID
+                // spelling or an inferred source_ids relation.
+                inventory.visit_plans_for_obligations(v.obligation_ids(), &mut |kind, id| {
+                    emit(kind, id);
+                });
+            }
+            HistoricalSourceRecordValueV4::ArtifactRegistrationV3(v) => match v.source() {
+                // Reviewer raw registration is owned by Execution.  Keeping
+                // Execution -> registration is sufficient; the reverse edge
+                // would make an artificial ownership cycle.
+                ArtifactSourceV3::ReviewerExecution { .. } => {}
+                ArtifactSourceV3::VerifierArtifact { claim_id, .. }
+                | ArtifactSourceV3::ExternalHarnessWitness { claim_id, .. } => {
+                    emit(HistoricalSourceRecordKindV4::Claim, claim_id);
+                }
+                ArtifactSourceV3::RunGenesis { .. } | ArtifactSourceV3::SnapshotIngest { .. } => {}
+            },
+            HistoricalSourceRecordValueV4::ArtifactRegistrationV4(v) => match v.source() {
+                ArtifactSourceV4::ReviewerExecution { execution_id, .. } => {
+                    emit(HistoricalSourceRecordKindV4::Execution, execution_id);
+                }
+                ArtifactSourceV4::VerifierArtifact { claim_id, .. }
+                | ArtifactSourceV4::ExternalHarnessWitness { claim_id, .. } => {
+                    emit(HistoricalSourceRecordKindV4::Claim, claim_id);
+                }
+                ArtifactSourceV4::GluingInput { plan_id, .. } => {
+                    // Descriptor owns its materialized V4 registration. The
+                    // reverse descriptor edge is excluded to retain a DAG.
+                    emit(HistoricalSourceRecordKindV4::ReviewPlan, plan_id);
+                }
+                ArtifactSourceV4::RunGenesis { .. } | ArtifactSourceV4::SnapshotIngest { .. } => {}
+            },
+            HistoricalSourceRecordValueV4::Execution(v) => {
+                emit(HistoricalSourceRecordKindV4::ReviewPlan, v.plan_id());
+                emit(
+                    HistoricalSourceRecordKindV4::ContextEnvelope,
+                    v.envelope_id(),
+                );
+                for id in v.obligation_ids() {
+                    emit(HistoricalSourceRecordKindV4::Obligation, id);
+                }
+                emit(
+                    HistoricalSourceRecordKindV4::ArtifactRegistrationV3,
+                    v.raw_artifact_registration_id(),
+                );
+            }
+            HistoricalSourceRecordValueV4::Claim(v) => {
+                emit(HistoricalSourceRecordKindV4::Execution, v.execution_id());
+                for id in v.obligation_ids() {
+                    emit(HistoricalSourceRecordKindV4::Obligation, id);
+                }
+            }
+            HistoricalSourceRecordValueV4::ClaimAssessment(v) => {
+                emit(HistoricalSourceRecordKindV4::Claim, v.claim_id());
+                for id in v.binding_ids() {
+                    emit(HistoricalSourceRecordKindV4::EvidenceBinding, id);
+                }
+                for id in v.evidence_ids() {
+                    emit(HistoricalSourceRecordKindV4::Evidence, id);
+                }
+                for id in v.verification_ids() {
+                    emit(HistoricalSourceRecordKindV4::Verification, id);
+                }
+                for id in v.decision_ids() {
+                    emit(HistoricalSourceRecordKindV4::Decision, id);
+                }
+                for id in v.finding_ids() {
+                    emit(HistoricalSourceRecordKindV4::Finding, id);
+                }
+            }
+            HistoricalSourceRecordValueV4::Evidence(v) => {
+                emit(
+                    HistoricalSourceRecordKindV4::ArtifactRegistrationV3,
+                    v.input_registration_id(),
+                );
+                emit(
+                    HistoricalSourceRecordKindV4::ArtifactRegistrationV3,
+                    v.output_registration_id(),
+                );
+                // A binding points back to evidence.  Resolve its real claim
+                // through the inventory instead of adding a binding edge and
+                // creating Evidence <-> EvidenceBinding ownership cycles.
+                inventory.visit_claims_for_evidence(v.id(), &mut |kind, id| emit(kind, id));
+            }
+            HistoricalSourceRecordValueV4::EvidenceBinding(v) => {
+                emit(HistoricalSourceRecordKindV4::Claim, v.claim_id());
+                emit(HistoricalSourceRecordKindV4::Evidence, v.evidence_id());
+            }
+            HistoricalSourceRecordValueV4::Verification(v) => {
+                emit(HistoricalSourceRecordKindV4::Claim, v.claim_id());
+                for id in v.evidence_ids() {
+                    emit(HistoricalSourceRecordKindV4::Evidence, id);
+                }
+                emit(
+                    HistoricalSourceRecordKindV4::ArtifactRegistrationV3,
+                    v.input_registration_id(),
+                );
+                emit(
+                    HistoricalSourceRecordKindV4::ArtifactRegistrationV3,
+                    v.output_registration_id(),
+                );
+                for id in v.evidence_ids() {
+                    inventory.visit_bindings_for_evidence(id, &mut |kind, id| emit(kind, id));
+                }
+            }
+            HistoricalSourceRecordValueV4::Decision(v) => {
+                emit(HistoricalSourceRecordKindV4::Claim, v.claim_id());
+                inventory.visit_typed_trace_sources(v.source_ids(), &mut |kind, id| {
+                    emit(kind, id);
+                });
+            }
+            HistoricalSourceRecordValueV4::Finding(v) => {
+                emit(HistoricalSourceRecordKindV4::Claim, v.claim_id());
+                if let Some(id) = v.decision_id() {
+                    emit(HistoricalSourceRecordKindV4::Decision, id);
+                }
+                for id in v.evidence_ids() {
+                    emit(HistoricalSourceRecordKindV4::Evidence, id);
+                }
+                for id in v.verification_ids() {
+                    emit(HistoricalSourceRecordKindV4::Verification, id);
+                }
+                if let Some(id) = v.supersedes_finding_id() {
+                    emit(HistoricalSourceRecordKindV4::Finding, id);
+                }
+            }
+            HistoricalSourceRecordValueV4::GluingInputDescriptor(v) => {
+                emit(HistoricalSourceRecordKindV4::ReviewPlan, v.plan_id());
+                // Registration is the reverse owner of this descriptor.  It
+                // is indexed rather than guessed from its StableId.
+                inventory.visit_v4_registrations_for_descriptor(v.id(), &mut |kind, id| {
+                    emit(kind, id);
+                });
+                inventory.visit_section_traces_for_descriptor(v.id(), &mut |kind, id| {
+                    emit(kind, id);
+                });
+            }
+            HistoricalSourceRecordValueV4::ContextCover(v) => {
+                emit(HistoricalSourceRecordKindV4::ReviewPlan, v.plan_id());
+                for id in v.selected_obligation_ids() {
+                    emit(HistoricalSourceRecordKindV4::Obligation, id);
+                }
+            }
+            HistoricalSourceRecordValueV4::Section(v) => {
+                // Do not classify naked IDs by equality or StableId kind:
+                // ClaimAssessment intentionally shares Claim's ID. Context is
+                // a Program fact and consequently never a historical record.
+                emit(
+                    HistoricalSourceRecordKindV4::ContextCover,
+                    v.projection_cover_id(),
+                );
+                emit(
+                    HistoricalSourceRecordKindV4::Obligation,
+                    v.projection_obligation_id(),
+                );
+                emit(HistoricalSourceRecordKindV4::Claim, v.projection_claim_id());
+                emit(
+                    HistoricalSourceRecordKindV4::ClaimAssessment,
+                    v.projection_claim_assessment_id(),
+                );
+                emit(
+                    HistoricalSourceRecordKindV4::GluingInputDescriptor,
+                    v.projection_input_descriptor_id(),
+                );
+                emit(
+                    HistoricalSourceRecordKindV4::ArtifactRegistrationV4,
+                    v.projection_input_registration_id(),
+                );
+                for id in v.projection_binding_ids() {
+                    emit(HistoricalSourceRecordKindV4::EvidenceBinding, id);
+                }
+                for id in v.projection_evidence_ids() {
+                    emit(HistoricalSourceRecordKindV4::Evidence, id);
+                }
+                for id in v.projection_verification_ids() {
+                    emit(HistoricalSourceRecordKindV4::Verification, id);
+                }
+                for id in v.projection_decision_ids() {
+                    emit(HistoricalSourceRecordKindV4::Decision, id);
+                }
+                for id in v.projection_finding_ids() {
+                    emit(HistoricalSourceRecordKindV4::Finding, id);
+                }
+            }
+            HistoricalSourceRecordValueV4::Restriction(v) => {
+                emit(
+                    HistoricalSourceRecordKindV4::Section,
+                    v.projection_section_id(),
+                );
+                for id in v.projection_claim_ids() {
+                    emit(HistoricalSourceRecordKindV4::Claim, id);
+                }
+                for id in v.projection_evidence_ids() {
+                    emit(HistoricalSourceRecordKindV4::Evidence, id);
+                }
+                for id in v.projection_verification_ids() {
+                    emit(HistoricalSourceRecordKindV4::Verification, id);
+                }
+                for id in v.projection_decision_ids() {
+                    emit(HistoricalSourceRecordKindV4::Decision, id);
+                }
+                for id in v.projection_finding_ids() {
+                    emit(HistoricalSourceRecordKindV4::Finding, id);
+                }
+            }
+            HistoricalSourceRecordValueV4::GluingAttempt(v) => {
+                emit(
+                    HistoricalSourceRecordKindV4::ContextCover,
+                    v.projection_cover_id(),
+                );
+                for id in v.projection_input_descriptor_ids() {
+                    emit(HistoricalSourceRecordKindV4::GluingInputDescriptor, id);
+                }
+                for id in v.projection_section_ids() {
+                    emit(HistoricalSourceRecordKindV4::Section, id);
+                }
+                for id in v.projection_restriction_ids() {
+                    emit(HistoricalSourceRecordKindV4::Restriction, id);
+                }
+                if let Some(id) = v.projection_global_candidate_id() {
+                    emit(HistoricalSourceRecordKindV4::GlobalCandidate, id);
+                }
+                // Obstruction points to its owner attempt.  The reverse option
+                // is an explicit ownership back-reference and is omitted.
+                for id in v.projection_claim_ids() {
+                    emit(HistoricalSourceRecordKindV4::Claim, id);
+                }
+                for id in v.projection_evidence_ids() {
+                    emit(HistoricalSourceRecordKindV4::Evidence, id);
+                }
+                for id in v.projection_verification_ids() {
+                    emit(HistoricalSourceRecordKindV4::Verification, id);
+                }
+                for id in v.projection_decision_ids() {
+                    emit(HistoricalSourceRecordKindV4::Decision, id);
+                }
+                for id in v.projection_finding_ids() {
+                    emit(HistoricalSourceRecordKindV4::Finding, id);
+                }
+            }
+            HistoricalSourceRecordValueV4::GlobalCandidate(v) => {
+                emit(
+                    HistoricalSourceRecordKindV4::ContextCover,
+                    v.projection_cover_id(),
+                );
+                for id in v.projection_required_section_ids() {
+                    emit(HistoricalSourceRecordKindV4::Section, id);
+                }
+                for id in v.projection_restriction_ids() {
+                    emit(HistoricalSourceRecordKindV4::Restriction, id);
+                }
+                for id in v.projection_claim_ids() {
+                    emit(HistoricalSourceRecordKindV4::Claim, id);
+                }
+                for id in v.projection_evidence_ids() {
+                    emit(HistoricalSourceRecordKindV4::Evidence, id);
+                }
+                for id in v.projection_verification_ids() {
+                    emit(HistoricalSourceRecordKindV4::Verification, id);
+                }
+                for id in v.projection_decision_ids() {
+                    emit(HistoricalSourceRecordKindV4::Decision, id);
+                }
+                for id in v.projection_finding_ids() {
+                    emit(HistoricalSourceRecordKindV4::Finding, id);
+                }
+            }
+            HistoricalSourceRecordValueV4::GluingObstruction(v) => {
+                emit(
+                    HistoricalSourceRecordKindV4::GluingAttempt,
+                    v.projection_attempt_id(),
+                );
+                for id in v.projection_section_ids() {
+                    emit(HistoricalSourceRecordKindV4::Section, id);
+                }
+                for id in v.projection_claim_ids() {
+                    emit(HistoricalSourceRecordKindV4::Claim, id);
+                }
+                for id in v.projection_evidence_ids() {
+                    emit(HistoricalSourceRecordKindV4::Evidence, id);
+                }
+                for id in v.projection_verification_ids() {
+                    emit(HistoricalSourceRecordKindV4::Verification, id);
+                }
+                for id in v.projection_decision_ids() {
+                    emit(HistoricalSourceRecordKindV4::Decision, id);
+                }
+                for id in v.projection_finding_ids() {
+                    emit(HistoricalSourceRecordKindV4::Finding, id);
+                }
+            }
+            HistoricalSourceRecordValueV4::Coverage(v) => {
+                // The denominator is an obligation universe.  Numerators are
+                // expanded from the aggregate's actual current M4 ownership
+                // through inventory reverse indexes, never from an implied
+                // state-axis relation.
+                for id in v.denominator_obligation_ids() {
+                    emit(HistoricalSourceRecordKindV4::Obligation, id);
+                    inventory.visit_coverage_contributors(id, &mut |kind, id| emit(kind, id));
+                }
+            }
+        }
+    }
+}
+
+/// The sole authority-free handoff to the later reducer.  It borrows both
+/// tails and all accepted phases; callers cannot pass record lists or mint a
+/// replacement source topology.
+pub(crate) struct IncrementalStalenessInputV5<'a> {
+    source: HistoricalPrefixProjectionV4<'a>,
+    closure: &'a IncrementalSourceClosureV5,
+    mapping: &'a M6MappingPhaseV5,
+    correspondence: &'a M6ObligationCorrespondencePhaseV5,
+    target: &'a V5PreIncrementalProjection<'a>,
+    inventory: HistoricalSourceInventoryV5,
+}
+
+#[cfg(test)]
+thread_local! {
+    static STALENESS_INPUT_MATERIALIZATIONS_V5: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_staleness_input_materializations_v5_for_test() {
+    STALENESS_INPUT_MATERIALIZATIONS_V5.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn staleness_input_materializations_v5_for_test() -> usize {
+    STALENESS_INPUT_MATERIALIZATIONS_V5.with(std::cell::Cell::get)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HistoricalAdmissionReferenceStatsV5 {
+    occurrences: usize,
+    id_bytes: usize,
+}
+
+fn historical_admission_reference_stats_v5(
+    source: &HistoricalPrefixAdmissionV4<'_>,
+) -> M6Result<HistoricalAdmissionReferenceStatsV5> {
+    fn add(stats: &mut HistoricalAdmissionReferenceStatsV5, id: &StableId) -> M6Result<()> {
+        stats.occurrences = stats
+            .occurrences
+            .checked_add(1)
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 staleness historical reference count",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?;
+        stats.id_bytes =
+            stats
+                .id_bytes
+                .checked_add(id.allocated_bytes())
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 staleness historical reference ID bytes",
+                    limit: MAX_M6_STALENESS_WORKING_BYTES,
+                    observed: usize::MAX,
+                })?;
+        Ok(())
+    }
+
+    let inventory = HistoricalAdmissionInventoryV5 { source };
+    let mut stats = HistoricalAdmissionReferenceStatsV5::default();
+    let mut failed = None;
+    source.try_visit_replay_records(|record| {
+        let descriptor = HistoricalRecordDescriptorV5::from_admission(record);
+        descriptor.visit_required_records(&inventory, |_, id| {
+            if failed.is_none() {
+                failed = add(&mut stats, id).err();
+            }
+        });
+        Ok::<(), M6Error>(())
+    })?;
+    if let Some(error) = failed {
+        return Err(error);
+    }
+    // HPP's synthetic coverage member has one denominator predecessor for
+    // each actual universe obligation.  A coverage contributor is a typed
+    // historical record key, so no source record can contribute more than
+    // once to its unique obligation axis; charge every replay record once as
+    // the tight allocation-free upper image without deriving coverage sets.
+    for id in source.universe_obligation_ids() {
+        add(&mut stats, id)?;
+    }
+    source.try_visit_replay_records(|record| {
+        add(&mut stats, record.id())?;
+        Ok::<(), M6Error>(())
+    })?;
+    Ok(stats)
+}
+
+/// Allocation-free combined resident-set admission for the historical reducer.
+/// Mapping/correspondence *construction* peaks are intentionally not added:
+/// those phases are already sealed.  The source projection's own oracle is
+/// charged separately; this function covers only currently retained sealed
+/// DTO ownership, target predecessor, and every inventory/topology collection
+/// that this constructor can materialize.
+fn staleness_input_external_reservation_bytes(
+    source: &HistoricalPrefixAdmissionV4<'_>,
+    mapping: &M6MappingPhaseV5,
+    correspondence: &M6ObligationCorrespondencePhaseV5,
+    target: &V5PreIncrementalProjection<'_>,
+) -> M6Result<usize> {
+    fn add(total: usize, value: usize) -> M6Result<usize> {
+        total.checked_add(value).ok_or(M6Error::Incomplete {
+            operation: "M6 staleness combined working bytes",
+            limit: MAX_M6_STALENESS_WORKING_BYTES,
+            observed: usize::MAX,
+        })
+    }
+    fn mul(left: usize, right: usize) -> M6Result<usize> {
+        left.checked_mul(right).ok_or(M6Error::Incomplete {
+            operation: "M6 staleness combined working bytes",
+            limit: MAX_M6_STALENESS_WORKING_BYTES,
+            observed: usize::MAX,
+        })
+    }
+
+    let record_count = source.record_count();
+    let mut program_id_count = 0_usize;
+    let mut program_id_bytes = 0_usize;
+    let mut program_id_overflow = false;
+    source.program_space().visit_known_ids(|id| {
+        program_id_count = program_id_count.checked_add(1).unwrap_or_else(|| {
+            program_id_overflow = true;
+            usize::MAX
+        });
+        program_id_bytes = program_id_bytes
+            .checked_add(id.allocated_bytes())
+            .unwrap_or_else(|| {
+                program_id_overflow = true;
+                usize::MAX
+            });
+    });
+    if program_id_overflow {
+        return Err(M6Error::Incomplete {
+            operation: "M6 staleness Program ID accounting",
+            limit: MAX_M6_STALENESS_WORKING_BYTES,
+            observed: usize::MAX,
+        });
+    }
+    // The no-allocation pass walks the actual typed predecessor vocabulary,
+    // so sparse legal histories reserve their observed references rather
+    // than a record-count-times-maximum fiction.
+    let reference_stats = historical_admission_reference_stats_v5(source)?;
+    let key_slot = std::mem::size_of::<OwnedHistoricalRecordKeyV5>();
+    let inventory_bytes = [
+        mul(record_count, key_slot)?,
+        source.record_id_bytes(),
+        // Reverse maps retain one owner key and one referenced key per
+        // appearance.  Topology retains the same reference in `edges`,
+        // `dependents`, and Kahn's indegree/frontier.  Each is charged with a
+        // concrete key slot; dynamic StableId storage is charged below.
+        mul(
+            reference_stats.occurrences,
+            key_slot.checked_mul(5).ok_or(M6Error::Incomplete {
+                operation: "M6 staleness inventory slot bytes",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?,
+        )?,
+        mul(reference_stats.id_bytes, 5)?,
+        mul(program_id_count, std::mem::size_of::<StableId>())?,
+        program_id_bytes,
+        // The identity map, indegree table and ready frontier each own at
+        // most one key per historical record.
+        mul(
+            record_count,
+            key_slot.checked_mul(3).ok_or(M6Error::Incomplete {
+                operation: "M6 staleness topology slot bytes",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?,
+        )?,
+    ]
+    .into_iter()
+    .try_fold(0_usize, add)?;
+    let (mapping_retained, correspondence_retained) =
+        staleness_mapping_correspondence_retained_bytes(mapping, correspondence)?;
+    // Event owns the replay backing type, so it supplies one capacity-aware
+    // retained oracle rather than letting this reducer accidentally omit the
+    // duplicate plan, registration Vec spare slots, or run/tail scalars.
+    let target_retained = target.retained_bytes_for_m6().map_err(M6Error::from)?;
+    let total = [
+        mapping_retained,
+        correspondence_retained,
+        target_retained,
+        inventory_bytes,
+        MAX_M6_CANONICAL_BYTES,
+    ]
+    .into_iter()
+    .try_fold(0_usize, add)?;
+    bounded(
+        total,
+        MAX_M6_STALENESS_WORKING_BYTES,
+        "M6 staleness external working bytes",
+    )?;
+    Ok(total)
+}
+
+fn staleness_mapping_correspondence_retained_bytes(
+    mapping: &M6MappingPhaseV5,
+    correspondence: &M6ObligationCorrespondencePhaseV5,
+) -> M6Result<(usize, usize)> {
+    fn add(total: usize, value: usize) -> M6Result<usize> {
+        total.checked_add(value).ok_or(M6Error::Incomplete {
+            operation: "M6 staleness phase retained bytes",
+            limit: MAX_M6_STALENESS_WORKING_BYTES,
+            observed: usize::MAX,
+        })
+    }
+    let mapping_retained = mapping
+        .mappings()
+        .iter()
+        .try_fold(mapping.morphism().allocated_bytes(), |total, item| {
+            add(total, item.allocated_bytes())
+        })?;
+    let mapping_retained = add(
+        mapping_retained,
+        mapping
+            .mappings_capacity()
+            .checked_mul(std::mem::size_of::<ProgramMappingV5>())
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 staleness mapping vector slots",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?,
+    )?;
+    let correspondence_retained = correspondence.entries().iter().try_fold(
+        correspondence.correspondence().allocated_bytes(),
+        |total, item| add(total, item.allocated_bytes()),
+    )?;
+    let correspondence_retained = add(
+        correspondence_retained,
+        correspondence
+            .entries_capacity()
+            .checked_mul(std::mem::size_of::<ObligationCorrespondenceEntryV5>())
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 staleness correspondence vector slots",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?,
+    )?;
+    Ok((mapping_retained, correspondence_retained))
+}
+
+/// Splits the fixed M6 process budget into the already-live external inputs
+/// and the source-only historical projection.  The source projection oracle
+/// includes source replay ownership; this function never charges it again.
+fn staleness_source_working_limit(
+    working_limit: usize,
+    source_reservation: usize,
+    external_reservation: usize,
+) -> M6Result<usize> {
+    let source_limit =
+        working_limit
+            .checked_sub(external_reservation)
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 staleness combined working bytes",
+                limit: working_limit,
+                observed: usize::MAX,
+            })?;
+    let combined_reservation =
+        source_reservation
+            .checked_add(external_reservation)
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 staleness combined working bytes",
+                limit: working_limit,
+                observed: usize::MAX,
+            })?;
+    bounded(
+        combined_reservation,
+        working_limit,
+        "M6 staleness combined working bytes",
+    )?;
+    Ok(source_limit)
+}
+
+/// Checks the sealed mapping's complete ProgramSpace domains against the two
+/// actual pinned spaces.  This runs before HPP materialization; a matching
+/// snapshot ID is deliberately insufficient because it does not commit to the
+/// accepted fact set.
+fn validate_mapping_program_domains(
+    mapping: &M6MappingPhaseV5,
+    source: &ProgramSpace,
+    target: &ProgramSpace,
+) -> M6Result<()> {
+    let (source_domain_count, source_domain_digest) = source.m6_known_id_domain()?;
+    let (target_domain_count, target_domain_digest) = target.m6_known_id_domain()?;
+    let expected_source_count =
+        usize::try_from(mapping.morphism().source_domain_count()).map_err(|_| {
+            M6Error::InvalidHistoricalTopology(
+                "mapping source ProgramSpace domain count is not representable",
+            )
+        })?;
+    let expected_target_count =
+        usize::try_from(mapping.morphism().target_domain_count()).map_err(|_| {
+            M6Error::InvalidHistoricalTopology(
+                "mapping target ProgramSpace domain count is not representable",
+            )
+        })?;
+    if source_domain_count != expected_source_count
+        || &source_domain_digest != mapping.morphism().source_domain_digest()
+        || target_domain_count != expected_target_count
+        || &target_domain_digest != mapping.morphism().target_domain_digest()
+    {
+        return Err(M6Error::InvalidHistoricalTopology(
+            "mapping ProgramSpace domain does not equal the pinned source/target facts",
+        ));
+    }
+    Ok(())
+}
+
+impl<'a> IncrementalStalenessInputV5<'a> {
+    /// Creates the only reducer handoff from exact replay-owned inputs. No
+    /// generic record list, raw JSON, or caller-provided provenance set can
+    /// replace the pinned source topology.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        source_log: &'a EventLogV4,
+        closure: &'a IncrementalSourceClosureV5,
+        mapping: &'a M6MappingPhaseV5,
+        correspondence: &'a M6ObligationCorrespondencePhaseV5,
+        target: &'a V5PreIncrementalProjection<'a>,
+    ) -> M6Result<Self> {
+        Self::new_with_working_limit(
+            source_log,
+            closure,
+            mapping,
+            correspondence,
+            target,
+            MAX_M6_STALENESS_WORKING_BYTES,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_working_limit(
+        source_log: &'a EventLogV4,
+        closure: &'a IncrementalSourceClosureV5,
+        mapping: &'a M6MappingPhaseV5,
+        correspondence: &'a M6ObligationCorrespondencePhaseV5,
+        target: &'a V5PreIncrementalProjection<'a>,
+        working_limit: usize,
+    ) -> M6Result<Self> {
+        // This must remain the first operation: HPP generation, `known_ids`,
+        // inventory maps, topology edges and reducer scratch all allocate.
+        // The V4 admission and every retained external input are observed only
+        // through allocation-free accessors.  The source oracle already
+        // includes replay ownership, so it is added exactly once here and is
+        // deliberately excluded from the external reservation below.
+        let source_admission = source_log.historical_prefix_admission_v4()?;
+        if source_log.tail_hash() != closure.source_tail_hash()
+            || source_log.run_id() != &closure.input.source_run_id
+            || source_admission.program_space().snapshot_id() != closure.source_snapshot_id()
+            || target.tail_hash() != closure.target_predecessor_tail_hash()
+            || target.run_id() != &closure.input.target_run_id
+            || target.program_space().snapshot_id() != closure.target_snapshot_id()
+            || target.universe().id() != closure.target_universe_id()
+        {
+            return Err(M6Error::InvalidHistoricalTopology(
+                "source/target replay tail or snapshot does not equal closure",
+            ));
+        }
+        if mapping.morphism().source_closure_id() != closure.id()
+            || mapping.morphism().source_snapshot_id() != closure.source_snapshot_id()
+            || mapping.morphism().target_snapshot_id() != closure.target_snapshot_id()
+            || correspondence.correspondence().morphism_id() != mapping.morphism().id()
+            || correspondence.correspondence().source_universe_id() != closure.source_universe_id()
+            || correspondence.correspondence().target_universe_id() != closure.target_universe_id()
+        {
+            return Err(M6Error::InvalidHistoricalTopology(
+                "mapping/correspondence phase is not bound to the closure",
+            ));
+        }
+        // Snapshot IDs alone are not a ProgramSpace domain binding: two
+        // independently admitted extractions can legitimately carry the same
+        // snapshot ID while exposing different accepted fact sets.  Recompute
+        // the exact sorted fact-ID domain in a streaming, allocation-free pass
+        // before asking the source log to materialize HPP.
+        validate_mapping_program_domains(
+            mapping,
+            source_admission.program_space(),
+            target.program_space(),
+        )?;
+        let external_reservation = staleness_input_external_reservation_bytes(
+            &source_admission,
+            mapping,
+            correspondence,
+            target,
+        )?;
+        let source_limit = staleness_source_working_limit(
+            working_limit,
+            source_admission.working_reservation_bytes(),
+            external_reservation,
+        )?;
+        let source = source_log.historical_prefix_projection_v4_with_limit(
+            u64::try_from(source_limit).map_err(|_| M6Error::Incomplete {
+                operation: "M6 staleness source working limit",
+                limit: working_limit,
+                observed: usize::MAX,
+            })?,
+        )?;
+        #[cfg(test)]
+        STALENESS_INPUT_MATERIALIZATIONS_V5.with(|count| count.set(count.get() + 1));
+        let inventory = HistoricalSourceInventoryV5::new(&source, source.program_space())?;
+        Self::validate_topology(&source, &inventory)?;
+        Ok(Self {
+            source,
+            closure,
+            mapping,
+            correspondence,
+            target,
+            inventory,
+        })
+    }
+
+    fn validate_topology(
+        source: &HistoricalPrefixProjectionV4<'_>,
+        inventory: &HistoricalSourceInventoryV5,
+    ) -> M6Result<()> {
+        let mut edges =
+            BTreeMap::<OwnedHistoricalRecordKeyV5, BTreeSet<OwnedHistoricalRecordKeyV5>>::new();
+        source.try_visit_records(|record| {
+            let descriptor = HistoricalRecordDescriptorV5::from_projection(record);
+            let key = OwnedHistoricalRecordKeyV5 {
+                kind: descriptor.key().kind,
+                id: descriptor.key().id.clone(),
+            };
+            let mut dependencies = BTreeSet::new();
+            let mut self_edge = false;
+            descriptor.visit_required_records(inventory, |kind, id| {
+                let dependency = OwnedHistoricalRecordKeyV5 {
+                    kind,
+                    id: id.clone(),
+                };
+                if dependency == key {
+                    // Ownership backreferences are omitted in the individual
+                    // record arms. Any remaining self reference is an actual
+                    // malformed predecessor, never a harmless duplicate.
+                    self_edge = true;
+                    return;
+                }
+                dependencies.insert(dependency);
+            });
+            if self_edge {
+                return Err(M6Error::InvalidHistoricalTopology(
+                    "historical required-record graph contains a self edge",
+                ));
+            }
+            if edges.insert(key, dependencies).is_some() {
+                return Err(M6Error::InvalidHistoricalTopology(
+                    "duplicate source record key",
+                ));
+            }
+            Ok(())
+        })?;
+        for dependencies in edges.values() {
+            if dependencies.iter().any(|key| !edges.contains_key(key)) {
+                return Err(M6Error::InvalidHistoricalTopology(
+                    "required source record is external to the pinned inventory",
+                ));
+            }
+        }
+        let mut indegree = edges
+            .iter()
+            .map(|(key, dependencies)| (key.clone(), dependencies.len()))
+            .collect::<BTreeMap<_, _>>();
+        let mut dependents =
+            BTreeMap::<OwnedHistoricalRecordKeyV5, BTreeSet<OwnedHistoricalRecordKeyV5>>::new();
+        for (record, dependencies) in &edges {
+            for dependency in dependencies {
+                dependents
+                    .entry(dependency.clone())
+                    .or_default()
+                    .insert(record.clone());
+            }
+        }
+        let mut ready = indegree
+            .iter()
+            .filter_map(|(key, count)| (*count == 0).then_some(key.clone()))
+            .collect::<BTreeSet<_>>();
+        let mut visited = 0_usize;
+        while let Some(key) = ready.pop_first() {
+            visited += 1;
+            for dependent in dependents.get(&key).into_iter().flatten() {
+                let count =
+                    indegree
+                        .get_mut(dependent)
+                        .ok_or(M6Error::InvalidHistoricalTopology(
+                            "dependent edge has no source owner",
+                        ))?;
+                *count = count
+                    .checked_sub(1)
+                    .ok_or(M6Error::InvalidHistoricalTopology(
+                        "historical dependency indegree underflow",
+                    ))?;
+                if *count == 0 {
+                    ready.insert(dependent.clone());
+                }
+            }
+        }
+        if visited != edges.len() {
+            return Err(M6Error::InvalidHistoricalTopology(
+                "historical required-record graph contains a cycle",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn visit_source_descriptors(
+        &self,
+        mut visitor: impl for<'b> FnMut(HistoricalRecordDescriptorV5<'b>) -> M6Result<()>,
+    ) -> M6Result<()> {
+        self.source.try_visit_records(|record| {
+            visitor(HistoricalRecordDescriptorV5::from_projection(record))
+        })
+    }
+}
+
 /// Complete in-memory correspondence phase. Event/Store persistence is owned
 /// by a later slice; this value grants no append or acceptance authority.
 #[derive(Clone, Debug)]
@@ -5260,6 +7029,9 @@ impl M6ObligationCorrespondencePhaseV5 {
     #[must_use]
     pub fn entries(&self) -> &[ObligationCorrespondenceEntryV5] {
         &self.entries
+    }
+    fn entries_capacity(&self) -> usize {
+        self.entries.capacity()
     }
     #[must_use]
     pub fn correspondence(&self) -> &ObligationCorrespondenceV5 {
@@ -7189,6 +8961,100 @@ mod tests {
                 .unwrap()
                 .status(),
             MappingStatusV5::Modified
+        );
+    }
+
+    #[test]
+    fn mapping_domain_binding_uses_streaming_program_fact_set_not_snapshot_id() {
+        let (source, target) = spaces();
+        let closure = closure(&source, &target);
+        let mapping = ChangeMorphismV5::build_with_inputs(
+            &closure,
+            &source,
+            &target,
+            &inputs(&source, &target),
+        )
+        .unwrap();
+        let (count, digest) = target.m6_known_id_domain().unwrap();
+        assert_eq!(count, target.known_ids().len());
+        assert_eq!(digest, *mapping.morphism().target_domain_digest());
+
+        // Keep the accepted snapshot fields byte-for-byte identical while
+        // changing one accepted fact ID.  This is the mixed-domain case that
+        // snapshot-only phase validation would silently admit.
+        let mut foreign: Value =
+            serde_json::from_slice(&crate::canonical_json(&target.streaming_ref()).unwrap())
+                .unwrap();
+        foreign["relations"][0]["id"] = Value::String("relation:foreign-domain".to_owned());
+        let foreign =
+            ProgramSpace::from_json_slice(&serde_json::to_vec(&foreign).unwrap()).unwrap();
+        assert_eq!(foreign.snapshot_id(), target.snapshot_id());
+        assert!(matches!(
+            validate_mapping_program_domains(&mapping, &source, &foreign),
+            Err(M6Error::InvalidHistoricalTopology(
+                "mapping ProgramSpace domain does not equal the pinned source/target facts"
+            ))
+        ));
+    }
+
+    #[test]
+    fn staleness_phase_retained_oracle_charges_outer_and_body_vector_capacity() {
+        let (_closure, mut mappings, _source, _target, mut correspondence) = correspondence_phase();
+        let before_mapping_capacity = mappings.mappings.capacity();
+        let before_entry_capacity = correspondence.entries.capacity();
+        let before =
+            staleness_mapping_correspondence_retained_bytes(&mappings, &correspondence).unwrap();
+        mappings.mappings.reserve(32);
+        correspondence.entries.reserve(32);
+        let after_mapping_capacity = mappings.mappings.capacity();
+        let after_entry_capacity = correspondence.entries.capacity();
+        let after =
+            staleness_mapping_correspondence_retained_bytes(&mappings, &correspondence).unwrap();
+        assert!(after_mapping_capacity > before_mapping_capacity);
+        assert!(after_entry_capacity > before_entry_capacity);
+        assert_eq!(
+            after.0 - before.0,
+            (after_mapping_capacity - before_mapping_capacity)
+                * std::mem::size_of::<ProgramMappingV5>()
+        );
+        assert_eq!(
+            after.1 - before.1,
+            (after_entry_capacity - before_entry_capacity)
+                * std::mem::size_of::<ObligationCorrespondenceEntryV5>()
+        );
+
+        let mapping = mappings.mappings.first_mut().unwrap();
+        let before = mapping.allocated_bytes();
+        let before_capacity = mapping.source_body_hashes.capacity();
+        mapping.source_body_hashes.reserve(32);
+        let after_capacity = mapping.source_body_hashes.capacity();
+        let after = mapping.allocated_bytes();
+        assert!(after_capacity > before_capacity);
+        assert_eq!(
+            after - before,
+            (after_capacity - before_capacity) * std::mem::size_of::<IdBodyHashV5>()
+        );
+
+        let entry = correspondence.entries.first_mut().unwrap();
+        let before = entry.allocated_bytes();
+        let before_capacity = entry.target_body_hashes.capacity();
+        entry.target_body_hashes.reserve(32);
+        let after_capacity = entry.target_body_hashes.capacity();
+        let after = entry.allocated_bytes();
+        assert!(after_capacity > before_capacity);
+        assert_eq!(
+            after - before,
+            (after_capacity - before_capacity) * std::mem::size_of::<IdBodyHashV5>()
+        );
+
+        correspondence.entries = Vec::with_capacity(17);
+        let (_, empty_correspondence) =
+            staleness_mapping_correspondence_retained_bytes(&mappings, &correspondence).unwrap();
+        assert_eq!(
+            empty_correspondence,
+            correspondence.correspondence.allocated_bytes()
+                + correspondence.entries.capacity()
+                    * std::mem::size_of::<ObligationCorrespondenceEntryV5>()
         );
     }
 
@@ -9189,6 +11055,57 @@ mod tests {
         assert!(
             bounded_event_dto(&plus_one, MAX_M6_MAPPING_DTO_BYTES, "exact DTO plus LF").is_err()
         );
+    }
+
+    #[test]
+    fn staleness_combined_budget_is_inclusive_and_overflow_closed() {
+        assert_eq!(staleness_source_working_limit(19, 7, 12).unwrap(), 7);
+        assert!(matches!(
+            staleness_source_working_limit(18, 7, 12),
+            Err(M6Error::Incomplete {
+                operation: "M6 staleness combined working bytes",
+                limit: 18,
+                observed: 19,
+            })
+        ));
+        assert!(matches!(
+            staleness_source_working_limit(usize::MAX, usize::MAX, 1),
+            Err(M6Error::Incomplete {
+                operation: "M6 staleness combined working bytes",
+                observed: usize::MAX,
+                ..
+            })
+        ));
+        assert!(matches!(
+            staleness_source_working_limit(0, 0, 1),
+            Err(M6Error::Incomplete {
+                operation: "M6 staleness combined working bytes",
+                observed: usize::MAX,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn staleness_phase_retention_uses_actual_sealed_mapping_and_correspondence() {
+        let (_closure, mapping, _source, _target, correspondence) = correspondence_phase();
+        let (mapping_bytes, correspondence_bytes) =
+            staleness_mapping_correspondence_retained_bytes(&mapping, &correspondence).unwrap();
+        let expected_mapping = mapping
+            .mappings()
+            .iter()
+            .fold(mapping.morphism().allocated_bytes(), |total, item| {
+                total.checked_add(item.allocated_bytes()).unwrap()
+            })
+            + mapping.mappings.capacity() * std::mem::size_of::<ProgramMappingV5>();
+        let expected_correspondence = correspondence.entries().iter().fold(
+            correspondence.correspondence().allocated_bytes(),
+            |total, item| total.checked_add(item.allocated_bytes()).unwrap(),
+        ) + correspondence.entries.capacity()
+            * std::mem::size_of::<ObligationCorrespondenceEntryV5>();
+        assert_eq!(mapping_bytes, expected_mapping);
+        assert_eq!(correspondence_bytes, expected_correspondence);
+        assert!(mapping_bytes > 0 && correspondence_bytes > 0);
     }
 
     #[test]
