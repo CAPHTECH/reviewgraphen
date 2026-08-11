@@ -5848,12 +5848,83 @@ impl ClaimAssessmentV3 {
     pub fn finding_ids(&self) -> &[StableId] {
         &self.finding_ids
     }
+    pub(crate) fn claim_id(&self) -> &StableId {
+        &self.scope.claim_id
+    }
+    pub(crate) fn run_id(&self) -> &StableId {
+        &self.scope.run_id
+    }
+    pub(crate) fn snapshot_id(&self) -> &StableId {
+        &self.scope.snapshot_id
+    }
+    pub(crate) fn universe_id(&self) -> &StableId {
+        &self.scope.universe_id
+    }
+    pub(crate) fn bindings(&self) -> &[EvidenceBindingV3] {
+        &self.bindings
+    }
+    pub(crate) fn evidence(&self) -> &[EvidenceV3] {
+        &self.evidence
+    }
+    pub(crate) fn verifications(&self) -> &[VerificationV3] {
+        &self.verifications
+    }
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
         bounded_bytes(self, "ClaimAssessmentV3")
     }
     pub fn body_hash(&self) -> Result<ContentHash> {
         body_hash(self)
     }
+}
+
+#[cfg(test)]
+pub(crate) fn m5_test_passed_assessment() -> (ExecutionClaimV2, ClaimAssessmentV3) {
+    let id = |kind: &str, name: &str| StableId::parse(format!("{kind}:{name}")).unwrap();
+    let execution_id = id("execution", "m5-proof");
+    let obligation_id = id("obligation", "m5-proof");
+    let target = id("artifact", "target");
+    let source = id("artifact", "source");
+    let identity = serde_json::json!({"assumptions":[],"execution_id":execution_id,"obligation_ids":[obligation_id],"polarity":"issue_present","property_id":M4_PROPERTY_ID,"requested_evidence":[],"source_ids":[source],"summary":"duplicate charge","target_refs":[target]});
+    let claim_id = derived_id("claim", &identity).unwrap();
+    let claim: ExecutionClaimV2 = serde_json::from_value(serde_json::json!({"assumptions":[],"author_kind":"ai","candidate_confidence":0.99,"disposition":"proposed","execution_id":"execution:m5-proof","id":claim_id,"obligation_ids":["obligation:m5-proof"],"polarity":"issue_present","property_id":M4_PROPERTY_ID,"requested_evidence":[],"review_status":"unreviewed","source_ids":["artifact:source"],"summary":"duplicate charge","target_refs":["artifact:target"]})).unwrap();
+    let scope = AuthorityScopeV3::new(
+        ContentHash::sha256(b"policy"),
+        id("run", "m5-proof"),
+        id("snapshot", "m5-proof"),
+        id("universe", "m5-proof"),
+        &claim,
+    )
+    .unwrap();
+    let evidence = EvidenceV3::new(
+        &scope,
+        EvidenceKindV3::TestWitness,
+        BTreeSet::from([id("artifact", "target"), id("test", "double-submit")]),
+        VerifierDescriptorV3::FixedFixtureV1,
+        id("registration", "m5-proof-in"),
+        id("registration", "m5-proof-out"),
+        EvidenceObservationV3::Witnessed,
+    )
+    .unwrap();
+    let binding =
+        EvidenceBindingV3::new(&scope, &evidence, EvidenceRelationV3::Reproduces).unwrap();
+    let verification = VerificationV3::new(
+        &scope,
+        VerifierDescriptorV3::FixedFixtureV1,
+        id("registration", "m5-proof-in"),
+        id("registration", "m5-proof-out"),
+        BTreeSet::from([evidence.id.clone()]),
+        VerificationOutcomeV3::Passed,
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let mut assessment = ClaimAssessmentV3::new(&scope);
+    assessment
+        .record_evidence(&scope, evidence, binding)
+        .unwrap();
+    assessment
+        .record_verification(&scope, verification)
+        .unwrap();
+    (claim, assessment)
 }
 
 #[cfg(test)]

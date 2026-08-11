@@ -14,6 +14,7 @@ mod execution;
 mod harness_source_v1;
 mod id;
 mod m4;
+mod m5;
 mod planning;
 mod program;
 mod projection;
@@ -73,6 +74,21 @@ pub use m4::{
     STATIC_PROCEDURE_ID, StaticApplicabilityV1, StaticFactEvaluationV1, StaticFactInputV1,
     StaticFactResultV1, StaticRecordProposalV1, StaticScopeV3, VerificationOutcomeV3,
     VerificationV3, VerifierDescriptorV3, VerifierProcedureV3, evaluate_static_fact_v1,
+};
+pub use m5::{
+    AssignmentCompatibilityV4, AssignmentValueV4, ContextCoverV4, DOUBLE_SUBMIT_ASSIGNMENT_KEY,
+    DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID, DOUBLE_SUBMIT_INVARIANT_ID,
+    DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID, DOUBLE_SUBMIT_PROFILE_ID, DOUBLE_SUBMIT_PROPERTY_ID,
+    DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID, DOUBLE_SUBMIT_UI_CONTEXT_ID, GlobalCandidateV4,
+    GluingAttemptV4, GluingBundleV4, GluingInputDescriptorV4, GluingObstructionKindV4,
+    GluingObstructionV4, GluingRequiredResolutionV4, GluingResultV4, M5Error, M5Result,
+    M5SeverityV4, MAX_M5_ATTEMPT_SOURCE_IDS, MAX_M5_BUNDLE_CANONICAL_BYTES,
+    MAX_M5_CLAIM_SOURCE_IDS, MAX_M5_CONTEXT_MEMBER_IDS, MAX_M5_COVER_DOMAIN_IDS,
+    MAX_M5_COVER_SOURCE_IDS, MAX_M5_DESCRIPTOR_CANONICAL_BYTES,
+    MAX_M5_DESCRIPTOR_QUALIFICATION_IDS, MAX_M5_OVERLAP_IDS, MAX_M5_REQUIRED_CONTEXTS,
+    MAX_M5_RESTRICTION_SOURCE_IDS, MAX_M5_SECTION_SOURCE_IDS, MAX_M5_SECTION_TRACE_IDS,
+    MAX_M5_SECTIONS, MAX_M5_SELECTED_OBLIGATIONS, MAX_M5_STABLE_ID_BYTES, MAX_M5_TRACE_IDS,
+    RestrictionV4, SectionV4,
 };
 pub use planning::{
     DeferralReason, PlanBudget, PlannerPolicyV1, ReviewPlan, RiskDescriptor, ScheduleWave, plan,

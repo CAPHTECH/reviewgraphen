@@ -48,6 +48,20 @@ impl StableId {
         Self::parse(format!("{kind}:{hash}"))
     }
 
+    /// Builds a deterministic ID from an already lexicographically ordered
+    /// identity DTO without materializing a `serde_json::Value` tree.
+    #[allow(dead_code)]
+    pub(crate) fn derived_streaming<T: Serialize>(
+        kind: &str,
+        identity: &T,
+        max_identity_bytes: usize,
+        operation: &'static str,
+    ) -> Result<Self> {
+        crate::canonical::canonical_json_count_bounded(identity, max_identity_bytes, operation)?;
+        let hash = crate::canonical::compact_json_sha256_streaming(identity)?;
+        Self::parse(format!("{kind}:{hash}"))
+    }
+
     /// Returns the ID kind before the first colon.
     #[must_use]
     pub fn kind(&self) -> &str {
