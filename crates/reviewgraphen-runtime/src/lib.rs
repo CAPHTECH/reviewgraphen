@@ -1,7 +1,16 @@
-//! Deterministic ADR 0020 D2 fake runtime.
+//! Frozen ReviewGraphen runtime orchestration for ADR 0020 and ADR 0021.
 //!
-//! Preparation, one fake reviewer invocation, and the ordered durable writes
-//! run behind the same replayed V2 session boundary.
+//! The ADR 0020 path prepares or resumes one deterministic D2 fake-review
+//! attempt and orders its durable writes behind a replayed V2 session. The
+//! ADR 0021 path coordinates only the closed, process-free static-fact and
+//! fixed-fixture M4 descriptors across Core authority checks and Store CAS and
+//! journal durability behind a replayed V3 session.
+//!
+//! Verification output is not human acceptance. Acceptance remains a
+//! separate, explicit Core-governed human-authority operation, and this crate
+//! exposes no arbitrary command, path, environment, network, or runner input.
+
+pub mod m4_verification;
 
 use reviewgraphen_core::{
     ArtifactRegistered, ContentHash, ContextSourceRegistration, ExecutionOutcome,

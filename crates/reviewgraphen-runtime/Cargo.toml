@@ -1,6 +1,6 @@
 [package]
 name = "reviewgraphen-runtime"
-description = "Deterministic prepare-only fake runtime for ReviewGraphen"
+description = "Frozen ADR 0020 fake-review and ADR 0021 durable M4 orchestration for ReviewGraphen"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,7 @@ workspace = true
 reviewgraphen-core = { path = "../reviewgraphen-core" }
 reviewgraphen-store = { path = "../reviewgraphen-store" }
 reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer" }
+reviewgraphen-verifier = { path = "../reviewgraphen-verifier" }
 thiserror.workspace = true
 
 [dev-dependencies]

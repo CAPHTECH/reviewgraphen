@@ -888,6 +888,7 @@ dependencies = [
  "reviewgraphen-core",
  "reviewgraphen-reviewer",
  "reviewgraphen-store",
+ "reviewgraphen-verifier",
  "serde_json",
  "tempfile",
  "thiserror",
