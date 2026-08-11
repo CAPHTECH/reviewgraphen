@@ -4432,6 +4432,92 @@ pub(crate) struct ClaimAssessmentScopeV3 {
     source_ids: Vec<StableId>,
 }
 
+/// Allocation-free prediction of the dynamic backing retained by a freshly
+/// initialized D2 assessment scope and assessment. It mirrors
+/// `ClaimAssessmentScopeV3::new` plus `ClaimAssessmentV3::new_from_scope`
+/// using borrowed scalar lengths only; notably it never computes a canonical
+/// claim body or constructs either M4 value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct InitialClaimAssessmentBackingV3 {
+    scope_dynamic_bytes: u64,
+    assessment_dynamic_bytes: u64,
+}
+
+impl InitialClaimAssessmentBackingV3 {
+    pub(crate) const fn scope_dynamic_bytes(self) -> u64 {
+        self.scope_dynamic_bytes
+    }
+
+    pub(crate) const fn assessment_dynamic_bytes(self) -> u64 {
+        self.assessment_dynamic_bytes
+    }
+}
+
+pub(crate) fn predicted_initial_claim_assessment_backing_v3(
+    run_id: &StableId,
+    genesis_hash: &ContentHash,
+    snapshot_id: &StableId,
+    universe_id: &StableId,
+    claim: &ExecutionClaimV2,
+) -> Result<InitialClaimAssessmentBackingV3> {
+    fn add(total: &mut u64, value: usize) -> Result<()> {
+        checked_memory_add(total, value)
+    }
+
+    fn id_set_backing(values: &BTreeSet<StableId>) -> Result<u64> {
+        let mut total = 0_u64;
+        let slots = values
+            .len()
+            .checked_mul(std::mem::size_of::<StableId>())
+            .ok_or(M4Error::Incomplete {
+                operation: "M4 retained verifier bytes",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?;
+        add(&mut total, slots)?;
+        for value in values {
+            add(&mut total, value.as_str().len())?;
+        }
+        Ok(total)
+    }
+
+    let mut scope_dynamic_bytes = id_set_backing(claim.target_refs())?
+        .checked_add(id_set_backing(claim.source_ids())?)
+        .ok_or(M4Error::Incomplete {
+            operation: "M4 retained verifier bytes",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })?;
+    for value in [
+        run_id.as_str().len(),
+        genesis_hash.as_str().len(),
+        snapshot_id.as_str().len(),
+        universe_id.as_str().len(),
+        claim.id().as_str().len(),
+        "sha256:".len() + 64,
+        claim.property_id().len(),
+    ] {
+        add(&mut scope_dynamic_bytes, value)?;
+    }
+    let assessment_dynamic_bytes = scope_dynamic_bytes
+        .checked_add(
+            u64::try_from(claim.id().as_str().len()).map_err(|_| M4Error::Incomplete {
+                operation: "M4 retained verifier bytes",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?,
+        )
+        .ok_or(M4Error::Incomplete {
+            operation: "M4 retained verifier bytes",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })?;
+    Ok(InitialClaimAssessmentBackingV3 {
+        scope_dynamic_bytes,
+        assessment_dynamic_bytes,
+    })
+}
+
 impl ClaimAssessmentScopeV3 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(

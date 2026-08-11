@@ -1,4 +1,4 @@
-use crate::context::{ContextProjectionAdmission, context_domain_error};
+use crate::context::{ContextProjectionAdmission, context_domain_error, context_resource_oracle};
 use crate::execution::{
     MAX_D2_WORKING_BYTES, ReviewExecutionRecorded, ReviewerRawClosure, preflight_d2_decode_working,
 };
@@ -4528,7 +4528,10 @@ fn validate_v2_completed_transition_with_shadow(
 ) -> Result<()> {
     if matches!(
         version,
-        EventContractVersion::V2 | EventContractVersion::V3 | EventContractVersion::V4
+        EventContractVersion::V2
+            | EventContractVersion::V3
+            | EventContractVersion::V4
+            | EventContractVersion::V5
     ) && let PersistedPayload::ObligationTransition {
         obligation_id,
         next: ObligationLifecycle::Completed,
@@ -9466,6 +9469,13 @@ std::thread_local! {
     static V3_TEST_TRANSACTION_ALLOCATION_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_REPLAY_PAYLOAD_DECODE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_PLAN_AUTHORITY_MATERIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_D2_AUTHORITY_MATERIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_D2_RESERVATION_ALLOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_D2_FORCED_SLOT_OVERHEAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_D2_CONTEXT_SESSION_SEALS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_D2_CONTEXT_SOURCE_REQUESTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_D2_FORCED_CONTEXT_WORKING_OVERHEAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_D2_ASSESSMENT_CONSTRUCTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_APPEND_SHADOW_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_BINDING_APPEND_PEAK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_BINDING_SHADOW_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -9935,6 +9945,8 @@ impl V3RunAggregate {
         claims: &[ExecutionClaimV2],
     ) -> Result<()> {
         for claim in claims {
+            #[cfg(test)]
+            V5_TEST_D2_ASSESSMENT_CONSTRUCTIONS.with(|value| value.set(value.get() + 1));
             if claim.obligation_ids().len() != 1 {
                 return Err(DomainError::Validation(
                     "M4 requires an exact one-obligation D2 claim".to_owned(),
@@ -10912,6 +10924,32 @@ impl AuthorityTrustRootsV5 {
             human_grants,
             allowed_gluing_input_bindings,
         })
+    }
+
+    /// Rebuilds the short-lived V3 semantic-validator view only inside the
+    /// private V5 replay reducer. This is deliberately a value conversion,
+    /// never a V4 replay capability or basis import.
+    #[allow(dead_code)] // Materialized by the following private M4 slice.
+    fn rebuild_v3_validation_roots(&self) -> Result<AuthorityTrustRootsV3> {
+        AuthorityTrustRootsV3::new(
+            self.policy_revision_hash.clone(),
+            self.repository_id.clone(),
+            self.repository_source_hash.clone(),
+            self.harnesses
+                .iter()
+                .map(harness_binding_v4_as_v3)
+                .collect(),
+            self.human_grants.iter().map(human_grant_v4_as_v3).collect(),
+        )
+    }
+}
+
+#[allow(dead_code)] // Used by private V5 post-plan replay only.
+struct V5ResolverAsV3<'a>(&'a dyn AuthorityArtifactResolverV5);
+
+impl AuthorityArtifactResolverV3 for V5ResolverAsV3<'_> {
+    fn read_exact(&self, cas_hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+        self.0.read_exact(cas_hash, destination)
     }
 }
 
@@ -14904,14 +14942,14 @@ fn registration_v3_matches_external_harness(
         && registration.sensitivity() == harness.result_sensitivity
 }
 
-fn validate_deferred_registration_v3_at_v4(
+fn validate_deferred_registration_v3(
     aggregate: &ReviewAggregate,
     registration: &ArtifactRegisteredV3,
     resolver: &impl AuthorityArtifactResolverV3,
 ) -> Result<()> {
     match registration.source() {
         ArtifactSourceV3::RunGenesis { .. } => Err(DomainError::Validation(
-            "event-v4 refuses a standalone inherited run-genesis registration".to_owned(),
+            "inherited replay refuses a standalone run-genesis registration".to_owned(),
         )),
         ArtifactSourceV3::SnapshotIngest {
             run_id,
@@ -14927,7 +14965,7 @@ fn validate_deferred_registration_v3_at_v4(
                         && artifact.content_hash.as_ref() == Some(registration.cas_hash())
                 })
                 .ok_or_else(|| DomainError::DanglingReference {
-                    owner: "event-v4 snapshot registration closure",
+                    owner: "inherited snapshot registration closure",
                     owner_id: registration.registration_id().clone(),
                     reference: snapshot_id.clone(),
                 })?;
@@ -14940,7 +14978,7 @@ fn validate_deferred_registration_v3_at_v4(
                 || artifact.location.is_none()
             {
                 return Err(DomainError::Validation(
-                    "event-v4 snapshot registration lacks its exact durable source closure"
+                    "inherited snapshot registration lacks its exact durable source closure"
                         .to_owned(),
                 ));
             }
@@ -14964,7 +15002,7 @@ fn validate_deferred_registration_v3_at_v4(
                 return Ok(());
             }
             let execution = execution.ok_or_else(|| DomainError::DanglingReference {
-                owner: "event-v4 reviewer registration closure",
+                owner: "inherited reviewer registration closure",
                 owner_id: registration.registration_id().clone(),
                 reference: execution_id.clone(),
             })?;
@@ -14975,7 +15013,7 @@ fn validate_deferred_registration_v3_at_v4(
                 || registration.sensitivity() != ArtifactSensitivity::Sensitive
             {
                 return Err(DomainError::Validation(
-                    "event-v4 reviewer registration lacks its exact durable execution closure"
+                    "inherited reviewer registration lacks its exact durable execution closure"
                         .to_owned(),
                 ));
             }
@@ -18559,11 +18597,12 @@ impl EventLogV4 {
                     reason: "event-v4 deferred registration disappeared from replay state"
                         .to_owned(),
                 })?;
-            validate_deferred_registration_v3_at_v4(&log.aggregate, registration, &v3_resolver)
-                .map_err(|error| DomainError::AuthorityReplayRefused {
+            validate_deferred_registration_v3(&log.aggregate, registration, &v3_resolver).map_err(
+                |error| DomainError::AuthorityReplayRefused {
                     event_sequence,
                     reason: error.to_string(),
-                })?;
+                },
+            )?;
         }
         log.validate_projection_trace_v4()?;
         let basis = AuthorityReplayBasisV4::build(
@@ -19031,6 +19070,333 @@ pub(crate) struct V5StructuralPrefixAccounting {
     retained_envelope_bytes: u64,
 }
 
+/// Scalar-only D2 accounting harvested while the structural FSM already
+/// decodes each post-plan payload. It intentionally retains no DTO or raw
+/// body, so the later authority gate can be allocation-free.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct V5D2StructuralAccounting {
+    post_plan_events: u64,
+    d2_prefix_events: u64,
+    transitions: u64,
+    reviewer_registrations: u64,
+    contexts: u64,
+    executions: u64,
+    deferred_semantic_events: u64,
+    payload_dynamic_bytes: u64,
+    trace_dynamic_bytes: u64,
+    deferred_dynamic_bytes: u64,
+    state_growth_bytes: u64,
+    max_payload_scratch: u64,
+    max_context_envelope_staging: u64,
+    max_context_source_cas_bytes: u64,
+    max_reducer_growth: u64,
+    max_reviewer_cas_bytes: u64,
+}
+
+impl V5D2StructuralAccounting {
+    fn increment(value: &mut u64, operation: &'static str) -> Result<()> {
+        *value = value
+            .checked_add(1)
+            .ok_or_else(|| replay_incomplete(operation, u64::MAX, u64::MAX))?;
+        Ok(())
+    }
+
+    /// Accounts for a projected context's largest live source CAS object
+    /// without materializing it. The only admissible source is one of the
+    /// initial, StableId-sorted SnapshotIngest registrations; later D2
+    /// registrations must never become implicit context input.
+    fn observe_context_sources(
+        &mut self,
+        context: &ReviewContextEnvelope,
+        registrations: &[ArtifactRegisteredV3],
+    ) -> Result<()> {
+        for (index, source) in context.included_sources().iter().enumerate() {
+            if context.included_sources()[..index]
+                .iter()
+                .any(|previous| previous.registration_id() == source.registration_id())
+            {
+                return Err(DomainError::Validation(
+                    "V5 structural D2 context repeats an included source registration".to_owned(),
+                ));
+            }
+            let registration = registrations
+                .binary_search_by(|candidate| {
+                    candidate.registration_id().cmp(source.registration_id())
+                })
+                .ok()
+                .map(|index| &registrations[index])
+                .ok_or_else(|| DomainError::Validation(
+                    "V5 structural D2 context source registration is not an initial SnapshotIngest artifact"
+                        .to_owned(),
+                ))?;
+            if !matches!(
+                registration.source(),
+                ArtifactSourceV3::SnapshotIngest { .. }
+            ) || registration.cas_hash() != source.cas_hash()
+            {
+                return Err(DomainError::Validation(
+                    "V5 structural D2 context source registration provenance or CAS hash mismatch"
+                        .to_owned(),
+                ));
+            }
+            self.max_context_source_cas_bytes =
+                self.max_context_source_cas_bytes.max(registration.size());
+        }
+        Ok(())
+    }
+
+    fn observe(
+        &mut self,
+        envelope: &EventEnvelope,
+        payload: &PersistedPayload,
+        registrations: &[ArtifactRegisteredV3],
+        aggregate: &ReviewAggregate,
+        run_id: &StableId,
+        genesis_hash: &ContentHash,
+    ) -> Result<()> {
+        Self::increment(&mut self.post_plan_events, "V5 D2 post-plan accounting")?;
+        // This reducer owns a contiguous D2 prefix only. Once an inherited
+        // M4/M5 record appears, the integrated dispatcher must continue from
+        // that exact cursor; applying a later D2 event early would destroy
+        // stream-order semantics.
+        if self.deferred_semantic_events != 0 {
+            return Self::increment(
+                &mut self.deferred_semantic_events,
+                "V5 deferred semantic post-plan accounting",
+            );
+        }
+        Self::increment(&mut self.d2_prefix_events, "V5 D2 prefix accounting")?;
+        self.state_growth_bytes = self
+            .state_growth_bytes
+            .checked_add(d2_retained_state_growth(
+                payload,
+                aggregate,
+                run_id,
+                genesis_hash,
+            )?)
+            .ok_or_else(|| replay_incomplete("V5 D2 replay state growth", u64::MAX, u64::MAX))?;
+        let staging = v3_payload_staging_bytes(payload)?;
+        self.max_payload_scratch = self.max_payload_scratch.max(staging);
+        self.max_reducer_growth = self
+            .max_reducer_growth
+            .max(v3_reducer_growth_upper_bound(payload)?);
+        match payload {
+            PersistedPayload::ObligationTransition { .. } => {
+                Self::increment(&mut self.transitions, "V5 D2 transition accounting")?
+            }
+            PersistedPayload::ArtifactRegisteredV3(registration)
+                if matches!(
+                    registration.source(),
+                    ArtifactSourceV3::ReviewerExecution { .. }
+                ) =>
+            {
+                Self::increment(
+                    &mut self.reviewer_registrations,
+                    "V5 D2 registration accounting",
+                )?;
+                self.max_reviewer_cas_bytes = self.max_reviewer_cas_bytes.max(registration.size());
+                self.payload_dynamic_bytes = self
+                    .payload_dynamic_bytes
+                    .checked_add(staging)
+                    .ok_or_else(|| {
+                        replay_incomplete("V5 D2 registration accounting", u64::MAX, u64::MAX)
+                    })?;
+                self.deferred_dynamic_bytes = self
+                    .deferred_dynamic_bytes
+                    .checked_add(
+                        u64::try_from(registration.registration_id().allocated_bytes())
+                            .unwrap_or(u64::MAX),
+                    )
+                    .ok_or_else(|| {
+                        replay_incomplete("V5 D2 deferred registration IDs", u64::MAX, u64::MAX)
+                    })?;
+            }
+            PersistedPayload::ContextEnvelopeProjected(context) => {
+                Self::increment(&mut self.contexts, "V5 D2 context accounting")?;
+                self.max_context_envelope_staging = self.max_context_envelope_staging.max(staging);
+                self.observe_context_sources(context, registrations)?;
+                self.payload_dynamic_bytes = self
+                    .payload_dynamic_bytes
+                    .checked_add(staging)
+                    .ok_or_else(|| {
+                        replay_incomplete("V5 D2 context accounting", u64::MAX, u64::MAX)
+                    })?;
+            }
+            PersistedPayload::ReviewExecutionRecorded(_) => {
+                Self::increment(&mut self.executions, "V5 D2 execution accounting")?;
+                self.payload_dynamic_bytes = self
+                    .payload_dynamic_bytes
+                    .checked_add(staging)
+                    .ok_or_else(|| {
+                        replay_incomplete("V5 D2 execution accounting", u64::MAX, u64::MAX)
+                    })?;
+            }
+            // M4/M5 records are structurally closed by the outer FSM. D2
+            // deliberately leaves their semantic replay to the next private
+            // reducer, while continuing to process later D2 records.
+            _ => Self::increment(
+                &mut self.deferred_semantic_events,
+                "V5 deferred semantic post-plan accounting",
+            )?,
+        }
+        if let Some(record_id) = d2_trace_record_id(payload) {
+            let dynamic = [
+                envelope.id().allocated_bytes(),
+                envelope.previous_event_hash().allocated_bytes(),
+                record_id.allocated_bytes(),
+                envelope.payload_hash().allocated_bytes(),
+            ]
+            .into_iter()
+            .try_fold(0_u64, |total, bytes| {
+                total
+                    .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                    .ok_or_else(|| {
+                        replay_incomplete("V5 D2 trace ID/hash accounting", u64::MAX, u64::MAX)
+                    })
+            })?;
+            self.trace_dynamic_bytes =
+                self.trace_dynamic_bytes
+                    .checked_add(dynamic)
+                    .ok_or_else(|| {
+                        replay_incomplete("V5 D2 trace ID/hash accounting", u64::MAX, u64::MAX)
+                    })?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn trace_count(self) -> Result<u64> {
+        [
+            self.transitions,
+            self.reviewer_registrations,
+            self.contexts,
+            self.executions,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, value| {
+            total
+                .checked_add(value)
+                .ok_or_else(|| replay_incomplete("V5 D2 trace count", u64::MAX, u64::MAX))
+        })
+    }
+}
+
+/// Exact portable retained growth of the D2-owned aggregate/V3 maps. This is
+/// intentionally separate from payload staging: the latter is transient,
+/// whereas this function mirrors the records actually retained by
+/// `apply_for_log` and `V3RunAggregate::initialize_claims`.
+fn d2_retained_state_growth(
+    payload: &PersistedPayload,
+    aggregate: &ReviewAggregate,
+    run_id: &StableId,
+    genesis_hash: &ContentHash,
+) -> Result<u64> {
+    fn add(total: &mut u64, value: u64, operation: &'static str) -> Result<()> {
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| replay_incomplete(operation, u64::MAX, u64::MAX))?;
+        Ok(())
+    }
+    let mut total = 0;
+    match payload {
+        PersistedPayload::ArtifactRegisteredV3(registration)
+            if matches!(
+                registration.source(),
+                ArtifactSourceV3::ReviewerExecution { .. }
+            ) =>
+        {
+            let entry = v3_owned_record_bytes::<ArtifactRegisteredV3>(
+                registration.registration_id(),
+                u64::try_from(registration.allocated_bytes()).unwrap_or(u64::MAX),
+            )?;
+            // ReviewAggregate and V3RunAggregate each own a cloned record.
+            add(&mut total, entry, "V5 D2 registration aggregate growth")?;
+            add(&mut total, entry, "V5 D2 registration V3 growth")?;
+        }
+        PersistedPayload::ContextEnvelopeProjected(context) => add(
+            &mut total,
+            v3_owned_record_bytes::<ReviewContextEnvelope>(
+                context.id(),
+                u64::try_from(context.cloned_allocated_bytes()).unwrap_or(u64::MAX),
+            )?,
+            "V5 D2 context aggregate growth",
+        )?,
+        PersistedPayload::ReviewExecutionRecorded(recorded) => {
+            add(
+                &mut total,
+                v3_owned_record_bytes::<crate::ExecutionRecord>(
+                    recorded.execution.id(),
+                    u64::try_from(recorded.execution.allocated_bytes()).unwrap_or(u64::MAX),
+                )?,
+                "V5 D2 execution aggregate growth",
+            )?;
+            add(
+                &mut total,
+                u64::try_from(
+                    size_of::<(StableId, u64)>()
+                        .saturating_add(recorded.execution.id().allocated_bytes()),
+                )
+                .unwrap_or(u64::MAX),
+                "V5 D2 execution raw-size growth",
+            )?;
+            for claim in &recorded.claims {
+                add(
+                    &mut total,
+                    v3_owned_record_bytes::<crate::ExecutionClaimV2>(
+                        claim.id(),
+                        u64::try_from(claim.allocated_bytes()).unwrap_or(u64::MAX),
+                    )?,
+                    "V5 D2 claim aggregate growth",
+                )?;
+                let assessment = crate::m4::predicted_initial_claim_assessment_backing_v3(
+                    run_id,
+                    genesis_hash,
+                    aggregate.program().snapshot_id(),
+                    aggregate.universe().id(),
+                    claim,
+                )
+                .map_err(m4_domain_error)?;
+                add(
+                    &mut total,
+                    v3_owned_record_bytes::<crate::m4::ClaimAssessmentScopeV3>(
+                        claim.id(),
+                        assessment.scope_dynamic_bytes(),
+                    )?,
+                    "V5 D2 assessment scope growth",
+                )?;
+                add(
+                    &mut total,
+                    v3_owned_record_bytes::<crate::ClaimAssessmentV3>(
+                        claim.id(),
+                        assessment.assessment_dynamic_bytes(),
+                    )?,
+                    "V5 D2 assessment growth",
+                )?;
+            }
+        }
+        PersistedPayload::ObligationTransition { .. } => {}
+        _ => {}
+    }
+    Ok(total)
+}
+
+fn d2_trace_record_id(payload: &PersistedPayload) -> Option<&StableId> {
+    match payload {
+        PersistedPayload::ObligationTransition { obligation_id, .. } => Some(obligation_id),
+        PersistedPayload::ArtifactRegisteredV3(registration)
+            if matches!(
+                registration.source(),
+                ArtifactSourceV3::ReviewerExecution { .. }
+            ) =>
+        {
+            Some(registration.registration_id())
+        }
+        PersistedPayload::ContextEnvelopeProjected(context) => Some(context.id()),
+        PersistedPayload::ReviewExecutionRecorded(recorded) => Some(recorded.execution.id()),
+        _ => None,
+    }
+}
+
 impl V5StructuralPrefixAccounting {
     pub(crate) const fn canonical_prefix_bytes(self) -> u64 {
         self.canonical_prefix_bytes
@@ -19132,6 +19498,11 @@ pub struct ReplayedV5PreIncrementalStructuralPrefixState<'a> {
     predecessor_offset: u64,
     predecessor_event_count: u64,
     tail_hash: ContentHash,
+    plan_event_count: u64,
+    plan_canonical_offset: u64,
+    plan_tail_hash: ContentHash,
+    post_plan_phase: V5StructuralPostPlanPhase,
+    d2_accounting: V5D2StructuralAccounting,
     accounting: V5StructuralPrefixAccounting,
 }
 
@@ -19177,10 +19548,471 @@ struct ReplayedV5PlanAuthorityState<'a> {
     basis: PreIncrementalAuthorityReplayBasisV5,
 }
 
+/// Private source/plan certification for a later full V5 semantic replay.
+/// This is intentionally distinct from the ADR §4 full-predecessor basis.
+#[allow(dead_code)]
+struct PlanAuthorityCheckpointV5<'a> {
+    structural: &'a ReplayedV5PreIncrementalStructuralPrefixState<'a>,
+    plan_event_count: u64,
+    plan_canonical_offset: u64,
+    plan_tail_hash: ContentHash,
+    checkpoint_digest: ContentHash,
+}
+
+/// Private semantic continuation of a certified V5 plan prefix.  It owns its
+/// mutable replay products and only borrows the plan certification, so a
+/// failed post-plan replay cannot alter the certified base or expose a
+/// partially-applied aggregate.
+#[allow(dead_code)]
+struct ReplayedV5M4AuthorityState<'a> {
+    plan_checkpoint: &'a PlanAuthorityCheckpointV5<'a>,
+    aggregate: ReviewAggregate,
+    v3_aggregate: V3RunAggregate,
+    d2_trace: Vec<V5D2ReplayTrace>,
+    deferred_registration_closures: Vec<(u64, StableId)>,
+    d2_dispatch_cursor: V5D2DispatchCursor,
+}
+
+/// Private handoff for the integrated M4/M5 reducer. `replay_from_event` is
+/// the plan boundary because `applied_d2_trace` is the byte-for-byte proof of
+/// which following events were already applied. A successor validates that
+/// trace, does not reapply it, and resumes at `consumed_through_event + 1` on
+/// the same aggregate. A full V5 authority basis remains forbidden until the
+/// expected terminal phase has been semantically replayed.
+#[allow(dead_code)] // Consumed by the following integrated M4/M5 reducer slice.
+#[derive(Clone, Debug)]
+struct V5D2DispatchCursor {
+    replay_from_event: u64,
+    consumed_through_event: u64,
+    consumed_tail_hash: ContentHash,
+    applied_phase: V5StructuralPostPlanPhase,
+    expected_terminal_phase: V5StructuralPostPlanPhase,
+    deferred_semantic_events: u64,
+}
+
+fn validate_v5_d2_dispatch_cursor(state: &ReplayedV5M4AuthorityState<'_>) -> Result<()> {
+    let checkpoint = state.plan_checkpoint;
+    let structural = checkpoint.structural;
+    let prefix = structural
+        .event_log
+        .envelopes
+        .get(
+            ..usize::try_from(structural.predecessor_event_count).map_err(|_| {
+                DomainError::EventSequence("V5 D2 cursor predecessor count overflow".to_owned())
+            })?,
+        )
+        .ok_or_else(|| DomainError::EventSequence("V5 D2 cursor prefix is absent".to_owned()))?;
+    if state.d2_dispatch_cursor.replay_from_event != checkpoint.plan_event_count
+        || state.d2_dispatch_cursor.consumed_through_event < checkpoint.plan_event_count
+        || state.d2_dispatch_cursor.expected_terminal_phase != structural.post_plan_phase
+        || state.d2_dispatch_cursor.deferred_semantic_events
+            != structural
+                .predecessor_event_count
+                .checked_sub(state.d2_dispatch_cursor.consumed_through_event)
+                .ok_or_else(|| {
+                    DomainError::EventSequence("V5 D2 cursor exceeds predecessor".to_owned())
+                })?
+    {
+        return Err(DomainError::EventSequence(
+            "V5 D2 cursor coordinates or terminal phase mismatch".to_owned(),
+        ));
+    }
+    let consumed = usize::try_from(state.d2_dispatch_cursor.consumed_through_event)
+        .map_err(|_| DomainError::EventSequence("V5 D2 cursor overflow".to_owned()))?;
+    let plan = usize::try_from(checkpoint.plan_event_count)
+        .map_err(|_| DomainError::EventSequence("V5 D2 plan cursor overflow".to_owned()))?;
+    let applied = prefix.get(plan..consumed).ok_or_else(|| {
+        DomainError::EventSequence("V5 D2 applied cursor range is absent".to_owned())
+    })?;
+    if applied.len() != state.d2_trace.len()
+        || prefix
+            .get(consumed.checked_sub(1).ok_or_else(|| {
+                DomainError::EventSequence("V5 D2 cursor has no consumed tail".to_owned())
+            })?)
+            .map(EventEnvelope::event_hash)
+            != Some(&state.d2_dispatch_cursor.consumed_tail_hash)
+    {
+        return Err(DomainError::EventSequence(
+            "V5 D2 trace length or consumed tail mismatch".to_owned(),
+        ));
+    }
+    let mut phase = V5StructuralPostPlanPhase::Inherited {
+        m4_bundle: V5StructuralM4BundlePhase::Idle,
+    };
+    let mut registration_ids = BTreeSet::new();
+    for (trace_index, (envelope, trace)) in applied.iter().zip(&state.d2_trace).enumerate() {
+        let payload = decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+        advance_v5_structural_post_plan(&mut phase, &mut registration_ids, &payload)?;
+        let (kind, record_id, next) = match &payload {
+            PersistedPayload::ObligationTransition {
+                obligation_id,
+                next,
+            } => ("obligation_transition", obligation_id, Some(*next)),
+            PersistedPayload::ArtifactRegisteredV3(registration) => (
+                "artifact_registered_v3",
+                registration.registration_id(),
+                None,
+            ),
+            PersistedPayload::ContextEnvelopeProjected(context) => {
+                ("context_envelope_projected", context.id(), None)
+            }
+            PersistedPayload::ReviewExecutionRecorded(recorded) => {
+                ("review_execution_recorded", recorded.execution.id(), None)
+            }
+            _ => {
+                return Err(DomainError::EventSequence(
+                    "V5 D2 cursor trace crosses a non-D2 record".to_owned(),
+                ));
+            }
+        };
+        if trace.event_sequence != envelope.sequence()
+            || trace.event_id != *envelope.id()
+            || trace.predecessor_event_hash != *envelope.previous_event_hash()
+            || trace.payload_kind != kind
+            || trace.record_id != *record_id
+            || trace.record_body_hash != *envelope.payload_hash()
+            || trace.transition_next != next
+        {
+            return Err(DomainError::EventSequence(
+                "V5 D2 cursor trace does not match its canonical envelope".to_owned(),
+            ));
+        }
+        let applied_to_aggregate = match kind {
+            "obligation_transition" => {
+                state.d2_trace[trace_index + 1..]
+                    .iter()
+                    .any(|later| later.transition_next.is_some() && later.record_id == *record_id)
+                    || state
+                        .aggregate
+                        .obligation(record_id)
+                        .is_some_and(|obligation| Some(obligation.lifecycle()) == next)
+            }
+            "artifact_registered_v3" => state.v3_aggregate.registrations.contains_key(record_id),
+            "context_envelope_projected" => state
+                .aggregate
+                .context_envelopes()
+                .any(|context| context.id() == record_id),
+            "review_execution_recorded" => state
+                .aggregate
+                .executions()
+                .any(|execution| execution.id() == record_id),
+            _ => false,
+        };
+        if !applied_to_aggregate {
+            return Err(DomainError::EventSequence(
+                "V5 D2 cursor trace is not reflected in its aggregate".to_owned(),
+            ));
+        }
+    }
+    if phase != state.d2_dispatch_cursor.applied_phase {
+        return Err(DomainError::EventSequence(
+            "V5 D2 cursor local structural phase mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Minimal owned trace for the private D2 continuation. It deliberately has
+/// no public projection or envelope/raw-body accessor.
+#[allow(dead_code)] // Held only by the private V5 D2 replay state.
+#[derive(Debug)]
+struct V5D2ReplayTrace {
+    event_sequence: u64,
+    event_id: StableId,
+    predecessor_event_hash: ContentHash,
+    payload_kind: &'static str,
+    record_id: StableId,
+    record_body_hash: ContentHash,
+    transition_next: Option<ObligationLifecycle>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct V5PlanAuthorityPreflight {
     retained_bytes: u64,
     working_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct V5D2AuthorityPreflight {
+    retained_bytes: u64,
+    working_bytes: u64,
+}
+
+/// Finishes one named D2 working phase. Each addition is checked before the
+/// phase participates in the maximum, so an overflowing candidate can never
+/// disappear through `Option` iteration.
+fn v5_d2_phase_bytes(
+    base: u64,
+    additions: impl IntoIterator<Item = u64>,
+    operation: &'static str,
+) -> Result<u64> {
+    additions.into_iter().try_fold(base, |total, value| {
+        total
+            .checked_add(value)
+            .ok_or_else(|| replay_incomplete(operation, u64::MAX, u64::MAX))
+    })
+}
+
+/// Computes the complete D2 live set while one context session is being
+/// rebuilt. `context_session_working` may come either from the allocation-free
+/// oracle or from a session whose allocator capacities have already been
+/// sealed; both paths intentionally share every other live term. The context
+/// session is temporary and never enters the returned retained state; its
+/// complete retained component is already included in `session_working_bytes`
+/// and is therefore governed by this working peak.
+fn v5_d2_context_working_phase(
+    retained: u64,
+    context_session_working: u64,
+    context_envelope_staging: u64,
+) -> Result<u64> {
+    v5_d2_phase_bytes(
+        retained,
+        [context_session_working, context_envelope_staging],
+        "V5 D2 context working phase",
+    )
+}
+
+/// Covers every accepted obligation which a D2 context record could name,
+/// including obligations deferred by the recorded plan. With no context
+/// record there is no context session phase at all.
+fn v5_d2_context_session_working_oracle(
+    aggregate: &ReviewAggregate,
+    context_count: u64,
+) -> Result<u64> {
+    if context_count == 0 {
+        return Ok(0);
+    }
+    aggregate
+        .obligations()
+        .try_fold(0_u64, |maximum, obligation| {
+            let oracle = context_resource_oracle(aggregate, obligation.id())
+                .map_err(context_domain_error)?;
+            Ok(maximum.max(oracle.session_working_bytes()))
+        })
+}
+
+fn enforce_v5_d2_sealed_context_working(
+    retained: u64,
+    context_session_working: u64,
+    context_envelope_staging: u64,
+    max_working_bytes: u64,
+) -> Result<()> {
+    let observed =
+        v5_d2_context_working_phase(retained, context_session_working, context_envelope_staging)?;
+    if observed > max_working_bytes {
+        return Err(replay_incomplete(
+            "V5 D2 sealed context working reservation",
+            max_working_bytes,
+            observed,
+        ));
+    }
+    Ok(())
+}
+
+/// Allocation-free resource oracle for the private D2 continuation. It uses
+/// only structural scalar coordinates and sealed envelope byte accounting;
+/// decoding, cloning, roots materialization, and CAS reads remain after this
+/// gate. The structural FSM has already admitted the closed post-plan shape.
+fn v5_d2_authority_preflight(
+    checkpoint: &PlanAuthorityCheckpointV5<'_>,
+) -> Result<V5D2AuthorityPreflight> {
+    v5_d2_authority_preflight_with_slots(checkpoint, None)
+}
+
+fn v5_d2_authority_preflight_with_slots(
+    checkpoint: &PlanAuthorityCheckpointV5<'_>,
+    actual_slots: Option<(u64, u64)>,
+) -> Result<V5D2AuthorityPreflight> {
+    fn add(total: &mut u64, value: u64, operation: &'static str) -> Result<()> {
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| replay_incomplete(operation, u64::MAX, u64::MAX))?;
+        Ok(())
+    }
+    let structural = checkpoint.structural;
+    let log = structural.event_log;
+    let d2 = structural.d2_accounting;
+    let structural_backing =
+        u64::try_from(structural.projection().retained_bytes_for_m6()?).unwrap_or(u64::MAX);
+    let checkpoint_owned = u64::try_from(size_of::<PlanAuthorityCheckpointV5>())
+        .unwrap_or(u64::MAX)
+        .checked_add(u64::try_from(checkpoint.plan_tail_hash.allocated_bytes()).unwrap_or(u64::MAX))
+        .and_then(|value| {
+            value.checked_add(
+                u64::try_from(checkpoint.checkpoint_digest.allocated_bytes()).unwrap_or(u64::MAX),
+            )
+        })
+        .ok_or_else(|| replay_incomplete("V5 D2 checkpoint retained bytes", u64::MAX, u64::MAX))?;
+    let base_clone = structural.pre_incremental.aggregate.retained_bytes_v3()?;
+    let initial_v3 = structural.pre_incremental.registrations.iter().try_fold(
+        u64::try_from(size_of::<V3RunAggregate>()).unwrap_or(u64::MAX),
+        |total, registration| {
+            total
+                .checked_add(v3_owned_record_bytes::<ArtifactRegisteredV3>(
+                    registration.registration_id(),
+                    u64::try_from(registration.allocated_bytes()).unwrap_or(u64::MAX),
+                )?)
+                .ok_or_else(|| replay_incomplete("V5 D2 initial V3 state", u64::MAX, u64::MAX))
+        },
+    )?;
+    let predicted_trace_slots = d2
+        .d2_prefix_events
+        .checked_mul(u64::try_from(size_of::<V5D2ReplayTrace>()).unwrap_or(u64::MAX))
+        .ok_or_else(|| replay_incomplete("V5 D2 trace capacity", u64::MAX, u64::MAX))?;
+    let predicted_deferred_slots = d2
+        .d2_prefix_events
+        .checked_mul(u64::try_from(size_of::<(u64, StableId)>()).unwrap_or(u64::MAX))
+        .ok_or_else(|| replay_incomplete("V5 D2 deferred capacity", u64::MAX, u64::MAX))?;
+    let (trace_slots, deferred_slots) =
+        actual_slots.unwrap_or((predicted_trace_slots, predicted_deferred_slots));
+    let state = u64::try_from(size_of::<ReplayedV5M4AuthorityState>()).unwrap_or(u64::MAX);
+    let mut retained = 0;
+    for value in [
+        structural_backing,
+        checkpoint_owned,
+        state,
+        base_clone,
+        initial_v3,
+        trace_slots,
+        deferred_slots,
+        d2.state_growth_bytes,
+        d2.trace_dynamic_bytes,
+        d2.deferred_dynamic_bytes,
+        // The private handoff owns the exact cursor tail hash even when no
+        // M4/M5 semantic range follows this D2 prefix.
+        u64::try_from(structural.tail_hash.allocated_bytes()).unwrap_or(u64::MAX),
+    ] {
+        add(&mut retained, value, "V5 D2 retained preflight")?;
+    }
+    let canonical_scratch = log.maximum_canonical_event_line_bytes_for_store()?;
+    let context_session_working =
+        v5_d2_context_session_working_oracle(&structural.pre_incremental.aggregate, d2.contexts)?;
+    let clone_phase = v5_d2_phase_bytes(
+        structural_backing,
+        [checkpoint_owned, base_clone, canonical_scratch],
+        "V5 D2 clone working phase",
+    )?;
+    let final_phase =
+        v5_d2_phase_bytes(retained, [canonical_scratch], "V5 D2 final working phase")?;
+    let reducer_phase = v5_d2_phase_bytes(
+        retained,
+        [d2.max_reducer_growth],
+        "V5 D2 reducer working phase",
+    )?;
+    let reviewer_phase = v5_d2_phase_bytes(
+        retained,
+        [d2.max_reviewer_cas_bytes],
+        "V5 D2 reviewer working phase",
+    )?;
+    // `session_working_bytes` already seals the session, its largest accepted
+    // source buffer, and final context canonicalization. Only the decoded
+    // persisted envelope staging is additionally live in event replay.
+    let context_phase = if d2.contexts == 0 {
+        0
+    } else {
+        v5_d2_context_working_phase(
+            retained,
+            context_session_working,
+            d2.max_context_envelope_staging,
+        )?
+    };
+    let working = clone_phase
+        .max(final_phase)
+        .max(reducer_phase)
+        .max(reviewer_phase)
+        .max(context_phase);
+    Ok(V5D2AuthorityPreflight {
+        retained_bytes: retained,
+        working_bytes: working,
+    })
+}
+
+/// Independently measures the private D2 return value after semantic replay.
+/// This deliberately walks actual aggregate maps, vector capacities, and each
+/// owned ID/hash backing instead of reusing structural scalar accounting.
+fn v5_d2_realized_retained_bytes(
+    checkpoint: &PlanAuthorityCheckpointV5<'_>,
+    state: &ReplayedV5M4AuthorityState<'_>,
+) -> Result<u64> {
+    fn add(total: &mut u64, value: u64, operation: &'static str) -> Result<()> {
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| replay_incomplete(operation, u64::MAX, u64::MAX))?;
+        Ok(())
+    }
+    let structural = checkpoint.structural;
+    let structural_backing =
+        u64::try_from(structural.projection().retained_bytes_for_m6()?).unwrap_or(u64::MAX);
+    let checkpoint_owned = u64::try_from(size_of::<PlanAuthorityCheckpointV5>())
+        .unwrap_or(u64::MAX)
+        .checked_add(u64::try_from(checkpoint.plan_tail_hash.allocated_bytes()).unwrap_or(u64::MAX))
+        .and_then(|value| {
+            value.checked_add(
+                u64::try_from(checkpoint.checkpoint_digest.allocated_bytes()).unwrap_or(u64::MAX),
+            )
+        })
+        .ok_or_else(|| {
+            replay_incomplete(
+                "V5 D2 realized checkpoint retained bytes",
+                u64::MAX,
+                u64::MAX,
+            )
+        })?;
+    let trace_slots = u64::try_from(
+        state
+            .d2_trace
+            .capacity()
+            .saturating_mul(size_of::<V5D2ReplayTrace>()),
+    )
+    .unwrap_or(u64::MAX);
+    let deferred_slots = u64::try_from(
+        state
+            .deferred_registration_closures
+            .capacity()
+            .saturating_mul(size_of::<(u64, StableId)>()),
+    )
+    .unwrap_or(u64::MAX);
+    let mut total = 0;
+    for value in [
+        structural_backing,
+        checkpoint_owned,
+        u64::try_from(size_of::<ReplayedV5M4AuthorityState>()).unwrap_or(u64::MAX),
+        state.aggregate.retained_bytes_v3()?,
+        state.v3_aggregate.retained_bytes()?,
+        trace_slots,
+        deferred_slots,
+        u64::try_from(
+            state
+                .d2_dispatch_cursor
+                .consumed_tail_hash
+                .allocated_bytes(),
+        )
+        .unwrap_or(u64::MAX),
+    ] {
+        add(&mut total, value, "V5 D2 realized retained bytes")?;
+    }
+    for trace in &state.d2_trace {
+        for bytes in [
+            trace.event_id.allocated_bytes(),
+            trace.predecessor_event_hash.allocated_bytes(),
+            trace.record_id.allocated_bytes(),
+            trace.record_body_hash.allocated_bytes(),
+        ] {
+            add(
+                &mut total,
+                u64::try_from(bytes).unwrap_or(u64::MAX),
+                "V5 D2 realized trace IDs/hashes",
+            )?;
+        }
+    }
+    for (_, registration_id) in &state.deferred_registration_closures {
+        add(
+            &mut total,
+            u64::try_from(registration_id.allocated_bytes()).unwrap_or(u64::MAX),
+            "V5 D2 realized deferred registration IDs",
+        )?;
+    }
+    Ok(total)
 }
 
 fn v5_plan_authority_preflight(
@@ -19277,6 +20109,57 @@ fn validate_plan_only_registration_source_v5(
         ));
     }
     Ok(())
+}
+
+/// D2 may introduce only a sensitive raw reviewer artifact. Snapshot sources
+/// belong exclusively to the certified plan boundary, while verifier sources
+/// belong to the following M4 reducer.
+fn validate_d2_reviewer_registration_source_v5(registration: &ArtifactRegisteredV3) -> Result<()> {
+    if matches!(
+        registration.source(),
+        ArtifactSourceV3::ReviewerExecution { .. }
+    ) && registration.sensitivity() == ArtifactSensitivity::Sensitive
+    {
+        return Ok(());
+    }
+    Err(DomainError::Validation(
+        "V5 D2 replay accepts reviewer-execution raw registrations only".to_owned(),
+    ))
+}
+
+fn validate_deferred_d2_registration_v5(
+    aggregate: &ReviewAggregate,
+    registration: &ArtifactRegisteredV3,
+    resolver: &impl AuthorityArtifactResolverV3,
+) -> Result<()> {
+    let ArtifactSourceV3::ReviewerExecution { execution_id, .. } = registration.source() else {
+        return Err(DomainError::Validation(
+            "V5 D2 deferred registration is not reviewer-execution provenance".to_owned(),
+        ));
+    };
+    if aggregate
+        .executions()
+        .all(|execution| execution.id() != execution_id)
+    {
+        return Err(DomainError::DanglingReference {
+            owner: "V5 D2 deferred reviewer registration",
+            owner_id: registration.registration_id().clone(),
+            reference: execution_id.clone(),
+        });
+    }
+    validate_deferred_registration_v3(aggregate, registration, resolver)
+}
+
+/// Locates the single accepted plan boundary inside a structurally admitted
+/// V5 prefix. Post-plan records are decode-and-drop at the structural layer,
+/// so they must never be reflected in the plan-only certification basis.
+fn v5_plan_boundary(
+    structural: &ReplayedV5PreIncrementalStructuralPrefixState<'_>,
+) -> Result<(u64, ContentHash)> {
+    Ok((
+        structural.plan_event_count,
+        structural.plan_tail_hash.clone(),
+    ))
 }
 
 impl PreIncrementalAuthorityReplayBasisV5 {
@@ -20052,11 +20935,30 @@ impl EventLogV5 {
         let mut registrations = Vec::new();
         let mut saw_sources = false;
         let mut plan = None;
+        let mut plan_event_count = None;
+        let mut plan_canonical_offset = None;
+        let mut plan_tail_hash = None;
+        let mut d2_accounting = V5D2StructuralAccounting::default();
+        let mut through_event_canonical_bytes =
+            prefix[0].canonical_line_bytes_v5.ok_or_else(|| {
+                DomainError::EventSequence(
+                    "V5 structural prefix genesis lacks canonical line accounting".to_owned(),
+                )
+            })?;
         let mut post_plan = V5StructuralPostPlanPhase::Inherited {
             m4_bundle: V5StructuralM4BundlePhase::Idle,
         };
         let mut v4_registration_ids = BTreeSet::new();
-        for envelope in prefix.iter().skip(1) {
+        for (index, envelope) in prefix.iter().enumerate().skip(1) {
+            through_event_canonical_bytes = through_event_canonical_bytes
+                .checked_add(envelope.canonical_line_bytes_v5.ok_or_else(|| {
+                    DomainError::EventSequence(
+                        "V5 structural prefix envelope lacks canonical line accounting".to_owned(),
+                    )
+                })?)
+                .ok_or_else(|| {
+                    replay_incomplete("V5 structural plan boundary offset", u64::MAX, u64::MAX)
+                })?;
             let payload =
                 decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
             if plan.is_some() {
@@ -20064,6 +20966,14 @@ impl EventLogV5 {
                     &mut post_plan,
                     &mut v4_registration_ids,
                     &payload,
+                )?;
+                d2_accounting.observe(
+                    envelope,
+                    &payload,
+                    &registrations,
+                    &aggregate,
+                    &self.run_id,
+                    &self.genesis_hash,
                 )?;
                 // This is intentionally a decode-and-drop check.  In
                 // particular, it does not call authority validation, rebuild
@@ -20091,6 +21001,13 @@ impl EventLogV5 {
                 PersistedPayload::ReviewPlanRecorded(value) if saw_sources => {
                     aggregate.record_review_plan(value.clone())?;
                     plan = Some(value);
+                    plan_event_count = Some(u64::try_from(index).map_err(|_| {
+                        DomainError::EventSequence("V5 structural plan index overflow".to_owned())
+                    })?.checked_add(1).ok_or_else(|| {
+                        DomainError::EventSequence("V5 structural plan count overflow".to_owned())
+                    })?);
+                    plan_canonical_offset = Some(through_event_canonical_bytes);
+                    plan_tail_hash = Some(envelope.event_hash().clone());
                 }
                 _ => return Err(DomainError::Validation(
                     "V5 structural prefix requires registrations, snapshot sources, then one review plan"
@@ -20126,6 +21043,17 @@ impl EventLogV5 {
             predecessor_offset: coordinates.predecessor_offset,
             predecessor_event_count: coordinates.predecessor_event_count,
             tail_hash: coordinates.tail_hash.clone(),
+            plan_event_count: plan_event_count.ok_or_else(|| {
+                DomainError::Validation("V5 structural prefix has no plan boundary".to_owned())
+            })?,
+            plan_canonical_offset: plan_canonical_offset.ok_or_else(|| {
+                DomainError::Validation("V5 structural prefix has no plan offset".to_owned())
+            })?,
+            plan_tail_hash: plan_tail_hash.ok_or_else(|| {
+                DomainError::Validation("V5 structural prefix has no plan tail".to_owned())
+            })?,
+            post_plan_phase: post_plan,
+            d2_accounting,
             accounting: V5StructuralPrefixAccounting {
                 canonical_prefix_bytes,
                 event_count: coordinates.predecessor_event_count,
@@ -20160,6 +21088,33 @@ impl EventLogV5 {
         max_retained_bytes: u64,
         max_working_bytes: u64,
     ) -> Result<ReplayedV5PlanAuthorityState<'a>> {
+        let checkpoint = Self::certify_plan_authority_checkpoint_v5_with_limits(
+            structural,
+            resolver,
+            roots,
+            max_retained_bytes,
+            max_working_bytes,
+        )?;
+        if checkpoint.plan_event_count != structural.predecessor_event_count {
+            return Err(DomainError::AuthorityReplayRefused {
+                event_sequence: checkpoint.plan_event_count.saturating_add(1),
+                reason: "V5 plan-only authority checkpoint refuses post-plan payloads".to_owned(),
+            });
+        }
+        let basis = PreIncrementalAuthorityReplayBasisV5::plan_only(structural, roots)?;
+        Ok(ReplayedV5PlanAuthorityState { structural, basis })
+    }
+
+    /// Certifies only the exact initial source/plan boundary. The returned
+    /// checkpoint is private and has no aggregate/projection API; it is the
+    /// sole legal input to the later full-prefix semantic reducer.
+    fn certify_plan_authority_checkpoint_v5_with_limits<'a>(
+        structural: &'a ReplayedV5PreIncrementalStructuralPrefixState<'a>,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+        max_retained_bytes: u64,
+        max_working_bytes: u64,
+    ) -> Result<PlanAuthorityCheckpointV5<'a>> {
         // This is intentionally the first authority operation. Structural
         // state was already materialized and independently admitted; no
         // authority-owned allocation or CAS read precedes this combined gate.
@@ -20202,8 +21157,403 @@ impl EventLogV5 {
                 resolver.read_exact(cas_hash, destination)
             })?;
         }
-        let basis = PreIncrementalAuthorityReplayBasisV5::plan_only(structural, roots)?;
-        Ok(ReplayedV5PlanAuthorityState { structural, basis })
+        let (plan_event_count, plan_tail_hash) = v5_plan_boundary(structural)?;
+        let plan_canonical_offset = structural.plan_canonical_offset;
+        #[derive(Serialize)]
+        struct CheckpointBody<'a> {
+            schema: &'static str,
+            run_id: &'a StableId,
+            genesis_hash: &'a ContentHash,
+            plan_event_count: u64,
+            plan_canonical_offset: u64,
+            plan_tail_hash: &'a ContentHash,
+            policy_revision_hash: &'a ContentHash,
+        }
+        let checkpoint_digest = ContentHash::sha256(&canonical_json(&CheckpointBody {
+            schema: "reviewgraphen.plan_authority_checkpoint.v5",
+            run_id: &structural.pre_incremental.run_id,
+            genesis_hash: &structural.genesis_hash,
+            plan_event_count,
+            plan_canonical_offset,
+            plan_tail_hash: &plan_tail_hash,
+            policy_revision_hash: &roots.policy_revision_hash,
+        })?);
+        Ok(PlanAuthorityCheckpointV5 {
+            structural,
+            plan_event_count,
+            plan_canonical_offset,
+            plan_tail_hash,
+            checkpoint_digest,
+        })
+    }
+
+    /// Replays the inherited D2 continuation of an already certified V5 plan
+    /// prefix. This deliberately stops before the M4 evidence/human reducer:
+    /// no V4 basis, V4 position digest, V4 session, or public partial
+    /// projection participates in this checkpoint.
+    #[allow(dead_code)] // Connected by the next private M4/human reducer slice.
+    fn replay_certified_d2_authority_prefix_v5<'a>(
+        plan_checkpoint: &'a PlanAuthorityCheckpointV5<'a>,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<ReplayedV5M4AuthorityState<'a>> {
+        Self::replay_certified_d2_authority_prefix_v5_with_limits(
+            plan_checkpoint,
+            resolver,
+            roots,
+            plan_checkpoint
+                .structural
+                .event_log
+                .limits
+                .max_retained_bytes,
+            plan_checkpoint
+                .structural
+                .event_log
+                .limits
+                .max_working_bytes,
+        )
+    }
+
+    fn replay_certified_d2_authority_prefix_v5_with_limits<'a>(
+        plan_checkpoint: &'a PlanAuthorityCheckpointV5<'a>,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+        max_retained_bytes: u64,
+        max_working_bytes: u64,
+    ) -> Result<ReplayedV5M4AuthorityState<'a>> {
+        let structural = plan_checkpoint.structural;
+        let log = structural.event_log;
+        let count = usize::try_from(structural.predecessor_event_count).map_err(|_| {
+            DomainError::EventSequence("V5 certified D2 replay count overflow".to_owned())
+        })?;
+        let prefix = log.envelopes.get(..count).ok_or_else(|| {
+            DomainError::EventSequence(
+                "V5 certified D2 replay prefix is outside the log".to_owned(),
+            )
+        })?;
+        let plan_index = usize::try_from(plan_checkpoint.plan_event_count)
+            .map_err(|_| {
+                DomainError::EventSequence("V5 plan checkpoint index overflow".to_owned())
+            })?
+            .checked_sub(1)
+            .ok_or_else(|| {
+                DomainError::EventSequence("V5 plan checkpoint has zero count".to_owned())
+            })?;
+
+        let d2_prefix_count = usize::try_from(structural.d2_accounting.d2_prefix_events)
+            .map_err(|_| DomainError::EventSequence("V5 D2 prefix count overflow".to_owned()))?;
+        let preflight = v5_d2_authority_preflight(plan_checkpoint)?;
+        if preflight.retained_bytes > max_retained_bytes {
+            return Err(replay_incomplete(
+                "V5 D2 authority retained preflight",
+                max_retained_bytes,
+                preflight.retained_bytes,
+            ));
+        }
+        if preflight.working_bytes > max_working_bytes {
+            return Err(replay_incomplete(
+                "V5 D2 authority working preflight",
+                max_working_bytes,
+                preflight.working_bytes,
+            ));
+        }
+        let mut d2_trace = Vec::new();
+        d2_trace
+            .try_reserve_exact(d2_prefix_count)
+            .map_err(|_| DomainError::Incomplete {
+                operation: "V5 certified D2 replay trace",
+                limit: d2_prefix_count,
+                observed: d2_prefix_count,
+            })?;
+        let mut deferred_registration_closures = Vec::new();
+        deferred_registration_closures
+            .try_reserve_exact(d2_prefix_count)
+            .map_err(|_| DomainError::Incomplete {
+                operation: "V5 certified D2 deferred registrations",
+                limit: d2_prefix_count,
+                observed: d2_prefix_count,
+            })?;
+        #[cfg(test)]
+        V5_TEST_D2_RESERVATION_ALLOCATIONS.with(|value| value.set(value.get() + 2));
+        let trace_slot_bytes = u64::try_from(
+            d2_trace
+                .capacity()
+                .checked_mul(size_of::<V5D2ReplayTrace>())
+                .ok_or_else(|| replay_incomplete("V5 D2 sealed trace slots", u64::MAX, u64::MAX))?,
+        )
+        .unwrap_or(u64::MAX);
+        #[cfg(test)]
+        let trace_slot_bytes = trace_slot_bytes
+            .checked_add(V5_TEST_D2_FORCED_SLOT_OVERHEAD.with(std::cell::Cell::get))
+            .ok_or_else(|| replay_incomplete("V5 D2 sealed trace slots", u64::MAX, u64::MAX))?;
+        let deferred_slot_bytes = u64::try_from(
+            deferred_registration_closures
+                .capacity()
+                .checked_mul(size_of::<(u64, StableId)>())
+                .ok_or_else(|| {
+                    replay_incomplete("V5 D2 sealed deferred slots", u64::MAX, u64::MAX)
+                })?,
+        )
+        .unwrap_or(u64::MAX);
+        // `try_reserve_exact` may legally choose a larger capacity. Seal the
+        // allocator's actual slots and repeat both resource gates before any
+        // aggregate/root/CAS authority materialization.
+        let sealed_preflight = v5_d2_authority_preflight_with_slots(
+            plan_checkpoint,
+            Some((trace_slot_bytes, deferred_slot_bytes)),
+        )?;
+        if sealed_preflight.retained_bytes > max_retained_bytes {
+            return Err(replay_incomplete(
+                "V5 D2 sealed actual retained reservation",
+                max_retained_bytes,
+                sealed_preflight.retained_bytes,
+            ));
+        }
+        if sealed_preflight.working_bytes > max_working_bytes {
+            return Err(replay_incomplete(
+                "V5 D2 sealed actual working reservation",
+                max_working_bytes,
+                sealed_preflight.working_bytes,
+            ));
+        }
+        #[cfg(test)]
+        V5_TEST_D2_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(value.get() + 1));
+
+        let mut aggregate = structural.pre_incremental.aggregate.clone();
+        let mut v3_aggregate = V3RunAggregate {
+            registrations: structural
+                .pre_incremental
+                .registrations
+                .iter()
+                .map(|registration| (registration.registration_id().clone(), registration.clone()))
+                .collect(),
+            ..V3RunAggregate::default()
+        };
+        if roots.policy_revision_hash != target_policy_revision_hash_v5(aggregate.program())?
+            || roots.repository_id != *aggregate.program().repository_id()
+            || roots.repository_source_hash
+                != *aggregate
+                    .program()
+                    .repository_source()
+                    .content_hash()
+                    .ok_or(DomainError::AuthorityPolicyMismatch)?
+        {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        let v3_resolver = V5ResolverAsV3(resolver);
+
+        let mut consumed_through_event = plan_checkpoint.plan_event_count;
+        let mut applied_phase = V5StructuralPostPlanPhase::Inherited {
+            m4_bundle: V5StructuralM4BundlePhase::Idle,
+        };
+        let mut applied_v4_registration_ids = BTreeSet::new();
+        for envelope in &prefix[plan_index + 1..] {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            if envelope.actor() != payload.actor() {
+                return Err(DomainError::AuthorityReplayRefused {
+                    event_sequence: envelope.sequence(),
+                    reason: "event-v5 actor does not match its closed payload actor".to_owned(),
+                });
+            }
+            validate_stream_payload_position(
+                EventContractVersion::V5,
+                envelope.sequence(),
+                &payload,
+            )?;
+            payload.validate_for_enclosing_run(&structural.pre_incremental.run_id)?;
+            // The structural FSM has already established the complete
+            // inherited M4/M5 ordering. Stop immediately before the first
+            // non-D2 record: later D2 events must not be applied before the
+            // integrated dispatcher has reduced that intervening semantics.
+            if d2_trace_record_id(&payload).is_none() {
+                break;
+            }
+            advance_v5_structural_post_plan(
+                &mut applied_phase,
+                &mut applied_v4_registration_ids,
+                &payload,
+            )?;
+            reject_v2_legacy_execution_payload(EventContractVersion::V5, &payload)?;
+            validate_v2_completed_transition(EventContractVersion::V5, &aggregate, &payload)?;
+            reject_duplicate_d1_record(&aggregate, &payload)?;
+            let reviewer_raw_size = match &payload {
+                PersistedPayload::ArtifactRegisteredV3(registration) => {
+                    match registration.source() {
+                        ArtifactSourceV3::ReviewerExecution { .. } => {
+                            validate_d2_reviewer_registration_source_v5(registration)?;
+                            let _bytes = resolve_registered_bytes(registration, &v3_resolver)?;
+                            deferred_registration_closures.push((
+                                envelope.sequence(),
+                                registration.registration_id().clone(),
+                            ));
+                            None
+                        }
+                        _ => {
+                            return Err(DomainError::AuthorityReplayRefused {
+                                event_sequence: envelope.sequence(),
+                                reason:
+                                    "V5 certified D2 checkpoint defers M4 verifier registrations"
+                                        .to_owned(),
+                            });
+                        }
+                    }
+                }
+                PersistedPayload::ContextEnvelopeProjected(context) => {
+                    let context_envelope_staging = v3_payload_staging_bytes(&payload)?;
+                    let (rebuilt, _) = rebuild_context_projection_from_cas_with_sealed_gate(
+                        &aggregate,
+                        context,
+                        |oracle| {
+                            #[cfg(test)]
+                            V5_TEST_D2_CONTEXT_SESSION_SEALS
+                                .with(|value| value.set(value.get() + 1));
+                            let context_session_working = oracle.session_working_bytes();
+                            #[cfg(test)]
+                            let context_session_working = context_session_working
+                                .checked_add(
+                                    V5_TEST_D2_FORCED_CONTEXT_WORKING_OVERHEAD
+                                        .with(std::cell::Cell::get),
+                                )
+                                .ok_or_else(|| {
+                                    replay_incomplete(
+                                        "V5 D2 sealed context working reservation",
+                                        u64::MAX,
+                                        u64::MAX,
+                                    )
+                                })?;
+                            enforce_v5_d2_sealed_context_working(
+                                sealed_preflight.retained_bytes,
+                                context_session_working,
+                                context_envelope_staging,
+                                max_working_bytes,
+                            )
+                        },
+                        |cas_hash, destination| resolver.read_exact(cas_hash, destination),
+                        |_| {
+                            #[cfg(test)]
+                            V5_TEST_D2_CONTEXT_SOURCE_REQUESTS
+                                .with(|value| value.set(value.get() + 1));
+                            Ok(())
+                        },
+                    )?;
+                    if &rebuilt != context {
+                        return Err(DomainError::AuthorityReplayRefused {
+                            event_sequence: envelope.sequence(),
+                            reason:
+                                "context projection bytes do not rebuild from registered sources"
+                                    .to_owned(),
+                        });
+                    }
+                    None
+                }
+                PersistedPayload::ReviewExecutionRecorded(recorded) => {
+                    let registration = v3_aggregate
+                        .registrations
+                        .get(recorded.execution.raw_artifact_registration_id())
+                        .ok_or_else(|| DomainError::DanglingReference {
+                            owner: "v5 D2 raw registration",
+                            owner_id: recorded.execution.id().clone(),
+                            reference: recorded.execution.raw_artifact_registration_id().clone(),
+                        })?;
+                    let bytes = resolve_registered_bytes(registration, &v3_resolver)?;
+                    ReviewerRawClosure::from_bytes(recorded, &bytes)?;
+                    Some(registration.size())
+                }
+                PersistedPayload::ObligationTransition { .. } => None,
+                _ => unreachable!("non-D2 payload was dispatched before semantic reduction"),
+            };
+            apply_for_log(
+                &mut aggregate,
+                Some(&mut v3_aggregate),
+                &payload,
+                envelope.actor(),
+                &structural.pre_incremental.run_id,
+                &structural.genesis_hash,
+                reviewer_raw_size,
+                true,
+            )?;
+            let (payload_kind, record_id, transition_next) = match &payload {
+                PersistedPayload::ObligationTransition {
+                    obligation_id,
+                    next,
+                    ..
+                } => ("obligation_transition", obligation_id.clone(), Some(*next)),
+                PersistedPayload::ArtifactRegisteredV3(registration) => (
+                    "artifact_registered_v3",
+                    registration.registration_id().clone(),
+                    None,
+                ),
+                PersistedPayload::ContextEnvelopeProjected(context) => {
+                    ("context_envelope_projected", context.id().clone(), None)
+                }
+                PersistedPayload::ReviewExecutionRecorded(recorded) => (
+                    "review_execution_recorded",
+                    recorded.execution.id().clone(),
+                    None,
+                ),
+                _ => unreachable!("closed D2 payload was checked above"),
+            };
+            let trace = V5D2ReplayTrace {
+                event_sequence: envelope.sequence(),
+                event_id: envelope.id().clone(),
+                predecessor_event_hash: envelope.previous_event_hash().clone(),
+                payload_kind,
+                record_id,
+                record_body_hash: envelope.payload_hash().clone(),
+                transition_next,
+            };
+            d2_trace.push(trace);
+            consumed_through_event = envelope.sequence();
+        }
+        for (event_sequence, registration_id) in &deferred_registration_closures {
+            let registration =
+                v3_aggregate
+                    .registrations
+                    .get(registration_id)
+                    .ok_or_else(|| DomainError::AuthorityReplayRefused {
+                        event_sequence: *event_sequence,
+                        reason: "V5 deferred registration disappeared from replay state".to_owned(),
+                    })?;
+            validate_deferred_d2_registration_v5(&aggregate, registration, &v3_resolver).map_err(
+                |error| DomainError::AuthorityReplayRefused {
+                    event_sequence: *event_sequence,
+                    reason: error.to_string(),
+                },
+            )?;
+        }
+        let replayed = ReplayedV5M4AuthorityState {
+            plan_checkpoint,
+            aggregate,
+            v3_aggregate,
+            d2_trace,
+            deferred_registration_closures,
+            d2_dispatch_cursor: V5D2DispatchCursor {
+                replay_from_event: plan_checkpoint.plan_event_count,
+                consumed_through_event,
+                consumed_tail_hash: prefix[usize::try_from(consumed_through_event)
+                    .map_err(|_| DomainError::EventSequence("V5 D2 cursor overflow".to_owned()))?
+                    .checked_sub(1)
+                    .ok_or_else(|| {
+                        DomainError::EventSequence("V5 D2 cursor has no genesis".to_owned())
+                    })?]
+                .event_hash()
+                .clone(),
+                applied_phase,
+                expected_terminal_phase: structural.post_plan_phase,
+                deferred_semantic_events: structural.d2_accounting.deferred_semantic_events,
+            },
+        };
+        validate_v5_d2_dispatch_cursor(&replayed)?;
+        let realized_retained = v5_d2_realized_retained_bytes(plan_checkpoint, &replayed)?;
+        if realized_retained != sealed_preflight.retained_bytes {
+            return Err(replay_incomplete(
+                "V5 D2 realized retained bytes",
+                sealed_preflight.retained_bytes,
+                realized_retained,
+            ));
+        }
+        Ok(replayed)
     }
 
     /// Reopens only a confirmed homogeneous V5 prefix.  This structural
@@ -22365,6 +23715,29 @@ fn rebuild_exact_cas_bytes(
 fn rebuild_context_projection_from_cas(
     aggregate: &ReviewAggregate,
     expected: &ReviewContextEnvelope,
+    read_exact: impl FnMut(&ContentHash, &mut [u8]) -> Result<()>,
+    observe_source: impl FnMut(u64) -> Result<()>,
+) -> Result<(
+    ReviewContextEnvelope,
+    crate::context::ContextProjectionAdmission,
+)> {
+    rebuild_context_projection_from_cas_with_sealed_gate(
+        aggregate,
+        expected,
+        |_| Ok(()),
+        read_exact,
+        observe_source,
+    )
+}
+
+/// Variant used by V5 D2 replay to inspect the allocator-sealed context
+/// reservation. The gate runs after `prepare_context` has reserved every
+/// arena, but before `next_source_request` can expose a request or trigger a
+/// CAS allocation/read. Historical V3/V4 replay uses the no-op wrapper above.
+fn rebuild_context_projection_from_cas_with_sealed_gate(
+    aggregate: &ReviewAggregate,
+    expected: &ReviewContextEnvelope,
+    mut observe_sealed: impl FnMut(crate::context::ContextResourceOracle) -> Result<()>,
     mut read_exact: impl FnMut(&ContentHash, &mut [u8]) -> Result<()>,
     mut observe_source: impl FnMut(u64) -> Result<()>,
 ) -> Result<(
@@ -22377,6 +23750,7 @@ fn rebuild_context_projection_from_cas(
         .ok_or_else(|| DomainError::Validation("context envelope has no obligation".to_owned()))?;
     let mut session =
         crate::prepare_context(aggregate, obligation_id.clone()).map_err(context_domain_error)?;
+    observe_sealed(session.sealed_resource_oracle())?;
     while let Some(request) = session
         .next_source_request()
         .map_err(context_domain_error)?
@@ -28872,6 +30246,16 @@ mod tests {
             ))
             .expect("no-file structural prefix");
         assert!(structural.pre_incremental.registrations.is_empty());
+        assert_eq!(structural.d2_accounting.contexts, 0);
+        assert_eq!(
+            v5_d2_context_session_working_oracle(
+                &structural.pre_incremental.aggregate,
+                structural.d2_accounting.contexts,
+            )
+            .expect("context-free D2 oracle"),
+            0,
+            "a prefix without D2 context records has no context phase"
+        );
         let preflight =
             v5_plan_authority_preflight(&v5, &structural, &roots).expect("no-file preflight");
         let structural_resident =
@@ -28943,6 +30327,678 @@ mod tests {
         )
         .expect_err("plan-only authority must reject reviewer-execution provenance");
         assert!(matches!(error, DomainError::Validation(_)));
+    }
+
+    #[test]
+    fn private_v5_certified_d2_replay_rebuilds_context_and_reviewer_raw() {
+        let (v4, _basis, roots_v4, resolver, _session, _claim, _input, _output) =
+            static_v4_bundle_base();
+        // Keep the complete inherited prefix. The D2 slice must stop at the
+        // first M4 record and hand its exact cursor to the following ordered
+        // reducer, rather than truncating the tail or applying later records
+        // out of stream order.
+        let v5 = rewrap_v4_prefix_as_v5(&v4);
+        let roots = AuthorityTrustRootsV5::new(
+            target_policy_revision_hash_v5(v4.aggregate.program()).expect("derived V5 policy"),
+            roots_v4.repository_id,
+            roots_v4.repository_source_hash,
+            roots_v4.harnesses,
+            roots_v4.human_grants,
+            roots_v4.allowed_gluing_input_bindings,
+        )
+        .expect("V5 roots");
+        struct Resolver(BTreeMap<ContentHash, Vec<u8>>);
+        impl AuthorityArtifactResolverV5 for Resolver {
+            fn read_exact(&self, hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                let bytes = self.0.get(hash).ok_or_else(|| {
+                    DomainError::Validation("missing V5 D2 replay CAS object".to_owned())
+                })?;
+                if bytes.len() != destination.len() {
+                    return Err(DomainError::Validation(
+                        "V5 D2 CAS size mismatch".to_owned(),
+                    ));
+                }
+                destination.copy_from_slice(bytes);
+                Ok(())
+            }
+        }
+        let resolver = Resolver(resolver.objects);
+        V5_TEST_D2_ASSESSMENT_CONSTRUCTIONS.with(|value| value.set(0));
+        let structural = v5
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                v5.run_id(),
+                v5.genesis_hash(),
+                v5.canonical_prefix_bytes_for_store(),
+                u64::try_from(v5.envelopes.len()).unwrap(),
+                v5.tail_hash(),
+            ))
+            .expect("D2 structural prefix");
+        assert_eq!(
+            V5_TEST_D2_ASSESSMENT_CONSTRUCTIONS.with(std::cell::Cell::get),
+            0,
+            "structural replay must not construct an M4 scope or assessment"
+        );
+        let checkpoint = EventLogV5::certify_plan_authority_checkpoint_v5_with_limits(
+            &structural,
+            &resolver,
+            &roots,
+            v5.limits.max_retained_bytes,
+            v5.limits.max_working_bytes,
+        )
+        .expect("plan checkpoint");
+        assert!(checkpoint.plan_event_count < structural.predecessor_event_count);
+        let d2_preflight = v5_d2_authority_preflight(&checkpoint).expect("D2 preflight");
+        struct NoRead;
+        impl AuthorityArtifactResolverV5 for NoRead {
+            fn read_exact(&self, _hash: &ContentHash, _destination: &mut [u8]) -> Result<()> {
+                panic!("D2 resource refusal must precede CAS reads")
+            }
+        }
+        V5_TEST_D2_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(0));
+        assert!(
+            EventLogV5::replay_certified_d2_authority_prefix_v5_with_limits(
+                &checkpoint,
+                &NoRead,
+                &roots,
+                d2_preflight.retained_bytes - 1,
+                d2_preflight.working_bytes,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            V5_TEST_D2_AUTHORITY_MATERIALIZATIONS.with(std::cell::Cell::get),
+            0
+        );
+        V5_TEST_D2_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(0));
+        assert!(
+            EventLogV5::replay_certified_d2_authority_prefix_v5_with_limits(
+                &checkpoint,
+                &NoRead,
+                &roots,
+                d2_preflight.retained_bytes,
+                d2_preflight.working_bytes - 1,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            V5_TEST_D2_AUTHORITY_MATERIALIZATIONS.with(std::cell::Cell::get),
+            0
+        );
+        V5_TEST_D2_FORCED_SLOT_OVERHEAD.with(|value| value.set(1));
+        V5_TEST_D2_RESERVATION_ALLOCATIONS.with(|value| value.set(0));
+        V5_TEST_D2_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(0));
+        assert!(matches!(
+            EventLogV5::replay_certified_d2_authority_prefix_v5_with_limits(
+                &checkpoint,
+                &NoRead,
+                &roots,
+                d2_preflight.retained_bytes,
+                d2_preflight.working_bytes,
+            ),
+            Err(DomainError::Incomplete {
+                operation: "V5 D2 sealed actual retained reservation",
+                ..
+            })
+        ));
+        assert_eq!(
+            V5_TEST_D2_RESERVATION_ALLOCATIONS.with(std::cell::Cell::get),
+            2,
+            "the sealed-capacity gate must be observably after both reservations"
+        );
+        assert_eq!(
+            V5_TEST_D2_AUTHORITY_MATERIALIZATIONS.with(std::cell::Cell::get),
+            0,
+            "allocator overcapacity must fail before authority materialization"
+        );
+        V5_TEST_D2_FORCED_SLOT_OVERHEAD.with(|value| value.set(0));
+
+        let d2_context = v5
+            .envelopes
+            .iter()
+            .find_map(|envelope| {
+                match decode_canonical_payload(EventContractVersion::V5, envelope.payload.get()) {
+                    Ok(PersistedPayload::ContextEnvelopeProjected(context)) => Some(context),
+                    _ => None,
+                }
+            })
+            .expect("D2 context envelope");
+        let context_obligation_id = d2_context
+            .obligation_ids()
+            .first()
+            .expect("D2 context obligation")
+            .clone();
+        let measured_replayed =
+            EventLogV5::replay_certified_d2_authority_prefix_v5(&checkpoint, &resolver, &roots)
+                .expect("measure actual D2 retained state");
+        let measured_retained = v5_d2_realized_retained_bytes(&checkpoint, &measured_replayed)
+            .expect("literal actual D2 retained walker");
+        drop(measured_replayed);
+        let sealed_context = crate::prepare_context(
+            &checkpoint.structural.pre_incremental.aggregate,
+            context_obligation_id,
+        )
+        .expect("allocator-sealed D2 context session");
+        let context_envelope_staging = u64::try_from(
+            size_of::<ReviewContextEnvelope>()
+                .checked_add(d2_context.allocated_bytes())
+                .expect("literal context staging overflow"),
+        )
+        .expect("literal decoded context envelope staging");
+        let exact_context_phase = measured_retained
+            .checked_add(
+                sealed_context
+                    .sealed_resource_oracle()
+                    .session_working_bytes(),
+            )
+            .and_then(|value| value.checked_add(context_envelope_staging))
+            .expect("literal sealed context live set");
+        assert_eq!(measured_retained, d2_preflight.retained_bytes);
+        assert!(
+            exact_context_phase <= d2_preflight.working_bytes,
+            "the full accepted-obligation first gate must cover this actual sealed session"
+        );
+        enforce_v5_d2_sealed_context_working(
+            d2_preflight.retained_bytes,
+            sealed_context
+                .sealed_resource_oracle()
+                .session_working_bytes(),
+            context_envelope_staging,
+            exact_context_phase,
+        )
+        .expect("exact sealed context limit");
+        assert!(matches!(
+            enforce_v5_d2_sealed_context_working(
+                d2_preflight.retained_bytes,
+                sealed_context
+                    .sealed_resource_oracle()
+                    .session_working_bytes(),
+                context_envelope_staging,
+                exact_context_phase - 1,
+            ),
+            Err(DomainError::Incomplete {
+                operation: "V5 D2 sealed context working reservation",
+                ..
+            })
+        ));
+        assert!(exact_context_phase <= d2_preflight.working_bytes);
+        let forced_context_overhead = d2_preflight
+            .working_bytes
+            .checked_sub(exact_context_phase)
+            .and_then(|gap| gap.checked_add(1))
+            .expect("one byte over the admitted D2 context phase");
+        struct CountingNoRead(std::cell::Cell<u64>);
+        impl AuthorityArtifactResolverV5 for CountingNoRead {
+            fn read_exact(&self, _hash: &ContentHash, _destination: &mut [u8]) -> Result<()> {
+                self.0.set(self.0.get() + 1);
+                panic!("sealed D2 context refusal must precede CAS reads")
+            }
+        }
+
+        // Probe the gate itself at its inclusive boundary. Both probes stop
+        // inside the sealed callback, so even the accepted exact limit cannot
+        // emit a source request or reach the NoRead resolver.
+        let exact_probe_reads = CountingNoRead(std::cell::Cell::new(0));
+        let exact_probe_seals = std::cell::Cell::new(0_u64);
+        let exact_probe_sources = std::cell::Cell::new(0_u64);
+        assert!(matches!(
+            rebuild_context_projection_from_cas_with_sealed_gate(
+                &checkpoint.structural.pre_incremental.aggregate,
+                &d2_context,
+                |oracle| {
+                    exact_probe_seals.set(exact_probe_seals.get() + 1);
+                    enforce_v5_d2_sealed_context_working(
+                        d2_preflight.retained_bytes,
+                        oracle.session_working_bytes(),
+                        context_envelope_staging,
+                        exact_context_phase,
+                    )?;
+                    Err(DomainError::Validation(
+                        "sealed context exact probe complete".to_owned(),
+                    ))
+                },
+                |hash, destination| exact_probe_reads.read_exact(hash, destination),
+                |_| {
+                    exact_probe_sources.set(exact_probe_sources.get() + 1);
+                    Ok(())
+                },
+            ),
+            Err(DomainError::Validation(reason))
+                if reason == "sealed context exact probe complete"
+        ));
+        assert_eq!(exact_probe_seals.get(), 1);
+        assert_eq!(exact_probe_sources.get(), 0);
+        assert_eq!(exact_probe_reads.0.get(), 0);
+
+        let minus_one_probe_reads = CountingNoRead(std::cell::Cell::new(0));
+        let minus_one_probe_seals = std::cell::Cell::new(0_u64);
+        let minus_one_probe_sources = std::cell::Cell::new(0_u64);
+        assert!(matches!(
+            rebuild_context_projection_from_cas_with_sealed_gate(
+                &checkpoint.structural.pre_incremental.aggregate,
+                &d2_context,
+                |oracle| {
+                    minus_one_probe_seals.set(minus_one_probe_seals.get() + 1);
+                    enforce_v5_d2_sealed_context_working(
+                        d2_preflight.retained_bytes,
+                        oracle.session_working_bytes(),
+                        context_envelope_staging,
+                        exact_context_phase - 1,
+                    )
+                },
+                |hash, destination| minus_one_probe_reads.read_exact(hash, destination),
+                |_| {
+                    minus_one_probe_sources.set(minus_one_probe_sources.get() + 1);
+                    Ok(())
+                },
+            ),
+            Err(DomainError::Incomplete {
+                operation: "V5 D2 sealed context working reservation",
+                ..
+            })
+        ));
+        assert_eq!(minus_one_probe_seals.get(), 1);
+        assert_eq!(minus_one_probe_sources.get(), 0);
+        assert_eq!(minus_one_probe_reads.0.get(), 0);
+
+        let no_context_reads = CountingNoRead(std::cell::Cell::new(0));
+        V5_TEST_D2_FORCED_CONTEXT_WORKING_OVERHEAD.with(|value| value.set(forced_context_overhead));
+        V5_TEST_D2_CONTEXT_SESSION_SEALS.with(|value| value.set(0));
+        V5_TEST_D2_CONTEXT_SOURCE_REQUESTS.with(|value| value.set(0));
+        V5_TEST_D2_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(0));
+        assert!(matches!(
+            EventLogV5::replay_certified_d2_authority_prefix_v5_with_limits(
+                &checkpoint,
+                &no_context_reads,
+                &roots,
+                d2_preflight.retained_bytes,
+                d2_preflight.working_bytes,
+            ),
+            Err(DomainError::Incomplete {
+                operation: "V5 D2 sealed context working reservation",
+                ..
+            })
+        ));
+        assert_eq!(
+            V5_TEST_D2_CONTEXT_SESSION_SEALS.with(std::cell::Cell::get),
+            1,
+            "one allocator-sealed context session must reach the second gate"
+        );
+        assert_eq!(
+            V5_TEST_D2_CONTEXT_SOURCE_REQUESTS.with(std::cell::Cell::get),
+            0,
+            "the second context gate must precede the first source request"
+        );
+        assert_eq!(no_context_reads.0.get(), 0);
+        assert_eq!(
+            V5_TEST_D2_AUTHORITY_MATERIALIZATIONS.with(std::cell::Cell::get),
+            1,
+            "context sealing occurs after the aggregate authority materialization boundary"
+        );
+        V5_TEST_D2_FORCED_CONTEXT_WORKING_OVERHEAD.with(|value| value.set(0));
+        assert!(
+            EventLogV5::replay_plan_authority_prefix_v5(&structural, &resolver, &roots).is_err(),
+            "the ADR full-predecessor basis must not be emitted before D2 semantic replay"
+        );
+        let replayed = EventLogV5::replay_certified_d2_authority_prefix_v5_with_limits(
+            &checkpoint,
+            &resolver,
+            &roots,
+            d2_preflight.retained_bytes,
+            d2_preflight.working_bytes,
+        )
+        .expect("exact D2 semantic replay limits");
+        assert!(
+            V5_TEST_D2_ASSESSMENT_CONSTRUCTIONS.with(std::cell::Cell::get) > 0,
+            "only semantic D2 replay may materialize assessment state"
+        );
+        assert_eq!(replayed.aggregate.executions().count(), 1);
+        assert_eq!(replayed.v3_aggregate.assessments.len(), 1);
+        for (claim_id, scope) in &replayed.v3_aggregate.assessment_scopes {
+            let claim = replayed
+                .aggregate
+                .execution_claims()
+                .find(|claim| claim.id() == claim_id)
+                .expect("replayed claim for predicted M4 backing");
+            let predicted = crate::m4::predicted_initial_claim_assessment_backing_v3(
+                &checkpoint.structural.pre_incremental.run_id,
+                &checkpoint.structural.genesis_hash,
+                replayed.aggregate.program().snapshot_id(),
+                replayed.aggregate.universe().id(),
+                claim,
+            )
+            .expect("allocation-free M4 backing prediction");
+            assert_eq!(
+                predicted.scope_dynamic_bytes(),
+                scope.allocated_bytes().expect("actual scope backing")
+            );
+            assert_eq!(
+                predicted.assessment_dynamic_bytes(),
+                replayed.v3_aggregate.assessments[claim_id]
+                    .retained_bytes()
+                    .expect("actual assessment backing")
+            );
+        }
+        assert!(
+            replayed
+                .d2_trace
+                .iter()
+                .any(|entry| entry.payload_kind == "review_execution_recorded")
+        );
+        assert!(replayed.d2_dispatch_cursor.deferred_semantic_events > 0);
+        assert!(
+            replayed.d2_dispatch_cursor.consumed_through_event < structural.predecessor_event_count,
+            "the D2 cursor must stop before the inherited M4 tail"
+        );
+        assert_eq!(
+            replayed.d2_dispatch_cursor.consumed_tail_hash,
+            v5.envelopes
+                [usize::try_from(replayed.d2_dispatch_cursor.consumed_through_event).unwrap() - 1]
+                .event_hash()
+                .clone()
+        );
+        let raw_hash = replayed
+            .v3_aggregate
+            .registrations
+            .values()
+            .find(|registration| {
+                matches!(
+                    registration.source(),
+                    ArtifactSourceV3::ReviewerExecution { .. }
+                )
+            })
+            .expect("replayed reviewer raw registration")
+            .cas_hash()
+            .clone();
+        let checkpoint_before = (
+            checkpoint.plan_event_count,
+            checkpoint.plan_canonical_offset,
+            checkpoint.plan_tail_hash.clone(),
+            checkpoint.checkpoint_digest.clone(),
+            checkpoint.structural.tail_hash.clone(),
+        );
+        let mut tampered_objects = resolver.0.clone();
+        tampered_objects.insert(raw_hash, vec![0]);
+        assert!(
+            EventLogV5::replay_certified_d2_authority_prefix_v5(
+                &checkpoint,
+                &Resolver(tampered_objects),
+                &roots,
+            )
+            .is_err(),
+            "raw CAS tampering must fail before any D2 state escapes"
+        );
+        assert_eq!(
+            checkpoint_before,
+            (
+                checkpoint.plan_event_count,
+                checkpoint.plan_canonical_offset,
+                checkpoint.plan_tail_hash.clone(),
+                checkpoint.checkpoint_digest.clone(),
+                checkpoint.structural.tail_hash.clone(),
+            ),
+            "a late D2 failure must not mutate its certified plan checkpoint"
+        );
+        let context_source_hash = structural
+            .pre_incremental
+            .registrations
+            .first()
+            .expect("certified snapshot source registration")
+            .cas_hash()
+            .clone();
+        let mut mismatched_context_objects = resolver.0.clone();
+        mismatched_context_objects
+            .insert(context_source_hash, b"not the certified source".to_vec());
+        assert!(
+            EventLogV5::replay_certified_d2_authority_prefix_v5(
+                &checkpoint,
+                &Resolver(mismatched_context_objects),
+                &roots,
+            )
+            .is_err(),
+            "context projection must rebuild from exact source CAS bytes"
+        );
+    }
+
+    #[test]
+    fn v5_d2_context_accounting_uses_only_initial_snapshot_cas_maxima() {
+        let (log, _initial, _plan, _obligation, context, _sources) = d2_v3_log();
+        let mut registrations = log
+            .events()
+            .iter()
+            .filter_map(|event| {
+                match decode_canonical_payload(
+                    EventContractVersion::V3,
+                    event.envelope().payload.get(),
+                )
+                .expect("fixture payload")
+                {
+                    PersistedPayload::ArtifactRegisteredV3(registration) => Some(registration),
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        registrations.sort_by(|left, right| left.registration_id().cmp(right.registration_id()));
+        assert!(registrations.iter().all(|registration| matches!(
+            registration.source(),
+            ArtifactSourceV3::SnapshotIngest { .. }
+        )));
+
+        let expected_max = context
+            .included_sources()
+            .iter()
+            .map(|source| {
+                let index = registrations
+                    .binary_search_by(|registration| {
+                        registration.registration_id().cmp(source.registration_id())
+                    })
+                    .expect("context source has initial registration");
+                let registration = &registrations[index];
+                assert_eq!(registration.cas_hash(), source.cas_hash());
+                registration.size()
+            })
+            .max()
+            .expect("fixture has included sources");
+        let payload = PersistedPayload::ContextEnvelopeProjected(context.clone());
+        let context_event = log
+            .events()
+            .iter()
+            .find(|event| {
+                matches!(
+                    decode_canonical_payload(
+                        EventContractVersion::V3,
+                        event.envelope().payload.get(),
+                    ),
+                    Ok(PersistedPayload::ContextEnvelopeProjected(_))
+                )
+            })
+            .expect("fixture context event");
+        let mut accounting = V5D2StructuralAccounting::default();
+        accounting
+            .observe(
+                context_event.envelope(),
+                &payload,
+                &registrations,
+                log.aggregate(),
+                log.run_id(),
+                log.genesis_hash(),
+            )
+            .expect("initial SnapshotIngest sources are structurally admitted");
+        assert_eq!(accounting.contexts, 1);
+        assert_eq!(accounting.max_context_source_cas_bytes, expected_max);
+        assert_eq!(
+            accounting.max_context_envelope_staging,
+            v3_payload_staging_bytes(&payload).expect("context staging")
+        );
+
+        let missing = V5D2StructuralAccounting::default()
+            .observe_context_sources(&context, &[])
+            .expect_err("a context source without an initial registration must fail closed");
+        assert!(matches!(missing, DomainError::Validation(_)));
+
+        let mut non_snapshot = registrations.clone();
+        for registration in &mut non_snapshot {
+            registration.source = ArtifactSourceV3::ReviewerExecution {
+                execution_id: id("execution:v5-context-accounting-wrong-source"),
+                reviewer_id: "fixture-reviewer".to_owned(),
+                run_id: registration.run_id().clone(),
+            };
+        }
+        let provenance = V5D2StructuralAccounting::default()
+            .observe_context_sources(&context, &non_snapshot)
+            .expect_err("a non-SnapshotIngest context source must fail closed");
+        assert!(matches!(provenance, DomainError::Validation(_)));
+
+        let overflow = V5D2StructuralAccounting {
+            transitions: u64::MAX,
+            contexts: 1,
+            ..V5D2StructuralAccounting::default()
+        }
+        .trace_count()
+        .expect_err("D2 trace totals must not wrap");
+        assert!(matches!(overflow, DomainError::Incomplete { .. }));
+    }
+
+    #[test]
+    fn v5_d2_context_first_gate_covers_a_larger_deferred_obligation() {
+        let state = complete_planned_v5()
+            .replay_pre_incremental_state_for_store()
+            .expect("accepted planned aggregate");
+        let aggregate = &state.aggregate;
+        let full_accepted_max =
+            v5_d2_context_session_working_oracle(aggregate, 1).expect("all-obligation oracle");
+
+        let mut witness = None;
+        'budgets: for max_waves in 1..=16 {
+            for per_wave in 1..=16 {
+                let candidate = plan(
+                    aggregate,
+                    PlanBudget::new(max_waves, per_wave).expect("bounded test budget"),
+                )
+                .expect("deterministic limited plan");
+                if candidate.deferred().is_empty() {
+                    continue;
+                }
+                let wave_max = candidate
+                    .waves()
+                    .iter()
+                    .flat_map(|wave| wave.obligation_ids())
+                    .try_fold(0_u64, |maximum, obligation_id| {
+                        let oracle = context_resource_oracle(aggregate, obligation_id)
+                            .map_err(context_domain_error)?;
+                        Ok::<_, DomainError>(maximum.max(oracle.session_working_bytes()))
+                    })
+                    .expect("wave-only oracle");
+                let deferred_max = candidate
+                    .deferred()
+                    .keys()
+                    .try_fold(0_u64, |maximum, obligation_id| {
+                        let oracle = context_resource_oracle(aggregate, obligation_id)
+                            .map_err(context_domain_error)?;
+                        Ok::<_, DomainError>(maximum.max(oracle.session_working_bytes()))
+                    })
+                    .expect("deferred oracle");
+                if deferred_max > wave_max {
+                    witness = Some((wave_max, deferred_max));
+                    break 'budgets;
+                }
+            }
+        }
+        let (wave_max, deferred_max) = witness
+            .expect("fixture must contain a deferred obligation larger than its scheduled wave");
+        assert_eq!(full_accepted_max, deferred_max);
+        assert!(wave_max < full_accepted_max);
+        assert!(
+            v5_d2_phase_bytes(0, [wave_max], "wave-only context admission").unwrap()
+                < v5_d2_phase_bytes(0, [full_accepted_max], "full context admission").unwrap(),
+            "the obsolete wave-only gate would admit a lower preparation limit"
+        );
+    }
+
+    #[test]
+    fn v5_d2_each_working_phase_refuses_checked_add_overflow() {
+        for operation in [
+            "V5 D2 clone working phase",
+            "V5 D2 final working phase",
+            "V5 D2 reducer working phase",
+            "V5 D2 reviewer working phase",
+            "V5 D2 context working phase",
+        ] {
+            assert!(matches!(
+                v5_d2_phase_bytes(u64::MAX, [1], operation),
+                Err(DomainError::Incomplete {
+                    operation: actual,
+                    ..
+                }) if actual == operation
+            ));
+        }
+    }
+
+    #[test]
+    fn v5_completed_lifecycle_requires_prior_structured_execution() {
+        let aggregate = aggregate();
+        let obligation_id = aggregate
+            .universe()
+            .obligation_ids()
+            .first()
+            .expect("fixture obligation")
+            .clone();
+        assert!(
+            validate_v2_completed_transition(
+                EventContractVersion::V5,
+                &aggregate,
+                &PersistedPayload::ObligationTransition {
+                    obligation_id,
+                    next: ObligationLifecycle::Completed,
+                },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn private_v5_d2_rejects_non_reviewer_registration_provenance() {
+        let run_id = id("run:v5-d2-source-negative");
+        let registration = ArtifactRegisteredV3::new(
+            run_id.clone(),
+            ContentHash::sha256(b"snapshot bytes"),
+            "text/plain",
+            u64::try_from(b"snapshot bytes".len()).unwrap(),
+            ArtifactSensitivity::WorkspaceSource,
+            ArtifactSourceV3::SnapshotIngest {
+                adapter_id: "fixture-adapter".to_owned(),
+                run_id,
+                snapshot_id: id("snapshot:v5-d2-source-negative"),
+            },
+        )
+        .expect("well-shaped snapshot registration");
+        assert!(validate_d2_reviewer_registration_source_v5(&registration).is_err());
+    }
+
+    #[test]
+    fn private_v5_d2_rejects_deferred_reviewer_registration_without_execution() {
+        let run_id = id("run:v5-d2-deferred-negative");
+        let registration = ArtifactRegisteredV3::new(
+            run_id.clone(),
+            ContentHash::sha256(b"raw reviewer bytes"),
+            "application/json",
+            u64::try_from(b"raw reviewer bytes".len()).unwrap(),
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id: id("execution:v5-d2-missing"),
+                reviewer_id: "fixture-reviewer".to_owned(),
+                run_id,
+            },
+        )
+        .expect("well-shaped reviewer registration");
+        struct NoRead;
+        impl AuthorityArtifactResolverV3 for NoRead {
+            fn read_exact(&self, _hash: &ContentHash, _destination: &mut [u8]) -> Result<()> {
+                panic!("dangling reviewer registration must fail before CAS read")
+            }
+        }
+        assert!(
+            validate_deferred_d2_registration_v5(&aggregate(), &registration, &NoRead).is_err()
+        );
     }
 
     #[test]
@@ -34238,6 +36294,152 @@ mod tests {
             .confirm_replayed(&complete_log, &complete_basis, &sealed_session)
             .expect("atomic bundle receipt");
         assert!(complete_log.has_gluing_bundle_v4());
+
+        // Exercise the V5 D2 continuation against a genuinely complete
+        // inherited tail: canonical M4 records, both V4 registrations, and
+        // the M5 bundle remain in the same predecessor chain. D2 must apply
+        // only its contiguous prefix and hand the untouched semantic tail to
+        // the next ordered reducer with a self-validating cursor.
+        struct FullTailV5Resolver<'a>(&'a BTreeMap<ContentHash, Vec<u8>>);
+        impl AuthorityArtifactResolverV5 for FullTailV5Resolver<'_> {
+            fn read_exact(&self, cas_hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                let bytes = self.0.get(cas_hash).ok_or_else(|| {
+                    DomainError::Validation("missing full-tail V5 CAS object".to_owned())
+                })?;
+                if bytes.len() != destination.len() {
+                    return Err(DomainError::Validation(
+                        "full-tail V5 CAS object length mismatch".to_owned(),
+                    ));
+                }
+                destination.copy_from_slice(bytes);
+                Ok(())
+            }
+        }
+        let full_tail_v5 = rewrap_v4_prefix_as_v5(&complete_log);
+        let full_tail_v5_roots = AuthorityTrustRootsV5::new(
+            target_policy_revision_hash_v5(complete_log.aggregate.program())
+                .expect("derived full-tail V5 policy"),
+            roots.repository_id.clone(),
+            roots.repository_source_hash.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("full-tail V5 roots");
+        let full_tail_structural = full_tail_v5
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                full_tail_v5.run_id(),
+                full_tail_v5.genesis_hash(),
+                full_tail_v5.canonical_prefix_bytes_for_store(),
+                u64::try_from(full_tail_v5.envelopes.len()).unwrap(),
+                full_tail_v5.tail_hash(),
+            ))
+            .expect("full-tail V5 structural replay");
+        assert_eq!(
+            full_tail_structural.post_plan_phase,
+            V5StructuralPostPlanPhase::M5BundleRecorded
+        );
+        let full_tail_checkpoint = EventLogV5::certify_plan_authority_checkpoint_v5_with_limits(
+            &full_tail_structural,
+            &FullTailV5Resolver(&resolver.objects),
+            &full_tail_v5_roots,
+            full_tail_v5.limits.max_retained_bytes,
+            full_tail_v5.limits.max_working_bytes,
+        )
+        .expect("full-tail V5 plan checkpoint");
+        let full_tail_d2 = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &full_tail_checkpoint,
+            &FullTailV5Resolver(&resolver.objects),
+            &full_tail_v5_roots,
+        )
+        .expect("full-tail V5 D2 replay");
+        validate_v5_d2_dispatch_cursor(&full_tail_d2)
+            .expect("full-tail D2 cursor/trace/aggregate invariant");
+        assert_eq!(
+            full_tail_d2.d2_dispatch_cursor.applied_phase,
+            V5StructuralPostPlanPhase::Inherited {
+                m4_bundle: V5StructuralM4BundlePhase::Idle,
+            }
+        );
+        assert_eq!(
+            full_tail_d2.d2_dispatch_cursor.expected_terminal_phase,
+            V5StructuralPostPlanPhase::M5BundleRecorded
+        );
+        let first_deferred = full_tail_v5
+            .envelopes
+            .iter()
+            .find(|envelope| {
+                envelope.sequence() == full_tail_d2.d2_dispatch_cursor.consumed_through_event + 1
+            })
+            .expect("canonical deferred semantic tail boundary");
+        assert!(
+            d2_trace_record_id(
+                &decode_canonical_payload(EventContractVersion::V5, first_deferred.payload.get())
+                    .expect("canonical first deferred payload")
+            )
+            .is_none(),
+            "the cursor must stop immediately before the first non-D2 record"
+        );
+        let first_m4 = full_tail_v5
+            .envelopes
+            .iter()
+            .find(|envelope| {
+                matches!(
+                    decode_canonical_payload(EventContractVersion::V5, envelope.payload.get()),
+                    Ok(PersistedPayload::EvidenceRecordedV3(_))
+                )
+            })
+            .expect("canonical M4 tail");
+        assert!(
+            first_m4.sequence() > full_tail_d2.d2_dispatch_cursor.consumed_through_event,
+            "the real M4 bundle must remain deferred behind the D2 cursor"
+        );
+        assert_eq!(
+            full_tail_d2.d2_dispatch_cursor.replay_from_event,
+            full_tail_checkpoint.plan_event_count
+        );
+        assert_eq!(
+            full_tail_d2.d2_dispatch_cursor.deferred_semantic_events,
+            full_tail_structural.predecessor_event_count
+                - full_tail_d2.d2_dispatch_cursor.consumed_through_event
+        );
+        assert_eq!(
+            u64::try_from(full_tail_d2.d2_trace.len()).unwrap(),
+            full_tail_d2.d2_dispatch_cursor.consumed_through_event
+                - full_tail_checkpoint.plan_event_count
+        );
+        assert_eq!(
+            full_tail_d2.aggregate.executions().count(),
+            complete_log.aggregate.executions().count()
+        );
+        assert!(full_tail_d2.v3_aggregate.evidence.is_empty());
+        assert!(full_tail_d2.v3_aggregate.verifications.is_empty());
+        assert_eq!(
+            full_tail_v5
+                .envelopes
+                .iter()
+                .filter(|envelope| {
+                    matches!(
+                        decode_canonical_payload(EventContractVersion::V5, envelope.payload.get()),
+                        Ok(PersistedPayload::ArtifactRegisteredV4(_))
+                    )
+                })
+                .count(),
+            2
+        );
+        assert_eq!(
+            full_tail_v5
+                .envelopes
+                .iter()
+                .filter(|envelope| {
+                    matches!(
+                        decode_canonical_payload(EventContractVersion::V5, envelope.payload.get()),
+                        Ok(PersistedPayload::GluingBundleRecordedV4(_))
+                    )
+                })
+                .count(),
+            1
+        );
 
         let complete_tail_before_duplicate = complete_log.tail_hash().clone();
         let duplicate_bundle_payload =
