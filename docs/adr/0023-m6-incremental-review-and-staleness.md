@@ -797,6 +797,76 @@ evidence TTL is not modeled in the MVP, so there is no runtime-expiry reason or
 clock read. `assessment_time` is retained only as a caller-supplied canonical
 audit timestamp and does not change this reduction.
 
+#### 7.1 Reduction and predecessor-resolution decisions
+
+The following decisions close ambiguities that otherwise permit equivalent
+source histories to produce different M6 members. They are normative for the
+MVP implementation.
+
+1. `record_set_digest` uses the §8 closed 21-kind enum/order:
+   `obligation,review_plan,context_envelope,execution,claim,claim_assessment,
+   artifact_registration_v3,artifact_registration_v4,evidence,
+   evidence_binding,verification,decision,finding,gluing_input_descriptor,
+   context_cover,section,restriction,gluing_attempt,global_candidate,
+   gluing_obstruction,coverage`; within each kind it uses ascending StableId
+   order. This is an assessment-member ordering;
+   append order remains the separately derived ascending event-ID order in
+   §12.
+2. A source record that is relevant to more than one obligation produces one
+   independently reduced row per obligation. Its reasons are the sorted union
+   of those rows and directness is their maximum (`direct_and_indirect` is
+   greater than either singleton value); no first matching obligation wins.
+   The final `successor_record_ids`, `mapping_ids`,
+   `correspondence_entry_ids`, `reasons`, and `dependency_source_ids` are each
+   the complete sorted union of their independently reduced rows. Each union
+   is capped at 512 IDs/items; exceeding a cap is a typed `Incomplete` refusal,
+   never truncation. The
+   final record is `structurally_preserved` only when every row is preserved;
+   it is `superseded` only when every row meets the semantic-removal predicate
+   in item 4. An unsupported, unresolved, unexecuted, or otherwise nonremoved
+   row makes the final record `stale`, even when another row has no successor.
+3. The historical coverage row is always `superseded` and carries mandatory
+   direct `target_changed`. Required stale predecessors additionally union
+   their indirect `dependency_changed` reason, yielding
+   `direct_and_indirect`; it is never structurally preserved.
+4. A semantic removal is `superseded` only for `MappingStatus::Removed` or a
+   correspondence component with no target successor. Any unexecuted target
+   stage, including a mapped relevant object with no actual target successor
+   at the pinned target-predecessor tail, is `stale` and carries mandatory
+   direct `target_changed`. Required stale predecessors additionally union
+   their indirect reason and may yield `direct_and_indirect`.
+   `GluingFreshnessV5` uses the same split.
+5. `dependency_source_ids` is the complete sorted union of every required
+   transitive closure for the selected source-record rows, excluding the
+   row's own record ID. Direct dependencies are included because they are
+   depth-one members of that closure. The union is capped at 512 IDs; exceeding
+   it is a typed `Incomplete` refusal, never truncation.
+6. “Visit each relation once” is scoped to one deterministic policy walk for
+   one source-record row. A separate row starts a new sorted frontier and its
+   own visited-relation set; sharing a process-global set is forbidden.
+7. `assessment_time` is exactly the canonical 20-byte UTC-second string
+   `YYYY-MM-DDTHH:MM:SSZ` and uses canonical JSON formatting. Reusing the same
+   assessment ID/time with a different body is an ID/body collision refusal;
+   time is not rounded, generated, or used as a reduction input.
+8. The target predecessor ends immediately before the `source_bound` event at
+   its recorded `target_predecessor_offset`, `target_predecessor_event_count`,
+   and `target_predecessor_tail_hash`. A roots-bound authority replay must also
+   match run ID, genesis hash, and the sealed authority replay-basis digest
+   before it determines which target M4 history and optional frozen V4
+   descriptor/registration pair(s) or M5 bundle are accepted at that tail.
+   Later target events are outside the predecessor and cannot suppress an M6
+   action; structural replay supplies coordinates only and suppresses nothing.
+   Before `source_bound`, its closed-order recognizer admits the initial
+   registration/source/plan prefix, then only inherited D2 records and complete
+   M4 `evidence -> [binding ->] verification` bundles, zero to two frozen V4
+   registrations, and at most one frozen M5 bundle after exactly two V4
+   registrations. It rejects duplicate source/plan records, partial or
+   reordered M4 bundles, duplicate/third V4 registrations, inherited D2/M4
+   after a V4 registration, and every payload after the M5 bundle. This check
+   decodes and drops bodies: it performs no CAS read, authority validation,
+   lifecycle/claim reduction, or accepted-state update. M6 payloads cannot
+   enter this pre-`source_bound` vocabulary.
+
 The first and fifth action rows put their successor obligation in
 `mandatory_native_rerun`. This means source preservation or source human state
 never suppresses target work. It does not discard already-current target S1

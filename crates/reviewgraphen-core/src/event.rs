@@ -18694,14 +18694,6 @@ impl<'a> V5PreIncrementalProjection<'a> {
         self.registrations
     }
 
-    pub(crate) fn run_id(&self) -> &'a StableId {
-        self.run_id
-    }
-
-    pub(crate) fn tail_hash(&self) -> &'a ContentHash {
-        self.tail_hash
-    }
-
     /// Exact portable retained ownership of the replayed pre-incremental
     /// target state.  This intentionally includes the aggregate's plan copy,
     /// the separately retained plan, registration vector capacity and scalar
@@ -18778,6 +18770,352 @@ impl ReplayedV5PreIncrementalState {
             run_id: &self.run_id,
             tail_hash: &self.tail_hash,
         }
+    }
+}
+
+/// Exact structural coordinates of the target prefix locked by the source
+/// binding. They are not authority: a roots-bound replay must match all of
+/// these fields before it may admit any M4/M5 successor for suppression.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct V5StructuralPrefixCoordinates<'a> {
+    run_id: &'a StableId,
+    genesis_hash: &'a ContentHash,
+    predecessor_offset: u64,
+    predecessor_event_count: u64,
+    tail_hash: &'a ContentHash,
+}
+
+impl<'a> V5StructuralPrefixCoordinates<'a> {
+    /// Creates the exact, already source-bound prefix coordinate tuple.
+    ///
+    /// This is intentionally a borrow-only input: constructing it grants no
+    /// replay, append, record enumeration, or accepted-state authority.
+    pub const fn new(
+        run_id: &'a StableId,
+        genesis_hash: &'a ContentHash,
+        predecessor_offset: u64,
+        predecessor_event_count: u64,
+        tail_hash: &'a ContentHash,
+    ) -> Self {
+        Self {
+            run_id,
+            genesis_hash,
+            predecessor_offset,
+            predecessor_event_count,
+            tail_hash,
+        }
+    }
+}
+
+/// Borrow-only structural-prefix accounting. No target record DTO, raw JSON,
+/// event iterator, append cursor, or authority capability is retained.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct V5StructuralPrefixAccounting {
+    canonical_prefix_bytes: u64,
+    event_count: u64,
+    retained_envelope_bytes: u64,
+}
+
+impl V5StructuralPrefixAccounting {
+    pub(crate) const fn canonical_prefix_bytes(self) -> u64 {
+        self.canonical_prefix_bytes
+    }
+    pub(crate) const fn event_count(self) -> u64 {
+        self.event_count
+    }
+    pub(crate) const fn retained_envelope_bytes(self) -> u64 {
+        self.retained_envelope_bytes
+    }
+}
+
+/// Borrow-only M6 target input. It exposes only accepted genesis/plan facts
+/// and the exact source-bound structural prefix coordinates. Later M4/M5
+/// payloads are structurally checked to locate this tail but remain envelope
+/// bytes only; they cannot become actual successor records here.
+#[doc(hidden)]
+pub(crate) struct V5PreIncrementalStructuralPrefixProjection<'a> {
+    pre_incremental: V5PreIncrementalProjection<'a>,
+    event_log: &'a EventLogV5,
+    coordinates: V5StructuralPrefixCoordinates<'a>,
+    accounting: V5StructuralPrefixAccounting,
+}
+
+impl<'a> V5PreIncrementalStructuralPrefixProjection<'a> {
+    pub(crate) fn program_space(&self) -> &'a ProgramSpace {
+        self.pre_incremental.program_space()
+    }
+    pub(crate) fn universe(&self) -> &'a UniverseDescriptor {
+        self.pre_incremental.universe()
+    }
+    #[allow(dead_code)] // Reserved for the reducer after authority replay is available.
+    pub(crate) fn plan(&self) -> &'a ReviewPlan {
+        self.pre_incremental.plan()
+    }
+    pub(crate) fn run_id(&self) -> &'a StableId {
+        self.coordinates.run_id
+    }
+    pub(crate) fn genesis_hash(&self) -> &'a ContentHash {
+        self.coordinates.genesis_hash
+    }
+    pub(crate) fn predecessor_offset(&self) -> u64 {
+        self.coordinates.predecessor_offset
+    }
+    pub(crate) fn predecessor_event_count(&self) -> u64 {
+        self.coordinates.predecessor_event_count
+    }
+    pub(crate) fn tail_hash(&self) -> &'a ContentHash {
+        self.coordinates.tail_hash
+    }
+    pub(crate) const fn accounting(&self) -> V5StructuralPrefixAccounting {
+        self.accounting
+    }
+
+    pub(crate) fn retained_bytes_for_m6(&self) -> Result<usize> {
+        let replay_backing = self.event_log.full_resident_bytes_for_structural_store()?;
+        let outer_overhead = size_of::<ReplayedV5PreIncrementalStructuralPrefixState>()
+            .checked_sub(size_of::<ReplayedV5PreIncrementalState>())
+            .ok_or(DomainError::Incomplete {
+                operation: "event-v5 structural prefix outer overhead",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let outer = [
+            outer_overhead,
+            self.coordinates.genesis_hash.allocated_bytes(),
+            self.coordinates.tail_hash.allocated_bytes(),
+            usize::try_from(replay_backing).map_err(|_| DomainError::Incomplete {
+                operation: "event-v5 structural prefix retained envelopes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?,
+        ]
+        .into_iter()
+        .try_fold(0_usize, |total, value| {
+            total.checked_add(value).ok_or(DomainError::Incomplete {
+                operation: "event-v5 structural prefix retained bytes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+        })?;
+        self.pre_incremental
+            .retained_bytes_for_m6()?
+            .checked_add(outer)
+            .ok_or(DomainError::Incomplete {
+                operation: "event-v5 structural prefix retained bytes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+    }
+}
+
+/// Owned backing for the tail-bound, fail-closed structural-prefix projection.
+#[doc(hidden)]
+pub struct ReplayedV5PreIncrementalStructuralPrefixState<'a> {
+    event_log: &'a EventLogV5,
+    pre_incremental: ReplayedV5PreIncrementalState,
+    genesis_hash: ContentHash,
+    predecessor_offset: u64,
+    predecessor_event_count: u64,
+    tail_hash: ContentHash,
+    accounting: V5StructuralPrefixAccounting,
+}
+
+#[allow(dead_code)] // Core M6 consumes the crate-private borrow-only projection.
+impl ReplayedV5PreIncrementalStructuralPrefixState<'_> {
+    pub(crate) fn projection(&self) -> V5PreIncrementalStructuralPrefixProjection<'_> {
+        V5PreIncrementalStructuralPrefixProjection {
+            pre_incremental: self.pre_incremental.projection(),
+            event_log: self.event_log,
+            coordinates: V5StructuralPrefixCoordinates {
+                run_id: &self.pre_incremental.run_id,
+                genesis_hash: &self.genesis_hash,
+                predecessor_offset: self.predecessor_offset,
+                predecessor_event_count: self.predecessor_event_count,
+                tail_hash: &self.tail_hash,
+            },
+            accounting: self.accounting,
+        }
+    }
+
+    /// Returns only the accepted pre-incremental facts Store needs to form its
+    /// immutable index snapshot. It intentionally omits event envelopes,
+    /// source-bound coordinates, M4/M5 DTOs, and all append/replay authority.
+    #[doc(hidden)]
+    pub fn store_facts(&self) -> V5StructuralPrefixStoreFacts<'_> {
+        V5StructuralPrefixStoreFacts {
+            program_space: self.pre_incremental.aggregate.program(),
+            universe: self.pre_incremental.aggregate.universe(),
+            plan: &self.pre_incremental.plan,
+            registrations: &self.pre_incremental.registrations,
+        }
+    }
+}
+
+/// Narrow read-only facts extracted from a source-bound structural prefix.
+///
+/// This is not an event/record iterator: V4/M5 bodies are never represented,
+/// and registrations are exposed only as the already accepted source-CAS
+/// integrity tuples required by the existing V6 index contract.
+#[doc(hidden)]
+pub struct V5StructuralPrefixStoreFacts<'a> {
+    program_space: &'a ProgramSpace,
+    universe: &'a UniverseDescriptor,
+    plan: &'a ReviewPlan,
+    registrations: &'a [ArtifactRegisteredV3],
+}
+
+impl<'a> V5StructuralPrefixStoreFacts<'a> {
+    pub fn program_space(&self) -> &'a ProgramSpace {
+        self.program_space
+    }
+    pub fn universe(&self) -> &'a UniverseDescriptor {
+        self.universe
+    }
+    pub fn plan(&self) -> &'a ReviewPlan {
+        self.plan
+    }
+    /// Store-only integrity inputs; these are not historical/M4/M5 records.
+    pub fn source_registrations(&self) -> &'a [ArtifactRegisteredV3] {
+        self.registrations
+    }
+}
+
+/// Position-only recognizer for the frozen inherited vocabulary which may
+/// follow the initial V5 sources/plan prefix.  This is deliberately smaller
+/// than V4 replay: it proves only that a source-bound predecessor has a closed
+/// event shape.  It never establishes CAS availability, trust roots, claim
+/// assessment, lifecycle, or M5 semantic validity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum V5StructuralPostPlanPhase {
+    Inherited {
+        m4_bundle: V5StructuralM4BundlePhase,
+    },
+    V4Registrations {
+        count: u8,
+    },
+    M5BundleRecorded,
+}
+
+/// A frozen inherited M4 verification bundle is exactly E,V or E,B,V.  The
+/// verifier event closes the bundle; human decision/finding records remain
+/// separately positioned inherited records, as they do in V4.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum V5StructuralM4BundlePhase {
+    Idle,
+    Evidence,
+    EvidenceBound,
+}
+
+fn structural_v5_post_plan_error(reason: &'static str) -> DomainError {
+    DomainError::EventSequence(format!(
+        "V5 structural prefix inherited post-plan order: {reason}"
+    ))
+}
+
+fn advance_v5_structural_post_plan(
+    phase: &mut V5StructuralPostPlanPhase,
+    v4_registration_ids: &mut BTreeSet<StableId>,
+    payload: &PersistedPayload,
+) -> Result<()> {
+    match phase {
+        V5StructuralPostPlanPhase::Inherited { m4_bundle } => match payload {
+            // The initial source/plan pair is single-shot.  A duplicate must
+            // not be silently treated as an M6 source-bound record.
+            PersistedPayload::SnapshotSourcesRecorded(_) => {
+                Err(structural_v5_post_plan_error("duplicate snapshot sources"))
+            }
+            PersistedPayload::ReviewPlanRecorded(_) => {
+                Err(structural_v5_post_plan_error("duplicate review plan"))
+            }
+            // D2 records and human/finding records may appear only between
+            // complete inherited M4 verification bundles.  Their semantic
+            // linkage is intentionally not replayed here.
+            PersistedPayload::ObligationTransition { .. }
+            | PersistedPayload::ArtifactRegisteredV3(_)
+            | PersistedPayload::ContextEnvelopeProjected(_)
+            | PersistedPayload::ReviewExecutionRecorded(_)
+            | PersistedPayload::DecisionRecordedV3(_)
+            | PersistedPayload::FindingRecordedV3(_)
+                if *m4_bundle == V5StructuralM4BundlePhase::Idle =>
+            {
+                Ok(())
+            }
+            PersistedPayload::EvidenceRecordedV3(_)
+                if *m4_bundle == V5StructuralM4BundlePhase::Idle =>
+            {
+                *m4_bundle = V5StructuralM4BundlePhase::Evidence;
+                Ok(())
+            }
+            PersistedPayload::EvidenceBoundV3(_)
+                if *m4_bundle == V5StructuralM4BundlePhase::Evidence =>
+            {
+                *m4_bundle = V5StructuralM4BundlePhase::EvidenceBound;
+                Ok(())
+            }
+            PersistedPayload::VerificationRecordedV3(_)
+                if matches!(
+                    *m4_bundle,
+                    V5StructuralM4BundlePhase::Evidence | V5StructuralM4BundlePhase::EvidenceBound
+                ) =>
+            {
+                *m4_bundle = V5StructuralM4BundlePhase::Idle;
+                Ok(())
+            }
+            PersistedPayload::ArtifactRegisteredV4(registration)
+                if *m4_bundle == V5StructuralM4BundlePhase::Idle =>
+            {
+                if !v4_registration_ids.insert(registration.id().clone()) {
+                    return Err(structural_v5_post_plan_error(
+                        "duplicate V4 gluing registration ID",
+                    ));
+                }
+                *phase = V5StructuralPostPlanPhase::V4Registrations { count: 1 };
+                Ok(())
+            }
+            PersistedPayload::GluingBundleRecordedV4(_) => Err(structural_v5_post_plan_error(
+                "M5 bundle requires exactly two preceding V4 registrations",
+            )),
+            PersistedPayload::EvidenceBoundV3(_) => Err(structural_v5_post_plan_error(
+                "M4 binding must immediately follow inherited evidence",
+            )),
+            PersistedPayload::VerificationRecordedV3(_) => Err(structural_v5_post_plan_error(
+                "M4 verification must immediately close inherited evidence bundle",
+            )),
+            PersistedPayload::EvidenceRecordedV3(_) => Err(structural_v5_post_plan_error(
+                "M4 evidence cannot begin before the previous bundle closes",
+            )),
+            _ => Err(structural_v5_post_plan_error(
+                "payload is not in the closed inherited D2/M4 vocabulary",
+            )),
+        },
+        V5StructuralPostPlanPhase::V4Registrations { count } => match payload {
+            PersistedPayload::ArtifactRegisteredV4(registration) if *count < 2 => {
+                if !v4_registration_ids.insert(registration.id().clone()) {
+                    return Err(structural_v5_post_plan_error(
+                        "duplicate V4 gluing registration ID",
+                    ));
+                }
+                *count += 1;
+                Ok(())
+            }
+            PersistedPayload::ArtifactRegisteredV4(_) => Err(structural_v5_post_plan_error(
+                "third V4 gluing registration",
+            )),
+            PersistedPayload::GluingBundleRecordedV4(_) if *count == 2 => {
+                *phase = V5StructuralPostPlanPhase::M5BundleRecorded;
+                Ok(())
+            }
+            PersistedPayload::GluingBundleRecordedV4(_) => Err(structural_v5_post_plan_error(
+                "M5 bundle requires exactly two preceding V4 registrations",
+            )),
+            _ => Err(structural_v5_post_plan_error(
+                "inherited D2/M4 payload follows a V4 gluing registration",
+            )),
+        },
+        V5StructuralPostPlanPhase::M5BundleRecorded => Err(structural_v5_post_plan_error(
+            "payload follows the sole M5 bundle",
+        )),
     }
 }
 
@@ -18988,6 +19326,21 @@ impl EventLogV5 {
     #[doc(hidden)]
     pub fn retained_envelope_bytes_for_store(&self) -> Result<u64> {
         retained_envelope_vector_bytes_for_store(&self.envelopes)
+    }
+
+    /// Full resident ownership of this live log: inline struct plus every
+    /// owned heap field. Structural-prefix retention uses this rather than an
+    /// envelope-only proxy because it keeps a live `&EventLogV5` borrow.
+    #[doc(hidden)]
+    pub fn full_resident_bytes_for_structural_store(&self) -> Result<u64> {
+        u64::try_from(size_of::<Self>())
+            .unwrap_or(u64::MAX)
+            .checked_add(self.retained_bytes_v5()?)
+            .ok_or(DomainError::Incomplete {
+                operation: "V5 full resident structural bytes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
     }
 
     /// Exact validated canonical V5 JSONL prefix length, including LF.
@@ -19224,6 +19577,180 @@ impl EventLogV5 {
         Err(DomainError::Validation(
             "V5 target predecessor has no terminal review plan".to_owned(),
         ))
+    }
+
+    /// Replays only the source-bound target predecessor as a structural
+    /// prefix. Every envelope through the pinned count is canonical/schema/
+    /// chain validated, including the frozen inherited D2/M4/M5 vocabulary,
+    /// but later payload DTOs are never retained or exposed. Accepted
+    /// successor authority remains the responsibility of the later
+    /// roots-bound replay.
+    ///
+    /// The returned backing is deliberately opaque and borrows this log, so a
+    /// Store session can retain the exact live journal allocation while Core
+    /// keeps the only M6 projection seam crate-private.  It is neither clone
+    /// nor serializable and offers no generic record enumeration API.
+    #[doc(hidden)]
+    pub fn replay_pre_incremental_structural_prefix_for_store(
+        &self,
+        coordinates: V5StructuralPrefixCoordinates<'_>,
+    ) -> Result<ReplayedV5PreIncrementalStructuralPrefixState<'_>> {
+        if coordinates.run_id != &self.run_id || coordinates.genesis_hash != &self.genesis_hash {
+            return Err(DomainError::EventSequence(
+                "V5 structural prefix run or genesis does not equal the retained log".to_owned(),
+            ));
+        }
+        let count = usize::try_from(coordinates.predecessor_event_count).map_err(|_| {
+            DomainError::Incomplete {
+                operation: "V5 structural prefix event count",
+                limit: self.envelopes.len(),
+                observed: usize::MAX,
+            }
+        })?;
+        if count < 3 || count > self.envelopes.len() {
+            return Err(DomainError::EventSequence(
+                "V5 structural prefix count is outside the retained journal".to_owned(),
+            ));
+        }
+        let prefix = &self.envelopes[..count];
+        EventEnvelope::validate_v5_stream(&self.run_id, &self.canonical_genesis_bytes, prefix)?;
+        let (canonical_prefix_bytes, payload_bytes) =
+            prefix
+                .iter()
+                .try_fold((0_u64, 0_u64), |(canonical, retained), envelope| {
+                    let line = envelope.canonical_line_bytes_v5.ok_or_else(|| {
+                        DomainError::EventSequence(
+                            "V5 structural prefix envelope lacks canonical line accounting"
+                                .to_owned(),
+                        )
+                    })?;
+                    Ok::<_, DomainError>((
+                        canonical.checked_add(line).ok_or(DomainError::Incomplete {
+                            operation: "V5 structural prefix canonical bytes",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?,
+                        retained
+                            .checked_add(
+                                u64::try_from(envelope.allocated_bytes()).unwrap_or(u64::MAX),
+                            )
+                            .ok_or(DomainError::Incomplete {
+                                operation: "V5 structural prefix envelope bytes",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?,
+                    ))
+                })?;
+        let retained_envelope_bytes = payload_bytes
+            .checked_add(
+                u64::try_from(count.checked_mul(size_of::<EventEnvelope>()).ok_or(
+                    DomainError::Incomplete {
+                        operation: "V5 structural prefix envelope slots",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    },
+                )?)
+                .unwrap_or(u64::MAX),
+            )
+            .ok_or(DomainError::Incomplete {
+                operation: "V5 structural prefix retained bytes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        if canonical_prefix_bytes != coordinates.predecessor_offset
+            || prefix.last().map(EventEnvelope::event_hash) != Some(coordinates.tail_hash)
+        {
+            return Err(DomainError::EventSequence(
+                "V5 structural prefix offset or tail does not equal the source-bound coordinates"
+                    .to_owned(),
+            ));
+        }
+
+        let genesis = RunGenesisSnapshot::from_canonical_bytes_v3(&self.canonical_genesis_bytes)?;
+        let mut aggregate = genesis.rebuild_aggregate()?;
+        let mut registrations = Vec::new();
+        let mut saw_sources = false;
+        let mut plan = None;
+        let mut post_plan = V5StructuralPostPlanPhase::Inherited {
+            m4_bundle: V5StructuralM4BundlePhase::Idle,
+        };
+        let mut v4_registration_ids = BTreeSet::new();
+        for envelope in prefix.iter().skip(1) {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            if plan.is_some() {
+                advance_v5_structural_post_plan(
+                    &mut post_plan,
+                    &mut v4_registration_ids,
+                    &payload,
+                )?;
+                // This is intentionally a decode-and-drop check.  In
+                // particular, it does not call authority validation, rebuild
+                // CAS objects, apply a lifecycle transition, or turn any
+                // inherited claim/evidence/verification into accepted M6
+                // state.  The later roots-bound replay owns that work.
+                continue;
+            }
+            match payload {
+                PersistedPayload::ArtifactRegisteredV3(registration) if !saw_sources => {
+                    if registrations.last().is_some_and(|previous: &ArtifactRegisteredV3| {
+                        previous.registration_id() >= registration.registration_id()
+                    }) {
+                        return Err(DomainError::Validation(
+                            "V5 target registrations must be strictly StableId ordered".to_owned(),
+                        ));
+                    }
+                    aggregate.register_artifact_v3(&self.run_id, registration.clone())?;
+                    registrations.push(registration);
+                }
+                PersistedPayload::SnapshotSourcesRecorded(sources) if !saw_sources => {
+                    aggregate.record_snapshot_sources(sources)?;
+                    saw_sources = true;
+                }
+                PersistedPayload::ReviewPlanRecorded(value) if saw_sources => {
+                    aggregate.record_review_plan(value.clone())?;
+                    plan = Some(value);
+                }
+                _ => return Err(DomainError::Validation(
+                    "V5 structural prefix requires registrations, snapshot sources, then one review plan"
+                        .to_owned(),
+                )),
+            }
+        }
+        if matches!(
+            post_plan,
+            V5StructuralPostPlanPhase::Inherited {
+                m4_bundle: V5StructuralM4BundlePhase::Evidence
+                    | V5StructuralM4BundlePhase::EvidenceBound,
+            }
+        ) {
+            return Err(DomainError::EventSequence(
+                "V5 structural prefix ends inside an inherited M4 verification bundle".to_owned(),
+            ));
+        }
+        Ok(ReplayedV5PreIncrementalStructuralPrefixState {
+            event_log: self,
+            pre_incremental: ReplayedV5PreIncrementalState {
+                aggregate,
+                plan: plan.ok_or_else(|| {
+                    DomainError::Validation(
+                        "V5 structural prefix has no deterministic review plan".to_owned(),
+                    )
+                })?,
+                registrations,
+                run_id: self.run_id.clone(),
+                tail_hash: coordinates.tail_hash.clone(),
+            },
+            genesis_hash: self.genesis_hash.clone(),
+            predecessor_offset: coordinates.predecessor_offset,
+            predecessor_event_count: coordinates.predecessor_event_count,
+            tail_hash: coordinates.tail_hash.clone(),
+            accounting: V5StructuralPrefixAccounting {
+                canonical_prefix_bytes,
+                event_count: coordinates.predecessor_event_count,
+                retained_envelope_bytes,
+            },
+        })
     }
 
     /// Reopens only a confirmed homogeneous V5 prefix.  This structural
@@ -27478,6 +28005,283 @@ mod tests {
     }
 
     #[test]
+    fn v5_structural_prefix_is_tail_bound_and_excludes_later_envelopes() {
+        let mut complete = complete_planned_v5();
+        let predecessor_count = u64::try_from(complete.envelopes.len()).unwrap();
+        let predecessor_offset = complete.canonical_prefix_bytes_for_store();
+        let predecessor_tail = complete.tail_hash().clone();
+        let obligation_id = complete
+            .replay_pre_incremental_state_for_store()
+            .expect("planned target")
+            .projection()
+            .universe()
+            .obligation_ids()
+            .iter()
+            .next()
+            .expect("fixture obligation")
+            .clone();
+        let sequence = u64::try_from(complete.envelopes.len()).unwrap() + 1;
+        let transition = EventEnvelope::new(
+            EventContractVersion::V5,
+            complete.run_id.clone(),
+            complete.genesis_hash.clone(),
+            sequence,
+            SYSTEM_ACTOR,
+            sequence,
+            complete.tail_hash().clone(),
+            PersistedPayload::ObligationTransition {
+                obligation_id,
+                next: ObligationLifecycle::Planned,
+            },
+        )
+        .unwrap();
+        complete.append_sealed_envelope_v5(transition).unwrap();
+
+        let state = complete
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                complete.run_id(),
+                complete.genesis_hash(),
+                predecessor_offset,
+                predecessor_count,
+                &predecessor_tail,
+            ))
+            .expect("structural target predecessor");
+        let projection = state.projection();
+        assert_eq!(projection.tail_hash(), &predecessor_tail);
+        assert_eq!(projection.predecessor_offset(), predecessor_offset);
+        assert_eq!(projection.predecessor_event_count(), predecessor_count);
+        assert_eq!(
+            projection.accounting().canonical_prefix_bytes,
+            predecessor_offset
+        );
+        assert_eq!(projection.accounting().event_count, predecessor_count);
+        assert!(projection.accounting().retained_envelope_bytes > 0);
+        assert!(complete.replay_pre_incremental_state_for_store().is_err());
+    }
+
+    #[test]
+    fn v5_structural_prefix_refuses_count_or_tail_mismatch() {
+        let complete = complete_planned_v5();
+        let count = u64::try_from(complete.envelopes.len()).unwrap();
+        let offset = complete.canonical_prefix_bytes_for_store();
+        let tail = complete.tail_hash().clone();
+        assert!(
+            complete
+                .replay_pre_incremental_structural_prefix_for_store(
+                    V5StructuralPrefixCoordinates::new(
+                        complete.run_id(),
+                        complete.genesis_hash(),
+                        offset,
+                        count - 1,
+                        &tail,
+                    ),
+                )
+                .is_err()
+        );
+        assert!(
+            complete
+                .replay_pre_incremental_structural_prefix_for_store(
+                    V5StructuralPrefixCoordinates::new(
+                        complete.run_id(),
+                        complete.genesis_hash(),
+                        offset - 1,
+                        count,
+                        &tail,
+                    ),
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn v5_structural_prefix_accepts_closed_inherited_m4_and_v4_positions() {
+        let (v4, basis, roots, resolver, session, claim_id, input_id, output_id) =
+            static_v4_bundle_base();
+        let bundle = v4
+            .mint_verification_bundle_v4(
+                VerificationBundleRequestV4::static_fact(claim_id, input_id, output_id),
+                None,
+                &resolver,
+                &roots,
+                &basis,
+            )
+            .expect("complete inherited M4 bundle");
+        let m4_envelopes = bundle
+            .envelopes(&v4, &basis, &session)
+            .expect("inherited M4 envelopes")
+            .to_vec();
+        assert!(matches!(m4_envelopes.len(), 2 | 3));
+
+        let mut v5 = rewrap_v4_prefix_as_v5(&v4);
+        for envelope in &m4_envelopes {
+            append_v5_payload_for_structural_test(
+                &mut v5,
+                decode_canonical_payload(EventContractVersion::V4, envelope.payload.get())
+                    .expect("M4 payload"),
+            );
+        }
+        let plan_id = v4
+            .aggregate
+            .review_plans()
+            .next()
+            .expect("V4 plan")
+            .id()
+            .clone();
+        let (payment, _, _) = v4_gluing_registration(
+            &v4,
+            &v4.aggregate,
+            &plan_id,
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            crate::AssignmentValueV4::Required,
+            BTreeSet::new(),
+        );
+        let (ui, _, _) = v4_gluing_registration(
+            &v4,
+            &v4.aggregate,
+            &plan_id,
+            crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+            crate::AssignmentValueV4::Satisfied,
+            BTreeSet::new(),
+        );
+        append_v5_payload_for_structural_test(
+            &mut v5,
+            PersistedPayload::ArtifactRegisteredV4(payment),
+        );
+        append_v5_payload_for_structural_test(&mut v5, PersistedPayload::ArtifactRegisteredV4(ui));
+
+        let structural = v5
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                v5.run_id(),
+                v5.genesis_hash(),
+                v5.canonical_prefix_bytes_for_store(),
+                u64::try_from(v5.envelopes.len()).expect("V5 event count"),
+                v5.tail_hash(),
+            ))
+            .expect("closed plan/M4/V4 structural prefix");
+        // The opaque backing still does not expose these inherited records as
+        // accepted state; Core-only M6 projections expose only the plan facts.
+        assert_eq!(structural.projection().plan().id(), &plan_id);
+
+        // M5's atomic body is intentionally not semantically parsed by this
+        // structural FSM. The direct state-machine case proves only the
+        // allowed 2-registration -> one-bundle position; envelope admission
+        // separately preflights the frozen raw M5 DTO.
+        let mut phase = V5StructuralPostPlanPhase::Inherited {
+            m4_bundle: V5StructuralM4BundlePhase::Idle,
+        };
+        let mut registration_ids = BTreeSet::new();
+        let first = decode_canonical_payload(
+            EventContractVersion::V5,
+            v5.envelopes[v5.envelopes.len() - 2].payload.get(),
+        )
+        .expect("first V4 registration");
+        let second = decode_canonical_payload(
+            EventContractVersion::V5,
+            v5.envelopes[v5.envelopes.len() - 1].payload.get(),
+        )
+        .expect("second V4 registration");
+        advance_v5_structural_post_plan(&mut phase, &mut registration_ids, &first)
+            .expect("first registration position");
+        advance_v5_structural_post_plan(&mut phase, &mut registration_ids, &second)
+            .expect("second registration position");
+        let raw_bundle = PersistedPayload::GluingBundleRecordedV4(
+            raw_payload(br#"{}"#.to_vec()).expect("syntactic raw M5 body"),
+        );
+        advance_v5_structural_post_plan(&mut phase, &mut registration_ids, &raw_bundle)
+            .expect("one M5 bundle position");
+        assert_eq!(phase, V5StructuralPostPlanPhase::M5BundleRecorded);
+    }
+
+    #[test]
+    fn v5_structural_post_plan_state_machine_refuses_partial_and_late_members() {
+        let (v4, basis, roots, resolver, session, claim_id, input_id, output_id) =
+            static_v4_bundle_base();
+        let bundle = v4
+            .mint_verification_bundle_v4(
+                VerificationBundleRequestV4::static_fact(claim_id, input_id, output_id),
+                None,
+                &resolver,
+                &roots,
+                &basis,
+            )
+            .expect("M4 bundle");
+        let m4 = bundle
+            .envelopes(&v4, &basis, &session)
+            .expect("M4 envelopes")
+            .to_vec();
+        let evidence = decode_canonical_payload(EventContractVersion::V4, m4[0].payload.get())
+            .expect("evidence payload");
+        let binding = decode_canonical_payload(EventContractVersion::V4, m4[1].payload.get())
+            .expect("binding payload");
+
+        let mut partial = rewrap_v4_prefix_as_v5(&v4);
+        append_v5_payload_for_structural_test(&mut partial, evidence.clone());
+        assert!(
+            partial
+                .replay_pre_incremental_structural_prefix_for_store(
+                    V5StructuralPrefixCoordinates::new(
+                        partial.run_id(),
+                        partial.genesis_hash(),
+                        partial.canonical_prefix_bytes_for_store(),
+                        u64::try_from(partial.envelopes.len()).expect("partial count"),
+                        partial.tail_hash(),
+                    ),
+                )
+                .is_err()
+        );
+
+        let mut phase = V5StructuralPostPlanPhase::Inherited {
+            m4_bundle: V5StructuralM4BundlePhase::Idle,
+        };
+        let mut ids = BTreeSet::new();
+        assert!(advance_v5_structural_post_plan(&mut phase, &mut ids, &binding).is_err());
+
+        let plan_id = v4
+            .aggregate
+            .review_plans()
+            .next()
+            .expect("plan")
+            .id()
+            .clone();
+        let (registration, _, _) = v4_gluing_registration(
+            &v4,
+            &v4.aggregate,
+            &plan_id,
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            crate::AssignmentValueV4::Required,
+            BTreeSet::new(),
+        );
+        let first = PersistedPayload::ArtifactRegisteredV4(registration.clone());
+        advance_v5_structural_post_plan(&mut phase, &mut ids, &first)
+            .expect("first V4 registration");
+        assert!(advance_v5_structural_post_plan(&mut phase, &mut ids, &first).is_err());
+        let (second_registration, _, _) = v4_gluing_registration(
+            &v4,
+            &v4.aggregate,
+            &plan_id,
+            crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+            crate::AssignmentValueV4::Satisfied,
+            BTreeSet::new(),
+        );
+        advance_v5_structural_post_plan(
+            &mut phase,
+            &mut ids,
+            &PersistedPayload::ArtifactRegisteredV4(second_registration),
+        )
+        .expect("second V4 registration");
+        assert!(advance_v5_structural_post_plan(&mut phase, &mut ids, &evidence).is_err());
+        advance_v5_structural_post_plan(
+            &mut phase,
+            &mut ids,
+            &PersistedPayload::GluingBundleRecordedV4(
+                raw_payload(br#"{}"#.to_vec()).expect("syntactic raw M5 body"),
+            ),
+        )
+        .expect("M5 bundle position");
+        assert!(advance_v5_structural_post_plan(&mut phase, &mut ids, &first).is_err());
+    }
+
+    #[test]
     fn v5_pre_incremental_retained_oracle_charges_registration_spare_capacity() {
         let complete = complete_planned_v5();
         let mut state = complete
@@ -27492,6 +28296,63 @@ mod tests {
         assert_eq!(
             after - before,
             (after_capacity - before_capacity) * std::mem::size_of::<ArtifactRegisteredV3>()
+        );
+    }
+
+    #[test]
+    fn v5_structural_prefix_retained_oracle_charges_live_envelope_capacity() {
+        let mut complete = complete_planned_v5();
+        let before_capacity = complete.envelopes.capacity();
+        let before = {
+            let state = complete
+                .replay_pre_incremental_structural_prefix_for_store(
+                    V5StructuralPrefixCoordinates::new(
+                        complete.run_id(),
+                        complete.genesis_hash(),
+                        complete.canonical_prefix_bytes_for_store(),
+                        u64::try_from(complete.envelopes.len()).unwrap(),
+                        complete.tail_hash(),
+                    ),
+                )
+                .unwrap();
+            let observed = state.projection().retained_bytes_for_m6().unwrap();
+            let expected = state
+                .pre_incremental
+                .projection()
+                .retained_bytes_for_m6()
+                .unwrap()
+                + (size_of::<ReplayedV5PreIncrementalStructuralPrefixState>()
+                    - size_of::<ReplayedV5PreIncrementalState>())
+                + state.genesis_hash.allocated_bytes()
+                + state.tail_hash.allocated_bytes()
+                + usize::try_from(complete.full_resident_bytes_for_structural_store().unwrap())
+                    .unwrap();
+            assert_eq!(
+                observed, expected,
+                "every live and outer allocation is charged once"
+            );
+            observed
+        };
+        complete.envelopes.reserve(32);
+        let after_capacity = complete.envelopes.capacity();
+        let after = {
+            let state = complete
+                .replay_pre_incremental_structural_prefix_for_store(
+                    V5StructuralPrefixCoordinates::new(
+                        complete.run_id(),
+                        complete.genesis_hash(),
+                        complete.canonical_prefix_bytes_for_store(),
+                        u64::try_from(complete.envelopes.len()).unwrap(),
+                        complete.tail_hash(),
+                    ),
+                )
+                .unwrap();
+            state.projection().retained_bytes_for_m6().unwrap()
+        };
+        assert!(after_capacity > before_capacity);
+        assert_eq!(
+            after - before,
+            (after_capacity - before_capacity) * std::mem::size_of::<EventEnvelope>()
         );
     }
 
@@ -28101,6 +28962,62 @@ mod tests {
             );
         }
         result
+    }
+
+    /// Test-only transport of an already shaped V4 prefix into an independent
+    /// V5 chain. It deliberately changes the envelope version and chain hash
+    /// while preserving only the frozen payload vocabulary; no V4 authority
+    /// basis is transported.
+    fn rewrap_v4_prefix_as_v5(v4: &EventLogV4) -> EventLogV5 {
+        let request = RunGenesisBootstrapRequestV4::new(
+            v4.run_id().clone(),
+            v4.canonical_genesis_bytes().to_vec(),
+            v4.aggregate.program().repository_identity(),
+            v4.aggregate.program().snapshot_id().clone(),
+            v4.aggregate.program().profile_id(),
+            v4.aggregate.program().profile_version(),
+        )
+        .expect("V5 rewrap request");
+        let mut result = EventLogV5::from_bootstrap_request(request).expect("V5 bootstrap");
+        for legacy in v4.envelopes().iter().skip(1) {
+            let payload = decode_canonical_payload(EventContractVersion::V4, legacy.payload.get())
+                .expect("V4 fixture payload");
+            let sequence = u64::try_from(result.envelopes.len()).expect("V5 sequence") + 1;
+            let actor = payload.actor().to_owned();
+            let envelope = EventEnvelope::new(
+                EventContractVersion::V5,
+                result.run_id.clone(),
+                result.genesis_hash.clone(),
+                sequence,
+                actor,
+                sequence,
+                result.tail_hash().clone(),
+                payload,
+            )
+            .expect("rewrapped V5 envelope");
+            result
+                .append_sealed_envelope_v5(envelope)
+                .expect("append rewrapped V5 envelope");
+        }
+        result
+    }
+
+    fn append_v5_payload_for_structural_test(log: &mut EventLogV5, payload: PersistedPayload) {
+        let sequence = u64::try_from(log.envelopes.len()).expect("V5 sequence") + 1;
+        let actor = payload.actor().to_owned();
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            sequence,
+            actor,
+            sequence,
+            log.tail_hash().clone(),
+            payload,
+        )
+        .expect("V5 structural test envelope");
+        log.append_sealed_envelope_v5(envelope)
+            .expect("append V5 structural test envelope");
     }
 
     fn empty_v4_roots(aggregate: &ReviewAggregate) -> AuthorityTrustRootsV4 {

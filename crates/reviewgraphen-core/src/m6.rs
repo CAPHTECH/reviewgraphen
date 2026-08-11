@@ -8,7 +8,8 @@
 
 use crate::event::{
     HistoricalPrefixAdmissionV4, HistoricalPrefixProjectionV4, HistoricalSourceRecordKindV4,
-    HistoricalSourceRecordProjectionV4, HistoricalSourceRecordValueV4, V5PreIncrementalProjection,
+    HistoricalSourceRecordProjectionV4, HistoricalSourceRecordValueV4,
+    V5PreIncrementalStructuralPrefixProjection,
 };
 use crate::{
     ArtifactSourceV3, ArtifactSourceV4, AuthorityReplayBasisV4, ContentHash, DecisionOutcomeV3,
@@ -6509,7 +6510,7 @@ pub(crate) struct IncrementalStalenessInputV5<'a> {
     closure: &'a IncrementalSourceClosureV5,
     mapping: &'a M6MappingPhaseV5,
     correspondence: &'a M6ObligationCorrespondencePhaseV5,
-    target: &'a V5PreIncrementalProjection<'a>,
+    target: &'a V5PreIncrementalStructuralPrefixProjection<'a>,
     inventory: HistoricalSourceInventoryV5,
 }
 
@@ -6598,7 +6599,7 @@ fn staleness_input_external_reservation_bytes(
     source: &HistoricalPrefixAdmissionV4<'_>,
     mapping: &M6MappingPhaseV5,
     correspondence: &M6ObligationCorrespondencePhaseV5,
-    target: &V5PreIncrementalProjection<'_>,
+    target: &V5PreIncrementalStructuralPrefixProjection<'_>,
 ) -> M6Result<usize> {
     fn add(total: usize, value: usize) -> M6Result<usize> {
         total.checked_add(value).ok_or(M6Error::Incomplete {
@@ -6820,7 +6821,7 @@ impl<'a> IncrementalStalenessInputV5<'a> {
         closure: &'a IncrementalSourceClosureV5,
         mapping: &'a M6MappingPhaseV5,
         correspondence: &'a M6ObligationCorrespondencePhaseV5,
-        target: &'a V5PreIncrementalProjection<'a>,
+        target: &'a V5PreIncrementalStructuralPrefixProjection<'a>,
     ) -> M6Result<Self> {
         Self::new_with_working_limit(
             source_log,
@@ -6838,7 +6839,7 @@ impl<'a> IncrementalStalenessInputV5<'a> {
         closure: &'a IncrementalSourceClosureV5,
         mapping: &'a M6MappingPhaseV5,
         correspondence: &'a M6ObligationCorrespondencePhaseV5,
-        target: &'a V5PreIncrementalProjection<'a>,
+        target: &'a V5PreIncrementalStructuralPrefixProjection<'a>,
         working_limit: usize,
     ) -> M6Result<Self> {
         // This must remain the first operation: HPP generation, `known_ids`,
@@ -6853,11 +6854,23 @@ impl<'a> IncrementalStalenessInputV5<'a> {
             || source_admission.program_space().snapshot_id() != closure.source_snapshot_id()
             || target.tail_hash() != closure.target_predecessor_tail_hash()
             || target.run_id() != &closure.input.target_run_id
+            || target.genesis_hash() != &closure.input.target_genesis_hash
+            || target.predecessor_offset() != closure.input.target_predecessor_offset
+            || target.predecessor_event_count() != closure.input.target_predecessor_event_count
             || target.program_space().snapshot_id() != closure.target_snapshot_id()
             || target.universe().id() != closure.target_universe_id()
         {
             return Err(M6Error::InvalidHistoricalTopology(
-                "source/target replay tail or snapshot does not equal closure",
+                "source/target replay coordinates or snapshot do not equal closure",
+            ));
+        }
+        let accounting = target.accounting();
+        if accounting.canonical_prefix_bytes() != target.predecessor_offset()
+            || accounting.event_count() != target.predecessor_event_count()
+            || accounting.retained_envelope_bytes() == 0
+        {
+            return Err(M6Error::InvalidHistoricalTopology(
+                "target structural replay accounting does not bind its predecessor coordinates",
             ));
         }
         if mapping.morphism().source_closure_id() != closure.id()

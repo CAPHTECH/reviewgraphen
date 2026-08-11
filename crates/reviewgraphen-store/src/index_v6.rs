@@ -8,7 +8,9 @@
 
 use super::IndexError;
 use crate::{CasHash, CasStore, EventJournal, StoreRoot, StoreRootIdentity};
-use reviewgraphen_core::{ContentHash, ProgramSpace, StableId, canonical_json};
+use reviewgraphen_core::{
+    ContentHash, ProgramSpace, StableId, V5StructuralPrefixCoordinates, canonical_json,
+};
 use serde::Serialize;
 use std::io::Cursor;
 
@@ -272,10 +274,21 @@ fn project_complete_target(
     root: &StoreRoot,
 ) -> Result<(PreIncrementalIndexSnapshotV6, TargetProjectionObservedV6), IndexError> {
     let log = session.log();
-    let state = log
-        .replay_pre_incremental_state_for_store()
+    let event_count =
+        u64::try_from(log.envelopes().len()).map_err(|_| IndexError::IntegerOutOfRange)?;
+    // Keep the opaque Core-owned backing alive for this projection.  It
+    // checks the exact source-bound offset/count/tail tuple against the live
+    // EventLog allocation; Store reads only the narrow accepted facts below.
+    let structural_prefix = log
+        .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+            log.run_id(),
+            log.genesis_hash(),
+            session.confirmed_offset(),
+            event_count,
+            log.tail_hash(),
+        ))
         .map_err(|_| IndexError::ProjectionContractViolation)?;
-    let projection = state.projection();
+    let projection = structural_prefix.store_facts();
     let program = projection.program_space();
     let universe = projection.universe();
     let plan = projection.plan();
@@ -287,7 +300,7 @@ fn project_complete_target(
     let reader = crate::CasReader::open_existing(root)?;
     let mut largest_cas_bytes = Vec::new();
     let mut largest_cas_hash = None;
-    for registration in projection.registrations() {
+    for registration in projection.source_registrations() {
         let hash = CasHash::parse(registration.cas_hash().to_string())?;
         let mut bytes = Vec::new();
         bytes
@@ -315,8 +328,6 @@ fn project_complete_target(
         })
         .map_err(|_| IndexError::ProjectionContractViolation)?,
     );
-    let event_count =
-        u64::try_from(log.envelopes().len()).map_err(|_| IndexError::IntegerOutOfRange)?;
     let plan_body_hash = ContentHash::sha256(
         &plan
             .canonical_bytes()
