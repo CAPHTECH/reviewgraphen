@@ -37,6 +37,10 @@ pub enum EventContractVersion {
     V3,
     /// M5 contract with fresh homogeneous v4 envelopes and source-bound gluing.
     V4,
+    /// M6 contract with a fresh homogeneous v5 target stream.  V4 payload
+    /// bodies remain frozen; M6 payload bodies are added only by the M6 DTO
+    /// module and never upcast a source journal.
+    V5,
 }
 
 impl EventContractVersion {
@@ -48,6 +52,7 @@ impl EventContractVersion {
             Self::V2 => "reviewgraphen.review_event.v2",
             Self::V3 => "reviewgraphen.review_event.v3",
             Self::V4 => "reviewgraphen.review_event.v4",
+            Self::V5 => "reviewgraphen.review_event.v5",
         }
     }
 
@@ -57,6 +62,7 @@ impl EventContractVersion {
             "reviewgraphen.review_event.v2" => Ok(Self::V2),
             "reviewgraphen.review_event.v3" => Ok(Self::V3),
             "reviewgraphen.review_event.v4" => Ok(Self::V4),
+            "reviewgraphen.review_event.v5" => Ok(Self::V5),
             _ => Err(DomainError::EventSequence(
                 "unsupported event schema".to_owned(),
             )),
@@ -80,11 +86,18 @@ pub enum EventStreamGenesis<'a> {
     /// Fresh v4 uses the frozen v3 canonical baseline snapshot shape while
     /// requiring its distinct sequence-one v4 manifest and discriminator.
     V4(&'a [u8]),
+    /// Fresh v5 uses the same accepted ProgramSpace baseline shape, but its
+    /// envelopes are an independent v5 chain.  A V4 source is therefore read
+    /// only and can never be appended through this variant.
+    V5(&'a [u8]),
 }
 
 const SYSTEM_ACTOR: &str = "reviewgraphen-core@1";
 const RUN_GENESIS_SCHEMA: &str = "reviewgraphen.run_genesis.v1";
 const MAX_D1_EVENT_LINE_BYTES: usize = 1_048_576;
+const MAX_V5_REPLAY_EVENTS: u64 = 1_000_000;
+const MAX_V5_JOURNAL_PREFIX_BYTES: u64 = 67_108_864;
+const MAX_V5_REPLAY_WORKING_BYTES: u64 = 536_870_912;
 const MAX_EVENT_JSON_DEPTH: usize = 128;
 const MAX_EVENT_JSON_VALUES: usize = 65_536;
 const MAX_GENESIS_JSON_DEPTH: usize = 128;
@@ -1646,6 +1659,108 @@ impl ArtifactSourceV4 {
         }
         Ok(())
     }
+
+    fn allocated_bytes(&self) -> usize {
+        match self {
+            Self::RunGenesis { run_id } => run_id.allocated_bytes(),
+            Self::SnapshotIngest {
+                adapter_id,
+                run_id,
+                snapshot_id,
+            } => adapter_id
+                .capacity()
+                .saturating_add(run_id.allocated_bytes())
+                .saturating_add(snapshot_id.allocated_bytes()),
+            Self::ReviewerExecution {
+                execution_id,
+                reviewer_id,
+                run_id,
+            } => execution_id
+                .allocated_bytes()
+                .saturating_add(reviewer_id.capacity())
+                .saturating_add(run_id.allocated_bytes()),
+            Self::VerifierArtifact {
+                claim_id,
+                descriptor_id,
+                procedure_version,
+                run_id,
+                ..
+            } => claim_id
+                .allocated_bytes()
+                .saturating_add(descriptor_id.capacity())
+                .saturating_add(procedure_version.capacity())
+                .saturating_add(run_id.allocated_bytes()),
+            Self::ExternalHarnessWitness {
+                claim_body_hash,
+                claim_id,
+                descriptor_id,
+                genesis_hash,
+                harness_id,
+                harness_revision,
+                harness_source_hash,
+                policy_revision_hash,
+                procedure_version,
+                property_id,
+                repository_id,
+                repository_source_hash,
+                run_id,
+                snapshot_id,
+                test_artifact_id,
+                universe_id,
+            } => [
+                claim_body_hash.allocated_bytes(),
+                claim_id.allocated_bytes(),
+                descriptor_id.capacity(),
+                genesis_hash.allocated_bytes(),
+                harness_id.capacity(),
+                harness_revision.capacity(),
+                harness_source_hash.allocated_bytes(),
+                policy_revision_hash.allocated_bytes(),
+                procedure_version.capacity(),
+                property_id.capacity(),
+                repository_id.allocated_bytes(),
+                repository_source_hash.allocated_bytes(),
+                run_id.allocated_bytes(),
+                snapshot_id.allocated_bytes(),
+                test_artifact_id.allocated_bytes(),
+                universe_id.allocated_bytes(),
+            ]
+            .into_iter()
+            .fold(0_usize, usize::saturating_add),
+            Self::GluingInput {
+                context_id,
+                descriptor_hash,
+                descriptor_id,
+                descriptor_media_type,
+                genesis_hash,
+                plan_id,
+                policy_revision_hash,
+                profile_descriptor_id,
+                repository_id,
+                repository_source_hash,
+                run_id,
+                snapshot_id,
+                universe_id,
+                ..
+            } => [
+                context_id.allocated_bytes(),
+                descriptor_hash.allocated_bytes(),
+                descriptor_id.allocated_bytes(),
+                descriptor_media_type.capacity(),
+                genesis_hash.allocated_bytes(),
+                plan_id.allocated_bytes(),
+                policy_revision_hash.allocated_bytes(),
+                profile_descriptor_id.capacity(),
+                repository_id.allocated_bytes(),
+                repository_source_hash.allocated_bytes(),
+                run_id.allocated_bytes(),
+                snapshot_id.allocated_bytes(),
+                universe_id.allocated_bytes(),
+            ]
+            .into_iter()
+            .fold(0_usize, usize::saturating_add),
+        }
+    }
 }
 
 /// Strict event-v4 registration. Its `registration-v4` identity commits to
@@ -1778,6 +1893,16 @@ impl ArtifactRegistrationV4 {
             ));
         }
         Ok(())
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        self.schema
+            .capacity()
+            .saturating_add(self.id.allocated_bytes())
+            .saturating_add(self.run_id.allocated_bytes())
+            .saturating_add(self.cas_hash.allocated_bytes())
+            .saturating_add(self.media_type.capacity())
+            .saturating_add(self.source.allocated_bytes())
     }
 
     pub fn from_json_bytes(input: &[u8]) -> Result<Self> {
@@ -2454,6 +2579,17 @@ impl RunGenesisManifestV4 {
             ));
         }
         self.genesis_artifact.validate()
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        self.run_id
+            .allocated_bytes()
+            .saturating_add(self.event_contract_version.capacity())
+            .saturating_add(self.genesis_artifact.allocated_bytes())
+            .saturating_add(self.repository_identity.capacity())
+            .saturating_add(self.snapshot_id.allocated_bytes())
+            .saturating_add(self.profile_id.capacity())
+            .saturating_add(self.profile_version.capacity())
     }
 
     fn validate_against_genesis(
@@ -3410,6 +3546,59 @@ enum PersistedPayload {
 }
 
 impl PersistedPayload {
+    fn validation_heap_bytes_v5(&self) -> Result<u64> {
+        let bytes = match self {
+            Self::ObligationTransition { obligation_id, .. } => obligation_id.allocated_bytes(),
+            Self::RunGenesisManifestV4(value) => value.allocated_bytes(),
+            Self::ArtifactRegisteredV3(value) => value.allocated_bytes(),
+            Self::ArtifactRegisteredV4(value) => value.allocated_bytes(),
+            Self::GluingBundleRecordedV4(value) => value.get().len(),
+            Self::EvidenceRecordedV3(value) => {
+                usize::try_from(value.allocated_bytes().map_err(m4_domain_error)?)
+                    .unwrap_or(usize::MAX)
+            }
+            Self::EvidenceBoundV3(value) => {
+                usize::try_from(value.allocated_bytes().map_err(m4_domain_error)?)
+                    .unwrap_or(usize::MAX)
+            }
+            Self::VerificationRecordedV3(value) => {
+                usize::try_from(value.allocated_bytes().map_err(m4_domain_error)?)
+                    .unwrap_or(usize::MAX)
+            }
+            Self::DecisionRecordedV3(value) => {
+                usize::try_from(value.allocated_bytes().map_err(m4_domain_error)?)
+                    .unwrap_or(usize::MAX)
+            }
+            Self::FindingRecordedV3(value) => {
+                usize::try_from(value.allocated_bytes().map_err(m4_domain_error)?)
+                    .unwrap_or(usize::MAX)
+            }
+            Self::SnapshotSourcesRecorded(value) => value.allocated_bytes(),
+            Self::ReviewPlanRecorded(value) => value.allocated_bytes(),
+            Self::ContextEnvelopeProjected(value) => value.allocated_bytes(),
+            Self::ReviewExecutionRecorded(value) => value.allocated_bytes(),
+            Self::ClaimProposed(_)
+            | Self::EvidenceRecorded(_)
+            | Self::EvidenceBound(_)
+            | Self::VerificationRecorded(_)
+            | Self::DecisionRecorded(_)
+            | Self::FindingRecorded(_)
+            | Self::RunGenesisManifest(_)
+            | Self::RunGenesisManifestV3(_)
+            | Self::ArtifactRegistered(_) => {
+                return Err(DomainError::EventSequence(
+                    "V5 validation accounting refuses a payload outside the closed V5 vocabulary"
+                        .to_owned(),
+                ));
+            }
+        };
+        u64::try_from(bytes).map_err(|_| DomainError::Incomplete {
+            operation: "V5 decoded payload recursive heap",
+            limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })
+    }
+
     fn unreconciled_kind_and_id(&self) -> Option<(UnreconciledRecordKind, &StableId)> {
         match self {
             Self::EvidenceRecorded(value) => Some((UnreconciledRecordKind::Evidence, value.id())),
@@ -3485,7 +3674,7 @@ impl PersistedPayload {
                     | Self::ArtifactRegisteredV4(_)
                     | Self::GluingBundleRecordedV4(_)
             ),
-            EventContractVersion::V4 => !matches!(
+            EventContractVersion::V4 | EventContractVersion::V5 => !matches!(
                 self,
                 Self::ClaimProposed(_)
                     | Self::EvidenceRecorded(_)
@@ -4069,6 +4258,10 @@ fn top_level_schema_mentions_v4(input: &[u8]) -> Result<bool> {
     top_level_schema_mentions(input, EventContractVersion::V4)
 }
 
+fn top_level_schema_mentions_v5(input: &[u8]) -> Result<bool> {
+    top_level_schema_mentions(input, EventContractVersion::V5)
+}
+
 fn top_level_schema_mentions(input: &[u8], target: EventContractVersion) -> Result<bool> {
     let mut cursor = skip_json_whitespace(input, 0);
     if input.get(cursor) != Some(&b'{') {
@@ -4270,6 +4463,14 @@ fn validate_stream_payload_position(
                 "v4 streams require RunGenesisManifestV4 exactly at sequence one".to_owned(),
             ));
         }
+        EventContractVersion::V5
+            if (sequence == 1) != matches!(payload, PersistedPayload::RunGenesisManifestV4(_)) =>
+        {
+            return Err(DomainError::EventSequence(
+                "v5 streams require the frozen RunGenesisManifestV4 exactly at sequence one"
+                    .to_owned(),
+            ));
+        }
         _ => {}
     }
     Ok(())
@@ -4281,7 +4482,10 @@ fn reject_v2_legacy_execution_payload(
 ) -> Result<()> {
     if matches!(
         version,
-        EventContractVersion::V2 | EventContractVersion::V3 | EventContractVersion::V4
+        EventContractVersion::V2
+            | EventContractVersion::V3
+            | EventContractVersion::V4
+            | EventContractVersion::V5
     ) && matches!(payload, PersistedPayload::ClaimProposed(_))
     {
         return Err(DomainError::Validation(
@@ -4365,6 +4569,8 @@ pub struct EventEnvelope {
     event_hash: ContentHash,
     #[serde(skip)]
     canonical_line_bytes_v4: Option<u64>,
+    #[serde(skip)]
+    canonical_line_bytes_v5: Option<u64>,
 }
 
 impl EventEnvelope {
@@ -4382,9 +4588,11 @@ impl EventEnvelope {
             previous_event_hash: raw.previous_event_hash,
             event_hash: raw.event_hash,
             canonical_line_bytes_v4: None,
+            canonical_line_bytes_v5: None,
         };
         envelope.validate()?;
         envelope.set_canonical_line_bytes_v4()?;
+        envelope.set_canonical_line_bytes_v5()?;
         Ok(envelope)
     }
 
@@ -4460,9 +4668,11 @@ impl EventEnvelope {
             previous_event_hash,
             event_hash,
             canonical_line_bytes_v4: None,
+            canonical_line_bytes_v5: None,
         };
         envelope.validate()?;
         envelope.set_canonical_line_bytes_v4()?;
+        envelope.set_canonical_line_bytes_v5()?;
         if envelope.payload_is_d1()? {
             let _ = envelope.canonical_bytes()?;
         }
@@ -4491,6 +4701,31 @@ impl EventEnvelope {
             });
         }
         self.canonical_line_bytes_v4 = Some(line_bytes);
+        Ok(())
+    }
+
+    fn set_canonical_line_bytes_v5(&mut self) -> Result<()> {
+        if self.contract_version()? != EventContractVersion::V5 {
+            return Ok(());
+        }
+        let body_bytes = crate::canonical::canonical_json_count_bounded(
+            self,
+            MAX_D1_EVENT_LINE_BYTES - 1,
+            "event-v5 canonical line body",
+        )?;
+        let line_bytes = body_bytes.checked_add(1).ok_or(DomainError::Incomplete {
+            operation: "event-v5 canonical line bytes",
+            limit: MAX_D1_EVENT_LINE_BYTES,
+            observed: usize::MAX,
+        })?;
+        if line_bytes > u64::try_from(MAX_D1_EVENT_LINE_BYTES).unwrap_or(u64::MAX) {
+            return Err(DomainError::Incomplete {
+                operation: "event-v5 canonical line bytes",
+                limit: MAX_D1_EVENT_LINE_BYTES,
+                observed: usize::try_from(line_bytes).unwrap_or(usize::MAX),
+            });
+        }
+        self.canonical_line_bytes_v5 = Some(line_bytes);
         Ok(())
     }
 
@@ -4526,11 +4761,14 @@ impl EventEnvelope {
             .any(|window| window == b"review_execution_recorded");
         let is_v3 = top_level_schema_mentions_v3(input)?;
         let is_v4 = top_level_schema_mentions_v4(input)?;
-        if is_d2 || is_v3 || is_v4 {
+        let is_v5 = top_level_schema_mentions_v5(input)?;
+        if is_d2 || is_v3 || is_v4 || is_v5 {
             let operation = if is_d2 {
                 "D2 canonical event JSONL"
             } else if is_v3 {
                 "event-v3 canonical JSONL"
+            } else if is_v5 {
+                "event-v5 canonical JSONL"
             } else {
                 "event-v4 canonical JSONL"
             };
@@ -4838,7 +5076,8 @@ impl EventEnvelope {
                 "event stream requires a run ID even when empty".to_owned(),
             ));
         }
-        let mut previous_event_hash = event_chain_genesis_hash(run_id, genesis_hash)?;
+        let chain_genesis_hash = event_chain_genesis_hash(run_id, genesis_hash)?;
+        let mut previous_event_hash = &chain_genesis_hash;
         for (index, event) in events.iter().enumerate() {
             let expected = u64::try_from(index).map_err(|_| {
                 DomainError::EventSequence("event count does not fit u64".to_owned())
@@ -4853,14 +5092,14 @@ impl EventEnvelope {
             if &event.run_id != run_id
                 || &event.genesis_hash != genesis_hash
                 || event.sequence != expected
-                || event.previous_event_hash != previous_event_hash
+                || &event.previous_event_hash != previous_event_hash
             {
                 return Err(DomainError::EventSequence(
                     "event run IDs, genesis hashes, sequences, and hashes must form one contiguous prefix"
                     .to_owned(),
                 ));
             }
-            previous_event_hash = event.event_hash.clone();
+            previous_event_hash = &event.event_hash;
         }
         Ok(())
     }
@@ -4955,6 +5194,11 @@ impl EventEnvelope {
                     "v4 streams require the opaque strict v4 stream validator".to_owned(),
                 ));
             }
+            (EventContractVersion::V5, EventStreamGenesis::V5(_)) => {
+                return Err(DomainError::EventSequence(
+                    "v5 streams require the opaque strict v5 stream validator".to_owned(),
+                ));
+            }
             _ => {
                 return Err(DomainError::EventSequence(
                     "event stream genesis material must match its explicit contract version"
@@ -5043,6 +5287,92 @@ impl EventEnvelope {
         }
         Ok(())
     }
+
+    /// Strictly validates a homogeneous v5 stream for durable identity and
+    /// framing decisions.  V5 deliberately reuses the frozen V4 genesis body
+    /// while changing the envelope contract; this is not an upcast path and
+    /// therefore refuses every V4 envelope.
+    pub(crate) fn validate_v5_stream(
+        run_id: &StableId,
+        canonical_genesis_bytes: &[u8],
+        events: &[EventEnvelope],
+    ) -> Result<()> {
+        Self::validate_v5_stream_with_accounting(run_id, canonical_genesis_bytes, events)
+            .map(|_| ())
+    }
+
+    fn validate_v5_stream_with_accounting(
+        run_id: &StableId,
+        canonical_genesis_bytes: &[u8],
+        events: &[EventEnvelope],
+    ) -> Result<V5ValidationScratch> {
+        let snapshot = RunGenesisSnapshot::from_canonical_bytes_v3(canonical_genesis_bytes)?;
+        let snapshot_bytes = snapshot.owned_bytes()?;
+        let initial = snapshot.rebuild_aggregate()?;
+        let aggregate_bytes = initial.retained_bytes_v3()?;
+        initial.validate_pristine_for_event_log()?;
+        let genesis_hash = ContentHash::sha256(canonical_genesis_bytes);
+        Self::validate_sequence(EventContractVersion::V5, run_id, &genesis_hash, events)?;
+        if let Some(first) = events.first() {
+            let payload = decode_canonical_payload(EventContractVersion::V5, first.payload.get())?;
+            let PersistedPayload::RunGenesisManifestV4(manifest) = payload else {
+                return Err(DomainError::EventSequence(
+                    "V5 sequence one must carry the frozen RunGenesisManifestV4".to_owned(),
+                ));
+            };
+            manifest.validate_against_genesis(run_id, &snapshot, canonical_genesis_bytes)?;
+        }
+        let mut max_event_validation_bytes = 0_u64;
+        for envelope in events {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            let line_bytes = envelope.canonical_line_bytes_v5.ok_or_else(|| {
+                DomainError::EventSequence(
+                    "V5 validation requires the admitted LF-inclusive event line length".to_owned(),
+                )
+            })?;
+            let event_validation_bytes = line_bytes
+                .checked_add(payload.validation_heap_bytes_v5()?)
+                .ok_or(DomainError::Incomplete {
+                    operation: "V5 event validation recursive ownership",
+                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?;
+            max_event_validation_bytes = max_event_validation_bytes.max(event_validation_bytes);
+            if envelope.actor() != payload.actor() {
+                return Err(DomainError::EventSequence(
+                    "v5 event actor does not match its closed payload actor".to_owned(),
+                ));
+            }
+            validate_stream_payload_position(
+                EventContractVersion::V5,
+                envelope.sequence(),
+                &payload,
+            )?;
+            payload.validate_for_enclosing_run(run_id)?;
+        }
+        Ok(V5ValidationScratch {
+            snapshot_bytes,
+            aggregate_bytes,
+            max_event_validation_bytes,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct V5ValidationScratch {
+    snapshot_bytes: u64,
+    aggregate_bytes: u64,
+    max_event_validation_bytes: u64,
+}
+
+impl V5ValidationScratch {
+    #[allow(dead_code)] // Reserved for the crate-private Store/session admission builder.
+    const ZERO: Self = Self {
+        snapshot_bytes: 0,
+        aggregate_bytes: 0,
+        max_event_validation_bytes: 0,
+    };
 }
 
 /// Typed, hash-chain-validated event prefix for durable projections.
@@ -5106,6 +5436,14 @@ impl<'a> ValidatedEventView<'a> {
                     observed: usize::MAX,
                 })?,
             EventStreamGenesis::V4(bytes) => u64::try_from(bytes.len())
+                .ok()
+                .and_then(|length| length.checked_mul(2))
+                .ok_or(DomainError::Incomplete {
+                    operation: "validated genesis scratch",
+                    limit: working_limit_usize,
+                    observed: usize::MAX,
+                })?,
+            EventStreamGenesis::V5(bytes) => u64::try_from(bytes.len())
                 .ok()
                 .and_then(|length| length.checked_mul(2))
                 .ok_or(DomainError::Incomplete {
@@ -8835,7 +9173,10 @@ fn decode_payload(version: EventContractVersion, input: &str) -> Result<Persiste
             _ => unreachable!("closed D1 kind checked"),
         };
     }
-    if matches!(version, EventContractVersion::V3 | EventContractVersion::V4) {
+    if matches!(
+        version,
+        EventContractVersion::V3 | EventContractVersion::V4 | EventContractVersion::V5
+    ) {
         let payload = match raw.kind.as_str() {
             "run_genesis_manifest" if version == EventContractVersion::V3 => {
                 PersistedPayload::RunGenesisManifestV3(
@@ -8843,7 +9184,9 @@ fn decode_payload(version: EventContractVersion, input: &str) -> Result<Persiste
                         .map_err(|error| DomainError::Json(error.to_string()))?,
                 )
             }
-            "run_genesis_manifest" if version == EventContractVersion::V4 => {
+            "run_genesis_manifest"
+                if matches!(version, EventContractVersion::V4 | EventContractVersion::V5) =>
+            {
                 PersistedPayload::RunGenesisManifestV4(
                     serde_json::from_str(raw.data.get())
                         .map_err(|error| DomainError::Json(error.to_string()))?,
@@ -8853,13 +9196,17 @@ fn decode_payload(version: EventContractVersion, input: &str) -> Result<Persiste
                 serde_json::from_str(raw.data.get())
                     .map_err(|error| DomainError::Json(error.to_string()))?,
             ),
-            "artifact_registered_v4" if version == EventContractVersion::V4 => {
+            "artifact_registered_v4"
+                if matches!(version, EventContractVersion::V4 | EventContractVersion::V5) =>
+            {
                 PersistedPayload::ArtifactRegisteredV4(
                     serde_json::from_str(raw.data.get())
                         .map_err(|error| DomainError::Json(error.to_string()))?,
                 )
             }
-            "gluing_bundle_recorded_v4" if version == EventContractVersion::V4 => {
+            "gluing_bundle_recorded_v4"
+                if matches!(version, EventContractVersion::V4 | EventContractVersion::V5) =>
+            {
                 PersistedPayload::GluingBundleRecordedV4(raw_payload(
                     raw.data.get().as_bytes().to_vec(),
                 )?)
@@ -16856,6 +17203,532 @@ impl EventLogV4 {
     }
 }
 
+/// Closed homogeneous V5 envelope chain foundation.
+///
+/// The target event contract keeps the accepted V4 genesis body byte-for-byte
+/// but gives it a new V5 envelope chain.  This type deliberately does not
+/// replay authority-bearing payloads or expose a raw append command: M6
+/// session authority is reconstructed by the V5 session layer before its
+/// sealed methods can call [`Self::append_sealed_envelope_v5`].  Keeping the
+/// chain state separate from [`EventLogV4`] prevents accidental V4-to-V5
+/// upcasts or writes to the historical source stream.
+///
+/// External callers cannot turn a parsed envelope into append authority:
+///
+/// ```compile_fail
+/// use reviewgraphen_core::{EventEnvelope, EventLogV5};
+/// fn bypass(log: &mut EventLogV5, envelope: EventEnvelope) {
+///     log.append_sealed_envelope_v5(envelope).unwrap();
+/// }
+/// ```
+///
+/// Nor can they bypass Store/session admission with a standalone V5 prefix
+/// validator:
+///
+/// ```compile_fail
+/// use reviewgraphen_core::{EventEnvelope, StableId};
+/// fn bypass(run_id: &StableId, events: &[EventEnvelope]) {
+///     EventEnvelope::validate_v5_stream(run_id, b"{}", events).unwrap();
+/// }
+/// ```
+#[derive(Debug)]
+pub struct EventLogV5 {
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    canonical_genesis_bytes: Vec<u8>,
+    envelopes: Vec<EventEnvelope>,
+    canonical_prefix_bytes: u64,
+    limits: EventReplayLimitsV5,
+}
+
+/// Crate-private V5 admission limits. The Store milestone will replace this
+/// single-prefix seam with the ADR 0023 dual-session peak contract; keeping it
+/// non-public prevents a partial prefix budget from becoming protocol API.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EventReplayLimitsV5 {
+    max_events: u64,
+    max_canonical_bytes: u64,
+    max_retained_bytes: u64,
+    max_working_bytes: u64,
+}
+
+impl EventReplayLimitsV5 {
+    #[allow(dead_code)] // Reserved for the crate-private Store/session admission builder.
+    pub(crate) fn new(
+        max_events: u64,
+        max_canonical_bytes: u64,
+        max_retained_bytes: u64,
+        max_working_bytes: u64,
+    ) -> Result<Self> {
+        for (operation, observed, limit) in [
+            (
+                "V5 replay requested event count",
+                max_events,
+                MAX_V5_REPLAY_EVENTS,
+            ),
+            (
+                "V5 replay requested canonical journal bytes",
+                max_canonical_bytes,
+                MAX_V5_JOURNAL_PREFIX_BYTES,
+            ),
+            (
+                "V5 replay requested working bytes",
+                max_working_bytes,
+                MAX_V5_REPLAY_WORKING_BYTES,
+            ),
+        ] {
+            if observed > limit {
+                return Err(replay_incomplete(operation, limit, observed));
+            }
+        }
+        if max_retained_bytes > max_working_bytes {
+            return Err(replay_incomplete(
+                "V5 replay requested retained bytes",
+                max_working_bytes,
+                max_retained_bytes,
+            ));
+        }
+        Ok(Self {
+            max_events,
+            max_canonical_bytes,
+            max_retained_bytes,
+            max_working_bytes,
+        })
+    }
+
+    fn protocol_maximum() -> Self {
+        Self {
+            max_events: MAX_V5_REPLAY_EVENTS,
+            max_canonical_bytes: MAX_V5_JOURNAL_PREFIX_BYTES,
+            max_retained_bytes: MAX_V5_REPLAY_WORKING_BYTES,
+            max_working_bytes: MAX_V5_REPLAY_WORKING_BYTES,
+        }
+    }
+}
+
+/// Internal admission charge for one successful V5 structural replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // Reserved for the crate-private Store/session admission builder.
+pub(crate) struct EventReplayAccountingV5 {
+    canonical_prefix_bytes: u64,
+    retained_bytes: u64,
+    working_bytes: u64,
+}
+
+#[allow(dead_code)] // Reserved for the crate-private Store/session admission builder.
+impl EventReplayAccountingV5 {
+    #[must_use]
+    pub(crate) const fn canonical_prefix_bytes(self) -> u64 {
+        self.canonical_prefix_bytes
+    }
+
+    #[must_use]
+    pub(crate) const fn retained_bytes(self) -> u64 {
+        self.retained_bytes
+    }
+
+    #[must_use]
+    pub(crate) const fn working_bytes(self) -> u64 {
+        self.working_bytes
+    }
+}
+
+fn checked_v5_replay_add(
+    operation: &'static str,
+    limit: u64,
+    left: u64,
+    right: u64,
+) -> Result<u64> {
+    let observed = left.checked_add(right).ok_or(DomainError::Incomplete {
+        operation,
+        limit: usize::try_from(limit).unwrap_or(usize::MAX),
+        observed: usize::MAX,
+    })?;
+    if observed > limit {
+        return Err(replay_incomplete(operation, limit, observed));
+    }
+    Ok(observed)
+}
+
+#[allow(dead_code)] // Reserved for the crate-private Store/session admission builder.
+fn preflight_v5_replay_accounting(
+    run_id: &StableId,
+    genesis_hash: &ContentHash,
+    canonical_genesis_capacity: usize,
+    envelopes: &[EventEnvelope],
+    envelope_capacity: usize,
+    validation: V5ValidationScratch,
+    limits: EventReplayLimitsV5,
+) -> Result<EventReplayAccountingV5> {
+    let count = u64::try_from(envelopes.len())
+        .map_err(|_| replay_incomplete("V5 replay event count", limits.max_events, u64::MAX))?;
+    if count > limits.max_events {
+        return Err(replay_incomplete(
+            "V5 replay event count",
+            limits.max_events,
+            count,
+        ));
+    }
+
+    let mut canonical_prefix_bytes = 0_u64;
+    let mut envelope_heap_bytes = 0_u64;
+    for envelope in envelopes {
+        if envelope.contract_version()? != EventContractVersion::V5 {
+            return Err(DomainError::Validation(
+                "V5 replay refuses a non-V5 envelope".to_owned(),
+            ));
+        }
+        let line_bytes = envelope.canonical_line_bytes_v5.ok_or_else(|| {
+            DomainError::EventSequence(
+                "V5 replay envelope is missing its validated canonical line length".to_owned(),
+            )
+        })?;
+        canonical_prefix_bytes = checked_v5_replay_add(
+            "V5 replay canonical JSONL bytes",
+            limits.max_canonical_bytes,
+            canonical_prefix_bytes,
+            line_bytes,
+        )?;
+        envelope_heap_bytes = envelope_heap_bytes
+            .checked_add(u64::try_from(envelope.allocated_bytes()).unwrap_or(u64::MAX))
+            .ok_or(DomainError::Incomplete {
+                operation: "V5 replay retained envelope bytes",
+                limit: usize::try_from(limits.max_retained_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+    }
+
+    let envelope_slots = u64::try_from(
+        envelope_capacity.saturating_mul(size_of::<EventEnvelope>()),
+    )
+    .map_err(|_| DomainError::Incomplete {
+        operation: "V5 replay retained envelope slots",
+        limit: usize::try_from(limits.max_retained_bytes).unwrap_or(usize::MAX),
+        observed: usize::MAX,
+    })?;
+    let retained_parts = [
+        u64::try_from(canonical_genesis_capacity).unwrap_or(u64::MAX),
+        envelope_slots,
+        envelope_heap_bytes,
+        u64::try_from(run_id.allocated_bytes()).unwrap_or(u64::MAX),
+        u64::try_from(genesis_hash.allocated_bytes()).unwrap_or(u64::MAX),
+    ];
+    let mut retained_bytes = 0_u64;
+    for part in retained_parts {
+        retained_bytes = checked_v5_replay_add(
+            "V5 replay retained bytes",
+            limits.max_retained_bytes,
+            retained_bytes,
+            part,
+        )?;
+    }
+    let working_bytes = [
+        validation.snapshot_bytes,
+        validation.aggregate_bytes,
+        validation.max_event_validation_bytes,
+    ]
+    .into_iter()
+    .try_fold(retained_bytes, |total, part| {
+        checked_v5_replay_add(
+            "V5 replay working bytes",
+            limits.max_working_bytes,
+            total,
+            part,
+        )
+    })?;
+    Ok(EventReplayAccountingV5 {
+        canonical_prefix_bytes,
+        retained_bytes,
+        working_bytes,
+    })
+}
+
+impl EventLogV5 {
+    fn retained_bytes_v5(&self) -> Result<u64> {
+        let envelope_slots = self
+            .envelopes
+            .capacity()
+            .checked_mul(size_of::<EventEnvelope>())
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or(DomainError::Incomplete {
+                operation: "V5 replay realized retained envelope slots",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let envelope_heap = self.envelopes.iter().try_fold(0_u64, |total, envelope| {
+            total
+                .checked_add(u64::try_from(envelope.allocated_bytes()).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "V5 replay realized retained envelope bytes",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })
+        })?;
+        [
+            u64::try_from(self.canonical_genesis_bytes.capacity()).unwrap_or(u64::MAX),
+            envelope_slots,
+            envelope_heap,
+            u64::try_from(self.run_id.allocated_bytes()).unwrap_or(u64::MAX),
+            u64::try_from(self.genesis_hash.allocated_bytes()).unwrap_or(u64::MAX),
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, part| {
+            total.checked_add(part).ok_or(DomainError::Incomplete {
+                operation: "V5 replay realized retained bytes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+        })
+    }
+
+    /// Creates the only fresh V5 chain genesis.  The caller supplies the
+    /// ordinary typed target bootstrap request; all envelope metadata and the
+    /// frozen V4 manifest body are internally derived.
+    pub fn from_bootstrap_request(request: RunGenesisBootstrapRequestV4) -> Result<Self> {
+        let v4 = EventLogV4::from_bootstrap_request(request)?;
+        let genesis = EventEnvelope::new(
+            EventContractVersion::V5,
+            v4.run_id.clone(),
+            v4.genesis_hash.clone(),
+            1,
+            SYSTEM_ACTOR,
+            1,
+            event_chain_genesis_hash(&v4.run_id, &v4.genesis_hash)?,
+            PersistedPayload::RunGenesisManifestV4(v4.manifest.clone()),
+        )?;
+        EventEnvelope::validate_v5_stream(
+            &v4.run_id,
+            &v4.canonical_genesis_bytes,
+            std::slice::from_ref(&genesis),
+        )?;
+        let mut envelopes = Vec::new();
+        envelopes
+            .try_reserve_exact(1)
+            .map_err(|_| DomainError::Incomplete {
+                operation: "V5 bootstrap envelope ownership",
+                limit: 1,
+                observed: 1,
+            })?;
+        envelopes.push(genesis);
+        let canonical_prefix_bytes = envelopes[0].canonical_line_bytes_v5.ok_or_else(|| {
+            DomainError::EventSequence("V5 genesis line length missing".to_owned())
+        })?;
+        Ok(Self {
+            run_id: v4.run_id,
+            genesis_hash: v4.genesis_hash,
+            canonical_genesis_bytes: v4.canonical_genesis_bytes,
+            envelopes,
+            canonical_prefix_bytes,
+            limits: EventReplayLimitsV5::protocol_maximum(),
+        })
+    }
+
+    /// Reopens only a confirmed homogeneous V5 prefix.  This structural
+    /// admission validates exact canonical envelopes, hash-chain continuity,
+    /// genesis bindings, and the closed frozen inherited vocabulary.  V5
+    /// authority replay is deliberately separate and must revalidate CAS and
+    /// trust roots before producing an editable session.
+    #[allow(dead_code)] // Called only by the future opaque Store/session builder.
+    pub(crate) fn replay_confirmed_v5_prefix(
+        run_id: StableId,
+        canonical_genesis_bytes: Vec<u8>,
+        envelopes: Vec<EventEnvelope>,
+        limits: EventReplayLimitsV5,
+    ) -> Result<(Self, EventReplayAccountingV5)> {
+        if envelopes.is_empty() {
+            return Err(DomainError::EventSequence(
+                "V5 replay requires the sequence-one genesis manifest".to_owned(),
+            ));
+        }
+        let genesis_hash = ContentHash::sha256(&canonical_genesis_bytes);
+        // Count/cap the already-owned prefix before any genesis or payload
+        // decode can allocate typed recursive ownership.
+        preflight_v5_replay_accounting(
+            &run_id,
+            &genesis_hash,
+            canonical_genesis_bytes.capacity(),
+            &envelopes,
+            envelopes.capacity(),
+            V5ValidationScratch::ZERO,
+            limits,
+        )?;
+        let validation = EventEnvelope::validate_v5_stream_with_accounting(
+            &run_id,
+            &canonical_genesis_bytes,
+            &envelopes,
+        )?;
+        let preflight_accounting = preflight_v5_replay_accounting(
+            &run_id,
+            &genesis_hash,
+            canonical_genesis_bytes.capacity(),
+            &envelopes,
+            envelopes.capacity(),
+            validation,
+            limits,
+        )?;
+        let log = Self {
+            run_id,
+            genesis_hash,
+            canonical_genesis_bytes,
+            envelopes,
+            canonical_prefix_bytes: preflight_accounting.canonical_prefix_bytes,
+            limits,
+        };
+        let retained_bytes = log.retained_bytes_v5()?;
+        if retained_bytes > limits.max_retained_bytes {
+            return Err(replay_incomplete(
+                "V5 replay realized retained bytes",
+                limits.max_retained_bytes,
+                retained_bytes,
+            ));
+        }
+        let scratch_bytes = preflight_accounting
+            .working_bytes
+            .checked_sub(preflight_accounting.retained_bytes)
+            .ok_or(DomainError::Incomplete {
+                operation: "V5 replay scratch bytes",
+                limit: usize::try_from(limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let working_bytes = checked_v5_replay_add(
+            "V5 replay realized working bytes",
+            limits.max_working_bytes,
+            retained_bytes,
+            scratch_bytes,
+        )?;
+        Ok((
+            log,
+            EventReplayAccountingV5 {
+                canonical_prefix_bytes: preflight_accounting.canonical_prefix_bytes,
+                retained_bytes,
+                working_bytes,
+            },
+        ))
+    }
+
+    /// Appends one internally sealed V5 envelope after the authority/session
+    /// layer has checked its exact predecessor and next sequence.  This is
+    /// crate-visible only: callers cannot submit raw payloads or manufacture
+    /// a V5 canonical-state transition.
+    #[allow(dead_code)] // Consumed by the V5 authority-session module landing next.
+    pub(crate) fn append_sealed_envelope_v5(&mut self, envelope: EventEnvelope) -> Result<()> {
+        let expected_sequence = u64::try_from(self.envelopes.len())
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| DomainError::EventSequence("V5 sequence overflow".to_owned()))?;
+        if envelope.contract_version()? != EventContractVersion::V5
+            || envelope.run_id() != &self.run_id
+            || envelope.genesis_hash() != &self.genesis_hash
+            || envelope.sequence() != expected_sequence
+            || envelope.previous_event_hash() != self.tail_hash()
+        {
+            return Err(DomainError::EventSequence(
+                "sealed V5 envelope does not bind the current homogeneous prefix".to_owned(),
+            ));
+        }
+        let line_bytes = envelope.canonical_line_bytes_v5.ok_or_else(|| {
+            DomainError::EventSequence(
+                "sealed V5 envelope lacks its validated canonical line length".to_owned(),
+            )
+        })?;
+        let next_count = u64::try_from(self.envelopes.len())
+            .unwrap_or(u64::MAX)
+            .checked_add(1)
+            .ok_or_else(|| {
+                replay_incomplete("V5 append event count", self.limits.max_events, u64::MAX)
+            })?;
+        if next_count > self.limits.max_events {
+            return Err(replay_incomplete(
+                "V5 append event count",
+                self.limits.max_events,
+                next_count,
+            ));
+        }
+        let next_prefix_bytes = checked_v5_replay_add(
+            "V5 append canonical JSONL bytes",
+            self.limits.max_canonical_bytes,
+            self.canonical_prefix_bytes,
+            line_bytes,
+        )?;
+        envelope.validate()?;
+        let payload = decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+        if envelope.actor() != payload.actor() {
+            return Err(DomainError::EventSequence(
+                "sealed V5 envelope actor does not match its closed payload".to_owned(),
+            ));
+        }
+        validate_stream_payload_position(EventContractVersion::V5, envelope.sequence(), &payload)?;
+        payload.validate_for_enclosing_run(&self.run_id)?;
+        let event_validation_bytes = line_bytes
+            .checked_add(payload.validation_heap_bytes_v5()?)
+            .ok_or(DomainError::Incomplete {
+                operation: "V5 append validation recursive ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        drop(payload);
+        self.envelopes
+            .try_reserve(1)
+            .map_err(|_| DomainError::Incomplete {
+                operation: "V5 append envelope ownership",
+                limit: self.envelopes.capacity(),
+                observed: self.envelopes.len().saturating_add(1),
+            })?;
+        let prospective_retained = self
+            .retained_bytes_v5()?
+            .checked_add(u64::try_from(envelope.allocated_bytes()).unwrap_or(u64::MAX))
+            .ok_or(DomainError::Incomplete {
+                operation: "V5 append realized retained bytes",
+                limit: usize::try_from(self.limits.max_retained_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if prospective_retained > self.limits.max_retained_bytes {
+            return Err(replay_incomplete(
+                "V5 append realized retained bytes",
+                self.limits.max_retained_bytes,
+                prospective_retained,
+            ));
+        }
+        checked_v5_replay_add(
+            "V5 append realized working bytes",
+            self.limits.max_working_bytes,
+            prospective_retained,
+            event_validation_bytes,
+        )?;
+        self.envelopes.push(envelope);
+        self.canonical_prefix_bytes = next_prefix_bytes;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+
+    #[must_use]
+    pub fn genesis_hash(&self) -> &ContentHash {
+        &self.genesis_hash
+    }
+
+    #[must_use]
+    pub fn tail_hash(&self) -> &ContentHash {
+        self.envelopes
+            .last()
+            .expect("V5 log invariant requires a sequence-one genesis envelope")
+            .event_hash()
+    }
+
+    #[must_use]
+    pub fn envelopes(&self) -> &[EventEnvelope] {
+        &self.envelopes
+    }
+
+    #[must_use]
+    pub fn canonical_genesis_bytes(&self) -> &[u8] {
+        &self.canonical_genesis_bytes
+    }
+}
+
 /// Append-only, in-memory event log that deterministically replays a prefix
 /// only when it shares the canonical initial aggregate/genesis hash.
 #[derive(Clone, Debug)]
@@ -23133,9 +24006,9 @@ impl EventLog {
         run_id: StableId,
         initial: ReviewAggregate,
     ) -> Result<Self> {
-        if version == EventContractVersion::V4 {
+        if matches!(version, EventContractVersion::V4 | EventContractVersion::V5) {
             return Err(DomainError::Validation(
-                "event-v4 construction requires EventLogV4 bootstrap".to_owned(),
+                "event-v4/v5 construction requires a versioned bootstrap".to_owned(),
             ));
         }
         if run_id.kind() != "run" {
@@ -23204,7 +24077,9 @@ impl EventLog {
             EventContractVersion::V3 => v3_genesis_hash.ok_or_else(|| {
                 DomainError::Validation("missing preflighted v3 genesis hash".to_owned())
             })?,
-            EventContractVersion::V4 => unreachable!("v4 rejected above"),
+            EventContractVersion::V4 | EventContractVersion::V5 => {
+                unreachable!("versioned bootstrap rejected above")
+            }
         };
         let tail_hash = event_chain_genesis_hash(&run_id, &genesis_hash)?;
         Ok(Self {
@@ -24716,6 +25591,344 @@ mod tests {
             aggregate.program().profile_version(),
         )
         .expect("v4 request")
+    }
+
+    fn v5_replay_limits(max_events: u64, max_canonical_bytes: u64) -> EventReplayLimitsV5 {
+        EventReplayLimitsV5::new(max_events, max_canonical_bytes, 536_870_912, 536_870_912)
+            .expect("test V5 limits")
+    }
+
+    #[test]
+    fn v5_bootstrap_is_homogeneous_and_rejects_v4_upcast() {
+        let v5 = EventLogV5::from_bootstrap_request(v4_bootstrap_request()).expect("v5 bootstrap");
+        assert_eq!(v5.envelopes().len(), 1);
+        assert_eq!(
+            v5.envelopes()[0].contract_version().expect("v5 contract"),
+            EventContractVersion::V5
+        );
+        EventEnvelope::validate_v5_stream(
+            v5.run_id(),
+            v5.canonical_genesis_bytes(),
+            v5.envelopes(),
+        )
+        .expect("v5 genesis validates");
+
+        let v4 = EventLogV4::from_bootstrap_request(v4_bootstrap_request()).expect("v4 bootstrap");
+        let error = EventLogV5::replay_confirmed_v5_prefix(
+            v4.run_id().clone(),
+            v4.canonical_genesis_bytes().to_vec(),
+            v4.envelopes().to_vec(),
+            v5_replay_limits(16, 1024 * 1024),
+        )
+        .expect_err("a v4 prefix is not an upcastable v5 prefix");
+        assert!(matches!(
+            error,
+            DomainError::Validation(_) | DomainError::EventSequence(_)
+        ));
+    }
+
+    #[test]
+    fn v5_replay_rechecks_hash_chain_and_sealed_append_prefix() {
+        let mut log =
+            EventLogV5::from_bootstrap_request(v4_bootstrap_request()).expect("v5 bootstrap");
+        let obligation_id = aggregate()
+            .obligations()
+            .next()
+            .expect("fixture obligation")
+            .id()
+            .clone();
+        let appended = EventEnvelope::new(
+            EventContractVersion::V5,
+            log.run_id().clone(),
+            log.genesis_hash().clone(),
+            2,
+            SYSTEM_ACTOR,
+            2,
+            log.tail_hash().clone(),
+            PersistedPayload::ObligationTransition {
+                obligation_id,
+                next: ObligationLifecycle::Planned,
+            },
+        )
+        .expect("sealed v5 envelope");
+        log.append_sealed_envelope_v5(appended).expect("v5 append");
+
+        let (replayed, accounting) = EventLogV5::replay_confirmed_v5_prefix(
+            log.run_id().clone(),
+            log.canonical_genesis_bytes().to_vec(),
+            log.envelopes().to_vec(),
+            v5_replay_limits(16, 1024 * 1024),
+        )
+        .expect("replay exact v5 prefix");
+        assert_eq!(replayed.tail_hash(), log.tail_hash());
+        assert_eq!(replayed.envelopes().len(), 2);
+        assert_eq!(
+            accounting.canonical_prefix_bytes(),
+            log.envelopes()
+                .iter()
+                .map(|event| event.canonical_line_bytes_v5.expect("V5 line bytes"))
+                .sum::<u64>()
+        );
+        let exact_prefix_bytes = accounting.canonical_prefix_bytes();
+        EventLogV5::replay_confirmed_v5_prefix(
+            log.run_id().clone(),
+            log.canonical_genesis_bytes().to_vec(),
+            log.envelopes().to_vec(),
+            v5_replay_limits(2, exact_prefix_bytes),
+        )
+        .expect("multi-event LF-inclusive prefix exact limit");
+        assert!(
+            EventLogV5::replay_confirmed_v5_prefix(
+                log.run_id().clone(),
+                log.canonical_genesis_bytes().to_vec(),
+                log.envelopes().to_vec(),
+                v5_replay_limits(2, exact_prefix_bytes - 1),
+            )
+            .is_err()
+        );
+
+        let mut tampered = log.envelopes().to_vec();
+        tampered[1].previous_event_hash = ContentHash::sha256(b"not-the-v5-genesis");
+        assert!(
+            EventLogV5::replay_confirmed_v5_prefix(
+                log.run_id().clone(),
+                log.canonical_genesis_bytes().to_vec(),
+                tampered,
+                v5_replay_limits(16, 1024 * 1024),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v5_bootstrap_and_replay_are_deterministic_at_exact_limits() {
+        let left =
+            EventLogV5::from_bootstrap_request(v4_bootstrap_request()).expect("left v5 bootstrap");
+        let right =
+            EventLogV5::from_bootstrap_request(v4_bootstrap_request()).expect("right v5 bootstrap");
+        assert_eq!(left.run_id(), right.run_id());
+        assert_eq!(left.genesis_hash(), right.genesis_hash());
+        assert_eq!(left.tail_hash(), right.tail_hash());
+        assert_eq!(
+            left.envelopes()[0].canonical_bytes().expect("left bytes"),
+            right.envelopes()[0].canonical_bytes().expect("right bytes")
+        );
+
+        let exact_bytes = left.envelopes()[0]
+            .canonical_line_bytes_v5
+            .expect("validated V5 line bytes include LF");
+        let (_, unlimited_accounting) = EventLogV5::replay_confirmed_v5_prefix(
+            left.run_id().clone(),
+            left.canonical_genesis_bytes().to_vec(),
+            left.envelopes().to_vec(),
+            v5_replay_limits(1, exact_bytes),
+        )
+        .expect("exact replay limits are admitted");
+        assert_eq!(unlimited_accounting.canonical_prefix_bytes(), exact_bytes);
+        let exact_limits = EventReplayLimitsV5::new(
+            1,
+            exact_bytes,
+            unlimited_accounting.retained_bytes(),
+            unlimited_accounting.working_bytes(),
+        )
+        .expect("exact V5 limits");
+        EventLogV5::replay_confirmed_v5_prefix(
+            left.run_id().clone(),
+            left.canonical_genesis_bytes().to_vec(),
+            left.envelopes().to_vec(),
+            exact_limits,
+        )
+        .expect("exact retained and working limits are admitted");
+        assert!(
+            EventLogV5::replay_confirmed_v5_prefix(
+                left.run_id().clone(),
+                left.canonical_genesis_bytes().to_vec(),
+                left.envelopes().to_vec(),
+                EventReplayLimitsV5::new(
+                    0,
+                    exact_bytes,
+                    unlimited_accounting.retained_bytes(),
+                    unlimited_accounting.working_bytes(),
+                )
+                .expect("event-count V5 limits"),
+            )
+            .is_err()
+        );
+        assert!(
+            EventLogV5::replay_confirmed_v5_prefix(
+                left.run_id().clone(),
+                left.canonical_genesis_bytes().to_vec(),
+                left.envelopes().to_vec(),
+                EventReplayLimitsV5::new(
+                    1,
+                    exact_bytes - 1,
+                    unlimited_accounting.retained_bytes(),
+                    unlimited_accounting.working_bytes(),
+                )
+                .expect("canonical-byte V5 limits"),
+            )
+            .is_err()
+        );
+        assert!(
+            EventLogV5::replay_confirmed_v5_prefix(
+                left.run_id().clone(),
+                left.canonical_genesis_bytes().to_vec(),
+                left.envelopes().to_vec(),
+                EventReplayLimitsV5::new(
+                    1,
+                    exact_bytes,
+                    unlimited_accounting.retained_bytes() - 1,
+                    unlimited_accounting.working_bytes(),
+                )
+                .expect("retained-byte V5 limits"),
+            )
+            .is_err()
+        );
+        assert!(
+            EventLogV5::replay_confirmed_v5_prefix(
+                left.run_id().clone(),
+                left.canonical_genesis_bytes().to_vec(),
+                left.envelopes().to_vec(),
+                EventReplayLimitsV5::new(
+                    1,
+                    exact_bytes,
+                    unlimited_accounting.retained_bytes(),
+                    unlimited_accounting.working_bytes() - 1,
+                )
+                .expect("working-byte V5 limits"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v5_replay_refuses_foreign_genesis_run_and_order_and_legacy_constructor() {
+        let log = EventLogV5::from_bootstrap_request(v4_bootstrap_request()).expect("v5 bootstrap");
+        assert!(
+            EventLogV5::replay_confirmed_v5_prefix(
+                id("run:v5-foreign"),
+                log.canonical_genesis_bytes().to_vec(),
+                log.envelopes().to_vec(),
+                v5_replay_limits(16, 1024 * 1024),
+            )
+            .is_err()
+        );
+
+        let mut wrong_genesis = log.canonical_genesis_bytes().to_vec();
+        wrong_genesis[0] = b'[';
+        assert!(
+            EventLogV5::replay_confirmed_v5_prefix(
+                log.run_id().clone(),
+                wrong_genesis,
+                log.envelopes().to_vec(),
+                v5_replay_limits(16, 1024 * 1024),
+            )
+            .is_err()
+        );
+
+        let mut wrong_order = log.envelopes().to_vec();
+        wrong_order[0].sequence = 2;
+        assert!(
+            EventLogV5::replay_confirmed_v5_prefix(
+                log.run_id().clone(),
+                log.canonical_genesis_bytes().to_vec(),
+                wrong_order,
+                v5_replay_limits(16, 1024 * 1024),
+            )
+            .is_err()
+        );
+
+        assert!(
+            EventLog::new_with_version(EventContractVersion::V5, id("run:v5-legacy"), aggregate())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn v5_ingress_is_structurally_detected_before_serde_and_counts_mandatory_lf() {
+        let log = EventLogV5::from_bootstrap_request(v4_bootstrap_request()).expect("v5 bootstrap");
+        let body = log.envelopes()[0]
+            .canonical_bytes()
+            .expect("canonical v5 genesis envelope");
+        assert!(top_level_schema_mentions_v5(&body).expect("structural V5 discriminator"));
+        let parsed = EventEnvelope::from_json_slice(&body).expect("V5 envelope ingress");
+        assert_eq!(
+            parsed.canonical_line_bytes_v5,
+            Some(u64::try_from(body.len() + 1).expect("V5 line length"))
+        );
+
+        let mut exact = body.clone();
+        exact.resize(MAX_D1_EVENT_LINE_BYTES - 1, b' ');
+        EventEnvelope::from_json_slice(&exact).expect("exact V5 JSONL ingress including LF");
+        let mut plus_one = exact;
+        plus_one.push(b' ');
+        assert!(matches!(
+            EventEnvelope::from_json_slice(&plus_one),
+            Err(DomainError::Incomplete {
+                operation: "event-v5 canonical JSONL",
+                limit: MAX_D1_EVENT_LINE_BYTES,
+                observed,
+            })
+            if observed == MAX_D1_EVENT_LINE_BYTES + 1
+        ));
+
+        let mut malformed_oversized = br#"{"schema":"reviewgraphen.review_event.v5","x":"#.to_vec();
+        malformed_oversized.resize(MAX_D1_EVENT_LINE_BYTES, b'x');
+        assert!(matches!(
+            EventEnvelope::from_json_slice(&malformed_oversized),
+            Err(DomainError::Incomplete {
+                operation: "event-v5 canonical JSONL",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn v5_replay_accounting_arithmetic_overflow_is_typed() {
+        assert!(matches!(
+            checked_v5_replay_add("V5 overflow test", u64::MAX, u64::MAX, 1),
+            Err(DomainError::Incomplete {
+                operation: "V5 overflow test",
+                observed: usize::MAX,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn v5_internal_admission_limits_are_protocol_capped() {
+        EventReplayLimitsV5::new(
+            MAX_V5_REPLAY_EVENTS,
+            MAX_V5_JOURNAL_PREFIX_BYTES,
+            MAX_V5_REPLAY_WORKING_BYTES,
+            MAX_V5_REPLAY_WORKING_BYTES,
+        )
+        .expect("hard maxima are inclusive");
+
+        for refused in [
+            EventReplayLimitsV5::new(
+                MAX_V5_REPLAY_EVENTS + 1,
+                MAX_V5_JOURNAL_PREFIX_BYTES,
+                MAX_V5_REPLAY_WORKING_BYTES,
+                MAX_V5_REPLAY_WORKING_BYTES,
+            ),
+            EventReplayLimitsV5::new(
+                MAX_V5_REPLAY_EVENTS,
+                MAX_V5_JOURNAL_PREFIX_BYTES + 1,
+                MAX_V5_REPLAY_WORKING_BYTES,
+                MAX_V5_REPLAY_WORKING_BYTES,
+            ),
+            EventReplayLimitsV5::new(
+                MAX_V5_REPLAY_EVENTS,
+                MAX_V5_JOURNAL_PREFIX_BYTES,
+                MAX_V5_REPLAY_WORKING_BYTES,
+                MAX_V5_REPLAY_WORKING_BYTES + 1,
+            ),
+            EventReplayLimitsV5::new(1, 1, 2, 1),
+            EventReplayLimitsV5::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        ] {
+            assert!(matches!(refused, Err(DomainError::Incomplete { .. })));
+        }
     }
 
     struct EmptyV4Resolver;
@@ -29932,10 +31145,14 @@ mod tests {
             previous_event_hash,
             event_hash,
             canonical_line_bytes_v4: None,
+            canonical_line_bytes_v5: None,
         };
         envelope
             .set_canonical_line_bytes_v4()
             .expect("canonical V4 line bytes");
+        envelope
+            .set_canonical_line_bytes_v5()
+            .expect("canonical V5 line bytes");
         envelope
     }
 

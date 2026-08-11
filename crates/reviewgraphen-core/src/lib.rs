@@ -73,7 +73,7 @@ pub use event::{
     BorrowedStaticStrIterV4, BorrowedStringSetIterV4, BorrowedStringSliceIterV4,
     BorrowedV4EventMetadata, BorrowedVerificationProjectionV3, DecisionAdmissionV4,
     DecisionInputV3, DecisionReceiptV4, DecodedPayload, Event, EventAdmissions, EventCommand,
-    EventContractVersion, EventEnvelope, EventLog, EventLogV4, EventReplayLimits,
+    EventContractVersion, EventEnvelope, EventLog, EventLogV4, EventLogV5, EventReplayLimits,
     EventStreamGenesis, EventViewAccounting, EvidenceAdmissionV4, EvidenceBindingAdmission,
     EvidenceBindingAdmissionV4, ExpectedAuthorityEventV4, ExpectedVerificationAttemptV3,
     ExternalWitnessAdmissionV3, ExternalWitnessAdmissionV4, FindingReceiptV4,
