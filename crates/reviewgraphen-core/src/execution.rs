@@ -1923,6 +1923,10 @@ impl ValidatedExecutionBundle {
     pub(crate) fn into_parts(self) -> (ReviewExecutionRecorded, ReviewerRawClosure) {
         (self.recorded, self.raw_closure)
     }
+
+    pub(crate) fn parts(&self) -> (&ReviewExecutionRecorded, &ReviewerRawClosure) {
+        (&self.recorded, &self.raw_closure)
+    }
     #[must_use]
     pub fn execution(&self) -> &ExecutionRecord {
         &self.recorded.execution

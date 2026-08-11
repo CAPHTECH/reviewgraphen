@@ -17,9 +17,11 @@ use serde::de::Visitor;
 use serde::ser::{SerializeSeq, SerializeStruct};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, value::RawValue};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::mem::size_of;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 /// The immutable wire contract carried by every envelope in a stream.
 ///
@@ -75,6 +77,9 @@ pub enum EventStreamGenesis<'a> {
     V2Verified(&'a VerifiedV2Genesis),
     /// Fresh v3 uses the same canonical baseline snapshot shape as v2.
     V3(&'a [u8]),
+    /// Fresh v4 uses the frozen v3 canonical baseline snapshot shape while
+    /// requiring its distinct sequence-one v4 manifest and discriminator.
+    V4(&'a [u8]),
 }
 
 const SYSTEM_ACTOR: &str = "reviewgraphen-core@1";
@@ -2617,6 +2622,41 @@ fn validate_v3_genesis_decoded_envelope(
     validate_v3_genesis_contract(run_id, initial, bytes, manifest)
 }
 
+fn validate_v4_genesis_envelope(
+    run_id: &StableId,
+    initial: &ReviewAggregate,
+    bytes: &[u8],
+    envelope: &EventEnvelope,
+) -> Result<RunGenesisSnapshot> {
+    let snapshot = RunGenesisSnapshot::from_canonical_bytes_v3(bytes)?;
+    let rebuilt = snapshot.rebuild_aggregate()?;
+    let rebuilt_bytes = RunGenesisSnapshot::from_aggregate_v3(&rebuilt)?.canonical_bytes_v3()?;
+    let initial_bytes = encode_exact_compact_json(
+        &BorrowedRunGenesisSnapshot(initial),
+        "event-v4 genesis validation bytes",
+    )?;
+    if rebuilt_bytes != initial_bytes {
+        return Err(DomainError::Validation(
+            "verified v4 genesis bytes do not reconstruct the supplied initial aggregate"
+                .to_owned(),
+        ));
+    }
+    if envelope.genesis_hash != ContentHash::sha256(bytes) || envelope.sequence != 1 {
+        return Err(DomainError::EventSequence(
+            "v4 genesis manifest must occupy sequence one and bind the canonical genesis CAS"
+                .to_owned(),
+        ));
+    }
+    let payload = decode_canonical_payload(EventContractVersion::V4, envelope.payload.get())?;
+    let PersistedPayload::RunGenesisManifestV4(manifest) = payload else {
+        return Err(DomainError::EventSequence(
+            "v4 sequence one must carry RunGenesisManifestV4".to_owned(),
+        ));
+    };
+    manifest.validate_against_genesis(run_id, &snapshot, bytes)?;
+    Ok(snapshot)
+}
+
 /// One persisted source entry, referring to a prior registration rather than
 /// embedding workspace bytes in the event stream.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -4852,6 +4892,11 @@ impl EventEnvelope {
                 let snapshot = RunGenesisSnapshot::from_canonical_bytes_v3(bytes)?;
                 (ContentHash::sha256(bytes), Some(snapshot), None)
             }
+            (EventContractVersion::V4, EventStreamGenesis::V4(_)) => {
+                return Err(DomainError::EventSequence(
+                    "v4 streams require the opaque strict v4 stream validator".to_owned(),
+                ));
+            }
             _ => {
                 return Err(DomainError::EventSequence(
                     "event stream genesis material must match its explicit contract version"
@@ -4904,6 +4949,41 @@ impl EventEnvelope {
             verified_pristine_hash: verified.map(|value| value.pristine_aggregate_hash.clone()),
             events,
         })
+    }
+
+    /// Strictly validates a homogeneous v4 stream for durable identity and
+    /// framing decisions without exposing its closed payload values. This is
+    /// intentionally structural: authority replay still requires
+    /// [`EventLogV4::replay_confirmed_v4_prefix`].
+    pub fn validate_v4_stream(
+        run_id: &StableId,
+        canonical_genesis_bytes: &[u8],
+        events: &[EventEnvelope],
+    ) -> Result<()> {
+        let snapshot = RunGenesisSnapshot::from_canonical_bytes_v3(canonical_genesis_bytes)?;
+        let initial = snapshot.rebuild_aggregate()?;
+        initial.validate_pristine_for_event_log()?;
+        let genesis_hash = ContentHash::sha256(canonical_genesis_bytes);
+        Self::validate_sequence(EventContractVersion::V4, run_id, &genesis_hash, events)?;
+        if let Some(first) = events.first() {
+            validate_v4_genesis_envelope(run_id, &initial, canonical_genesis_bytes, first)?;
+        }
+        for envelope in events {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V4, envelope.payload.get())?;
+            if envelope.actor() != payload.actor() {
+                return Err(DomainError::EventSequence(
+                    "v4 event actor does not match its closed payload actor".to_owned(),
+                ));
+            }
+            validate_stream_payload_position(
+                EventContractVersion::V4,
+                envelope.sequence(),
+                &payload,
+            )?;
+            payload.validate_for_enclosing_run(run_id)?;
+        }
+        Ok(())
     }
 }
 
@@ -4960,6 +5040,14 @@ impl<'a> ValidatedEventView<'a> {
                 })?,
             EventStreamGenesis::V2Verified(_) => 0,
             EventStreamGenesis::V3(bytes) => u64::try_from(bytes.len())
+                .ok()
+                .and_then(|length| length.checked_mul(2))
+                .ok_or(DomainError::Incomplete {
+                    operation: "validated genesis scratch",
+                    limit: working_limit_usize,
+                    observed: usize::MAX,
+                })?,
+            EventStreamGenesis::V4(bytes) => u64::try_from(bytes.len())
                 .ok()
                 .and_then(|length| length.checked_mul(2))
                 .ok_or(DomainError::Incomplete {
@@ -7459,9 +7547,86 @@ fn v4_authority_position_digest(
 
 /// Tail-bound replay witness. It is intentionally neither cloneable nor
 /// serializable and has no public constructor.
+static NEXT_V4_SESSION_IDENTITY: AtomicU64 = AtomicU64::new(1);
+
+/// Process-local, one-owner identity used to prevent a prepared v4 value from
+/// crossing between independently locked replay sessions that happen to name
+/// the same durable prefix.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::OpaqueSessionIdentityV4>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::OpaqueSessionIdentityV4>();
+/// ```
+#[derive(Debug)]
+pub struct OpaqueSessionIdentityV4 {
+    digest: ContentHash,
+    replay_binding: RefCell<Option<SessionReplayBindingV4>>,
+}
+
+#[derive(Debug)]
+struct SessionReplayBindingV4 {
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    confirmed_tail_hash: ContentHash,
+}
+
+impl OpaqueSessionIdentityV4 {
+    /// Creates a fresh process-local identity. It grants no durable or review
+    /// authority and is useful only while held by one exclusive Store session.
+    #[must_use]
+    pub fn fresh() -> Self {
+        let ordinal = NEXT_V4_SESSION_IDENTITY.fetch_add(1, AtomicOrdering::Relaxed);
+        let process = std::process::id();
+        Self {
+            digest: ContentHash::sha256(
+                format!("reviewgraphen-v4-session:{process}:{ordinal}").as_bytes(),
+            ),
+            replay_binding: RefCell::new(None),
+        }
+    }
+
+    fn matches(&self, digest: &ContentHash) -> bool {
+        &self.digest == digest
+    }
+
+    fn bind_confirmed_replay(
+        &self,
+        run_id: &StableId,
+        genesis_hash: &ContentHash,
+        confirmed_tail_hash: &ContentHash,
+        envelopes: &[EventEnvelope],
+    ) -> Result<()> {
+        let mut binding = self.replay_binding.borrow_mut();
+        if let Some(previous) = binding.as_ref() {
+            let extends_previous = previous.run_id == *run_id
+                && previous.genesis_hash == *genesis_hash
+                && previous.confirmed_tail_hash != *confirmed_tail_hash
+                && envelopes
+                    .iter()
+                    .take(envelopes.len().saturating_sub(1))
+                    .any(|envelope| envelope.event_hash() == &previous.confirmed_tail_hash);
+            if !extends_previous {
+                return Err(DomainError::AuthorityReplayBasisMismatch);
+            }
+        }
+        *binding = Some(SessionReplayBindingV4 {
+            run_id: run_id.clone(),
+            genesis_hash: genesis_hash.clone(),
+            confirmed_tail_hash: confirmed_tail_hash.clone(),
+        });
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct AuthorityReplayBasisV4 {
     schema: &'static str,
+    session_identity: ContentHash,
     run_id: StableId,
     genesis_hash: ContentHash,
     confirmed_tail_hash: ContentHash,
@@ -7473,8 +7638,57 @@ pub struct AuthorityReplayBasisV4 {
     basis_digest: ContentHash,
 }
 
+#[allow(clippy::too_many_arguments)] // Every exact basis field is an independent digest input.
+fn authority_replay_basis_digest_v4(
+    session_identity: &ContentHash,
+    run_id: &StableId,
+    genesis_hash: &ContentHash,
+    confirmed_tail_hash: &ContentHash,
+    confirmed_event_count: u64,
+    next_sequence: u64,
+    policy_revision_hash: &ContentHash,
+    inherited_m4_entries: &[AuthorityReplayEntryV3AtV4],
+    gluing_input_entries: &[GluingInputReplayEntryV4],
+) -> Result<ContentHash> {
+    let inherited_m4_entry_digests = inherited_m4_entries
+        .iter()
+        .map(AuthorityReplayEntryV3AtV4::digest_view)
+        .collect::<Vec<_>>();
+    let gluing_input_entry_digests = gluing_input_entries
+        .iter()
+        .map(GluingInputReplayEntryV4::digest_view)
+        .collect::<Vec<_>>();
+    #[derive(Serialize)]
+    struct Body<'entries, 'data> {
+        confirmed_event_count: u64,
+        confirmed_tail_hash: &'data ContentHash,
+        genesis_hash: &'data ContentHash,
+        gluing_input_entries: &'entries [GluingInputReplayEntryV4Digest<'data>],
+        inherited_m4_entries: &'entries [AuthorityReplayEntryV3AtV4Digest<'data>],
+        next_sequence: u64,
+        policy_revision_hash: &'data ContentHash,
+        run_id: &'data StableId,
+        schema: &'static str,
+        session_identity: &'data ContentHash,
+    }
+    Ok(ContentHash::sha256(&canonical_json(&Body {
+        confirmed_event_count,
+        confirmed_tail_hash,
+        genesis_hash,
+        gluing_input_entries: &gluing_input_entry_digests,
+        inherited_m4_entries: &inherited_m4_entry_digests,
+        next_sequence,
+        policy_revision_hash,
+        run_id,
+        schema: "reviewgraphen.authority_replay_basis.v4",
+        session_identity,
+    })?))
+}
+
 impl AuthorityReplayBasisV4 {
+    #[allow(clippy::too_many_arguments)] // Every exact replay coordinate is independently bound.
     fn build(
+        session_identity: ContentHash,
         run_id: StableId,
         genesis_hash: ContentHash,
         confirmed_tail_hash: ContentHash,
@@ -7486,40 +7700,21 @@ impl AuthorityReplayBasisV4 {
         let next_sequence = confirmed_event_count.checked_add(1).ok_or_else(|| {
             DomainError::EventSequence("event-v4 replay sequence overflow".to_owned())
         })?;
-        let inherited_m4_entry_digests = inherited_m4_entries
-            .iter()
-            .map(AuthorityReplayEntryV3AtV4::digest_view)
-            .collect::<Vec<_>>();
-        let gluing_input_entry_digests = gluing_input_entries
-            .iter()
-            .map(GluingInputReplayEntryV4::digest_view)
-            .collect::<Vec<_>>();
-        #[derive(Serialize)]
-        struct Body<'entries, 'data> {
-            confirmed_event_count: u64,
-            confirmed_tail_hash: &'data ContentHash,
-            genesis_hash: &'data ContentHash,
-            gluing_input_entries: &'entries [GluingInputReplayEntryV4Digest<'data>],
-            inherited_m4_entries: &'entries [AuthorityReplayEntryV3AtV4Digest<'data>],
-            next_sequence: u64,
-            policy_revision_hash: &'data ContentHash,
-            run_id: &'data StableId,
-            schema: &'static str,
-        }
         let schema = "reviewgraphen.authority_replay_basis.v4";
-        let basis_digest = ContentHash::sha256(&canonical_json(&Body {
+        let basis_digest = authority_replay_basis_digest_v4(
+            &session_identity,
+            &run_id,
+            &genesis_hash,
+            &confirmed_tail_hash,
             confirmed_event_count,
-            confirmed_tail_hash: &confirmed_tail_hash,
-            genesis_hash: &genesis_hash,
-            gluing_input_entries: &gluing_input_entry_digests,
-            inherited_m4_entries: &inherited_m4_entry_digests,
             next_sequence,
-            policy_revision_hash: &policy_revision_hash,
-            run_id: &run_id,
-            schema,
-        })?);
+            &policy_revision_hash,
+            &inherited_m4_entries,
+            &gluing_input_entries,
+        )?;
         Ok(Self {
             schema,
+            session_identity,
             run_id,
             genesis_hash,
             confirmed_tail_hash,
@@ -7572,12 +7767,761 @@ impl AuthorityReplayBasisV4 {
     pub fn basis_digest(&self) -> &ContentHash {
         &self.basis_digest
     }
+
+    #[must_use]
+    pub fn session_identity_digest(&self) -> &ContentHash {
+        &self.session_identity
+    }
+
+    fn validate_for_log_v4(&self, log: &EventLogV4) -> Result<()> {
+        let event_count = u64::try_from(log.envelopes.len())
+            .map_err(|_| DomainError::EventSequence("event-v4 event count overflow".to_owned()))?;
+        if self.run_id != log.run_id
+            || self.session_identity != log.session_identity
+            || self.genesis_hash != log.genesis_hash
+            || self.confirmed_tail_hash != log.tail_hash
+            || self.confirmed_event_count != event_count
+            || self.next_sequence
+                != event_count.checked_add(1).ok_or_else(|| {
+                    DomainError::EventSequence("event-v4 append sequence overflow".to_owned())
+                })?
+            || self.basis_digest
+                != authority_replay_basis_digest_v4(
+                    &self.session_identity,
+                    &self.run_id,
+                    &self.genesis_hash,
+                    &self.confirmed_tail_hash,
+                    self.confirmed_event_count,
+                    self.next_sequence,
+                    &self.policy_revision_hash,
+                    &self.inherited_m4_entries,
+                    &self.gluing_input_entries,
+                )?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ArtifactRegistrationV3AtV4SourceRole {
+    SnapshotIngest {
+        adapter_id: String,
+        snapshot_id: StableId,
+        source_bundle_hash: ContentHash,
+        source_bundle_total_bytes: u64,
+        source_bundle_entry_count: u64,
+        artifact_id: StableId,
+        normalized_path: String,
+        content_hash: ContentHash,
+        line_count: u64,
+    },
+    ReviewerRaw {
+        execution_id: StableId,
+        reviewer_id: String,
+        raw_output_hash: ContentHash,
+        raw_output_size: u64,
+        raw_output_media_type: String,
+        raw_output_sensitivity: ArtifactSensitivity,
+    },
+    VerifierInput {
+        claim_id: StableId,
+        claim_body_hash: ContentHash,
+        descriptor_id: String,
+        procedure_version: String,
+    },
+    VerifierOutput {
+        claim_id: StableId,
+        claim_body_hash: ContentHash,
+        descriptor_id: String,
+        procedure_version: String,
+        expected_result_hash: ContentHash,
+    },
+    ExternalHarnessWitness {
+        harness_binding: Box<HarnessBindingRoleV4>,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case", tag = "role")]
+enum ArtifactRegistrationV3AtV4SourceRoleDigest<'a> {
+    SnapshotIngest {
+        adapter_id: &'a str,
+        snapshot_id: &'a StableId,
+        source_bundle_hash: &'a ContentHash,
+        source_bundle_total_bytes: u64,
+        source_bundle_entry_count: u64,
+        artifact_id: &'a StableId,
+        normalized_path: &'a str,
+        content_hash: &'a ContentHash,
+        line_count: u64,
+    },
+    ReviewerRaw {
+        execution_id: &'a StableId,
+        reviewer_id: &'a str,
+        raw_output_hash: &'a ContentHash,
+        raw_output_size: u64,
+        raw_output_media_type: &'a str,
+        raw_output_sensitivity: ArtifactSensitivity,
+    },
+    VerifierInput {
+        claim_id: &'a StableId,
+        claim_body_hash: &'a ContentHash,
+        descriptor_id: &'a str,
+        procedure_version: &'a str,
+    },
+    VerifierOutput {
+        claim_id: &'a StableId,
+        claim_body_hash: &'a ContentHash,
+        descriptor_id: &'a str,
+        procedure_version: &'a str,
+        expected_result_hash: &'a ContentHash,
+    },
+    ExternalHarnessWitness {
+        harness_binding: HarnessBindingRoleV4Digest<'a>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct HarnessBindingRoleV4 {
+    policy_revision_hash: ContentHash,
+    repository_id: StableId,
+    repository_source_hash: ContentHash,
+    harness_id: String,
+    harness_revision: String,
+    harness_source_hash: ContentHash,
+    test_artifact_id: StableId,
+    descriptor_id: String,
+    procedure_version: String,
+    result_hash: ContentHash,
+    result_size: u64,
+    result_media_type: String,
+    result_sensitivity: ArtifactSensitivity,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    snapshot_id: StableId,
+    universe_id: StableId,
+    property_id: String,
+    claim_id: StableId,
+    claim_body_hash: ContentHash,
+}
+
+#[derive(Serialize)]
+struct HarnessBindingRoleV4Digest<'a> {
+    claim_body_hash: &'a ContentHash,
+    claim_id: &'a StableId,
+    descriptor_id: &'a str,
+    genesis_hash: &'a ContentHash,
+    harness_id: &'a str,
+    harness_revision: &'a str,
+    harness_source_hash: &'a ContentHash,
+    policy_revision_hash: &'a ContentHash,
+    procedure_version: &'a str,
+    property_id: &'a str,
+    repository_id: &'a StableId,
+    repository_source_hash: &'a ContentHash,
+    result_hash: &'a ContentHash,
+    result_media_type: &'a str,
+    result_sensitivity: ArtifactSensitivity,
+    result_size: u64,
+    run_id: &'a StableId,
+    snapshot_id: &'a StableId,
+    test_artifact_id: &'a StableId,
+    universe_id: &'a StableId,
+}
+
+impl HarnessBindingRoleV4 {
+    fn from_root(root: &AuthorityHarnessBindingV3Tuple) -> Self {
+        Self {
+            policy_revision_hash: root.policy_revision_hash.clone(),
+            repository_id: root.repository_id.clone(),
+            repository_source_hash: root.repository_source_hash.clone(),
+            harness_id: root.harness_id.clone(),
+            harness_revision: root.harness_revision.clone(),
+            harness_source_hash: root.harness_source_hash.clone(),
+            test_artifact_id: root.test_artifact_id.clone(),
+            descriptor_id: root.descriptor_id.clone(),
+            procedure_version: root.procedure_version.clone(),
+            result_hash: root.result_hash.clone(),
+            result_size: root.result_size,
+            result_media_type: root.result_media_type.clone(),
+            result_sensitivity: root.result_sensitivity,
+            run_id: root.run_id.clone(),
+            genesis_hash: root.genesis_hash.clone(),
+            snapshot_id: root.snapshot_id.clone(),
+            universe_id: root.universe_id.clone(),
+            property_id: root.property_id.clone(),
+            claim_id: root.claim_id.clone(),
+            claim_body_hash: root.claim_body_hash.clone(),
+        }
+    }
+
+    fn digest_view(&self) -> HarnessBindingRoleV4Digest<'_> {
+        HarnessBindingRoleV4Digest {
+            claim_body_hash: &self.claim_body_hash,
+            claim_id: &self.claim_id,
+            descriptor_id: &self.descriptor_id,
+            genesis_hash: &self.genesis_hash,
+            harness_id: &self.harness_id,
+            harness_revision: &self.harness_revision,
+            harness_source_hash: &self.harness_source_hash,
+            policy_revision_hash: &self.policy_revision_hash,
+            procedure_version: &self.procedure_version,
+            property_id: &self.property_id,
+            repository_id: &self.repository_id,
+            repository_source_hash: &self.repository_source_hash,
+            result_hash: &self.result_hash,
+            result_media_type: &self.result_media_type,
+            result_sensitivity: self.result_sensitivity,
+            result_size: self.result_size,
+            run_id: &self.run_id,
+            snapshot_id: &self.snapshot_id,
+            test_artifact_id: &self.test_artifact_id,
+            universe_id: &self.universe_id,
+        }
+    }
+
+    fn as_v3_input(&self) -> HarnessTrustRootInputV3 {
+        HarnessTrustRootInputV3 {
+            policy_revision_hash: self.policy_revision_hash.clone(),
+            repository_id: self.repository_id.clone(),
+            repository_source_hash: self.repository_source_hash.clone(),
+            harness_id: self.harness_id.clone(),
+            harness_revision: self.harness_revision.clone(),
+            harness_source_hash: self.harness_source_hash.clone(),
+            test_artifact_id: self.test_artifact_id.clone(),
+            descriptor_id: self.descriptor_id.clone(),
+            procedure_version: self.procedure_version.clone(),
+            result_hash: self.result_hash.clone(),
+            result_size: self.result_size,
+            result_media_type: self.result_media_type.clone(),
+            result_sensitivity: self.result_sensitivity,
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            snapshot_id: self.snapshot_id.clone(),
+            universe_id: self.universe_id.clone(),
+            property_id: self.property_id.clone(),
+            claim_id: self.claim_id.clone(),
+            claim_body_hash: self.claim_body_hash.clone(),
+        }
+    }
+
+    fn copied(&self) -> Self {
+        Self {
+            policy_revision_hash: self.policy_revision_hash.clone(),
+            repository_id: self.repository_id.clone(),
+            repository_source_hash: self.repository_source_hash.clone(),
+            harness_id: self.harness_id.clone(),
+            harness_revision: self.harness_revision.clone(),
+            harness_source_hash: self.harness_source_hash.clone(),
+            test_artifact_id: self.test_artifact_id.clone(),
+            descriptor_id: self.descriptor_id.clone(),
+            procedure_version: self.procedure_version.clone(),
+            result_hash: self.result_hash.clone(),
+            result_size: self.result_size,
+            result_media_type: self.result_media_type.clone(),
+            result_sensitivity: self.result_sensitivity,
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            snapshot_id: self.snapshot_id.clone(),
+            universe_id: self.universe_id.clone(),
+            property_id: self.property_id.clone(),
+            claim_id: self.claim_id.clone(),
+            claim_body_hash: self.claim_body_hash.clone(),
+        }
+    }
+}
+
+impl ArtifactRegistrationV3AtV4SourceRole {
+    const fn name(&self) -> &'static str {
+        match self {
+            Self::SnapshotIngest { .. } => "snapshot_ingest",
+            Self::ReviewerRaw { .. } => "reviewer_raw",
+            Self::VerifierInput { .. } => "verifier_input",
+            Self::VerifierOutput { .. } => "verifier_output",
+            Self::ExternalHarnessWitness { .. } => "external_harness_witness",
+        }
+    }
+
+    fn digest_view(&self) -> ArtifactRegistrationV3AtV4SourceRoleDigest<'_> {
+        match self {
+            Self::SnapshotIngest {
+                adapter_id,
+                snapshot_id,
+                source_bundle_hash,
+                source_bundle_total_bytes,
+                source_bundle_entry_count,
+                artifact_id,
+                normalized_path,
+                content_hash,
+                line_count,
+            } => ArtifactRegistrationV3AtV4SourceRoleDigest::SnapshotIngest {
+                adapter_id,
+                snapshot_id,
+                source_bundle_hash,
+                source_bundle_total_bytes: *source_bundle_total_bytes,
+                source_bundle_entry_count: *source_bundle_entry_count,
+                artifact_id,
+                normalized_path,
+                content_hash,
+                line_count: *line_count,
+            },
+            Self::ReviewerRaw {
+                execution_id,
+                reviewer_id,
+                raw_output_hash,
+                raw_output_size,
+                raw_output_media_type,
+                raw_output_sensitivity,
+            } => ArtifactRegistrationV3AtV4SourceRoleDigest::ReviewerRaw {
+                execution_id,
+                reviewer_id,
+                raw_output_hash,
+                raw_output_size: *raw_output_size,
+                raw_output_media_type,
+                raw_output_sensitivity: *raw_output_sensitivity,
+            },
+            Self::VerifierInput {
+                claim_id,
+                claim_body_hash,
+                descriptor_id,
+                procedure_version,
+            } => ArtifactRegistrationV3AtV4SourceRoleDigest::VerifierInput {
+                claim_id,
+                claim_body_hash,
+                descriptor_id,
+                procedure_version,
+            },
+            Self::VerifierOutput {
+                claim_id,
+                claim_body_hash,
+                descriptor_id,
+                procedure_version,
+                expected_result_hash,
+            } => ArtifactRegistrationV3AtV4SourceRoleDigest::VerifierOutput {
+                claim_id,
+                claim_body_hash,
+                descriptor_id,
+                procedure_version,
+                expected_result_hash,
+            },
+            Self::ExternalHarnessWitness { harness_binding } => {
+                ArtifactRegistrationV3AtV4SourceRoleDigest::ExternalHarnessWitness {
+                    harness_binding: harness_binding.digest_view(),
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ArtifactRegistrationV3AtV4TrustBinding {
+    session_identity: ContentHash,
+    policy_revision_hash: ContentHash,
+    repository_id: StableId,
+    repository_source_hash: ContentHash,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    snapshot_id: StableId,
+    universe_id: StableId,
+    confirmed_tail_hash: ContentHash,
+    expected_next_sequence: u64,
+    registration_id: StableId,
+    registration_body_hash: ContentHash,
+    cas_hash: ContentHash,
+    size: u64,
+    media_type: String,
+    sensitivity: ArtifactSensitivity,
+    complete_v3_source: ArtifactSourceV3,
+    source_role: ArtifactRegistrationV3AtV4SourceRole,
+    role_closure_digest: ContentHash,
+    trust_binding_digest: ContentHash,
+}
+
+/// One-shot, position-bound admission for a frozen v3 registration body in a
+/// fresh v4 envelope. Its fields are private and it is neither cloneable nor
+/// serializable.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::ArtifactRegistrationV3AtV4Admission>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::ArtifactRegistrationV3AtV4Admission>();
+/// ```
+#[derive(Debug)]
+pub struct ArtifactRegistrationV3AtV4Admission {
+    binding: ArtifactRegistrationV3AtV4TrustBinding,
+    registration: ArtifactRegisteredV3,
+    actor: &'static str,
+    predecessor_event_hash: ContentHash,
+    event_sequence: u64,
+    envelope: EventEnvelope,
+}
+
+/// Descriptive result of a confirmed bridged registration append. It carries
+/// no authority for another append.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ArtifactRegistrationV3AtV4Receipt {
+    session_identity: ContentHash,
+    run_id: StableId,
+    registration_id: StableId,
+    source_role: &'static str,
+    event_sequence: u64,
+    event_id: StableId,
+    confirmed_tail_hash: ContentHash,
+    expected_next_sequence: u64,
+    trust_binding_digest: ContentHash,
+}
+
+impl ArtifactRegistrationV3AtV4Receipt {
+    #[must_use]
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+
+    #[must_use]
+    pub fn registration_id(&self) -> &StableId {
+        &self.registration_id
+    }
+
+    #[must_use]
+    pub const fn source_role(&self) -> &'static str {
+        self.source_role
+    }
+
+    #[must_use]
+    pub const fn event_sequence(&self) -> u64 {
+        self.event_sequence
+    }
+
+    #[must_use]
+    pub fn event_id(&self) -> &StableId {
+        &self.event_id
+    }
+
+    #[must_use]
+    pub fn confirmed_tail_hash(&self) -> &ContentHash {
+        &self.confirmed_tail_hash
+    }
+
+    #[must_use]
+    pub const fn expected_next_sequence(&self) -> u64 {
+        self.expected_next_sequence
+    }
+
+    #[must_use]
+    pub fn trust_binding_digest(&self) -> &ContentHash {
+        &self.trust_binding_digest
+    }
+}
+
+impl ArtifactRegistrationV3AtV4Admission {
+    /// Exact sealed envelope for the Store durability stage. Borrowing it does
+    /// not confirm the append or advance any Core replay state.
+    pub fn envelope<'a>(
+        &'a self,
+        log: &EventLogV4,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<&'a EventEnvelope> {
+        basis.validate_for_log_v4(log)?;
+        if !session_identity.matches(&self.binding.session_identity)
+            || self.binding.session_identity != log.session_identity
+            || self.binding.session_identity != basis.session_identity
+            || self.binding.confirmed_tail_hash != log.tail_hash
+            || self.binding.expected_next_sequence != basis.next_sequence
+            || self.predecessor_event_hash != log.tail_hash
+            || self.event_sequence != basis.next_sequence
+            || !registration_v3_matches_v4_role(&self.registration, &self.binding.source_role)
+            || self.binding.trust_binding_digest
+                != artifact_registration_v3_at_v4_binding_digest(&self.binding)?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        Ok(&self.envelope)
+    }
+
+    /// Consumes this one-shot admission only after Store has durably written
+    /// the envelope and rebuilt the confirmed prefix under the same exclusive
+    /// session identity.
+    pub fn confirm_replayed(
+        self,
+        log: &EventLogV4,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Receipt> {
+        basis.validate_for_log_v4(log)?;
+        let expected_count = self.event_sequence;
+        let last_envelope = log.envelopes.last().ok_or_else(|| {
+            DomainError::EventSequence("confirmed event-v4 prefix is empty".to_owned())
+        })?;
+        let envelope_matches =
+            last_envelope.canonical_bytes()? == self.envelope.canonical_bytes()?;
+        if !session_identity.matches(&self.binding.session_identity)
+            || self.binding.session_identity != log.session_identity
+            || self.binding.session_identity != basis.session_identity
+            || self.actor != SYSTEM_ACTOR
+            || self.predecessor_event_hash != *self.envelope.previous_event_hash()
+            || self.event_sequence != self.envelope.sequence()
+            || self.binding.run_id != log.run_id
+            || self.binding.genesis_hash != log.genesis_hash
+            || self.binding.confirmed_tail_hash != self.predecessor_event_hash
+            || self.binding.expected_next_sequence != self.event_sequence
+            || self.binding.registration_id != *self.registration.registration_id()
+            || self.binding.registration_body_hash
+                != ContentHash::sha256(&canonical_json(&self.registration)?)
+            || self.binding.complete_v3_source != *self.registration.source()
+            || !registration_v3_matches_v4_role(&self.registration, &self.binding.source_role)
+            || self.binding.trust_binding_digest
+                != artifact_registration_v3_at_v4_binding_digest(&self.binding)?
+            || basis.confirmed_event_count != expected_count
+            || basis.confirmed_tail_hash != *self.envelope.event_hash()
+            || basis.next_sequence
+                != self.event_sequence.checked_add(1).ok_or_else(|| {
+                    DomainError::EventSequence(
+                        "event-v4 registration confirmation sequence overflow".to_owned(),
+                    )
+                })?
+            || !envelope_matches
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        Ok(ArtifactRegistrationV3AtV4Receipt {
+            session_identity: self.binding.session_identity,
+            run_id: self.binding.run_id,
+            registration_id: self.binding.registration_id,
+            source_role: self.binding.source_role.name(),
+            event_sequence: self.event_sequence,
+            event_id: self.envelope.id().clone(),
+            confirmed_tail_hash: self.envelope.event_hash().clone(),
+            expected_next_sequence: basis.next_sequence,
+            trust_binding_digest: self.binding.trust_binding_digest,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct PreparedV4Position {
+    session_identity: ContentHash,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    predecessor_event_hash: ContentHash,
+    event_sequence: u64,
+    basis_digest: ContentHash,
+    payload_hash: ContentHash,
+}
+
+/// One-shot, opaque authority-free inherited D2 event prepared for one exact
+/// v4 append position.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::PreparedInheritedD2EventV4>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::PreparedInheritedD2EventV4>();
+/// ```
+#[derive(Debug)]
+pub struct PreparedInheritedD2EventV4 {
+    position: PreparedV4Position,
+    envelope: EventEnvelope,
+}
+
+/// Descriptive result of one confirmed authority-free inherited D2 append.
+#[derive(Debug, Eq, PartialEq)]
+pub struct InheritedD2EventReceiptV4 {
+    event_sequence: u64,
+    event_id: StableId,
+    confirmed_tail_hash: ContentHash,
+    expected_next_sequence: u64,
+}
+
+/// Result of executing the fixed code-owned fixture harness in one exact v4
+/// session. The embedded harness capability is one-shot and nonserializable.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::FixtureExecutionReceiptV4>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::FixtureExecutionReceiptV4>();
+/// ```
+#[derive(Debug)]
+pub struct FixtureExecutionReceiptV4 {
+    harness: Option<HarnessBindingRoleV4>,
+    session_identity: ContentHash,
+    basis_digest: ContentHash,
+    tail_hash: ContentHash,
+    expected_first_sequence: u64,
+    fixture_result_hash: ContentHash,
+    fixture_result_bytes: Vec<u8>,
+    witness_bytes: Vec<u8>,
+}
+
+impl FixtureExecutionReceiptV4 {
+    #[must_use]
+    pub fn witness_bytes(&self) -> &[u8] {
+        &self.witness_bytes
+    }
+
+    #[must_use]
+    pub fn fixture_result_bytes(&self) -> &[u8] {
+        &self.fixture_result_bytes
+    }
+}
+
+/// One-shot external-witness authority minted only after its exact
+/// registration is observed in the confirmed post-durable v4 prefix.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::ExternalWitnessAdmissionV4>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::ExternalWitnessAdmissionV4>();
+/// ```
+#[derive(Debug)]
+pub struct ExternalWitnessAdmissionV4 {
+    session_identity: ContentHash,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    confirmed_tail_hash: ContentHash,
+    expected_next_sequence: u64,
+    registration_id: StableId,
+    harness_binding: HarnessBindingRoleV4,
+}
+
+impl ExternalWitnessAdmissionV4 {
+    /// Revalidates this one-shot witness capability at the exact next v4
+    /// position without exposing its harness binding.
+    pub fn validate_position(
+        &self,
+        log: &EventLogV4,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<()> {
+        basis.validate_for_log_v4(log)?;
+        let registered = log
+            .v3_aggregate
+            .registrations
+            .get(&self.registration_id)
+            .ok_or(DomainError::WitnessAdmissionMismatch)?;
+        if !session_identity.matches(&self.session_identity)
+            || self.session_identity != log.session_identity
+            || self.run_id != log.run_id
+            || self.genesis_hash != log.genesis_hash
+            || self.confirmed_tail_hash != log.tail_hash
+            || self.expected_next_sequence != basis.next_sequence
+            || self.registration_id != *registered.registration_id()
+            || !registration_v3_matches_external_harness(registered, &self.harness_binding)
+            || self.harness_binding.run_id != log.run_id
+            || self.harness_binding.genesis_hash != log.genesis_hash
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        Ok(())
+    }
+}
+
+impl InheritedD2EventReceiptV4 {
+    #[must_use]
+    pub const fn event_sequence(&self) -> u64 {
+        self.event_sequence
+    }
+
+    #[must_use]
+    pub fn event_id(&self) -> &StableId {
+        &self.event_id
+    }
+
+    #[must_use]
+    pub fn confirmed_tail_hash(&self) -> &ContentHash {
+        &self.confirmed_tail_hash
+    }
+
+    #[must_use]
+    pub const fn expected_next_sequence(&self) -> u64 {
+        self.expected_next_sequence
+    }
+}
+
+impl PreparedInheritedD2EventV4 {
+    /// Exact sealed envelope for Store's durability stage. Core state remains
+    /// unchanged until a confirmed prefix is replayed.
+    pub fn envelope<'a>(
+        &'a self,
+        log: &EventLogV4,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<&'a EventEnvelope> {
+        basis.validate_for_log_v4(log)?;
+        if !session_identity.matches(&self.position.session_identity)
+            || self.position.session_identity != log.session_identity
+            || self.position.session_identity != basis.session_identity
+            || self.position.run_id != log.run_id
+            || self.position.genesis_hash != log.genesis_hash
+            || self.position.predecessor_event_hash != log.tail_hash
+            || self.position.event_sequence != basis.next_sequence
+            || self.position.basis_digest != basis.basis_digest
+            || self.position.payload_hash != *self.envelope.payload_hash()
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        Ok(&self.envelope)
+    }
+
+    /// Consumes this staged event after durable success has been established
+    /// by exact replay under the same exclusive session identity.
+    pub fn confirm_replayed(
+        self,
+        log: &EventLogV4,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<InheritedD2EventReceiptV4> {
+        basis.validate_for_log_v4(log)?;
+        let last_envelope = log.envelopes.last().ok_or_else(|| {
+            DomainError::EventSequence("confirmed event-v4 prefix is empty".to_owned())
+        })?;
+        let envelope_matches =
+            last_envelope.canonical_bytes()? == self.envelope.canonical_bytes()?;
+        if !session_identity.matches(&self.position.session_identity)
+            || self.position.session_identity != log.session_identity
+            || self.position.session_identity != basis.session_identity
+            || self.position.run_id != log.run_id
+            || self.position.genesis_hash != log.genesis_hash
+            || self.position.predecessor_event_hash != *self.envelope.previous_event_hash()
+            || self.position.event_sequence != self.envelope.sequence()
+            || self.position.payload_hash != *self.envelope.payload_hash()
+            || basis.confirmed_event_count != self.position.event_sequence
+            || basis.confirmed_tail_hash != *self.envelope.event_hash()
+            || !envelope_matches
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        Ok(InheritedD2EventReceiptV4 {
+            event_sequence: self.position.event_sequence,
+            event_id: self.envelope.id().clone(),
+            confirmed_tail_hash: self.envelope.event_hash().clone(),
+            expected_next_sequence: basis.next_sequence,
+        })
+    }
 }
 
 /// Pure, opaque event-v4 log. It contains no durable-store or append
 /// capability; later units consume it only after this complete validation.
 #[derive(Debug)]
 pub struct EventLogV4 {
+    session_identity: ContentHash,
     run_id: StableId,
     genesis_hash: ContentHash,
     canonical_genesis_bytes: Vec<u8>,
@@ -7598,11 +8542,351 @@ impl<R: AuthorityArtifactResolverV4> AuthorityArtifactResolverV3 for V4ResolverA
     }
 }
 
+fn snapshot_line_count_v4(bytes: &[u8]) -> Result<u64> {
+    let newlines = bytes.iter().filter(|byte| **byte == b'\n').count();
+    let count = newlines.saturating_add(1);
+    u64::try_from(count)
+        .map_err(|_| DomainError::EventSequence("snapshot line count overflow".to_owned()))
+}
+
+fn artifact_registration_v3_at_v4_binding_digest(
+    binding: &ArtifactRegistrationV3AtV4TrustBinding,
+) -> Result<ContentHash> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        cas_hash: &'a ContentHash,
+        complete_v3_source: &'a ArtifactSourceV3,
+        confirmed_tail_hash: &'a ContentHash,
+        expected_next_sequence: u64,
+        genesis_hash: &'a ContentHash,
+        media_type: &'a str,
+        policy_revision_hash: &'a ContentHash,
+        registration_body_hash: &'a ContentHash,
+        registration_id: &'a StableId,
+        repository_id: &'a StableId,
+        repository_source_hash: &'a ContentHash,
+        role_closure_digest: &'a ContentHash,
+        run_id: &'a StableId,
+        sensitivity: ArtifactSensitivity,
+        session_identity: &'a ContentHash,
+        size: u64,
+        snapshot_id: &'a StableId,
+        source_role: ArtifactRegistrationV3AtV4SourceRoleDigest<'a>,
+        universe_id: &'a StableId,
+    }
+    Ok(ContentHash::sha256(&canonical_json(&Body {
+        cas_hash: &binding.cas_hash,
+        complete_v3_source: &binding.complete_v3_source,
+        confirmed_tail_hash: &binding.confirmed_tail_hash,
+        expected_next_sequence: binding.expected_next_sequence,
+        genesis_hash: &binding.genesis_hash,
+        media_type: &binding.media_type,
+        policy_revision_hash: &binding.policy_revision_hash,
+        registration_body_hash: &binding.registration_body_hash,
+        registration_id: &binding.registration_id,
+        repository_id: &binding.repository_id,
+        repository_source_hash: &binding.repository_source_hash,
+        role_closure_digest: &binding.role_closure_digest,
+        run_id: &binding.run_id,
+        sensitivity: binding.sensitivity,
+        session_identity: &binding.session_identity,
+        size: binding.size,
+        snapshot_id: &binding.snapshot_id,
+        source_role: binding.source_role.digest_view(),
+        universe_id: &binding.universe_id,
+    })?))
+}
+
+fn registration_v3_matches_v4_role(
+    registration: &ArtifactRegisteredV3,
+    role: &ArtifactRegistrationV3AtV4SourceRole,
+) -> bool {
+    match (registration.source(), role) {
+        (
+            ArtifactSourceV3::SnapshotIngest {
+                adapter_id,
+                run_id,
+                snapshot_id,
+            },
+            ArtifactRegistrationV3AtV4SourceRole::SnapshotIngest {
+                adapter_id: role_adapter,
+                snapshot_id: role_snapshot,
+                ..
+            },
+        ) => {
+            adapter_id == role_adapter
+                && run_id == registration.run_id()
+                && snapshot_id == role_snapshot
+                && registration.sensitivity() == ArtifactSensitivity::WorkspaceSource
+        }
+        (
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id,
+                reviewer_id,
+                run_id,
+            },
+            ArtifactRegistrationV3AtV4SourceRole::ReviewerRaw {
+                execution_id: role_execution,
+                reviewer_id: role_reviewer,
+                raw_output_hash,
+                raw_output_size,
+                raw_output_media_type,
+                raw_output_sensitivity,
+            },
+        ) => {
+            execution_id == role_execution
+                && reviewer_id == role_reviewer
+                && run_id == registration.run_id()
+                && raw_output_hash == registration.cas_hash()
+                && *raw_output_size == registration.size()
+                && raw_output_media_type == registration.media_type()
+                && *raw_output_sensitivity == registration.sensitivity()
+        }
+        (
+            ArtifactSourceV3::VerifierArtifact {
+                claim_id,
+                descriptor_id,
+                procedure_version,
+                role: VerifierArtifactRoleV3::Input,
+                run_id,
+            },
+            ArtifactRegistrationV3AtV4SourceRole::VerifierInput {
+                claim_id: role_claim,
+                descriptor_id: role_descriptor,
+                procedure_version: role_procedure,
+                ..
+            },
+        ) => {
+            claim_id == role_claim
+                && descriptor_id == role_descriptor
+                && procedure_version == role_procedure
+                && run_id == registration.run_id()
+        }
+        (
+            ArtifactSourceV3::VerifierArtifact {
+                claim_id,
+                descriptor_id,
+                procedure_version,
+                role: VerifierArtifactRoleV3::Output,
+                run_id,
+            },
+            ArtifactRegistrationV3AtV4SourceRole::VerifierOutput {
+                claim_id: role_claim,
+                descriptor_id: role_descriptor,
+                procedure_version: role_procedure,
+                expected_result_hash,
+                ..
+            },
+        ) => {
+            claim_id == role_claim
+                && descriptor_id == role_descriptor
+                && procedure_version == role_procedure
+                && run_id == registration.run_id()
+                && expected_result_hash == registration.cas_hash()
+        }
+        (
+            ArtifactSourceV3::ExternalHarnessWitness { .. },
+            ArtifactRegistrationV3AtV4SourceRole::ExternalHarnessWitness { harness_binding },
+        ) => registration_v3_matches_external_harness(registration, harness_binding),
+        _ => false,
+    }
+}
+
+fn registration_v3_matches_external_harness(
+    registration: &ArtifactRegisteredV3,
+    harness: &HarnessBindingRoleV4,
+) -> bool {
+    let ArtifactSourceV3::ExternalHarnessWitness {
+        claim_body_hash,
+        claim_id,
+        descriptor_id,
+        genesis_hash,
+        harness_id,
+        harness_revision,
+        harness_source_hash,
+        policy_revision_hash,
+        procedure_version,
+        property_id,
+        repository_id,
+        repository_source_hash,
+        run_id,
+        snapshot_id,
+        test_artifact_id,
+        universe_id,
+    } = registration.source()
+    else {
+        return false;
+    };
+    claim_body_hash == &harness.claim_body_hash
+        && claim_id == &harness.claim_id
+        && descriptor_id == &harness.descriptor_id
+        && genesis_hash == &harness.genesis_hash
+        && harness_id == &harness.harness_id
+        && harness_revision == &harness.harness_revision
+        && harness_source_hash == &harness.harness_source_hash
+        && policy_revision_hash == &harness.policy_revision_hash
+        && procedure_version == &harness.procedure_version
+        && property_id == &harness.property_id
+        && repository_id == &harness.repository_id
+        && repository_source_hash == &harness.repository_source_hash
+        && run_id == &harness.run_id
+        && snapshot_id == &harness.snapshot_id
+        && test_artifact_id == &harness.test_artifact_id
+        && universe_id == &harness.universe_id
+        && registration.cas_hash() == &harness.result_hash
+        && registration.size() == harness.result_size
+        && registration.media_type() == harness.result_media_type
+        && registration.sensitivity() == harness.result_sensitivity
+}
+
+fn validate_deferred_registration_v3_at_v4(
+    aggregate: &ReviewAggregate,
+    registration: &ArtifactRegisteredV3,
+    resolver: &impl AuthorityArtifactResolverV3,
+) -> Result<()> {
+    match registration.source() {
+        ArtifactSourceV3::RunGenesis { .. } => Err(DomainError::Validation(
+            "event-v4 refuses a standalone inherited run-genesis registration".to_owned(),
+        )),
+        ArtifactSourceV3::SnapshotIngest {
+            run_id,
+            snapshot_id,
+            ..
+        } => {
+            let artifact = aggregate
+                .program()
+                .artifacts()
+                .iter()
+                .find(|artifact| {
+                    artifact.kind == "file"
+                        && artifact.content_hash.as_ref() == Some(registration.cas_hash())
+                })
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "event-v4 snapshot registration closure",
+                    owner_id: registration.registration_id().clone(),
+                    reference: snapshot_id.clone(),
+                })?;
+            let bytes = resolve_registered_bytes(registration, resolver)?;
+            if run_id != registration.run_id()
+                || snapshot_id != aggregate.program().snapshot_id()
+                || registration.sensitivity() != ArtifactSensitivity::WorkspaceSource
+                || registration.size() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+                || ContentHash::sha256(&bytes) != *registration.cas_hash()
+                || artifact.location.is_none()
+            {
+                return Err(DomainError::Validation(
+                    "event-v4 snapshot registration lacks its exact durable source closure"
+                        .to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        ArtifactSourceV3::ReviewerExecution {
+            execution_id,
+            reviewer_id,
+            run_id,
+        } => {
+            let execution = aggregate
+                .executions()
+                .find(|execution| execution.id() == execution_id);
+            if execution.is_none()
+                && reviewer_id == crate::FAKE_REVIEWER_ID
+                && run_id == registration.run_id()
+                && registration.sensitivity() == ArtifactSensitivity::Sensitive
+                && pending_reviewer_execution_id_v4(aggregate, execution_id)?
+            {
+                resolve_registered_bytes(registration, resolver)?;
+                return Ok(());
+            }
+            let execution = execution.ok_or_else(|| DomainError::DanglingReference {
+                owner: "event-v4 reviewer registration closure",
+                owner_id: registration.registration_id().clone(),
+                reference: execution_id.clone(),
+            })?;
+            if run_id != registration.run_id()
+                || reviewer_id != execution.reviewer_id()
+                || registration.registration_id() != execution.raw_artifact_registration_id()
+                || registration.cas_hash() != execution.raw_artifact_hash()
+                || registration.sensitivity() != ArtifactSensitivity::Sensitive
+            {
+                return Err(DomainError::Validation(
+                    "event-v4 reviewer registration lacks its exact durable execution closure"
+                        .to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        ArtifactSourceV3::VerifierArtifact { .. }
+        | ArtifactSourceV3::ExternalHarnessWitness { .. } => Ok(()),
+    }
+}
+
+fn pending_reviewer_execution_id_v4(
+    aggregate: &ReviewAggregate,
+    expected_execution_id: &StableId,
+) -> Result<bool> {
+    for plan in aggregate.review_plans() {
+        for wave in plan.waves() {
+            for obligation_id in wave.obligation_ids() {
+                if aggregate
+                    .obligation(obligation_id)
+                    .is_none_or(|obligation| {
+                        obligation.lifecycle() != ObligationLifecycle::InProgress
+                    })
+                {
+                    continue;
+                }
+                for context in aggregate
+                    .context_envelopes()
+                    .filter(|context| context.obligation_ids().contains(obligation_id))
+                {
+                    let previous_attempt = aggregate
+                        .executions()
+                        .filter(|execution| {
+                            execution.plan_id() == plan.id()
+                                && execution.wave_id() == wave.id()
+                                && execution.obligation_ids().len() == 1
+                                && execution.obligation_ids().contains(obligation_id)
+                                && execution.envelope_id() == context.id()
+                                && execution.snapshot_id() == context.snapshot_id()
+                        })
+                        .map(ExecutionRecord::attempt)
+                        .max()
+                        .unwrap_or(0);
+                    let Some(attempt) = previous_attempt.checked_add(1) else {
+                        continue;
+                    };
+                    let input = crate::ExecutionRecordInput::fake(
+                        plan.id().clone(),
+                        wave.id().clone(),
+                        obligation_id.clone(),
+                        context.id().clone(),
+                        context.snapshot_id().clone(),
+                        attempt,
+                    )?;
+                    if input.execution_id()? == *expected_execution_id {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 impl EventLogV4 {
     /// Constructs the only fresh v4 state: one internally derived genesis
     /// envelope. No caller-provided IDs, registrations, manifests, or hashes
     /// participate in construction.
     pub fn from_bootstrap_request(request: RunGenesisBootstrapRequestV4) -> Result<Self> {
+        let session_identity = OpaqueSessionIdentityV4::fresh();
+        Self::from_bootstrap_request_for_session(request, &session_identity)
+    }
+
+    fn from_bootstrap_request_for_session(
+        request: RunGenesisBootstrapRequestV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<Self> {
         let RunGenesisBootstrapRequestV4 {
             run_id,
             canonical_genesis_bytes,
@@ -7670,6 +8954,7 @@ impl EventLogV4 {
         v3_aggregate.register_artifact(&mut aggregate, &run_id, genesis_artifact, false)?;
         let tail_hash = envelope.event_hash().clone();
         Ok(Self {
+            session_identity: session_identity.digest.clone(),
             run_id,
             genesis_hash,
             canonical_genesis_bytes,
@@ -7683,6 +8968,811 @@ impl EventLogV4 {
         })
     }
 
+    fn validate_append_basis_v4(&self, basis: &AuthorityReplayBasisV4) -> Result<()> {
+        basis.validate_for_log_v4(self)?;
+        if !self.v4_registrations.is_empty() {
+            return Err(DomainError::EventSequence(
+                "inherited D2 append cannot follow an event-v4 gluing registration".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn registration_binding_v3_at_v4(
+        &self,
+        registration: &ArtifactRegisteredV3,
+        source_role: ArtifactRegistrationV3AtV4SourceRole,
+        role_closure_digest: ContentHash,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4TrustBinding> {
+        self.validate_append_basis_v4(basis)?;
+        registration.validate()?;
+        if registration.run_id() != &self.run_id {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        crate::canonical::canonical_json_count_bounded(
+            registration,
+            MAX_V3_REGISTRATION_IDENTITY_BYTES,
+            "event-v4 bridged registration body",
+        )?;
+        let repository_source_hash = self
+            .aggregate
+            .program()
+            .repository_source()
+            .content_hash()
+            .ok_or(DomainError::AuthorityPolicyMismatch)?
+            .clone();
+        let mut binding = ArtifactRegistrationV3AtV4TrustBinding {
+            session_identity: self.session_identity.clone(),
+            policy_revision_hash: basis.policy_revision_hash.clone(),
+            repository_id: self.aggregate.program().repository_id().clone(),
+            repository_source_hash,
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            snapshot_id: self.aggregate.program().snapshot_id().clone(),
+            universe_id: self.aggregate.universe().id().clone(),
+            confirmed_tail_hash: self.tail_hash.clone(),
+            expected_next_sequence: basis.next_sequence,
+            registration_id: registration.registration_id().clone(),
+            registration_body_hash: ContentHash::sha256(&canonical_json(registration)?),
+            cas_hash: registration.cas_hash().clone(),
+            size: registration.size(),
+            media_type: registration.media_type().to_owned(),
+            sensitivity: registration.sensitivity(),
+            complete_v3_source: registration.source().clone(),
+            source_role,
+            role_closure_digest,
+            trust_binding_digest: ContentHash::sha256(b"uninitialized-v4-registration-binding"),
+        };
+        binding.trust_binding_digest = artifact_registration_v3_at_v4_binding_digest(&binding)?;
+        Ok(binding)
+    }
+
+    fn seal_registration_v3_at_v4(
+        &self,
+        registration: ArtifactRegisteredV3,
+        binding: ArtifactRegistrationV3AtV4TrustBinding,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission> {
+        if !registration_v3_matches_v4_role(&registration, &binding.source_role) {
+            return Err(DomainError::Validation(
+                "event-v4 registration source role does not match its frozen v3 body".to_owned(),
+            ));
+        }
+        let event_sequence = binding.expected_next_sequence;
+        let payload = PersistedPayload::ArtifactRegisteredV3(registration.clone());
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V4,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            event_sequence,
+            SYSTEM_ACTOR,
+            event_sequence,
+            self.tail_hash.clone(),
+            payload,
+        )?;
+        Ok(ArtifactRegistrationV3AtV4Admission {
+            predecessor_event_hash: self.tail_hash.clone(),
+            event_sequence,
+            actor: SYSTEM_ACTOR,
+            binding,
+            registration,
+            envelope,
+        })
+    }
+
+    /// Seals one exact complete snapshot bundle entry to a frozen v3
+    /// registration body and the current v4 tail.
+    pub fn prepare_snapshot_artifact_registration_v3_at_v4(
+        &self,
+        registration: ArtifactRegisteredV3,
+        source_bundle: &crate::SnapshotSourceBundle,
+        artifact_id: &StableId,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission> {
+        self.validate_append_basis_v4(basis)?;
+        let program = self.aggregate.program();
+        let expected_entry_count = program
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+            .count();
+        if source_bundle.snapshot_id() != program.snapshot_id()
+            || source_bundle.entries().len() != expected_entry_count
+            || source_bundle.total_bytes()
+                > u64::try_from(crate::execution::MAX_D2_RESOLVED_SOURCE_BYTES).unwrap_or(u64::MAX)
+        {
+            return Err(DomainError::InvalidSnapshotSourceBundle {
+                artifact_id: artifact_id.clone(),
+                reason: "bundle is not the complete canonical current ProgramSpace closure"
+                    .to_owned(),
+            });
+        }
+        for entry in source_bundle.entries() {
+            let Some(artifact) = program
+                .artifacts()
+                .iter()
+                .find(|artifact| artifact.id == *entry.artifact_id())
+            else {
+                return Err(DomainError::InvalidSnapshotSourceBundle {
+                    artifact_id: entry.artifact_id().clone(),
+                    reason: "bundle entry is absent from the current ProgramSpace".to_owned(),
+                });
+            };
+            if artifact.kind != "file"
+                || artifact
+                    .location
+                    .as_ref()
+                    .is_none_or(|location| location.path != entry.path())
+                || artifact.content_hash.as_ref() != Some(entry.content_hash())
+                || ContentHash::sha256(entry.bytes()) != *entry.cas_hash()
+            {
+                return Err(DomainError::InvalidSnapshotSourceBundle {
+                    artifact_id: entry.artifact_id().clone(),
+                    reason: "bundle entry differs from current accepted file facts".to_owned(),
+                });
+            }
+        }
+        let entry = source_bundle
+            .entries()
+            .iter()
+            .find(|entry| entry.artifact_id() == artifact_id)
+            .ok_or_else(|| DomainError::InvalidSnapshotSourceBundle {
+                artifact_id: artifact_id.clone(),
+                reason: "selected artifact is absent from the complete bundle".to_owned(),
+            })?;
+        let ArtifactSourceV3::SnapshotIngest {
+            adapter_id,
+            run_id,
+            snapshot_id,
+        } = registration.source()
+        else {
+            return Err(DomainError::Validation(
+                "snapshot bridge refuses a non-snapshot v3 source role".to_owned(),
+            ));
+        };
+        let entry_size =
+            u64::try_from(entry.bytes().len()).map_err(|_| DomainError::Incomplete {
+                operation: "event-v4 snapshot registration bytes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        if run_id != &self.run_id
+            || snapshot_id != self.aggregate.program().snapshot_id()
+            || source_bundle.snapshot_id() != snapshot_id
+            || registration.cas_hash() != entry.cas_hash()
+            || registration.size() != entry_size
+            || registration.sensitivity() != ArtifactSensitivity::WorkspaceSource
+        {
+            return Err(DomainError::Validation(
+                "snapshot bridge registration, selected entry, and current closure differ"
+                    .to_owned(),
+            ));
+        }
+        let source_bundle_hash = source_bundle.canonical_digest_bounded(
+            crate::m4::MAX_RETAINED_WORKING_BYTES as usize,
+            "event-v4 snapshot source bundle closure",
+        )?;
+        let source_bundle_entry_count =
+            u64::try_from(source_bundle.entries().len()).map_err(|_| DomainError::Incomplete {
+                operation: "event-v4 snapshot source bundle entries",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let line_count = snapshot_line_count_v4(entry.bytes())?;
+        let program_stream = program.streaming_ref();
+        crate::canonical::canonical_json_count_bounded(
+            &program_stream,
+            crate::m4::MAX_RETAINED_WORKING_BYTES as usize,
+            "event-v4 snapshot ProgramSpace closure",
+        )?;
+        let program_digest = crate::canonical::compact_json_sha256_streaming(&program_stream)?;
+        #[derive(Serialize)]
+        struct Closure<'a> {
+            artifact_id: &'a StableId,
+            content_hash: &'a ContentHash,
+            normalized_path: &'a str,
+            program_digest: &'a ContentHash,
+            source_bundle_hash: &'a ContentHash,
+        }
+        let role_closure_digest = crate::canonical::compact_json_sha256_streaming(&Closure {
+            artifact_id,
+            content_hash: entry.content_hash(),
+            normalized_path: entry.path(),
+            program_digest: &program_digest,
+            source_bundle_hash: &source_bundle_hash,
+        })?;
+        let role = ArtifactRegistrationV3AtV4SourceRole::SnapshotIngest {
+            adapter_id: adapter_id.clone(),
+            snapshot_id: snapshot_id.clone(),
+            source_bundle_hash,
+            source_bundle_total_bytes: source_bundle.total_bytes(),
+            source_bundle_entry_count,
+            artifact_id: artifact_id.clone(),
+            normalized_path: entry.path().to_owned(),
+            content_hash: entry.content_hash().clone(),
+            line_count,
+        };
+        let binding =
+            self.registration_binding_v3_at_v4(&registration, role, role_closure_digest, basis)?;
+        self.seal_registration_v3_at_v4(registration, binding)
+    }
+
+    /// Seals a reviewer-raw registration only from the complete validated D2
+    /// bundle that names the same bytes and frozen v3 source object.
+    pub fn prepare_reviewer_raw_artifact_registration_v3_at_v4(
+        &self,
+        registration: ArtifactRegisteredV3,
+        execution_bundle: &ValidatedExecutionBundle,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission> {
+        self.validate_append_basis_v4(basis)?;
+        let (recorded, raw_closure) = execution_bundle.parts();
+        let ArtifactSourceV3::ReviewerExecution {
+            execution_id,
+            reviewer_id,
+            run_id,
+        } = registration.source()
+        else {
+            return Err(DomainError::Validation(
+                "reviewer-raw bridge refuses a non-reviewer v3 source role".to_owned(),
+            ));
+        };
+        if run_id != &self.run_id
+            || execution_id != recorded.execution.id()
+            || reviewer_id != recorded.execution.reviewer_id()
+            || registration.registration_id() != recorded.execution.raw_artifact_registration_id()
+            || registration.cas_hash() != recorded.execution.raw_artifact_hash()
+            || registration.size() != raw_closure.raw_artifact_size()
+            || registration.sensitivity() != ArtifactSensitivity::Sensitive
+            || !raw_closure.matches(recorded)
+        {
+            return Err(DomainError::Validation(
+                "reviewer-raw registration differs from its validated execution closure".to_owned(),
+            ));
+        }
+        crate::canonical::canonical_json_count_bounded(
+            recorded,
+            crate::m4::MAX_RECORD_BYTES,
+            "event-v4 reviewer execution closure",
+        )?;
+        let recorded_digest = crate::canonical::compact_json_sha256_streaming(recorded)?;
+        crate::canonical::canonical_json_count_bounded(
+            &registration,
+            MAX_V3_REGISTRATION_IDENTITY_BYTES,
+            "event-v4 reviewer registration closure",
+        )?;
+        let registration_digest = ContentHash::sha256(&canonical_json(&registration)?);
+        #[derive(Serialize)]
+        struct Closure<'a> {
+            recorded_digest: &'a ContentHash,
+            registration_digest: &'a ContentHash,
+        }
+        let role_closure_digest = crate::canonical::compact_json_sha256_streaming(&Closure {
+            recorded_digest: &recorded_digest,
+            registration_digest: &registration_digest,
+        })?;
+        let role = ArtifactRegistrationV3AtV4SourceRole::ReviewerRaw {
+            execution_id: execution_id.clone(),
+            reviewer_id: reviewer_id.clone(),
+            raw_output_hash: registration.cas_hash().clone(),
+            raw_output_size: registration.size(),
+            raw_output_media_type: registration.media_type().to_owned(),
+            raw_output_sensitivity: registration.sensitivity(),
+        };
+        let binding =
+            self.registration_binding_v3_at_v4(&registration, role, role_closure_digest, basis)?;
+        self.seal_registration_v3_at_v4(registration, binding)
+    }
+
+    #[allow(clippy::too_many_arguments)] // Private common path behind two role-closed public APIs.
+    fn prepare_static_verifier_registration_v3_at_v4(
+        &self,
+        claim_id: &StableId,
+        cas_hash: ContentHash,
+        size: u64,
+        resolver: &impl AuthorityArtifactResolverV4,
+        roots: &AuthorityTrustRootsV4,
+        basis: &AuthorityReplayBasisV4,
+        role: VerifierArtifactRoleV3,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission> {
+        self.validate_append_basis_v4(basis)?;
+        if basis.policy_revision_hash != roots.policy_revision_hash {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        validate_repository_trust_root(&self.aggregate, &roots.rebuild_v3_validation_roots()?)?;
+        let claim = self
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == claim_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "event-v4 static verifier registration",
+                owner_id: claim_id.clone(),
+                reference: claim_id.clone(),
+            })?;
+        let media_type = match role {
+            VerifierArtifactRoleV3::Input => STATIC_INPUT_MEDIA_TYPE,
+            VerifierArtifactRoleV3::Output => STATIC_OUTPUT_MEDIA_TYPE,
+        };
+        let registration = ArtifactRegisteredV3::new_validated(
+            self.run_id.clone(),
+            cas_hash,
+            media_type,
+            size,
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::VerifierArtifact {
+                run_id: self.run_id.clone(),
+                claim_id: claim_id.clone(),
+                descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+                procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+                role,
+            },
+        )?;
+        let v3_resolver = V4ResolverAsV3(resolver);
+        let bytes = resolve_registered_bytes(&registration, &v3_resolver)?;
+        let inherited_roots = roots.rebuild_v3_validation_roots()?;
+        validate_authority_registration(
+            &self.aggregate,
+            &registration,
+            &bytes,
+            &inherited_roots,
+            &self.genesis_hash,
+        )?;
+        let claim_body_hash = claim.body_hash()?;
+        let object_hash = ContentHash::sha256(&bytes);
+        #[derive(Serialize)]
+        struct Closure<'a> {
+            claim_body_hash: &'a ContentHash,
+            claim_id: &'a StableId,
+            descriptor_id: &'static str,
+            object_hash: &'a ContentHash,
+            procedure_version: &'static str,
+            registration_id: &'a StableId,
+        }
+        let role_closure_digest = crate::canonical::compact_json_sha256_streaming(&Closure {
+            claim_body_hash: &claim_body_hash,
+            claim_id,
+            descriptor_id: STATIC_DESCRIPTOR_ID,
+            object_hash: &object_hash,
+            procedure_version: STATIC_PROCEDURE_ID,
+            registration_id: registration.registration_id(),
+        })?;
+        let source_role = match role {
+            VerifierArtifactRoleV3::Input => ArtifactRegistrationV3AtV4SourceRole::VerifierInput {
+                claim_id: claim_id.clone(),
+                claim_body_hash,
+                descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+                procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+            },
+            VerifierArtifactRoleV3::Output => {
+                ArtifactRegistrationV3AtV4SourceRole::VerifierOutput {
+                    claim_id: claim_id.clone(),
+                    claim_body_hash,
+                    descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+                    procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+                    expected_result_hash: registration.cas_hash().clone(),
+                }
+            }
+        };
+        let binding = self.registration_binding_v3_at_v4(
+            &registration,
+            source_role,
+            role_closure_digest,
+            basis,
+        )?;
+        self.seal_registration_v3_at_v4(registration, binding)
+    }
+
+    /// Prepares the exact static-verifier input role at a v4 position.
+    pub fn prepare_static_verifier_input_registration_v3_at_v4(
+        &self,
+        claim_id: &StableId,
+        cas_hash: ContentHash,
+        size: u64,
+        resolver: &impl AuthorityArtifactResolverV4,
+        roots: &AuthorityTrustRootsV4,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission> {
+        self.prepare_static_verifier_registration_v3_at_v4(
+            claim_id,
+            cas_hash,
+            size,
+            resolver,
+            roots,
+            basis,
+            VerifierArtifactRoleV3::Input,
+        )
+    }
+
+    /// Prepares the exact static-verifier output role at a v4 position.
+    pub fn prepare_static_verifier_output_registration_v3_at_v4(
+        &self,
+        claim_id: &StableId,
+        cas_hash: ContentHash,
+        size: u64,
+        resolver: &impl AuthorityArtifactResolverV4,
+        roots: &AuthorityTrustRootsV4,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission> {
+        self.prepare_static_verifier_registration_v3_at_v4(
+            claim_id,
+            cas_hash,
+            size,
+            resolver,
+            roots,
+            basis,
+            VerifierArtifactRoleV3::Output,
+        )
+    }
+
+    /// Executes the fixed, process-free fixture harness from one exact v4
+    /// host root. No command, path, or caller-shaped harness metadata enters
+    /// this boundary.
+    pub fn execute_fixture_harness_v4(
+        &self,
+        claim_id: &StableId,
+        roots: &AuthorityTrustRootsV4,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<FixtureExecutionReceiptV4> {
+        self.validate_append_basis_v4(basis)?;
+        if basis.policy_revision_hash != roots.policy_revision_hash {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        let claim = self
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == claim_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "event-v4 fixture execution claim",
+                owner_id: claim_id.clone(),
+                reference: claim_id.clone(),
+            })?;
+        claim.validate_shape()?;
+        let test_artifact_id = StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?;
+        if claim.property_id() != M4_PROPERTY_ID
+            || claim.polarity() != crate::ClaimPolarity::IssuePresent
+            || !self.v3_aggregate.assessment_scopes.contains_key(claim_id)
+            || !self
+                .aggregate
+                .program()
+                .known_ids()
+                .contains(&test_artifact_id)
+            || !claim
+                .target_refs()
+                .iter()
+                .all(|id| self.aggregate.program().known_ids().contains(id))
+        {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        let claim_body_hash = claim.body_hash()?;
+        let root = roots
+            .harnesses
+            .iter()
+            .find(|root| {
+                root.run_id == self.run_id
+                    && root.genesis_hash == self.genesis_hash
+                    && root.snapshot_id == *self.aggregate.program().snapshot_id()
+                    && root.universe_id == *self.aggregate.universe().id()
+                    && root.claim_id == *claim_id
+                    && root.claim_body_hash == claim_body_hash
+                    && root.property_id == claim.property_id()
+            })
+            .ok_or(DomainError::HarnessTrustRootMissing)?;
+        let harness = HarnessBindingRoleV4::from_root(root);
+        let scope = harness.as_v3_input();
+        let (_, fixture_result_bytes, fixture_result_hash) =
+            deterministic_fixture_result_for_claim(&self.aggregate, claim, &scope)?;
+        let witness_bytes = crate::harness_source_v1::run_duplicate_submit_harness();
+        if witness_bytes.as_slice() != FIXTURE_WITNESS_BYTES
+            || ContentHash::sha256(&witness_bytes) != harness.result_hash
+            || u64::try_from(witness_bytes.len()).unwrap_or(u64::MAX) != harness.result_size
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        Ok(FixtureExecutionReceiptV4 {
+            harness: Some(harness),
+            session_identity: self.session_identity.clone(),
+            basis_digest: basis.basis_digest.clone(),
+            tail_hash: self.tail_hash.clone(),
+            expected_first_sequence: basis.next_sequence,
+            fixture_result_hash,
+            fixture_result_bytes,
+            witness_bytes,
+        })
+    }
+
+    fn validate_fixture_receipt_v4<'a>(
+        &self,
+        receipt: &'a FixtureExecutionReceiptV4,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<&'a HarnessBindingRoleV4> {
+        self.validate_append_basis_v4(basis)?;
+        let harness = receipt
+            .harness
+            .as_ref()
+            .ok_or(DomainError::WitnessAdmissionMismatch)?;
+        if receipt.session_identity != self.session_identity
+            || receipt.session_identity != basis.session_identity
+            || receipt.basis_digest != basis.basis_digest
+            || receipt.tail_hash != self.tail_hash
+            || receipt.expected_first_sequence != basis.next_sequence
+            || receipt.witness_bytes.as_slice() != FIXTURE_WITNESS_BYTES
+            || ContentHash::sha256(&receipt.witness_bytes) != harness.result_hash
+            || ContentHash::sha256(&receipt.fixture_result_bytes) != receipt.fixture_result_hash
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        validate_fixture_result_for_root(
+            &self.aggregate,
+            &harness.as_v3_input(),
+            &receipt.fixture_result_bytes,
+        )?;
+        Ok(harness)
+    }
+
+    /// Prepares the external-harness witness registration while retaining the
+    /// one-shot harness capability for post-durable witness admission.
+    pub fn prepare_external_harness_witness_registration_v3_at_v4(
+        &self,
+        receipt: &FixtureExecutionReceiptV4,
+        resolver: &impl AuthorityArtifactResolverV4,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission> {
+        let harness = self.validate_fixture_receipt_v4(receipt, basis)?;
+        let registration = ArtifactRegisteredV3::new_validated(
+            self.run_id.clone(),
+            harness.result_hash.clone(),
+            harness.result_media_type.clone(),
+            harness.result_size,
+            harness.result_sensitivity,
+            ArtifactSourceV3::ExternalHarnessWitness {
+                policy_revision_hash: harness.policy_revision_hash.clone(),
+                repository_id: harness.repository_id.clone(),
+                repository_source_hash: harness.repository_source_hash.clone(),
+                run_id: harness.run_id.clone(),
+                genesis_hash: harness.genesis_hash.clone(),
+                snapshot_id: harness.snapshot_id.clone(),
+                universe_id: harness.universe_id.clone(),
+                property_id: harness.property_id.clone(),
+                claim_id: harness.claim_id.clone(),
+                claim_body_hash: harness.claim_body_hash.clone(),
+                harness_id: harness.harness_id.clone(),
+                harness_revision: harness.harness_revision.clone(),
+                harness_source_hash: harness.harness_source_hash.clone(),
+                test_artifact_id: harness.test_artifact_id.clone(),
+                descriptor_id: harness.descriptor_id.clone(),
+                procedure_version: harness.procedure_version.clone(),
+            },
+        )?;
+        let bytes = resolve_registered_bytes(&registration, &V4ResolverAsV3(resolver))?;
+        validate_fresh_fixture_witness_registration(
+            &self.aggregate,
+            &registration,
+            &bytes,
+            &harness.as_v3_input(),
+        )?;
+        #[derive(Serialize)]
+        struct Closure<'a> {
+            harness_binding: HarnessBindingRoleV4Digest<'a>,
+            witness_hash: &'a ContentHash,
+        }
+        let witness_hash = ContentHash::sha256(&bytes);
+        let role_closure_digest = crate::canonical::compact_json_sha256_streaming(&Closure {
+            harness_binding: harness.digest_view(),
+            witness_hash: &witness_hash,
+        })?;
+        let role = ArtifactRegistrationV3AtV4SourceRole::ExternalHarnessWitness {
+            harness_binding: Box::new(harness.copied()),
+        };
+        let binding =
+            self.registration_binding_v3_at_v4(&registration, role, role_closure_digest, basis)?;
+        self.seal_registration_v3_at_v4(registration, binding)
+    }
+
+    /// Prepares the deterministic fixture verifier output as the closed
+    /// verifier-output role from the same one-shot harness execution.
+    pub fn prepare_fixture_verifier_output_registration_v3_at_v4(
+        &self,
+        receipt: &FixtureExecutionReceiptV4,
+        resolver: &impl AuthorityArtifactResolverV4,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission> {
+        let harness = self.validate_fixture_receipt_v4(receipt, basis)?;
+        let size = u64::try_from(receipt.fixture_result_bytes.len()).map_err(|_| {
+            DomainError::Incomplete {
+                operation: "event-v4 fixture result bytes",
+                limit: crate::m4::MAX_RECORD_BYTES,
+                observed: usize::MAX,
+            }
+        })?;
+        let registration = ArtifactRegisteredV3::new_validated(
+            self.run_id.clone(),
+            receipt.fixture_result_hash.clone(),
+            FIXTURE_OUTPUT_MEDIA_TYPE,
+            size,
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::VerifierArtifact {
+                run_id: self.run_id.clone(),
+                claim_id: harness.claim_id.clone(),
+                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                role: VerifierArtifactRoleV3::Output,
+            },
+        )?;
+        let bytes = resolve_registered_bytes(&registration, &V4ResolverAsV3(resolver))?;
+        if bytes != receipt.fixture_result_bytes {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        validate_fixture_result_for_root(&self.aggregate, &harness.as_v3_input(), &bytes)?;
+        #[derive(Serialize)]
+        struct Closure<'a> {
+            claim_body_hash: &'a ContentHash,
+            fixture_result_hash: &'a ContentHash,
+            harness_binding: HarnessBindingRoleV4Digest<'a>,
+        }
+        let role_closure_digest = crate::canonical::compact_json_sha256_streaming(&Closure {
+            claim_body_hash: &harness.claim_body_hash,
+            fixture_result_hash: &receipt.fixture_result_hash,
+            harness_binding: harness.digest_view(),
+        })?;
+        let role = ArtifactRegistrationV3AtV4SourceRole::VerifierOutput {
+            claim_id: harness.claim_id.clone(),
+            claim_body_hash: harness.claim_body_hash.clone(),
+            descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+            procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+            expected_result_hash: receipt.fixture_result_hash.clone(),
+        };
+        let binding =
+            self.registration_binding_v3_at_v4(&registration, role, role_closure_digest, basis)?;
+        self.seal_registration_v3_at_v4(registration, binding)
+    }
+
+    /// Mints witness authority only after the exact external-witness
+    /// registration admission has been confirmed by replay at the immediately
+    /// preceding durable position.
+    pub fn admit_external_witness_v4(
+        &self,
+        mut fixture: FixtureExecutionReceiptV4,
+        registration: &ArtifactRegistrationV3AtV4Receipt,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ExternalWitnessAdmissionV4> {
+        basis.validate_for_log_v4(self)?;
+        let harness = fixture
+            .harness
+            .take()
+            .ok_or(DomainError::WitnessAdmissionMismatch)?;
+        let registered = self
+            .v3_aggregate
+            .registrations
+            .get(&registration.registration_id)
+            .ok_or(DomainError::WitnessAdmissionMismatch)?;
+        if fixture.session_identity != self.session_identity
+            || fixture.session_identity != basis.session_identity
+            || registration.session_identity != self.session_identity
+            || registration.source_role != "external_harness_witness"
+            || registration.run_id != self.run_id
+            || registration.registration_id != *registered.registration_id()
+            || !registration_v3_matches_external_harness(registered, &harness)
+            || registration.confirmed_tail_hash != self.tail_hash
+            || registration.expected_next_sequence != basis.next_sequence
+            || registration.event_sequence != fixture.expected_first_sequence
+            || basis.next_sequence
+                != fixture
+                    .expected_first_sequence
+                    .checked_add(1)
+                    .ok_or(DomainError::WitnessAdmissionMismatch)?
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        Ok(ExternalWitnessAdmissionV4 {
+            session_identity: self.session_identity.clone(),
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            confirmed_tail_hash: self.tail_hash.clone(),
+            expected_next_sequence: basis.next_sequence,
+            registration_id: registration.registration_id.clone(),
+            harness_binding: harness,
+        })
+    }
+
+    fn validate_inherited_d2_command_v4(
+        &self,
+        payload: &PersistedPayload,
+        admission: &CommandAdmission,
+        sequence: u64,
+    ) -> Result<Option<u64>> {
+        if !matches!(
+            payload,
+            PersistedPayload::ObligationTransition { .. }
+                | PersistedPayload::SnapshotSourcesRecorded(_)
+                | PersistedPayload::ReviewPlanRecorded(_)
+                | PersistedPayload::ContextEnvelopeProjected(_)
+                | PersistedPayload::ReviewExecutionRecorded(_)
+        ) {
+            return Err(DomainError::Validation(
+                "event-v4 inherited D2 wrapper refuses this payload family".to_owned(),
+            ));
+        }
+        if !payload.allowed_in(EventContractVersion::V4) || payload.actor() != SYSTEM_ACTOR {
+            return Err(DomainError::EventSequence(
+                "inherited D2 payload is not admitted by event-v4".to_owned(),
+            ));
+        }
+        validate_stream_payload_position(EventContractVersion::V4, sequence, payload)?;
+        validate_v2_completed_transition(EventContractVersion::V4, &self.aggregate, payload)?;
+        reject_duplicate_d1_record(&self.aggregate, payload)?;
+        payload.validate_for_enclosing_run(&self.run_id)?;
+        match (payload, admission) {
+            (
+                PersistedPayload::ContextEnvelopeProjected(envelope),
+                CommandAdmission::ContextProjection(capability),
+            ) if capability.matches(envelope, &self.aggregate)? => Ok(None),
+            (PersistedPayload::ContextEnvelopeProjected(_), _) => Err(DomainError::Validation(
+                "event-v4 context append requires its exact byte-reverified builder admission"
+                    .to_owned(),
+            )),
+            (
+                PersistedPayload::ReviewExecutionRecorded(recorded),
+                CommandAdmission::ReviewerRaw(closure),
+            ) if closure.matches(recorded) => Ok(Some(closure.raw_artifact_size())),
+            (PersistedPayload::ReviewExecutionRecorded(_), _) => Err(DomainError::Validation(
+                "event-v4 execution append requires its exact validated raw-output closure"
+                    .to_owned(),
+            )),
+            (_, CommandAdmission::None) => Ok(None),
+            _ => Err(DomainError::Validation(
+                "event-v4 inherited D2 admission does not match its payload".to_owned(),
+            )),
+        }
+    }
+
+    /// Prepares one authority-free inherited D2 command for the exact current
+    /// v4 tail. Authority-bearing v3/M4 families and every raw registration
+    /// are refused by this surface.
+    pub fn prepare_inherited_d2_event_v4(
+        &self,
+        command: EventCommand,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<PreparedInheritedD2EventV4> {
+        self.validate_append_basis_v4(basis)?;
+        let EventCommand { payload, admission } = command;
+        let reviewer_raw_size =
+            self.validate_inherited_d2_command_v4(&payload, &admission, basis.next_sequence)?;
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V4,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            basis.next_sequence,
+            payload.actor(),
+            basis.next_sequence,
+            self.tail_hash.clone(),
+            payload.clone(),
+        )?;
+        let mut next_aggregate = self.aggregate.clone();
+        let mut next_v3_aggregate = self.v3_aggregate.clone();
+        apply_for_log(
+            &mut next_aggregate,
+            Some(&mut next_v3_aggregate),
+            &payload,
+            payload.actor(),
+            &self.run_id,
+            &self.genesis_hash,
+            reviewer_raw_size,
+            true,
+        )?;
+        Ok(PreparedInheritedD2EventV4 {
+            position: PreparedV4Position {
+                session_identity: self.session_identity.clone(),
+                run_id: self.run_id.clone(),
+                genesis_hash: self.genesis_hash.clone(),
+                predecessor_event_hash: self.tail_hash.clone(),
+                event_sequence: basis.next_sequence,
+                basis_digest: basis.basis_digest.clone(),
+                payload_hash: envelope.payload_hash().clone(),
+            },
+            envelope,
+        })
+    }
+
     /// Replays a confirmed homogeneous v4 prefix from canonical bytes and
     /// host roots. Persisted metadata never creates replay authority.
     pub fn replay_confirmed_v4_prefix(
@@ -7692,6 +9782,31 @@ impl EventLogV4 {
         resolver: &impl AuthorityArtifactResolverV4,
         roots: &AuthorityTrustRootsV4,
         limits: EventReplayLimits,
+    ) -> Result<(Self, AuthorityReplayBasisV4)> {
+        let session_identity = OpaqueSessionIdentityV4::fresh();
+        Self::replay_confirmed_v4_prefix_for_session(
+            run_id,
+            canonical_genesis_bytes,
+            envelopes,
+            resolver,
+            roots,
+            limits,
+            &session_identity,
+        )
+    }
+
+    /// Replays a confirmed prefix into one exact caller-owned exclusive
+    /// session identity. Reusing prepared values across another identity is
+    /// refused even if both sessions name byte-identical durable prefixes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn replay_confirmed_v4_prefix_for_session(
+        run_id: StableId,
+        canonical_genesis_bytes: &[u8],
+        envelopes: &[EventEnvelope],
+        resolver: &impl AuthorityArtifactResolverV4,
+        roots: &AuthorityTrustRootsV4,
+        limits: EventReplayLimits,
+        session_identity: &OpaqueSessionIdentityV4,
     ) -> Result<(Self, AuthorityReplayBasisV4)> {
         if envelopes.is_empty() {
             return Err(DomainError::EventSequence(
@@ -7737,7 +9852,7 @@ impl EventLogV4 {
             snapshot.program_space.profile_id(),
             snapshot.program_space.profile_version(),
         )?;
-        let mut log = Self::from_bootstrap_request(request)?;
+        let mut log = Self::from_bootstrap_request_for_session(request, session_identity)?;
         // V4 roots retain their copied tuples, never a V3 capability. Rebuild
         // this short-lived validator view only for the inherited M4 bodies.
         let inherited_roots = roots.rebuild_v3_validation_roots()?;
@@ -7762,6 +9877,7 @@ impl EventLogV4 {
             })?;
         let mut inherited_m4_entries = Vec::new();
         let mut gluing_input_entries = Vec::new();
+        let mut deferred_registration_closures = Vec::new();
         let v3_resolver = V4ResolverAsV3(resolver);
         for envelope in &envelopes[1..] {
             let payload =
@@ -7938,12 +10054,31 @@ impl EventLogV4 {
                     ));
                 }
                 if let PersistedPayload::ArtifactRegisteredV3(registration) = &payload {
+                    match registration.source() {
+                        ArtifactSourceV3::RunGenesis { .. } => {
+                            return Err(DomainError::AuthorityReplayRefused {
+                                event_sequence: envelope.sequence(),
+                                reason: "event-v4 refuses a standalone inherited run-genesis registration"
+                                    .to_owned(),
+                            });
+                        }
+                        ArtifactSourceV3::SnapshotIngest { .. }
+                        | ArtifactSourceV3::ReviewerExecution { .. } => {
+                            deferred_registration_closures.push((
+                                envelope.sequence(),
+                                registration.registration_id().clone(),
+                            ));
+                        }
+                        ArtifactSourceV3::VerifierArtifact { .. }
+                        | ArtifactSourceV3::ExternalHarnessWitness { .. } => {}
+                    }
                     let bytes = resolve_registered_bytes(registration, &v3_resolver)?;
                     validate_authority_registration(
                         &log.aggregate,
                         registration,
                         &bytes,
                         &inherited_roots,
+                        &log.genesis_hash,
                     )
                     .map_err(|error| DomainError::AuthorityReplayRefused {
                         event_sequence: envelope.sequence(),
@@ -8059,14 +10194,37 @@ impl EventLogV4 {
             log.tail_hash = envelope.event_hash().clone();
             log.envelopes.push(envelope.clone());
         }
+        for (event_sequence, registration_id) in deferred_registration_closures {
+            let registration = log
+                .v3_aggregate
+                .registrations
+                .get(&registration_id)
+                .ok_or_else(|| DomainError::AuthorityReplayRefused {
+                    event_sequence,
+                    reason: "event-v4 deferred registration disappeared from replay state"
+                        .to_owned(),
+                })?;
+            validate_deferred_registration_v3_at_v4(&log.aggregate, registration, &v3_resolver)
+                .map_err(|error| DomainError::AuthorityReplayRefused {
+                    event_sequence,
+                    reason: error.to_string(),
+                })?;
+        }
         let basis = AuthorityReplayBasisV4::build(
-            run_id,
+            log.session_identity.clone(),
+            run_id.clone(),
             log.genesis_hash.clone(),
             log.tail_hash.clone(),
             count,
             roots.policy_revision_hash().clone(),
             inherited_m4_entries,
             gluing_input_entries,
+        )?;
+        session_identity.bind_confirmed_replay(
+            &run_id,
+            &log.genesis_hash,
+            &log.tail_hash,
+            &log.envelopes,
         )?;
         Ok((log, basis))
     }
@@ -10326,6 +12484,7 @@ fn validate_authority_registration(
     registration: &ArtifactRegisteredV3,
     bytes: &[u8],
     roots: &AuthorityTrustRootsV3,
+    expected_genesis_hash: &ContentHash,
 ) -> Result<()> {
     match registration.source() {
         ArtifactSourceV3::VerifierArtifact {
@@ -10334,25 +12493,65 @@ fn validate_authority_registration(
             role,
             ..
         } => {
-            if !aggregate
+            let claim = aggregate
                 .execution_claims()
-                .any(|claim| claim.id() == claim_id)
-            {
-                return Err(DomainError::DanglingReference {
+                .find(|claim| claim.id() == claim_id)
+                .ok_or_else(|| DomainError::DanglingReference {
                     owner: "v3 verifier registration claim",
                     owner_id: registration.registration_id().clone(),
                     reference: claim_id.clone(),
-                });
-            }
+                })?;
+            let obligation_id = claim
+                .obligation_ids()
+                .first()
+                .ok_or(DomainError::VerificationBundleMismatch)?;
+            let obligation = aggregate.obligation(obligation_id).ok_or_else(|| {
+                DomainError::DanglingReference {
+                    owner: "v3 verifier registration obligation",
+                    owner_id: registration.registration_id().clone(),
+                    reference: obligation_id.clone(),
+                }
+            })?;
             match (descriptor_id.as_str(), role) {
                 (STATIC_DESCRIPTOR_ID, VerifierArtifactRoleV3::Input) => {
-                    crate::StaticFactInputV1::from_json_bytes(bytes).map_err(m4_domain_error)?;
+                    let actual = crate::StaticFactInputV1::from_json_bytes(bytes)
+                        .map_err(m4_domain_error)?;
+                    let expected = crate::m4::reconstruct_static_evaluation_v1(
+                        aggregate.program(),
+                        obligation,
+                        claim,
+                    )
+                    .map_err(m4_domain_error)?;
+                    if &actual != expected.input() {
+                        return Err(DomainError::VerificationBundleMismatch);
+                    }
                 }
                 (STATIC_DESCRIPTOR_ID, VerifierArtifactRoleV3::Output) => {
-                    crate::StaticFactResultV1::from_json_bytes(bytes).map_err(m4_domain_error)?;
+                    let actual = crate::StaticFactResultV1::from_json_bytes(bytes)
+                        .map_err(m4_domain_error)?;
+                    let expected = crate::m4::reconstruct_static_evaluation_v1(
+                        aggregate.program(),
+                        obligation,
+                        claim,
+                    )
+                    .map_err(m4_domain_error)?;
+                    if &actual != expected.result() {
+                        return Err(DomainError::VerificationBundleMismatch);
+                    }
                 }
                 (FIXTURE_DESCRIPTOR_ID, VerifierArtifactRoleV3::Output) => {
-                    crate::FixedFixtureResultV1::from_json_bytes(bytes).map_err(m4_domain_error)?;
+                    let root = roots
+                        .harnesses
+                        .iter()
+                        .find(|root| {
+                            root.input.run_id == *registration.run_id()
+                                && root.input.genesis_hash == *expected_genesis_hash
+                                && root.input.snapshot_id == *aggregate.program().snapshot_id()
+                                && root.input.universe_id == *aggregate.universe().id()
+                                && root.input.claim_id == *claim_id
+                        })
+                        .ok_or(DomainError::HarnessTrustRootMissing)?;
+                    validate_fixture_result_for_root(aggregate, &root.input, bytes)?;
                 }
                 _ => return Err(DomainError::VerificationBundleMismatch),
             }
@@ -11646,11 +13845,17 @@ impl EventLog {
                 )?;
                 record_v3_test_selected_peak(registration_peak);
                 let bytes = resolve_registered_bytes(registration, resolver)?;
-                validate_authority_registration(&log.aggregate, registration, &bytes, roots)
-                    .map_err(|error| DomainError::AuthorityReplayRefused {
-                        event_sequence: envelope.sequence(),
-                        reason: error.to_string(),
-                    })?;
+                validate_authority_registration(
+                    &log.aggregate,
+                    registration,
+                    &bytes,
+                    roots,
+                    &log.genesis_hash,
+                )
+                .map_err(|error| DomainError::AuthorityReplayRefused {
+                    event_sequence: envelope.sequence(),
+                    reason: error.to_string(),
+                })?;
             }
             if let PersistedPayload::ReviewExecutionRecorded(recorded) = &payload {
                 let registration = log
@@ -12668,7 +14873,13 @@ impl EventLog {
             [registration.size()],
         )?;
         let bytes = resolve_registered_bytes(&registration, resolver)?;
-        validate_authority_registration(&self.aggregate, &registration, &bytes, roots)?;
+        validate_authority_registration(
+            &self.aggregate,
+            &registration,
+            &bytes,
+            roots,
+            &self.genesis_hash,
+        )?;
         Ok(ValidatedArtifactRegistrationV3 {
             run_id: self.run_id.clone(),
             genesis_hash: self.genesis_hash.clone(),
@@ -16256,6 +18467,1138 @@ mod tests {
         )
         .expect_err("count limit");
         assert!(matches!(error, DomainError::Incomplete { .. }));
+    }
+
+    #[test]
+    fn v4_strict_stream_bridge_validates_genesis_without_exposing_payload_authority() {
+        let bootstrap =
+            EventLogV4::from_bootstrap_request(v4_bootstrap_request()).expect("v4 bootstrap");
+        EventEnvelope::validate_v4_stream(
+            bootstrap.run_id(),
+            bootstrap.canonical_genesis_bytes(),
+            bootstrap.envelopes(),
+        )
+        .expect("strict v4 stream");
+        let mut wrong_actor = bootstrap.envelopes()[0].clone();
+        wrong_actor.actor = "caller".to_owned();
+        assert!(
+            EventEnvelope::validate_v4_stream(
+                bootstrap.run_id(),
+                bootstrap.canonical_genesis_bytes(),
+                &[wrong_actor],
+            )
+            .is_err()
+        );
+        assert!(matches!(
+            EventEnvelope::validated_view(
+                EventContractVersion::V4,
+                bootstrap.run_id(),
+                EventStreamGenesis::V4(bootstrap.canonical_genesis_bytes()),
+                bootstrap.envelopes(),
+            ),
+            Err(DomainError::EventSequence(_))
+        ));
+    }
+
+    #[test]
+    fn v4_authority_free_append_advances_basis_only_on_success() {
+        let bootstrap =
+            EventLogV4::from_bootstrap_request(v4_bootstrap_request()).expect("v4 bootstrap");
+        let roots = empty_v4_roots(&aggregate());
+        let session = OpaqueSessionIdentityV4::fresh();
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            bootstrap.envelopes(),
+            &EmptyV4Resolver,
+            &roots,
+            EventReplayLimits {
+                max_events: 8,
+                max_canonical_bytes: 1_048_576,
+            },
+            &session,
+        )
+        .expect("v4 replay");
+        let obligation_id = log
+            .aggregate
+            .obligations()
+            .next()
+            .expect("fixture obligation")
+            .id()
+            .clone();
+        let stale = log
+            .prepare_inherited_d2_event_v4(
+                EventCommand::obligation_transition(
+                    obligation_id.clone(),
+                    ObligationLifecycle::Planned,
+                ),
+                &basis,
+            )
+            .expect("stale prepared transition");
+        let prepared = log
+            .prepare_inherited_d2_event_v4(
+                EventCommand::obligation_transition(obligation_id, ObligationLifecycle::Planned),
+                &basis,
+            )
+            .expect("prepared transition");
+        let inherited_entries = basis.inherited_m4_entry_count();
+        let mut confirmed = log.envelopes().to_vec();
+        confirmed.push(
+            prepared
+                .envelope(&log, &basis, &session)
+                .expect("staged envelope")
+                .clone(),
+        );
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            log.run_id().clone(),
+            log.canonical_genesis_bytes(),
+            &confirmed,
+            &EmptyV4Resolver,
+            &roots,
+            EventReplayLimits {
+                max_events: 8,
+                max_canonical_bytes: 1_048_576,
+            },
+            &session,
+        )
+        .expect("confirmed replay");
+        let receipt = prepared
+            .confirm_replayed(&log, &basis, &session)
+            .expect("confirmed receipt");
+        assert_eq!(basis.confirmed_event_count(), 2);
+        assert_eq!(basis.next_sequence(), 3);
+        assert_eq!(basis.confirmed_tail_hash(), receipt.confirmed_tail_hash());
+        assert_eq!(basis.inherited_m4_entry_count(), inherited_entries);
+        let before_digest = basis.basis_digest().clone();
+        let before_tail = basis.confirmed_tail_hash().clone();
+        let before_count = basis.confirmed_event_count();
+        let before_log_len = log.envelopes().len();
+        assert!(matches!(
+            stale.envelope(&log, &basis, &session),
+            Err(DomainError::AuthorityReplayBasisMismatch)
+        ));
+        assert_eq!(basis.basis_digest(), &before_digest);
+        assert_eq!(basis.confirmed_tail_hash(), &before_tail);
+        assert_eq!(basis.confirmed_event_count(), before_count);
+        assert_eq!(log.envelopes().len(), before_log_len);
+        assert_eq!(log.tail_hash(), &before_tail);
+    }
+
+    #[test]
+    fn v4_prepared_values_cannot_cross_identical_replay_sessions() {
+        let bootstrap =
+            EventLogV4::from_bootstrap_request(v4_bootstrap_request()).expect("v4 bootstrap");
+        let roots = empty_v4_roots(&aggregate());
+        let first_session = OpaqueSessionIdentityV4::fresh();
+        let second_session = OpaqueSessionIdentityV4::fresh();
+        let replay = |session: &OpaqueSessionIdentityV4| {
+            EventLogV4::replay_confirmed_v4_prefix_for_session(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                bootstrap.envelopes(),
+                &EmptyV4Resolver,
+                &roots,
+                EventReplayLimits {
+                    max_events: 8,
+                    max_canonical_bytes: 1_048_576,
+                },
+                session,
+            )
+            .expect("v4 replay")
+        };
+        let (first_log, first_basis) = replay(&first_session);
+        let (second_log, second_basis) = replay(&second_session);
+        assert!(matches!(
+            EventLogV4::replay_confirmed_v4_prefix_for_session(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                bootstrap.envelopes(),
+                &EmptyV4Resolver,
+                &roots,
+                EventReplayLimits {
+                    max_events: 8,
+                    max_canonical_bytes: 1_048_576,
+                },
+                &first_session,
+            ),
+            Err(DomainError::AuthorityReplayBasisMismatch)
+        ));
+        assert_eq!(
+            first_log.envelopes()[0]
+                .canonical_bytes()
+                .expect("first genesis bytes"),
+            second_log.envelopes()[0]
+                .canonical_bytes()
+                .expect("second genesis bytes")
+        );
+        assert_ne!(
+            first_basis.session_identity_digest(),
+            second_basis.session_identity_digest()
+        );
+        assert_ne!(first_basis.basis_digest(), second_basis.basis_digest());
+
+        let obligation_id = first_log
+            .aggregate
+            .obligations()
+            .next()
+            .expect("fixture obligation")
+            .id()
+            .clone();
+        let prepared = first_log
+            .prepare_inherited_d2_event_v4(
+                EventCommand::obligation_transition(obligation_id, ObligationLifecycle::Planned),
+                &first_basis,
+            )
+            .expect("prepared transition");
+        assert!(matches!(
+            prepared.envelope(&second_log, &second_basis, &second_session),
+            Err(DomainError::AuthorityReplayBasisMismatch)
+        ));
+        assert!(matches!(
+            prepared.envelope(&second_log, &second_basis, &first_session),
+            Err(DomainError::AuthorityReplayBasisMismatch)
+        ));
+    }
+
+    #[test]
+    fn v4_replay_refuses_unsealed_snapshot_and_standalone_genesis_registrations() {
+        let (_, initial, _, _, _, _) = d2_v3_log();
+        let genesis = RunGenesisSnapshot::from_aggregate_v3(&initial)
+            .expect("v4 genesis")
+            .canonical_bytes_v3()
+            .expect("v4 genesis bytes");
+        let bootstrap = EventLogV4::from_bootstrap_request(
+            RunGenesisBootstrapRequestV4::new(
+                id("run:d2-core-v3"),
+                genesis,
+                initial.program().repository_identity(),
+                initial.program().snapshot_id().clone(),
+                initial.program().profile_id(),
+                initial.program().profile_version(),
+            )
+            .expect("v4 request"),
+        )
+        .expect("v4 bootstrap");
+        let roots = empty_v4_roots(&initial);
+        let unrelated_bytes = b"not a current ProgramSpace file".to_vec();
+        let unrelated_hash = ContentHash::sha256(&unrelated_bytes);
+        let snapshot = ArtifactRegisteredV3::new(
+            bootstrap.run_id().clone(),
+            unrelated_hash.clone(),
+            "text/plain",
+            u64::try_from(unrelated_bytes.len()).expect("unrelated size"),
+            ArtifactSensitivity::WorkspaceSource,
+            ArtifactSourceV3::SnapshotIngest {
+                adapter_id: "crafted-adapter".to_owned(),
+                run_id: bootstrap.run_id().clone(),
+                snapshot_id: initial.program().snapshot_id().clone(),
+            },
+        )
+        .expect("crafted snapshot registration");
+        let snapshot_event = EventEnvelope::new(
+            EventContractVersion::V4,
+            bootstrap.run_id().clone(),
+            bootstrap.genesis_hash().clone(),
+            2,
+            SYSTEM_ACTOR,
+            2,
+            bootstrap.tail_hash().clone(),
+            PersistedPayload::ArtifactRegisteredV3(snapshot),
+        )
+        .expect("crafted snapshot event");
+        let snapshot_prefix = vec![bootstrap.envelopes()[0].clone(), snapshot_event];
+        assert!(matches!(
+            EventLogV4::replay_confirmed_v4_prefix(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &snapshot_prefix,
+                &V4CasResolver {
+                    objects: BTreeMap::from([(unrelated_hash, unrelated_bytes)]),
+                },
+                &roots,
+                EventReplayLimits {
+                    max_events: 8,
+                    max_canonical_bytes: 1_048_576,
+                },
+            ),
+            Err(DomainError::AuthorityReplayRefused { .. })
+        ));
+
+        let standalone_genesis = ArtifactRegisteredV3::new(
+            bootstrap.run_id().clone(),
+            ContentHash::sha256(b"standalone genesis"),
+            "application/json",
+            18,
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::RunGenesis {
+                run_id: bootstrap.run_id().clone(),
+            },
+        )
+        .expect("standalone genesis registration");
+        let standalone_event = EventEnvelope::new(
+            EventContractVersion::V4,
+            bootstrap.run_id().clone(),
+            bootstrap.genesis_hash().clone(),
+            2,
+            SYSTEM_ACTOR,
+            2,
+            bootstrap.tail_hash().clone(),
+            PersistedPayload::ArtifactRegisteredV3(standalone_genesis),
+        )
+        .expect("standalone genesis event");
+        assert!(matches!(
+            EventLogV4::replay_confirmed_v4_prefix(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &[bootstrap.envelopes()[0].clone(), standalone_event],
+                &EmptyV4Resolver,
+                &roots,
+                EventReplayLimits {
+                    max_events: 8,
+                    max_canonical_bytes: 1_048_576,
+                },
+            ),
+            Err(DomainError::AuthorityReplayRefused { .. })
+        ));
+    }
+
+    #[test]
+    fn v4_registration_roles_form_a_closed_five_by_five_substitution_matrix() {
+        let run_id = id("run:v4-role-matrix");
+        let snapshot_id = id("snapshot:v4-role-matrix");
+        let claim_id = id("claim:v4-role-matrix");
+        let hashes = (0..5)
+            .map(|index| ContentHash::sha256(format!("role-{index}").as_bytes()))
+            .collect::<Vec<_>>();
+        let witness_hash = ContentHash::parse(FIXTURE_WITNESS_HASH).expect("fixture witness hash");
+        let harness = HarnessBindingRoleV4 {
+            policy_revision_hash: ContentHash::sha256(b"role-policy"),
+            repository_id: id("repository:v4-role-matrix"),
+            repository_source_hash: ContentHash::sha256(b"role-repository"),
+            harness_id: FIXTURE_HARNESS_ID.to_owned(),
+            harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+            harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH)
+                .expect("fixture harness hash"),
+            test_artifact_id: id(FIXTURE_TEST_ARTIFACT_ID),
+            descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+            procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+            result_hash: witness_hash.clone(),
+            result_size: 145,
+            result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+            result_sensitivity: ArtifactSensitivity::CanonicalState,
+            run_id: run_id.clone(),
+            genesis_hash: ContentHash::sha256(b"role-genesis"),
+            snapshot_id: snapshot_id.clone(),
+            universe_id: id("universe:v4-role-matrix"),
+            property_id: M4_PROPERTY_ID.to_owned(),
+            claim_id: claim_id.clone(),
+            claim_body_hash: ContentHash::sha256(b"role-claim"),
+        };
+        let registrations = [
+            ArtifactRegisteredV3::new(
+                run_id.clone(),
+                hashes[0].clone(),
+                "text/plain",
+                1,
+                ArtifactSensitivity::WorkspaceSource,
+                ArtifactSourceV3::SnapshotIngest {
+                    adapter_id: "adapter:v4-role-matrix".to_owned(),
+                    run_id: run_id.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                },
+            )
+            .expect("snapshot registration"),
+            ArtifactRegisteredV3::new(
+                run_id.clone(),
+                hashes[1].clone(),
+                "application/json",
+                2,
+                ArtifactSensitivity::Sensitive,
+                ArtifactSourceV3::ReviewerExecution {
+                    execution_id: id("execution:v4-role-matrix"),
+                    reviewer_id: "reviewer:v4-role-matrix".to_owned(),
+                    run_id: run_id.clone(),
+                },
+            )
+            .expect("reviewer registration"),
+            ArtifactRegisteredV3::new_validated(
+                run_id.clone(),
+                hashes[2].clone(),
+                STATIC_INPUT_MEDIA_TYPE,
+                3,
+                ArtifactSensitivity::CanonicalState,
+                ArtifactSourceV3::VerifierArtifact {
+                    run_id: run_id.clone(),
+                    claim_id: claim_id.clone(),
+                    descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+                    procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+                    role: VerifierArtifactRoleV3::Input,
+                },
+            )
+            .expect("verifier input registration"),
+            ArtifactRegisteredV3::new_validated(
+                run_id.clone(),
+                hashes[3].clone(),
+                STATIC_OUTPUT_MEDIA_TYPE,
+                4,
+                ArtifactSensitivity::CanonicalState,
+                ArtifactSourceV3::VerifierArtifact {
+                    run_id: run_id.clone(),
+                    claim_id: claim_id.clone(),
+                    descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+                    procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+                    role: VerifierArtifactRoleV3::Output,
+                },
+            )
+            .expect("verifier output registration"),
+            ArtifactRegisteredV3::new_validated(
+                run_id.clone(),
+                witness_hash,
+                FIXTURE_MEDIA_TYPE,
+                145,
+                ArtifactSensitivity::CanonicalState,
+                ArtifactSourceV3::ExternalHarnessWitness {
+                    policy_revision_hash: harness.policy_revision_hash.clone(),
+                    repository_id: harness.repository_id.clone(),
+                    repository_source_hash: harness.repository_source_hash.clone(),
+                    run_id: run_id.clone(),
+                    genesis_hash: harness.genesis_hash.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                    universe_id: harness.universe_id.clone(),
+                    property_id: harness.property_id.clone(),
+                    claim_id: claim_id.clone(),
+                    claim_body_hash: harness.claim_body_hash.clone(),
+                    harness_id: harness.harness_id.clone(),
+                    harness_revision: harness.harness_revision.clone(),
+                    harness_source_hash: harness.harness_source_hash.clone(),
+                    test_artifact_id: harness.test_artifact_id.clone(),
+                    descriptor_id: harness.descriptor_id.clone(),
+                    procedure_version: harness.procedure_version.clone(),
+                },
+            )
+            .expect("external witness registration"),
+        ];
+        let roles = [
+            ArtifactRegistrationV3AtV4SourceRole::SnapshotIngest {
+                adapter_id: "adapter:v4-role-matrix".to_owned(),
+                snapshot_id,
+                source_bundle_hash: ContentHash::sha256(b"role-bundle"),
+                source_bundle_total_bytes: 1,
+                source_bundle_entry_count: 1,
+                artifact_id: id("artifact:v4-role-matrix-source"),
+                normalized_path: "src/lib.rs".to_owned(),
+                content_hash: hashes[0].clone(),
+                line_count: 1,
+            },
+            ArtifactRegistrationV3AtV4SourceRole::ReviewerRaw {
+                execution_id: id("execution:v4-role-matrix"),
+                reviewer_id: "reviewer:v4-role-matrix".to_owned(),
+                raw_output_hash: hashes[1].clone(),
+                raw_output_size: 2,
+                raw_output_media_type: "application/json".to_owned(),
+                raw_output_sensitivity: ArtifactSensitivity::Sensitive,
+            },
+            ArtifactRegistrationV3AtV4SourceRole::VerifierInput {
+                claim_id: claim_id.clone(),
+                claim_body_hash: ContentHash::sha256(b"role-input-claim"),
+                descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+                procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+            },
+            ArtifactRegistrationV3AtV4SourceRole::VerifierOutput {
+                claim_id,
+                claim_body_hash: ContentHash::sha256(b"role-output-claim"),
+                descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+                procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+                expected_result_hash: hashes[3].clone(),
+            },
+            ArtifactRegistrationV3AtV4SourceRole::ExternalHarnessWitness {
+                harness_binding: Box::new(harness),
+            },
+        ];
+
+        for (registration_index, registration) in registrations.iter().enumerate() {
+            for (role_index, role) in roles.iter().enumerate() {
+                assert_eq!(
+                    registration_v3_matches_v4_role(registration, role),
+                    registration_index == role_index,
+                    "registration role {registration_index} substituted for role {role_index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn v4_static_verifier_input_and_output_roles_rebind_validated_v3_objects() {
+        let (v3, _v3_basis, v3_roots, claim_id, evaluation, mut v3_resolver) =
+            static_boundary_base();
+        v3_resolver.insert(br#"{"attempt":1,"fixture":true,"version":3}"#.to_vec());
+        let input_bytes = evaluation.input().canonical_bytes().expect("static input");
+        let output_bytes = evaluation
+            .result()
+            .canonical_bytes()
+            .expect("static output");
+        let input_hash = v3_resolver.insert(input_bytes.clone());
+        let output_hash = v3_resolver.insert(output_bytes.clone());
+        let genesis = v3
+            .run_genesis_snapshot()
+            .expect("v3 genesis")
+            .canonical_bytes()
+            .expect("v3 genesis bytes");
+        let bootstrap = EventLogV4::from_bootstrap_request(
+            RunGenesisBootstrapRequestV4::new(
+                v3.run_id().clone(),
+                genesis,
+                v3.aggregate().program().repository_identity(),
+                v3.aggregate().program().snapshot_id().clone(),
+                v3.aggregate().program().profile_id(),
+                v3.aggregate().program().profile_version(),
+            )
+            .expect("v4 request"),
+        )
+        .expect("v4 bootstrap");
+        let envelopes = rewrap_v3_suffix_as_v4(&v3, &bootstrap);
+        let roots = AuthorityTrustRootsV4::new(
+            v3_roots.policy_revision_hash().clone(),
+            v3.aggregate().program().repository_id().clone(),
+            v3.aggregate()
+                .program()
+                .repository_source()
+                .content_hash()
+                .expect("repository source hash")
+                .clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("v4 roots");
+        let resolver = V4CasResolver {
+            objects: v3_resolver.objects,
+        };
+        let session = OpaqueSessionIdentityV4::fresh();
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &envelopes,
+            &resolver,
+            &roots,
+            EventReplayLimits {
+                max_events: 64,
+                max_canonical_bytes: 8_388_608,
+            },
+            &session,
+        )
+        .expect("v4 static prefix");
+        let input = log
+            .prepare_static_verifier_input_registration_v3_at_v4(
+                &claim_id,
+                input_hash,
+                u64::try_from(input_bytes.len()).expect("input size"),
+                &resolver,
+                &roots,
+                &basis,
+            )
+            .expect("v4 input admission");
+        let output = log
+            .prepare_static_verifier_output_registration_v3_at_v4(
+                &claim_id,
+                output_hash,
+                u64::try_from(output_bytes.len()).expect("output size"),
+                &resolver,
+                &roots,
+                &basis,
+            )
+            .expect("v4 output admission");
+        assert_eq!(input.binding.source_role.name(), "verifier_input");
+        assert_eq!(output.binding.source_role.name(), "verifier_output");
+        input
+            .envelope(&log, &basis, &session)
+            .expect("sealed input envelope");
+        output
+            .envelope(&log, &basis, &session)
+            .expect("sealed output envelope");
+    }
+
+    #[test]
+    fn v3_snapshot_registration_bridge_is_complete_role_bound_and_basis_atomic() {
+        let (_, initial, _, _, _, source_by_id) = d2_v3_log();
+        let genesis = RunGenesisSnapshot::from_aggregate_v3(&initial)
+            .expect("v4 genesis")
+            .canonical_bytes_v3()
+            .expect("v4 genesis bytes");
+        let bootstrap = EventLogV4::from_bootstrap_request(
+            RunGenesisBootstrapRequestV4::new(
+                id("run:d2-core-v3"),
+                genesis,
+                initial.program().repository_identity(),
+                initial.program().snapshot_id().clone(),
+                initial.program().profile_id(),
+                initial.program().profile_version(),
+            )
+            .expect("v4 request"),
+        )
+        .expect("v4 bootstrap");
+        let roots = empty_v4_roots(&initial);
+        let session = OpaqueSessionIdentityV4::fresh();
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            bootstrap.envelopes(),
+            &EmptyV4Resolver,
+            &roots,
+            EventReplayLimits {
+                max_events: 8,
+                max_canonical_bytes: 1_048_576,
+            },
+            &session,
+        )
+        .expect("v4 replay");
+        let entries = initial
+            .program()
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+            .map(|artifact| {
+                let bytes = source_by_id[&artifact.id].clone();
+                let hash = ContentHash::sha256(&bytes);
+                crate::SnapshotSourceEntry::new(
+                    artifact.id.clone(),
+                    artifact
+                        .location
+                        .as_ref()
+                        .expect("file location")
+                        .path
+                        .clone(),
+                    hash.clone(),
+                    hash,
+                    bytes,
+                )
+            })
+            .collect::<Vec<_>>();
+        let bundle = crate::SnapshotSourceBundle::new(initial.program(), entries)
+            .expect("complete source bundle");
+        let canonical_bundle = bundle.canonical_bytes().expect("canonical source bundle");
+        assert_eq!(
+            bundle
+                .canonical_digest_bounded(
+                    canonical_bundle.len(),
+                    "test exact snapshot source bundle",
+                )
+                .expect("exact bound"),
+            ContentHash::sha256(&canonical_bundle)
+        );
+        let one_byte_over_limit = canonical_bundle.len().saturating_sub(1);
+        assert!(matches!(
+            bundle.canonical_digest_bounded(
+                one_byte_over_limit,
+                "test one-byte-over snapshot source bundle",
+            ),
+            Err(DomainError::Incomplete {
+                limit,
+                observed,
+                ..
+            }) if limit == one_byte_over_limit && observed == canonical_bundle.len()
+        ));
+        let selected = bundle.entries().first().expect("source entry");
+        let registration = ArtifactRegisteredV3::new(
+            log.run_id().clone(),
+            selected.cas_hash().clone(),
+            "text/plain",
+            u64::try_from(selected.bytes().len()).unwrap(),
+            ArtifactSensitivity::WorkspaceSource,
+            ArtifactSourceV3::SnapshotIngest {
+                adapter_id: "fixture-adapter".to_owned(),
+                run_id: log.run_id().clone(),
+                snapshot_id: initial.program().snapshot_id().clone(),
+            },
+        )
+        .expect("snapshot registration");
+        let stale = log
+            .prepare_snapshot_artifact_registration_v3_at_v4(
+                registration.clone(),
+                &bundle,
+                selected.artifact_id(),
+                &basis,
+            )
+            .expect("stale admission");
+        let admission = log
+            .prepare_snapshot_artifact_registration_v3_at_v4(
+                registration,
+                &bundle,
+                selected.artifact_id(),
+                &basis,
+            )
+            .expect("snapshot admission");
+        let wrong_role = ArtifactRegisteredV3::new(
+            log.run_id().clone(),
+            ContentHash::sha256(b"raw"),
+            "application/json",
+            3,
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id: id("execution:wrong-role"),
+                reviewer_id: crate::FAKE_REVIEWER_ID.to_owned(),
+                run_id: log.run_id().clone(),
+            },
+        )
+        .expect("wrong-role registration");
+        assert!(
+            log.prepare_snapshot_artifact_registration_v3_at_v4(
+                wrong_role,
+                &bundle,
+                selected.artifact_id(),
+                &basis,
+            )
+            .is_err()
+        );
+        let mut confirmed = log.envelopes().to_vec();
+        confirmed.push(
+            admission
+                .envelope(&log, &basis, &session)
+                .expect("registration envelope")
+                .clone(),
+        );
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            log.run_id().clone(),
+            log.canonical_genesis_bytes(),
+            &confirmed,
+            &V4CasResolver {
+                objects: BTreeMap::from([(selected.cas_hash().clone(), selected.bytes().to_vec())]),
+            },
+            &roots,
+            EventReplayLimits {
+                max_events: 8,
+                max_canonical_bytes: 1_048_576,
+            },
+            &session,
+        )
+        .expect("confirmed registration replay");
+        let receipt = admission
+            .confirm_replayed(&log, &basis, &session)
+            .expect("registration receipt");
+        assert_eq!(receipt.source_role(), "snapshot_ingest");
+        assert_eq!(basis.confirmed_event_count(), 2);
+        assert_eq!(basis.inherited_m4_entry_count(), 0);
+        let digest = basis.basis_digest().clone();
+        let tail = basis.confirmed_tail_hash().clone();
+        let event_count = log.envelopes().len();
+        assert!(matches!(
+            stale.envelope(&log, &basis, &session),
+            Err(DomainError::AuthorityReplayBasisMismatch)
+        ));
+        assert_eq!(basis.basis_digest(), &digest);
+        assert_eq!(basis.confirmed_tail_hash(), &tail);
+        assert_eq!(log.envelopes().len(), event_count);
+    }
+
+    #[test]
+    fn v3_reviewer_raw_bridge_requires_its_validated_execution_before_d2_append() {
+        let (v3, initial, review_plan, obligation_id, context, source_by_id) = d2_v3_log();
+        let genesis = RunGenesisSnapshot::from_aggregate_v3(&initial)
+            .expect("v4 genesis")
+            .canonical_bytes_v3()
+            .expect("v4 genesis bytes");
+        let bootstrap = EventLogV4::from_bootstrap_request(
+            RunGenesisBootstrapRequestV4::new(
+                v3.run_id().clone(),
+                genesis,
+                initial.program().repository_identity(),
+                initial.program().snapshot_id().clone(),
+                initial.program().profile_id(),
+                initial.program().profile_version(),
+            )
+            .expect("v4 request"),
+        )
+        .expect("v4 bootstrap");
+        let envelopes = rewrap_v3_suffix_as_v4(&v3, &bootstrap);
+        let mut objects: BTreeMap<ContentHash, Vec<u8>> = source_by_id
+            .values()
+            .map(|bytes| (ContentHash::sha256(bytes), bytes.clone()))
+            .collect();
+        let roots = empty_v4_roots(&initial);
+        let session = OpaqueSessionIdentityV4::fresh();
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &envelopes,
+            &V4CasResolver {
+                objects: objects.clone(),
+            },
+            &roots,
+            EventReplayLimits {
+                max_events: 32,
+                max_canonical_bytes: 4_194_304,
+            },
+            &session,
+        )
+        .expect("v4 D2 prefix replay");
+        let wave = review_plan
+            .waves()
+            .iter()
+            .find(|wave| wave.obligation_ids().contains(&obligation_id))
+            .expect("review wave");
+        let input = crate::ExecutionRecordInput::fake(
+            review_plan.id().clone(),
+            wave.id().clone(),
+            obligation_id.clone(),
+            context.id().clone(),
+            context.snapshot_id().clone(),
+            1,
+        )
+        .expect("execution input");
+        let execution_id = input.execution_id().expect("execution ID");
+        let raw = br#"{"attempt":1,"fixture":true,"version":4}"#.to_vec();
+        objects.insert(ContentHash::sha256(&raw), raw.clone());
+        let registration = ArtifactRegisteredV3::new(
+            log.run_id().clone(),
+            ContentHash::sha256(&raw),
+            "application/json",
+            u64::try_from(raw.len()).unwrap(),
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id,
+                reviewer_id: crate::FAKE_REVIEWER_ID.to_owned(),
+                run_id: log.run_id().clone(),
+            },
+        )
+        .expect("reviewer registration");
+        let obligation = log
+            .aggregate
+            .obligation(&obligation_id)
+            .expect("current obligation");
+        let claim = crate::ExecutionClaimInputV2::new(
+            obligation.property_id(),
+            obligation.normalized_target_refs().clone(),
+            ClaimPolarity::IssueAbsent,
+            "v4 reviewer bridge fixture",
+            context.normalized_included_source_ids().clone(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            Some(1.0),
+        )
+        .expect("claim");
+        let bundle = ValidatedExecutionBundle::fake_v3(
+            input,
+            &registration,
+            raw,
+            source_by_id.values().collect(),
+            vec![claim],
+            crate::ExecutionOutcome::Structured,
+        )
+        .expect("validated execution bundle");
+        let wrong_role = ArtifactRegisteredV3::new(
+            log.run_id().clone(),
+            ContentHash::sha256(b"snapshot-role"),
+            "text/plain",
+            13,
+            ArtifactSensitivity::WorkspaceSource,
+            ArtifactSourceV3::SnapshotIngest {
+                adapter_id: "fixture-adapter".to_owned(),
+                run_id: log.run_id().clone(),
+                snapshot_id: log.aggregate.program().snapshot_id().clone(),
+            },
+        )
+        .expect("wrong snapshot role");
+        assert!(
+            log.prepare_reviewer_raw_artifact_registration_v3_at_v4(wrong_role, &bundle, &basis,)
+                .is_err()
+        );
+        let crafted_reviewer = ArtifactRegisteredV3::new(
+            log.run_id().clone(),
+            registration.cas_hash().clone(),
+            "application/json",
+            registration.size(),
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id: id("execution:crafted-unplanned"),
+                reviewer_id: crate::FAKE_REVIEWER_ID.to_owned(),
+                run_id: log.run_id().clone(),
+            },
+        )
+        .expect("crafted reviewer registration");
+        let crafted_event = EventEnvelope::new(
+            EventContractVersion::V4,
+            log.run_id().clone(),
+            log.genesis_hash().clone(),
+            basis.next_sequence(),
+            SYSTEM_ACTOR,
+            basis.next_sequence(),
+            log.tail_hash().clone(),
+            PersistedPayload::ArtifactRegisteredV3(crafted_reviewer),
+        )
+        .expect("crafted reviewer event");
+        let mut crafted_prefix = log.envelopes().to_vec();
+        crafted_prefix.push(crafted_event);
+        assert!(matches!(
+            EventLogV4::replay_confirmed_v4_prefix_for_session(
+                log.run_id().clone(),
+                log.canonical_genesis_bytes(),
+                &crafted_prefix,
+                &V4CasResolver {
+                    objects: objects.clone(),
+                },
+                &roots,
+                EventReplayLimits {
+                    max_events: 32,
+                    max_canonical_bytes: 4_194_304,
+                },
+                &session,
+            ),
+            Err(DomainError::AuthorityReplayRefused { .. })
+        ));
+        let admission = log
+            .prepare_reviewer_raw_artifact_registration_v3_at_v4(registration, &bundle, &basis)
+            .expect("reviewer bridge admission");
+        let mut confirmed = log.envelopes().to_vec();
+        confirmed.push(
+            admission
+                .envelope(&log, &basis, &session)
+                .expect("reviewer registration envelope")
+                .clone(),
+        );
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            log.run_id().clone(),
+            log.canonical_genesis_bytes(),
+            &confirmed,
+            &V4CasResolver {
+                objects: objects.clone(),
+            },
+            &roots,
+            EventReplayLimits {
+                max_events: 32,
+                max_canonical_bytes: 4_194_304,
+            },
+            &session,
+        )
+        .expect("reviewer registration replay");
+        let receipt = admission
+            .confirm_replayed(&log, &basis, &session)
+            .expect("reviewer registration receipt");
+        assert_eq!(receipt.source_role(), "reviewer_raw");
+        let execution = log
+            .prepare_inherited_d2_event_v4(EventCommand::review_execution_recorded(bundle), &basis)
+            .expect("prepared D2 execution");
+        confirmed.push(
+            execution
+                .envelope(&log, &basis, &session)
+                .expect("execution envelope")
+                .clone(),
+        );
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            log.run_id().clone(),
+            log.canonical_genesis_bytes(),
+            &confirmed,
+            &V4CasResolver { objects },
+            &roots,
+            EventReplayLimits {
+                max_events: 32,
+                max_canonical_bytes: 4_194_304,
+            },
+            &session,
+        )
+        .expect("D2 execution replay");
+        let execution_receipt = execution
+            .confirm_replayed(&log, &basis, &session)
+            .expect("D2 execution receipt");
+        assert_eq!(
+            basis.confirmed_tail_hash(),
+            execution_receipt.confirmed_tail_hash()
+        );
+        assert_eq!(log.aggregate.executions().count(), 1);
+        assert_eq!(log.aggregate.execution_claims().count(), 1);
+        assert_eq!(basis.inherited_m4_entry_count(), 0);
+    }
+
+    #[test]
+    fn v4_external_witness_authority_exists_only_after_registration_replay() {
+        let (mut v3, initial, plan, obligation_id, context, sources) = d2_v3_m4_log();
+        let (_, claim_id) = append_d2_attempt_v3_with_polarity(
+            &mut v3,
+            &plan,
+            &obligation_id,
+            &context,
+            &sources,
+            ClaimPolarity::IssuePresent,
+        );
+        let genesis = RunGenesisSnapshot::from_aggregate_v3(&initial)
+            .expect("v4 genesis")
+            .canonical_bytes_v3()
+            .expect("v4 genesis bytes");
+        let bootstrap = EventLogV4::from_bootstrap_request(
+            RunGenesisBootstrapRequestV4::new(
+                v3.run_id().clone(),
+                genesis,
+                initial.program().repository_identity(),
+                initial.program().snapshot_id().clone(),
+                initial.program().profile_id(),
+                initial.program().profile_version(),
+            )
+            .expect("v4 request"),
+        )
+        .expect("v4 bootstrap");
+        let envelopes = rewrap_v3_suffix_as_v4(&v3, &bootstrap);
+        let claim = v3
+            .aggregate()
+            .execution_claims()
+            .find(|claim| claim.id() == &claim_id)
+            .expect("fixture claim");
+        let policy_revision_hash = ContentHash::sha256(b"v4 witness policy");
+        let repository_id = initial.program().repository_id().clone();
+        let repository_source_hash = initial
+            .program()
+            .repository_source()
+            .content_hash()
+            .expect("repository source hash")
+            .clone();
+        let roots = AuthorityTrustRootsV4::new(
+            policy_revision_hash.clone(),
+            repository_id.clone(),
+            repository_source_hash.clone(),
+            vec![AuthorityHarnessBindingV3Tuple {
+                policy_revision_hash,
+                repository_id,
+                repository_source_hash,
+                harness_id: FIXTURE_HARNESS_ID.to_owned(),
+                harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+                harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH)
+                    .expect("fixture harness hash"),
+                test_artifact_id: id(FIXTURE_TEST_ARTIFACT_ID),
+                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH)
+                    .expect("fixture witness hash"),
+                result_size: 145,
+                result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+                result_sensitivity: ArtifactSensitivity::CanonicalState,
+                run_id: bootstrap.run_id().clone(),
+                genesis_hash: bootstrap.genesis_hash().clone(),
+                snapshot_id: initial.program().snapshot_id().clone(),
+                universe_id: initial.universe().id().clone(),
+                property_id: M4_PROPERTY_ID.to_owned(),
+                claim_id: claim_id.clone(),
+                claim_body_hash: claim.body_hash().expect("claim body hash"),
+            }],
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("v4 witness roots");
+        let raw = br#"{"attempt":1,"fixture":true,"version":3}"#.to_vec();
+        let mut objects = sources
+            .values()
+            .map(|bytes| (ContentHash::sha256(bytes), bytes.clone()))
+            .chain(std::iter::once((ContentHash::sha256(&raw), raw)))
+            .collect::<BTreeMap<_, _>>();
+        let session = OpaqueSessionIdentityV4::fresh();
+        let limits = EventReplayLimits {
+            max_events: 64,
+            max_canonical_bytes: 8_388_608,
+        };
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &envelopes,
+            &V4CasResolver {
+                objects: objects.clone(),
+            },
+            &roots,
+            limits,
+            &session,
+        )
+        .expect("v4 fixture prefix");
+        let fixture = log
+            .execute_fixture_harness_v4(&claim_id, &roots, &basis)
+            .expect("fixture execution");
+        objects.insert(
+            ContentHash::sha256(fixture.witness_bytes()),
+            fixture.witness_bytes().to_vec(),
+        );
+        let resolver = V4CasResolver { objects };
+        let splice_fixture = log
+            .execute_fixture_harness_v4(&claim_id, &roots, &basis)
+            .expect("second fixture execution");
+        let premature = log
+            .prepare_external_harness_witness_registration_v3_at_v4(&fixture, &resolver, &basis)
+            .expect("premature witness registration admission");
+        assert!(matches!(
+            premature.confirm_replayed(&log, &basis, &session),
+            Err(DomainError::AuthorityReplayBasisMismatch)
+        ));
+
+        let registration = log
+            .prepare_external_harness_witness_registration_v3_at_v4(&fixture, &resolver, &basis)
+            .expect("witness registration admission");
+        let splice_registration = log
+            .prepare_external_harness_witness_registration_v3_at_v4(
+                &splice_fixture,
+                &resolver,
+                &basis,
+            )
+            .expect("splice registration admission");
+        let mut confirmed = log.envelopes().to_vec();
+        confirmed.push(
+            registration
+                .envelope(&log, &basis, &session)
+                .expect("sealed witness registration")
+                .clone(),
+        );
+        let (confirmed_log, confirmed_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            log.run_id().clone(),
+            log.canonical_genesis_bytes(),
+            &confirmed,
+            &resolver,
+            &roots,
+            limits,
+            &session,
+        )
+        .expect("durable witness registration replay");
+        let registration_receipt = registration
+            .confirm_replayed(&confirmed_log, &confirmed_basis, &session)
+            .expect("post-durable registration receipt");
+        let mut spliced_receipt = splice_registration
+            .confirm_replayed(&confirmed_log, &confirmed_basis, &session)
+            .expect("second post-durable registration receipt");
+        spliced_receipt.registration_id = confirmed_log
+            .v3_aggregate
+            .registrations
+            .values()
+            .find(|registration| {
+                !matches!(
+                    registration.source(),
+                    ArtifactSourceV3::ExternalHarnessWitness { .. }
+                )
+            })
+            .expect("unrelated durable registration")
+            .registration_id()
+            .clone();
+        assert!(matches!(
+            confirmed_log.admit_external_witness_v4(
+                splice_fixture,
+                &spliced_receipt,
+                &confirmed_basis,
+            ),
+            Err(DomainError::WitnessAdmissionMismatch)
+        ));
+        let witness = confirmed_log
+            .admit_external_witness_v4(fixture, &registration_receipt, &confirmed_basis)
+            .expect("post-durable witness admission");
+        witness
+            .validate_position(&confirmed_log, &confirmed_basis, &session)
+            .expect("witness position");
+
+        let other_session = OpaqueSessionIdentityV4::fresh();
+        let (other_log, other_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            confirmed_log.run_id().clone(),
+            confirmed_log.canonical_genesis_bytes(),
+            confirmed_log.envelopes(),
+            &resolver,
+            &roots,
+            limits,
+            &other_session,
+        )
+        .expect("independent confirmed replay");
+        assert!(matches!(
+            witness.validate_position(&other_log, &other_basis, &other_session),
+            Err(DomainError::WitnessAdmissionMismatch)
+        ));
     }
 
     #[test]

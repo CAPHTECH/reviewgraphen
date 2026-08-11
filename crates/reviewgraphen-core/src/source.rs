@@ -1,5 +1,6 @@
 use crate::{ContentHash, DomainError, ProgramSpace, Result, StableId, canonical_json};
-use serde::Serialize;
+use serde::ser::{SerializeSeq, SerializeStruct};
+use serde::{Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Immutable source bytes for one accepted `file:*` ProgramSpace artifact.
@@ -73,6 +74,58 @@ pub struct SnapshotSourceBundle {
     snapshot_id: StableId,
     entries: Vec<SnapshotSourceEntry>,
     total_bytes: u64,
+}
+
+struct SnapshotSourceEntryStreamingRef<'a>(&'a SnapshotSourceEntry);
+
+impl Serialize for SnapshotSourceEntryStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("SnapshotSourceEntry", 5)?;
+        state.serialize_field("artifact_id", &value.artifact_id)?;
+        state.serialize_field("bytes", &value.bytes)?;
+        state.serialize_field("cas_hash", &value.cas_hash)?;
+        state.serialize_field("content_hash", &value.content_hash)?;
+        state.serialize_field("path", &value.path)?;
+        state.end()
+    }
+}
+
+struct SnapshotSourceEntriesStreamingRef<'a>(&'a [SnapshotSourceEntry]);
+
+impl Serialize for SnapshotSourceEntriesStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for entry in self.0 {
+            sequence.serialize_element(&SnapshotSourceEntryStreamingRef(entry))?;
+        }
+        sequence.end()
+    }
+}
+
+struct SnapshotSourceBundleStreamingRef<'a>(&'a SnapshotSourceBundle);
+
+impl Serialize for SnapshotSourceBundleStreamingRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = self.0;
+        let mut state = serializer.serialize_struct("SnapshotSourceBundle", 3)?;
+        state.serialize_field(
+            "entries",
+            &SnapshotSourceEntriesStreamingRef(&value.entries),
+        )?;
+        state.serialize_field("snapshot_id", &value.snapshot_id)?;
+        state.serialize_field("total_bytes", &value.total_bytes)?;
+        state.end()
+    }
 }
 
 impl SnapshotSourceBundle {
@@ -206,5 +259,15 @@ impl SnapshotSourceBundle {
     /// Canonical, byte-stable serialization for deterministic handoff tests.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
         canonical_json(self)
+    }
+
+    pub(crate) fn canonical_digest_bounded(
+        &self,
+        limit: usize,
+        operation: &'static str,
+    ) -> Result<ContentHash> {
+        let streaming = SnapshotSourceBundleStreamingRef(self);
+        crate::canonical::canonical_json_count_bounded(&streaming, limit, operation)?;
+        crate::canonical::compact_json_sha256_streaming(&streaming)
     }
 }

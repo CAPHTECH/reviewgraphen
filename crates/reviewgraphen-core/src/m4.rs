@@ -1980,6 +1980,22 @@ pub fn evaluate_static_fact_v1(
 ) -> Result<StaticFactEvaluationV1> {
     #[cfg(test)]
     STATIC_EVALUATOR_CALLS.with(|calls| calls.set(calls.get() + 1));
+    derive_static_fact_evaluation_v1(program, obligation, claim)
+}
+
+pub(crate) fn reconstruct_static_evaluation_v1(
+    program: &ProgramSpace,
+    obligation: &Obligation,
+    claim: &ExecutionClaimV2,
+) -> Result<StaticFactEvaluationV1> {
+    derive_static_fact_evaluation_v1(program, obligation, claim)
+}
+
+fn derive_static_fact_evaluation_v1(
+    program: &ProgramSpace,
+    obligation: &Obligation,
+    claim: &ExecutionClaimV2,
+) -> Result<StaticFactEvaluationV1> {
     claim.validate_shape()?;
     if obligation.version().snapshot() != program.snapshot_id() {
         return Err(M4Error::SnapshotMismatch {
