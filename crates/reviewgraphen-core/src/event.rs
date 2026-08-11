@@ -9476,6 +9476,14 @@ std::thread_local! {
     static V5_TEST_D2_CONTEXT_SOURCE_REQUESTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_D2_FORCED_CONTEXT_WORKING_OVERHEAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_D2_ASSESSMENT_CONSTRUCTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M4_AUTHORITY_MATERIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M4_RESERVATION_ALLOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M4_CAS_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M4_EXACT_RETAINED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M4_EXACT_WORKING: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M4_CONTEXT_SESSION_SEALS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M4_CONTEXT_SOURCE_REQUESTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M4_FORCED_CONTEXT_WORKING_OVERHEAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_APPEND_SHADOW_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_BINDING_APPEND_PEAK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_BINDING_SHADOW_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -10924,23 +10932,6 @@ impl AuthorityTrustRootsV5 {
             human_grants,
             allowed_gluing_input_bindings,
         })
-    }
-
-    /// Rebuilds the short-lived V3 semantic-validator view only inside the
-    /// private V5 replay reducer. This is deliberately a value conversion,
-    /// never a V4 replay capability or basis import.
-    #[allow(dead_code)] // Materialized by the following private M4 slice.
-    fn rebuild_v3_validation_roots(&self) -> Result<AuthorityTrustRootsV3> {
-        AuthorityTrustRootsV3::new(
-            self.policy_revision_hash.clone(),
-            self.repository_id.clone(),
-            self.repository_source_hash.clone(),
-            self.harnesses
-                .iter()
-                .map(harness_binding_v4_as_v3)
-                .collect(),
-            self.human_grants.iter().map(human_grant_v4_as_v3).collect(),
-        )
     }
 }
 
@@ -19091,6 +19082,18 @@ struct V5D2StructuralAccounting {
     max_context_source_cas_bytes: u64,
     max_reducer_growth: u64,
     max_reviewer_cas_bytes: u64,
+    m4_authority_entries: u64,
+    m4_authority_entry_dynamic_bytes: u64,
+    m4_additional_d2_traces: u64,
+    m4_additional_d2_trace_dynamic_bytes: u64,
+    m4_reviewer_registrations: u64,
+    m4_reviewer_registration_dynamic_bytes: u64,
+    m4_state_growth_upper_bound: u64,
+    max_m4_payload_scratch: u64,
+    max_m4_reducer_growth: u64,
+    max_m4_cas_bytes: u64,
+    m4_contexts: u64,
+    m5_started: bool,
 }
 
 impl V5D2StructuralAccounting {
@@ -19159,11 +19162,137 @@ impl V5D2StructuralAccounting {
         // M4/M5 record appears, the integrated dispatcher must continue from
         // that exact cursor; applying a later D2 event early would destroy
         // stream-order semantics.
-        if self.deferred_semantic_events != 0 {
-            return Self::increment(
+        let belongs_to_d2_prefix = matches!(
+            payload,
+            PersistedPayload::ObligationTransition { .. }
+                | PersistedPayload::ArtifactRegisteredV3(ArtifactRegisteredV3 {
+                    source: ArtifactSourceV3::ReviewerExecution { .. },
+                    ..
+                })
+                | PersistedPayload::ContextEnvelopeProjected(_)
+                | PersistedPayload::ReviewExecutionRecorded(_)
+        );
+        if self.deferred_semantic_events != 0 || !belongs_to_d2_prefix {
+            Self::increment(
                 &mut self.deferred_semantic_events,
                 "V5 deferred semantic post-plan accounting",
-            );
+            )?;
+            if matches!(payload, PersistedPayload::ArtifactRegisteredV4(_)) {
+                self.m5_started = true;
+            }
+            if self.m5_started {
+                return Ok(());
+            }
+            let staging = v3_payload_staging_bytes(payload)?;
+            self.max_m4_payload_scratch = self.max_m4_payload_scratch.max(staging);
+            let reducer_growth = v3_reducer_growth_upper_bound(payload)?;
+            self.max_m4_reducer_growth = self.max_m4_reducer_growth.max(reducer_growth);
+            self.m4_state_growth_upper_bound = self
+                .m4_state_growth_upper_bound
+                .checked_add(reducer_growth)
+                .ok_or_else(|| {
+                    replay_incomplete("V5 M4 state growth accounting", u64::MAX, u64::MAX)
+                })?;
+            let authority_record = match payload {
+                PersistedPayload::EvidenceRecordedV3(value) => {
+                    Some(("evidence_recorded_v3", value.id()))
+                }
+                PersistedPayload::EvidenceBoundV3(value) => Some(("evidence_bound_v3", value.id())),
+                PersistedPayload::VerificationRecordedV3(value) => {
+                    Some(("verification_recorded_v3", value.id()))
+                }
+                PersistedPayload::DecisionRecordedV3(value) => {
+                    Some(("decision_recorded_v3", value.id()))
+                }
+                _ => None,
+            };
+            if let Some((payload_kind, record_id)) = authority_record {
+                Self::increment(
+                    &mut self.m4_authority_entries,
+                    "V5 M4 authority entry accounting",
+                )?;
+                let hash_bytes = envelope.payload_hash().allocated_bytes();
+                let dynamic = [
+                    envelope.id().allocated_bytes(),
+                    record_id.allocated_bytes(),
+                    hash_bytes,
+                    envelope.previous_event_hash().allocated_bytes(),
+                    hash_bytes,
+                    hash_bytes,
+                    payload_kind.len(),
+                ]
+                .into_iter()
+                .try_fold(0_u64, |total, bytes| {
+                    total
+                        .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                        .ok_or_else(|| {
+                            replay_incomplete("V5 M4 authority entry backing", u64::MAX, u64::MAX)
+                        })
+                })?;
+                self.m4_authority_entry_dynamic_bytes = self
+                    .m4_authority_entry_dynamic_bytes
+                    .checked_add(dynamic)
+                    .ok_or_else(|| {
+                        replay_incomplete("V5 M4 authority entry backing", u64::MAX, u64::MAX)
+                    })?;
+            }
+            if let Some(record_id) = d2_trace_record_id(payload) {
+                Self::increment(
+                    &mut self.m4_additional_d2_traces,
+                    "V5 M4 later D2 trace accounting",
+                )?;
+                let dynamic = [
+                    envelope.id().allocated_bytes(),
+                    envelope.previous_event_hash().allocated_bytes(),
+                    record_id.allocated_bytes(),
+                    envelope.payload_hash().allocated_bytes(),
+                ]
+                .into_iter()
+                .try_fold(0_u64, |total, bytes| {
+                    total
+                        .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                        .ok_or_else(|| {
+                            replay_incomplete("V5 M4 later D2 trace backing", u64::MAX, u64::MAX)
+                        })
+                })?;
+                self.m4_additional_d2_trace_dynamic_bytes = self
+                    .m4_additional_d2_trace_dynamic_bytes
+                    .checked_add(dynamic)
+                    .ok_or_else(|| {
+                        replay_incomplete("V5 M4 later D2 trace backing", u64::MAX, u64::MAX)
+                    })?;
+            }
+            if let PersistedPayload::ArtifactRegisteredV3(registration) = payload {
+                self.max_m4_cas_bytes = self.max_m4_cas_bytes.max(registration.size());
+                if matches!(
+                    registration.source(),
+                    ArtifactSourceV3::ReviewerExecution { .. }
+                ) {
+                    Self::increment(
+                        &mut self.m4_reviewer_registrations,
+                        "V5 M4 reviewer registration accounting",
+                    )?;
+                    self.m4_reviewer_registration_dynamic_bytes = self
+                        .m4_reviewer_registration_dynamic_bytes
+                        .checked_add(
+                            u64::try_from(registration.registration_id().allocated_bytes())
+                                .unwrap_or(u64::MAX),
+                        )
+                        .ok_or_else(|| {
+                            replay_incomplete(
+                                "V5 M4 reviewer registration backing",
+                                u64::MAX,
+                                u64::MAX,
+                            )
+                        })?;
+                }
+            }
+            if let PersistedPayload::ContextEnvelopeProjected(context) = payload {
+                Self::increment(&mut self.m4_contexts, "V5 M4 context accounting")?;
+                self.max_context_envelope_staging = self.max_context_envelope_staging.max(staging);
+                self.observe_context_sources(context, registrations)?;
+            }
+            return Ok(());
         }
         Self::increment(&mut self.d2_prefix_events, "V5 D2 prefix accounting")?;
         self.state_growth_bytes = self
@@ -19234,10 +19363,7 @@ impl V5D2StructuralAccounting {
             // M4/M5 records are structurally closed by the outer FSM. D2
             // deliberately leaves their semantic replay to the next private
             // reducer, while continuing to process later D2 records.
-            _ => Self::increment(
-                &mut self.deferred_semantic_events,
-                "V5 deferred semantic post-plan accounting",
-            )?,
+            _ => unreachable!("non-D2 payload was accounted by the deferred semantic branch"),
         }
         if let Some(record_id) = d2_trace_record_id(payload) {
             let dynamic = [
@@ -19573,6 +19699,22 @@ struct ReplayedV5M4AuthorityState<'a> {
     d2_dispatch_cursor: V5D2DispatchCursor,
 }
 
+/// Private ordered semantic handoff at the first frozen V4 gluing-input
+/// registration.  It deliberately contains no authority basis: ADR 0023 §4
+/// permits that basis only after the terminal M5 semantics have been replayed.
+#[allow(dead_code)] // Consumed by the following M5 continuation slice.
+struct ReplayedV5M5ContinuationState<'a> {
+    plan_checkpoint: &'a PlanAuthorityCheckpointV5<'a>,
+    aggregate: ReviewAggregate,
+    v3_aggregate: V3RunAggregate,
+    d2_trace: Vec<V5D2ReplayTrace>,
+    deferred_registration_closures: Vec<(u64, StableId)>,
+    inherited_m4_entries: Vec<AuthorityReplayEntryV3AtV5>,
+    consumed_through_event: u64,
+    consumed_tail_hash: ContentHash,
+    phase: V5StructuralPostPlanPhase,
+}
+
 /// Private handoff for the integrated M4/M5 reducer. `replay_from_event` is
 /// the plan boundary because `applied_d2_trace` is the byte-for-byte proof of
 /// which following events were already applied. A successor validates that
@@ -19712,6 +19854,199 @@ fn validate_v5_d2_dispatch_cursor(state: &ReplayedV5M4AuthorityState<'_>) -> Res
     Ok(())
 }
 
+fn validate_v5_m5_continuation(
+    state: &ReplayedV5M5ContinuationState<'_>,
+    roots: &AuthorityTrustRootsV5,
+) -> Result<()> {
+    let structural = state.plan_checkpoint.structural;
+    if state.phase
+        != (V5StructuralPostPlanPhase::Inherited {
+            m4_bundle: V5StructuralM4BundlePhase::Idle,
+        })
+        || state.consumed_through_event < state.plan_checkpoint.plan_event_count
+        || state.consumed_through_event >= structural.predecessor_event_count
+    {
+        return Err(DomainError::EventSequence(
+            "V5 M5 continuation coordinates or phase mismatch".to_owned(),
+        ));
+    }
+    let consumed = usize::try_from(state.consumed_through_event)
+        .map_err(|_| DomainError::EventSequence("V5 M5 continuation cursor overflow".to_owned()))?;
+    let prefix = structural
+        .event_log
+        .envelopes
+        .get(
+            ..usize::try_from(structural.predecessor_event_count).map_err(|_| {
+                DomainError::EventSequence("V5 M5 predecessor count overflow".to_owned())
+            })?,
+        )
+        .ok_or_else(|| DomainError::EventSequence("V5 M5 predecessor is absent".to_owned()))?;
+    if prefix
+        .get(consumed.checked_sub(1).ok_or_else(|| {
+            DomainError::EventSequence("V5 M5 continuation has no consumed event".to_owned())
+        })?)
+        .map(EventEnvelope::event_hash)
+        != Some(&state.consumed_tail_hash)
+        || !matches!(
+            prefix.get(consumed).map(|envelope| {
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())
+            }),
+            Some(Ok(PersistedPayload::ArtifactRegisteredV4(_)))
+        )
+    {
+        return Err(DomainError::EventSequence(
+            "V5 M5 continuation does not stop before the first V4 registration".to_owned(),
+        ));
+    }
+    let mut trace_index = 0_usize;
+    let mut authority_index = 0_usize;
+    let mut deferred_index = 0_usize;
+    for envelope in prefix.iter().take(consumed).skip(
+        usize::try_from(state.plan_checkpoint.plan_event_count)
+            .map_err(|_| DomainError::EventSequence("V5 M5 plan cursor overflow".to_owned()))?,
+    ) {
+        let payload = decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+        if let Some(record_id) = d2_trace_record_id(&payload) {
+            let trace = state.d2_trace.get(trace_index).ok_or_else(|| {
+                DomainError::EventSequence("V5 M5 continuation D2 trace is short".to_owned())
+            })?;
+            let (payload_kind, transition_next) = match &payload {
+                PersistedPayload::ObligationTransition { next, .. } => {
+                    ("obligation_transition", Some(*next))
+                }
+                PersistedPayload::ArtifactRegisteredV3(_) => ("artifact_registered_v3", None),
+                PersistedPayload::ContextEnvelopeProjected(_) => {
+                    ("context_envelope_projected", None)
+                }
+                PersistedPayload::ReviewExecutionRecorded(_) => ("review_execution_recorded", None),
+                _ => unreachable!("closed D2 trace payload"),
+            };
+            if trace.event_sequence != envelope.sequence()
+                || trace.event_id != *envelope.id()
+                || trace.predecessor_event_hash != *envelope.previous_event_hash()
+                || trace.record_id != *record_id
+                || trace.record_body_hash != *envelope.payload_hash()
+                || trace.payload_kind != payload_kind
+                || trace.transition_next != transition_next
+            {
+                return Err(DomainError::EventSequence(
+                    "V5 M5 continuation D2 trace mismatch".to_owned(),
+                ));
+            }
+            let reflected = match &payload {
+                PersistedPayload::ObligationTransition {
+                    obligation_id,
+                    next,
+                } => {
+                    let later_transition_exists = prefix
+                        .iter()
+                        .take(consumed)
+                        .skip(usize::try_from(envelope.sequence()).unwrap_or(usize::MAX))
+                        .any(|later| {
+                            matches!(
+                                decode_canonical_payload(
+                                    EventContractVersion::V5,
+                                    later.payload.get()
+                                ),
+                                Ok(PersistedPayload::ObligationTransition {
+                                    obligation_id: later_id,
+                                    ..
+                                }) if later_id == *obligation_id
+                            )
+                        });
+                    later_transition_exists
+                        || state
+                            .aggregate
+                            .obligation(obligation_id)
+                            .is_some_and(|value| value.lifecycle() == *next)
+                }
+                PersistedPayload::ArtifactRegisteredV3(registration) => state
+                    .v3_aggregate
+                    .registrations
+                    .contains_key(registration.registration_id()),
+                PersistedPayload::ContextEnvelopeProjected(context) => {
+                    state.aggregate.context_envelope(context.id()).is_some()
+                }
+                PersistedPayload::ReviewExecutionRecorded(recorded) => state
+                    .aggregate
+                    .executions()
+                    .any(|value| value.id() == recorded.execution.id()),
+                _ => unreachable!("closed D2 reflection payload"),
+            };
+            if !reflected {
+                return Err(DomainError::EventSequence(
+                    "V5 M5 continuation D2 aggregate reflection mismatch".to_owned(),
+                ));
+            }
+            trace_index += 1;
+        }
+        if let PersistedPayload::ArtifactRegisteredV3(registration) = &payload
+            && matches!(
+                registration.source(),
+                ArtifactSourceV3::ReviewerExecution { .. }
+            )
+        {
+            if !state
+                .deferred_registration_closures
+                .get(deferred_index)
+                .is_some_and(|(sequence, id)| {
+                    *sequence == envelope.sequence() && id == registration.registration_id()
+                })
+            {
+                return Err(DomainError::EventSequence(
+                    "V5 M5 continuation deferred registration mismatch".to_owned(),
+                ));
+            }
+            deferred_index += 1;
+        }
+        if let Some((payload_kind, record_id, record_body_hash)) =
+            authority_record_identity(&payload)?
+        {
+            let entry = state
+                .inherited_m4_entries
+                .get(authority_index)
+                .ok_or_else(|| {
+                    DomainError::EventSequence(
+                        "V5 M5 continuation authority trace is short".to_owned(),
+                    )
+                })?;
+            let independently_rebuilt_trust =
+                authority_trust_digest(&state.v3_aggregate, roots, &payload)?;
+            if entry.event_sequence != envelope.sequence()
+                || entry.event_id != *envelope.id()
+                || entry.predecessor_event_hash != *envelope.previous_event_hash()
+                || entry.payload_kind != payload_kind
+                || entry.record_id != record_id
+                || entry.record_body_hash != record_body_hash
+                || independently_rebuilt_trust.as_ref() != Some(&entry.v3_trust_binding_digest)
+                || entry.v5_position_digest
+                    != v5_authority_position_digest(
+                        &structural.pre_incremental.run_id,
+                        &structural.genesis_hash,
+                        envelope.id(),
+                        envelope.sequence(),
+                        envelope.previous_event_hash(),
+                        &entry.v3_trust_binding_digest,
+                    )?
+            {
+                return Err(DomainError::EventSequence(
+                    "V5 M5 continuation authority trace mismatch".to_owned(),
+                ));
+            }
+            authority_index += 1;
+        }
+    }
+    if trace_index != state.d2_trace.len()
+        || authority_index != state.inherited_m4_entries.len()
+        || deferred_index != state.deferred_registration_closures.len()
+    {
+        return Err(DomainError::EventSequence(
+            "V5 M5 continuation trace has trailing entries".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Minimal owned trace for the private D2 continuation. It deliberately has
 /// no public projection or envelope/raw-body accessor.
 #[allow(dead_code)] // Held only by the private V5 D2 replay state.
@@ -19734,6 +20069,12 @@ struct V5PlanAuthorityPreflight {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct V5D2AuthorityPreflight {
+    retained_bytes: u64,
+    working_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct V5M4AuthorityPreflight {
     retained_bytes: u64,
     working_bytes: u64,
 }
@@ -20011,6 +20352,305 @@ fn v5_d2_realized_retained_bytes(
             u64::try_from(registration_id.allocated_bytes()).unwrap_or(u64::MAX),
             "V5 D2 realized deferred registration IDs",
         )?;
+    }
+    Ok(total)
+}
+
+/// Allocation-free upper bound for the ordered M4 continuation.  The first
+/// pass uses only scalar facts harvested by the structural FSM.  After the
+/// three vectors have reserved their slots, the same formula is repeated
+/// with allocator-reported capacities before roots, payloads, or CAS bytes
+/// are materialized.
+fn v5_m4_authority_preflight(
+    state: &ReplayedV5M4AuthorityState<'_>,
+    actual_slots: Option<(u64, u64, u64)>,
+) -> Result<V5M4AuthorityPreflight> {
+    fn slots<T>(count: u64, operation: &'static str) -> Result<u64> {
+        count
+            .checked_mul(u64::try_from(size_of::<T>()).unwrap_or(u64::MAX))
+            .ok_or_else(|| replay_incomplete(operation, u64::MAX, u64::MAX))
+    }
+    fn add(total: &mut u64, value: u64, operation: &'static str) -> Result<()> {
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| replay_incomplete(operation, u64::MAX, u64::MAX))?;
+        Ok(())
+    }
+    let d2 = state.plan_checkpoint.structural.d2_accounting;
+    let baseline = v5_d2_realized_retained_bytes(state.plan_checkpoint, state)?;
+    let trace_count = u64::try_from(state.d2_trace.len())
+        .unwrap_or(u64::MAX)
+        .checked_add(d2.m4_additional_d2_traces)
+        .ok_or_else(|| replay_incomplete("V5 M4 trace count", u64::MAX, u64::MAX))?;
+    let deferred_count = u64::try_from(state.deferred_registration_closures.len())
+        .unwrap_or(u64::MAX)
+        .checked_add(d2.m4_reviewer_registrations)
+        .ok_or_else(|| replay_incomplete("V5 M4 deferred count", u64::MAX, u64::MAX))?;
+    let predicted = (
+        slots::<V5D2ReplayTrace>(trace_count, "V5 M4 trace slots")?,
+        slots::<(u64, StableId)>(deferred_count, "V5 M4 deferred slots")?,
+        slots::<AuthorityReplayEntryV3AtV5>(
+            d2.m4_authority_entries,
+            "V5 M4 authority entry slots",
+        )?,
+    );
+    let (trace_slots, deferred_slots, entry_slots) = actual_slots.unwrap_or(predicted);
+    let old_trace_slots = u64::try_from(
+        state
+            .d2_trace
+            .capacity()
+            .saturating_mul(size_of::<V5D2ReplayTrace>()),
+    )
+    .unwrap_or(u64::MAX);
+    let old_deferred_slots = u64::try_from(
+        state
+            .deferred_registration_closures
+            .capacity()
+            .saturating_mul(size_of::<(u64, StableId)>()),
+    )
+    .unwrap_or(u64::MAX);
+    let mut retained = baseline
+        .checked_sub(old_trace_slots)
+        .and_then(|value| value.checked_sub(old_deferred_slots))
+        .ok_or_else(|| replay_incomplete("V5 M4 retained baseline", u64::MAX, u64::MAX))?;
+    for value in [
+        trace_slots,
+        deferred_slots,
+        entry_slots,
+        d2.m4_state_growth_upper_bound,
+        // Each entry owns two StableIds, four hashes and one closed payload
+        // kind. Hash/ID encodings are bounded by the admitted canonical
+        // envelope bytes; charging the largest payload staging for each is a
+        // conservative allocation-free bound for their backing storage.
+        d2.m4_authority_entries
+            .checked_mul(d2.max_m4_payload_scratch)
+            .ok_or_else(|| {
+                replay_incomplete("V5 M4 authority entry backing", u64::MAX, u64::MAX)
+            })?,
+        u64::try_from(size_of::<ReplayedV5M5ContinuationState>())
+            .unwrap_or(u64::MAX)
+            .saturating_sub(
+                u64::try_from(size_of::<ReplayedV5M4AuthorityState>()).unwrap_or(u64::MAX),
+            ),
+    ] {
+        add(&mut retained, value, "V5 M4 retained preflight")?;
+    }
+    let canonical_scratch = state
+        .plan_checkpoint
+        .structural
+        .event_log
+        .maximum_canonical_event_line_bytes_for_store()?;
+    let payload_phase = v5_d2_phase_bytes(
+        retained,
+        [baseline, d2.max_m4_payload_scratch, canonical_scratch],
+        "V5 M4 payload working phase",
+    )?;
+    let cas_phase = v5_d2_phase_bytes(
+        retained,
+        [baseline, v5_m4_cas_working_bytes(d2)],
+        "V5 M4 CAS working phase",
+    )?;
+    let reducer_phase = v5_d2_phase_bytes(
+        retained,
+        [baseline, d2.max_m4_reducer_growth],
+        "V5 M4 reducer working phase",
+    )?;
+    let context_phase = if d2.m4_contexts == 0 {
+        0
+    } else {
+        v5_d2_phase_bytes(
+            retained,
+            [
+                baseline,
+                v5_d2_context_session_working_oracle(&state.aggregate, d2.m4_contexts)?,
+                d2.max_context_envelope_staging,
+            ],
+            "V5 M4 later D2 context working phase",
+        )?
+    };
+    Ok(V5M4AuthorityPreflight {
+        retained_bytes: retained,
+        working_bytes: payload_phase
+            .max(cas_phase)
+            .max(reducer_phase)
+            .max(context_phase),
+    })
+}
+
+const fn v5_m4_cas_working_bytes(accounting: V5D2StructuralAccounting) -> u64 {
+    // A reviewer registration in the contiguous D2 prefix may remain
+    // deferred across inherited M4 and be consumed by a later ordered
+    // execution. Its raw object therefore participates in the M4 CAS peak.
+    if accounting.max_m4_cas_bytes > accounting.max_reviewer_cas_bytes {
+        accounting.max_m4_cas_bytes
+    } else {
+        accounting.max_reviewer_cas_bytes
+    }
+}
+
+fn v5_m4_realized_retained_bytes(state: &ReplayedV5M5ContinuationState<'_>) -> Result<u64> {
+    fn add(total: &mut u64, value: u64, operation: &'static str) -> Result<()> {
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| replay_incomplete(operation, u64::MAX, u64::MAX))?;
+        Ok(())
+    }
+    let structural = state.plan_checkpoint.structural;
+    let structural_backing =
+        u64::try_from(structural.projection().retained_bytes_for_m6()?).unwrap_or(u64::MAX);
+    let checkpoint_owned = u64::try_from(size_of::<PlanAuthorityCheckpointV5>())
+        .unwrap_or(u64::MAX)
+        .checked_add(
+            u64::try_from(state.plan_checkpoint.plan_tail_hash.allocated_bytes())
+                .unwrap_or(u64::MAX),
+        )
+        .and_then(|value| {
+            value.checked_add(
+                u64::try_from(state.plan_checkpoint.checkpoint_digest.allocated_bytes())
+                    .unwrap_or(u64::MAX),
+            )
+        })
+        .ok_or_else(|| replay_incomplete("V5 M4 checkpoint retained bytes", u64::MAX, u64::MAX))?;
+    let mut total = 0;
+    for value in [
+        structural_backing,
+        checkpoint_owned,
+        u64::try_from(size_of::<ReplayedV5M5ContinuationState>()).unwrap_or(u64::MAX),
+        state.aggregate.retained_bytes_v3()?,
+        state.v3_aggregate.retained_bytes()?,
+        u64::try_from(
+            state
+                .d2_trace
+                .capacity()
+                .saturating_mul(size_of::<V5D2ReplayTrace>()),
+        )
+        .unwrap_or(u64::MAX),
+        u64::try_from(
+            state
+                .deferred_registration_closures
+                .capacity()
+                .saturating_mul(size_of::<(u64, StableId)>()),
+        )
+        .unwrap_or(u64::MAX),
+        u64::try_from(
+            state
+                .inherited_m4_entries
+                .capacity()
+                .saturating_mul(size_of::<AuthorityReplayEntryV3AtV5>()),
+        )
+        .unwrap_or(u64::MAX),
+        u64::try_from(state.consumed_tail_hash.allocated_bytes()).unwrap_or(u64::MAX),
+    ] {
+        add(&mut total, value, "V5 M4 realized retained bytes")?;
+    }
+    for trace in &state.d2_trace {
+        for bytes in [
+            trace.event_id.allocated_bytes(),
+            trace.predecessor_event_hash.allocated_bytes(),
+            trace.record_id.allocated_bytes(),
+            trace.record_body_hash.allocated_bytes(),
+        ] {
+            add(
+                &mut total,
+                u64::try_from(bytes).unwrap_or(u64::MAX),
+                "V5 M4 realized trace backing",
+            )?;
+        }
+    }
+    for (_, id) in &state.deferred_registration_closures {
+        add(
+            &mut total,
+            u64::try_from(id.allocated_bytes()).unwrap_or(u64::MAX),
+            "V5 M4 realized deferred backing",
+        )?;
+    }
+    for entry in &state.inherited_m4_entries {
+        for bytes in [
+            entry.event_id.allocated_bytes(),
+            entry.record_id.allocated_bytes(),
+            entry.record_body_hash.allocated_bytes(),
+            entry.predecessor_event_hash.allocated_bytes(),
+            entry.v3_trust_binding_digest.allocated_bytes(),
+            entry.v5_position_digest.allocated_bytes(),
+            entry.payload_kind.capacity(),
+        ] {
+            add(
+                &mut total,
+                u64::try_from(bytes).unwrap_or(u64::MAX),
+                "V5 M4 realized authority entry backing",
+            )?;
+        }
+    }
+    Ok(total)
+}
+
+fn v5_m4_provisional_retained_bytes(
+    state: &ReplayedV5M4AuthorityState<'_>,
+    aggregate: &ReviewAggregate,
+    v3_aggregate: &V3RunAggregate,
+    entry_capacity: usize,
+    consumed_tail_hash: &ContentHash,
+) -> Result<u64> {
+    let d2 = state.plan_checkpoint.structural.d2_accounting;
+    let mut total = v5_d2_realized_retained_bytes(state.plan_checkpoint, state)?;
+    for removed in [
+        state.aggregate.retained_bytes_v3()?,
+        state.v3_aggregate.retained_bytes()?,
+        u64::try_from(size_of::<ReplayedV5M4AuthorityState>()).unwrap_or(u64::MAX),
+        u64::try_from(
+            state
+                .d2_trace
+                .capacity()
+                .saturating_mul(size_of::<V5D2ReplayTrace>()),
+        )
+        .unwrap_or(u64::MAX),
+        u64::try_from(
+            state
+                .deferred_registration_closures
+                .capacity()
+                .saturating_mul(size_of::<(u64, StableId)>()),
+        )
+        .unwrap_or(u64::MAX),
+        u64::try_from(
+            state
+                .d2_dispatch_cursor
+                .consumed_tail_hash
+                .allocated_bytes(),
+        )
+        .unwrap_or(u64::MAX),
+    ] {
+        total = total.checked_sub(removed).ok_or_else(|| {
+            replay_incomplete("V5 M4 provisional retained subtraction", u64::MAX, u64::MAX)
+        })?;
+    }
+    for added in [
+        aggregate.retained_bytes_v3()?,
+        v3_aggregate.retained_bytes()?,
+        u64::try_from(size_of::<ReplayedV5M5ContinuationState>()).unwrap_or(u64::MAX),
+        u64::try_from(
+            state
+                .d2_trace
+                .capacity()
+                .saturating_mul(size_of::<V5D2ReplayTrace>()),
+        )
+        .unwrap_or(u64::MAX),
+        u64::try_from(
+            state
+                .deferred_registration_closures
+                .capacity()
+                .saturating_mul(size_of::<(u64, StableId)>()),
+        )
+        .unwrap_or(u64::MAX),
+        u64::try_from(entry_capacity.saturating_mul(size_of::<AuthorityReplayEntryV3AtV5>()))
+            .unwrap_or(u64::MAX),
+        u64::try_from(consumed_tail_hash.allocated_bytes()).unwrap_or(u64::MAX),
+        d2.m4_additional_d2_trace_dynamic_bytes,
+        d2.m4_reviewer_registration_dynamic_bytes,
+        d2.m4_authority_entry_dynamic_bytes,
+    ] {
+        total = total.checked_add(added).ok_or_else(|| {
+            replay_incomplete("V5 M4 provisional retained addition", u64::MAX, u64::MAX)
+        })?;
     }
     Ok(total)
 }
@@ -21556,6 +22196,618 @@ impl EventLogV5 {
         Ok(replayed)
     }
 
+    /// Replays the original post-plan order from the certified D2 cursor
+    /// through inherited M4/human semantics, stopping immediately before the
+    /// first frozen V4 gluing-input registration. No pre-incremental basis is
+    /// produced at this non-terminal boundary.
+    #[allow(dead_code)] // Connected by the following private M5 continuation slice.
+    fn replay_ordered_m4_authority_prefix_v5<'a>(
+        d2_state: ReplayedV5M4AuthorityState<'a>,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<ReplayedV5M5ContinuationState<'a>> {
+        let limits = d2_state.plan_checkpoint.structural.event_log.limits;
+        Self::replay_ordered_m4_authority_prefix_v5_with_limits(
+            d2_state,
+            resolver,
+            roots,
+            limits.max_retained_bytes,
+            limits.max_working_bytes,
+        )
+    }
+
+    fn replay_ordered_m4_authority_prefix_v5_with_limits<'a>(
+        mut d2_state: ReplayedV5M4AuthorityState<'a>,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+        max_retained_bytes: u64,
+        max_working_bytes: u64,
+    ) -> Result<ReplayedV5M5ContinuationState<'a>> {
+        validate_v5_d2_dispatch_cursor(&d2_state)?;
+        let checkpoint = d2_state.plan_checkpoint;
+        let structural = checkpoint.structural;
+        let prefix = structural
+            .event_log
+            .envelopes
+            .get(
+                ..usize::try_from(structural.predecessor_event_count).map_err(|_| {
+                    DomainError::EventSequence("V5 M4 predecessor count overflow".to_owned())
+                })?,
+            )
+            .ok_or_else(|| DomainError::EventSequence("V5 M4 prefix is absent".to_owned()))?;
+        let preflight = v5_m4_authority_preflight(&d2_state, None)?;
+        let baseline_retained = v5_d2_realized_retained_bytes(checkpoint, &d2_state)?;
+        if baseline_retained > max_retained_bytes {
+            return Err(replay_incomplete(
+                "V5 M4 authority baseline retained preflight",
+                max_retained_bytes,
+                baseline_retained,
+            ));
+        }
+        if preflight.working_bytes > max_working_bytes {
+            return Err(replay_incomplete(
+                "V5 M4 authority working preflight",
+                max_working_bytes,
+                preflight.working_bytes,
+            ));
+        }
+        let d2 = structural.d2_accounting;
+        let additional_traces = usize::try_from(d2.m4_additional_d2_traces).map_err(|_| {
+            replay_incomplete("V5 M4 trace reservation conversion", u64::MAX, u64::MAX)
+        })?;
+        let additional_deferred = usize::try_from(d2.m4_reviewer_registrations).map_err(|_| {
+            replay_incomplete("V5 M4 deferred reservation conversion", u64::MAX, u64::MAX)
+        })?;
+        let entry_count = usize::try_from(d2.m4_authority_entries).map_err(|_| {
+            replay_incomplete("V5 M4 entry reservation conversion", u64::MAX, u64::MAX)
+        })?;
+        d2_state
+            .d2_trace
+            .try_reserve_exact(additional_traces)
+            .map_err(|_| {
+                replay_incomplete(
+                    "V5 M4 trace reservation",
+                    d2.m4_additional_d2_traces,
+                    u64::MAX,
+                )
+            })?;
+        d2_state
+            .deferred_registration_closures
+            .try_reserve_exact(additional_deferred)
+            .map_err(|_| {
+                replay_incomplete(
+                    "V5 M4 deferred reservation",
+                    d2.m4_reviewer_registrations,
+                    u64::MAX,
+                )
+            })?;
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(entry_count).map_err(|_| {
+            replay_incomplete("V5 M4 entry reservation", d2.m4_authority_entries, u64::MAX)
+        })?;
+        #[cfg(test)]
+        V5_TEST_M4_RESERVATION_ALLOCATIONS.with(|value| value.set(value.get() + 3));
+        let actual_slots = (
+            u64::try_from(
+                d2_state
+                    .d2_trace
+                    .capacity()
+                    .saturating_mul(size_of::<V5D2ReplayTrace>()),
+            )
+            .unwrap_or(u64::MAX),
+            u64::try_from(
+                d2_state
+                    .deferred_registration_closures
+                    .capacity()
+                    .saturating_mul(size_of::<(u64, StableId)>()),
+            )
+            .unwrap_or(u64::MAX),
+            u64::try_from(
+                entries
+                    .capacity()
+                    .saturating_mul(size_of::<AuthorityReplayEntryV3AtV5>()),
+            )
+            .unwrap_or(u64::MAX),
+        );
+        let sealed_preflight = v5_m4_authority_preflight(&d2_state, Some(actual_slots))?;
+        #[cfg(test)]
+        V5_TEST_M4_EXACT_WORKING.with(|value| value.set(sealed_preflight.working_bytes));
+        if sealed_preflight.working_bytes > max_working_bytes {
+            return Err(replay_incomplete(
+                "V5 M4 sealed actual working reservation",
+                max_working_bytes,
+                sealed_preflight.working_bytes,
+            ));
+        }
+        let mut provisional_aggregate = d2_state.aggregate.clone();
+        let mut provisional_v3_aggregate = d2_state.v3_aggregate.clone();
+        let mut provisional_phase = d2_state.d2_dispatch_cursor.applied_phase;
+        let mut provisional_v4_ids = BTreeSet::new();
+        let provisional_start = usize::try_from(d2_state.d2_dispatch_cursor.consumed_through_event)
+            .map_err(|_| {
+                DomainError::EventSequence("V5 M4 provisional cursor overflow".to_owned())
+            })?;
+        let mut provisional_consumed = d2_state.d2_dispatch_cursor.consumed_through_event;
+        for envelope in prefix.get(provisional_start..).ok_or_else(|| {
+            DomainError::EventSequence("V5 M4 provisional range is absent".to_owned())
+        })? {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            if matches!(payload, PersistedPayload::ArtifactRegisteredV4(_)) {
+                if provisional_phase
+                    != (V5StructuralPostPlanPhase::Inherited {
+                        m4_bundle: V5StructuralM4BundlePhase::Idle,
+                    })
+                {
+                    return Err(structural_v5_post_plan_error(
+                        "V4 registration cannot interrupt a provisional inherited M4 bundle",
+                    ));
+                }
+                break;
+            }
+            if envelope.actor() != payload.actor() {
+                return Err(DomainError::AuthorityReplayRefused {
+                    event_sequence: envelope.sequence(),
+                    reason: "event-v5 actor does not match its provisional payload actor"
+                        .to_owned(),
+                });
+            }
+            validate_stream_payload_position(
+                EventContractVersion::V5,
+                envelope.sequence(),
+                &payload,
+            )?;
+            payload.validate_for_enclosing_run(&structural.pre_incremental.run_id)?;
+            // The structural recognizer admits the closed E,V shape, but it
+            // grants no M4 authority. In particular a Passed verification
+            // that cites evidence still needs the binding-owned assessment
+            // closure below and is refused as dangling if B is absent.
+            advance_v5_structural_post_plan(
+                &mut provisional_phase,
+                &mut provisional_v4_ids,
+                &payload,
+            )?;
+            reject_v2_legacy_execution_payload(EventContractVersion::V5, &payload)?;
+            validate_v2_completed_transition(
+                EventContractVersion::V5,
+                &provisional_aggregate,
+                &payload,
+            )?;
+            reject_duplicate_d1_record(&provisional_aggregate, &payload)?;
+            let reviewer_raw_size = match &payload {
+                PersistedPayload::ReviewExecutionRecorded(recorded) => Some(
+                    provisional_v3_aggregate
+                        .registrations
+                        .get(recorded.execution.raw_artifact_registration_id())
+                        .ok_or_else(|| DomainError::DanglingReference {
+                            owner: "v5 provisional D2 raw registration",
+                            owner_id: recorded.execution.id().clone(),
+                            reference: recorded.execution.raw_artifact_registration_id().clone(),
+                        })?
+                        .size(),
+                ),
+                PersistedPayload::ArtifactRegisteredV3(_)
+                | PersistedPayload::ContextEnvelopeProjected(_)
+                | PersistedPayload::EvidenceRecordedV3(_)
+                | PersistedPayload::EvidenceBoundV3(_)
+                | PersistedPayload::VerificationRecordedV3(_)
+                | PersistedPayload::DecisionRecordedV3(_)
+                | PersistedPayload::FindingRecordedV3(_)
+                | PersistedPayload::ObligationTransition { .. } => None,
+                _ => {
+                    return Err(DomainError::AuthorityReplayRefused {
+                        event_sequence: envelope.sequence(),
+                        reason: "V5 provisional M4 reducer encountered unsupported payload"
+                            .to_owned(),
+                    });
+                }
+            };
+            apply_for_log(
+                &mut provisional_aggregate,
+                Some(&mut provisional_v3_aggregate),
+                &payload,
+                envelope.actor(),
+                &structural.pre_incremental.run_id,
+                &structural.genesis_hash,
+                reviewer_raw_size,
+                true,
+            )?;
+            provisional_consumed = envelope.sequence();
+        }
+        if provisional_phase
+            != (V5StructuralPostPlanPhase::Inherited {
+                m4_bundle: V5StructuralM4BundlePhase::Idle,
+            })
+        {
+            return Err(structural_v5_post_plan_error(
+                "provisional inherited M4 continuation ended incomplete",
+            ));
+        }
+        let provisional_tail_hash = prefix
+            .get(
+                usize::try_from(provisional_consumed)
+                    .map_err(|_| {
+                        DomainError::EventSequence("V5 M4 provisional tail overflow".to_owned())
+                    })?
+                    .checked_sub(1)
+                    .ok_or_else(|| {
+                        DomainError::EventSequence(
+                            "V5 M4 provisional tail has no genesis".to_owned(),
+                        )
+                    })?,
+            )
+            .ok_or_else(|| {
+                DomainError::EventSequence("V5 M4 provisional tail is absent".to_owned())
+            })?
+            .event_hash()
+            .clone();
+        let exact_retained = v5_m4_provisional_retained_bytes(
+            &d2_state,
+            &provisional_aggregate,
+            &provisional_v3_aggregate,
+            entries.capacity(),
+            &provisional_tail_hash,
+        )?;
+        #[cfg(test)]
+        V5_TEST_M4_EXACT_RETAINED.with(|value| value.set(exact_retained));
+        if exact_retained > max_retained_bytes {
+            return Err(replay_incomplete(
+                "V5 M4 exact provisional retained preflight",
+                max_retained_bytes,
+                exact_retained,
+            ));
+        }
+        // The provisional reducer is only an exact capacity oracle. It must
+        // not remain live beside the authority pass as a second full M4
+        // aggregate.
+        drop(provisional_aggregate);
+        drop(provisional_v3_aggregate);
+        #[cfg(test)]
+        V5_TEST_M4_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(value.get() + 1));
+        if roots.policy_revision_hash
+            != target_policy_revision_hash_v5(d2_state.aggregate.program())?
+            || roots.repository_id != *d2_state.aggregate.program().repository_id()
+            || roots.repository_source_hash
+                != *d2_state
+                    .aggregate
+                    .program()
+                    .repository_source()
+                    .content_hash()
+                    .ok_or(DomainError::AuthorityPolicyMismatch)?
+        {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        let v3_resolver = V5ResolverAsV3(resolver);
+
+        let ReplayedV5M4AuthorityState {
+            mut aggregate,
+            mut v3_aggregate,
+            mut d2_trace,
+            mut deferred_registration_closures,
+            d2_dispatch_cursor,
+            ..
+        } = d2_state;
+        let mut phase = d2_dispatch_cursor.applied_phase;
+        let mut v4_registration_ids = BTreeSet::new();
+        let mut consumed = d2_dispatch_cursor.consumed_through_event;
+        let start = usize::try_from(consumed)
+            .map_err(|_| DomainError::EventSequence("V5 M4 cursor overflow".to_owned()))?;
+        for envelope in prefix.get(start..).ok_or_else(|| {
+            DomainError::EventSequence("V5 M4 continuation range is absent".to_owned())
+        })? {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            if matches!(payload, PersistedPayload::ArtifactRegisteredV4(_)) {
+                if phase
+                    != (V5StructuralPostPlanPhase::Inherited {
+                        m4_bundle: V5StructuralM4BundlePhase::Idle,
+                    })
+                {
+                    return Err(structural_v5_post_plan_error(
+                        "V4 registration cannot interrupt an inherited M4 bundle",
+                    ));
+                }
+                break;
+            }
+            if envelope.actor() != payload.actor() {
+                return Err(DomainError::AuthorityReplayRefused {
+                    event_sequence: envelope.sequence(),
+                    reason: "event-v5 actor does not match its closed payload actor".to_owned(),
+                });
+            }
+            validate_stream_payload_position(
+                EventContractVersion::V5,
+                envelope.sequence(),
+                &payload,
+            )?;
+            payload.validate_for_enclosing_run(&structural.pre_incremental.run_id)?;
+            advance_v5_structural_post_plan(&mut phase, &mut v4_registration_ids, &payload)?;
+            reject_v2_legacy_execution_payload(EventContractVersion::V5, &payload)?;
+            validate_v2_completed_transition(EventContractVersion::V5, &aggregate, &payload)?;
+            reject_duplicate_d1_record(&aggregate, &payload)?;
+
+            #[cfg(test)]
+            if matches!(
+                payload,
+                PersistedPayload::ArtifactRegisteredV3(_)
+                    | PersistedPayload::ContextEnvelopeProjected(_)
+                    | PersistedPayload::ReviewExecutionRecorded(_)
+                    | PersistedPayload::EvidenceRecordedV3(_)
+                    | PersistedPayload::EvidenceBoundV3(_)
+                    | PersistedPayload::VerificationRecordedV3(_)
+                    | PersistedPayload::DecisionRecordedV3(_)
+            ) {
+                V5_TEST_M4_CAS_READS.with(|value| value.set(value.get() + 1));
+            }
+
+            let reviewer_raw_size = match &payload {
+                PersistedPayload::ArtifactRegisteredV3(registration) => match registration.source()
+                {
+                    ArtifactSourceV3::ReviewerExecution { .. } => {
+                        validate_d2_reviewer_registration_source_v5(registration)?;
+                        let _bytes = resolve_registered_bytes(registration, &v3_resolver)?;
+                        deferred_registration_closures
+                            .push((envelope.sequence(), registration.registration_id().clone()));
+                        None
+                    }
+                    ArtifactSourceV3::VerifierArtifact { .. }
+                    | ArtifactSourceV3::ExternalHarnessWitness { .. } => {
+                        let bytes = resolve_registered_bytes(registration, &v3_resolver)?;
+                        validate_authority_registration(
+                            &aggregate,
+                            registration,
+                            &bytes,
+                            roots,
+                            &structural.genesis_hash,
+                        )?;
+                        None
+                    }
+                    _ => {
+                        return Err(DomainError::AuthorityReplayRefused {
+                            event_sequence: envelope.sequence(),
+                            reason: "post-plan V5 registration has unsupported provenance"
+                                .to_owned(),
+                        });
+                    }
+                },
+                PersistedPayload::ContextEnvelopeProjected(context) => {
+                    let context_envelope_staging = v3_payload_staging_bytes(&payload)?;
+                    let (rebuilt, _) = rebuild_context_projection_from_cas_with_sealed_gate(
+                        &aggregate,
+                        context,
+                        |oracle| {
+                            #[cfg(test)]
+                            V5_TEST_M4_CONTEXT_SESSION_SEALS
+                                .with(|value| value.set(value.get() + 1));
+                            let context_session_working = oracle.session_working_bytes();
+                            #[cfg(test)]
+                            let context_session_working = context_session_working
+                                .checked_add(
+                                    V5_TEST_M4_FORCED_CONTEXT_WORKING_OVERHEAD
+                                        .with(std::cell::Cell::get),
+                                )
+                                .ok_or_else(|| {
+                                    replay_incomplete(
+                                        "V5 M4 sealed later D2 context working phase",
+                                        u64::MAX,
+                                        u64::MAX,
+                                    )
+                                })?;
+                            let observed = v5_d2_phase_bytes(
+                                exact_retained,
+                                [context_session_working, context_envelope_staging],
+                                "V5 M4 sealed later D2 context working phase",
+                            )?;
+                            if observed > max_working_bytes {
+                                return Err(replay_incomplete(
+                                    "V5 M4 sealed later D2 context working phase",
+                                    max_working_bytes,
+                                    observed,
+                                ));
+                            }
+                            Ok(())
+                        },
+                        |cas_hash, destination| resolver.read_exact(cas_hash, destination),
+                        |_| {
+                            #[cfg(test)]
+                            V5_TEST_M4_CONTEXT_SOURCE_REQUESTS
+                                .with(|value| value.set(value.get() + 1));
+                            Ok(())
+                        },
+                    )?;
+                    if &rebuilt != context {
+                        return Err(DomainError::AuthorityReplayRefused {
+                            event_sequence: envelope.sequence(),
+                            reason:
+                                "context projection bytes do not rebuild from registered sources"
+                                    .to_owned(),
+                        });
+                    }
+                    None
+                }
+                PersistedPayload::ReviewExecutionRecorded(recorded) => {
+                    let registration = v3_aggregate
+                        .registrations
+                        .get(recorded.execution.raw_artifact_registration_id())
+                        .ok_or_else(|| DomainError::DanglingReference {
+                            owner: "v5 ordered D2 raw registration",
+                            owner_id: recorded.execution.id().clone(),
+                            reference: recorded.execution.raw_artifact_registration_id().clone(),
+                        })?;
+                    let bytes = resolve_registered_bytes(registration, &v3_resolver)?;
+                    ReviewerRawClosure::from_bytes(recorded, &bytes)?;
+                    Some(registration.size())
+                }
+                PersistedPayload::EvidenceRecordedV3(_)
+                | PersistedPayload::EvidenceBoundV3(_)
+                | PersistedPayload::VerificationRecordedV3(_)
+                | PersistedPayload::DecisionRecordedV3(_) => {
+                    validate_authority_payload_against_cas(
+                        &aggregate,
+                        &v3_aggregate,
+                        &payload,
+                        &v3_resolver,
+                        roots,
+                    )?;
+                    None
+                }
+                PersistedPayload::FindingRecordedV3(_)
+                | PersistedPayload::ObligationTransition { .. } => None,
+                _ => {
+                    return Err(DomainError::AuthorityReplayRefused {
+                        event_sequence: envelope.sequence(),
+                        reason: "V5 ordered M4 reducer encountered unsupported payload".to_owned(),
+                    });
+                }
+            };
+
+            let identity = authority_record_identity(&payload)?;
+            let trust_digest = authority_trust_digest(&v3_aggregate, roots, &payload)?;
+            if identity.is_some() != trust_digest.is_some() {
+                return Err(DomainError::AuthorityReplayRefused {
+                    event_sequence: envelope.sequence(),
+                    reason: "V5 inherited authority identity/trust mismatch".to_owned(),
+                });
+            }
+            let authority_entry = match (identity, trust_digest) {
+                (
+                    Some((payload_kind, record_id, record_body_hash)),
+                    Some(v3_trust_binding_digest),
+                ) => {
+                    let v5_position_digest = v5_authority_position_digest(
+                        &structural.pre_incremental.run_id,
+                        &structural.genesis_hash,
+                        envelope.id(),
+                        envelope.sequence(),
+                        envelope.previous_event_hash(),
+                        &v3_trust_binding_digest,
+                    )?;
+                    Some(AuthorityReplayEntryV3AtV5 {
+                        event_sequence: envelope.sequence(),
+                        event_id: envelope.id().clone(),
+                        payload_kind: payload_kind.to_owned(),
+                        record_id,
+                        record_body_hash,
+                        predecessor_event_hash: envelope.previous_event_hash().clone(),
+                        v3_trust_binding_digest,
+                        v5_position_digest,
+                    })
+                }
+                (None, None) => None,
+                _ => unreachable!("identity/trust parity was checked above"),
+            };
+            apply_for_log(
+                &mut aggregate,
+                Some(&mut v3_aggregate),
+                &payload,
+                envelope.actor(),
+                &structural.pre_incremental.run_id,
+                &structural.genesis_hash,
+                reviewer_raw_size,
+                true,
+            )?;
+            if let Some(entry) = authority_entry {
+                entries.push(entry);
+            }
+            if let Some(record_id) = d2_trace_record_id(&payload) {
+                let transition_next = match &payload {
+                    PersistedPayload::ObligationTransition { next, .. } => Some(*next),
+                    _ => None,
+                };
+                let payload_kind = match &payload {
+                    PersistedPayload::ObligationTransition { .. } => "obligation_transition",
+                    PersistedPayload::ArtifactRegisteredV3(_) => "artifact_registered_v3",
+                    PersistedPayload::ContextEnvelopeProjected(_) => "context_envelope_projected",
+                    PersistedPayload::ReviewExecutionRecorded(_) => "review_execution_recorded",
+                    _ => unreachable!("closed D2 trace source"),
+                };
+                d2_trace.push(V5D2ReplayTrace {
+                    event_sequence: envelope.sequence(),
+                    event_id: envelope.id().clone(),
+                    predecessor_event_hash: envelope.previous_event_hash().clone(),
+                    payload_kind,
+                    record_id: record_id.clone(),
+                    record_body_hash: envelope.payload_hash().clone(),
+                    transition_next,
+                });
+            }
+            consumed = envelope.sequence();
+        }
+        if phase
+            != (V5StructuralPostPlanPhase::Inherited {
+                m4_bundle: V5StructuralM4BundlePhase::Idle,
+            })
+        {
+            return Err(structural_v5_post_plan_error(
+                "inherited M4 continuation ended with an incomplete bundle",
+            ));
+        }
+        for (event_sequence, registration_id) in &deferred_registration_closures {
+            let registration =
+                v3_aggregate
+                    .registrations
+                    .get(registration_id)
+                    .ok_or_else(|| DomainError::AuthorityReplayRefused {
+                        event_sequence: *event_sequence,
+                        reason: "V5 deferred registration disappeared from ordered replay"
+                            .to_owned(),
+                    })?;
+            validate_deferred_d2_registration_v5(&aggregate, registration, &v3_resolver).map_err(
+                |error| DomainError::AuthorityReplayRefused {
+                    event_sequence: *event_sequence,
+                    reason: error.to_string(),
+                },
+            )?;
+        }
+        let consumed_tail_hash = prefix
+            .get(
+                usize::try_from(consumed)
+                    .map_err(|_| {
+                        DomainError::EventSequence("V5 ordered cursor overflow".to_owned())
+                    })?
+                    .checked_sub(1)
+                    .ok_or_else(|| {
+                        DomainError::EventSequence("V5 ordered cursor has no genesis".to_owned())
+                    })?,
+            )
+            .ok_or_else(|| {
+                DomainError::EventSequence("V5 ordered cursor tail is absent".to_owned())
+            })?
+            .event_hash()
+            .clone();
+        if consumed != provisional_consumed
+            || phase != provisional_phase
+            || consumed_tail_hash != provisional_tail_hash
+        {
+            return Err(DomainError::EventSequence(
+                "V5 M4 provisional and authority passes diverged".to_owned(),
+            ));
+        }
+        let continuation = ReplayedV5M5ContinuationState {
+            plan_checkpoint: checkpoint,
+            // Only the roots/CAS-authorized pass is promoted. The dry state
+            // exists solely to seal exact allocator capacities.
+            aggregate,
+            v3_aggregate,
+            d2_trace,
+            deferred_registration_closures,
+            inherited_m4_entries: entries,
+            consumed_through_event: consumed,
+            consumed_tail_hash,
+            phase,
+        };
+        validate_v5_m5_continuation(&continuation, roots)?;
+        let realized_retained = v5_m4_realized_retained_bytes(&continuation)?;
+        if realized_retained != exact_retained {
+            return Err(replay_incomplete(
+                "V5 M4 realized retained bytes",
+                exact_retained,
+                realized_retained,
+            ));
+        }
+        Ok(continuation)
+    }
+
     /// Reopens only a confirmed homogeneous V5 prefix.  This structural
     /// admission validates exact canonical envelopes, hash-chain continuity,
     /// genesis bindings, and the closed frozen inherited vocabulary.  V5
@@ -22156,6 +23408,293 @@ impl AuthorityTrustRootsV3 {
         Ok(total)
     }
 }
+
+/// Allocation-free semantic view shared by native V3 roots and the V5 host
+/// tuples that preserve the frozen V3 authority contract. V5 replay borrows
+/// the nested sets in place; it never clones their allocator-dependent
+/// `BTreeSet` nodes merely to run the V3 validators.
+#[derive(Clone, Copy)]
+struct HarnessTrustRootView<'a> {
+    policy_revision_hash: &'a ContentHash,
+    repository_id: &'a StableId,
+    repository_source_hash: &'a ContentHash,
+    harness_id: &'a str,
+    harness_revision: &'a str,
+    harness_source_hash: &'a ContentHash,
+    test_artifact_id: &'a StableId,
+    descriptor_id: &'a str,
+    procedure_version: &'a str,
+    result_hash: &'a ContentHash,
+    result_size: u64,
+    result_media_type: &'a str,
+    result_sensitivity: ArtifactSensitivity,
+    run_id: &'a StableId,
+    genesis_hash: &'a ContentHash,
+    snapshot_id: &'a StableId,
+    universe_id: &'a StableId,
+    property_id: &'a str,
+    claim_id: &'a StableId,
+    claim_body_hash: &'a ContentHash,
+}
+
+impl<'a> From<&'a HarnessTrustRootInputV3> for HarnessTrustRootView<'a> {
+    fn from(root: &'a HarnessTrustRootInputV3) -> Self {
+        Self {
+            policy_revision_hash: &root.policy_revision_hash,
+            repository_id: &root.repository_id,
+            repository_source_hash: &root.repository_source_hash,
+            harness_id: &root.harness_id,
+            harness_revision: &root.harness_revision,
+            harness_source_hash: &root.harness_source_hash,
+            test_artifact_id: &root.test_artifact_id,
+            descriptor_id: &root.descriptor_id,
+            procedure_version: &root.procedure_version,
+            result_hash: &root.result_hash,
+            result_size: root.result_size,
+            result_media_type: &root.result_media_type,
+            result_sensitivity: root.result_sensitivity,
+            run_id: &root.run_id,
+            genesis_hash: &root.genesis_hash,
+            snapshot_id: &root.snapshot_id,
+            universe_id: &root.universe_id,
+            property_id: &root.property_id,
+            claim_id: &root.claim_id,
+            claim_body_hash: &root.claim_body_hash,
+        }
+    }
+}
+
+impl<'a> From<&'a AuthorityHarnessBindingV3Tuple> for HarnessTrustRootView<'a> {
+    fn from(root: &'a AuthorityHarnessBindingV3Tuple) -> Self {
+        Self {
+            policy_revision_hash: &root.policy_revision_hash,
+            repository_id: &root.repository_id,
+            repository_source_hash: &root.repository_source_hash,
+            harness_id: &root.harness_id,
+            harness_revision: &root.harness_revision,
+            harness_source_hash: &root.harness_source_hash,
+            test_artifact_id: &root.test_artifact_id,
+            descriptor_id: &root.descriptor_id,
+            procedure_version: &root.procedure_version,
+            result_hash: &root.result_hash,
+            result_size: root.result_size,
+            result_media_type: &root.result_media_type,
+            result_sensitivity: root.result_sensitivity,
+            run_id: &root.run_id,
+            genesis_hash: &root.genesis_hash,
+            snapshot_id: &root.snapshot_id,
+            universe_id: &root.universe_id,
+            property_id: &root.property_id,
+            claim_id: &root.claim_id,
+            claim_body_hash: &root.claim_body_hash,
+        }
+    }
+}
+
+impl HarnessTrustRootView<'_> {
+    fn matches_source(self, registration: &ArtifactRegisteredV3) -> bool {
+        let ArtifactSourceV3::ExternalHarnessWitness {
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            run_id,
+            genesis_hash,
+            snapshot_id,
+            universe_id,
+            property_id,
+            claim_id,
+            claim_body_hash,
+            harness_id,
+            harness_revision,
+            harness_source_hash,
+            test_artifact_id,
+            descriptor_id,
+            procedure_version,
+        } = registration.source()
+        else {
+            return false;
+        };
+        self.policy_revision_hash == policy_revision_hash
+            && self.repository_id == repository_id
+            && self.repository_source_hash == repository_source_hash
+            && self.run_id == run_id
+            && self.genesis_hash == genesis_hash
+            && self.snapshot_id == snapshot_id
+            && self.universe_id == universe_id
+            && self.property_id == property_id
+            && self.claim_id == claim_id
+            && self.claim_body_hash == claim_body_hash
+            && self.harness_id == harness_id
+            && self.harness_revision == harness_revision
+            && self.harness_source_hash == harness_source_hash
+            && self.test_artifact_id == test_artifact_id
+            && self.descriptor_id == descriptor_id
+            && self.procedure_version == procedure_version
+            && self.result_hash == registration.cas_hash()
+            && self.result_size == registration.size()
+            && self.result_media_type == registration.media_type()
+            && self.result_sensitivity == registration.sensitivity()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct HumanTrustGrantView<'a> {
+    policy_revision_hash: &'a ContentHash,
+    actor: &'a str,
+    authority_id: &'a str,
+    capabilities: &'a BTreeSet<HumanAuthorityCapabilityV3>,
+    run_id: &'a StableId,
+    snapshot_id: &'a StableId,
+    universe_id: &'a StableId,
+    property_ids: &'a BTreeSet<String>,
+    claim_ids: &'a BTreeSet<StableId>,
+    valid_from: &'a str,
+    valid_until: &'a str,
+}
+
+impl<'a> From<&'a HumanTrustGrantInputV3> for HumanTrustGrantView<'a> {
+    fn from(grant: &'a HumanTrustGrantInputV3) -> Self {
+        Self {
+            policy_revision_hash: &grant.policy_revision_hash,
+            actor: &grant.actor,
+            authority_id: &grant.authority_id,
+            capabilities: &grant.capabilities,
+            run_id: &grant.run_id,
+            snapshot_id: &grant.snapshot_id,
+            universe_id: &grant.universe_id,
+            property_ids: &grant.property_ids,
+            claim_ids: &grant.claim_ids,
+            valid_from: &grant.valid_from,
+            valid_until: &grant.valid_until,
+        }
+    }
+}
+
+impl<'a> From<&'a AuthorityHumanGrantV3Tuple> for HumanTrustGrantView<'a> {
+    fn from(grant: &'a AuthorityHumanGrantV3Tuple) -> Self {
+        Self {
+            policy_revision_hash: &grant.policy_revision_hash,
+            actor: &grant.actor,
+            authority_id: &grant.authority_id,
+            capabilities: &grant.capabilities,
+            run_id: &grant.run_id,
+            snapshot_id: &grant.snapshot_id,
+            universe_id: &grant.universe_id,
+            property_ids: &grant.property_ids,
+            claim_ids: &grant.claim_ids,
+            valid_from: &grant.valid_from,
+            valid_until: &grant.valid_until,
+        }
+    }
+}
+
+impl HumanTrustGrantView<'_> {
+    fn authorizes(self, decision: &DecisionV3) -> bool {
+        let capability = match decision.outcome() {
+            crate::DecisionOutcomeV3::Accept => HumanAuthorityCapabilityV3::AcceptFinding,
+            crate::DecisionOutcomeV3::Reject => HumanAuthorityCapabilityV3::RejectFinding,
+            crate::DecisionOutcomeV3::Defer => HumanAuthorityCapabilityV3::DeferFinding,
+            crate::DecisionOutcomeV3::Exception => HumanAuthorityCapabilityV3::RecordException,
+        };
+        self.policy_revision_hash == decision.policy_revision_hash()
+            && self.actor == decision.actor()
+            && self.authority_id == decision.authority_id()
+            && self.capabilities.contains(&capability)
+            && self.run_id == decision.run_id()
+            && self.snapshot_id == decision.snapshot_id()
+            && self.universe_id == decision.universe_id()
+            && self.property_ids.contains(decision.property_id())
+            && self.claim_ids.contains(decision.claim_id())
+            && self.valid_from <= decision.issued_at()
+            && decision.issued_at() <= self.valid_until
+            && decision
+                .expires_at()
+                .is_none_or(|expires| expires <= self.valid_until)
+    }
+}
+
+trait AuthorityTrustRootsV3View {
+    fn policy_revision_hash_view(&self) -> &ContentHash;
+    fn repository_id_view(&self) -> &StableId;
+    fn repository_source_hash_view(&self) -> &ContentHash;
+    fn harness_for_source_view(
+        &self,
+        registration: &ArtifactRegisteredV3,
+    ) -> Option<HarnessTrustRootView<'_>>;
+    fn harness_for_fixture_registration_view(
+        &self,
+        registration: &ArtifactRegisteredV3,
+        expected_genesis_hash: &ContentHash,
+        aggregate: &ReviewAggregate,
+        claim_id: &StableId,
+    ) -> Option<HarnessTrustRootView<'_>>;
+    fn human_grant_for_view(&self, decision: &DecisionV3) -> Option<HumanTrustGrantView<'_>>;
+}
+
+macro_rules! impl_authority_roots_view {
+    ($type:ty, $harness:expr, $human:expr) => {
+        impl AuthorityTrustRootsV3View for $type {
+            fn policy_revision_hash_view(&self) -> &ContentHash {
+                &self.policy_revision_hash
+            }
+
+            fn repository_id_view(&self) -> &StableId {
+                &self.repository_id
+            }
+
+            fn repository_source_hash_view(&self) -> &ContentHash {
+                &self.repository_source_hash
+            }
+
+            fn harness_for_source_view(
+                &self,
+                registration: &ArtifactRegisteredV3,
+            ) -> Option<HarnessTrustRootView<'_>> {
+                self.harnesses
+                    .iter()
+                    .map($harness)
+                    .find(|root| root.matches_source(registration))
+            }
+
+            fn harness_for_fixture_registration_view(
+                &self,
+                registration: &ArtifactRegisteredV3,
+                expected_genesis_hash: &ContentHash,
+                aggregate: &ReviewAggregate,
+                claim_id: &StableId,
+            ) -> Option<HarnessTrustRootView<'_>> {
+                self.harnesses.iter().map($harness).find(|root| {
+                    root.run_id == registration.run_id()
+                        && root.genesis_hash == expected_genesis_hash
+                        && root.snapshot_id == aggregate.program().snapshot_id()
+                        && root.universe_id == aggregate.universe().id()
+                        && root.claim_id == claim_id
+                })
+            }
+
+            fn human_grant_for_view(
+                &self,
+                decision: &DecisionV3,
+            ) -> Option<HumanTrustGrantView<'_>> {
+                self.human_grants
+                    .iter()
+                    .map($human)
+                    .find(|grant| grant.authorizes(decision))
+            }
+        }
+    };
+}
+
+impl_authority_roots_view!(
+    AuthorityTrustRootsV3,
+    |root: &HarnessTrustRootV3| HarnessTrustRootView::from(&root.input),
+    |grant: &HumanTrustGrantV3| HumanTrustGrantView::from(&grant.0)
+);
+impl_authority_roots_view!(
+    AuthorityTrustRootsV5,
+    |root: &AuthorityHarnessBindingV3Tuple| HarnessTrustRootView::from(root),
+    |grant: &AuthorityHumanGrantV3Tuple| HumanTrustGrantView::from(grant)
+);
 
 fn validate_harness_root(
     policy_revision_hash: &ContentHash,
@@ -23560,71 +25099,115 @@ fn projected_authority_completion_reserve(
     Ok(duplicated_entries.max(projected_basis))
 }
 
-fn trust_digest_for_harness(root: &HarnessTrustRootInputV3) -> Result<ContentHash> {
-    let value = serde_json::json!({
-        "claim_body_hash": root.claim_body_hash,
-        "claim_id": root.claim_id,
-        "descriptor_id": root.descriptor_id,
-        "genesis_hash": root.genesis_hash,
-        "harness_id": root.harness_id,
-        "harness_revision": root.harness_revision,
-        "harness_source_hash": root.harness_source_hash,
-        "policy_revision_hash": root.policy_revision_hash,
-        "procedure_version": root.procedure_version,
-        "property_id": root.property_id,
-        "repository_id": root.repository_id,
-        "repository_source_hash": root.repository_source_hash,
-        "result_hash": root.result_hash,
-        "result_media_type": root.result_media_type,
-        "result_sensitivity": root.result_sensitivity,
-        "result_size": root.result_size,
-        "run_id": root.run_id,
-        "snapshot_id": root.snapshot_id,
-        "test_artifact_id": root.test_artifact_id,
-        "universe_id": root.universe_id,
-    });
-    Ok(ContentHash::sha256(&canonical_json(&value)?))
+fn trust_digest_for_harness<'a>(root: impl Into<HarnessTrustRootView<'a>>) -> Result<ContentHash> {
+    let root = root.into();
+    #[derive(Serialize)]
+    struct CanonicalHarnessTrust<'a> {
+        claim_body_hash: &'a ContentHash,
+        claim_id: &'a StableId,
+        descriptor_id: &'a str,
+        genesis_hash: &'a ContentHash,
+        harness_id: &'a str,
+        harness_revision: &'a str,
+        harness_source_hash: &'a ContentHash,
+        policy_revision_hash: &'a ContentHash,
+        procedure_version: &'a str,
+        property_id: &'a str,
+        repository_id: &'a StableId,
+        repository_source_hash: &'a ContentHash,
+        result_hash: &'a ContentHash,
+        result_media_type: &'a str,
+        result_sensitivity: ArtifactSensitivity,
+        result_size: u64,
+        run_id: &'a StableId,
+        snapshot_id: &'a StableId,
+        test_artifact_id: &'a StableId,
+        universe_id: &'a StableId,
+    }
+    crate::canonical::compact_json_sha256_streaming(&CanonicalHarnessTrust {
+        claim_body_hash: root.claim_body_hash,
+        claim_id: root.claim_id,
+        descriptor_id: root.descriptor_id,
+        genesis_hash: root.genesis_hash,
+        harness_id: root.harness_id,
+        harness_revision: root.harness_revision,
+        harness_source_hash: root.harness_source_hash,
+        policy_revision_hash: root.policy_revision_hash,
+        procedure_version: root.procedure_version,
+        property_id: root.property_id,
+        repository_id: root.repository_id,
+        repository_source_hash: root.repository_source_hash,
+        result_hash: root.result_hash,
+        result_media_type: root.result_media_type,
+        result_sensitivity: root.result_sensitivity,
+        result_size: root.result_size,
+        run_id: root.run_id,
+        snapshot_id: root.snapshot_id,
+        test_artifact_id: root.test_artifact_id,
+        universe_id: root.universe_id,
+    })
 }
 
-fn trust_digest_for_human(grant: &HumanTrustGrantInputV3) -> Result<ContentHash> {
-    let value = serde_json::json!({
-        "actor": grant.actor,
-        "authority_id": grant.authority_id,
-        "capabilities": grant.capabilities,
-        "claim_ids": grant.claim_ids,
-        "policy_revision_hash": grant.policy_revision_hash,
-        "property_ids": grant.property_ids,
-        "run_id": grant.run_id,
-        "snapshot_id": grant.snapshot_id,
-        "universe_id": grant.universe_id,
-        "valid_from": grant.valid_from,
-        "valid_until": grant.valid_until,
-    });
-    Ok(ContentHash::sha256(&canonical_json(&value)?))
+fn trust_digest_for_human<'a>(grant: impl Into<HumanTrustGrantView<'a>>) -> Result<ContentHash> {
+    let grant = grant.into();
+    #[derive(Serialize)]
+    struct CanonicalHumanTrust<'a> {
+        actor: &'a str,
+        authority_id: &'a str,
+        capabilities: &'a BTreeSet<HumanAuthorityCapabilityV3>,
+        claim_ids: &'a BTreeSet<StableId>,
+        policy_revision_hash: &'a ContentHash,
+        property_ids: &'a BTreeSet<String>,
+        run_id: &'a StableId,
+        snapshot_id: &'a StableId,
+        universe_id: &'a StableId,
+        valid_from: &'a str,
+        valid_until: &'a str,
+    }
+    crate::canonical::compact_json_sha256_streaming(&CanonicalHumanTrust {
+        actor: grant.actor,
+        authority_id: grant.authority_id,
+        capabilities: grant.capabilities,
+        claim_ids: grant.claim_ids,
+        policy_revision_hash: grant.policy_revision_hash,
+        property_ids: grant.property_ids,
+        run_id: grant.run_id,
+        snapshot_id: grant.snapshot_id,
+        universe_id: grant.universe_id,
+        valid_from: grant.valid_from,
+        valid_until: grant.valid_until,
+    })
 }
 
-fn static_trust_digest(roots: &AuthorityTrustRootsV3) -> Result<ContentHash> {
-    let value = serde_json::json!({
-        "descriptor_id": STATIC_DESCRIPTOR_ID,
-        "policy_revision_hash": roots.policy_revision_hash,
-        "procedure_version": STATIC_PROCEDURE_ID,
-        "repository_id": roots.repository_id,
-        "repository_source_hash": roots.repository_source_hash,
-    });
-    Ok(ContentHash::sha256(&canonical_json(&value)?))
+fn static_trust_digest(roots: &impl AuthorityTrustRootsV3View) -> Result<ContentHash> {
+    #[derive(Serialize)]
+    struct CanonicalStaticTrust<'a> {
+        descriptor_id: &'static str,
+        policy_revision_hash: &'a ContentHash,
+        procedure_version: &'static str,
+        repository_id: &'a StableId,
+        repository_source_hash: &'a ContentHash,
+    }
+    crate::canonical::compact_json_sha256_streaming(&CanonicalStaticTrust {
+        descriptor_id: STATIC_DESCRIPTOR_ID,
+        policy_revision_hash: roots.policy_revision_hash_view(),
+        procedure_version: STATIC_PROCEDURE_ID,
+        repository_id: roots.repository_id_view(),
+        repository_source_hash: roots.repository_source_hash_view(),
+    })
 }
 
 fn validate_repository_trust_root(
     aggregate: &ReviewAggregate,
-    roots: &AuthorityTrustRootsV3,
+    roots: &impl AuthorityTrustRootsV3View,
 ) -> Result<()> {
     let source_hash = aggregate
         .program()
         .repository_source()
         .content_hash()
         .ok_or(DomainError::AuthorityPolicyMismatch)?;
-    if aggregate.program().repository_id() != &roots.repository_id
-        || source_hash != &roots.repository_source_hash
+    if aggregate.program().repository_id() != roots.repository_id_view()
+        || source_hash != roots.repository_source_hash_view()
     {
         return Err(DomainError::AuthorityPolicyMismatch);
     }
@@ -23930,7 +25513,7 @@ fn verifier_registration_matches(
 
 fn evidence_trust_digest(
     state: &V3RunAggregate,
-    roots: &AuthorityTrustRootsV3,
+    roots: &impl AuthorityTrustRootsV3View,
     evidence: &EvidenceV3,
 ) -> Result<ContentHash> {
     let input = state
@@ -23974,11 +25557,11 @@ fn evidence_trust_digest(
         }
         crate::VerifierDescriptorV3::FixedFixtureV1 => {
             let root = roots
-                .harness_for_source(input)
+                .harness_for_source_view(input)
                 .ok_or(DomainError::HarnessTrustRootMissing)?;
             if !verifier_registration_matches(
                 output,
-                &root.claim_id,
+                root.claim_id,
                 FIXTURE_DESCRIPTOR_ID,
                 FIXTURE_PROCEDURE_ID,
                 VerifierArtifactRoleV3::Output,
@@ -23992,7 +25575,7 @@ fn evidence_trust_digest(
 
 fn authority_trust_digest(
     state: &V3RunAggregate,
-    roots: &AuthorityTrustRootsV3,
+    roots: &impl AuthorityTrustRootsV3View,
     payload: &PersistedPayload,
 ) -> Result<Option<ContentHash>> {
     match payload {
@@ -24013,9 +25596,9 @@ fn authority_trust_digest(
                     .get(evidence.input_registration_id())
                     .ok_or(DomainError::VerificationBundleMismatch)?;
                 let root = roots
-                    .harness_for_source(input)
+                    .harness_for_source_view(input)
                     .ok_or(DomainError::HarnessTrustRootMissing)?;
-                if binding.claim_id() != &root.claim_id {
+                if binding.claim_id() != root.claim_id {
                     return Err(DomainError::VerificationBundleMismatch);
                 }
             }
@@ -24036,9 +25619,9 @@ fn authority_trust_digest(
                         .get(evidence.input_registration_id())
                         .ok_or(DomainError::VerificationBundleMismatch)?;
                     let root = roots
-                        .harness_for_source(input)
+                        .harness_for_source_view(input)
                         .ok_or(DomainError::HarnessTrustRootMissing)?;
-                    if verification.claim_id() != &root.claim_id {
+                    if verification.claim_id() != root.claim_id {
                         return Err(DomainError::VerificationBundleMismatch);
                     }
                 }
@@ -24048,11 +25631,11 @@ fn authority_trust_digest(
             }
         }
         PersistedPayload::DecisionRecordedV3(decision) => {
-            if decision.policy_revision_hash() != roots.policy_revision_hash() {
+            if decision.policy_revision_hash() != roots.policy_revision_hash_view() {
                 return Err(DomainError::AuthorityPolicyMismatch);
             }
             roots
-                .human_grant_for(decision)
+                .human_grant_for_view(decision)
                 .ok_or(DomainError::HumanTrustRootMissing)
                 .and_then(trust_digest_for_human)
                 .map(Some)
@@ -24065,7 +25648,7 @@ fn validate_authority_registration(
     aggregate: &ReviewAggregate,
     registration: &ArtifactRegisteredV3,
     bytes: &[u8],
-    roots: &AuthorityTrustRootsV3,
+    roots: &impl AuthorityTrustRootsV3View,
     expected_genesis_hash: &ContentHash,
 ) -> Result<()> {
     match registration.source() {
@@ -24123,17 +25706,14 @@ fn validate_authority_registration(
                 }
                 (FIXTURE_DESCRIPTOR_ID, VerifierArtifactRoleV3::Output) => {
                     let root = roots
-                        .harnesses
-                        .iter()
-                        .find(|root| {
-                            root.input.run_id == *registration.run_id()
-                                && root.input.genesis_hash == *expected_genesis_hash
-                                && root.input.snapshot_id == *aggregate.program().snapshot_id()
-                                && root.input.universe_id == *aggregate.universe().id()
-                                && root.input.claim_id == *claim_id
-                        })
+                        .harness_for_fixture_registration_view(
+                            registration,
+                            expected_genesis_hash,
+                            aggregate,
+                            claim_id,
+                        )
                         .ok_or(DomainError::HarnessTrustRootMissing)?;
-                    validate_fixture_result_for_root(aggregate, &root.input, bytes)?;
+                    validate_fixture_result_for_root(aggregate, root, bytes)?;
                 }
                 _ => return Err(DomainError::VerificationBundleMismatch),
             }
@@ -24144,7 +25724,7 @@ fn validate_authority_registration(
             ..
         } => {
             let root = roots
-                .harness_for_source(registration)
+                .harness_for_source_view(registration)
                 .ok_or(DomainError::HarnessTrustRootMissing)?;
             let claim = aggregate
                 .execution_claims()
@@ -24155,7 +25735,7 @@ fn validate_authority_registration(
                     reference: claim_id.clone(),
                 })?;
             if claim.body_hash()? != *claim_body_hash
-                || claim.body_hash()? != root.claim_body_hash
+                || claim.body_hash()? != *root.claim_body_hash
                 || bytes.len() != usize::try_from(FIXTURE_WITNESS_SIZE).unwrap_or(usize::MAX)
                 || ContentHash::sha256(bytes).as_str() != FIXTURE_WITNESS_HASH
                 || bytes != FIXTURE_WITNESS_BYTES
@@ -24622,24 +26202,25 @@ struct FixtureReplayClosure {
     proposal: crate::m4::FixtureRecordProposalV1,
 }
 
-fn validate_fixture_result_for_root(
+fn validate_fixture_result_for_root<'a>(
     aggregate: &ReviewAggregate,
-    root: &HarnessTrustRootInputV3,
+    root: impl Into<HarnessTrustRootView<'a>>,
     output_bytes: &[u8],
 ) -> Result<crate::FixedFixtureResultV1> {
+    let root = root.into();
     let claim = aggregate
         .execution_claims()
-        .find(|claim| claim.id() == &root.claim_id)
+        .find(|claim| claim.id() == root.claim_id)
         .ok_or(DomainError::VerificationBundleMismatch)?;
     let result =
         crate::FixedFixtureResultV1::from_json_bytes(output_bytes).map_err(m4_domain_error)?;
     let mut subject_ids = claim.target_refs().iter().cloned().collect::<Vec<_>>();
     subject_ids.push(StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?);
     subject_ids.sort_unstable();
-    if claim.body_hash()? != root.claim_body_hash
+    if claim.body_hash()? != *root.claim_body_hash
         || claim.property_id() != root.property_id
         || claim.polarity() != crate::ClaimPolarity::IssuePresent
-        || result.claim_id() != &root.claim_id
+        || result.claim_id() != root.claim_id
         || result.property_id() != root.property_id
         || result.descriptor() != crate::VerifierDescriptorV3::FixedFixtureV1
         || result.procedure() != crate::VerifierProcedureV3::DuplicateSubmitV1
@@ -24811,7 +26392,7 @@ fn fixture_replay_closure(
     state: &V3RunAggregate,
     evidence: &EvidenceV3,
     resolver: &impl AuthorityArtifactResolverV3,
-    roots: &AuthorityTrustRootsV3,
+    roots: &impl AuthorityTrustRootsV3View,
 ) -> Result<FixtureReplayClosure> {
     let input = state
         .registrations
@@ -24822,20 +26403,20 @@ fn fixture_replay_closure(
         .get(evidence.output_registration_id())
         .ok_or(DomainError::VerificationBundleMismatch)?;
     let root = roots
-        .harness_for_source(input)
+        .harness_for_source_view(input)
         .ok_or(DomainError::HarnessTrustRootMissing)?;
     let claim = aggregate
         .execution_claims()
-        .find(|claim| claim.id() == &root.claim_id)
+        .find(|claim| claim.id() == root.claim_id)
         .ok_or(DomainError::VerificationBundleMismatch)?;
-    if claim.body_hash()? != root.claim_body_hash
+    if claim.body_hash()? != *root.claim_body_hash
         || claim.property_id() != root.property_id
         || claim.polarity() != crate::ClaimPolarity::IssuePresent
-        || aggregate.program().snapshot_id() != &root.snapshot_id
-        || aggregate.universe().id() != &root.universe_id
+        || aggregate.program().snapshot_id() != root.snapshot_id
+        || aggregate.universe().id() != root.universe_id
         || !verifier_registration_matches(
             output,
-            &root.claim_id,
+            root.claim_id,
             FIXTURE_DESCRIPTOR_ID,
             FIXTURE_PROCEDURE_ID,
             VerifierArtifactRoleV3::Output,
@@ -24849,7 +26430,7 @@ fn fixture_replay_closure(
     let mut subject_ids = claim.target_refs().iter().cloned().collect::<Vec<_>>();
     subject_ids.push(StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?);
     subject_ids.sort_unstable();
-    if evidence.snapshot_id() != &root.snapshot_id
+    if evidence.snapshot_id() != root.snapshot_id
         || evidence.subject_ids() != subject_ids
         || evidence.input_registration_id() != input.registration_id()
         || evidence.output_registration_id() != output.registration_id()
@@ -24858,7 +26439,7 @@ fn fixture_replay_closure(
     }
     let scope = state
         .assessment_scopes
-        .get(&root.claim_id)
+        .get(root.claim_id)
         .ok_or(DomainError::VerificationBundleMismatch)?;
     let proposal = crate::m4::materialize_fixture_replay_v1(
         scope,
@@ -24869,7 +26450,7 @@ fn fixture_replay_closure(
     .map_err(m4_domain_error)?;
     Ok(FixtureReplayClosure {
         claim_id: root.claim_id.clone(),
-        property_id: root.property_id.clone(),
+        property_id: root.property_id.to_owned(),
         snapshot_id: root.snapshot_id.clone(),
         input_registration_id: input.registration_id().clone(),
         output_registration_id: output.registration_id().clone(),
@@ -24883,7 +26464,7 @@ fn validate_authority_payload_against_cas(
     state: &V3RunAggregate,
     payload: &PersistedPayload,
     resolver: &impl AuthorityArtifactResolverV3,
-    roots: &AuthorityTrustRootsV3,
+    roots: &impl AuthorityTrustRootsV3View,
 ) -> Result<()> {
     match payload {
         PersistedPayload::EvidenceRecordedV3(evidence)
@@ -31547,8 +33128,11 @@ mod tests {
 
     #[test]
     fn v5_structural_prefix_accepts_closed_inherited_m4_and_v4_positions() {
-        let (v4, basis, roots, resolver, session, claim_id, input_id, output_id) =
-            static_v4_bundle_base();
+        let (policy_probe, _, _, _, _, _) = static_boundary_base();
+        let v5_policy = target_policy_revision_hash_v5(policy_probe.aggregate.program())
+            .expect("derived native V5 policy");
+        let (v4, basis, roots, mut resolver, session, claim_id, input_id, output_id) =
+            static_v4_bundle_base_with_policy(v5_policy.clone());
         let bundle = v4
             .mint_verification_bundle_v4(
                 VerificationBundleRequestV4::static_fact(claim_id, input_id, output_id),
@@ -31565,6 +33149,143 @@ mod tests {
         assert!(matches!(m4_envelopes.len(), 2 | 3));
 
         let mut v5 = rewrap_v4_prefix_as_v5(&v4);
+        let base_structural = v5
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                v5.run_id(),
+                v5.genesis_hash(),
+                v5.canonical_prefix_bytes_for_store(),
+                u64::try_from(v5.envelopes.len()).expect("base V5 event count"),
+                v5.tail_hash(),
+            ))
+            .expect("base V5 structural prefix");
+        let first_deferred_count = base_structural
+            .plan_event_count
+            .checked_add(base_structural.d2_accounting.d2_prefix_events)
+            .and_then(|value| value.checked_add(1))
+            .expect("first inherited semantic count");
+        let first_deferred_index = usize::try_from(first_deferred_count - 1).unwrap();
+        let first_deferred_envelope = &v5.envelopes[first_deferred_index];
+        let first_deferred_offset = v5.envelopes[..=first_deferred_index]
+            .iter()
+            .try_fold(0_u64, |total, envelope| {
+                total.checked_add(
+                    u64::try_from(
+                        envelope
+                            .canonical_bytes()
+                            .expect("canonical V5 event")
+                            .len()
+                            + 1,
+                    )
+                    .unwrap(),
+                )
+            })
+            .expect("first inherited semantic offset");
+        let first_deferred = v5
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                v5.run_id(),
+                v5.genesis_hash(),
+                first_deferred_offset,
+                first_deferred_count,
+                first_deferred_envelope.event_hash(),
+            ))
+            .expect("first inherited semantic structural prefix");
+        let PersistedPayload::ArtifactRegisteredV3(first_registration) = decode_canonical_payload(
+            EventContractVersion::V5,
+            first_deferred_envelope.payload.get(),
+        )
+        .expect("first inherited semantic payload") else {
+            panic!("fixture first inherited semantic record must be a V3 registration");
+        };
+        assert_eq!(first_deferred.d2_accounting.deferred_semantic_events, 1);
+        assert_eq!(
+            first_deferred.d2_accounting.max_m4_cas_bytes,
+            first_registration.size(),
+            "the first non-D2 registration is accounted before the prefix stops"
+        );
+        let plan = v4.aggregate.review_plans().next().expect("V4 plan");
+        let plan_id = plan.id().clone();
+        let (later_d2_obligation, later_context, later_sources) = plan
+            .waves()
+            .iter()
+            .flat_map(|wave| wave.obligation_ids())
+            .filter(|candidate| {
+                v4.aggregate
+                    .obligation(candidate)
+                    .is_some_and(|obligation| {
+                        obligation
+                            .lifecycle()
+                            .can_transition_to(ObligationLifecycle::Planned)
+                            || obligation
+                                .lifecycle()
+                                .can_transition_to(ObligationLifecycle::InProgress)
+                    })
+            })
+            .find_map(|candidate| {
+                let mut session = crate::prepare_context(&v4.aggregate, candidate.clone()).ok()?;
+                let mut sources = BTreeMap::new();
+                while let Some(request) = session.next_source_request().ok()? {
+                    let hash = v4
+                        .aggregate
+                        .program()
+                        .artifact(request.artifact_id())?
+                        .content_hash
+                        .as_ref()?;
+                    let bytes = resolver.objects.get(hash)?.clone();
+                    session.submit_source(&request, &bytes).ok()?;
+                    sources.insert(request.artifact_id().clone(), bytes);
+                }
+                let built = session.finish().ok()?;
+                (!built.envelope().normalized_included_source_ids().is_empty())
+                    .then(|| (candidate.clone(), built, sources))
+            })
+            .expect("source-grounded later D2 obligation");
+        let current_lifecycle = v4
+            .aggregate
+            .obligation(&later_d2_obligation)
+            .expect("later D2 obligation")
+            .lifecycle();
+        let later_context_envelope = later_context.envelope().clone();
+        let context_command = EventCommand::context_envelope_projected(later_context);
+        let later_wave = plan
+            .waves()
+            .iter()
+            .find(|wave| wave.obligation_ids().contains(&later_d2_obligation))
+            .expect("later D2 wave");
+        let execution_input = crate::ExecutionRecordInput::fake(
+            plan_id.clone(),
+            later_wave.id().clone(),
+            later_d2_obligation.clone(),
+            later_context_envelope.id().clone(),
+            later_context_envelope.snapshot_id().clone(),
+            1,
+        )
+        .expect("later D2 execution input");
+        let later_execution_id = execution_input.execution_id().expect("later execution ID");
+        let later_raw = format!(
+            "{{\"attempt\":1,\"fixture\":true,\"padding\":\"{}\",\"version\":3}}",
+            "x".repeat(200_000)
+        )
+        .into_bytes();
+        let later_registration = ArtifactRegisteredV3::new(
+            v4.run_id().clone(),
+            ContentHash::sha256(&later_raw),
+            "application/json",
+            u64::try_from(later_raw.len()).unwrap(),
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id: later_execution_id.clone(),
+                reviewer_id: crate::execution::FAKE_REVIEWER_ID.to_owned(),
+                run_id: v4.run_id().clone(),
+            },
+        )
+        .expect("later D2 reviewer registration");
+        resolver
+            .objects
+            .insert(ContentHash::sha256(&later_raw), later_raw.clone());
+        append_v5_payload_for_structural_test(
+            &mut v5,
+            PersistedPayload::ArtifactRegisteredV3(later_registration.clone()),
+        );
         for envelope in &m4_envelopes {
             append_v5_payload_for_structural_test(
                 &mut v5,
@@ -31572,13 +33293,59 @@ mod tests {
                     .expect("M4 payload"),
             );
         }
-        let plan_id = v4
+        if current_lifecycle == ObligationLifecycle::Generated {
+            append_v5_payload_for_structural_test(
+                &mut v5,
+                PersistedPayload::ObligationTransition {
+                    obligation_id: later_d2_obligation.clone(),
+                    next: ObligationLifecycle::Planned,
+                },
+            );
+        }
+        append_v5_payload_for_structural_test(
+            &mut v5,
+            PersistedPayload::ObligationTransition {
+                obligation_id: later_d2_obligation.clone(),
+                next: ObligationLifecycle::InProgress,
+            },
+        );
+        append_v5_payload_for_structural_test(&mut v5, context_command.payload);
+        let later_obligation = v4
             .aggregate
-            .review_plans()
-            .next()
-            .expect("V4 plan")
-            .id()
-            .clone();
+            .obligation(&later_d2_obligation)
+            .expect("later obligation body");
+        let later_claim = crate::ExecutionClaimInputV2::new(
+            later_obligation.property_id(),
+            later_obligation.normalized_target_refs().clone(),
+            ClaimPolarity::IssueAbsent,
+            "late V5 D2 structured claim",
+            later_context_envelope
+                .normalized_included_source_ids()
+                .clone(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            Some(1.0),
+        )
+        .expect("later claim input");
+        let source_buffers = later_sources.values().collect::<Vec<_>>();
+        let later_bundle = ValidatedExecutionBundle::fake_v3(
+            execution_input,
+            &later_registration,
+            later_raw.clone(),
+            source_buffers,
+            vec![later_claim],
+            crate::ExecutionOutcome::Structured,
+        )
+        .expect("later D2 bundle");
+        let execution_command = EventCommand::review_execution_recorded(later_bundle);
+        append_v5_payload_for_structural_test(&mut v5, execution_command.payload);
+        append_v5_payload_for_structural_test(
+            &mut v5,
+            PersistedPayload::ObligationTransition {
+                obligation_id: later_d2_obligation.clone(),
+                next: ObligationLifecycle::Completed,
+            },
+        );
         let (payment, _, _) = v4_gluing_registration(
             &v4,
             &v4.aggregate,
@@ -31610,9 +33377,265 @@ mod tests {
                 v5.tail_hash(),
             ))
             .expect("closed plan/M4/V4 structural prefix");
+        assert_eq!(
+            structural.d2_accounting.m4_authority_entries,
+            u64::try_from(m4_envelopes.len()).unwrap(),
+            "the first inherited Evidence record is included in M4 accounting"
+        );
+        assert_eq!(
+            structural.d2_accounting.max_reviewer_cas_bytes, 40,
+            "the contiguous D2 reviewer raw remains visible to M4 accounting"
+        );
+        assert_eq!(
+            structural.d2_accounting.max_m4_cas_bytes,
+            u64::try_from(later_raw.len()).unwrap(),
+            "the large post-M4 reviewer raw controls the integrated CAS phase"
+        );
         // The opaque backing still does not expose these inherited records as
         // accepted state; Core-only M6 projections expose only the plan facts.
         assert_eq!(structural.projection().plan().id(), &plan_id);
+
+        struct NativeV5Resolver(BTreeMap<ContentHash, Vec<u8>>);
+        impl AuthorityArtifactResolverV5 for NativeV5Resolver {
+            fn read_exact(&self, cas_hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                let bytes = self.0.get(cas_hash).ok_or_else(|| {
+                    DomainError::Validation("missing native V5 test CAS object".to_owned())
+                })?;
+                if bytes.len() != destination.len() {
+                    return Err(DomainError::Validation(
+                        "native V5 test CAS object length mismatch".to_owned(),
+                    ));
+                }
+                destination.copy_from_slice(bytes);
+                Ok(())
+            }
+        }
+        let AuthorityTrustRootsV4 {
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            allowed_gluing_input_bindings: _,
+        } = roots;
+        assert_eq!(policy_revision_hash, v5_policy);
+        let v5_roots = AuthorityTrustRootsV5::new(
+            v5_policy,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            Vec::new(),
+        )
+        .expect("native V5 authority roots");
+        let v5_resolver = NativeV5Resolver(resolver.objects);
+        let checkpoint = EventLogV5::certify_plan_authority_checkpoint_v5_with_limits(
+            &structural,
+            &v5_resolver,
+            &v5_roots,
+            v5.limits.max_retained_bytes,
+            v5.limits.max_working_bytes,
+        )
+        .expect("native V5 plan checkpoint");
+        let d2 = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &checkpoint,
+            &v5_resolver,
+            &v5_roots,
+        )
+        .expect("native V5 D2 prefix");
+        let continuation =
+            EventLogV5::replay_ordered_m4_authority_prefix_v5(d2, &v5_resolver, &v5_roots)
+                .expect("native V5 ordered M4 replay");
+        let exact_m4_working = V5_TEST_M4_EXACT_WORKING.with(std::cell::Cell::get);
+        assert!(exact_m4_working > 0);
+        let d2_for_exact_working = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &checkpoint,
+            &v5_resolver,
+            &v5_roots,
+        )
+        .expect("native V5 D2 prefix for exact M4 working limit");
+        EventLogV5::replay_ordered_m4_authority_prefix_v5_with_limits(
+            d2_for_exact_working,
+            &v5_resolver,
+            &v5_roots,
+            v5.limits.max_retained_bytes,
+            exact_m4_working,
+        )
+        .expect("native V5 ordered M4 replay at exact working limit");
+        assert_eq!(continuation.inherited_m4_entries.len(), m4_envelopes.len());
+        assert_eq!(continuation.v3_aggregate.evidence.len(), 1);
+        assert_eq!(continuation.v3_aggregate.verifications.len(), 1);
+        assert_eq!(
+            continuation
+                .aggregate
+                .obligation(&later_d2_obligation)
+                .expect("later D2 obligation")
+                .lifecycle(),
+            ObligationLifecycle::Completed
+        );
+        assert!(
+            continuation
+                .d2_trace
+                .iter()
+                .any(|trace| trace.record_id == later_d2_obligation)
+        );
+        assert!(
+            continuation
+                .aggregate
+                .context_envelope(later_context_envelope.id())
+                .is_some()
+        );
+        assert!(
+            continuation
+                .aggregate
+                .executions()
+                .any(|execution| execution.id() == &later_execution_id)
+        );
+        assert!(
+            continuation
+                .v3_aggregate
+                .registrations
+                .contains_key(later_registration.registration_id())
+        );
+        assert!(
+            continuation
+                .deferred_registration_closures
+                .iter()
+                .any(|(_, id)| id == later_registration.registration_id())
+        );
+        assert!(
+            continuation
+                .d2_trace
+                .windows(2)
+                .all(|pair| { pair[0].event_sequence < pair[1].event_sequence })
+        );
+        assert!(matches!(
+            decode_canonical_payload(
+                EventContractVersion::V5,
+                v5.envelopes[usize::try_from(continuation.consumed_through_event).unwrap()]
+                    .payload
+                    .get(),
+            ),
+            Ok(PersistedPayload::ArtifactRegisteredV4(_))
+        ));
+        validate_v5_m5_continuation(&continuation, &v5_roots).expect("native V5 M5 handoff");
+        struct TamperedLateRawResolver<'a> {
+            delegate: &'a NativeV5Resolver,
+            target: ContentHash,
+        }
+        impl AuthorityArtifactResolverV5 for TamperedLateRawResolver<'_> {
+            fn read_exact(&self, cas_hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                if cas_hash == &self.target {
+                    destination.fill(b'x');
+                    return Ok(());
+                }
+                self.delegate.read_exact(cas_hash, destination)
+            }
+        }
+        let structural_tail_before_failure = structural.tail_hash.clone();
+        let d2_for_tampered_raw = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &checkpoint,
+            &v5_resolver,
+            &v5_roots,
+        )
+        .expect("native V5 D2 prefix for late raw failure");
+        assert!(
+            EventLogV5::replay_ordered_m4_authority_prefix_v5(
+                d2_for_tampered_raw,
+                &TamperedLateRawResolver {
+                    delegate: &v5_resolver,
+                    target: later_registration.cas_hash().clone(),
+                },
+                &v5_roots,
+            )
+            .is_err()
+        );
+        assert_eq!(structural.tail_hash, structural_tail_before_failure);
+        let d2_for_short_working = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &checkpoint,
+            &v5_resolver,
+            &v5_roots,
+        )
+        .expect("native V5 D2 prefix for M4 working refusal");
+        V5_TEST_M4_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(0));
+        V5_TEST_M4_CAS_READS.with(|value| value.set(0));
+        assert!(matches!(
+            EventLogV5::replay_ordered_m4_authority_prefix_v5_with_limits(
+                d2_for_short_working,
+                &v5_resolver,
+                &v5_roots,
+                v5.limits.max_retained_bytes,
+                exact_m4_working - 1,
+            ),
+            Err(DomainError::Incomplete {
+                operation: "V5 M4 sealed actual working reservation",
+                ..
+            })
+        ));
+        assert_eq!(
+            V5_TEST_M4_AUTHORITY_MATERIALIZATIONS.with(std::cell::Cell::get),
+            0
+        );
+        assert_eq!(V5_TEST_M4_CAS_READS.with(std::cell::Cell::get), 0);
+        let d2_for_context_limit = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &checkpoint,
+            &v5_resolver,
+            &v5_roots,
+        )
+        .expect("native V5 D2 prefix for late context limit");
+        V5_TEST_M4_CONTEXT_SESSION_SEALS.with(|value| value.set(0));
+        V5_TEST_M4_CONTEXT_SOURCE_REQUESTS.with(|value| value.set(0));
+        V5_TEST_M4_FORCED_CONTEXT_WORKING_OVERHEAD.with(|value| value.set(u64::MAX));
+        let context_limit_result = EventLogV5::replay_ordered_m4_authority_prefix_v5(
+            d2_for_context_limit,
+            &v5_resolver,
+            &v5_roots,
+        );
+        V5_TEST_M4_FORCED_CONTEXT_WORKING_OVERHEAD.with(|value| value.set(0));
+        assert!(matches!(
+            context_limit_result,
+            Err(DomainError::Incomplete {
+                operation: "V5 M4 sealed later D2 context working phase",
+                ..
+            })
+        ));
+        assert_eq!(
+            V5_TEST_M4_CONTEXT_SESSION_SEALS.with(std::cell::Cell::get),
+            1
+        );
+        assert_eq!(
+            V5_TEST_M4_CONTEXT_SOURCE_REQUESTS.with(std::cell::Cell::get),
+            0
+        );
+        assert_eq!(structural.tail_hash, structural_tail_before_failure);
+        let exact_retained = V5_TEST_M4_EXACT_RETAINED.with(std::cell::Cell::get);
+        assert!(exact_retained > 0);
+        let d2_for_short_limit = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &checkpoint,
+            &v5_resolver,
+            &v5_roots,
+        )
+        .expect("native V5 D2 prefix for exact retained refusal");
+        V5_TEST_M4_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(0));
+        V5_TEST_M4_CAS_READS.with(|value| value.set(0));
+        assert!(matches!(
+            EventLogV5::replay_ordered_m4_authority_prefix_v5_with_limits(
+                d2_for_short_limit,
+                &v5_resolver,
+                &v5_roots,
+                exact_retained - 1,
+                v5.limits.max_working_bytes,
+            ),
+            Err(DomainError::Incomplete {
+                operation: "V5 M4 exact provisional retained preflight",
+                ..
+            })
+        ));
+        assert_eq!(
+            V5_TEST_M4_AUTHORITY_MATERIALIZATIONS.with(std::cell::Cell::get),
+            0
+        );
+        assert_eq!(V5_TEST_M4_CAS_READS.with(std::cell::Cell::get), 0);
 
         // M5's atomic body is intentionally not semantically parsed by this
         // structural FSM. The direct state-machine case proves only the
@@ -32500,8 +34523,46 @@ mod tests {
         StableId,
         StableId,
     ) {
+        static_v4_bundle_base_with_policy(ContentHash::sha256(
+            b"static expectation boundary policy",
+        ))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn static_v4_bundle_base_with_policy(
+        policy_revision_hash: ContentHash,
+    ) -> (
+        EventLogV4,
+        AuthorityReplayBasisV4,
+        AuthorityTrustRootsV4,
+        V4CasResolver,
+        OpaqueSessionIdentityV4,
+        StableId,
+        StableId,
+        StableId,
+    ) {
+        static_v4_bundle_base_with_policy_and_polarity(
+            policy_revision_hash,
+            ClaimPolarity::IssuePresent,
+        )
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn static_v4_bundle_base_with_policy_and_polarity(
+        policy_revision_hash: ContentHash,
+        polarity: ClaimPolarity,
+    ) -> (
+        EventLogV4,
+        AuthorityReplayBasisV4,
+        AuthorityTrustRootsV4,
+        V4CasResolver,
+        OpaqueSessionIdentityV4,
+        StableId,
+        StableId,
+        StableId,
+    ) {
         let (mut v3, mut v3_basis, v3_roots, claim_id, evaluation, mut resolver) =
-            static_boundary_base();
+            static_boundary_base_with_policy_and_polarity(policy_revision_hash, polarity);
         resolver.insert(br#"{"attempt":1,"fixture":true,"version":3}"#.to_vec());
         let input_bytes = evaluation.input().canonical_bytes().expect("static input");
         let output_bytes = evaluation
@@ -33140,8 +35201,11 @@ mod tests {
 
     #[test]
     fn v4_human_decision_is_exact_grant_bound_and_finding_is_authority_free() {
+        let (policy_probe, _, _, _, _, _) = static_boundary_base();
+        let v5_policy = target_policy_revision_hash_v5(policy_probe.aggregate.program())
+            .expect("derived human V5 policy");
         let (log, basis, roots, resolver, session, claim_id, input_id, output_id) =
-            static_v4_bundle_base();
+            static_v4_bundle_base_with_policy(v5_policy.clone());
         let bundle = log
             .mint_verification_bundle_v4(
                 VerificationBundleRequestV4::static_fact(claim_id.clone(), input_id, output_id),
@@ -33382,6 +35446,104 @@ mod tests {
             .confirm_replayed(&log, &basis, &session)
             .expect("finding receipt");
         assert_eq!(basis.inherited_m4_entry_count(), authority_entries);
+
+        let mut native_v5 = rewrap_v4_prefix_as_v5(&log);
+        let plan_id = log
+            .aggregate
+            .review_plans()
+            .next()
+            .expect("human V5 plan")
+            .id()
+            .clone();
+        let (boundary, _, _) = v4_gluing_registration(
+            &log,
+            &log.aggregate,
+            &plan_id,
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            crate::AssignmentValueV4::Required,
+            BTreeSet::new(),
+        );
+        append_v5_payload_for_structural_test(
+            &mut native_v5,
+            PersistedPayload::ArtifactRegisteredV4(boundary),
+        );
+        let native_structural = native_v5
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                native_v5.run_id(),
+                native_v5.genesis_hash(),
+                native_v5.canonical_prefix_bytes_for_store(),
+                u64::try_from(native_v5.envelopes.len()).unwrap(),
+                native_v5.tail_hash(),
+            ))
+            .expect("human/finding native V5 structural prefix");
+        struct HumanV5Resolver(BTreeMap<ContentHash, Vec<u8>>);
+        impl AuthorityArtifactResolverV5 for HumanV5Resolver {
+            fn read_exact(&self, cas_hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                let bytes = self.0.get(cas_hash).ok_or_else(|| {
+                    DomainError::Validation("missing human V5 CAS object".to_owned())
+                })?;
+                if bytes.len() != destination.len() {
+                    return Err(DomainError::Validation(
+                        "human V5 CAS object length mismatch".to_owned(),
+                    ));
+                }
+                destination.copy_from_slice(bytes);
+                Ok(())
+            }
+        }
+        let native_roots = AuthorityTrustRootsV5::new(
+            v5_policy,
+            roots.repository_id.clone(),
+            roots.repository_source_hash.clone(),
+            Vec::new(),
+            vec![human_grant()],
+            Vec::new(),
+        )
+        .expect("human native V5 roots");
+        let native_resolver = HumanV5Resolver(resolver.objects.clone());
+        let native_checkpoint = EventLogV5::certify_plan_authority_checkpoint_v5_with_limits(
+            &native_structural,
+            &native_resolver,
+            &native_roots,
+            native_v5.limits.max_retained_bytes,
+            native_v5.limits.max_working_bytes,
+        )
+        .expect("human native V5 plan checkpoint");
+        let native_d2 = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &native_checkpoint,
+            &native_resolver,
+            &native_roots,
+        )
+        .expect("human native V5 D2 replay");
+        let native_continuation = EventLogV5::replay_ordered_m4_authority_prefix_v5(
+            native_d2,
+            &native_resolver,
+            &native_roots,
+        )
+        .expect("human/finding native V5 M4 replay");
+        assert_eq!(
+            native_continuation.inherited_m4_entries.len(),
+            authority_entries
+        );
+        assert!(
+            native_continuation
+                .inherited_m4_entries
+                .iter()
+                .any(|entry| entry.payload_kind == "decision_recorded_v3")
+        );
+        assert!(
+            native_continuation
+                .inherited_m4_entries
+                .iter()
+                .all(|entry| entry.payload_kind != "finding_recorded_v3")
+        );
+        let assessment = native_continuation
+            .v3_aggregate
+            .assessments
+            .get(&claim_id)
+            .expect("human/finding native V5 assessment");
+        assert!(assessment.active_decision_id().is_some());
+        assert!(assessment.current_finding_id().is_some());
 
         // The full static run contains every inherited D2/M4 event shape:
         // D2 planning/context/execution/claim state followed by M4
@@ -36414,6 +38576,14 @@ mod tests {
         );
         assert!(full_tail_d2.v3_aggregate.evidence.is_empty());
         assert!(full_tail_d2.v3_aggregate.verifications.is_empty());
+        assert!(matches!(
+            EventLogV5::replay_ordered_m4_authority_prefix_v5(
+                full_tail_d2,
+                &FullTailV5Resolver(&resolver.objects),
+                &full_tail_v5_roots,
+            ),
+            Err(DomainError::HarnessTrustRootMissing)
+        ));
         assert_eq!(
             full_tail_v5
                 .envelopes
@@ -39652,6 +41822,36 @@ mod tests {
         crate::StaticFactEvaluationV1,
         AuthorityTestResolver,
     ) {
+        static_boundary_base_with_policy(ContentHash::sha256(b"static expectation boundary policy"))
+    }
+
+    fn static_boundary_base_with_policy(
+        policy_revision_hash: ContentHash,
+    ) -> (
+        EventLog,
+        AuthorityReplayBasisV3,
+        AuthorityTrustRootsV3,
+        StableId,
+        crate::StaticFactEvaluationV1,
+        AuthorityTestResolver,
+    ) {
+        static_boundary_base_with_policy_and_polarity(
+            policy_revision_hash,
+            ClaimPolarity::IssuePresent,
+        )
+    }
+
+    fn static_boundary_base_with_policy_and_polarity(
+        policy_revision_hash: ContentHash,
+        polarity: ClaimPolarity,
+    ) -> (
+        EventLog,
+        AuthorityReplayBasisV3,
+        AuthorityTrustRootsV3,
+        StableId,
+        crate::StaticFactEvaluationV1,
+        AuthorityTestResolver,
+    ) {
         let (mut log, _, plan, obligation_id, envelope, sources) = d2_v3_m4_log();
         let (_, claim_id) = append_d2_attempt_v3_with_polarity(
             &mut log,
@@ -39659,7 +41859,7 @@ mod tests {
             &obligation_id,
             &envelope,
             &sources,
-            ClaimPolarity::IssuePresent,
+            polarity,
         );
         let claim = log
             .aggregate()
@@ -39669,11 +41869,7 @@ mod tests {
         let obligation = log.aggregate().obligation(&obligation_id).unwrap();
         let evaluation =
             crate::evaluate_static_fact_v1(log.aggregate().program(), obligation, claim).unwrap();
-        let roots = authority_roots_for_claim(
-            &log,
-            claim_id.clone(),
-            ContentHash::sha256(b"static expectation boundary policy"),
-        );
+        let roots = authority_roots_for_claim(&log, claim_id.clone(), policy_revision_hash);
         let basis = log.fresh_authority_basis_v3(&roots).unwrap();
         let mut resolver = AuthorityTestResolver::default();
         for bytes in sources.values() {
