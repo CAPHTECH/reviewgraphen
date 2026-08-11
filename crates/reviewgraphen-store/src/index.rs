@@ -31,6 +31,10 @@ use std::{
 };
 use thiserror::Error;
 
+#[path = "index_v4.rs"]
+mod v4;
+pub use v4::*;
+
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(test)]
@@ -51,8 +55,13 @@ pub(crate) enum PublishFault {
     AfterCandidateLinkBeforeDirectorySync,
     AfterCandidateSync,
     AfterImageDropBeforeCandidateRead,
+    AfterCandidateInodeCheck,
+    AfterCandidateHashCheck,
     AfterValidation,
     AfterRename,
+    AfterActiveInodeCheck,
+    AfterActiveHashCheck,
+    BeforeFinalDirectorySync,
     AfterActiveVerify,
 }
 
@@ -100,12 +109,6 @@ impl IndexLimits {
     fn validate(self) -> Result<(), IndexError> {
         if self.max_rows == 0
             || self.max_serialized_bytes < PAGE_SIZE
-            || self.max_working_bytes
-                < self
-                    .max_serialized_bytes
-                    .checked_mul(3)
-                    .and_then(|value| value.checked_add(1024))
-                    .unwrap_or(u64::MAX)
             || self.max_query_bytes == 0
             || self.max_query_bytes > self.max_working_bytes
             || self.max_statement_bytes == 0
@@ -941,13 +944,21 @@ impl<'a> DerivedIndex<'a> {
     }
 
     fn read_active_image_locked_with_retained(&self, retained: u64) -> Result<Vec<u8>, IndexError> {
+        self.read_active_image_locked_with_limits_and_retained(self.limits, retained)
+    }
+
+    fn read_active_image_locked_with_limits_and_retained(
+        &self,
+        limits: IndexLimits,
+        retained: u64,
+    ) -> Result<Vec<u8>, IndexError> {
         let bytes = read_fd_exact_with_retained(
             self.open_entry(ACTIVE_FILE)?,
-            self.limits.max_serialized_bytes,
+            limits.max_serialized_bytes,
             retained,
-            self.limits.max_working_bytes,
+            limits.max_working_bytes,
         )?;
-        check_image_len(bytes.len(), self.limits)?;
+        check_image_len(bytes.len(), limits)?;
         Ok(bytes)
     }
 
@@ -1664,6 +1675,15 @@ fn deserialize_read_only_with_journal(
     limits: IndexLimits,
     journal_view: u64,
 ) -> Result<Connection, IndexError> {
+    deserialize_read_only_for_schema(image, limits, journal_view, INDEX_SCHEMA_VERSION)
+}
+
+fn deserialize_read_only_for_schema(
+    image: Vec<u8>,
+    limits: IndexLimits,
+    journal_view: u64,
+    required_schema: u32,
+) -> Result<Connection, IndexError> {
     let image_len = image.len();
     check_image_len(image_len, limits)?;
     let image_bytes = u64::try_from(image_len).map_err(|_| IndexError::IntegerOutOfRange)?;
@@ -1699,16 +1719,16 @@ fn deserialize_read_only_with_journal(
     // No pragma mutation, limit installation, or schema/table access may
     // precede the disposable schema-version decision.
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version == 1 || version == 2 {
+    if version > 0 && version < i64::from(required_schema) {
         return Err(IndexError::RebuildRequired {
             found: u32::try_from(version).map_err(|_| IndexError::CorruptIndex)?,
-            required: INDEX_SCHEMA_VERSION,
+            required: required_schema,
         });
     }
-    if version != i64::from(INDEX_SCHEMA_VERSION) {
+    if version != i64::from(required_schema) {
         return Err(IndexError::CorruptIndex);
     }
-    configure_query_connection(&connection, limits, journal_view)?;
+    configure_query_connection(&connection, limits, journal_view, required_schema)?;
     connection.pragma_update(None, "query_only", true)?;
     let query_only: i64 = connection.pragma_query_value(None, "query_only", |row| row.get(0))?;
     // SQLite reports an in-memory deserialize as writable even with its
@@ -1724,6 +1744,7 @@ fn configure_query_connection(
     connection: &Connection,
     limits: IndexLimits,
     journal_view: u64,
+    required_schema: u32,
 ) -> Result<(), IndexError> {
     connection.pragma_update(None, "temp_store", "MEMORY")?;
     connection.pragma_update(None, "foreign_keys", true)?;
@@ -1742,8 +1763,15 @@ fn configure_query_connection(
     if temp_store != 2 || foreign_keys != 1 || trusted_schema != 0 || cache_size != -cache_kib {
         return Err(IndexError::CorruptIndex);
     }
-    let length =
-        i32::try_from(limits.max_serialized_bytes).map_err(|_| IndexError::IntegerOutOfRange)?;
+    // A reconstructed image may be larger than one admitted public query,
+    // but no individual value read from it may be. Install the query budget,
+    // not the image budget, as SQLite's allocation boundary.
+    let value_limit = if required_schema >= 4 {
+        limits.max_query_bytes.min(limits.max_serialized_bytes)
+    } else {
+        limits.max_serialized_bytes
+    };
+    let length = i32::try_from(value_limit).map_err(|_| IndexError::IntegerOutOfRange)?;
     let sql =
         i32::try_from(limits.max_statement_bytes).map_err(|_| IndexError::IntegerOutOfRange)?;
     for (kind, value) in [
@@ -7083,10 +7111,7 @@ mod tests {
         ));
         limits = StoreLimits::default();
         limits.max_index_working_bytes = limits.max_index_serialized_bytes * 3;
-        assert!(matches!(
-            IndexLimits::try_from(limits),
-            Err(IndexError::InvalidLimits)
-        ));
+        IndexLimits::try_from(limits).unwrap();
     }
 
     #[test]

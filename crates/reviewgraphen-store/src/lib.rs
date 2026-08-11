@@ -11,10 +11,16 @@ mod journal;
 
 #[cfg(target_os = "linux")]
 pub use index::{
-    DerivedIndex, IndexArtifactRegistration, IndexClaim, IndexContextEnvelope, IndexError,
-    IndexEvent, IndexExecution, IndexFinding, IndexLimits, IndexMarker, IndexObligation,
-    IndexObligationLifecycle, IndexProgramObject, IndexProgramRelation, IndexRebuildReceipt,
-    IndexReviewPlan, IndexShadow, IndexSnapshot, IndexSnapshotSource, IndexUniverse,
+    DerivedIndex, DerivedIndexV4, INDEX_SCHEMA_VERSION_V4, IndexAccountingV4,
+    IndexArtifactRegistration, IndexArtifactRegistrationV4, IndexClaim, IndexClaimAssessmentV3,
+    IndexContextEnvelope, IndexDecisionV3, IndexError, IndexEvent, IndexEvidenceBindingV3,
+    IndexEvidenceV3, IndexExecution, IndexFinding, IndexFindingV3, IndexLimits, IndexMarker,
+    IndexMarkerV4, IndexObligation, IndexObligationLifecycle, IndexProgramObject,
+    IndexProgramRelation, IndexRebuildReceipt, IndexRebuildReceiptV4, IndexReviewPlan, IndexShadow,
+    IndexSnapshot, IndexSnapshotSource, IndexSnapshotV4, IndexUniverse, IndexVerificationV3,
+    PROJECTION_CONTRACT_VERSION_V4, V4CoverageAxis, V4SelectionCounts, V4SelectionItem,
+    V4SelectionRequest, V4SelectionSummary, V4SelectionVisitError, V4SelectionVisitor,
+    ValidatedIndexSnapshotV4,
 };
 #[cfg(target_os = "linux")]
 pub use journal::{

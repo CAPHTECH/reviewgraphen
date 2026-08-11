@@ -9,12 +9,16 @@ use super::{
     verify_fd_kind_mode,
 };
 use reviewgraphen_core::{
-    AuthorityArtifactResolverV3, AuthorityReplayBasisV3, AuthorityTrustRootsV3, ContentHash,
-    DecisionInputV3, EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
-    EventReplayLimits, EventStreamGenesis, ExternalWitnessAdmissionV3, FixtureExecutionReceiptV1,
-    StableId, ValidatedArtifactRegistrationV3, ValidatedDecisionV3, ValidatedFindingV3,
-    ValidatedVerificationBundleV3, VerificationBundleReceiptV3,
-    VerificationBundleResumeAuthorityV3, VerifierArtifactRoleV3, canonical_json,
+    ArtifactRegisteredV3, AuthorityArtifactResolverV3, AuthorityReplayBasisV3,
+    AuthorityTrustRootsV3, BuiltContextProjection, ContentHash, DecisionInputV3, EventAdmissions,
+    EventCommand, EventContractVersion, EventEnvelope, EventLog, EventReplayLimits,
+    EventStreamGenesis, ExpectedVerificationAttemptV3, ExternalWitnessAdmissionV3,
+    FixtureExecutionReceiptV1, FixtureRegistrationResumeAuthorityV3, ObligationLifecycle,
+    ReviewPlan, SnapshotSourcesRecorded, StableId, StaticFactEvaluationV1,
+    StaticVerificationAttemptInspectionV3, ValidatedArtifactRegistrationV3, ValidatedDecisionV3,
+    ValidatedExecutionBundle, ValidatedFindingV3, ValidatedVerificationBundleV3,
+    VerificationAttemptStageV3, VerificationBundleReceiptV3, VerificationBundleResumeAuthorityV3,
+    VerifierArtifactRoleV3, canonical_json,
 };
 use rustix::{
     fd::OwnedFd,
@@ -310,6 +314,8 @@ pub enum JournalError {
     ReceiptCorruption { name: String },
     #[error("journal operation exceeded {limit} bytes/events after observing {observed}")]
     Incomplete { limit: u64, observed: u64 },
+    #[error("CAS object {hash} exists without its exact durable V3 registration")]
+    OrphanCasObjectV3 { hash: ContentHash },
 }
 
 /// Confirmation returned only after the appended line has reached `sync_data`.
@@ -565,6 +571,44 @@ pub struct ReplayedV3RunSession<'root, 'roots> {
     state: ReplayedV3RunSessionState,
 }
 
+/// Authority-replayed historical prefix used only to validate a disposable
+/// derived-index image before it may be classified as stale.
+pub(crate) struct IndexV4ReplayedPrefix {
+    log: EventLog,
+    basis: AuthorityReplayBasisV3,
+    confirmed_offset: u64,
+}
+
+impl IndexV4ReplayedPrefix {
+    pub(crate) fn initial(&self) -> &reviewgraphen_core::ReviewAggregate {
+        self.log.initial()
+    }
+
+    pub(crate) fn current(&self) -> &reviewgraphen_core::ReviewAggregate {
+        self.log.aggregate()
+    }
+
+    pub(crate) fn envelopes(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &reviewgraphen_core::EventEnvelope> {
+        self.log.envelopes()
+    }
+
+    pub(crate) fn claim_assessments(
+        &self,
+    ) -> impl Iterator<Item = &reviewgraphen_core::ClaimAssessmentV3> {
+        self.log.claim_assessments_v3()
+    }
+
+    pub(crate) const fn confirmed_offset(&self) -> u64 {
+        self.confirmed_offset
+    }
+
+    pub(crate) const fn basis(&self) -> &AuthorityReplayBasisV3 {
+        &self.basis
+    }
+}
+
 /// A lock-held V3 session recovered at a partially durable verification
 /// bundle. It deliberately exposes no read, mint, registration, decision,
 /// finding, or ordinary append surface: the only legal transition is the
@@ -751,6 +795,270 @@ impl ReplayedV3RunSession<'_, '_> {
         Ok(self.log.verifications_v3().count())
     }
 
+    /// Read-only, crate-internal source for the authority-bound index-v4
+    /// projection.  Keeping these borrows on the replay session ensures the
+    /// index cannot accidentally combine an authority-verified aggregate
+    /// with envelopes read from a later journal prefix.
+    pub(crate) fn index_v4_initial(
+        &self,
+    ) -> Result<&reviewgraphen_core::ReviewAggregate, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.initial())
+    }
+
+    pub(crate) fn index_v4_current(
+        &self,
+    ) -> Result<&reviewgraphen_core::ReviewAggregate, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.aggregate())
+    }
+
+    pub(crate) fn index_v4_envelopes(
+        &self,
+    ) -> Result<impl ExactSizeIterator<Item = &reviewgraphen_core::EventEnvelope>, JournalError>
+    {
+        self.require_healthy()?;
+        Ok(self.log.envelopes())
+    }
+
+    pub(crate) fn index_v4_claim_assessments(
+        &self,
+    ) -> Result<impl Iterator<Item = &reviewgraphen_core::ClaimAssessmentV3>, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.claim_assessments_v3())
+    }
+
+    pub(crate) fn index_v4_confirmed_offset(&self) -> Result<u64, JournalError> {
+        self.require_healthy()?;
+        Ok(self.writer.state.confirmed_offset)
+    }
+
+    pub(crate) fn index_v4_replay_prefix(
+        &self,
+        event_count: u64,
+        confirmed_offset: u64,
+    ) -> Result<IndexV4ReplayedPrefix, JournalError> {
+        self.require_healthy()?;
+        let count = usize::try_from(event_count).map_err(|_| JournalError::Incomplete {
+            limit: self.writer.limits.max_events,
+            observed: event_count,
+        })?;
+        let prefix = self
+            .writer
+            .state
+            .events
+            .get(..count)
+            .ok_or(JournalError::Identity(
+                "index prefix event count exceeds journal",
+            ))?;
+        let mut observed_offset = 0_u64;
+        for envelope in prefix {
+            let line = canonical_json(envelope)?;
+            observed_offset = observed_offset
+                .checked_add(
+                    u64::try_from(line.len())
+                        .map_err(|_| JournalError::Incomplete {
+                            limit: self.writer.limits.max_replay_bytes,
+                            observed: u64::MAX,
+                        })?
+                        .checked_add(1)
+                        .ok_or(JournalError::Incomplete {
+                            limit: self.writer.limits.max_replay_bytes,
+                            observed: u64::MAX,
+                        })?,
+                )
+                .ok_or(JournalError::Incomplete {
+                    limit: self.writer.limits.max_replay_bytes,
+                    observed: u64::MAX,
+                })?;
+        }
+        if observed_offset != confirmed_offset {
+            return Err(JournalError::Identity(
+                "index prefix offset does not match canonical journal prefix",
+            ));
+        }
+        let JournalGenesis::V3Shared(genesis) = &self.writer.identity.genesis else {
+            return Err(JournalError::Identity(
+                "V3 session lost its verified genesis",
+            ));
+        };
+        let (log, basis) = EventLog::replay_validated_v3_prefix(
+            self.writer.identity.run_id.clone(),
+            genesis,
+            prefix,
+            &self.resolver,
+            self.roots,
+            EventReplayLimits::new(
+                self.writer.limits.max_events,
+                self.writer.limits.max_replay_bytes,
+            ),
+        )?;
+        Ok(IndexV4ReplayedPrefix {
+            log,
+            basis,
+            confirmed_offset,
+        })
+    }
+
+    /// Revalidates that an operation basis is the exact roots/CAS-bound
+    /// certificate for the session's current durable prefix.  It performs no
+    /// journal or CAS mutation and never accepts a caller-composed tuple.
+    pub fn validate_v3_operation_basis(
+        &self,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<(), JournalError> {
+        self.require_healthy()?;
+        let (_, replayed) = self.replay_candidate()?;
+        if !same_authority_basis(basis, &replayed) {
+            return Err(reviewgraphen_core::DomainError::AuthorityReplayBasisMismatch.into());
+        }
+        Ok(())
+    }
+
+    /// Descriptor-relative, read-only classification of one exact CAS tuple.
+    /// `false` means no object exists; every malformed, wrong-size, or
+    /// wrong-hash object is a typed refusal rather than an approximate miss.
+    pub fn cas_contains_exact_v3(
+        &self,
+        hash: &ContentHash,
+        size: u64,
+    ) -> Result<bool, JournalError> {
+        self.require_healthy()?;
+        if size > self.resolver.reader.root.limits().max_object_bytes {
+            return Err(JournalError::Incomplete {
+                limit: self.resolver.reader.root.limits().max_object_bytes,
+                observed: size,
+            });
+        }
+        let length = usize::try_from(size).map_err(|_| JournalError::Incomplete {
+            limit: self.resolver.reader.root.limits().max_object_bytes,
+            observed: size,
+        })?;
+        let cas_hash = CasHash::parse(hash.to_string())?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_| JournalError::Incomplete {
+                limit: size,
+                observed: size,
+            })?;
+        bytes.resize(length, 0);
+        match self.resolver.reader.read_exact_slice(&cas_hash, &mut bytes) {
+            Ok(()) => Ok(true),
+            Err(StoreError::MissingArtifact) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub fn cas_contains_exact(&self, hash: &ContentHash, size: u64) -> Result<bool, JournalError> {
+        self.cas_contains_exact_v3(hash, size)
+    }
+
+    /// Durably records one snapshot-source projection in a V3 stream.  This
+    /// intentionally exposes no generic command or authority payload seam.
+    pub fn append_snapshot_sources_v3(
+        &mut self,
+        sources: SnapshotSourcesRecorded,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.append_nonauthority_v3(EventCommand::snapshot_sources_recorded(sources), basis)
+    }
+
+    /// Durably applies one ordinary obligation lifecycle transition.
+    pub fn append_obligation_transition_v3(
+        &mut self,
+        obligation_id: StableId,
+        next: ObligationLifecycle,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.append_nonauthority_v3(
+            EventCommand::obligation_transition(obligation_id, next),
+            basis,
+        )
+    }
+
+    /// Durably records one deterministic D2 review plan in a V3 stream.
+    pub fn append_review_plan_v3(
+        &mut self,
+        plan: ReviewPlan,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.append_nonauthority_v3(EventCommand::review_plan_recorded(plan), basis)
+    }
+
+    /// Durably records a context projection together with its private,
+    /// byte-reverified core admission.
+    pub fn append_context_projection_v3(
+        &mut self,
+        projection: BuiltContextProjection,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.append_nonauthority_v3(EventCommand::context_envelope_projected(projection), basis)
+    }
+
+    /// Durably records a non-authority V3 registration.  Core rejects the
+    /// verifier/external-witness source variants at this ordinary append seam.
+    pub fn append_nonauthority_registration_v3(
+        &mut self,
+        registration: ArtifactRegisteredV3,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.append_nonauthority_v3(EventCommand::artifact_registered_v3(registration), basis)
+    }
+
+    /// Durably records one validated D2 execution and all of its claims as a
+    /// single event.  The bundle carries the private raw-reviewer closure.
+    pub fn append_review_execution_v3(
+        &mut self,
+        bundle: ValidatedExecutionBundle,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.append_nonauthority_v3(EventCommand::review_execution_recorded(bundle), basis)
+    }
+
+    fn append_nonauthority_v3(
+        &mut self,
+        command: EventCommand,
+        basis: &mut AuthorityReplayBasisV3,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        self.require_healthy()?;
+        let (mut candidate, _) = self.checked_candidate(basis)?;
+        let first = candidate.events().len();
+        candidate.append(command)?;
+        let next_basis = self.replay_candidate_log(&candidate)?.1;
+        let mut receipts = self.commit_candidate(candidate, next_basis, first, basis)?;
+        receipts.pop().ok_or(JournalError::Identity(
+            "non-authority V3 append produced no event",
+        ))
+    }
+
+    fn replay_candidate_log(
+        &self,
+        candidate: &EventLog,
+    ) -> Result<(EventLog, AuthorityReplayBasisV3), JournalError> {
+        let JournalGenesis::V3Shared(genesis) = &self.writer.identity.genesis else {
+            return Err(JournalError::Identity(
+                "V3 session lost its verified genesis",
+            ));
+        };
+        let envelopes = candidate
+            .events()
+            .iter()
+            .map(|event| event.envelope().clone())
+            .collect::<Vec<_>>();
+        Ok(EventLog::replay_validated_v3_prefix(
+            self.writer.identity.run_id.clone(),
+            genesis,
+            &envelopes,
+            &self.resolver,
+            self.roots,
+            EventReplayLimits::new(
+                self.writer.limits.max_events,
+                self.writer.limits.max_replay_bytes,
+            ),
+        )?)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_static_verifier_artifact_registration(
         &self,
@@ -793,7 +1101,128 @@ impl ReplayedV3RunSession<'_, '_> {
         basis: &AuthorityReplayBasisV3,
     ) -> Result<FixtureExecutionReceiptV1, JournalError> {
         self.require_healthy()?;
-        Ok(self.log.execute_fixture_harness_v1(claim_id, basis)?)
+        Ok(self
+            .log
+            .execute_fixture_harness_v1(claim_id, self.roots, basis)?)
+    }
+
+    /// Seals a fresh caller-executed static evaluation against the exact
+    /// claim, program and current durable-prefix basis held by Core.
+    pub fn seal_static_verification_attempt_v3(
+        &self,
+        claim_id: &StableId,
+        evaluation: &StaticFactEvaluationV1,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ExpectedVerificationAttemptV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .seal_static_verification_attempt_v3(claim_id, evaluation, basis)?)
+    }
+
+    /// Inspects durable static-verifier state without invoking the evaluator.
+    pub fn inspect_static_verification_attempt_v3(
+        &self,
+        claim_id: &StableId,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<StaticVerificationAttemptInspectionV3, JournalError> {
+        self.require_healthy()?;
+        self.validate_v3_operation_basis(basis)?;
+        Ok(self.log.inspect_static_verification_attempt_v3(
+            claim_id,
+            &self.resolver,
+            self.roots,
+            basis,
+        )?)
+    }
+
+    /// Builds Core's opaque description of the one admitted fixed-fixture
+    /// attempt. The returned value carries no harness execution authority.
+    pub fn expect_fixture_verification_attempt_v3(
+        &self,
+        claim_id: &StableId,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ExpectedVerificationAttemptV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .expect_fixture_verification_attempt_v3(claim_id, self.roots, basis)?)
+    }
+
+    /// Classifies the exact durable retry stage and rejects CAS objects that
+    /// exist before their corresponding registration becomes authoritative.
+    pub fn inspect_m4_verification_attempt_v3(
+        &self,
+        expected: &ExpectedVerificationAttemptV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<VerificationAttemptStageV3, JournalError> {
+        self.require_healthy()?;
+        self.validate_v3_operation_basis(basis)?;
+        let stage = self.log.inspect_verification_attempt_v3(
+            expected,
+            &self.resolver,
+            self.roots,
+            basis,
+        )?;
+        if stage == VerificationAttemptStageV3::Ready
+            && self.cas_contains_exact_v3(expected.input_hash(), expected.input_size())?
+        {
+            return Err(JournalError::OrphanCasObjectV3 {
+                hash: expected.input_hash().clone(),
+            });
+        }
+        if matches!(
+            stage,
+            VerificationAttemptStageV3::Ready
+                | VerificationAttemptStageV3::InputRegistered
+                | VerificationAttemptStageV3::WitnessRegistered
+        ) && self.cas_contains_exact_v3(expected.output_hash(), expected.output_size())?
+        {
+            return Err(JournalError::OrphanCasObjectV3 {
+                hash: expected.output_hash().clone(),
+            });
+        }
+        Ok(stage)
+    }
+
+    /// Recovers the narrowly scoped, non-executable fixture authority from
+    /// an exact durable registration prefix.
+    pub fn recover_fixture_registration_resume_authority(
+        &self,
+        claim_id: &StableId,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<FixtureRegistrationResumeAuthorityV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.recover_fixture_registration_resume_authority_v3(
+            claim_id,
+            &self.resolver,
+            self.roots,
+            basis,
+        )?)
+    }
+
+    pub fn prepare_fixture_output_from_resume(
+        &self,
+        authority: &mut FixtureRegistrationResumeAuthorityV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedArtifactRegistrationV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .prepare_fixture_output_from_resume_v3(authority, &self.resolver, basis)?)
+    }
+
+    pub fn mint_fixture_verification_bundle_from_resume(
+        &self,
+        authority: FixtureRegistrationResumeAuthorityV3,
+        basis: &AuthorityReplayBasisV3,
+    ) -> Result<ValidatedVerificationBundleV3, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.mint_fixture_verification_bundle_from_resume_v3(
+            authority,
+            &self.resolver,
+            basis,
+        )?)
     }
 
     pub fn prepare_external_fixture_witness_registration(
@@ -5477,18 +5906,21 @@ mod tests {
     use reviewgraphen_core::{
         ArtifactRegistered, ArtifactRegisteredV3, ArtifactSensitivity, ArtifactSource,
         ArtifactSourceV3, AssessmentDispositionV3, AssessmentReviewStatusV3, AuthorityTrustRootsV3,
-        ClaimPolarity, EventCommand, EventLog, ExecutionClaimInputV2, ExecutionOutcome,
-        ExecutionRecordInput, FAKE_REVIEWER_ID, FIXTURE_DESCRIPTOR_ID, FIXTURE_HARNESS_ID,
-        FIXTURE_HARNESS_REVISION, FIXTURE_HARNESS_SOURCE_HASH, FIXTURE_MEDIA_TYPE,
-        FIXTURE_PROCEDURE_ID, FIXTURE_TEST_ARTIFACT_ID, FIXTURE_WITNESS_HASH,
-        HarnessTrustRootInputV3, M4_PROPERTY_ID, MvpRulePack, ObligationLifecycle, PlanBudget,
-        ProgramSpace, ReviewAggregate, SnapshotSourceRecordEntry, SnapshotSourcesRecorded,
-        ValidatedExecutionBundle, plan, prepare_context,
+        ClaimPolarity, DecisionInputV3, DecisionOutcomeV3, EventCommand, EventLog,
+        ExecutionClaimInputV2, ExecutionOutcome, ExecutionRecordInput, FAKE_REVIEWER_ID,
+        FIXTURE_DESCRIPTOR_ID, FIXTURE_HARNESS_ID, FIXTURE_HARNESS_REVISION,
+        FIXTURE_HARNESS_SOURCE_HASH, FIXTURE_MEDIA_TYPE, FIXTURE_PROCEDURE_ID,
+        FIXTURE_TEST_ARTIFACT_ID, FIXTURE_WITNESS_HASH, HarnessTrustRootInputV3,
+        HumanAuthorityCapabilityV3, HumanTrustGrantInputV3, M4_PROPERTY_ID, MvpRulePack,
+        ObligationLifecycle, PlanBudget, ProgramSpace, ReviewAggregate, SnapshotSourceRecordEntry,
+        SnapshotSourcesRecorded, ValidatedExecutionBundle, VerificationAttemptStageV3,
+        evaluate_static_fact_v1, plan, prepare_context,
     };
     use serde_json::Value;
     use std::{
         collections::{BTreeMap, BTreeSet},
         os::unix::fs::PermissionsExt,
+        path::PathBuf,
         sync::{Arc, Barrier, mpsc},
     };
 
@@ -5578,10 +6010,59 @@ mod tests {
             .unwrap();
     }
 
+    fn test_cas_inventory(root: &StoreRoot) -> Vec<(PathBuf, u64)> {
+        let base = root.path().join("artifacts").join("sha256");
+        let mut result = Vec::new();
+        for prefix in std::fs::read_dir(base).unwrap() {
+            let prefix = prefix.unwrap();
+            if !prefix.file_type().unwrap().is_dir() {
+                continue;
+            }
+            for object in std::fs::read_dir(prefix.path()).unwrap() {
+                let object = object.unwrap();
+                if object.file_type().unwrap().is_file() {
+                    result.push((object.path(), object.metadata().unwrap().len()));
+                }
+            }
+        }
+        result.sort_unstable();
+        result
+    }
+
+    fn clone_test_harness_root(root: &HarnessTrustRootInputV3) -> HarnessTrustRootInputV3 {
+        HarnessTrustRootInputV3 {
+            policy_revision_hash: root.policy_revision_hash.clone(),
+            repository_id: root.repository_id.clone(),
+            repository_source_hash: root.repository_source_hash.clone(),
+            harness_id: root.harness_id.clone(),
+            harness_revision: root.harness_revision.clone(),
+            harness_source_hash: root.harness_source_hash.clone(),
+            test_artifact_id: root.test_artifact_id.clone(),
+            descriptor_id: root.descriptor_id.clone(),
+            procedure_version: root.procedure_version.clone(),
+            result_hash: root.result_hash.clone(),
+            result_size: root.result_size,
+            result_media_type: root.result_media_type.clone(),
+            result_sensitivity: root.result_sensitivity,
+            run_id: root.run_id.clone(),
+            genesis_hash: root.genesis_hash.clone(),
+            snapshot_id: root.snapshot_id.clone(),
+            universe_id: root.universe_id.clone(),
+            property_id: root.property_id.clone(),
+            claim_id: root.claim_id.clone(),
+            claim_body_hash: root.claim_body_hash.clone(),
+        }
+    }
+
     fn public_v3_fixture_journal<'a>(
         root: &'a StoreRoot,
         run: &str,
-    ) -> (EventJournal<'a>, AuthorityTrustRootsV3, StableId) {
+    ) -> (
+        EventJournal<'a>,
+        AuthorityTrustRootsV3,
+        StableId,
+        HarnessTrustRootInputV3,
+    ) {
         let mut input: Value = serde_json::from_slice(include_bytes!(
             "../../../examples/double-submit-payment/program-space.json"
         ))
@@ -5787,33 +6268,46 @@ mod tests {
             .execution_claims()
             .find(|claim| claim.id() == &claim_id)
             .unwrap();
+        let harness_root = HarnessTrustRootInputV3 {
+            policy_revision_hash: policy.clone(),
+            repository_id: repository_id.clone(),
+            repository_source_hash: repository_source_hash.clone(),
+            harness_id: FIXTURE_HARNESS_ID.to_owned(),
+            harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+            harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH).unwrap(),
+            test_artifact_id: StableId::parse(FIXTURE_TEST_ARTIFACT_ID).unwrap(),
+            descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+            procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+            result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH).unwrap(),
+            result_size: 145,
+            result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+            result_sensitivity: ArtifactSensitivity::CanonicalState,
+            run_id: log.run_id().clone(),
+            genesis_hash: log.genesis_hash().clone(),
+            snapshot_id: log.aggregate().program().snapshot_id().clone(),
+            universe_id: log.aggregate().universe().id().clone(),
+            property_id: M4_PROPERTY_ID.to_owned(),
+            claim_id: claim_id.clone(),
+            claim_body_hash: claim_record.body_hash().unwrap(),
+        };
         let roots = AuthorityTrustRootsV3::new(
             policy.clone(),
             repository_id.clone(),
             repository_source_hash.clone(),
-            vec![HarnessTrustRootInputV3 {
+            vec![clone_test_harness_root(&harness_root)],
+            vec![HumanTrustGrantInputV3 {
                 policy_revision_hash: policy,
-                repository_id,
-                repository_source_hash,
-                harness_id: FIXTURE_HARNESS_ID.to_owned(),
-                harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
-                harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH).unwrap(),
-                test_artifact_id: StableId::parse(FIXTURE_TEST_ARTIFACT_ID).unwrap(),
-                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
-                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
-                result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH).unwrap(),
-                result_size: 145,
-                result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
-                result_sensitivity: ArtifactSensitivity::CanonicalState,
-                run_id: log.run_id().clone(),
-                genesis_hash: log.genesis_hash().clone(),
+                actor: "human:store-reviewer".to_owned(),
+                authority_id: "store-review-board".to_owned(),
+                capabilities: BTreeSet::from([HumanAuthorityCapabilityV3::AcceptFinding]),
+                run_id: run_id.clone(),
                 snapshot_id: log.aggregate().program().snapshot_id().clone(),
                 universe_id: log.aggregate().universe().id().clone(),
-                property_id: M4_PROPERTY_ID.to_owned(),
-                claim_id: claim_id.clone(),
-                claim_body_hash: claim_record.body_hash().unwrap(),
+                property_ids: BTreeSet::from([M4_PROPERTY_ID.to_owned()]),
+                claim_ids: BTreeSet::from([claim_id.clone()]),
+                valid_from: "2026-01-01T00:00:00Z".to_owned(),
+                valid_until: "2027-01-01T00:00:00Z".to_owned(),
             }],
-            Vec::new(),
         )
         .unwrap();
         let genesis = log
@@ -5832,7 +6326,504 @@ mod tests {
         let mut writer = journal.writer_v3().unwrap();
         writer.append_batch(&prefix).unwrap();
         drop(writer);
-        (journal, roots, claim_id)
+        (journal, roots, claim_id, harness_root)
+    }
+
+    fn public_v4_rebuild_with_limits(
+        limits: crate::StoreLimits,
+    ) -> Result<crate::IndexRebuildReceiptV4, crate::IndexError> {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), limits).unwrap();
+        let (journal, roots, _, _) = public_v3_fixture_journal(&root, "run:store-public-v4-limits");
+        crate::DerivedIndexV4::open(&root)
+            .unwrap()
+            .rebuild_v4(&journal, &roots)
+    }
+
+    #[test]
+    fn public_v4_rebuild_resource_limits_are_exact_and_one_less_refuses() {
+        crate::index::reset_projection_decode_count_for_test();
+        let baseline = public_v4_rebuild_with_limits(crate::StoreLimits::default()).unwrap();
+        assert_eq!(
+            crate::index::projection_decode_count_for_test(),
+            baseline.event_count * 3
+        );
+        let obligation_probes = crate::index::projection_obligation_probe_count_for_test();
+        assert!(obligation_probes > 0);
+        assert!(obligation_probes <= baseline.event_count * 2);
+        assert_eq!(
+            baseline.accounting.sql_bytes,
+            baseline.accounting.text_bytes
+                + baseline.accounting.integer_cells * 8
+                + baseline.accounting.rows
+        );
+        assert_ne!(
+            baseline.accounting.owned_bytes,
+            baseline.accounting.query_bytes * 8
+        );
+
+        let exact = crate::StoreLimits {
+            max_index_rows: baseline.accounting.rows,
+            max_index_query_bytes: baseline.accounting.query_bytes,
+            max_index_working_bytes: baseline.accounting.working_bytes,
+            max_index_serialized_bytes: baseline.serialized_bytes,
+            ..crate::StoreLimits::default()
+        };
+        let exact_receipt = public_v4_rebuild_with_limits(exact).unwrap();
+        assert_eq!(exact_receipt.accounting, baseline.accounting);
+        assert_eq!(exact_receipt.serialized_bytes, baseline.serialized_bytes);
+
+        for constrained in [
+            crate::StoreLimits {
+                max_index_rows: baseline.accounting.rows - 1,
+                ..exact
+            },
+            crate::StoreLimits {
+                max_index_query_bytes: baseline.accounting.query_bytes - 1,
+                ..exact
+            },
+            crate::StoreLimits {
+                max_index_working_bytes: baseline.accounting.working_bytes - 1,
+                ..exact
+            },
+        ] {
+            assert!(matches!(
+                public_v4_rebuild_with_limits(constrained),
+                Err(crate::IndexError::Incomplete { .. })
+            ));
+        }
+
+        let overflow = crate::StoreLimits {
+            max_index_rows: u64::MAX,
+            max_index_query_bytes: u64::MAX,
+            max_index_working_bytes: u64::MAX,
+            ..crate::StoreLimits::default()
+        };
+        assert!(public_v4_rebuild_with_limits(overflow).is_err());
+    }
+
+    #[test]
+    fn public_v4_snapshot_query_and_working_limits_are_exact_and_one_less_refuses() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), crate::StoreLimits::default()).unwrap();
+        let (journal, roots, _, _) =
+            public_v3_fixture_journal(&root, "run:store-public-v4-snapshot-limits");
+        let identity = journal.identity.clone();
+        let receipt = crate::DerivedIndexV4::open(&root)
+            .unwrap()
+            .rebuild_v4(&journal, &roots)
+            .unwrap();
+        drop(journal);
+        drop(root);
+
+        let exact = crate::StoreLimits {
+            max_index_rows: receipt.accounting.rows,
+            max_index_serialized_bytes: receipt.serialized_bytes,
+            max_index_query_bytes: receipt.accounting.query_bytes,
+            max_index_working_bytes: receipt.accounting.working_bytes,
+            ..crate::StoreLimits::default()
+        };
+
+        let query = |limits: crate::StoreLimits| {
+            let root = StoreRoot::open(workspace.path(), limits).unwrap();
+            let journal = EventJournal::open(&root, identity.clone()).unwrap();
+            crate::DerivedIndexV4::open(&root)
+                .unwrap()
+                .snapshot_current_v4(&journal, &roots)
+        };
+        let snapshot = query(exact).unwrap();
+        assert_eq!(
+            u64::try_from(canonical_json(&snapshot).unwrap().len()).unwrap(),
+            receipt.accounting.query_bytes
+        );
+
+        for constrained in [
+            crate::StoreLimits {
+                max_index_rows: receipt.accounting.rows - 1,
+                ..exact
+            },
+            crate::StoreLimits {
+                max_index_query_bytes: receipt.accounting.query_bytes - 1,
+                ..exact
+            },
+            crate::StoreLimits {
+                max_index_working_bytes: receipt.accounting.working_bytes - 1,
+                ..exact
+            },
+        ] {
+            assert!(matches!(
+                query(constrained),
+                Err(crate::IndexError::Incomplete { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn public_v4_json_staging_is_exact_and_refuses_hostile_canonical_cells_before_allocation() {
+        struct CountingVisitor(u64);
+        impl crate::V4SelectionVisitor for CountingVisitor {
+            type Error = std::convert::Infallible;
+
+            fn visit(&mut self, _item: crate::V4SelectionItem<'_>) -> Result<(), Self::Error> {
+                self.0 += 1;
+                Ok(())
+            }
+        }
+
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), crate::StoreLimits::default()).unwrap();
+        let (journal, roots, _, _) =
+            public_v3_fixture_journal(&root, "run:store-public-v4-json-staging");
+        let index = crate::DerivedIndexV4::open(&root).unwrap();
+        index.rebuild_v4(&journal, &roots).unwrap();
+        let snapshot = index.snapshot_current_v4(&journal, &roots).unwrap();
+        let execution = snapshot.executions.first().unwrap();
+        let selected: BTreeSet<StableId> =
+            serde_json::from_str(&execution.obligation_ids_canonical_json).unwrap();
+        let plan_id = execution.plan_id.clone();
+        let expected_offset = snapshot.marker.confirmed_offset;
+        let expected_events = snapshot.marker.event_count;
+        let expected_tail = snapshot.marker.tail_hash.clone();
+        let active_path = root.path().join("indexes/reviewgraphen.sqlite");
+        let original_image = std::fs::read(&active_path).unwrap();
+
+        // A published image and its deterministic rebuild have the same cell
+        // staging peak. Candidate validation admits the exact value and rejects
+        // exact-1 before either generic Value or typed source allocation.
+        let connection = rusqlite::Connection::open(&active_path).unwrap();
+        let baseline_staging =
+            crate::index::v4_json_staging_for_connection_for_test(&connection, index.limits())
+                .unwrap();
+        drop(connection);
+        assert!(baseline_staging > 0);
+        crate::index::set_v4_json_staging_limit_for_test(Some(baseline_staging));
+        crate::index::reset_v4_json_decode_allocation_count_for_test();
+        index.rebuild_v4(&journal, &roots).unwrap();
+        assert!(crate::index::v4_json_decode_allocation_count_for_test() > 0);
+        crate::index::set_v4_json_staging_limit_for_test(Some(baseline_staging - 1));
+        crate::index::reset_v4_json_decode_allocation_count_for_test();
+        assert!(matches!(
+            index.rebuild_v4(&journal, &roots),
+            Err(crate::IndexError::Incomplete { limit, observed })
+                if limit + 1 == observed && observed == baseline_staging
+        ));
+        assert_eq!(crate::index::v4_json_decode_allocation_count_for_test(), 0);
+
+        let hostile_number = format!(
+            "[{}]",
+            std::iter::repeat_n("1e+20", 4_096)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let decoded_number: serde_json::Value = serde_json::from_str(&hostile_number).unwrap();
+        let hostile_number = String::from_utf8(canonical_json(&decoded_number).unwrap()).unwrap();
+        let hostile_escape =
+            String::from_utf8(canonical_json(&vec!["\0\n\\\"é".repeat(4_096)]).unwrap()).unwrap();
+        let hostile_source = String::from_utf8(
+            canonical_json(&ArtifactSourceV3::RunGenesis {
+                run_id: StableId::parse(format!("run:{}", "source".repeat(4_096))).unwrap(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let hostile_cases = [
+            (
+                "UPDATE program_relations SET target_ids_canonical_json=?1",
+                hostile_number,
+            ),
+            (
+                "UPDATE program_relations SET target_ids_canonical_json=?1",
+                hostile_escape,
+            ),
+            (
+                "UPDATE artifact_registrations SET source_canonical_json=?1 WHERE source_kind='run_genesis'",
+                hostile_source,
+            ),
+        ];
+
+        for (case_index, (update, hostile)) in hostile_cases.into_iter().enumerate() {
+            std::fs::write(&active_path, &original_image).unwrap();
+            let connection = rusqlite::Connection::open(&active_path).unwrap();
+            assert!(connection.execute(update, [&hostile]).unwrap() > 0);
+            let exact_staging =
+                crate::index::v4_json_staging_for_connection_for_test(&connection, index.limits())
+                    .unwrap();
+            drop(connection);
+            assert!(exact_staging > baseline_staging);
+
+            crate::index::set_v4_json_staging_limit_for_test(Some(exact_staging));
+            crate::index::reset_v4_json_decode_allocation_count_for_test();
+            assert!(matches!(
+                index.snapshot_current_v4(&journal, &roots),
+                Err(crate::IndexError::CorruptIndex)
+            ));
+            assert!(crate::index::v4_json_decode_allocation_count_for_test() > 0);
+
+            crate::index::set_v4_json_staging_limit_for_test(Some(exact_staging - 1));
+            crate::index::reset_v4_json_decode_allocation_count_for_test();
+            assert!(matches!(
+                index.snapshot_current_v4(&journal, &roots),
+                Err(crate::IndexError::Incomplete { limit, observed })
+                    if limit + 1 == observed && observed == exact_staging
+            ));
+            assert_eq!(crate::index::v4_json_decode_allocation_count_for_test(), 0);
+
+            if case_index == 2 {
+                let mut visitor = CountingVisitor(0);
+                assert!(matches!(
+                    index.visit_current_v4_selection(
+                        &journal,
+                        &roots,
+                        crate::V4SelectionRequest {
+                            plan_id: &plan_id,
+                            selected_obligation_ids: &selected,
+                            expected_confirmed_offset: expected_offset,
+                            expected_event_count: expected_events,
+                            expected_tail_hash: &expected_tail,
+                        },
+                        &mut visitor,
+                    ),
+                    Err(crate::V4SelectionVisitError::Index(
+                        crate::IndexError::Incomplete { limit, observed }
+                    )) if limit + 1 == observed && observed == exact_staging
+                ));
+                assert_eq!(visitor.0, 0);
+            }
+        }
+        crate::index::set_v4_json_staging_limit_for_test(None);
+        std::fs::write(&active_path, original_image).unwrap();
+    }
+
+    #[test]
+    fn validated_v4_handle_reuses_one_snapshot_and_refuses_drift_tamper_and_wrong_journal() {
+        struct CountingVisitor(u64);
+        impl crate::V4SelectionVisitor for CountingVisitor {
+            type Error = std::convert::Infallible;
+
+            fn visit(&mut self, _item: crate::V4SelectionItem<'_>) -> Result<(), Self::Error> {
+                self.0 += 1;
+                Ok(())
+            }
+        }
+
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), crate::StoreLimits::default()).unwrap();
+        let (journal, roots, _, _) =
+            public_v3_fixture_journal(&root, "run:store-validated-v4-handle");
+        let index = crate::DerivedIndexV4::open(&root).unwrap();
+        index.rebuild_v4(&journal, &roots).unwrap();
+        crate::index::reset_v4_full_snapshot_construction_count_for_test();
+        let handle = index
+            .validated_snapshot_current_v4(&journal, &roots)
+            .unwrap();
+        assert_eq!(
+            crate::index::v4_full_snapshot_construction_count_for_test(),
+            1
+        );
+        let snapshot = handle.snapshot();
+        let execution = snapshot.executions.first().unwrap();
+        let selected: BTreeSet<StableId> =
+            serde_json::from_str(&execution.obligation_ids_canonical_json).unwrap();
+        let request = crate::V4SelectionRequest {
+            plan_id: &execution.plan_id,
+            selected_obligation_ids: &selected,
+            expected_confirmed_offset: snapshot.marker.confirmed_offset,
+            expected_event_count: snapshot.marker.event_count,
+            expected_tail_hash: &snapshot.marker.tail_hash,
+        };
+
+        let mut first = CountingVisitor(0);
+        let first_summary = handle
+            .visit_selection(&journal, request, &mut first)
+            .unwrap();
+        let mut second = CountingVisitor(0);
+        let second_summary = handle
+            .visit_selection(&journal, request, &mut second)
+            .unwrap();
+        assert_eq!(first_summary, second_summary);
+        assert_eq!(first.0, second.0);
+        assert!(first.0 > 0);
+        assert_eq!(
+            crate::index::v4_full_snapshot_construction_count_for_test(),
+            1
+        );
+
+        let wrong_tail = ContentHash::sha256(b"validated handle request drift");
+        let mut drift = CountingVisitor(0);
+        assert!(matches!(
+            handle.visit_selection(
+                &journal,
+                crate::V4SelectionRequest {
+                    expected_tail_hash: &wrong_tail,
+                    ..request
+                },
+                &mut drift,
+            ),
+            Err(crate::V4SelectionVisitError::Index(
+                crate::IndexError::ProjectionContractViolation
+            ))
+        ));
+        assert_eq!(drift.0, 0);
+
+        let active_path = root.path().join("indexes/reviewgraphen.sqlite");
+        let original_image = std::fs::read(&active_path).unwrap();
+        let connection = rusqlite::Connection::open(&active_path).unwrap();
+        assert!(
+            connection
+                .execute("UPDATE program_relations SET relation_kind='tampered'", [],)
+                .unwrap()
+                > 0
+        );
+        drop(connection);
+        let mut tamper = CountingVisitor(0);
+        assert!(matches!(
+            handle.visit_selection(&journal, request, &mut tamper),
+            Err(crate::V4SelectionVisitError::Index(
+                crate::IndexError::CorruptIndex
+            ))
+        ));
+        assert_eq!(tamper.0, 0);
+        std::fs::write(&active_path, original_image).unwrap();
+
+        let (wrong_journal, _, _, _) =
+            public_v3_fixture_journal(&root, "run:store-validated-v4-wrong-journal");
+        let mut wrong = CountingVisitor(0);
+        assert!(matches!(
+            handle.visit_selection(&wrong_journal, request, &mut wrong),
+            Err(crate::V4SelectionVisitError::Index(_))
+        ));
+        assert_eq!(wrong.0, 0);
+        assert_eq!(
+            crate::index::v4_full_snapshot_construction_count_for_test(),
+            1
+        );
+    }
+
+    #[test]
+    fn public_v4_selection_operational_bound_is_exact_and_one_less_refuses_before_callbacks() {
+        struct CountingVisitor(u64);
+        impl crate::V4SelectionVisitor for CountingVisitor {
+            type Error = std::convert::Infallible;
+
+            fn visit(&mut self, _item: crate::V4SelectionItem<'_>) -> Result<(), Self::Error> {
+                self.0 += 1;
+                Ok(())
+            }
+        }
+
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), crate::StoreLimits::default()).unwrap();
+        let (journal, roots, _, _) =
+            public_v3_fixture_journal(&root, "run:store-public-v4-selection-limits");
+        let identity = journal.identity.clone();
+        let index = crate::DerivedIndexV4::open(&root).unwrap();
+        let receipt = index.rebuild_v4(&journal, &roots).unwrap();
+        let snapshot = index.snapshot_current_v4(&journal, &roots).unwrap();
+        let execution = snapshot.executions.first().unwrap();
+        let selected: BTreeSet<StableId> =
+            serde_json::from_str(&execution.obligation_ids_canonical_json).unwrap();
+        let peak = crate::index::v4_selection_sql_operational_charge_for_test(
+            &snapshot,
+            &selected,
+            index.limits(),
+        )
+        .unwrap();
+        assert!(peak <= 256 * 1024 * 1024);
+        let plan_id = execution.plan_id.clone();
+        let expected_offset = snapshot.marker.confirmed_offset;
+        let expected_events = snapshot.marker.event_count;
+        let expected_tail = snapshot.marker.tail_hash.clone();
+        drop(journal);
+        drop(root);
+
+        let exact = crate::StoreLimits {
+            max_index_rows: receipt.accounting.rows,
+            max_index_serialized_bytes: receipt.serialized_bytes,
+            max_index_query_bytes: receipt.accounting.query_bytes,
+            // Exact normative Working4 remains admissible; selection scratch
+            // is governed by its separate Store operational ceiling.
+            max_index_working_bytes: receipt.accounting.working_bytes,
+            ..crate::StoreLimits::default()
+        };
+        let root = StoreRoot::open(workspace.path(), exact).unwrap();
+        let journal = EventJournal::open(&root, identity.clone()).unwrap();
+        let index = crate::DerivedIndexV4::open(&root).unwrap();
+        crate::index::set_v4_selection_operational_limit_for_test(Some(peak));
+        let mut exact_visitor = CountingVisitor(0);
+        let summary = index
+            .visit_current_v4_selection(
+                &journal,
+                &roots,
+                crate::V4SelectionRequest {
+                    plan_id: &plan_id,
+                    selected_obligation_ids: &selected,
+                    expected_confirmed_offset: expected_offset,
+                    expected_event_count: expected_events,
+                    expected_tail_hash: &expected_tail,
+                },
+                &mut exact_visitor,
+            )
+            .unwrap();
+        assert_eq!(
+            exact_visitor.0,
+            summary.counts.artifact_registrations
+                + summary.counts.executions
+                + summary.counts.claims
+                + summary.counts.evidence
+                + summary.counts.evidence_bindings
+                + summary.counts.verifications
+                + summary.counts.decisions
+                + summary.counts.findings
+                + summary.counts.claim_assessments
+                + summary.counts.obstructions
+                + summary.counts.denominator_ids
+                + summary.counts.visited_ids
+                + summary.counts.completed_ids
+                + summary.counts.evidence_supported_ids
+                + summary.counts.verified_ids
+                + summary.counts.accepted_ids
+        );
+        let wrong_tail = ContentHash::sha256(b"visitor expected-marker drift");
+        let mut drift_visitor = CountingVisitor(0);
+        assert!(matches!(
+            index.visit_current_v4_selection(
+                &journal,
+                &roots,
+                crate::V4SelectionRequest {
+                    plan_id: &plan_id,
+                    selected_obligation_ids: &selected,
+                    expected_confirmed_offset: expected_offset,
+                    expected_event_count: expected_events,
+                    expected_tail_hash: &wrong_tail,
+                },
+                &mut drift_visitor,
+            ),
+            Err(crate::V4SelectionVisitError::Index(
+                crate::IndexError::ProjectionContractViolation
+            ))
+        ));
+        assert_eq!(drift_visitor.0, 0);
+        crate::index::set_v4_selection_operational_limit_for_test(Some(peak - 1));
+        let mut refused_visitor = CountingVisitor(0);
+        assert!(matches!(
+            index.visit_current_v4_selection(
+                &journal,
+                &roots,
+                crate::V4SelectionRequest {
+                    plan_id: &plan_id,
+                    selected_obligation_ids: &selected,
+                    expected_confirmed_offset: expected_offset,
+                    expected_event_count: expected_events,
+                    expected_tail_hash: &expected_tail,
+                },
+                &mut refused_visitor,
+            ),
+            Err(crate::V4SelectionVisitError::Index(
+                crate::IndexError::Incomplete { limit, observed }
+            )) if limit + 1 == observed && observed == peak
+        ));
+        assert_eq!(refused_visitor.0, 0);
+        crate::index::set_v4_selection_operational_limit_for_test(None);
     }
 
     #[test]
@@ -6054,13 +7045,89 @@ mod tests {
         ] {
             let (_workspace, root) = root();
             let run = format!("run:store-public-v3-e2e-{index}");
-            let (journal, roots, claim_id) = public_v3_fixture_journal(&root, &run);
+            let (journal, roots, claim_id, harness_root) = public_v3_fixture_journal(&root, &run);
+            if index == 0 {
+                let before_cas = test_cas_inventory(&root);
+                let mut wrong_harness = clone_test_harness_root(&harness_root);
+                wrong_harness.harness_revision = "fixture-harness-wrong-revision".to_owned();
+                assert!(
+                    AuthorityTrustRootsV3::new(
+                        harness_root.policy_revision_hash.clone(),
+                        harness_root.repository_id.clone(),
+                        harness_root.repository_source_hash.clone(),
+                        vec![wrong_harness],
+                        Vec::new(),
+                    )
+                    .is_err()
+                );
+                assert_eq!(test_cas_inventory(&root), before_cas);
+
+                let missing_roots = AuthorityTrustRootsV3::new(
+                    harness_root.policy_revision_hash.clone(),
+                    harness_root.repository_id.clone(),
+                    harness_root.repository_source_hash.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .unwrap();
+                let (blocked, blocked_basis) = journal.replayed_v3_session(&missing_roots).unwrap();
+                let before_events = blocked.event_count().unwrap();
+                let before_tail = blocked.tail_hash().unwrap().clone();
+                assert!(
+                    blocked
+                        .expect_fixture_verification_attempt_v3(&claim_id, &blocked_basis)
+                        .is_err()
+                );
+                assert!(
+                    blocked
+                        .execute_fixture_harness(&claim_id, &blocked_basis)
+                        .is_err()
+                );
+                assert_eq!(blocked.event_count().unwrap(), before_events);
+                assert_eq!(blocked.tail_hash().unwrap(), &before_tail);
+                assert_eq!(test_cas_inventory(&root), before_cas);
+                drop(blocked);
+            }
             let (mut session, mut basis) = journal.replayed_v3_session(&roots).unwrap();
+            let ready = session
+                .expect_fixture_verification_attempt_v3(&claim_id, &basis)
+                .unwrap();
+            assert_eq!(
+                session
+                    .inspect_m4_verification_attempt_v3(&ready, &basis)
+                    .unwrap(),
+                VerificationAttemptStageV3::Ready
+            );
             let mut fixture = session.execute_fixture_harness(&claim_id, &basis).unwrap();
             let witness_bytes = fixture.witness_bytes().to_vec();
             let result_bytes = fixture.fixture_result_bytes().to_vec();
             put_test_cas(&root, &witness_bytes);
             put_test_cas(&root, &result_bytes);
+            assert!(matches!(
+                session.inspect_m4_verification_attempt_v3(&ready, &basis),
+                Err(JournalError::OrphanCasObjectV3 { hash }) if hash == *ready.input_hash()
+            ));
+            let before_validation_count = session.event_count().unwrap();
+            let before_validation_tail = session.tail_hash().unwrap().clone();
+            session.validate_v3_operation_basis(&basis).unwrap();
+            assert_eq!(session.event_count().unwrap(), before_validation_count);
+            assert_eq!(session.tail_hash().unwrap(), &before_validation_tail);
+            assert!(
+                session
+                    .cas_contains_exact(
+                        &ContentHash::sha256(&witness_bytes),
+                        u64::try_from(witness_bytes.len()).unwrap(),
+                    )
+                    .unwrap()
+            );
+            assert!(
+                session
+                    .cas_contains_exact(
+                        &ContentHash::sha256(&witness_bytes),
+                        u64::try_from(witness_bytes.len()).unwrap() + 1,
+                    )
+                    .is_err()
+            );
 
             let witness = session
                 .prepare_external_fixture_witness_registration(&mut fixture, &basis)
@@ -6076,6 +7143,15 @@ mod tests {
             session
                 .append_authority_registration(output, &mut basis)
                 .unwrap();
+            let registered = session
+                .expect_fixture_verification_attempt_v3(&claim_id, &basis)
+                .unwrap();
+            assert_eq!(
+                session
+                    .inspect_m4_verification_attempt_v3(&registered, &basis)
+                    .unwrap(),
+                VerificationAttemptStageV3::OutputRegistered
+            );
             let admission = session
                 .admit_external_fixture_witness(&mut fixture, &witness_id, &basis)
                 .unwrap();
@@ -6180,13 +7256,22 @@ mod tests {
             assert_eq!(healthy.evidence_count().unwrap(), 1);
             assert_eq!(healthy.evidence_binding_count().unwrap(), 1);
             assert_eq!(healthy.verification_count().unwrap(), 1);
+            let complete = healthy
+                .expect_fixture_verification_attempt_v3(&claim_id, &current_basis)
+                .unwrap();
+            assert_eq!(
+                healthy
+                    .inspect_m4_verification_attempt_v3(&complete, &current_basis)
+                    .unwrap(),
+                VerificationAttemptStageV3::Complete
+            );
             drop(healthy);
 
             assert!(matches!(
                 journal.recover_verification_bundle_resume(&roots),
                 Err(JournalError::BundleResumeAuthorityMismatch)
             ));
-            let (replayed, replayed_basis) = journal.replayed_v3_session(&roots).unwrap();
+            let (mut replayed, mut replayed_basis) = journal.replayed_v3_session(&roots).unwrap();
             assert_eq!(replayed.evidence_count().unwrap(), 1);
             assert_eq!(replayed.evidence_binding_count().unwrap(), 1);
             assert_eq!(replayed.verification_count().unwrap(), 1);
@@ -6200,6 +7285,442 @@ mod tests {
                 assessment.review_status(),
                 AssessmentReviewStatusV3::Unreviewed
             );
+            let active_path = root.path().join("indexes").join("reviewgraphen.sqlite");
+            let stale_image = if index == 0 {
+                drop(replayed);
+                let derived = crate::DerivedIndexV4::open(&root).unwrap();
+                derived.rebuild_v4(&journal, &roots).unwrap();
+                let image = std::fs::read(&active_path).unwrap();
+                let reopened = journal.replayed_v3_session(&roots).unwrap();
+                replayed = reopened.0;
+                replayed_basis = reopened.1;
+                Some(image)
+            } else {
+                None
+            };
+            let decision = replayed
+                .mint_decision(
+                    &claim_id,
+                    DecisionInputV3::new(
+                        DecisionOutcomeV3::Accept,
+                        "human:store-reviewer",
+                        "store-review-board",
+                        "explicit acceptance of the reproduced counterexample",
+                        "2026-08-10T00:00:00Z",
+                        None,
+                    ),
+                    &replayed_basis,
+                )
+                .unwrap();
+            replayed
+                .append_decision(decision, &mut replayed_basis)
+                .unwrap();
+            let finding = replayed
+                .mint_finding(
+                    &claim_id,
+                    "reviewgraphen.finding_projection@1",
+                    &replayed_basis,
+                )
+                .unwrap();
+            replayed
+                .append_finding(finding, &mut replayed_basis)
+                .unwrap();
+            let assessment = replayed.claim_assessment(&claim_id).unwrap().unwrap();
+            assert_eq!(assessment.disposition(), AssessmentDispositionV3::Accepted);
+            assert_eq!(
+                assessment.review_status(),
+                AssessmentReviewStatusV3::Accepted
+            );
+            drop(replayed);
+
+            let derived = crate::DerivedIndexV4::open(&root).unwrap();
+            if let Some(stale_image) = stale_image.as_ref() {
+                assert!(matches!(
+                    derived.snapshot_current_v4(&journal, &roots),
+                    Err(crate::IndexError::CommittedIndexStale { .. })
+                ));
+                for statement in [
+                    "UPDATE program_relations SET body_hash='sha256:0000000000000000'",
+                    "UPDATE artifact_registrations SET source_kind='reviewer_execution' WHERE source_kind='run_genesis'",
+                ] {
+                    let connection = rusqlite::Connection::open(&active_path).unwrap();
+                    assert!(connection.execute(statement, []).unwrap() > 0);
+                    drop(connection);
+                    assert!(matches!(
+                        derived.snapshot_current_v4(&journal, &roots),
+                        Err(crate::IndexError::CorruptIndex)
+                    ));
+                    std::fs::write(&active_path, stale_image).unwrap();
+                }
+                let connection = rusqlite::Connection::open(&active_path).unwrap();
+                connection
+                    .pragma_update(None, "ignore_check_constraints", true)
+                    .unwrap();
+                assert!(
+                    connection
+                        .execute("UPDATE obligations SET lifecycle='invalid'", [])
+                        .unwrap()
+                        > 0
+                );
+                drop(connection);
+                assert!(matches!(
+                    derived.snapshot_current_v4(&journal, &roots),
+                    Err(crate::IndexError::CorruptIndex)
+                ));
+                std::fs::write(&active_path, stale_image).unwrap();
+
+                let connection = rusqlite::Connection::open(&active_path).unwrap();
+                connection
+                    .pragma_update(None, "foreign_keys", false)
+                    .unwrap();
+                assert!(
+                    connection
+                        .execute(
+                            "UPDATE evidence_bindings_v3 SET evidence_id='evidence:missing'",
+                            [],
+                        )
+                        .unwrap()
+                        > 0
+                );
+                drop(connection);
+                assert!(matches!(
+                    derived.snapshot_current_v4(&journal, &roots),
+                    Err(crate::IndexError::CorruptIndex)
+                ));
+                std::fs::write(&active_path, stale_image).unwrap();
+            }
+            let receipt = derived.rebuild_v4(&journal, &roots).unwrap();
+            assert_eq!(
+                receipt.authority_replay_basis_digest,
+                replayed_basis.basis_digest().clone()
+            );
+            let snapshot = derived.snapshot_current_v4(&journal, &roots).unwrap();
+            assert_eq!(snapshot.evidence.len(), 1);
+            assert_eq!(snapshot.evidence_bindings.len(), 1);
+            assert_eq!(snapshot.verifications.len(), 1);
+            assert_eq!(snapshot.decisions.len(), 1);
+            assert_eq!(snapshot.findings.len(), 1);
+            assert_eq!(snapshot.claim_assessments.len(), 1);
+            assert_eq!(snapshot.claim_assessments[0].disposition, "accepted");
+            assert_eq!(snapshot.findings[0].status, "accepted");
+            if index == 0 {
+                let current_image = std::fs::read(&active_path).unwrap();
+                for statement in [
+                    "UPDATE index_meta SET tail_hash='sha256:0000000000000000'",
+                    "UPDATE index_meta SET authority_replay_basis_digest='sha256:0000000000000000'",
+                    "UPDATE evidence_v3 SET body_hash='sha256:0000000000000000'",
+                    "UPDATE evidence_bindings_v3 SET body_hash='sha256:0000000000000000'",
+                    "UPDATE verifications_v3 SET body_hash='sha256:0000000000000000'",
+                    "UPDATE decisions_v3 SET body_hash='sha256:0000000000000000'",
+                    "UPDATE findings_v3 SET body_hash='sha256:0000000000000000'",
+                    "UPDATE artifact_registrations SET source_canonical_json='{\"kind\":\"run_genesis\",\"run_id\":\"run:wrong\"}' WHERE source_kind='run_genesis'",
+                    "UPDATE artifact_registrations SET cas_hash='sha256:0000000000000000' WHERE source_kind='external_harness_witness'",
+                    "UPDATE review_plans SET budget_canonical_json=budget_canonical_json||' '",
+                    "UPDATE context_envelopes SET losses_canonical_json=losses_canonical_json||' '",
+                    "UPDATE executions SET inference_settings_canonical_json=inference_settings_canonical_json||' '",
+                    "UPDATE claims SET assumptions_canonical_json=assumptions_canonical_json||' '",
+                    "UPDATE evidence_v3 SET subject_ids_canonical_json=subject_ids_canonical_json||' '",
+                    "UPDATE verifications_v3 SET limitations_canonical_json=limitations_canonical_json||' '",
+                    "UPDATE decisions_v3 SET source_ids_canonical_json=source_ids_canonical_json||' '",
+                    "UPDATE findings_v3 SET evidence_ids_canonical_json=evidence_ids_canonical_json||' '",
+                    "UPDATE claim_assessments_v3 SET verification_ids_canonical_json=verification_ids_canonical_json||' '",
+                ] {
+                    let connection = rusqlite::Connection::open(&active_path).unwrap();
+                    connection
+                        .pragma_update(None, "ignore_check_constraints", true)
+                        .unwrap();
+                    assert!(
+                        connection.execute(statement, []).unwrap() > 0,
+                        "{statement}"
+                    );
+                    drop(connection);
+                    assert!(matches!(
+                        derived.snapshot_current_v4(&journal, &roots),
+                        Err(crate::IndexError::CorruptIndex)
+                    ));
+                    std::fs::write(&active_path, &current_image).unwrap();
+                }
+                for statement in [
+                    "UPDATE evidence_v3 SET kind='invalid'",
+                    "UPDATE evidence_bindings_v3 SET relation='invalid'",
+                    "UPDATE verifications_v3 SET outcome='invalid'",
+                    "UPDATE decisions_v3 SET outcome='invalid'",
+                    "UPDATE findings_v3 SET status='invalid'",
+                    "UPDATE claim_assessments_v3 SET disposition='invalid'",
+                ] {
+                    let connection = rusqlite::Connection::open(&active_path).unwrap();
+                    connection
+                        .pragma_update(None, "ignore_check_constraints", true)
+                        .unwrap();
+                    assert!(
+                        connection.execute(statement, []).unwrap() > 0,
+                        "{statement}"
+                    );
+                    drop(connection);
+                    assert!(matches!(
+                        derived.snapshot_current_v4(&journal, &roots),
+                        Err(crate::IndexError::CorruptIndex)
+                    ));
+                    std::fs::write(&active_path, &current_image).unwrap();
+                }
+                for statement in [
+                    "UPDATE evidence_v3 SET input_registration_id='registration:missing'",
+                    "UPDATE evidence_bindings_v3 SET claim_id='claim:missing'",
+                    "UPDATE verifications_v3 SET output_registration_id='registration:missing'",
+                    "UPDATE decisions_v3 SET claim_id='claim:missing'",
+                    "UPDATE findings_v3 SET decision_id='decision:missing'",
+                    "UPDATE claim_assessments_v3 SET current_finding_id='finding:missing'",
+                ] {
+                    let connection = rusqlite::Connection::open(&active_path).unwrap();
+                    connection
+                        .pragma_update(None, "foreign_keys", false)
+                        .unwrap();
+                    assert!(
+                        connection.execute(statement, []).unwrap() > 0,
+                        "{statement}"
+                    );
+                    drop(connection);
+                    assert!(matches!(
+                        derived.snapshot_current_v4(&journal, &roots),
+                        Err(crate::IndexError::CorruptIndex)
+                    ));
+                    std::fs::write(&active_path, &current_image).unwrap();
+                }
+                for found in [2_u32, 3] {
+                    let connection = rusqlite::Connection::open(&active_path).unwrap();
+                    connection
+                        .pragma_update(None, "user_version", found)
+                        .unwrap();
+                    drop(connection);
+                    assert!(matches!(
+                        derived.snapshot_current_v4(&journal, &roots),
+                        Err(crate::IndexError::RebuildRequired {
+                            found: actual,
+                            required: 4
+                        }) if actual == found
+                    ));
+                    std::fs::write(&active_path, &current_image).unwrap();
+                }
+                let old_image = stale_image.as_ref().unwrap();
+                for fault in [
+                    crate::index::PublishFault::AfterWrite,
+                    crate::index::PublishFault::BeforeCandidateSync,
+                    crate::index::PublishFault::AfterCandidateLinkBeforeDirectorySync,
+                    crate::index::PublishFault::AfterCandidateSync,
+                    crate::index::PublishFault::AfterImageDropBeforeCandidateRead,
+                    crate::index::PublishFault::AfterCandidateInodeCheck,
+                    crate::index::PublishFault::AfterCandidateHashCheck,
+                    crate::index::PublishFault::AfterValidation,
+                    crate::index::PublishFault::AfterRename,
+                    crate::index::PublishFault::AfterActiveInodeCheck,
+                    crate::index::PublishFault::AfterActiveHashCheck,
+                    crate::index::PublishFault::AfterActiveVerify,
+                    crate::index::PublishFault::BeforeFinalDirectorySync,
+                ] {
+                    std::fs::write(&active_path, old_image).unwrap();
+                    derived.inject_publish_fault(fault);
+                    let result = derived.rebuild_v4(&journal, &roots);
+                    let before_rename = matches!(
+                        fault,
+                        crate::index::PublishFault::AfterWrite
+                            | crate::index::PublishFault::BeforeCandidateSync
+                            | crate::index::PublishFault::AfterCandidateLinkBeforeDirectorySync
+                            | crate::index::PublishFault::AfterCandidateSync
+                            | crate::index::PublishFault::AfterImageDropBeforeCandidateRead
+                            | crate::index::PublishFault::AfterCandidateInodeCheck
+                            | crate::index::PublishFault::AfterCandidateHashCheck
+                            | crate::index::PublishFault::AfterValidation
+                    );
+                    if before_rename {
+                        assert!(matches!(result, Err(crate::IndexError::Io(_))));
+                        assert_eq!(std::fs::read(&active_path).unwrap(), *old_image);
+                    } else {
+                        assert!(matches!(
+                            result,
+                            Err(crate::IndexError::PublicationDurabilityUncertain { .. })
+                        ));
+                        assert_eq!(std::fs::read(&active_path).unwrap(), current_image);
+                        derived.snapshot_current_v4(&journal, &roots).unwrap();
+                    }
+                }
+                std::fs::write(&active_path, &current_image).unwrap();
+            }
+            let expected_rows = 1_u64
+                + snapshot.events.len() as u64
+                + snapshot.projected_findings.len() as u64
+                + snapshot.shadows.len() as u64
+                + snapshot.program_objects.len() as u64
+                + snapshot.program_relations.len() as u64
+                + u64::from(snapshot.universe.is_some())
+                + snapshot.obligations.len() as u64
+                + snapshot.obligation_lifecycle.len() as u64
+                + snapshot.executions.len() as u64
+                + snapshot.claims.len() as u64
+                + snapshot.artifact_registrations.len() as u64
+                + snapshot.snapshot_sources.len() as u64
+                + snapshot.context_envelopes.len() as u64
+                + snapshot.review_plans.len() as u64
+                + snapshot.evidence.len() as u64
+                + snapshot.evidence_bindings.len() as u64
+                + snapshot.verifications.len() as u64
+                + snapshot.decisions.len() as u64
+                + snapshot.findings.len() as u64
+                + snapshot.claim_assessments.len() as u64;
+            assert_eq!(receipt.accounting.rows, expected_rows);
+            assert_eq!(
+                receipt.accounting.sql_bytes,
+                receipt.accounting.text_bytes
+                    + 8 * receipt.accounting.integer_cells
+                    + receipt.accounting.rows
+            );
+            assert_eq!(
+                receipt.accounting.query_bytes,
+                canonical_json(&snapshot).unwrap().len() as u64
+            );
+            let accounting_session = journal.replayed_v3_session(&roots).unwrap();
+            let (streamed, materialized_oracle) =
+                crate::index::preflight_accounting_limits_for_test(
+                    &accounting_session.0,
+                    &accounting_session.1,
+                    u64::MAX,
+                    u64::MAX,
+                )
+                .unwrap();
+            assert_eq!(streamed, materialized_oracle);
+            assert_eq!(streamed.rows, receipt.accounting.rows);
+            assert_eq!(streamed.integer_cells, receipt.accounting.integer_cells);
+            assert_eq!(streamed.text_bytes, receipt.accounting.text_bytes);
+            assert_eq!(streamed.sql_bytes, receipt.accounting.sql_bytes);
+            assert_eq!(streamed.query_bytes, receipt.accounting.query_bytes);
+            assert_eq!(streamed.owned_bytes, receipt.accounting.owned_bytes);
+            assert!(receipt.accounting.working_bytes >= streamed.working_bytes);
+            crate::index::preflight_accounting_limits_for_test(
+                &accounting_session.0,
+                &accounting_session.1,
+                streamed.query_bytes,
+                streamed.working_bytes,
+            )
+            .unwrap();
+            assert!(matches!(
+                crate::index::preflight_accounting_limits_for_test(
+                    &accounting_session.0,
+                    &accounting_session.1,
+                    streamed.query_bytes - 1,
+                    streamed.working_bytes,
+                ),
+                Err(crate::IndexError::Incomplete { limit, observed })
+                    if limit + 1 == observed && observed == streamed.query_bytes
+            ));
+            assert!(matches!(
+                crate::index::preflight_accounting_limits_for_test(
+                    &accounting_session.0,
+                    &accounting_session.1,
+                    streamed.query_bytes,
+                    streamed.working_bytes - 1,
+                ),
+                Err(crate::IndexError::Incomplete { limit, observed })
+                    if limit + 1 == observed && observed == streamed.working_bytes
+            ));
+            drop(accounting_session);
+            assert_eq!(
+                derived.snapshot_current_v4(&journal, &roots).unwrap(),
+                snapshot
+            );
+            let rebuilt = derived.rebuild_v4(&journal, &roots).unwrap();
+            assert_eq!(rebuilt.image_hash, receipt.image_hash);
+            assert_eq!(rebuilt.accounting, receipt.accounting);
+            if index == 0 {
+                let (mut conflict_session, mut conflict_basis) =
+                    journal.replayed_v3_session(&roots).unwrap();
+                let evaluation = {
+                    let aggregate = conflict_session.aggregate().unwrap();
+                    let claim = aggregate
+                        .execution_claims()
+                        .find(|claim| claim.id() == &claim_id)
+                        .unwrap();
+                    let obligation = aggregate
+                        .obligations()
+                        .find(|obligation| Some(obligation.id()) == claim.obligation_ids().first())
+                        .unwrap();
+                    evaluate_static_fact_v1(aggregate.program(), obligation, claim).unwrap()
+                };
+                let input_bytes = canonical_json(evaluation.input()).unwrap();
+                let output_bytes = canonical_json(evaluation.result()).unwrap();
+                put_test_cas(&root, &input_bytes);
+                put_test_cas(&root, &output_bytes);
+                let input = conflict_session
+                    .prepare_static_verifier_artifact_registration(
+                        claim_id.clone(),
+                        VerifierArtifactRoleV3::Input,
+                        ContentHash::sha256(&input_bytes),
+                        u64::try_from(input_bytes.len()).unwrap(),
+                        &conflict_basis,
+                    )
+                    .unwrap();
+                let input_id = input.registration_id().clone();
+                conflict_session
+                    .append_authority_registration(input, &mut conflict_basis)
+                    .unwrap();
+                let output = conflict_session
+                    .prepare_static_verifier_artifact_registration(
+                        claim_id.clone(),
+                        VerifierArtifactRoleV3::Output,
+                        ContentHash::sha256(&output_bytes),
+                        u64::try_from(output_bytes.len()).unwrap(),
+                        &conflict_basis,
+                    )
+                    .unwrap();
+                let output_id = output.registration_id().clone();
+                conflict_session
+                    .append_authority_registration(output, &mut conflict_basis)
+                    .unwrap();
+                let bundle = conflict_session
+                    .mint_static_verification_bundle(
+                        &claim_id,
+                        &input_id,
+                        &output_id,
+                        &conflict_basis,
+                    )
+                    .unwrap();
+                conflict_session
+                    .append_verification_bundle(bundle, &mut conflict_basis)
+                    .unwrap();
+                let conflict_assessment = conflict_session
+                    .claim_assessment(&claim_id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    conflict_assessment.disposition(),
+                    AssessmentDispositionV3::Supported
+                );
+                assert!(conflict_assessment.decision_conflict());
+                assert!(conflict_assessment.current_finding_id().is_none());
+                assert_eq!(conflict_assessment.verification_ids().len(), 2);
+                drop(conflict_session);
+
+                assert!(matches!(
+                    derived.snapshot_current_v4(&journal, &roots),
+                    Err(crate::IndexError::CommittedIndexStale { .. })
+                ));
+                derived.rebuild_v4(&journal, &roots).unwrap();
+                let conflict_snapshot = derived.snapshot_current_v4(&journal, &roots).unwrap();
+                assert_eq!(conflict_snapshot.verifications.len(), 2);
+                assert_eq!(conflict_snapshot.findings.len(), 1);
+                let projected = &conflict_snapshot.claim_assessments[0];
+                assert_eq!(projected.disposition, "supported");
+                assert_eq!(projected.review_status, "human_reviewed");
+                assert!(projected.decision_conflict);
+                assert!(projected.active_decision_id.is_none());
+                assert!(projected.current_finding_id.is_none());
+                assert_eq!(
+                    serde_json::from_str::<Vec<StableId>>(
+                        &projected.verification_ids_canonical_json
+                    )
+                    .unwrap()
+                    .len(),
+                    2
+                );
+            }
         }
     }
 
