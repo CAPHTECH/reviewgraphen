@@ -11,6 +11,7 @@
 //! exposes no arbitrary command, path, environment, network, or runner input.
 
 pub mod m4_verification;
+pub mod m5_gluing;
 
 use reviewgraphen_core::{
     ArtifactRegistered, ContentHash, ContextSourceRegistration, ExecutionOutcome,

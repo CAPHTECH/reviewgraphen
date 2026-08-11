@@ -9930,6 +9930,11 @@ impl M5DoubleSubmitAssignmentsV4 {
     ) -> Self {
         Self { payment, ui_event }
     }
+
+    #[must_use]
+    pub const fn compatibility(&self) -> crate::AssignmentCompatibilityV4 {
+        self.payment.compatibility(self.ui_event)
+    }
 }
 
 /// Fixed disclosure of what the runtime profile projection deliberately does
@@ -10242,6 +10247,70 @@ pub struct M5GluingProfileInspectionV4 {
     roots: AuthorityTrustRootsV4,
     remaining_inputs: Vec<M5GluingProfileInputV4>,
     source_ids: BTreeSet<StableId>,
+    completed: Option<M5CompletedGluingProfileV4>,
+}
+
+/// Closed descriptive proof that recovery found the exact profile bundle
+/// already durable. It is produced only after full roots-bound replay and
+/// assignment reinspection; it carries no append or replay authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct M5CompletedGluingProfileV4 {
+    event_id: StableId,
+    cover_id: StableId,
+    attempt_id: StableId,
+    result: crate::GluingResultV4,
+    obstruction_id: Option<StableId>,
+    obstruction_source_ids: BTreeSet<StableId>,
+    confirmed_tail_hash: ContentHash,
+    confirmed_event_count: u64,
+    source_ids: BTreeSet<StableId>,
+}
+
+impl M5CompletedGluingProfileV4 {
+    #[must_use]
+    pub fn event_id(&self) -> &StableId {
+        &self.event_id
+    }
+
+    #[must_use]
+    pub fn cover_id(&self) -> &StableId {
+        &self.cover_id
+    }
+
+    #[must_use]
+    pub fn attempt_id(&self) -> &StableId {
+        &self.attempt_id
+    }
+
+    #[must_use]
+    pub const fn result(&self) -> crate::GluingResultV4 {
+        self.result
+    }
+
+    #[must_use]
+    pub fn obstruction_id(&self) -> Option<&StableId> {
+        self.obstruction_id.as_ref()
+    }
+
+    #[must_use]
+    pub fn obstruction_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.obstruction_source_ids
+    }
+
+    #[must_use]
+    pub fn confirmed_tail_hash(&self) -> &ContentHash {
+        &self.confirmed_tail_hash
+    }
+
+    #[must_use]
+    pub const fn confirmed_event_count(&self) -> u64 {
+        self.confirmed_event_count
+    }
+
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
 }
 
 impl M5GluingProfileInspectionV4 {
@@ -10261,8 +10330,24 @@ impl M5GluingProfileInspectionV4 {
     }
 
     #[must_use]
+    pub fn completed(&self) -> Option<&M5CompletedGluingProfileV4> {
+        self.completed.as_ref()
+    }
+
+    #[must_use]
     pub fn into_parts(self) -> (AuthorityTrustRootsV4, Vec<M5GluingProfileInputV4>) {
         (self.roots, self.remaining_inputs)
+    }
+
+    #[must_use]
+    pub fn into_recovery_parts(
+        self,
+    ) -> (
+        AuthorityTrustRootsV4,
+        Vec<M5GluingProfileInputV4>,
+        Option<M5CompletedGluingProfileV4>,
+    ) {
+        (self.roots, self.remaining_inputs, self.completed)
     }
 }
 
@@ -14174,8 +14259,16 @@ impl EventLogV4 {
         &self,
         basis: &AuthorityReplayBasisV4,
     ) -> Result<M5GluingProfileBasisV4> {
+        self.m5_gluing_profile_basis_v4_internal(basis, false)
+    }
+
+    fn m5_gluing_profile_basis_v4_internal(
+        &self,
+        basis: &AuthorityReplayBasisV4,
+        admit_completed_bundle: bool,
+    ) -> Result<M5GluingProfileBasisV4> {
         basis.validate_for_log_v4(self)?;
-        if self.m5_bundle.is_some() {
+        if self.m5_bundle.is_some() && !admit_completed_bundle {
             return Err(DomainError::AlreadyComplete);
         }
         if self.v4_registrations.len() > 2
@@ -15933,15 +16026,54 @@ impl EventLogV4 {
             &augmented_roots,
             limits,
         )?;
-        let final_basis = confirmed_log.m5_gluing_profile_basis_v4(&confirmed_basis)?;
+        let final_basis =
+            confirmed_log.m5_gluing_profile_basis_v4_internal(&confirmed_basis, true)?;
         let source_ids = final_basis.source_ids().clone();
         let final_material = final_basis.into_host_material(assignments)?;
         let (roots, remaining_inputs) =
             final_material.augment_reinspection_roots(augmented_roots)?;
+        let completed = confirmed_log
+            .gluing_bundle_projection_v4()
+            .map(|bundle| {
+                let attempt = bundle.attempt();
+                let event_id = confirmed_log
+                    .envelopes
+                    .last()
+                    .ok_or_else(|| {
+                        DomainError::EventSequence(
+                            "completed M5 profile has no bundle event".to_owned(),
+                        )
+                    })?
+                    .id()
+                    .clone();
+                let confirmed_event_count =
+                    u64::try_from(confirmed_log.envelopes.len()).map_err(|_| {
+                        DomainError::EventSequence("event-v4 event count overflow".to_owned())
+                    })?;
+                Ok(M5CompletedGluingProfileV4 {
+                    event_id,
+                    cover_id: bundle.cover_id().clone(),
+                    attempt_id: attempt.id().clone(),
+                    result: attempt.result(),
+                    obstruction_id: attempt.obstruction_id().cloned(),
+                    obstruction_source_ids: bundle
+                        .obstruction()
+                        .map(|obstruction| obstruction.source_ids().cloned().collect())
+                        .unwrap_or_default(),
+                    confirmed_tail_hash: confirmed_log.tail_hash.clone(),
+                    confirmed_event_count,
+                    source_ids: source_ids.clone(),
+                })
+            })
+            .transpose()?;
+        if completed.is_some() && !remaining_inputs.is_empty() {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
         Ok(M5GluingProfileInspectionV4 {
             roots,
             remaining_inputs,
             source_ids,
+            completed,
         })
     }
 
@@ -28642,18 +28774,35 @@ mod tests {
             complete_log.mint_gluing_bundle_v4(&complete_basis, &sealed_session),
             Err(DomainError::AlreadyComplete)
         ));
-        assert!(matches!(
-            EventLogV4::inspect_m5_gluing_profile_v4(
-                bootstrap.run_id().clone(),
-                bootstrap.canonical_genesis_bytes(),
-                &sealed_confirmed,
-                &resolver,
-                empty_v4_roots(aggregate),
-                limits,
-                assignments,
-            ),
-            Err(DomainError::AlreadyComplete)
-        ));
+        let completed_inspection = EventLogV4::inspect_m5_gluing_profile_v4(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &sealed_confirmed,
+            &resolver,
+            empty_v4_roots(aggregate),
+            limits,
+            assignments,
+        )
+        .expect("complete profile remains inspectable after exact full replay");
+        assert_eq!(completed_inspection.remaining_input_count(), 0);
+        let completed = completed_inspection
+            .completed()
+            .expect("one fully replayed bundle");
+        assert_eq!(completed.event_id(), bundle_event.id());
+        assert_eq!(completed.attempt_id(), bundle_receipt.attempt_id());
+        assert_eq!(completed.cover_id(), bundle_receipt.cover_id());
+        assert_eq!(completed.result(), bundle_receipt.result());
+        assert!(completed.obstruction_id().is_some());
+        assert!(!completed.obstruction_source_ids().is_empty());
+        assert_eq!(
+            completed.confirmed_tail_hash(),
+            bundle_receipt.confirmed_tail_hash()
+        );
+        assert_eq!(
+            completed.confirmed_event_count(),
+            sealed_confirmed.len() as u64
+        );
+        assert!(!completed.source_ids().is_empty());
 
         let bundle_payload =
             decode_canonical_payload(EventContractVersion::V4, bundle_event.payload.get())

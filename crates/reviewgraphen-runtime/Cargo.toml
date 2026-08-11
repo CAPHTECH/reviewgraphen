@@ -18,5 +18,6 @@ reviewgraphen-verifier = { path = "../reviewgraphen-verifier" }
 thiserror.workspace = true
 
 [dev-dependencies]
+reviewgraphen-store = { path = "../reviewgraphen-store", features = ["test-support"] }
 serde_json.workspace = true
 tempfile.workspace = true

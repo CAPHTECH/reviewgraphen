@@ -861,6 +861,8 @@ A crash before descriptor registration can leave an unregistered CAS object. It 
 
 M5 performs no process/network/tool operation. Recovery, v5 rebuild, and report generation use only the confirmed canonical journal, registered CAS descriptors, v4 trust roots/basis, and reconstructed state. Cached overlap, SQLite, reports, or caller objects are never replay authority.
 
+Profile-specific canonical-tail recovery returns one closed typed outcome. `Continued` contains the attributed recovery receipt and runs the profile callback only after full replay proves a legal zero/one/two-descriptor prefix. `AlreadyComplete` contains the attributed recovery receipt plus a descriptive completed-profile summary (bundle event, cover, attempt, result, optional obstruction and its exact source IDs, confirmed tail/count, and profile source IDs); it is available only when the recovered full prefix, descriptor CAS, augmented roots, assignments, and atomic bundle all replay exactly. The callback is not invoked in that branch and no second bundle is prepared. A wrong/foreign/stale key or mismatched roots/profile/assignments returns neither outcome. The summary is not append authority, acceptance, evidence, or a reusable replay basis.
+
 ### 8. Index v5 and report v4
 
 Index v5 observes payloads only through Core's complete authority replay. The

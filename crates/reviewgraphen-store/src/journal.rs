@@ -17,11 +17,12 @@ use reviewgraphen_core::{
     EventLogV4, EventReplayLimits, EventStreamGenesis, ExpectedVerificationAttemptV3,
     ExternalWitnessAdmissionV3, FixtureExecutionReceiptV1, FixtureRegistrationResumeAuthorityV3,
     GLUING_INPUT_MEDIA_TYPE_V4, GluingBundleReceiptV4, GluingInputDescriptorV4,
-    InheritedD2EventReceiptV4, M5DoubleSubmitAssignmentsV4, M5GluingProfileInputV4,
-    MAX_M5_DESCRIPTOR_CANONICAL_BYTES, ObligationLifecycle, OpaqueSessionIdentityV4,
-    PreparedInheritedD2EventV4, RecoveredM4BundleV4Session as CoreRecoveredM4BundleV4Session,
-    ReviewPlan, RunGenesisSnapshot, SnapshotSourceBundle, SnapshotSourcesRecorded, StableId,
-    StaticFactEvaluationV1, StaticVerificationAttemptInspectionV3, TrustedGluingInputAdmissionV4,
+    InheritedD2EventReceiptV4, M5CompletedGluingProfileV4, M5DoubleSubmitAssignmentsV4,
+    M5GluingProfileInputV4, MAX_M5_DESCRIPTOR_CANONICAL_BYTES, ObligationLifecycle,
+    OpaqueSessionIdentityV4, PreparedInheritedD2EventV4,
+    RecoveredM4BundleV4Session as CoreRecoveredM4BundleV4Session, ReviewPlan, RunGenesisSnapshot,
+    SnapshotSourceBundle, SnapshotSourcesRecorded, StableId, StaticFactEvaluationV1,
+    StaticVerificationAttemptInspectionV3, TrustedGluingInputAdmissionV4,
     TrustedGluingInputSourceV4, ValidatedArtifactRegistrationV3, ValidatedDecisionV3,
     ValidatedExecutionBundle, ValidatedFindingV3, ValidatedGluingBundleV4,
     ValidatedVerificationBundleV3, ValidatedVerificationBundleV4, VerificationAttemptStageV3,
@@ -397,6 +398,8 @@ pub enum JournalError {
     GenesisNotCommittedV4 { stage: &'static str },
     #[error("event-v4 recovery durability is uncertain after {outcome:?}")]
     RecoveryDurabilityUncertainV4 { outcome: RecoveryOutcomeV4 },
+    #[error("the exact M5 profile has no completed atomic bundle")]
+    M5ProfileIncompleteV4,
 }
 
 /// Confirmation returned only after the appended line has reached `sync_data`.
@@ -930,6 +933,20 @@ pub struct M5GluingProfileSessionV4<'session, 'root, 'roots> {
     source_ids: std::collections::BTreeSet<StableId>,
 }
 
+/// Result of one profile-specific canonical-tail recovery. The complete
+/// branch proves that the uncertain bundle was already durable through the
+/// same full roots-bound replay; no callback or second append is attempted.
+pub enum M5GluingProfileRecoveryV4<T> {
+    Continued {
+        recovery: RecoveryReceiptV4,
+        value: T,
+    },
+    AlreadyComplete {
+        recovery: RecoveryReceiptV4,
+        completed: M5CompletedGluingProfileV4,
+    },
+}
+
 impl M5GluingProfileSessionV4<'_, '_, '_> {
     #[must_use]
     pub fn remaining_input_count(&self) -> usize {
@@ -939,6 +956,17 @@ impl M5GluingProfileSessionV4<'_, '_, '_> {
     #[must_use]
     pub fn source_ids(&self) -> &std::collections::BTreeSet<StableId> {
         &self.source_ids
+    }
+
+    /// Arms the next ordinary append acknowledgement boundary for an
+    /// integration-test-only post-sync uncertainty. This method exists only
+    /// behind the opt-in `test-support` feature and cannot mint authority or
+    /// alter the bytes selected by Core.
+    #[cfg(feature = "test-support")]
+    pub fn inject_next_append_post_sync_uncertainty_for_test_support(&mut self) {
+        self.session
+            .writer
+            .inject_faults([AppendFault::ClearMarkerDirectorySync]);
     }
 
     /// Consumes the next Core-issued suffix element (payment then UI-event).
@@ -974,6 +1002,14 @@ impl M5GluingProfileSessionV4<'_, '_, '_> {
     }
 }
 
+enum LockedM5ProfileSessionResult<T> {
+    Continued(T),
+    AlreadyComplete {
+        completed: Box<M5CompletedGluingProfileV4>,
+        roots: AuthorityTrustRootsV4,
+    },
+}
+
 fn run_locked_m5_profile_session<'root, T, F>(
     root: &'root StoreRoot,
     root_lock: V4RootLock,
@@ -982,7 +1018,7 @@ fn run_locked_m5_profile_session<'root, T, F>(
     base_roots: AuthorityTrustRootsV4,
     assignments: M5DoubleSubmitAssignmentsV4,
     operation: F,
-) -> Result<T, JournalError>
+) -> Result<LockedM5ProfileSessionResult<T>, JournalError>
 where
     F: for<'session, 'roots> FnOnce(
         &mut M5GluingProfileSessionV4<'session, 'root, 'roots>,
@@ -1006,7 +1042,13 @@ where
         assignments,
     )?;
     let source_ids = inspection.source_ids().clone();
-    let (augmented_roots, remaining_inputs) = inspection.into_parts();
+    let (augmented_roots, remaining_inputs, completed) = inspection.into_recovery_parts();
+    if let Some(completed) = completed {
+        return Ok(LockedM5ProfileSessionResult::AlreadyComplete {
+            completed: Box::new(completed),
+            roots: augmented_roots,
+        });
+    }
     let session_identity = OpaqueSessionIdentityV4::fresh();
     let (log, mut basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
         writer.identity.run_id.clone(),
@@ -1041,7 +1083,7 @@ where
         remaining_inputs,
         source_ids,
     };
-    operation(&mut profile)
+    operation(&mut profile).map(LockedM5ProfileSessionResult::Continued)
 }
 
 /// Authority-replayed historical prefix used only to validate a disposable
@@ -2876,7 +2918,7 @@ pub struct JournalWriter {
     run: OwnedFd,
     poisoned: bool,
     append_durability: AppendDurability,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     faults: std::collections::VecDeque<AppendFault>,
 }
 
@@ -2884,7 +2926,8 @@ pub struct JournalWriter {
 /// contract tests.  Keeping the injector on the writer rather than in global
 /// state makes concurrent tests independent and documents the exact durable
 /// boundary being exercised.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AppendFault {
     PartialWrite,
@@ -3469,7 +3512,7 @@ impl<'a> EventJournal<'a> {
                     run: dup(&run_lock).map_err(StoreError::Io)?,
                     poisoned: false,
                     append_durability: AppendDurability::Confirmed,
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     faults: std::collections::VecDeque::new(),
                 };
                 Ok((
@@ -3567,7 +3610,7 @@ impl<'a> EventJournal<'a> {
                 run: dup(&run_lock).map_err(StoreError::Io)?,
                 poisoned: false,
                 append_durability: AppendDurability::Confirmed,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 faults: std::collections::VecDeque::new(),
             };
             match recovery {
@@ -4061,7 +4104,7 @@ impl<'a> EventJournal<'a> {
         let root_lock = acquire_v4_root_lock(self.root)?;
         let run_lock = acquire_v4_run_lock(&self.run)?;
         let writer = self.writer_v4()?;
-        run_locked_m5_profile_session(
+        match run_locked_m5_profile_session(
             self.root,
             root_lock,
             run_lock,
@@ -4069,7 +4112,82 @@ impl<'a> EventJournal<'a> {
             base_roots,
             assignments,
             operation,
-        )
+        )? {
+            LockedM5ProfileSessionResult::Continued(value) => Ok(value),
+            LockedM5ProfileSessionResult::AlreadyComplete { .. } => Err(JournalError::Domain(
+                reviewgraphen_core::DomainError::AlreadyComplete,
+            )),
+        }
+    }
+
+    /// Revalidates one already-complete fixed profile without exposing the
+    /// augmented roots, replay basis, or editable session used internally.
+    /// The returned value is descriptive and source-bound to the confirmed
+    /// journal/CAS prefix.
+    pub fn inspect_completed_m5_gluing_profile_v4(
+        &self,
+        base_roots: AuthorityTrustRootsV4,
+        assignments: M5DoubleSubmitAssignmentsV4,
+    ) -> Result<M5CompletedGluingProfileV4, JournalError> {
+        if self.identity.version() != EventContractVersion::V4 {
+            return Err(JournalError::Identity(
+                "M5 profile inspection requires a V4 journal",
+            ));
+        }
+        let root_lock = acquire_v4_root_lock(self.root)?;
+        let run_lock = acquire_v4_run_lock(&self.run)?;
+        let writer = self.writer_v4()?;
+        match run_locked_m5_profile_session(
+            self.root,
+            root_lock,
+            run_lock,
+            writer,
+            base_roots,
+            assignments,
+            |_| Ok(()),
+        )? {
+            LockedM5ProfileSessionResult::AlreadyComplete { completed, .. } => Ok(*completed),
+            LockedM5ProfileSessionResult::Continued(()) => Err(JournalError::M5ProfileIncompleteV4),
+        }
+    }
+
+    /// Rebuilds and re-reads V5 from the same exact completed profile inputs.
+    /// This cross-crate assertion seam is intentionally available only to
+    /// integration tests; augmented roots remain private.
+    #[cfg(feature = "test-support")]
+    pub fn completed_m5_v5_snapshot_for_test_support(
+        &self,
+        base_roots: AuthorityTrustRootsV4,
+        assignments: M5DoubleSubmitAssignmentsV4,
+    ) -> Result<(M5CompletedGluingProfileV4, crate::IndexSnapshotV5), crate::IndexError> {
+        if self.identity.version() != EventContractVersion::V4 {
+            return Err(
+                JournalError::Identity("M5 profile inspection requires a V4 journal").into(),
+            );
+        }
+        let root_lock = acquire_v4_root_lock(self.root)?;
+        let run_lock = acquire_v4_run_lock(&self.run)?;
+        let writer = self.writer_v4()?;
+        let (completed, roots) = match run_locked_m5_profile_session(
+            self.root,
+            root_lock,
+            run_lock,
+            writer,
+            base_roots,
+            assignments,
+            |_| Ok(()),
+        )? {
+            LockedM5ProfileSessionResult::AlreadyComplete { completed, roots } => {
+                (*completed, roots)
+            }
+            LockedM5ProfileSessionResult::Continued(()) => {
+                return Err(JournalError::M5ProfileIncompleteV4.into());
+            }
+        };
+        let index = crate::DerivedIndexV5::open(self.root)?;
+        index.rebuild_v5(self, &roots)?;
+        let snapshot = index.snapshot_current_v5(self, &roots)?;
+        Ok((completed, snapshot))
     }
 
     /// Recovers one keyed canonical tail and, without releasing any lock,
@@ -4082,7 +4200,7 @@ impl<'a> EventJournal<'a> {
         key: RecoveryKeyV4,
         provenance: RecoveryProvenanceV4,
         operation: F,
-    ) -> Result<(RecoveryReceiptV4, T), JournalError>
+    ) -> Result<M5GluingProfileRecoveryV4<T>, JournalError>
     where
         F: for<'session, 'roots> FnOnce(
             &mut M5GluingProfileSessionV4<'session, 'a, 'roots>,
@@ -4194,7 +4312,7 @@ impl<'a> EventJournal<'a> {
             run: dup(&run_lock).map_err(StoreError::Io)?,
             poisoned: false,
             append_durability: AppendDurability::Confirmed,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             faults: std::collections::VecDeque::new(),
         };
         let value = run_locked_m5_profile_session(
@@ -4206,7 +4324,20 @@ impl<'a> EventJournal<'a> {
             assignments,
             operation,
         )?;
-        Ok((receipt, value))
+        Ok(match value {
+            LockedM5ProfileSessionResult::Continued(value) => {
+                M5GluingProfileRecoveryV4::Continued {
+                    recovery: receipt,
+                    value,
+                }
+            }
+            LockedM5ProfileSessionResult::AlreadyComplete { completed, .. } => {
+                M5GluingProfileRecoveryV4::AlreadyComplete {
+                    recovery: receipt,
+                    completed: *completed,
+                }
+            }
+        })
     }
 
     /// Acquires the exclusive journal lock and rebuilds one V4 replay basis
@@ -4377,7 +4508,7 @@ impl<'a> EventJournal<'a> {
             run: dup(&self.run).map_err(StoreError::Io)?,
             poisoned: false,
             append_durability: AppendDurability::Confirmed,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             faults: std::collections::VecDeque::new(),
         };
         Ok((
@@ -4780,7 +4911,7 @@ impl<'a> EventJournal<'a> {
             run: dup(&self.run).map_err(StoreError::Io)?,
             poisoned: false,
             append_durability: AppendDurability::Confirmed,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             faults: std::collections::VecDeque::new(),
         })
     }
@@ -4837,7 +4968,7 @@ impl<'a> EventJournal<'a> {
             run: dup(&self.run).map_err(StoreError::Io)?,
             poisoned: false,
             append_durability: AppendDurability::Confirmed,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             faults: std::collections::VecDeque::new(),
         };
         let JournalGenesis::V3Shared(genesis) = &writer.identity.genesis else {
@@ -6305,7 +6436,7 @@ impl JournalWriter {
     }
 
     fn clear_bundle_pending(&mut self) -> Result<(), JournalError> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.take_fault(AppendFault::ClearMarkerDirectorySync) {
             return Err(JournalError::Io(injected_io_error(
                 "bundle marker directory sync",
@@ -6655,7 +6786,7 @@ impl JournalWriter {
 
     fn clear_append_marker(&mut self) -> Result<(), JournalError> {
         fs::unlinkat(&self.run, APPEND_PENDING_MARKER, AtFlags::empty()).map_err(StoreError::Io)?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.take_fault(AppendFault::ClearMarkerDirectorySync) {
             restore_append_marker(&self.run).map_err(|error| match error {
                 JournalError::Io(error) => error,
@@ -6669,18 +6800,18 @@ impl JournalWriter {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn inject_faults(&mut self, faults: impl IntoIterator<Item = AppendFault>) {
         self.faults.extend(faults);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn take_fault(&mut self, expected: AppendFault) -> bool {
         self.faults.front().copied() == Some(expected) && self.faults.pop_front().is_some()
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn injected_io_error(operation: &'static str) -> std::io::Error {
     std::io::Error::other(format!("test-only injected {operation} failure"))
 }
@@ -7755,7 +7886,7 @@ fn ensure_v4_append_pending(run: &OwnedFd) -> Result<(), JournalError> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn restore_append_marker(run: &OwnedFd) -> Result<(), JournalError> {
     let fd = fs::openat(
         run,
@@ -15286,7 +15417,7 @@ mod tests {
             payment.descriptor.assignment_value(),
             ui.descriptor.assignment_value(),
         );
-        let (receipt, bundle) = journal
+        let recovered = journal
             .recover_with_m5_gluing_profile_session(
                 public_v4_profile_base_roots(),
                 assignments,
@@ -15303,6 +15434,13 @@ mod tests {
                 },
             )
             .unwrap();
+        let M5GluingProfileRecoveryV4::Continued {
+            recovery: receipt,
+            value: bundle,
+        } = recovered
+        else {
+            panic!("one-registration prefix must continue the M5 profile")
+        };
         assert!(matches!(
             receipt.outcome(),
             RecoveryOutcomeV4::TailRecovered { .. }
@@ -15313,6 +15451,81 @@ mod tests {
             reviewgraphen_core::GluingResultV4::Unknown
         );
         assert!(try_acquire_v4_root_lock(&root).unwrap().is_some());
+    }
+
+    #[test]
+    fn v4_gluing_bundle_post_sync_recovery_returns_verified_complete_without_callback() {
+        let (_workspace, root) = root();
+        let (journal, _roots, [payment, ui]) =
+            public_v4_gluing_journal(&root, "run:journal-v4-profile-bundle-uncertain");
+        let assignments = M5DoubleSubmitAssignmentsV4::new(
+            payment.descriptor.assignment_value(),
+            ui.descriptor.assignment_value(),
+        );
+        let run_id = journal.identity.run_id.clone();
+        let genesis_hash = journal.identity.genesis_hash();
+        assert!(matches!(
+            journal.with_m5_gluing_profile_session(
+                public_v4_profile_base_roots(),
+                assignments,
+                |profile| {
+                    assert!(profile.publish_next_gluing_input()?.is_some());
+                    assert!(profile.publish_next_gluing_input()?.is_some());
+                    profile
+                        .session
+                        .writer
+                        .inject_faults([AppendFault::ClearMarkerDirectorySync]);
+                    profile.append_gluing_bundle()
+                },
+            ),
+            Err(JournalError::SessionUncertain)
+        ));
+
+        let key = EventJournal::inspect_recovery_v4(
+            &root,
+            RecoveryInspectionV4::new(run_id, genesis_hash, RecoveryKindV4::CanonicalTail),
+        )
+        .unwrap();
+        let recovered = journal
+            .recover_with_m5_gluing_profile_session(
+                public_v4_profile_base_roots(),
+                assignments,
+                key,
+                RecoveryProvenanceV4::new("test", "v4-profile-bundle-uncertain").unwrap(),
+                |_| -> Result<(), JournalError> {
+                    panic!("a durable recovered bundle must not run the append callback")
+                },
+            )
+            .unwrap();
+        let M5GluingProfileRecoveryV4::AlreadyComplete {
+            recovery,
+            completed,
+        } = recovered
+        else {
+            panic!("post-sync bundle recovery must report verified completion")
+        };
+        assert!(matches!(
+            recovery.outcome(),
+            RecoveryOutcomeV4::TailRecovered { .. }
+        ));
+        assert_eq!(
+            completed.result(),
+            reviewgraphen_core::GluingResultV4::Unknown
+        );
+        assert!(completed.obstruction_id().is_some());
+        assert!(!completed.obstruction_source_ids().is_empty());
+        assert!(!completed.source_ids().is_empty());
+        assert!(!bundle_file_exists(&journal.run, APPEND_PENDING_MARKER).unwrap());
+        assert!(matches!(
+            journal.with_m5_gluing_profile_session(
+                public_v4_profile_base_roots(),
+                assignments,
+                |_| Ok(()),
+            ),
+            Err(JournalError::Domain(
+                reviewgraphen_core::DomainError::AlreadyComplete
+            ))
+        ));
     }
 
     #[test]
