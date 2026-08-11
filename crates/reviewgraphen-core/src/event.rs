@@ -9465,6 +9465,7 @@ std::thread_local! {
     static V3_TEST_GENESIS_ALLOCATION_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_TRANSACTION_ALLOCATION_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_REPLAY_PAYLOAD_DECODE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_PLAN_AUTHORITY_MATERIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_APPEND_SHADOW_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_BINDING_APPEND_PEAK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_BINDING_SHADOW_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -10799,6 +10800,219 @@ pub struct AuthorityTrustRootsV4 {
     harnesses: Vec<AuthorityHarnessBindingV3Tuple>,
     human_grants: Vec<AuthorityHumanGrantV3Tuple>,
     allowed_gluing_input_bindings: Vec<GluingInputTrustBindingV4>,
+}
+
+// V5 authority replay deliberately has its own host-root object.  Although
+// the frozen V3 verifier/human tuples and V4 gluing binding DTOs are reused as
+// data, this is not a V4 capability wrapper: it has no conversion to
+// `AuthorityTrustRootsV4`, no V4 basis input, and its eventual digest commits
+// V5 event positions.
+#[allow(dead_code)] // Private V5 authority reducer foundation; no public seam yet.
+#[derive(Debug)]
+pub(crate) struct AuthorityTrustRootsV5 {
+    policy_revision_hash: ContentHash,
+    repository_id: StableId,
+    repository_source_hash: ContentHash,
+    harnesses: Vec<AuthorityHarnessBindingV3Tuple>,
+    human_grants: Vec<AuthorityHumanGrantV3Tuple>,
+    allowed_gluing_input_bindings: Vec<GluingInputTrustBindingV4>,
+}
+
+/// Private, workspace-scoped CAS seam reserved for V5 authority replay. It
+/// intentionally is a distinct trait from the V4 resolver, preventing a V4
+/// replay capability from being passed as a V5 session input by type.
+#[allow(dead_code)] // Consumed by the private V5 authority reducer.
+pub(crate) trait AuthorityArtifactResolverV5 {
+    fn read_exact(&self, cas_hash: &ContentHash, destination: &mut [u8]) -> Result<()>;
+}
+
+impl AuthorityTrustRootsV5 {
+    #[allow(dead_code)] // Connected when the private V5 authority reducer lands.
+    pub(crate) fn new(
+        policy_revision_hash: ContentHash,
+        repository_id: StableId,
+        repository_source_hash: ContentHash,
+        harnesses: Vec<AuthorityHarnessBindingV3Tuple>,
+        human_grants: Vec<AuthorityHumanGrantV3Tuple>,
+        allowed_gluing_input_bindings: Vec<GluingInputTrustBindingV4>,
+    ) -> Result<Self> {
+        if repository_id.kind() != "repository" {
+            return Err(DomainError::Validation(
+                "V5 authority roots require a repository ID".to_owned(),
+            ));
+        }
+        if harnesses.len() > 64
+            || human_grants.len() > 64
+            || allowed_gluing_input_bindings.len() > 64
+        {
+            return Err(DomainError::Incomplete {
+                operation: "event-v5 authority trust roots",
+                limit: 64,
+                observed: harnesses
+                    .len()
+                    .max(human_grants.len())
+                    .max(allowed_gluing_input_bindings.len()),
+            });
+        }
+        let mut harness_keys = BTreeSet::new();
+        for binding in &harnesses {
+            validate_harness_binding_v4(
+                &policy_revision_hash,
+                &repository_id,
+                &repository_source_hash,
+                binding,
+            )?;
+            if !harness_keys.insert((
+                binding.run_id.clone(),
+                binding.claim_id.clone(),
+                binding.descriptor_id.clone(),
+            )) {
+                return Err(DomainError::Validation(
+                    "duplicate V5 claim-bound harness trust root".to_owned(),
+                ));
+            }
+        }
+        let mut human_keys = BTreeSet::new();
+        for grant in &human_grants {
+            validate_human_grant_v4(&policy_revision_hash, grant)?;
+            if !human_keys.insert((
+                grant.run_id.clone(),
+                grant.actor.clone(),
+                grant.authority_id.clone(),
+                grant.valid_from.clone(),
+                grant.valid_until.clone(),
+            )) {
+                return Err(DomainError::Validation(
+                    "duplicate V5 human authority trust grant".to_owned(),
+                ));
+            }
+        }
+        let mut gluing_keys = BTreeSet::new();
+        for binding in &allowed_gluing_input_bindings {
+            binding.validate()?;
+            if binding.policy_revision_hash != policy_revision_hash
+                || binding.repository_id != repository_id
+                || binding.repository_source_hash != repository_source_hash
+            {
+                return Err(DomainError::Validation(
+                    "V5 gluing root must equal the enclosing repository policy tuple".to_owned(),
+                ));
+            }
+            if !gluing_keys.insert(ContentHash::sha256(&canonical_gluing_binding(binding)?)) {
+                return Err(DomainError::Validation(
+                    "duplicate V5 gluing trust binding".to_owned(),
+                ));
+            }
+        }
+        Ok(Self {
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            allowed_gluing_input_bindings,
+        })
+    }
+}
+
+#[allow(dead_code)] // Basis entries stay private until complete authority replay exists.
+#[derive(Debug, Serialize)]
+struct AuthorityReplayEntryV3AtV5 {
+    event_sequence: u64,
+    event_id: StableId,
+    payload_kind: String,
+    record_id: StableId,
+    record_body_hash: ContentHash,
+    predecessor_event_hash: ContentHash,
+    v3_trust_binding_digest: ContentHash,
+    v5_position_digest: ContentHash,
+}
+
+/// The V5-specific digest position of a frozen gluing input.  The plan-only
+/// checkpoint has no such entries, but its canonical basis deliberately
+/// commits the empty collection rather than replacing it with a count.
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+struct GluingInputReplayEntryV5 {
+    event_sequence: u64,
+    event_id: StableId,
+    registration_id: StableId,
+    registration_body_hash: ContentHash,
+    predecessor_event_hash: ContentHash,
+    v4_trust_binding_digest: ContentHash,
+    v5_position_digest: ContentHash,
+}
+
+#[allow(dead_code)] // No public partial authority basis is exposed.
+#[derive(Debug)]
+struct PreIncrementalAuthorityReplayBasisV5 {
+    schema: &'static str,
+    target_run_id: StableId,
+    target_genesis_hash: ContentHash,
+    target_confirmed_tail_hash: ContentHash,
+    target_confirmed_event_count: u64,
+    target_next_sequence: u64,
+    policy_revision_hash: ContentHash,
+    inherited_m4_entries: Vec<AuthorityReplayEntryV3AtV5>,
+    gluing_input_entries: Vec<GluingInputReplayEntryV5>,
+    basis_digest: ContentHash,
+}
+
+#[allow(dead_code)] // Called by the private V5 authority reducer in the next slice.
+fn v5_authority_position_digest(
+    run_id: &StableId,
+    genesis_hash: &ContentHash,
+    event_id: &StableId,
+    event_sequence: u64,
+    predecessor_event_hash: &ContentHash,
+    v3_trust_binding_digest: &ContentHash,
+) -> Result<ContentHash> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        schema: &'static str,
+        run_id: &'a StableId,
+        genesis_hash: &'a ContentHash,
+        event_id: &'a StableId,
+        event_sequence: u64,
+        predecessor_event_hash: &'a ContentHash,
+        v3_trust_binding_digest: &'a ContentHash,
+    }
+    Ok(ContentHash::sha256(&canonical_json(&Body {
+        schema: "reviewgraphen.authority_position.v5",
+        run_id,
+        genesis_hash,
+        event_id,
+        event_sequence,
+        predecessor_event_hash,
+        v3_trust_binding_digest,
+    })?))
+}
+
+/// Canonical authority-policy identity derived only from accepted target
+/// ProgramSpace facts.  This is intentionally byte-for-byte the M6 target
+/// policy identity preimage, but remains Core-private so Store's projection
+/// cannot become an authority input.
+#[derive(Serialize)]
+struct V5TargetAuthorityPolicyIdentity<'a> {
+    schema: &'static str,
+    profile_id: &'a str,
+    profile_version: &'a str,
+    policy_version: &'a str,
+    rule_set_hash: &'a ContentHash,
+    extractor_set_hash: &'a ContentHash,
+}
+
+fn target_policy_revision_hash_v5(program: &ProgramSpace) -> Result<ContentHash> {
+    Ok(ContentHash::sha256(&canonical_json(
+        &V5TargetAuthorityPolicyIdentity {
+            schema: "reviewgraphen.target_policy_identity.v6",
+            profile_id: program.profile_id(),
+            profile_version: program.profile_version(),
+            policy_version: program.policy_version(),
+            rule_set_hash: program.rule_set_hash(),
+            extractor_set_hash: program.extractor_set_hash(),
+        },
+    )?))
 }
 
 /// The exact ADR 0021 fixture-harness tuple copied into a V4 host root.
@@ -18952,6 +19166,173 @@ impl ReplayedV5PreIncrementalStructuralPrefixState<'_> {
     }
 }
 
+/// Private replay-owned plan-only authority checkpoint. It is intentionally
+/// not exposed until post-plan D2/M4/M5 replay and its closed projection are
+/// complete; structural admission alone never upgrades into this state.
+#[allow(dead_code)]
+struct ReplayedV5PlanAuthorityState<'a> {
+    // This is a borrow of the independently admitted structural backing;
+    // authority replay never reconstructs or nests that ownership.
+    structural: &'a ReplayedV5PreIncrementalStructuralPrefixState<'a>,
+    basis: PreIncrementalAuthorityReplayBasisV5,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct V5PlanAuthorityPreflight {
+    retained_bytes: u64,
+    working_bytes: u64,
+}
+
+fn v5_plan_authority_preflight(
+    log: &EventLogV5,
+    structural: &ReplayedV5PreIncrementalStructuralPrefixState<'_>,
+    roots: &AuthorityTrustRootsV5,
+) -> Result<V5PlanAuthorityPreflight> {
+    fn add(total: &mut u64, value: u64, operation: &'static str) -> Result<()> {
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| replay_incomplete(operation, u64::MAX, u64::MAX))?;
+        Ok(())
+    }
+    let structural_projection = structural.projection();
+    // This includes the full resident V5 log and the independently-owned
+    // structural state exactly once. The authority checkpoint only borrows it.
+    let structural_backing = u64::try_from(structural_projection.retained_bytes_for_m6()?)
+        .map_err(|_| {
+            replay_incomplete("V5 plan authority structural backing", u64::MAX, u64::MAX)
+        })?;
+    let basis_dynamic = [
+        structural.pre_incremental.run_id.allocated_bytes(),
+        structural.genesis_hash.allocated_bytes(),
+        structural.tail_hash.allocated_bytes(),
+        roots.policy_revision_hash.allocated_bytes(),
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, value| {
+        total
+            .checked_add(u64::try_from(value).unwrap_or(u64::MAX))
+            .ok_or_else(|| {
+                replay_incomplete("V5 plan authority basis dynamic bytes", u64::MAX, u64::MAX)
+            })
+    })?;
+    let authority_dynamic = basis_dynamic;
+    let returned_state = u64::try_from(size_of::<ReplayedV5PlanAuthorityState>())
+        .unwrap_or(u64::MAX)
+        .checked_add(authority_dynamic)
+        .ok_or_else(|| replay_incomplete("V5 plan authority returned state", u64::MAX, u64::MAX))?;
+    let mut retained = 0_u64;
+    for value in [structural_backing, returned_state] {
+        add(&mut retained, value, "V5 plan authority retained preflight")?;
+    }
+    let largest_live_cas_buffer = structural
+        .pre_incremental
+        .registrations
+        .iter()
+        .map(ArtifactRegisteredV3::size)
+        .max()
+        .unwrap_or(0);
+    let canonical_scratch = log.maximum_canonical_event_line_bytes_for_store()?;
+    let registration_phase = structural_backing
+        .checked_add(largest_live_cas_buffer)
+        .and_then(|value| value.checked_add(canonical_scratch))
+        .ok_or_else(|| {
+            replay_incomplete("V5 plan authority registration phase", u64::MAX, u64::MAX)
+        })?;
+    let final_phase = retained
+        .checked_add(canonical_scratch)
+        .ok_or_else(|| replay_incomplete("V5 plan authority final phase", u64::MAX, u64::MAX))?;
+    let working = registration_phase.max(final_phase);
+    Ok(V5PlanAuthorityPreflight {
+        retained_bytes: retained,
+        working_bytes: working,
+    })
+}
+
+/// The plan-only checkpoint is deliberately narrower than the later V5
+/// authority reducer: its registrations are only the exact source-ingest
+/// closure already bound by `SnapshotSourcesRecorded`.  Keep this predicate
+/// separate so a future broadening cannot accidentally turn a reviewer or
+/// verifier artifact into an initial source registration.
+fn validate_plan_only_registration_source_v5(
+    registration: &ArtifactRegisteredV3,
+    expected_run_id: &StableId,
+    expected_snapshot_id: &StableId,
+) -> Result<()> {
+    let ArtifactSourceV3::SnapshotIngest {
+        run_id,
+        snapshot_id,
+        ..
+    } = registration.source()
+    else {
+        return Err(DomainError::Validation(
+            "V5 plan-only authority accepts snapshot-ingest registrations only".to_owned(),
+        ));
+    };
+    if registration.run_id() != expected_run_id
+        || run_id != expected_run_id
+        || snapshot_id != expected_snapshot_id
+    {
+        return Err(DomainError::Validation(
+            "V5 plan-only snapshot registration must bind the target run and snapshot".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+impl PreIncrementalAuthorityReplayBasisV5 {
+    fn plan_only(
+        structural: &ReplayedV5PreIncrementalStructuralPrefixState<'_>,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<Self> {
+        let target_next_sequence = structural
+            .predecessor_event_count
+            .checked_add(1)
+            .ok_or_else(|| {
+                DomainError::EventSequence("V5 authority replay next sequence overflow".to_owned())
+            })?;
+        let inherited_m4_entries = Vec::new();
+        let gluing_input_entries = Vec::new();
+        let schema = "reviewgraphen.pre_incremental_authority_replay_basis.v5";
+        // This is precisely ADR 0023 §4's displayed object.  Other validated
+        // target facts stay in the private replay-owned state, not its digest.
+        #[derive(Serialize)]
+        struct Body<'a> {
+            schema: &'a str,
+            target_run_id: &'a StableId,
+            target_genesis_hash: &'a ContentHash,
+            target_confirmed_tail_hash: &'a ContentHash,
+            target_confirmed_event_count: u64,
+            target_next_sequence: u64,
+            policy_revision_hash: &'a ContentHash,
+            inherited_m4_entries: &'a [AuthorityReplayEntryV3AtV5],
+            gluing_input_entries: &'a [GluingInputReplayEntryV5],
+        }
+        let basis_digest = ContentHash::sha256(&canonical_json(&Body {
+            schema,
+            target_run_id: &structural.pre_incremental.run_id,
+            target_genesis_hash: &structural.genesis_hash,
+            target_confirmed_tail_hash: &structural.tail_hash,
+            target_confirmed_event_count: structural.predecessor_event_count,
+            target_next_sequence,
+            policy_revision_hash: &roots.policy_revision_hash,
+            inherited_m4_entries: &inherited_m4_entries,
+            gluing_input_entries: &gluing_input_entries,
+        })?);
+        Ok(Self {
+            schema,
+            target_run_id: structural.pre_incremental.run_id.clone(),
+            target_genesis_hash: structural.genesis_hash.clone(),
+            target_confirmed_tail_hash: structural.tail_hash.clone(),
+            target_confirmed_event_count: structural.predecessor_event_count,
+            target_next_sequence,
+            policy_revision_hash: roots.policy_revision_hash.clone(),
+            inherited_m4_entries,
+            gluing_input_entries,
+            basis_digest,
+        })
+    }
+}
+
 /// Narrow read-only facts extracted from a source-bound structural prefix.
 ///
 /// This is not an event/record iterator: V4/M5 bodies are never represented,
@@ -19751,6 +20132,78 @@ impl EventLogV5 {
                 retained_envelope_bytes,
             },
         })
+    }
+
+    /// Private plan-only roots-bound replay checkpoint.  It intentionally
+    /// refuses all post-plan vocabulary until the D2/M4/M5 reducer and closed
+    /// actual-record projection are complete; callers cannot use it as a
+    /// partial authority API.
+    #[allow(dead_code)]
+    fn replay_plan_authority_prefix_v5<'a>(
+        structural: &'a ReplayedV5PreIncrementalStructuralPrefixState<'a>,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<ReplayedV5PlanAuthorityState<'a>> {
+        Self::replay_plan_authority_prefix_v5_with_limits(
+            structural,
+            resolver,
+            roots,
+            structural.event_log.limits.max_retained_bytes,
+            structural.event_log.limits.max_working_bytes,
+        )
+    }
+
+    fn replay_plan_authority_prefix_v5_with_limits<'a>(
+        structural: &'a ReplayedV5PreIncrementalStructuralPrefixState<'a>,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+        max_retained_bytes: u64,
+        max_working_bytes: u64,
+    ) -> Result<ReplayedV5PlanAuthorityState<'a>> {
+        // This is intentionally the first authority operation. Structural
+        // state was already materialized and independently admitted; no
+        // authority-owned allocation or CAS read precedes this combined gate.
+        let preflight = v5_plan_authority_preflight(structural.event_log, structural, roots)?;
+        if preflight.retained_bytes > max_retained_bytes {
+            return Err(replay_incomplete(
+                "V5 plan authority retained preflight",
+                max_retained_bytes,
+                preflight.retained_bytes,
+            ));
+        }
+        if preflight.working_bytes > max_working_bytes {
+            return Err(replay_incomplete(
+                "V5 plan authority working preflight",
+                max_working_bytes,
+                preflight.working_bytes,
+            ));
+        }
+        #[cfg(test)]
+        V5_TEST_PLAN_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(value.get() + 1));
+        let aggregate = &structural.pre_incremental.aggregate;
+        let source_hash = aggregate
+            .program()
+            .repository_source()
+            .content_hash()
+            .ok_or(DomainError::AuthorityPolicyMismatch)?;
+        if roots.policy_revision_hash != target_policy_revision_hash_v5(aggregate.program())?
+            || roots.repository_id != *aggregate.program().repository_id()
+            || roots.repository_source_hash != *source_hash
+        {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        for registration in &structural.pre_incremental.registrations {
+            validate_plan_only_registration_source_v5(
+                registration,
+                &structural.pre_incremental.run_id,
+                aggregate.program().snapshot_id(),
+            )?;
+            let _bytes = resolve_registered_bytes_with(registration, |cas_hash, destination| {
+                resolver.read_exact(cas_hash, destination)
+            })?;
+        }
+        let basis = PreIncrementalAuthorityReplayBasisV5::plan_only(structural, roots)?;
+        Ok(ReplayedV5PlanAuthorityState { structural, basis })
     }
 
     /// Reopens only a confirmed homogeneous V5 prefix.  This structural
@@ -21832,6 +22285,18 @@ fn resolve_registered_bytes(
     registration: &ArtifactRegisteredV3,
     resolver: &impl AuthorityArtifactResolverV3,
 ) -> Result<Vec<u8>> {
+    resolve_registered_bytes_with(registration, |cas_hash, destination| {
+        resolver.read_exact(cas_hash, destination)
+    })
+}
+
+/// Shared position-independent CAS boundary for V3-family registrations.
+/// Callers supply only their version-specific resolver capability; hash, size,
+/// source-role cap, and canonical byte checks remain centralized here.
+fn resolve_registered_bytes_with(
+    registration: &ArtifactRegisteredV3,
+    read_exact: impl FnOnce(&ContentHash, &mut [u8]) -> Result<()>,
+) -> Result<Vec<u8>> {
     let limit = match registration.source() {
         ArtifactSourceV3::VerifierArtifact { .. } => crate::m4::MAX_RECORD_BYTES as u64,
         ArtifactSourceV3::ExternalHarnessWitness { .. } => 145,
@@ -21850,7 +22315,7 @@ fn resolve_registered_bytes(
         registration.size(),
         limit,
         "event-v3 role-specific CAS bytes",
-        |cas_hash, destination| resolver.read_exact(cas_hash, destination),
+        read_exact,
     )
 }
 
@@ -27947,6 +28412,76 @@ mod tests {
             .expect("complete target")
     }
 
+    fn planned_v5_without_snapshot_files() -> (EventLogV5, AuthorityTrustRootsV5) {
+        let mut input: Value = serde_json::from_slice(FIXTURE).expect("fixture JSON");
+        let event = input["artifacts"]
+            .as_array()
+            .expect("fixture artifacts")
+            .iter()
+            .find(|artifact| artifact["id"] == "event:buy-tap")
+            .expect("fixture event artifact")
+            .clone();
+        input["artifacts"] = Value::Array(vec![event]);
+        for field in ["relations", "contexts", "invariants", "evidence"] {
+            input[field] = Value::Array(Vec::new());
+        }
+        input["extraction"]["capabilities"] = Value::Object(serde_json::Map::new());
+        input["extraction"]["limitations"] = Value::Array(Vec::new());
+        let program = ProgramSpace::from_json_slice(
+            &serde_json::to_vec(&input).expect("minimal fixture serialization"),
+        )
+        .expect("valid no-file program");
+        let (universe, obligations) = MvpRulePack::synthesize(&program)
+            .expect("no-file fixture synthesis")
+            .into_parts();
+        let aggregate = ReviewAggregate::new(program, universe, obligations)
+            .expect("no-file fixture aggregate");
+        assert!(
+            aggregate
+                .program()
+                .artifacts()
+                .iter()
+                .all(|artifact| artifact.kind != "file")
+        );
+        let canonical_genesis_bytes = RunGenesisSnapshot::from_aggregate_v3(&aggregate)
+            .expect("no-file genesis snapshot")
+            .canonical_bytes_v3()
+            .expect("no-file canonical genesis");
+        let request = RunGenesisBootstrapRequestV4::new(
+            id("run:v5-no-snapshot-files"),
+            canonical_genesis_bytes,
+            aggregate.program().repository_identity(),
+            aggregate.program().snapshot_id().clone(),
+            aggregate.program().profile_id(),
+            aggregate.program().profile_version(),
+        )
+        .expect("no-file bootstrap request");
+        let sources =
+            SnapshotSourcesRecorded::new(aggregate.program().snapshot_id().clone(), Vec::new())
+                .expect("empty source set is valid for a program with no file artifacts");
+        let review_plan = plan(&aggregate, PlanBudget::new(16, 16).expect("plan budget"))
+            .expect("no-file review plan");
+        let roots = AuthorityTrustRootsV5::new(
+            target_policy_revision_hash_v5(aggregate.program()).expect("derived V5 policy"),
+            aggregate.program().repository_id().clone(),
+            aggregate
+                .program()
+                .repository_source()
+                .content_hash()
+                .expect("repository source hash")
+                .clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("no-file V5 roots");
+        (
+            EventLogV5::from_planned_bootstrap_request(request, Vec::new(), sources, review_plan)
+                .expect("no-file planned V5 prefix"),
+            roots,
+        )
+    }
+
     #[test]
     fn v5_pre_incremental_projection_requires_exact_complete_plan_prefix() {
         let mut complete = complete_planned_v5();
@@ -28002,6 +28537,867 @@ mod tests {
         .unwrap();
         complete.append_sealed_envelope_v5(late).unwrap();
         assert!(complete.replay_pre_incremental_state_for_store().is_err());
+    }
+
+    #[test]
+    fn private_v5_plan_authority_replay_rechecks_every_initial_cas_registration() {
+        let (v4, _basis, roots, resolver, _session, _claim, _input, _output) =
+            static_v4_bundle_base();
+        let mut v5 = rewrap_v4_prefix_as_v5(&v4);
+        let plan_count = v5
+            .envelopes
+            .iter()
+            .position(|envelope| {
+                matches!(
+                    decode_canonical_payload(EventContractVersion::V5, envelope.payload.get()),
+                    Ok(PersistedPayload::ReviewPlanRecorded(_))
+                )
+            })
+            .expect("plan envelope")
+            + 1;
+        v5.envelopes.truncate(plan_count);
+        v5.canonical_prefix_bytes = v5
+            .envelopes
+            .iter()
+            .map(|envelope| {
+                envelope
+                    .canonical_line_bytes_v5
+                    .expect("V5 line accounting")
+            })
+            .sum();
+        let AuthorityTrustRootsV4 {
+            policy_revision_hash: _,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            allowed_gluing_input_bindings,
+        } = roots;
+        let roots = AuthorityTrustRootsV5::new(
+            target_policy_revision_hash_v5(v4.aggregate.program()).expect("derived V5 policy"),
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            allowed_gluing_input_bindings,
+        )
+        .expect("V5 roots");
+        struct V5TestResolver {
+            objects: BTreeMap<ContentHash, Vec<u8>>,
+            reads: RefCell<Vec<ContentHash>>,
+        }
+        impl AuthorityArtifactResolverV5 for V5TestResolver {
+            fn read_exact(&self, cas_hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                self.reads.borrow_mut().push(cas_hash.clone());
+                let bytes = self
+                    .objects
+                    .get(cas_hash)
+                    .ok_or_else(|| DomainError::Validation("missing V5 test CAS".to_owned()))?;
+                if bytes.len() != destination.len() {
+                    return Err(DomainError::Validation(
+                        "V5 test CAS size mismatch".to_owned(),
+                    ));
+                }
+                destination.copy_from_slice(bytes);
+                Ok(())
+            }
+        }
+        let resolver = V5TestResolver {
+            objects: resolver.objects,
+            reads: RefCell::new(Vec::new()),
+        };
+        let coordinates = V5StructuralPrefixCoordinates::new(
+            v5.run_id(),
+            v5.genesis_hash(),
+            v5.canonical_prefix_bytes_for_store(),
+            u64::try_from(v5.envelopes.len()).expect("V5 count"),
+            v5.tail_hash(),
+        );
+        let structural = v5
+            .replay_pre_incremental_structural_prefix_for_store(coordinates)
+            .expect("structural authority backing");
+        let preflight =
+            v5_plan_authority_preflight(&v5, &structural, &roots).expect("authority preflight");
+        // Independent hand calculation: it deliberately does not call the
+        // production preflight helper.
+        let structural_resident =
+            u64::try_from(structural.projection().retained_bytes_for_m6().unwrap()).unwrap();
+        let basis_dynamic = [
+            structural.pre_incremental.run_id.allocated_bytes(),
+            structural.genesis_hash.allocated_bytes(),
+            structural.tail_hash.allocated_bytes(),
+            roots.policy_revision_hash.allocated_bytes(),
+        ]
+        .into_iter()
+        .map(|value| u64::try_from(value).unwrap())
+        .sum::<u64>();
+        let manual_retained = structural_resident
+            + u64::try_from(size_of::<ReplayedV5PlanAuthorityState>()).unwrap()
+            + basis_dynamic;
+        let largest_cas = structural
+            .pre_incremental
+            .registrations
+            .iter()
+            .map(ArtifactRegisteredV3::size)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            largest_cas > manual_retained - structural_resident,
+            "static fixture must exercise the registration-dominant phase"
+        );
+        let decoded = v5.maximum_canonical_event_line_bytes_for_store().unwrap();
+        assert_eq!(preflight.retained_bytes, manual_retained);
+        let manual_registration_phase = structural_resident + largest_cas + decoded;
+        assert_eq!(preflight.working_bytes, manual_registration_phase);
+        EventLogV5::replay_plan_authority_prefix_v5_with_limits(
+            &structural,
+            &resolver,
+            &roots,
+            preflight.retained_bytes,
+            preflight.working_bytes,
+        )
+        .expect("exact authority-only limits are admitted");
+        resolver.reads.borrow_mut().clear();
+        V5_TEST_PLAN_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(0));
+        assert!(
+            EventLogV5::replay_plan_authority_prefix_v5_with_limits(
+                &structural,
+                &resolver,
+                &roots,
+                preflight.retained_bytes,
+                preflight.working_bytes - 1,
+            )
+            .is_err()
+        );
+        assert!(resolver.reads.borrow().is_empty());
+        assert_eq!(
+            V5_TEST_PLAN_AUTHORITY_MATERIALIZATIONS.with(std::cell::Cell::get),
+            0
+        );
+        let exact_limits = EventReplayLimitsV5::new(
+            u64::try_from(v5.envelopes.len()).unwrap(),
+            v5.canonical_prefix_bytes_for_store(),
+            preflight.retained_bytes,
+            v5.limits.max_working_bytes,
+        )
+        .expect("exact authority limits");
+        let (exact_log, _) = EventLogV5::replay_confirmed_v5_prefix(
+            v5.run_id.clone(),
+            v5.canonical_genesis_bytes.clone(),
+            v5.envelopes.clone(),
+            exact_limits,
+        )
+        .expect("exact authority-limited log");
+        let exact_structural = exact_log
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                exact_log.run_id(),
+                exact_log.genesis_hash(),
+                exact_log.canonical_prefix_bytes_for_store(),
+                u64::try_from(exact_log.envelopes.len()).unwrap(),
+                exact_log.tail_hash(),
+            ))
+            .expect("exact structural backing");
+        EventLogV5::replay_plan_authority_prefix_v5(&exact_structural, &resolver, &roots)
+            .expect("exact authority preflight is admitted");
+        resolver.reads.borrow_mut().clear();
+        let exact_preflight = v5_plan_authority_preflight(&exact_log, &exact_structural, &roots)
+            .expect("exact retained authority preflight");
+        let (retained_one_less_log, _) = EventLogV5::replay_confirmed_v5_prefix(
+            v5.run_id.clone(),
+            v5.canonical_genesis_bytes.clone(),
+            v5.envelopes.clone(),
+            EventReplayLimitsV5::new(
+                u64::try_from(v5.envelopes.len()).unwrap(),
+                v5.canonical_prefix_bytes_for_store(),
+                exact_preflight.retained_bytes - 1,
+                v5.limits.max_working_bytes,
+            )
+            .expect("one-less retained authority limits"),
+        )
+        .expect("one-less authority log admission remains structurally valid");
+        let one_less_structural = retained_one_less_log
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                retained_one_less_log.run_id(),
+                retained_one_less_log.genesis_hash(),
+                retained_one_less_log.canonical_prefix_bytes_for_store(),
+                u64::try_from(retained_one_less_log.envelopes.len()).unwrap(),
+                retained_one_less_log.tail_hash(),
+            ))
+            .expect("one-less structural authority backing");
+        let no_read_resolver = V5TestResolver {
+            objects: resolver.objects.clone(),
+            reads: RefCell::new(Vec::new()),
+        };
+        V5_TEST_PLAN_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(0));
+        assert!(
+            EventLogV5::replay_plan_authority_prefix_v5(
+                &one_less_structural,
+                &no_read_resolver,
+                &roots,
+            )
+            .is_err()
+        );
+        assert!(
+            no_read_resolver.reads.borrow().is_empty(),
+            "preflight must run before CAS reads"
+        );
+        assert_eq!(
+            V5_TEST_PLAN_AUTHORITY_MATERIALIZATIONS.with(std::cell::Cell::get),
+            0,
+            "one-less preflight must refuse before authority materialization"
+        );
+        let state = EventLogV5::replay_plan_authority_prefix_v5(&structural, &resolver, &roots)
+            .expect("plan-only V5 authority replay");
+        assert_eq!(
+            state
+                .structural
+                .pre_incremental
+                .aggregate
+                .program()
+                .snapshot_id(),
+            state.structural.pre_incremental.plan.snapshot_id()
+        );
+        assert_eq!(state.basis.target_confirmed_tail_hash, *v5.tail_hash());
+        assert_eq!(
+            state.basis.target_next_sequence,
+            u64::try_from(v5.envelopes.len()).unwrap() + 1
+        );
+        assert_eq!(
+            state.structural.pre_incremental.registrations.len(),
+            2,
+            "static V5 plan-only fixture has two snapshot-ingest registrations"
+        );
+        assert_eq!(
+            *resolver.reads.borrow(),
+            state
+                .structural
+                .pre_incremental
+                .registrations
+                .iter()
+                .map(|registration| registration.cas_hash().clone())
+                .collect::<Vec<_>>(),
+            "every initial registration must cross the V5 resolver boundary"
+        );
+
+        let mut tampered = resolver.objects.clone();
+        let first_hash = state
+            .structural
+            .pre_incremental
+            .registrations
+            .first()
+            .expect("replayed registration")
+            .cas_hash()
+            .clone();
+        tampered.insert(first_hash, vec![0]);
+        assert!(
+            EventLogV5::replay_plan_authority_prefix_v5(
+                &structural,
+                &V5TestResolver {
+                    objects: tampered,
+                    reads: RefCell::new(Vec::new()),
+                },
+                &roots,
+            )
+            .is_err()
+        );
+        let wrong_repository_roots = AuthorityTrustRootsV5::new(
+            roots.policy_revision_hash.clone(),
+            id("repository:wrong-v5-root"),
+            roots.repository_source_hash.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("well-shaped but foreign V5 roots");
+        assert!(
+            EventLogV5::replay_plan_authority_prefix_v5(
+                &structural,
+                &resolver,
+                &wrong_repository_roots
+            )
+            .is_err()
+        );
+        let wrong_policy_roots = AuthorityTrustRootsV5::new(
+            ContentHash::sha256(b"wrong derived policy"),
+            roots.repository_id.clone(),
+            roots.repository_source_hash.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("well-shaped V5 roots with only foreign policy");
+        assert!(
+            EventLogV5::replay_plan_authority_prefix_v5(
+                &structural,
+                &resolver,
+                &wrong_policy_roots
+            )
+            .is_err()
+        );
+        let wrong_source_roots = AuthorityTrustRootsV5::new(
+            roots.policy_revision_hash.clone(),
+            roots.repository_id.clone(),
+            ContentHash::sha256(b"wrong repository source"),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("well-shaped V5 roots with only foreign source");
+        assert!(
+            EventLogV5::replay_plan_authority_prefix_v5(
+                &structural,
+                &resolver,
+                &wrong_source_roots
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn private_v5_plan_authority_preflight_final_phase_dominates_without_snapshot_files() {
+        let (v5, roots) = planned_v5_without_snapshot_files();
+        struct NoCasReads;
+        impl AuthorityArtifactResolverV5 for NoCasReads {
+            fn read_exact(&self, _cas_hash: &ContentHash, _destination: &mut [u8]) -> Result<()> {
+                panic!("a no-file target must not request CAS bytes")
+            }
+        }
+        let structural = v5
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                v5.run_id(),
+                v5.genesis_hash(),
+                v5.canonical_prefix_bytes_for_store(),
+                u64::try_from(v5.envelopes.len()).expect("V5 count"),
+                v5.tail_hash(),
+            ))
+            .expect("no-file structural prefix");
+        assert!(structural.pre_incremental.registrations.is_empty());
+        let preflight =
+            v5_plan_authority_preflight(&v5, &structural, &roots).expect("no-file preflight");
+        let structural_resident =
+            u64::try_from(structural.projection().retained_bytes_for_m6().unwrap()).unwrap();
+        let returned_state_bytes = preflight.retained_bytes - structural_resident;
+        let largest_live_cas_buffer = structural
+            .pre_incremental
+            .registrations
+            .iter()
+            .map(ArtifactRegisteredV3::size)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            returned_state_bytes > largest_live_cas_buffer,
+            "the no-file prefix must exercise the final-state-dominant phase"
+        );
+        let canonical_scratch = v5.maximum_canonical_event_line_bytes_for_store().unwrap();
+        assert_eq!(
+            preflight.working_bytes,
+            preflight.retained_bytes + canonical_scratch,
+            "the final construction phase is the exact working-memory peak"
+        );
+        EventLogV5::replay_plan_authority_prefix_v5_with_limits(
+            &structural,
+            &NoCasReads,
+            &roots,
+            preflight.retained_bytes,
+            preflight.working_bytes,
+        )
+        .expect("exact final-dominant authority limits are admitted");
+        V5_TEST_PLAN_AUTHORITY_MATERIALIZATIONS.with(|value| value.set(0));
+        assert!(
+            EventLogV5::replay_plan_authority_prefix_v5_with_limits(
+                &structural,
+                &NoCasReads,
+                &roots,
+                preflight.retained_bytes,
+                preflight.working_bytes - 1,
+            )
+            .is_err(),
+            "one byte below the final-dominant peak must be refused before materialization"
+        );
+        assert_eq!(
+            V5_TEST_PLAN_AUTHORITY_MATERIALIZATIONS.with(std::cell::Cell::get),
+            0
+        );
+    }
+
+    #[test]
+    fn private_v5_plan_authority_rejects_non_snapshot_ingest_registration_source() {
+        let run_id = id("run:v5-plan-only-source-negative");
+        let registration = ArtifactRegisteredV3::new(
+            run_id.clone(),
+            ContentHash::sha256(b"well-shaped reviewer output"),
+            "application/json",
+            u64::try_from(b"well-shaped reviewer output".len()).unwrap(),
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id: id("execution:v5-plan-only-source-negative"),
+                reviewer_id: "fixture-reviewer".to_owned(),
+                run_id: run_id.clone(),
+            },
+        )
+        .expect("well-shaped non-snapshot registration");
+        let error = validate_plan_only_registration_source_v5(
+            &registration,
+            &run_id,
+            &id("snapshot:v5-plan-only-source-negative"),
+        )
+        .expect_err("plan-only authority must reject reviewer-execution provenance");
+        assert!(matches!(error, DomainError::Validation(_)));
+    }
+
+    #[test]
+    fn v5_plan_authority_basis_is_complete_canonical_and_root_sensitive() {
+        let (v4, _basis, roots_v4, resolver, _session, _claim, _input, _output) =
+            static_v4_bundle_base();
+        let mut v5 = rewrap_v4_prefix_as_v5(&v4);
+        let plan_count = v5
+            .envelopes
+            .iter()
+            .position(|envelope| {
+                matches!(
+                    decode_canonical_payload(EventContractVersion::V5, envelope.payload.get()),
+                    Ok(PersistedPayload::ReviewPlanRecorded(_))
+                )
+            })
+            .expect("plan envelope")
+            + 1;
+        v5.envelopes.truncate(plan_count);
+        v5.canonical_prefix_bytes = v5
+            .envelopes
+            .iter()
+            .map(|envelope| {
+                envelope
+                    .canonical_line_bytes_v5
+                    .expect("V5 line accounting")
+            })
+            .sum();
+        let AuthorityTrustRootsV4 {
+            policy_revision_hash: _,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            allowed_gluing_input_bindings,
+        } = roots_v4;
+        let roots = AuthorityTrustRootsV5::new(
+            target_policy_revision_hash_v5(v4.aggregate.program()).expect("derived V5 policy"),
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            allowed_gluing_input_bindings,
+        )
+        .expect("V5 roots");
+        struct Resolver(BTreeMap<ContentHash, Vec<u8>>);
+        impl AuthorityArtifactResolverV5 for Resolver {
+            fn read_exact(&self, hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                let bytes = self.0.get(hash).ok_or_else(|| {
+                    DomainError::Validation("missing V5 basis test CAS".to_owned())
+                })?;
+                if bytes.len() != destination.len() {
+                    return Err(DomainError::Validation("V5 basis test CAS size".to_owned()));
+                }
+                destination.copy_from_slice(bytes);
+                Ok(())
+            }
+        }
+        let structural = v5
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                v5.run_id(),
+                v5.genesis_hash(),
+                v5.canonical_prefix_bytes_for_store(),
+                u64::try_from(v5.envelopes.len()).unwrap(),
+                v5.tail_hash(),
+            ))
+            .expect("basis structural");
+        let state = EventLogV5::replay_plan_authority_prefix_v5(
+            &structural,
+            &Resolver(resolver.objects),
+            &roots,
+        )
+        .expect("basis state");
+        #[derive(Serialize)]
+        struct Oracle<'a> {
+            schema: &'a str,
+            target_run_id: &'a StableId,
+            target_genesis_hash: &'a ContentHash,
+            target_confirmed_tail_hash: &'a ContentHash,
+            target_confirmed_event_count: u64,
+            target_next_sequence: u64,
+            policy_revision_hash: &'a ContentHash,
+            inherited_m4_entries: &'a [AuthorityReplayEntryV3AtV5],
+            gluing_input_entries: &'a [GluingInputReplayEntryV5],
+        }
+        let basis = &state.basis;
+        assert_eq!(
+            basis.schema,
+            "reviewgraphen.pre_incremental_authority_replay_basis.v5"
+        );
+        assert!(basis.inherited_m4_entries.is_empty());
+        assert!(basis.gluing_input_entries.is_empty());
+        let oracle = Oracle {
+            schema: basis.schema,
+            target_run_id: &basis.target_run_id,
+            target_genesis_hash: &basis.target_genesis_hash,
+            target_confirmed_tail_hash: &basis.target_confirmed_tail_hash,
+            target_confirmed_event_count: basis.target_confirmed_event_count,
+            target_next_sequence: basis.target_next_sequence,
+            policy_revision_hash: &basis.policy_revision_hash,
+            inherited_m4_entries: &basis.inherited_m4_entries,
+            gluing_input_entries: &basis.gluing_input_entries,
+        };
+        assert_eq!(
+            basis.basis_digest,
+            ContentHash::sha256(&canonical_json(&oracle).unwrap())
+        );
+
+        // Policy is one of the displayed authority coordinates and changing
+        // it changes the basis before any future M4/M5 records exist.
+        let changed_roots = AuthorityTrustRootsV5::new(
+            ContentHash::sha256(b"basis policy axis"),
+            roots.repository_id.clone(),
+            roots.repository_source_hash.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let changed = changed_roots.expect("well-shaped changed root");
+        let changed_basis = PreIncrementalAuthorityReplayBasisV5::plan_only(&structural, &changed)
+            .expect("changed basis");
+        assert_ne!(basis.basis_digest, changed_basis.basis_digest);
+
+        #[derive(Serialize)]
+        struct PositionOracle<'a> {
+            schema: &'a str,
+            run_id: &'a StableId,
+            genesis_hash: &'a ContentHash,
+            event_id: &'a StableId,
+            event_sequence: u64,
+            predecessor_event_hash: &'a ContentHash,
+            v3_trust_binding_digest: &'a ContentHash,
+        }
+        let event_id = id("event:v5-position-oracle");
+        let predecessor = ContentHash::sha256(b"position predecessor");
+        let trust = ContentHash::sha256(b"position trust");
+        let actual = v5_authority_position_digest(
+            v5.run_id(),
+            v5.genesis_hash(),
+            &event_id,
+            9,
+            &predecessor,
+            &trust,
+        )
+        .expect("position digest");
+        let expected = ContentHash::sha256(
+            &canonical_json(&PositionOracle {
+                schema: "reviewgraphen.authority_position.v5",
+                run_id: v5.run_id(),
+                genesis_hash: v5.genesis_hash(),
+                event_id: &event_id,
+                event_sequence: 9,
+                predecessor_event_hash: &predecessor,
+                v3_trust_binding_digest: &trust,
+            })
+            .unwrap(),
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn v5_authority_position_and_basis_have_fixed_literal_canonical_oracles() {
+        let run_id = id("run:fixed");
+        let event_id = id("event:fixed");
+        let genesis_hash = ContentHash::sha256(b"basis genesis");
+        let predecessor_hash = ContentHash::sha256(b"position predecessor");
+        let trust_hash = ContentHash::sha256(b"position trust");
+        let position_literal = b"{\"event_id\":\"event:fixed\",\"event_sequence\":9,\"genesis_hash\":\"sha256:fda9f1c527fa660658760fc64e7431235367012d93245f239462ee648ba36d6b\",\"predecessor_event_hash\":\"sha256:b46fd1b5b17a27f0fcc30044ad453dd742ff450ab50fdc6fd797e2964cbc5190\",\"run_id\":\"run:fixed\",\"schema\":\"reviewgraphen.authority_position.v5\",\"v3_trust_binding_digest\":\"sha256:e4539fde550366c863d499006c27e528b53877091a5d4993a14f53e06a487ab4\"}";
+        let actual_position = v5_authority_position_digest(
+            &run_id,
+            &genesis_hash,
+            &event_id,
+            9,
+            &predecessor_hash,
+            &trust_hash,
+        )
+        .expect("position digest");
+        assert_eq!(
+            actual_position.to_string(),
+            "sha256:a447dcd8f4fb18a346200a2a9a62f5cd1adf51d0e17fb2d71a087ec58d6dd887"
+        );
+        #[derive(Serialize)]
+        struct Position<'a> {
+            schema: &'a str,
+            run_id: &'a StableId,
+            genesis_hash: &'a ContentHash,
+            event_id: &'a StableId,
+            event_sequence: u64,
+            predecessor_event_hash: &'a ContentHash,
+            v3_trust_binding_digest: &'a ContentHash,
+        }
+        assert_eq!(
+            canonical_json(&Position {
+                schema: "reviewgraphen.authority_position.v5",
+                run_id: &run_id,
+                genesis_hash: &genesis_hash,
+                event_id: &event_id,
+                event_sequence: 9,
+                predecessor_event_hash: &predecessor_hash,
+                v3_trust_binding_digest: &trust_hash,
+            })
+            .unwrap(),
+            position_literal
+        );
+
+        let policy_hash = ContentHash::sha256(b"basis policy");
+        let tail_hash = ContentHash::sha256(b"basis tail");
+        let basis_literal = b"{\"gluing_input_entries\":[],\"inherited_m4_entries\":[],\"policy_revision_hash\":\"sha256:4f75ba05f3489e9b80955975bdf022ba5e6be927b8325eaeb3a1f2e03a27362b\",\"schema\":\"reviewgraphen.pre_incremental_authority_replay_basis.v5\",\"target_confirmed_event_count\":8,\"target_confirmed_tail_hash\":\"sha256:988ac03fea1d175c34e50a347c87b09c8f699c5831dd84132d68b47e5b1cfaff\",\"target_genesis_hash\":\"sha256:fda9f1c527fa660658760fc64e7431235367012d93245f239462ee648ba36d6b\",\"target_next_sequence\":9,\"target_run_id\":\"run:fixed\"}";
+        #[derive(Serialize)]
+        struct Basis<'a> {
+            schema: &'a str,
+            target_run_id: &'a StableId,
+            target_genesis_hash: &'a ContentHash,
+            target_confirmed_tail_hash: &'a ContentHash,
+            target_confirmed_event_count: u64,
+            target_next_sequence: u64,
+            policy_revision_hash: &'a ContentHash,
+            inherited_m4_entries: &'a [AuthorityReplayEntryV3AtV5],
+            gluing_input_entries: &'a [GluingInputReplayEntryV5],
+        }
+        let empty_inherited = Vec::new();
+        let empty_gluing = Vec::new();
+        let canonical_basis = canonical_json(&Basis {
+            schema: "reviewgraphen.pre_incremental_authority_replay_basis.v5",
+            target_run_id: &run_id,
+            target_genesis_hash: &genesis_hash,
+            target_confirmed_tail_hash: &tail_hash,
+            target_confirmed_event_count: 8,
+            target_next_sequence: 9,
+            policy_revision_hash: &policy_hash,
+            inherited_m4_entries: &empty_inherited,
+            gluing_input_entries: &empty_gluing,
+        })
+        .unwrap();
+        assert_eq!(canonical_basis, basis_literal);
+        assert_eq!(
+            ContentHash::sha256(&canonical_basis).to_string(),
+            "sha256:34c774a7b2d018bac973010d1c0d0f36d97787731f9a10ead86ae666f390ad6b"
+        );
+
+        let position_digest = |run: &StableId,
+                               genesis: &ContentHash,
+                               event: &StableId,
+                               sequence: u64,
+                               predecessor: &ContentHash,
+                               trust: &ContentHash| {
+            ContentHash::sha256(
+                &canonical_json(&Position {
+                    schema: "reviewgraphen.authority_position.v5",
+                    run_id: run,
+                    genesis_hash: genesis,
+                    event_id: event,
+                    event_sequence: sequence,
+                    predecessor_event_hash: predecessor,
+                    v3_trust_binding_digest: trust,
+                })
+                .unwrap(),
+            )
+        };
+        let fixed_position = position_digest(
+            &run_id,
+            &genesis_hash,
+            &event_id,
+            9,
+            &predecessor_hash,
+            &trust_hash,
+        );
+        for changed in [
+            position_digest(
+                &id("run:other"),
+                &genesis_hash,
+                &event_id,
+                9,
+                &predecessor_hash,
+                &trust_hash,
+            ),
+            position_digest(
+                &run_id,
+                &ContentHash::sha256(b"other genesis"),
+                &event_id,
+                9,
+                &predecessor_hash,
+                &trust_hash,
+            ),
+            position_digest(
+                &run_id,
+                &genesis_hash,
+                &id("event:other"),
+                9,
+                &predecessor_hash,
+                &trust_hash,
+            ),
+            position_digest(
+                &run_id,
+                &genesis_hash,
+                &event_id,
+                10,
+                &predecessor_hash,
+                &trust_hash,
+            ),
+            position_digest(
+                &run_id,
+                &genesis_hash,
+                &event_id,
+                9,
+                &ContentHash::sha256(b"other predecessor"),
+                &trust_hash,
+            ),
+            position_digest(
+                &run_id,
+                &genesis_hash,
+                &event_id,
+                9,
+                &predecessor_hash,
+                &ContentHash::sha256(b"other trust"),
+            ),
+        ] {
+            assert_ne!(fixed_position, changed);
+        }
+        let inherited_dummy = vec![AuthorityReplayEntryV3AtV5 {
+            event_sequence: 1,
+            event_id: id("event:inherited"),
+            payload_kind: "evidence_recorded".to_owned(),
+            record_id: id("evidence:inherited"),
+            record_body_hash: ContentHash::sha256(b"record body"),
+            predecessor_event_hash: ContentHash::sha256(b"record predecessor"),
+            v3_trust_binding_digest: ContentHash::sha256(b"record trust"),
+            v5_position_digest: ContentHash::sha256(b"record position"),
+        }];
+        let gluing_dummy = vec![GluingInputReplayEntryV5 {
+            event_sequence: 2,
+            event_id: id("event:gluing"),
+            registration_id: id("registration:gluing"),
+            registration_body_hash: ContentHash::sha256(b"gluing body"),
+            predecessor_event_hash: ContentHash::sha256(b"gluing predecessor"),
+            v4_trust_binding_digest: ContentHash::sha256(b"gluing trust"),
+            v5_position_digest: ContentHash::sha256(b"gluing position"),
+        }];
+        let basis_digest = |run: &StableId,
+                            genesis: &ContentHash,
+                            tail: &ContentHash,
+                            count: u64,
+                            next: u64,
+                            policy: &ContentHash,
+                            inherited: &[AuthorityReplayEntryV3AtV5],
+                            gluing: &[GluingInputReplayEntryV5]| {
+            ContentHash::sha256(
+                &canonical_json(&Basis {
+                    schema: "reviewgraphen.pre_incremental_authority_replay_basis.v5",
+                    target_run_id: run,
+                    target_genesis_hash: genesis,
+                    target_confirmed_tail_hash: tail,
+                    target_confirmed_event_count: count,
+                    target_next_sequence: next,
+                    policy_revision_hash: policy,
+                    inherited_m4_entries: inherited,
+                    gluing_input_entries: gluing,
+                })
+                .unwrap(),
+            )
+        };
+        let fixed_basis = basis_digest(
+            &run_id,
+            &genesis_hash,
+            &tail_hash,
+            8,
+            9,
+            &policy_hash,
+            &empty_inherited,
+            &empty_gluing,
+        );
+        for changed in [
+            basis_digest(
+                &id("run:other"),
+                &genesis_hash,
+                &tail_hash,
+                8,
+                9,
+                &policy_hash,
+                &empty_inherited,
+                &empty_gluing,
+            ),
+            basis_digest(
+                &run_id,
+                &ContentHash::sha256(b"other genesis"),
+                &tail_hash,
+                8,
+                9,
+                &policy_hash,
+                &empty_inherited,
+                &empty_gluing,
+            ),
+            basis_digest(
+                &run_id,
+                &genesis_hash,
+                &ContentHash::sha256(b"other tail"),
+                8,
+                9,
+                &policy_hash,
+                &empty_inherited,
+                &empty_gluing,
+            ),
+            basis_digest(
+                &run_id,
+                &genesis_hash,
+                &tail_hash,
+                7,
+                9,
+                &policy_hash,
+                &empty_inherited,
+                &empty_gluing,
+            ),
+            basis_digest(
+                &run_id,
+                &genesis_hash,
+                &tail_hash,
+                8,
+                10,
+                &policy_hash,
+                &empty_inherited,
+                &empty_gluing,
+            ),
+            basis_digest(
+                &run_id,
+                &genesis_hash,
+                &tail_hash,
+                8,
+                9,
+                &ContentHash::sha256(b"other policy"),
+                &empty_inherited,
+                &empty_gluing,
+            ),
+            basis_digest(
+                &run_id,
+                &genesis_hash,
+                &tail_hash,
+                8,
+                9,
+                &policy_hash,
+                &inherited_dummy,
+                &empty_gluing,
+            ),
+            basis_digest(
+                &run_id,
+                &genesis_hash,
+                &tail_hash,
+                8,
+                9,
+                &policy_hash,
+                &empty_inherited,
+                &gluing_dummy,
+            ),
+        ] {
+            assert_ne!(fixed_basis, changed);
+        }
     }
 
     #[test]
@@ -34309,6 +35705,37 @@ mod tests {
                 &other_preimage,
             )
             .expect("selected authority substitution")
+        );
+    }
+
+    #[test]
+    fn v5_authority_position_digest_is_not_a_v4_position_digest() {
+        let run = id("run:v5-position");
+        let genesis = ContentHash::sha256(b"v5 genesis");
+        let event = id("event:v5-position");
+        let predecessor = ContentHash::sha256(b"v5 predecessor");
+        let trust = ContentHash::sha256(b"selected V5 root tuple");
+        let digest = v5_authority_position_digest(&run, &genesis, &event, 7, &predecessor, &trust)
+            .expect("V5 digest");
+        assert_ne!(
+            digest,
+            v5_authority_position_digest(&run, &genesis, &event, 8, &predecessor, &trust)
+                .expect("changed V5 sequence")
+        );
+        assert_ne!(
+            digest,
+            v4_authority_position_digest(
+                &run,
+                &genesis,
+                &event,
+                7,
+                &predecessor,
+                &InheritedAuthorityPreimageV4 {
+                    verifier: None,
+                    human: None,
+                },
+            )
+            .expect("V4 digest")
         );
     }
 
