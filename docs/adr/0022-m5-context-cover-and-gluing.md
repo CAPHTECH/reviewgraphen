@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-08-10
+- Amended: 2026-08-11 — closed the Core/Store bootstrap and recovery boundary, orphan adoption,
+  v5 reciprocal-FK/index-item/accounting details, and the legal pre-bundle prefix.
 - Scope: Defines the M5 vertical slice over the Accepted M4 contract: a fresh homogeneous event-v4 run, context cover, profile-owned local Sections, deterministic pairwise restrictions and gluing, source-bound gluing obstructions, index v5, and report v4. It does not implement a verifier, decision, finding, policy gate, provider adapter, generic command runner, generic context taxonomy, change morphism, or staleness.
 
 ## Context
@@ -127,16 +129,83 @@ The two `*V3Tuple` field sets and validation semantics are exactly ADR 0021's tr
 
 `basis_digest` is SHA-256 over the complete canonical basis except that field. `v4_position_digest` is SHA-256 over the inherited ADR 0021 trust preimage plus the actual v4 run/genesis/predecessor/sequence/event tuple. `trust_binding_digest` is SHA-256 over the complete gluing-input trust binding. The basis contains no secret and grants no fresh append authority.
 
+Recovery is inspected read-only, then keyed and attributed explicitly. The inspection descriptor is closed, and the key is an opaque, private-field, non-`Serialize`, non-`Deserialize`, non-`Clone` one-shot value with no public constructor. Receipts are descriptive and never replay or append authority:
+
 ```rust
+RecoveryInspectionV4 {
+  run_id, genesis_hash,
+  event_contract_version: "reviewgraphen.review_event.v4",
+  expected_kind: RecoveryKindV4,
+}
+RecoveryKeyV4 {
+  run_id, genesis_hash, event_contract_version: "reviewgraphen.review_event.v4",
+  expected_kind: RecoveryKindV4,
+  pre_recovery_offset, pre_recovery_tail_hash,
+  pre_recovery_file_hash: Option<ContentHash>,
+  pending_digest: Option<ContentHash>,
+}
+RecoveryKindV4 = GenesisBootstrap | CanonicalTail | M4BundleResume;
+M4BundlePrefixStageV4 {
+  classification: Stage0 | StrictInterior | AlreadyComplete,
+  confirmed_events, expected_events,
+}
+M4BundleMarkerActionV4 = ClearedAndSynced | RetainedForResume;
+M4BundleMarkerRecoveryReceiptV4 {
+  prefix_stage: M4BundlePrefixStageV4,
+  action: M4BundleMarkerActionV4,
+  pre_marker_hash: ContentHash,
+  post_marker_hash: Option<ContentHash>,
+}
+RecoveryOutcomeV4 =
+  GenesisNotCommitted
+| GenesisCommitted { event_id, event_hash, confirmed_offset }
+| TailRecovered { good_offset, discarded_hash }
+| M4BundleCleanupOrdinary { prefix_stage: M4BundlePrefixStageV4 }
+| M4BundleResumeRequired { prefix_stage: M4BundlePrefixStageV4 };
+RecoveryProvenanceV4 { actor, tool_version }
+RecoveryReceiptV4 {
+  schema: "reviewgraphen.recovery_receipt.v4",
+  key: RecoveryKeyV4, kind: RecoveryKindV4, outcome: RecoveryOutcomeV4,
+  provenance: RecoveryProvenanceV4, timestamp_unix_seconds,
+  pre_file_hash: Option<ContentHash>, post_file_hash: Option<ContentHash>,
+  marker_recovery: Option<M4BundleMarkerRecoveryReceiptV4>,
+}
+
+EventJournal::inspect_recovery_v4(
+    &StoreRoot, RecoveryInspectionV4,
+) -> Result<RecoveryKeyV4>;
 EventJournal::replayed_v4_session(
     &AuthorityTrustRootsV4,
 ) -> Result<(ReplayedV4RunSession, AuthorityReplayBasisV4)>;
+RecoveredV4Session =
+  Editable { session: ReplayedV4RunSession, basis: AuthorityReplayBasisV4 }
+| M4BundleResumeRequired {
+    session: RecoveredM4BundleV4Session,
+    basis: AuthorityReplayBasisV4,
+    resume_authority: VerificationBundleResumeAuthorityV4,
+  };
 EventJournal::recover_replayed_v4_session(
-    &AuthorityTrustRootsV4,
-) -> Result<(ReplayedV4RunSession, AuthorityReplayBasisV4)>;
+    &AuthorityTrustRootsV4, RecoveryKeyV4, RecoveryProvenanceV4,
+) -> Result<(RecoveryReceiptV4, RecoveredV4Session)>;
 ```
 
-Both APIs hold the exclusive journal lock. `open` scans the confirmed canonical v4 prefix, revalidates every inherited M4 authority event from original registered CAS bytes using the exact ADR 0021 rules plus its v4 position, validates every gluing-input registration against the exact v4 trust binding, and reconstructs the aggregate and basis. `recover` first performs canonical tail recovery and then the identical scan. Missing/mismatched trust roots, CAS bytes, policy revision, inherited authority, or uncertain prefix return a typed refusal and no session.
+`inspect_recovery_v4` acquires the same exclusive root/journal lock used by recovery, validates the requested run/genesis/version/kind against the observed filesystem and pending-marker state, performs no mutation, and returns only the opaque key. The lock guard never escapes. Recovery reacquires the lock and, immediately before mutation, rechecks every sealed key field against the current file identity, complete file hash, offset, tail, and pending marker; this is the mandatory TOCTOU check. The receipt's `kind` equals `key.expected_kind`, and its `pre_file_hash` equals `key.pre_recovery_file_hash`. Both receipt file hashes are exact optionals: `None` means that the log file did not exist at that boundary, not an empty-file hash. Wrong, stale, cross-run, cross-genesis, changed-after-inspection, or wrong-kind keys refuse without mutation. Actor and tool version are validated nonempty provenance; neither grants authority.
+
+For a nonexistent genesis log, the inspected key has offset zero, the run/genesis chain-start hash as `pre_recovery_tail_hash`, `pre_recovery_file_hash=None`, and `pending_digest=None`. An empty existing file instead has `pre_recovery_file_hash=Some(sha256(empty bytes))`. `GenesisNotCommitted` removes any empty/partial unpublished log and has `post_file_hash=None`; `GenesisCommitted` has `Some` hashes for the same confirmed file at both boundaries. `CanonicalTail` always has an existing post-recovery file. Inspection never mutates a marker. `M4BundleResume` recovery either clears and fsyncs it for a cleanup-only prefix or retains it for a strict-interior resume, as classified below; because marker storage is separate from the journal, its journal `pre_file_hash` and `post_file_hash` remain equal and `Some`.
+
+Kind and outcome are exhaustive and may not be mixed:
+
+| `RecoveryKindV4` | Only allowed `RecoveryOutcomeV4` | Returned state |
+| --- | --- | --- |
+| `GenesisBootstrap` | `GenesisNotCommitted` or `GenesisCommitted` | closed `GenesisRecoveryV4` branch; never a session/basis |
+| `CanonicalTail` | `TailRecovered` | ordinary `Editable` replay session and basis |
+| `M4BundleResume` | `M4BundleCleanupOrdinary` for `Stage0` or `AlreadyComplete`; `M4BundleResumeRequired` only for `StrictInterior` | ordinary `Editable` session/basis after cleanup, or resume-only recovered M4 bundle session/basis/authority |
+
+The M4 marker classification is exhaustive relative to the exact deterministic plan sealed by that marker. `expected_events>0`. `Stage0` means `confirmed_events=0` and no planned bundle event is durable. `StrictInterior` means `0<confirmed_events<expected_events` and the durable events are exactly the first `confirmed_events` entries of the ADR 0021 plan, including its static no-evidence stage omissions. `AlreadyComplete` means `confirmed_events=expected_events` and the entire exact plan is durable. Stage0 and already-complete recovery revalidate the complete marker/plan/trust closure, remove the marker, fsync the marker directory, then return an ordinary editable session and rebuilt basis; they never mint resume authority. Strict-interior recovery retains the marker and returns only the resume-only session, rebuilt basis, and exact remaining-suffix authority. A duplicate, gap, reorder, overlong prefix, unexpected planned-kind omission, foreign event, wrong body/ID/position, malformed marker, or suffix beyond the sealed plan is corrupt and refuses without marker cleanup, receipt, session, basis, or authority.
+
+`marker_recovery` is `None` for the other two kinds and required for every successful `M4BundleResume` recovery. Its `prefix_stage` equals the outcome stage. Cleanup outcomes record `ClearedAndSynced` with `post_marker_hash=None`; strict-interior outcomes record `RetainedForResume` with `post_marker_hash=Some(pre_marker_hash)`. Any other classification/action/hash/outcome combination is invalid.
+
+Both session APIs hold the exclusive journal lock. `open` scans the confirmed canonical v4 prefix, revalidates every inherited M4 authority event from original registered CAS bytes using the exact ADR 0021 rules plus its v4 position, validates every gluing-input registration against the exact v4 trust binding, and reconstructs the aggregate and basis. `recover` accepts only a `CanonicalTail` or `M4BundleResume` key, performs its keyed recovery, and then performs the identical scan. `CanonicalTail` and cleanup-only `M4BundleResume` return `Editable`; only a strict-interior M4 prefix returns the resume-only branch. Missing/mismatched trust roots, CAS bytes, policy revision, inherited authority, recovery key, or uncertain prefix return a typed refusal and no session.
 
 Every v4 registration or bundle append takes `&mut AuthorityReplayBasisV4`, verifies its exact tail and next sequence, and consumes a sealed tail-bound prepared value. Only `Ok(receipt)` replaces `confirmed_tail_hash`, increments `confirmed_event_count` and `next_sequence`, and recomputes `basis_digest`; a successful trusted descriptor registration also appends its one `GluingInputReplayEntryV4`, while the authority-free M5 bundle appends no replay entry. A confirmed pre-durability failure leaves the basis unchanged. `SessionUncertain` and any interrupted inherited M4 bundle leave it byte-for-byte unchanged, consume the prepared value, make the session non-editable, and require `recover_replayed_v4_session`; a partial M4 bundle additionally requires the v4 one-shot resume authority defined below. No retry is inferred from a basis.
 
@@ -215,25 +284,40 @@ RunGenesisManifestV4 {
   genesis_artifact: ArtifactRegistrationV3,
   repository_identity, snapshot_id, profile_id, profile_version,
 }
-RunGenesisBootstrapAdmissionV4 {
-  run_id, canonical_genesis_bytes, genesis_hash, genesis_size,
+RunGenesisBootstrapRequestV4 {
+  run_id,
+  canonical_genesis_bytes: Vec<u8>,
   repository_identity, snapshot_id, profile_id, profile_version,
-  nested_registration: ArtifactRegistrationV3,
-  manifest: RunGenesisManifestV4,
-  event_schema: "reviewgraphen.review_event.v4",
-  event_sequence: 1, logical_time: 1,
-  actor: "reviewgraphen-core@1",
-  previous_event_hash, payload_hash, event_id, event_hash,
 }
-EventLog::new_v4(RunGenesisBootstrapAdmissionV4) -> Result<EventLogV4>;
-EventLog::recover_new_v4(&StoreRoot) -> Result<EventLogV4>;
+EventLogV4::from_bootstrap_request(
+  RunGenesisBootstrapRequestV4,
+) -> Result<EventLogV4>;
+EventLogV4::replay_confirmed_v4_prefix(
+  run_id, canonical_genesis_bytes, envelopes,
+  resolver: &impl AuthorityArtifactResolverV4,
+  roots: &AuthorityTrustRootsV4,
+  limits: EventReplayLimits,
+) -> Result<(EventLogV4, AuthorityReplayBasisV4)>;
+EventJournal::publish_new_v4(
+  &StoreRoot, EventLogV4,
+) -> Result<(EventJournal, GenesisCommitReceiptV4)>;
+GenesisRecoveryV4 =
+  NotCommitted { receipt: RecoveryReceiptV4 }
+| Committed { receipt: RecoveryReceiptV4, journal: EventJournal };
+EventJournal::recover_new_v4(
+  &StoreRoot, RecoveryKeyV4, RecoveryProvenanceV4,
+) -> Result<GenesisRecoveryV4>;
 ```
 
-The store is the only constructor. It strictly decodes canonical `RunGenesisSnapshot` bytes, reconstructs the pristine aggregate, checks repository/snapshot/profile provenance, CAS-puts and fsyncs those bytes, and builds the nested v3 registration with `run_id`, `registration_id=StableId::derived("registration", exact v3 preimage)`, `cas_hash=genesis_hash=sha256(bytes)`, `media_type="application/json"`, exact byte size, `CanonicalState`, and closed `RunGenesis {run_id}` source. No v3 admission token is accepted. The manifest contains that complete registration and is the canonical payload of event 1; applying the one event atomically inserts the nested registration and manifest, with no standalone registration event.
+The bootstrap request's source closure is exactly its six fields. `canonical_genesis_bytes` must strict-canonical-decode as one `RunGenesisSnapshot`; its embedded run, repository identity, snapshot, profile ID, and profile version equal the five scalar fields, and its aggregate is pristine with no event-derived state. The request contains no path, `StoreRoot`, CAS handle, lock, journal, caller registration, manifest, event envelope, hash, ID, actor, or admission token.
+
+Core's two `EventLogV4` operations are pure over supplied bytes/envelopes and have no `StoreRoot`, filesystem, lock, CAS-put, fsync, truncation, or recovery capability. `from_bootstrap_request` strictly validates the complete source closure, computes `genesis_hash=sha256(canonical_genesis_bytes)` and exact byte size, internally constructs and validates a private bootstrap admission containing the nested v3 registration, manifest, and canonical sequence-1 v4 envelope, applies that envelope to a pristine in-memory aggregate, and returns an opaque validated `EventLogV4`. The nested registration has `run_id`, `registration_id=StableId::derived("registration", exact v3 preimage)`, `cas_hash=genesis_hash`, `media_type="application/json"`, exact byte size, `CanonicalState`, and closed `RunGenesis {run_id}` source. The manifest contains that complete registration and is the canonical payload of event 1; applying the one event atomically inserts the nested registration and manifest, with no standalone registration event. No externally produced bootstrap admission, registration, manifest, envelope, hash, or ID is accepted. `replay_confirmed_v4_prefix` validates an already confirmed prefix through a read-only resolver.
+
+Store is the only durable publisher. `publish_new_v4` consumes the opaque validated one-event `EventLogV4`, CAS-puts and fsyncs its exact sealed genesis bytes, then writes and syncs its exact sealed sequence-1 envelope. Store performs only storage-bound limit, collision, identity, and byte-integrity checks; it cannot construct, replace, or edit the request closure, nested registration, manifest, actor, envelope, or hashes. The pure in-memory constructors neither publish nor recover durable state.
 
 `previous_event_hash=event_chain_genesis_hash(run_id,genesis_hash)`. `payload_hash` hashes the canonical `run_genesis_manifest` payload containing `RunGenesisManifestV4`. `event_id` and `event_hash` use the normal event identity/envelope-hash preimages with the exact v4 schema discriminator, run/genesis, sequence/logical time 1, actor, payload hash, and previous hash. Substituting a v3 event discriminator, v3 manifest contract string, actor, nested registration, or any hash changes both validation and hashes and is refused.
 
-Bootstrap durability has one boundary: the CAS object is durable before the canonical sequence-1 JSONL line is attempted, and the log/session becomes visible only after that complete line is synced. A failure before line durability returns `GenesisNotCommitted` and may leave only an authority-free orphan CAS object. Post-sync uncertainty returns `GenesisSessionUncertain`, returns no log/session/basis, consumes the admission, and forbids retry until `recover_new_v4`. Recovery under the exclusive root lock accepts exactly one complete canonical sequence-1 event and then opens normal v4 replay; an empty or recoverably partial unconfirmed line is removed by canonical tail recovery and returns `GenesisNotCommitted`; any complete malformed, duplicated, wrong-actor, wrong-discriminator, or hash-mismatched line is a hard refusal. Only after confirmed bootstrap may `replayed_v4_session` construct the initial basis. No other source role bypasses session/tail/sequence binding.
+Bootstrap durability has one boundary: the CAS object is durable before the canonical sequence-1 JSONL line is attempted, and the journal becomes visible only after that complete line is synced. A failure before line durability returns `GenesisNotCommitted` and may leave only an authority-free orphan CAS object. Post-sync uncertainty returns `GenesisSessionUncertain`, returns no journal/session/basis, consumes the validated log, and forbids retry until `inspect_recovery_v4(... expected_kind=GenesisBootstrap)` produces a key for `EventJournal::recover_new_v4`. Genesis recovery accepts only that kind. Exactly one complete canonical sequence-1 event yields `GenesisRecoveryV4::Committed { receipt, journal }`; an absent log or an empty/recoverably partial unconfirmed line is removed and yields `GenesisRecoveryV4::NotCommitted { receipt }`, with no journal/session/basis. Any complete malformed, duplicated, wrong-actor, wrong-discriminator, or hash-mismatched line is a hard refusal. Only a committed journal may call `replayed_v4_session` to construct the initial basis. No other source role bypasses session/tail/sequence binding.
 
 Fresh M4 work inside a v4 run uses only these v4 session capabilities, even though the durable M4 record bodies retain their v3 schemas:
 
@@ -254,12 +338,10 @@ ReplayedV4RunSession::mint_verification_bundle(
 ReplayedV4RunSession::append_verification_bundle(
   ValidatedVerificationBundleV4, &mut AuthorityReplayBasisV4,
 ) -> Result<VerificationBundleReceiptV4>;
-ReplayedV4RunSession::recover_verification_bundle_resume(
-  &AuthorityTrustRootsV4, claim_id,
-) -> Result<VerificationBundleResumeAuthorityV4>;
-ReplayedV4RunSession::resume_verification_bundle(
+RecoveredM4BundleV4Session::resume_verification_bundle(
+  self,
   VerificationBundleResumeAuthorityV4, &mut AuthorityReplayBasisV4,
-) -> Result<VerificationBundleReceiptV4>;
+) -> Result<(ReplayedV4RunSession, VerificationBundleReceiptV4)>;
 ReplayedV4RunSession::mint_decision(
   TrustedHumanAdmissionV4, HumanDecisionRequestV4,
 ) -> Result<ValidatedDecisionV4>;
@@ -311,7 +393,7 @@ For static verification the harness/result fields in resume authority are the ex
 
 All listed values are one-shot, private-field, nonserializable, non-`Clone`, and bind `session_identity`, v4 run/genesis/predecessor/tail/next sequence, policy revision, snapshot/universe/property/claim body, and the exact ADR 0021 authority scope. `TrustedFixtureHarnessV4` may be constructed only by the trusted host that actually ran the compiled harness and contains the complete `AuthorityHarnessBindingV3Tuple` plus the v4 envelope position. `TrustedHumanAdmissionV4` may be constructed only by the trusted host from one exact `AuthorityHumanGrantV3Tuple`, requested decision body, and v4 envelope position. Session minting checks those values against `AuthorityTrustRootsV4`; store/session never constructs trust.
 
-The mint path internally creates the v4 evidence/binding/verification/decision admissions for exact next positions; no admission accessor is public. Resume scans the confirmed v4 prefix and reconstructs `VerificationBundleResumeAuthorityV4` from the matching v4 trust root, CAS registrations, claim closure, and exact remaining v3-schema M4 bodies at v4 positions. It follows ADR 0021's exhaustive prefix table but replaces every session/admission/resume position binding with v4. No `*V3`, `TrustedFixtureHarnessV1`, `AuthorityTrustRootsV3`, or `VerificationBundleResumeAuthorityV3` value is accepted by any v4 API.
+The mint path internally creates the v4 evidence/binding/verification/decision admissions for exact next positions; no admission accessor is public. `M4BundleResume` recovery scans the confirmed v4 prefix and pending marker. For a strict interior only, it reconstructs `VerificationBundleResumeAuthorityV4` from the matching v4 trust root, CAS registrations, claim closure, and exact remaining v3-schema M4 bodies at v4 positions. Stage0 and already-complete recovery construct no resume authority and return the ordinary editable branch after marker cleanup. `RecoveredM4BundleV4Session` is private, nonserializable, non-`Clone`, and resume-only: it exposes no snapshot, mint, ordinary append, or raw-event operation. Its sole method durably writes the exact remaining suffix, clears and fsyncs the marker after the suffix is complete, and returns an editable `ReplayedV4RunSession` only after success; uncertainty consumes it and requires another inspected `M4BundleResume` key. Resume follows ADR 0021's exhaustive prefix table but replaces every session/admission/resume position binding with v4. No `*V3`, `TrustedFixtureHarnessV1`, `AuthorityTrustRootsV3`, or `VerificationBundleResumeAuthorityV3` value is accepted by any v4 API.
 
 Every successful v4 append, including authority-free registration, finding, and M5 bundle events, advances basis tail/count/next sequence and recomputes its digest. A successful evidence, binding, verification, or decision append additionally adds exactly one `AuthorityReplayEntryV3AtV4` per durable authority-bearing event; a successful gluing-input registration adds exactly one gluing-input entry. Interrupted/uncertain multi-event M4 append updates neither caller basis nor exposed session state and recovery rebuilds both entry vectors from the confirmed prefix.
 
@@ -377,6 +459,8 @@ ReplayedV4RunSession::append_artifact_registration_v4(
 ```
 
 `TrustedGluingInputSourceV4` is host-constructed, nonserializable, and contains exactly one `GluingInputTrustBindingV4`; session admission requires equality with the trust-root member and CAS object. No raw `ArtifactRegistrationV4` append is public.
+
+An unregistered descriptor CAS object left by a crash is adoptable only as those exact immutable bytes; adoption never deletes, rewrites, or substitutes the object. Under the session lock, Store must strictly canonical-decode it as one `GluingInputDescriptorV4`, verify its hash/size/media type/sensitivity and complete run/genesis/snapshot/universe/plan/profile/context closure, require equality with exactly one `allowed_gluing_input_binding`, require that no v4 registration exists for that descriptor or context, and require that its context is the next legal context in payment-then-ui order. Successful adoption uses the same derived descriptor/registration IDs and emits the same registration event as a fresh CAS put. An ambiguous binding, extra or out-of-order object, byte/closure mismatch, or object not eligible for the next registration is `OrphanCanonicalInput`; an already registered descriptor is reconstructed from the journal and never appended again. A `CasStore::put` result such as `existed=true` is storage information only and grants no admission or replay authority.
 
 Every `qualification_source_id` must resolve at the current tail either to a ProgramSpace ID in `D` or to a binding/evidence/verification/decision/finding ID in the chosen claim's exact M4 assessment; otherwise admission refuses. The qualification array is part of the descriptor bytes, ID, hash, registration, trust binding, and replay entry, so it cannot be added by the bundle or model prose.
 
@@ -640,13 +724,13 @@ Existing StoreLimits remain fixed: event line `1,048,576`, CAS object `67,108,86
 
 The `4,944` union ceiling is the exact joint maximum of fixed cover/invariant (2), descriptor/registration IDs (4), Section/Restriction IDs (4), context/obligation/claim IDs (6), overlap plus retained context-member claim sources (at most 4,224), five per-Section M4 trace sets (640), and qualifications (64). The `4,224` term follows from both context member sets being capped at 4,096: overlap 3,968 plus 128 disjoint retained sources from each side reaches the maximum; a larger overlap reduces available disjoint member sources one-for-one or faster. Duplicate IDs reduce the actual set and never buy additional capacity. The obstruction adds only contexts/overlap already counted and explicitly excludes its owner attempt. Every row above has a real exact-limit acceptance test, a `limit+1` refusal before reserve/encoding, duplicate/order mutation tests, and checked-`u64` overflow tests; testing only the containing event byte limit is insufficient.
 
-For v5, `Rows5` counts every inherited-v4 and M5 row; `Icells5` counts every non-null INTEGER cell; `Tbytes5` sums every non-null TEXT UTF-8 length; `SQL5=Tbytes5 + 8*Icells5 + Rows5`; `Qbytes5` is canonical complete `IndexSnapshotV5` bytes; and `Owned5` is recursive decoded-snapshot ownership (UTF-8 string/key bytes, 8/list slot, 16/object entry, 8/integer/float, 1/Boolean, 0/null). Exact peak:
+For v5, `Rows5` counts every inherited-v4 and M5 row; `Icells5` counts every non-null INTEGER cell; `Tbytes5` sums every non-null TEXT UTF-8 length; `SQL5=Tbytes5 + 8*Icells5 + Rows5`; `Qbytes5` is canonical complete `IndexSnapshotV5` bytes; and `Owned5` is recursive decoded-snapshot ownership (UTF-8 string/key bytes, 8/list slot, 16/object entry, 8/integer/float, 1/Boolean, 0/null). `ObservedObject5` is the largest actual CAS-object byte length referenced by any inherited or v4 artifact-registration row in this rebuilt run, or zero when there is none. `ObservedEventLine5` is the largest actual confirmed canonical v4 event-line byte length including LF, or zero for an empty prefix. Exact peak:
 
 ```text
-Working5 = SQL5 + Qbytes5 + Owned5 + max_object_bytes + max_event_line_bytes
+Working5 = SQL5 + Qbytes5 + Owned5 + ObservedObject5 + ObservedEventLine5
 ```
 
-All arithmetic is checked `u64`, overflow observes `u64::MAX`, and Rows/Qbytes/Working are checked against StoreLimits before reserve/allocation/return. Page size, compressed bytes, allocator/RSS observations, and a v4 delta are invalid substitutes.
+The two observed terms are measured run data, not the configured `StoreLimits` caps; they are independently required not to exceed the CAS-object and event-line limits. All arithmetic is checked `u64`, overflow observes `u64::MAX`, and Rows/Qbytes/Working are checked against StoreLimits before reserve/allocation/return. Page size, compressed bytes, allocator/RSS observations, configured maxima substituted for observed values, and a v4 delta are invalid substitutes.
 
 Report v4 retains v3 limits (8,192 inherited registrations/executions; 131,072 claims; 8,192 ordinary obstructions; 3 views; 4,096 losses; 200,000 rows; 67,108,864 output bytes; 268,435,456 working bytes) and adds bounds of two `ArtifactRegistrationV4` records, two gluing-input descriptors, one cover, two Sections, one attempt, two restrictions, one candidate, and one gluing obstruction. Exact row formula:
 
@@ -669,9 +753,9 @@ gluing_bundle_recorded_v4(GluingBundleV4)
 actor = engine:reviewgraphen.m5_gluing@1
 ```
 
-The only legal order is: confirmed D2/M4 prefix (including any inherited v3 registration payloads); two trusted descriptor CAS puts and exact `artifact_registered_v4` events in context-ID order; then one `gluing_bundle_recorded_v4`. A gluing-input descriptor can never use inherited `artifact_registered`. Core prepares the complete bundle against a cloned replay aggregate and the exact current tail. Store appends that single canonical line atomically; one cover, 0..2 Sections, 0..2 Restrictions, one attempt, 0..1 candidate, and 0..1 obstruction therefore share one event tuple and cannot become independently durable. A second M5 bundle/cover/attempt is always `AlreadyComplete`, never a later revision.
+The only legal order is: confirmed D2/M4 prefix (including any inherited v3 registration payloads); zero, one, or two trusted descriptor CAS puts and exact `artifact_registered_v4` events in context-ID order; then, only after exactly two registrations, one `gluing_bundle_recorded_v4`. Thus the legal pre-bundle confirmed prefix contains exactly 0, 1, or 2 descriptors/registrations, never an out-of-order or third one. A gluing-input descriptor can never use inherited `artifact_registered`. Core prepares the complete bundle against a cloned replay aggregate and the exact current tail. Store appends that single canonical line atomically; one cover, 0..2 Sections, 0..2 Restrictions, one attempt, 0..1 candidate, and 0..1 obstruction therefore share one event tuple and cannot become independently durable. The bundle-owned arrays are all empty before that event and atomically complete after it. A second M5 bundle/cover/attempt is always `AlreadyComplete`, never a later revision.
 
-A crash before descriptor registration can leave an unregistered CAS object, which is typed `OrphanCanonicalInput` and is neither replay nor report authority. A crash after one or both registrations can leave valid unused registrations, but no M5 result. Reopen reconstructs them from the journal and exact CAS bytes; the same two inputs may then be used only to prepare the not-yet-durable bundle. A pre-sync bundle failure leaves no M5 record. Post-sync uncertainty consumes the bundle and basis, returns `SessionUncertain`, and requires v4 recovery to decide whether the one event landed; it is never retried. A durable bundle is replayed whole or the journal is refused as noncanonical.
+A crash before descriptor registration can leave an unregistered CAS object. It is neither replay nor report authority and may be adopted only by the exact immutable-object rule in §2; otherwise it is `OrphanCanonicalInput`. A crash after one or both registrations can leave valid unused registrations, but no M5 result. Reopen reconstructs them from the journal and exact CAS bytes; the same two inputs may then be used only to prepare the not-yet-durable bundle. A pre-sync bundle failure leaves no M5 record. Post-sync uncertainty consumes the bundle and basis, returns `SessionUncertain`, and requires v4 recovery to decide whether the one event landed; it is never retried. A durable bundle is replayed whole or the journal is refused as noncanonical.
 
 M5 performs no process/network/tool operation. Recovery, v5 rebuild, and report generation use only the confirmed canonical journal, registered CAS descriptors, v4 trust roots/basis, and reconstructed state. Cached overlap, SQLite, reports, or caller objects are never replay authority.
 
@@ -733,9 +817,14 @@ CREATE TABLE artifact_registrations_v4 (
     'verifier_artifact','external_harness_witness','gluing_input'
   )),
   source_canonical_json TEXT NOT NULL,
+  descriptor_id TEXT NOT NULL UNIQUE,
   body_hash TEXT NOT NULL,
   PRIMARY KEY(event_sequence,registration_id),
-  FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)
+  UNIQUE(registration_id,descriptor_id),
+  FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id),
+  FOREIGN KEY(descriptor_id)
+    REFERENCES gluing_input_descriptors_v4(descriptor_id)
+    DEFERRABLE INITIALLY DEFERRED
 ) STRICT;
 
 -- source_canonical_json is exactly one closed ArtifactSourceV4 object in §1.
@@ -747,7 +836,7 @@ CREATE TABLE gluing_input_descriptors_v4 (
   event_sequence INTEGER NOT NULL CHECK(event_sequence>0),
   event_id TEXT NOT NULL,
   descriptor_id TEXT NOT NULL UNIQUE,
-  registration_id TEXT NOT NULL UNIQUE REFERENCES artifact_registrations_v4(registration_id),
+  registration_id TEXT NOT NULL UNIQUE,
   schema TEXT NOT NULL CHECK(schema='reviewgraphen.gluing_input_descriptor.v4'),
   run_id TEXT NOT NULL,
   snapshot_id TEXT NOT NULL,
@@ -763,7 +852,10 @@ CREATE TABLE gluing_input_descriptors_v4 (
   body_hash TEXT NOT NULL,
   PRIMARY KEY(event_sequence,descriptor_id),
   UNIQUE(run_id,context_id),
-  FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)
+  FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id),
+  FOREIGN KEY(registration_id,descriptor_id)
+    REFERENCES artifact_registrations_v4(registration_id,descriptor_id)
+    DEFERRABLE INITIALLY DEFERRED
 ) STRICT;
 
 CREATE TABLE context_covers_v4 (
@@ -784,6 +876,7 @@ CREATE TABLE context_covers_v4 (
   source_ids_canonical_json TEXT NOT NULL,
   body_hash TEXT NOT NULL,
   PRIMARY KEY(event_sequence,cover_id),
+  UNIQUE(event_sequence,event_id,cover_id),
   FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)
 ) STRICT;
 
@@ -815,6 +908,7 @@ CREATE TABLE sections_v4 (
   body_hash TEXT NOT NULL,
   PRIMARY KEY(event_sequence,section_id),
   UNIQUE(cover_id,context_id),
+  UNIQUE(event_sequence,event_id,section_id),
   FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)
 ) STRICT;
 
@@ -841,6 +935,7 @@ CREATE TABLE gluing_attempts_v4 (
   finding_ids_canonical_json TEXT NOT NULL,
   body_hash TEXT NOT NULL,
   PRIMARY KEY(event_sequence,attempt_id),
+  UNIQUE(event_sequence,event_id,attempt_id),
   FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)
 ) STRICT;
 
@@ -864,7 +959,11 @@ CREATE TABLE restrictions_v4 (
   finding_ids_canonical_json TEXT NOT NULL,
   body_hash TEXT NOT NULL,
   PRIMARY KEY(event_sequence,restriction_id),
-  FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)
+  FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id),
+  FOREIGN KEY(event_sequence,event_id,attempt_id)
+    REFERENCES gluing_attempts_v4(event_sequence,event_id,attempt_id),
+  FOREIGN KEY(event_sequence,event_id,section_id)
+    REFERENCES sections_v4(event_sequence,event_id,section_id)
 ) STRICT;
 
 CREATE TABLE global_candidates_v4 (
@@ -887,7 +986,11 @@ CREATE TABLE global_candidates_v4 (
   finding_ids_canonical_json TEXT NOT NULL,
   body_hash TEXT NOT NULL,
   PRIMARY KEY(event_sequence,global_candidate_id),
-  FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)
+  FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id),
+  FOREIGN KEY(event_sequence,event_id,attempt_id)
+    REFERENCES gluing_attempts_v4(event_sequence,event_id,attempt_id),
+  FOREIGN KEY(event_sequence,event_id,cover_id)
+    REFERENCES context_covers_v4(event_sequence,event_id,cover_id)
 ) STRICT;
 
 CREATE TABLE gluing_obstructions_v4 (
@@ -943,6 +1046,53 @@ ArtifactRegistrationV4IndexItem {
   descriptor_id,
   body_hash,
 }
+GluingInputDescriptorV4IndexItem {
+  event_sequence,
+  event_id,
+  descriptor: GluingInputDescriptorV4,
+  registration_id,
+  descriptor_hash,
+  descriptor_size,
+  body_hash,
+}
+ContextCoverV4IndexItem {
+  event_sequence,
+  event_id,
+  cover: ContextCoverV4,
+  body_hash,
+}
+SectionV4IndexItem {
+  event_sequence,
+  event_id,
+  section: SectionV4,
+  body_hash,
+}
+RestrictionV4IndexItem {
+  event_sequence,
+  event_id,
+  attempt_id,
+  restriction: RestrictionV4,
+  body_hash,
+}
+GluingAttemptV4IndexItem {
+  event_sequence,
+  event_id,
+  attempt: GluingAttemptV4,
+  body_hash,
+}
+GlobalCandidateV4IndexItem {
+  event_sequence,
+  event_id,
+  attempt_id,
+  candidate: GlobalCandidateV4,
+  body_hash,
+}
+GluingObstructionV4IndexItem {
+  event_sequence,
+  event_id,
+  obstruction: GluingObstructionV4,
+  body_hash,
+}
 IndexSnapshotV5 {
   // all exact IndexSnapshotV4 top-level fields, unchanged
   artifact_registrations_v4: Vec<ArtifactRegistrationV4IndexItem>,
@@ -956,13 +1106,13 @@ IndexSnapshotV5 {
 }
 ```
 
-The registration index item is closed and complete: its scalar/source fields equal the complete `ArtifactRegistrationV4`, `event_actor` equals its journal envelope, and `body_hash` is recomputed from that DTO only. `registration_id` equals the DTO ID. `descriptor_id` is a required decoded FK equal to `source.descriptor_id` and to exactly one `gluing_input_descriptors_v4.descriptor_id`; that descriptor row's `registration_id` points back to this row. This reciprocal reference is validation, not source authority.
+All eight item objects are closed; the seven M5 topology item shapes above are exactly nested as written and no flattened alternative is accepted. Their nested DTO is the complete strict DTO from §2 or §3, and `body_hash` is recomputed from only that nested DTO. The registration index item is closed and complete: its scalar/source fields equal the complete `ArtifactRegistrationV4`, `event_actor` equals its journal envelope, and `body_hash` is recomputed from that DTO only. `registration_id` equals the DTO ID. `descriptor_id` is a required decoded FK equal to `source.descriptor_id` and to exactly one `gluing_input_descriptors_v4.descriptor_id`; that descriptor row's `registration_id` points back to this row. Rebuild inserts each registration/descriptor pair in one transaction with deferred foreign keys enabled; commit fails for a missing, crossed, or nonreciprocal pair. This reciprocal reference is validation, not source authority.
 
-For the admitted M5 profile the independent registration array has exactly two items, ordered by decoded `source.context_id` (`context:payment`, then `context:ui-event`), with `registration_id` only as a tie-breaker that can never be exercised because contexts are unique. Descriptor/Section/Restriction arrays use the same context order; singleton arrays use their sole record. Every other inherited array retains ADR 0021 ordering.
+For the admitted M5 profile the independent registration and descriptor arrays each have exactly 0, 1, or 2 items in a legal pre-bundle snapshot and exactly two after the bundle. They are ordered by decoded `source.context_id`/`descriptor.context_id` (`context:payment`, then `context:ui-event`), with registration or descriptor ID only as a tie-breaker that can never be exercised because contexts are unique. Section/Restriction arrays use the same context order; singleton arrays use their sole record. Every other inherited array retains ADR 0021 ordering.
 
-`Qbytes5` is the UTF-8 length of canonical JSON for this entire `IndexSnapshotV5`, explicitly including every key/string/value in `artifact_registrations_v4`; `Owned5` recursively charges that decoded array, its complete source objects, descriptor FKs, and body hashes. `Rows5` includes every `artifact_registrations_v4` SQL row independently from `gluing_input_descriptors_v4`. Omitting or nesting the independent array for accounting is a limit error.
+`Qbytes5` is the UTF-8 length of canonical JSON for this entire `IndexSnapshotV5`, using exactly the item keys and nesting above and explicitly including every key/string/value in `artifact_registrations_v4`; `Owned5` recursively charges all eight decoded arrays, their complete nested DTO/source objects, owner/descriptor FKs, and body hashes. `Rows5` includes every `artifact_registrations_v4` SQL row independently from `gluing_input_descriptors_v4`. Omitting, flattening, or nesting away the independent registration array for accounting is a limit error.
 
-Core checks beyond DDL: profile identity; all derived IDs/projected body hashes; fixed run/snapshot/plan/universe closure; descriptor registration/trust binding; exact `D` partition; exact overlap; Section eligibility and trace equality; restriction derivation; compatibility/result table; result/option cardinality; and all source-set formulas. Every bundle-owned cover/Section/restriction/attempt/candidate/obstruction row must have the identical `(event_sequence,event_id)` of its `gluing_bundle_recorded_v4` event; the tuple FKs on restrictions and candidates are mandatory rather than inferred through `attempt_id`. FKs/CHECKs are backstops. `IndexSnapshotV5` uses §3 context order for descriptors/Sections/Restrictions and singleton order for cover/attempt/candidate/obstruction; nested wire arrays retain the same context order. It never falls back to record-ID sorting for those positional arrays and never returns a partial M5 projection.
+Core checks beyond DDL: profile identity; all derived IDs/projected body hashes; fixed run/snapshot/plan/universe closure; descriptor registration/trust binding; exact `D` partition; exact overlap; Section eligibility and trace equality; restriction derivation; compatibility/result table; result/option cardinality; and all source-set formulas. Every bundle-owned cover/Section/restriction/attempt/candidate/obstruction row must have the identical `(event_sequence,event_id)` of its `gluing_bundle_recorded_v4` event; the tuple FKs on restrictions and candidates are mandatory rather than inferred through `attempt_id`. FKs/CHECKs are backstops. `IndexSnapshotV5` projects exactly the legal 0/1/2 pre-bundle descriptor and independent registration prefix. Its six bundle-owned arrays are simultaneously empty before the bundle and atomically complete afterward. It uses §3 context order for descriptors/Sections/Restrictions and singleton order for cover/attempt/candidate/obstruction; nested wire arrays retain the same context order. It never falls back to record-ID sorting for those positional arrays. “No partial M5 projection” means no partial bundle projection; it does not erase a legal descriptor prefix.
 
 `schemas/reviewgraphen.report.v4.schema.json` is Draft 2020-12 and closed at every object. Its top-level keys are v3's; `schema=reviewgraphen.review.report.v4`, `report_version=4`. Metadata retains v3 keys and adds `gluing_profile_descriptor_id` fixed to `reviewgraphen.double_submit_gluing@1`. Scenario retains v3 keys and adds the singleton sorted `context_cover_ids`. Result retains every v3 key and adds required arrays `gluing_input_descriptors`, `context_covers`, `sections`, `gluing_attempts`, `restrictions`, `global_candidates`, and `gluing_obstructions`.
 
@@ -1022,7 +1172,7 @@ recovery_ref        = the table entry for a
 
 `<exact array name>` is substituted byte-for-byte with the left table cell; it is not an open string. At most seven M5 omission losses exist per view. Other inherited v3 losses remain separately derived. A view never converts an omitted obstruction into a finding, combines arrays under a nonexistent path, or omits IDs from the corresponding exact loss set.
 
-The source-bound v4 generator holds the shared journal lock while obtaining the v5 snapshot; validates confirmed event chain, v4 genesis/tail, inherited M4 and gluing-input CAS/replay basis, and the one complete M5 bundle; recomputes hashes/index equality; and emits that bundle at/before tail. Any journal/index/CAS/replay/denominator/assignment/overlap/restriction/candidate/obstruction/loss/report mismatch rejects without output.
+The source-bound v4 generator holds the shared journal lock while obtaining the v5 snapshot; validates confirmed event chain, v4 genesis/tail, inherited M4 and gluing-input CAS/replay basis, and the one complete M5 bundle; recomputes hashes/index equality; and emits that bundle at/before tail. A legal 0/1/2-descriptor pre-bundle prefix is indexable but report generation returns typed `M5BundleIncomplete` without output until exactly two descriptors and the one complete bundle are durable. Any journal/index/CAS/replay/denominator/assignment/overlap/restriction/candidate/obstruction/loss/report mismatch rejects without output.
 
 ### 9. Runtime sequence
 
@@ -1039,7 +1189,7 @@ open ReplayedV4RunSession and AuthorityReplayBasisV4 over confirmed M4 state
 -> reopen/replay before source-bound report generation
 ```
 
-Prepared admissions/bundles are nonserializable and exact run/genesis/tail/sequence-bound. Registration success is a durable prefix; bundle pre-append failure leaves no M5 record. `SessionUncertain` forces v4 recovery and never retries the prepared value. No M5 operation runs a verifier/command, reads arbitrary workspace paths, or uses source/reviewer prose as instructions.
+Prepared admissions/bundles are nonserializable and exact run/genesis/tail/sequence-bound. Each registration success advances the legal durable 0/1/2-descriptor prefix; bundle pre-append failure leaves all bundle-owned arrays empty and report v4 unavailable. `SessionUncertain` forces v4 recovery and never retries the prepared value. No M5 operation runs a verifier/command, reads arbitrary workspace paths, or uses source/reviewer prose as instructions.
 
 ### 10. Required tests and reference scenario
 
@@ -1052,14 +1202,14 @@ Implementation uses deterministic fake/M4 fixture inputs only and includes:
 5. Both compatible pairs, conflict directions, all unknown combinations, and UI/payment `satisfied`/`required` are covered. The latter emits exactly one conflict, preserves Sections, and creates no duplicate finding/claim/acceptance/coverage transition.
 6. Missing Section, missing overlap, unknown descriptor value, candidate, qualified, glued, and conflict outcomes prove the exact result/candidate/obstruction matrix, trace unions, nullability, and non-authority.
 7. Mutate every literal ID kind, identity key, event DTO ID/schema/key/enum/set order/duplicate, every computed index/report body hash, descriptor/Section/Restriction context wire order, pair, partition, overlap, assignment, trace/source set, result, candidate, obstruction, resolution, blocks, actor, sequence/tail, and event tuple. Append/replay/index/report all refuse; source-graph traversal is acyclic and never follows the obstruction owner back-reference.
-8. Crash before/after each descriptor CAS put and registration and during/after atomic bundle append; test orphan handling, basis update rules, `SessionUncertain`, v4 recovery, no partial M5 record, and no duplicate prepared append.
+8. Crash before/after each descriptor CAS put and registration and during/after atomic bundle append; test exact orphan adoption and mismatch/ambiguity/order refusal, basis update rules, `SessionUncertain`, keyed attributed v4 recovery, legal 0/1/2 descriptor prefixes, no partial bundle record, and no duplicate prepared append.
 9. Rebuild v5 twice equally; v1/v2/v3/v4 images return `RebuildRequired` unchanged.
-10. Closed report-v4 schema mutations, every exact `ArtifactRegistrationV4ReportItem`/descriptor nested key and actor/reference mutation, every M5 array closure/order mutation, each of the seven exact versioned recovery refs and omitted ID sets, exact row/byte/working bounds, tail/index/CAS/replay tampering, and source-bound equality. The double-submit v4 fixture is generated from actual v4 journal/CAS/index output, never a detached report assertion.
+10. Closed report-v4 schema mutations, every exact `ArtifactRegistrationV4ReportItem`/descriptor nested key and actor/reference mutation, every M5 array closure/order mutation, each of the seven exact versioned recovery refs and omitted ID sets, exact row/byte/working bounds including observed object/event-line terms, tail/index/CAS/replay tampering, pre-bundle `M5BundleIncomplete`, and source-bound equality. The double-submit v4 fixture is generated from actual v4 journal/CAS/index output, never a detached report assertion.
 11. Every inherited M4 authority event is accepted at its exact v4 position only with matching v4 trust roots; substituted v3 basis/token/trusted capability/resume authority, predecessor, sequence, CAS bytes, policy, harness, or human grant refuses mint/append/open/recovery. Every successful append advances basis tail/count; authority append entry vectors advance exactly; pre-durable failure, interrupted bundle, and uncertainty do not.
 12. `ArtifactRegistrationV4` accepts the exact closed `gluing_input` source/actor/outer tuple and rejects inherited-v3 substitution, every old/new source-kind confusion, nested/outer hash-size-media-sensitivity mismatch, unknown field, wrong actor, and wrong `registration-v4` identity preimage.
 13. Each snapshot-ingest, reviewer-raw, verifier-input, verifier-output, and external-witness v3 registration body can append at a v4 position only through its matching sealed bridge role. The full all-pairs source-role substitution matrix refuses. Snapshot tests mutate run/snapshot/adapter, actor, selected CAS tuple, ProgramSpace fact, bundle hash/count/total bytes/order/missing/extra entry, tail, and sequence; success updates basis tail/count only, uncertainty updates nothing. External witness admission is possible only immediately after its exact confirmed receipt.
-14. `IndexSnapshotV5.artifact_registrations_v4` is independently present in context order with every exact field/body hash/actor/descriptor FK. Omission, nesting-only projection, duplicate row, wrong order/FK, or exclusion from `Qbytes5`/`Owned5`/`Rows5` refuses the whole snapshot.
-15. `EventLog::new_v4` bootstrap accepts only the exact canonical genesis CAS bytes, nested v3 `RunGenesis` registration, v4 manifest discriminator, actor, previous/payload/event hashes, and sequence/logical time 1. Crash tests cover orphan CAS before event durability, complete event uncertainty followed by recovery, recoverable partial line, malformed complete line, duplicate genesis, retry-before-recovery refusal, and successful recovery before basis construction.
+14. `IndexSnapshotV5.artifact_registrations_v4` is independently present in context order with every exact field/body hash/actor/descriptor FK; the seven topology items use their exact nested shapes. Omission, flattened substitution, nesting-only registration projection, duplicate row, wrong order/FK, crossed reciprocal pair, same-ID/different-event restriction or candidate ownership, or exclusion from `Qbytes5`/`Owned5`/`Rows5` refuses the whole snapshot.
+15. Pure `EventLogV4::from_bootstrap_request` and `replay_confirmed_v4_prefix` accept only the exact source closure or supplied canonical envelopes and perform no storage effect; Store-only `EventJournal::publish_new_v4` accepts only Core's opaque validated log and cannot construct or edit event 1. Crash tests cover orphan CAS before event durability, complete event uncertainty followed by inspected exact-key attributed recovery, absent-log `None` hashes, recoverable partial line, malformed complete line, duplicate genesis, retry-before-inspection refusal, closed `GenesisRecoveryV4` branches, and successful committed recovery before basis construction. Every kind/outcome cross-product outside the allowed table cells, every wrong-kind key, and every file/tail/marker mutation between inspection and recovery refuses without mutation. M4 marker tests cover stage0 cleanup to ordinary editable, every strict-interior ADR 0021 prefix to resume-only authority, already-complete cleanup to ordinary editable, exact marker receipt stage/action/hashes, and duplicate/gapped/reordered/overlong/wrong-body/wrong-suffix/malformed refusal with no cleanup.
 
 ## Consequences
 
@@ -1067,4 +1217,4 @@ M5 makes the local-to-global boundary auditable without treating prose as semant
 
 ## Decision acceptance
 
-This ADR is Accepted. It fixes profile vocabulary, migration, DTOs, identities, ordering, source closure, states, bounds, DDL, report shape, runtime protocol, and negative test matrix. It does not claim M4/M5 code, a v4 schema, v5 index, or source-bound double-submit fixture already exists.
+This ADR remains Accepted as amended 2026-08-11. The amendment closes the previously underspecified Core/Store bootstrap and attributed recovery boundary, resume-only interrupted-bundle state, exact orphan adoption, reciprocal and same-event SQL constraints, v5 item shapes and observed accounting, and the legal pre-bundle prefix/report boundary. Root-lock realization and internal validated-v5 traversal remain implementation seams and do not change the wire, authority, durability, or accounting contracts fixed here. This ADR does not claim M4/M5 code, a v4 schema, v5 index, or source-bound double-submit fixture already exists.
