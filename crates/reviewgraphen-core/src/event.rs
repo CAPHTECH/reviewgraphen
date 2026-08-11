@@ -4363,11 +4363,13 @@ pub struct EventEnvelope {
     payload_hash: ContentHash,
     previous_event_hash: ContentHash,
     event_hash: ContentHash,
+    #[serde(skip)]
+    canonical_line_bytes_v4: Option<u64>,
 }
 
 impl EventEnvelope {
     fn from_raw(raw: RawEventEnvelope) -> Result<Self> {
-        let envelope = Self {
+        let mut envelope = Self {
             schema: raw.schema,
             id: raw.id,
             run_id: raw.run_id,
@@ -4379,8 +4381,10 @@ impl EventEnvelope {
             payload_hash: raw.payload_hash,
             previous_event_hash: raw.previous_event_hash,
             event_hash: raw.event_hash,
+            canonical_line_bytes_v4: None,
         };
         envelope.validate()?;
+        envelope.set_canonical_line_bytes_v4()?;
         Ok(envelope)
     }
 
@@ -4443,7 +4447,7 @@ impl EventEnvelope {
             payload_hash: &payload_hash,
             previous_event_hash: &previous_event_hash,
         })?;
-        let envelope = Self {
+        let mut envelope = Self {
             schema: version.schema().to_owned(),
             id,
             run_id,
@@ -4455,12 +4459,39 @@ impl EventEnvelope {
             payload_hash,
             previous_event_hash,
             event_hash,
+            canonical_line_bytes_v4: None,
         };
         envelope.validate()?;
+        envelope.set_canonical_line_bytes_v4()?;
         if envelope.payload_is_d1()? {
             let _ = envelope.canonical_bytes()?;
         }
         Ok(envelope)
+    }
+
+    fn set_canonical_line_bytes_v4(&mut self) -> Result<()> {
+        if self.contract_version()? != EventContractVersion::V4 {
+            return Ok(());
+        }
+        let body_bytes = crate::canonical::canonical_json_count_bounded(
+            self,
+            MAX_D1_EVENT_LINE_BYTES - 1,
+            "event-v4 canonical line body",
+        )?;
+        let line_bytes = body_bytes.checked_add(1).ok_or(DomainError::Incomplete {
+            operation: "event-v4 canonical line bytes",
+            limit: MAX_D1_EVENT_LINE_BYTES,
+            observed: usize::MAX,
+        })?;
+        if line_bytes > u64::try_from(MAX_D1_EVENT_LINE_BYTES).unwrap_or(u64::MAX) {
+            return Err(DomainError::Incomplete {
+                operation: "event-v4 canonical line bytes",
+                limit: MAX_D1_EVENT_LINE_BYTES,
+                observed: usize::try_from(line_bytes).unwrap_or(usize::MAX),
+            });
+        }
+        self.canonical_line_bytes_v4 = Some(line_bytes);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -5318,6 +5349,2836 @@ pub enum DecodedPayload {
         execution: ExecutionRecord,
         claims: Vec<ExecutionClaimV2>,
     },
+}
+
+/// Read-only event-v4 payload vocabulary for the derived Store index-v5.
+///
+/// Every reference is lent synchronously from Core's authority replay and
+/// expires before that replay step releases its decoded DTO. The enum
+/// deliberately contains neither raw JSON nor an authority-bearing value and
+/// cannot be constructed by callers from untrusted input. Observations become
+/// usable only after the complete replay returns successfully.
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedProjectionPayloadV4;
+/// fn retain<'a>(
+///     slot: &mut Option<BorrowedProjectionPayloadV4<'static>>,
+///     value: BorrowedProjectionPayloadV4<'a>,
+/// ) {
+///     *slot = Some(value);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedProjectionPayloadV4;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<BorrowedProjectionPayloadV4<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedProjectionPayloadV4;
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<BorrowedProjectionPayloadV4<'static>>();
+/// ```
+pub struct BorrowedProjectionPayloadV4<'a> {
+    inner: BorrowedProjectionPayloadInnerV4<'a>,
+}
+
+enum BorrowedProjectionPayloadInnerV4<'a> {
+    Genesis(&'a RunGenesisManifestV4),
+    Persisted {
+        payload: &'a PersistedPayload,
+        decoded_bundle: Option<&'a crate::GluingBundleV4>,
+        decoded_descriptor: Option<&'a crate::GluingInputDescriptorV4>,
+    },
+    Direct(BorrowedDirectProjectionV4<'a>),
+}
+
+enum BorrowedDirectProjectionV4<'a> {
+    ObligationTransition {
+        obligation_id: &'a StableId,
+        next: ObligationLifecycle,
+    },
+    ArtifactRegisteredV3(&'a ArtifactRegisteredV3),
+    SnapshotSourcesRecorded(&'a SnapshotSourcesRecorded),
+    ReviewPlanRecorded(&'a ReviewPlan),
+    ContextEnvelopeProjected(&'a ReviewContextEnvelope),
+    ReviewExecutionRecorded {
+        execution: &'a ExecutionRecord,
+        claims: &'a BTreeMap<StableId, ExecutionClaimV2>,
+    },
+    EvidenceRecordedV3(&'a EvidenceV3),
+    EvidenceBoundV3(&'a EvidenceBindingV3),
+    VerificationRecordedV3(&'a VerificationV3),
+    DecisionRecordedV3(&'a DecisionV3),
+    FindingRecordedV3(&'a FindingV3),
+    ArtifactRegisteredV4 {
+        registration: &'a ArtifactRegistrationV4,
+        descriptor: &'a crate::GluingInputDescriptorV4,
+    },
+    GluingBundleRecordedV4(&'a crate::GluingBundleV4),
+}
+
+/// Callback-scoped, scalar-only metadata for one already validated V4 event.
+///
+/// It exposes neither the envelope nor raw/canonical payload bytes. The type
+/// is intentionally non-`Clone` and non-Serde, and its private fields prevent
+/// caller construction.
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedV4EventMetadata;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<BorrowedV4EventMetadata<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedV4EventMetadata;
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<BorrowedV4EventMetadata<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedV4EventMetadata;
+/// fn retain<'a>(
+///     slot: &mut Option<BorrowedV4EventMetadata<'static>>,
+///     value: BorrowedV4EventMetadata<'a>,
+/// ) {
+///     *slot = Some(value);
+/// }
+/// ```
+pub struct BorrowedV4EventMetadata<'a> {
+    sequence: u64,
+    id: &'a StableId,
+    schema: &'a str,
+    event_hash: &'a ContentHash,
+    payload_hash: &'a ContentHash,
+    actor: &'a str,
+    logical_time: u64,
+    canonical_line_bytes: u64,
+}
+
+impl<'a> BorrowedV4EventMetadata<'a> {
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> &'a StableId {
+        self.id
+    }
+
+    #[must_use]
+    pub const fn schema(&self) -> &'a str {
+        self.schema
+    }
+
+    #[must_use]
+    pub const fn event_hash(&self) -> &'a ContentHash {
+        self.event_hash
+    }
+
+    #[must_use]
+    pub const fn payload_hash(&self) -> &'a ContentHash {
+        self.payload_hash
+    }
+
+    #[must_use]
+    pub const fn actor(&self) -> &'a str {
+        self.actor
+    }
+
+    #[must_use]
+    pub const fn logical_time(&self) -> u64 {
+        self.logical_time
+    }
+
+    /// Exact canonical JSONL bytes including the mandatory trailing LF.
+    #[must_use]
+    pub const fn canonical_line_bytes(&self) -> u64 {
+        self.canonical_line_bytes
+    }
+}
+
+fn borrowed_v4_event_metadata(envelope: &EventEnvelope) -> Result<BorrowedV4EventMetadata<'_>> {
+    if envelope.contract_version()? != EventContractVersion::V4 {
+        return Err(DomainError::EventSequence(
+            "borrowed V4 metadata requires an event-v4 envelope".to_owned(),
+        ));
+    }
+    Ok(BorrowedV4EventMetadata {
+        sequence: envelope.sequence,
+        id: &envelope.id,
+        schema: &envelope.schema,
+        event_hash: &envelope.event_hash,
+        payload_hash: &envelope.payload_hash,
+        actor: &envelope.actor,
+        logical_time: envelope.logical_time,
+        canonical_line_bytes: envelope.canonical_line_bytes_v4.ok_or_else(|| {
+            DomainError::EventSequence(
+                "borrowed V4 metadata requires a validated canonical line length".to_owned(),
+            )
+        })?,
+    })
+}
+
+impl<'a> BorrowedProjectionPayloadV4<'a> {
+    #[must_use]
+    pub fn view(&self) -> BorrowedProjectionPayloadRefV4<'_> {
+        match &self.inner {
+            BorrowedProjectionPayloadInnerV4::Genesis(value) => {
+                BorrowedProjectionPayloadRefV4::RunGenesisManifestV4(
+                    BorrowedRunGenesisManifestProjectionV4 { value },
+                )
+            }
+            BorrowedProjectionPayloadInnerV4::Persisted {
+                payload,
+                decoded_bundle,
+                decoded_descriptor,
+            } => borrowed_projection_payload_ref_v4(payload, *decoded_bundle, *decoded_descriptor)
+                .expect("Core constructs borrowed projection payloads only after closed V4 replay"),
+            BorrowedProjectionPayloadInnerV4::Direct(value) => match value {
+                BorrowedDirectProjectionV4::ObligationTransition {
+                    obligation_id,
+                    next,
+                } => BorrowedProjectionPayloadRefV4::ObligationTransition(
+                    BorrowedObligationTransitionProjectionV4 {
+                        obligation_id,
+                        next: *next,
+                    },
+                ),
+                BorrowedDirectProjectionV4::ArtifactRegisteredV3(value) => {
+                    BorrowedProjectionPayloadRefV4::ArtifactRegisteredV3(
+                        BorrowedArtifactRegistrationProjectionV3 { value },
+                    )
+                }
+                BorrowedDirectProjectionV4::SnapshotSourcesRecorded(value) => {
+                    BorrowedProjectionPayloadRefV4::SnapshotSourcesRecorded(
+                        BorrowedSnapshotSourcesProjectionV4 { value },
+                    )
+                }
+                BorrowedDirectProjectionV4::ReviewPlanRecorded(value) => {
+                    BorrowedProjectionPayloadRefV4::ReviewPlanRecorded(
+                        BorrowedReviewPlanProjectionV4 { value },
+                    )
+                }
+                BorrowedDirectProjectionV4::ContextEnvelopeProjected(value) => {
+                    BorrowedProjectionPayloadRefV4::ContextEnvelopeProjected(
+                        BorrowedContextEnvelopeProjectionV4 { value },
+                    )
+                }
+                BorrowedDirectProjectionV4::ReviewExecutionRecorded { execution, claims } => {
+                    BorrowedProjectionPayloadRefV4::ReviewExecutionRecorded(
+                        BorrowedReviewExecutionProjectionV4 {
+                            source: BorrowedReviewExecutionSourceV4::Aggregate {
+                                execution,
+                                claims,
+                            },
+                        },
+                    )
+                }
+                BorrowedDirectProjectionV4::EvidenceRecordedV3(value) => {
+                    BorrowedProjectionPayloadRefV4::EvidenceRecordedV3(
+                        BorrowedEvidenceProjectionV3 { value },
+                    )
+                }
+                BorrowedDirectProjectionV4::EvidenceBoundV3(value) => {
+                    BorrowedProjectionPayloadRefV4::EvidenceBoundV3(
+                        BorrowedEvidenceBindingProjectionV3 { value },
+                    )
+                }
+                BorrowedDirectProjectionV4::VerificationRecordedV3(value) => {
+                    BorrowedProjectionPayloadRefV4::VerificationRecordedV3(
+                        BorrowedVerificationProjectionV3 { value },
+                    )
+                }
+                BorrowedDirectProjectionV4::DecisionRecordedV3(value) => {
+                    BorrowedProjectionPayloadRefV4::DecisionRecordedV3(
+                        BorrowedDecisionProjectionV3 { value },
+                    )
+                }
+                BorrowedDirectProjectionV4::FindingRecordedV3(value) => {
+                    BorrowedProjectionPayloadRefV4::FindingRecordedV3(BorrowedFindingProjectionV3 {
+                        value,
+                    })
+                }
+                BorrowedDirectProjectionV4::ArtifactRegisteredV4 {
+                    registration,
+                    descriptor,
+                } => BorrowedProjectionPayloadRefV4::ArtifactRegisteredV4(
+                    BorrowedArtifactRegistrationProjectionV4 {
+                        value: registration,
+                        descriptor: Some(descriptor),
+                    },
+                ),
+                BorrowedDirectProjectionV4::GluingBundleRecordedV4(value) => {
+                    BorrowedProjectionPayloadRefV4::GluingBundleRecordedV4(
+                        BorrowedGluingBundleProjectionV4 { value },
+                    )
+                }
+            },
+        }
+    }
+}
+
+/// Closed read-only view of one callback-scoped V4 projection payload.
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedProjectionPayloadRefV4;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<BorrowedProjectionPayloadRefV4<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedProjectionPayloadRefV4;
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<BorrowedProjectionPayloadRefV4<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedProjectionPayloadRefV4;
+/// fn retain<'a>(
+///     slot: &mut Option<BorrowedProjectionPayloadRefV4<'static>>,
+///     value: BorrowedProjectionPayloadRefV4<'a>,
+/// ) {
+///     *slot = Some(value);
+/// }
+/// ```
+pub enum BorrowedProjectionPayloadRefV4<'a> {
+    RunGenesisManifestV4(BorrowedRunGenesisManifestProjectionV4<'a>),
+    ObligationTransition(BorrowedObligationTransitionProjectionV4<'a>),
+    ArtifactRegisteredV3(BorrowedArtifactRegistrationProjectionV3<'a>),
+    SnapshotSourcesRecorded(BorrowedSnapshotSourcesProjectionV4<'a>),
+    ReviewPlanRecorded(BorrowedReviewPlanProjectionV4<'a>),
+    ContextEnvelopeProjected(BorrowedContextEnvelopeProjectionV4<'a>),
+    ReviewExecutionRecorded(BorrowedReviewExecutionProjectionV4<'a>),
+    EvidenceRecordedV3(BorrowedEvidenceProjectionV3<'a>),
+    EvidenceBoundV3(BorrowedEvidenceBindingProjectionV3<'a>),
+    VerificationRecordedV3(BorrowedVerificationProjectionV3<'a>),
+    DecisionRecordedV3(BorrowedDecisionProjectionV3<'a>),
+    FindingRecordedV3(BorrowedFindingProjectionV3<'a>),
+    ArtifactRegisteredV4(BorrowedArtifactRegistrationProjectionV4<'a>),
+    GluingBundleRecordedV4(BorrowedGluingBundleProjectionV4<'a>),
+}
+
+macro_rules! opaque_projection_wrapper {
+    ($name:ident, $value:ty) => {
+        pub struct $name<'a> {
+            pub(crate) value: &'a $value,
+        }
+    };
+}
+
+opaque_projection_wrapper!(BorrowedRunGenesisManifestProjectionV4, RunGenesisManifestV4);
+opaque_projection_wrapper!(
+    BorrowedArtifactRegistrationProjectionV3,
+    ArtifactRegisteredV3
+);
+opaque_projection_wrapper!(BorrowedSnapshotSourcesProjectionV4, SnapshotSourcesRecorded);
+opaque_projection_wrapper!(BorrowedReviewPlanProjectionV4, ReviewPlan);
+opaque_projection_wrapper!(BorrowedContextEnvelopeProjectionV4, ReviewContextEnvelope);
+pub struct BorrowedReviewExecutionProjectionV4<'a> {
+    source: BorrowedReviewExecutionSourceV4<'a>,
+}
+enum BorrowedReviewExecutionSourceV4<'a> {
+    Persisted(&'a ReviewExecutionRecorded),
+    Aggregate {
+        execution: &'a ExecutionRecord,
+        claims: &'a BTreeMap<StableId, ExecutionClaimV2>,
+    },
+}
+/// Opaque evidence projection: no complete DTO or canonical-byte producer is exposed.
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedEvidenceProjectionV3;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<BorrowedEvidenceProjectionV3<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedEvidenceProjectionV3;
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<BorrowedEvidenceProjectionV3<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::{BorrowedEvidenceProjectionV3, EvidenceV3};
+/// fn recover(value: BorrowedEvidenceProjectionV3<'_>) -> &EvidenceV3 {
+///     value.value()
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedEvidenceProjectionV3;
+/// fn canonical(value: BorrowedEvidenceProjectionV3<'_>) {
+///     let _ = value.canonical_bytes();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::{BorrowedEvidenceProjectionV3, canonical_json};
+/// fn canonical(value: BorrowedEvidenceProjectionV3<'_>) {
+///     let _ = canonical_json(&value);
+/// }
+/// ```
+pub struct BorrowedEvidenceProjectionV3<'a> {
+    pub(crate) value: &'a EvidenceV3,
+}
+opaque_projection_wrapper!(BorrowedEvidenceBindingProjectionV3, EvidenceBindingV3);
+opaque_projection_wrapper!(BorrowedVerificationProjectionV3, VerificationV3);
+opaque_projection_wrapper!(BorrowedDecisionProjectionV3, DecisionV3);
+opaque_projection_wrapper!(BorrowedFindingProjectionV3, FindingV3);
+/// Opaque V4 registration projection.
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedArtifactRegistrationProjectionV4;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<BorrowedArtifactRegistrationProjectionV4<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedArtifactRegistrationProjectionV4;
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<BorrowedArtifactRegistrationProjectionV4<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::{ArtifactRegistrationV4, BorrowedArtifactRegistrationProjectionV4};
+/// fn recover(value: BorrowedArtifactRegistrationProjectionV4<'_>) -> &ArtifactRegistrationV4 {
+///     value.value()
+/// }
+/// ```
+pub struct BorrowedArtifactRegistrationProjectionV4<'a> {
+    value: &'a ArtifactRegistrationV4,
+    descriptor: Option<&'a crate::GluingInputDescriptorV4>,
+}
+/// Opaque V4 gluing bundle projection.
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedGluingBundleProjectionV4;
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<BorrowedGluingBundleProjectionV4<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::{BorrowedGluingBundleProjectionV4, GluingBundleV4};
+/// fn recover(value: BorrowedGluingBundleProjectionV4<'_>) -> &GluingBundleV4 {
+///     value.value()
+/// }
+/// ```
+pub struct BorrowedGluingBundleProjectionV4<'a> {
+    pub(crate) value: &'a crate::GluingBundleV4,
+}
+
+/// Opaque, callback-scoped V4 artifact provenance.  Fields are available only
+/// through scalar visiting; the serializable `ArtifactSourceV4` is never
+/// returned.
+pub struct BorrowedArtifactSourceProjectionV4<'a> {
+    value: &'a ArtifactSourceV4,
+}
+
+pub struct BorrowedGluingInputDescriptorProjectionV4<'a> {
+    value: &'a crate::GluingInputDescriptorV4,
+}
+pub struct BorrowedContextCoverProjectionV4<'a> {
+    value: &'a crate::ContextCoverV4,
+}
+pub struct BorrowedSectionProjectionV4<'a> {
+    value: &'a crate::SectionV4,
+}
+pub struct BorrowedRestrictionProjectionV4<'a> {
+    value: &'a crate::RestrictionV4,
+}
+pub struct BorrowedGluingAttemptProjectionV4<'a> {
+    value: &'a crate::GluingAttemptV4,
+}
+pub struct BorrowedGlobalCandidateProjectionV4<'a> {
+    value: &'a crate::GlobalCandidateV4,
+}
+pub struct BorrowedGluingObstructionProjectionV4<'a> {
+    value: &'a crate::GluingObstructionV4,
+}
+
+pub struct BorrowedSectionIterV4<'a> {
+    inner: std::slice::Iter<'a, crate::SectionV4>,
+}
+impl<'a> Iterator for BorrowedSectionIterV4<'a> {
+    type Item = BorrowedSectionProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|value| BorrowedSectionProjectionV4 { value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedSectionIterV4<'_> {}
+
+pub struct BorrowedRestrictionIterV4<'a> {
+    inner: std::slice::Iter<'a, crate::RestrictionV4>,
+}
+impl<'a> Iterator for BorrowedRestrictionIterV4<'a> {
+    type Item = BorrowedRestrictionProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|value| BorrowedRestrictionProjectionV4 { value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedRestrictionIterV4<'_> {}
+
+/// Opaque descriptive claim-assessment projection rebuilt by V4 replay.
+/// It exposes scalar state and opaque ID iterators, never the complete
+/// serializable assessment DTO or its canonical-byte producer.
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedClaimAssessmentProjectionV4;
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<BorrowedClaimAssessmentProjectionV4<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use reviewgraphen_core::BorrowedClaimAssessmentProjectionV4;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<BorrowedClaimAssessmentProjectionV4<'static>>();
+/// ```
+pub struct BorrowedClaimAssessmentProjectionV4<'a> {
+    pub(crate) value: &'a crate::ClaimAssessmentV3,
+}
+
+pub struct BorrowedClaimAssessmentIterV4<'a> {
+    inner: std::collections::btree_map::Values<'a, StableId, crate::ClaimAssessmentV3>,
+}
+impl<'a> Iterator for BorrowedClaimAssessmentIterV4<'a> {
+    type Item = BorrowedClaimAssessmentProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|value| BorrowedClaimAssessmentProjectionV4 { value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedClaimAssessmentIterV4<'_> {}
+
+pub struct BorrowedObligationTransitionProjectionV4<'a> {
+    obligation_id: &'a StableId,
+    next: ObligationLifecycle,
+}
+
+/// Scalar-only field value used by opaque index projection visitors.
+/// Its `Serialize` implementation is exactly the corresponding JSON scalar:
+/// null, boolean, unsigned number, finite floating-point number, or string.
+/// Stable IDs and content hashes serialize as their canonical string forms.
+#[derive(Clone, Copy, Debug)]
+pub enum BorrowedProjectionScalarV4<'a> {
+    Null,
+    Bool(bool),
+    U64(u64),
+    F64(f64),
+    Text(&'a str),
+    StableId(&'a StableId),
+    ContentHash(&'a ContentHash),
+}
+
+impl Serialize for BorrowedProjectionScalarV4<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Null => serializer.serialize_none(),
+            Self::Bool(value) => serializer.serialize_bool(*value),
+            Self::U64(value) => serializer.serialize_u64(*value),
+            Self::F64(value) => serializer.serialize_f64(*value),
+            Self::Text(value) => serializer.serialize_str(value),
+            Self::StableId(value) => serializer.serialize_str(value.as_str()),
+            Self::ContentHash(value) => serializer.serialize_str(value.as_str()),
+        }
+    }
+}
+
+pub struct BorrowedArtifactSourceProjectionV3<'a> {
+    value: &'a ArtifactSourceV3,
+}
+
+impl BorrowedArtifactSourceProjectionV3<'_> {
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self.value {
+            ArtifactSourceV3::RunGenesis { .. } => "run_genesis",
+            ArtifactSourceV3::SnapshotIngest { .. } => "snapshot_ingest",
+            ArtifactSourceV3::ReviewerExecution { .. } => "reviewer_execution",
+            ArtifactSourceV3::VerifierArtifact { .. } => "verifier_artifact",
+            ArtifactSourceV3::ExternalHarnessWitness { .. } => "external_harness_witness",
+        }
+    }
+
+    /// Visits every source-object field exactly once in canonical
+    /// lexicographic key order.
+    pub fn visit_fields(
+        &self,
+        mut visitor: impl FnMut(&'static str, BorrowedProjectionScalarV4<'_>),
+    ) {
+        match self.value {
+            ArtifactSourceV3::RunGenesis { run_id } => {
+                visitor("kind", BorrowedProjectionScalarV4::Text(self.kind()));
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+            }
+            ArtifactSourceV3::SnapshotIngest {
+                adapter_id,
+                run_id,
+                snapshot_id,
+            } => {
+                visitor("adapter_id", BorrowedProjectionScalarV4::Text(adapter_id));
+                visitor("kind", BorrowedProjectionScalarV4::Text(self.kind()));
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+                visitor(
+                    "snapshot_id",
+                    BorrowedProjectionScalarV4::StableId(snapshot_id),
+                );
+            }
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id,
+                reviewer_id,
+                run_id,
+            } => {
+                visitor(
+                    "execution_id",
+                    BorrowedProjectionScalarV4::StableId(execution_id),
+                );
+                visitor("kind", BorrowedProjectionScalarV4::Text(self.kind()));
+                visitor("reviewer_id", BorrowedProjectionScalarV4::Text(reviewer_id));
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+            }
+            ArtifactSourceV3::VerifierArtifact {
+                claim_id,
+                descriptor_id,
+                procedure_version,
+                role,
+                run_id,
+            } => {
+                visitor("claim_id", BorrowedProjectionScalarV4::StableId(claim_id));
+                visitor(
+                    "descriptor_id",
+                    BorrowedProjectionScalarV4::Text(descriptor_id),
+                );
+                visitor("kind", BorrowedProjectionScalarV4::Text(self.kind()));
+                visitor(
+                    "procedure_version",
+                    BorrowedProjectionScalarV4::Text(procedure_version),
+                );
+                visitor(
+                    "role",
+                    BorrowedProjectionScalarV4::Text(match role {
+                        VerifierArtifactRoleV3::Input => "input",
+                        VerifierArtifactRoleV3::Output => "output",
+                    }),
+                );
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+            }
+            ArtifactSourceV3::ExternalHarnessWitness {
+                claim_body_hash,
+                claim_id,
+                descriptor_id,
+                genesis_hash,
+                harness_id,
+                harness_revision,
+                harness_source_hash,
+                policy_revision_hash,
+                procedure_version,
+                property_id,
+                repository_id,
+                repository_source_hash,
+                run_id,
+                snapshot_id,
+                test_artifact_id,
+                universe_id,
+            } => {
+                visitor(
+                    "claim_body_hash",
+                    BorrowedProjectionScalarV4::ContentHash(claim_body_hash),
+                );
+                visitor("claim_id", BorrowedProjectionScalarV4::StableId(claim_id));
+                visitor(
+                    "descriptor_id",
+                    BorrowedProjectionScalarV4::Text(descriptor_id),
+                );
+                visitor(
+                    "genesis_hash",
+                    BorrowedProjectionScalarV4::ContentHash(genesis_hash),
+                );
+                visitor("harness_id", BorrowedProjectionScalarV4::Text(harness_id));
+                visitor(
+                    "harness_revision",
+                    BorrowedProjectionScalarV4::Text(harness_revision),
+                );
+                visitor(
+                    "harness_source_hash",
+                    BorrowedProjectionScalarV4::ContentHash(harness_source_hash),
+                );
+                visitor("kind", BorrowedProjectionScalarV4::Text(self.kind()));
+                visitor(
+                    "policy_revision_hash",
+                    BorrowedProjectionScalarV4::ContentHash(policy_revision_hash),
+                );
+                visitor(
+                    "procedure_version",
+                    BorrowedProjectionScalarV4::Text(procedure_version),
+                );
+                visitor("property_id", BorrowedProjectionScalarV4::Text(property_id));
+                visitor(
+                    "repository_id",
+                    BorrowedProjectionScalarV4::StableId(repository_id),
+                );
+                visitor(
+                    "repository_source_hash",
+                    BorrowedProjectionScalarV4::ContentHash(repository_source_hash),
+                );
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+                visitor(
+                    "snapshot_id",
+                    BorrowedProjectionScalarV4::StableId(snapshot_id),
+                );
+                visitor(
+                    "test_artifact_id",
+                    BorrowedProjectionScalarV4::StableId(test_artifact_id),
+                );
+                visitor(
+                    "universe_id",
+                    BorrowedProjectionScalarV4::StableId(universe_id),
+                );
+            }
+        }
+    }
+}
+
+impl<'a> BorrowedRunGenesisManifestProjectionV4<'a> {
+    /// SHA-256 of the complete canonical v4 genesis manifest DTO.
+    pub fn body_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&canonical_json(self.value)?))
+    }
+
+    #[must_use]
+    pub fn run_id(&self) -> &'a StableId {
+        self.value.run_id()
+    }
+    #[must_use]
+    pub fn event_contract_version(&self) -> &'a str {
+        &self.value.event_contract_version
+    }
+    #[must_use]
+    pub fn repository_identity(&self) -> &'a str {
+        &self.value.repository_identity
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        &self.value.snapshot_id
+    }
+    #[must_use]
+    pub fn profile_id(&self) -> &'a str {
+        &self.value.profile_id
+    }
+    #[must_use]
+    pub fn profile_version(&self) -> &'a str {
+        &self.value.profile_version
+    }
+    #[must_use]
+    pub fn genesis_artifact(&self) -> BorrowedArtifactRegistrationProjectionV3<'a> {
+        BorrowedArtifactRegistrationProjectionV3 {
+            value: &self.value.genesis_artifact,
+        }
+    }
+}
+
+impl<'a> BorrowedObligationTransitionProjectionV4<'a> {
+    #[must_use]
+    pub const fn obligation_id(&self) -> &'a StableId {
+        self.obligation_id
+    }
+
+    #[must_use]
+    pub const fn next(&self) -> ObligationLifecycle {
+        self.next
+    }
+}
+
+impl<'a> BorrowedArtifactRegistrationProjectionV3<'a> {
+    /// SHA-256 of the complete canonical inherited v3 registration DTO.
+    pub fn body_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&canonical_json(self.value)?))
+    }
+
+    #[must_use]
+    pub fn registration_id(&self) -> &'a StableId {
+        self.value.registration_id()
+    }
+    #[must_use]
+    pub fn run_id(&self) -> &'a StableId {
+        self.value.run_id()
+    }
+    #[must_use]
+    pub fn cas_hash(&self) -> &'a ContentHash {
+        self.value.cas_hash()
+    }
+    #[must_use]
+    pub fn media_type(&self) -> &'a str {
+        self.value.media_type()
+    }
+    #[must_use]
+    pub const fn size(&self) -> u64 {
+        self.value.size()
+    }
+    #[must_use]
+    pub const fn sensitivity(&self) -> ArtifactSensitivity {
+        self.value.sensitivity()
+    }
+    #[must_use]
+    pub fn source(&self) -> BorrowedArtifactSourceProjectionV3<'a> {
+        BorrowedArtifactSourceProjectionV3 {
+            value: self.value.source(),
+        }
+    }
+}
+
+pub struct BorrowedSnapshotSourceEntryProjectionV4<'a> {
+    value: &'a SnapshotSourceRecordEntry,
+}
+
+pub struct BorrowedSnapshotSourceEntryIterV4<'a> {
+    inner: std::slice::Iter<'a, SnapshotSourceRecordEntry>,
+}
+
+impl<'a> Iterator for BorrowedSnapshotSourceEntryIterV4<'a> {
+    type Item = BorrowedSnapshotSourceEntryProjectionV4<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|value| BorrowedSnapshotSourceEntryProjectionV4 { value })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl ExactSizeIterator for BorrowedSnapshotSourceEntryIterV4<'_> {}
+
+impl<'a> BorrowedSnapshotSourcesProjectionV4<'a> {
+    /// SHA-256 of the complete canonical snapshot-source record DTO.
+    pub fn body_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&canonical_json(self.value)?))
+    }
+
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        self.value.snapshot_id()
+    }
+
+    #[must_use]
+    pub fn entries(&self) -> BorrowedSnapshotSourceEntryIterV4<'a> {
+        BorrowedSnapshotSourceEntryIterV4 {
+            inner: self.value.entries().iter(),
+        }
+    }
+}
+
+impl<'a> BorrowedSnapshotSourceEntryProjectionV4<'a> {
+    #[must_use]
+    pub fn artifact_id(&self) -> &'a StableId {
+        self.value.artifact_id()
+    }
+    #[must_use]
+    pub fn registration_id(&self) -> &'a StableId {
+        self.value.registration_id()
+    }
+    #[must_use]
+    pub fn path(&self) -> &'a str {
+        self.value.path()
+    }
+    #[must_use]
+    pub fn content_hash(&self) -> &'a ContentHash {
+        self.value.content_hash()
+    }
+    #[must_use]
+    pub fn cas_hash(&self) -> &'a ContentHash {
+        self.value.cas_hash()
+    }
+    #[must_use]
+    pub const fn line_count(&self) -> u64 {
+        self.value.line_count()
+    }
+}
+
+pub struct BorrowedPlanBudgetProjectionV4 {
+    value: crate::PlanBudget,
+}
+
+impl BorrowedPlanBudgetProjectionV4 {
+    #[must_use]
+    pub const fn max_waves(&self) -> u32 {
+        self.value.max_waves()
+    }
+    #[must_use]
+    pub const fn max_obligations_per_wave(&self) -> u32 {
+        self.value.max_obligations_per_wave()
+    }
+}
+
+pub struct BorrowedPlanRiskProjectionV4<'a> {
+    id: &'a StableId,
+    value: crate::RiskDescriptor,
+}
+
+pub struct BorrowedPlanRiskIterV4<'a> {
+    inner: std::collections::btree_map::Iter<'a, StableId, crate::RiskDescriptor>,
+}
+
+impl<'a> Iterator for BorrowedPlanRiskIterV4<'a> {
+    type Item = BorrowedPlanRiskProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|(id, value)| BorrowedPlanRiskProjectionV4 { id, value: *value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedPlanRiskIterV4<'_> {}
+
+impl<'a> BorrowedPlanRiskProjectionV4<'a> {
+    #[must_use]
+    pub const fn id(&self) -> &'a StableId {
+        self.id
+    }
+    #[must_use]
+    pub const fn impact(&self) -> crate::Severity {
+        self.value.impact()
+    }
+    #[must_use]
+    pub const fn likelihood(&self) -> crate::Severity {
+        self.value.likelihood()
+    }
+}
+
+pub struct BorrowedStableIdSliceIterV4<'a> {
+    inner: std::slice::Iter<'a, StableId>,
+}
+impl<'a> BorrowedStableIdSliceIterV4<'a> {
+    pub(crate) fn new(values: &'a [StableId]) -> Self {
+        Self {
+            inner: values.iter(),
+        }
+    }
+}
+impl<'a> Iterator for BorrowedStableIdSliceIterV4<'a> {
+    type Item = &'a StableId;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedStableIdSliceIterV4<'_> {}
+
+pub struct BorrowedPlanWaveProjectionV4<'a> {
+    value: &'a crate::ScheduleWave,
+}
+pub struct BorrowedPlanWaveIterV4<'a> {
+    inner: std::slice::Iter<'a, crate::ScheduleWave>,
+}
+impl<'a> Iterator for BorrowedPlanWaveIterV4<'a> {
+    type Item = BorrowedPlanWaveProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|value| BorrowedPlanWaveProjectionV4 { value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedPlanWaveIterV4<'_> {}
+impl<'a> BorrowedPlanWaveProjectionV4<'a> {
+    #[must_use]
+    pub const fn wave_index(&self) -> u32 {
+        self.value.wave_index()
+    }
+    #[must_use]
+    pub fn obligation_ids(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4 {
+            inner: self.value.obligation_ids().iter(),
+        }
+    }
+}
+
+pub struct BorrowedPlanDeferredProjectionV4<'a> {
+    id: &'a StableId,
+    reason: crate::DeferralReason,
+}
+pub struct BorrowedPlanDeferredIterV4<'a> {
+    inner: std::collections::btree_map::Iter<'a, StableId, crate::DeferralReason>,
+}
+impl<'a> Iterator for BorrowedPlanDeferredIterV4<'a> {
+    type Item = BorrowedPlanDeferredProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|(id, reason)| BorrowedPlanDeferredProjectionV4 {
+                id,
+                reason: *reason,
+            })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedPlanDeferredIterV4<'_> {}
+impl<'a> BorrowedPlanDeferredProjectionV4<'a> {
+    #[must_use]
+    pub const fn id(&self) -> &'a StableId {
+        self.id
+    }
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
+        self.reason.as_str()
+    }
+}
+
+impl<'a> BorrowedReviewPlanProjectionV4<'a> {
+    pub fn identity_body_hash(&self) -> crate::Result<ContentHash> {
+        self.value.identity_body_hash()
+    }
+    pub fn body_hash(&self) -> crate::Result<ContentHash> {
+        Ok(ContentHash::sha256(&self.value.canonical_bytes()?))
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn universe_id(&self) -> &'a StableId {
+        self.value.universe_id()
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        self.value.snapshot_id()
+    }
+    #[must_use]
+    pub fn planner_input_hash(&self) -> &'a ContentHash {
+        self.value.planner_input_hash()
+    }
+    #[must_use]
+    pub fn planner_policy_hash(&self) -> &'a ContentHash {
+        self.value.planner_policy_hash()
+    }
+    #[must_use]
+    pub const fn planner_policy_version(&self) -> &'static str {
+        self.value.planner_policy_version()
+    }
+    #[must_use]
+    pub const fn budget(&self) -> BorrowedPlanBudgetProjectionV4 {
+        BorrowedPlanBudgetProjectionV4 {
+            value: self.value.budget(),
+        }
+    }
+    #[must_use]
+    pub fn risk_breakdown(&self) -> BorrowedPlanRiskIterV4<'a> {
+        BorrowedPlanRiskIterV4 {
+            inner: self.value.risk_breakdown().iter(),
+        }
+    }
+    #[must_use]
+    pub fn waves(&self) -> BorrowedPlanWaveIterV4<'a> {
+        BorrowedPlanWaveIterV4 {
+            inner: self.value.waves().iter(),
+        }
+    }
+    #[must_use]
+    pub fn deferred(&self) -> BorrowedPlanDeferredIterV4<'a> {
+        BorrowedPlanDeferredIterV4 {
+            inner: self.value.deferred().iter(),
+        }
+    }
+}
+
+pub struct BorrowedStableIdSetIterV4<'a> {
+    inner: std::collections::btree_set::Iter<'a, StableId>,
+}
+impl<'a> Iterator for BorrowedStableIdSetIterV4<'a> {
+    type Item = &'a StableId;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedStableIdSetIterV4<'_> {}
+
+pub struct BorrowedStringSetIterV4<'a> {
+    inner: std::collections::btree_set::Iter<'a, String>,
+}
+impl<'a> Iterator for BorrowedStringSetIterV4<'a> {
+    type Item = &'a str;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(String::as_str)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedStringSetIterV4<'_> {}
+
+pub struct BorrowedStringSliceIterV4<'a> {
+    inner: std::slice::Iter<'a, String>,
+}
+impl<'a> BorrowedStringSliceIterV4<'a> {
+    pub(crate) fn new(values: &'a [String]) -> Self {
+        Self {
+            inner: values.iter(),
+        }
+    }
+}
+impl<'a> Iterator for BorrowedStringSliceIterV4<'a> {
+    type Item = &'a str;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(String::as_str)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedStringSliceIterV4<'_> {}
+
+pub struct BorrowedContextPolicyProjectionV4<'a> {
+    value: &'a crate::ContextPolicyV1,
+}
+
+const CONTEXT_POLICY_EDGE_ORDER_V1: &[&str] = &[
+    "calls:forward",
+    "calls:reverse",
+    "contains:forward",
+    "contains:reverse",
+    "covers:forward",
+    "covers:reverse",
+];
+const CONTEXT_POLICY_EXCLUSION_PRECEDENCE_V1: &[&str] = &[
+    "path_cap",
+    "test_cap",
+    "not_reached",
+    "included_file_cap",
+    "artifact_bytes_cap",
+    "total_resolved_bytes_cap",
+    "giant_line",
+    "excerpt_bytes_cap",
+    "total_excerpt_bytes_cap",
+];
+const CONTEXT_POLICY_LOSS_DESCRIPTIONS_V1: &[(&str, &str)] = &[
+    ("artifact_bytes_cap", "context_loss:artifact_bytes_cap"),
+    ("excerpt_bytes_cap", "context_loss:excerpt_bytes_cap"),
+    (
+        "excerpt_window_truncated",
+        "context_loss:excerpt_window_truncated",
+    ),
+    ("giant_line", "context_loss:giant_line"),
+    ("included_file_cap", "context_loss:included_file_cap"),
+    ("not_reached", "context_loss:not_reached"),
+    ("path_cap", "context_loss:path_cap"),
+    ("test_cap", "context_loss:test_cap"),
+    (
+        "total_excerpt_bytes_cap",
+        "context_loss:total_excerpt_bytes_cap",
+    ),
+    (
+        "total_resolved_bytes_cap",
+        "context_loss:total_resolved_bytes_cap",
+    ),
+];
+const CONTEXT_POLICY_RULES_V1: &[&str] = &[
+    "all_candidates_metadata_closure",
+    "anchors_out_of_range_domain_failure",
+    "anchors_reached_contains_locations",
+    "baseline_assumptions_empty",
+    "baseline_exactly_one_obligation",
+    "bfs_visited_edge_kind_direction_depth",
+    "bounded_canonical_serialization",
+    "calls_caller_to_callee",
+    "canonical_bfs_predecessor_paths",
+    "contains_file_to_member",
+    "context_identity_bounded_writer",
+    "covers_test_to_subject",
+    "event_admissions_context_projection",
+    "excerpts_lf_raw",
+    "full_range_some_normalizes_none",
+    "giant_line_exclude_loss",
+    "live_projection_private_admission",
+    "loss_adr0013_grouped_v1",
+    "max_string_all_canonical_text",
+    "offline_replay_metadata_only",
+    "ranked_greedy_two_phase_resolution",
+    "seed_kind_exact_expansion",
+    "selection_path_test_caps_exclude_loss",
+    "safety_caps_incomplete",
+    "source_artifact_excerpt_integrity",
+];
+const CONTEXT_POLICY_UNKNOWNS_V1: &[&str] = &[
+    "context_unknown:unresolved_invariant_scope",
+    "context_unknown:unresolved_relation_endpoint",
+    "context_unknown:unresolved_review_context_member",
+    "context_unknown:unresolved_seed_reference",
+];
+
+pub struct BorrowedStaticStrIterV4 {
+    inner: std::slice::Iter<'static, &'static str>,
+}
+impl Iterator for BorrowedStaticStrIterV4 {
+    type Item = &'static str;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().copied()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedStaticStrIterV4 {}
+
+pub struct BorrowedContextPolicyLossDescriptionProjectionV4 {
+    value: &'static (&'static str, &'static str),
+}
+impl BorrowedContextPolicyLossDescriptionProjectionV4 {
+    #[must_use]
+    pub const fn key(&self) -> &'static str {
+        self.value.0
+    }
+    #[must_use]
+    pub const fn description(&self) -> &'static str {
+        self.value.1
+    }
+}
+pub struct BorrowedContextPolicyLossDescriptionIterV4 {
+    inner: std::slice::Iter<'static, (&'static str, &'static str)>,
+}
+impl Iterator for BorrowedContextPolicyLossDescriptionIterV4 {
+    type Item = BorrowedContextPolicyLossDescriptionProjectionV4;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|value| BorrowedContextPolicyLossDescriptionProjectionV4 { value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedContextPolicyLossDescriptionIterV4 {}
+
+impl BorrowedContextPolicyProjectionV4<'_> {
+    #[must_use]
+    pub const fn version(&self) -> &'static str {
+        crate::ContextPolicyV1::VERSION
+    }
+
+    /// Visits all scalar policy fields in canonical lexicographic key order.
+    pub fn visit_scalar_fields(
+        &self,
+        mut visitor: impl FnMut(&'static str, BorrowedProjectionScalarV4<'_>),
+    ) {
+        for (key, value) in [
+            ("anchors_per_file", self.value.anchors_per_file() as u64),
+            ("callees_depth", self.value.callees_depth() as u64),
+            ("callers_depth", self.value.callers_depth() as u64),
+            (
+                "canonical_envelope_bytes",
+                self.value.canonical_envelope_bytes() as u64,
+            ),
+            ("contains_edges", self.value.contains_edges() as u64),
+            ("discovery_paths", self.value.discovery_paths() as u64),
+            ("excerpt_lines", self.value.excerpt_lines() as u64),
+            ("included_files", self.value.included_files() as u64),
+            ("max_assumptions", 64),
+            ("max_candidates", self.value.max_candidates() as u64),
+            (
+                "max_discovered_structural_ids",
+                self.value.max_discovered_structural_ids() as u64,
+            ),
+            ("max_excerpt_bytes", self.value.max_excerpt_bytes() as u64),
+            ("max_losses", self.value.max_losses() as u64),
+            (
+                "max_resolved_artifact_bytes",
+                self.value.max_resolved_artifact_bytes(),
+            ),
+            ("max_resolved_bytes", self.value.max_resolved_bytes()),
+            ("max_string_bytes", self.value.max_string_bytes() as u64),
+            (
+                "max_total_excerpt_bytes",
+                self.value.max_total_excerpt_bytes() as u64,
+            ),
+            ("max_unknowns", self.value.max_unknowns() as u64),
+            (
+                "obligations_per_envelope",
+                self.value.obligations_per_envelope() as u64,
+            ),
+            ("related_tests", self.value.related_tests() as u64),
+            ("relation_scan", self.value.relation_scan() as u64),
+        ] {
+            visitor(key, BorrowedProjectionScalarV4::U64(value));
+        }
+        visitor("version", BorrowedProjectionScalarV4::Text(self.version()));
+    }
+
+    #[must_use]
+    pub fn edge_kind_direction_order(&self) -> BorrowedStaticStrIterV4 {
+        BorrowedStaticStrIterV4 {
+            inner: CONTEXT_POLICY_EDGE_ORDER_V1.iter(),
+        }
+    }
+    #[must_use]
+    pub fn exclusion_reason_precedence(&self) -> BorrowedStaticStrIterV4 {
+        BorrowedStaticStrIterV4 {
+            inner: CONTEXT_POLICY_EXCLUSION_PRECEDENCE_V1.iter(),
+        }
+    }
+    #[must_use]
+    pub fn loss_descriptions(&self) -> BorrowedContextPolicyLossDescriptionIterV4 {
+        BorrowedContextPolicyLossDescriptionIterV4 {
+            inner: CONTEXT_POLICY_LOSS_DESCRIPTIONS_V1.iter(),
+        }
+    }
+    #[must_use]
+    pub fn rules(&self) -> BorrowedStaticStrIterV4 {
+        BorrowedStaticStrIterV4 {
+            inner: CONTEXT_POLICY_RULES_V1.iter(),
+        }
+    }
+    #[must_use]
+    pub fn unknown_descriptions(&self) -> BorrowedStaticStrIterV4 {
+        BorrowedStaticStrIterV4 {
+            inner: CONTEXT_POLICY_UNKNOWNS_V1.iter(),
+        }
+    }
+}
+
+pub struct BorrowedContextExcerptProjectionV4<'a> {
+    value: &'a crate::ExcerptRange,
+}
+impl BorrowedContextExcerptProjectionV4<'_> {
+    #[must_use]
+    pub fn start_line(&self) -> u32 {
+        self.value.start_line()
+    }
+    #[must_use]
+    pub fn end_line(&self) -> u32 {
+        self.value.end_line()
+    }
+}
+
+pub struct BorrowedContextIncludedSourceProjectionV4<'a> {
+    value: &'a crate::SourceArtifactRef,
+}
+pub struct BorrowedContextIncludedSourceIterV4<'a> {
+    inner: std::slice::Iter<'a, crate::SourceArtifactRef>,
+}
+impl<'a> Iterator for BorrowedContextIncludedSourceIterV4<'a> {
+    type Item = BorrowedContextIncludedSourceProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|value| BorrowedContextIncludedSourceProjectionV4 { value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedContextIncludedSourceIterV4<'_> {}
+impl<'a> BorrowedContextIncludedSourceProjectionV4<'a> {
+    #[must_use]
+    pub fn registration_id(&self) -> &'a StableId {
+        self.value.registration_id()
+    }
+    #[must_use]
+    pub fn artifact_id(&self) -> &'a StableId {
+        self.value.artifact_id()
+    }
+    #[must_use]
+    pub fn content_hash(&self) -> &'a ContentHash {
+        self.value.content_hash()
+    }
+    #[must_use]
+    pub fn cas_hash(&self) -> &'a ContentHash {
+        self.value.cas_hash()
+    }
+    #[must_use]
+    pub fn excerpt(&self) -> Option<BorrowedContextExcerptProjectionV4<'a>> {
+        self.value
+            .excerpt()
+            .map(|value| BorrowedContextExcerptProjectionV4 { value })
+    }
+    #[must_use]
+    pub fn excerpt_byte_length(&self) -> u64 {
+        self.value.excerpt_byte_length()
+    }
+    #[must_use]
+    pub fn excerpt_hash(&self) -> &'a ContentHash {
+        self.value.excerpt_hash()
+    }
+}
+
+pub struct BorrowedContextExcludedSourceProjectionV4<'a> {
+    value: &'a crate::ExcludedSourceRef,
+}
+pub struct BorrowedContextExcludedSourceIterV4<'a> {
+    inner: std::slice::Iter<'a, crate::ExcludedSourceRef>,
+}
+impl<'a> Iterator for BorrowedContextExcludedSourceIterV4<'a> {
+    type Item = BorrowedContextExcludedSourceProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|value| BorrowedContextExcludedSourceProjectionV4 { value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedContextExcludedSourceIterV4<'_> {}
+impl<'a> BorrowedContextExcludedSourceProjectionV4<'a> {
+    #[must_use]
+    pub fn artifact_id(&self) -> &'a StableId {
+        self.value.artifact_id()
+    }
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
+        self.value.reason().as_str()
+    }
+}
+
+pub struct BorrowedContextUnknownProjectionV4<'a> {
+    value: &'a crate::EnvelopeUnknown,
+}
+pub struct BorrowedContextUnknownIterV4<'a> {
+    inner: std::slice::Iter<'a, crate::EnvelopeUnknown>,
+}
+impl<'a> Iterator for BorrowedContextUnknownIterV4<'a> {
+    type Item = BorrowedContextUnknownProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|value| BorrowedContextUnknownProjectionV4 { value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedContextUnknownIterV4<'_> {}
+impl<'a> BorrowedContextUnknownProjectionV4<'a> {
+    #[must_use]
+    pub fn description(&self) -> &'a str {
+        self.value.description()
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        BorrowedStableIdSetIterV4 {
+            inner: self.value.source_ids().iter(),
+        }
+    }
+}
+
+pub struct BorrowedContextLossProjectionV4<'a> {
+    value: &'a crate::EnvelopeLoss,
+}
+pub struct BorrowedContextLossIterV4<'a> {
+    inner: std::slice::Iter<'a, crate::EnvelopeLoss>,
+}
+impl<'a> Iterator for BorrowedContextLossIterV4<'a> {
+    type Item = BorrowedContextLossProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|value| BorrowedContextLossProjectionV4 { value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedContextLossIterV4<'_> {}
+impl<'a> BorrowedContextLossProjectionV4<'a> {
+    #[must_use]
+    pub fn description(&self) -> &'a str {
+        self.value.description()
+    }
+    #[must_use]
+    pub const fn severity(&self) -> crate::Severity {
+        self.value.severity()
+    }
+    #[must_use]
+    pub fn affected_properties(&self) -> BorrowedStringSetIterV4<'a> {
+        BorrowedStringSetIterV4 {
+            inner: self.value.affected_properties().iter(),
+        }
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        BorrowedStableIdSetIterV4 {
+            inner: self.value.source_ids().iter(),
+        }
+    }
+}
+
+impl<'a> BorrowedContextEnvelopeProjectionV4<'a> {
+    pub fn body_hash(&self) -> crate::Result<ContentHash> {
+        Ok(ContentHash::sha256(
+            &self.value.canonical_bytes().map_err(context_domain_error)?,
+        ))
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        self.value.snapshot_id()
+    }
+    #[must_use]
+    pub fn projection_policy_version(&self) -> &'a str {
+        self.value.projection_policy_version()
+    }
+    #[must_use]
+    pub fn context_policy(&self) -> BorrowedContextPolicyProjectionV4<'a> {
+        BorrowedContextPolicyProjectionV4 {
+            value: self.value.context_policy(),
+        }
+    }
+    #[must_use]
+    pub fn context_policy_hash(&self) -> &'a ContentHash {
+        self.value.context_policy_hash()
+    }
+    #[must_use]
+    pub fn candidate_source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        BorrowedStableIdSetIterV4 {
+            inner: self.value.candidate_source_ids().iter(),
+        }
+    }
+    #[must_use]
+    pub fn obligation_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        BorrowedStableIdSetIterV4 {
+            inner: self.value.obligation_ids().iter(),
+        }
+    }
+    #[must_use]
+    pub fn included_sources(&self) -> BorrowedContextIncludedSourceIterV4<'a> {
+        BorrowedContextIncludedSourceIterV4 {
+            inner: self.value.included_sources().iter(),
+        }
+    }
+    #[must_use]
+    pub fn normalized_included_source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        BorrowedStableIdSetIterV4 {
+            inner: self.value.normalized_included_source_ids().iter(),
+        }
+    }
+    #[must_use]
+    pub fn excluded_sources(&self) -> BorrowedContextExcludedSourceIterV4<'a> {
+        BorrowedContextExcludedSourceIterV4 {
+            inner: self.value.excluded_sources().iter(),
+        }
+    }
+    #[must_use]
+    pub fn unknowns(&self) -> BorrowedContextUnknownIterV4<'a> {
+        BorrowedContextUnknownIterV4 {
+            inner: self.value.unknowns().iter(),
+        }
+    }
+    #[must_use]
+    pub fn assumptions(&self) -> BorrowedStringSliceIterV4<'a> {
+        BorrowedStringSliceIterV4::new(self.value.assumptions())
+    }
+    #[must_use]
+    pub fn losses(&self) -> BorrowedContextLossIterV4<'a> {
+        BorrowedContextLossIterV4 {
+            inner: self.value.losses().iter(),
+        }
+    }
+    #[must_use]
+    pub fn projection_hash(&self) -> &'a ContentHash {
+        self.value.projection_hash()
+    }
+}
+
+pub struct BorrowedExecutionSettingProjectionV4<'a> {
+    key: &'a str,
+    value: &'a str,
+}
+pub struct BorrowedExecutionSettingIterV4<'a> {
+    inner: std::collections::btree_map::Iter<'a, String, String>,
+}
+impl<'a> Iterator for BorrowedExecutionSettingIterV4<'a> {
+    type Item = BorrowedExecutionSettingProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|(key, value)| BorrowedExecutionSettingProjectionV4 { key, value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl ExactSizeIterator for BorrowedExecutionSettingIterV4<'_> {}
+impl<'a> BorrowedExecutionSettingProjectionV4<'a> {
+    #[must_use]
+    pub const fn key(&self) -> &'a str {
+        self.key
+    }
+    #[must_use]
+    pub const fn value(&self) -> &'a str {
+        self.value
+    }
+}
+
+pub struct BorrowedExecutionOutcomeProjectionV4<'a> {
+    value: &'a crate::ExecutionOutcome,
+}
+impl BorrowedExecutionOutcomeProjectionV4<'_> {
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self.value {
+            crate::ExecutionOutcome::Structured => "structured",
+            crate::ExecutionOutcome::Abstained { .. } => "abstained",
+            crate::ExecutionOutcome::Malformed { .. } => "malformed",
+            crate::ExecutionOutcome::ProviderFailure { .. } => "provider_failure",
+        }
+    }
+    /// Visits variant-specific fields in canonical lexicographic key order.
+    pub fn visit_fields(
+        &self,
+        mut visitor: impl FnMut(&'static str, BorrowedProjectionScalarV4<'_>),
+    ) {
+        match self.value {
+            crate::ExecutionOutcome::Structured => {}
+            crate::ExecutionOutcome::Abstained { reason, detail } => {
+                let reason = match reason {
+                    crate::AbstentionReason::InsufficientContext => "insufficient_context",
+                    crate::AbstentionReason::UnresolvedSymbol => "unresolved_symbol",
+                    crate::AbstentionReason::RequiredEvidenceUnavailable => {
+                        "required_evidence_unavailable"
+                    }
+                    crate::AbstentionReason::PropertyNotUnderstood => "property_not_understood",
+                    crate::AbstentionReason::ConflictingSources => "conflicting_sources",
+                    crate::AbstentionReason::ToolCapabilityMissing => "tool_capability_missing",
+                    crate::AbstentionReason::BudgetExhausted => "budget_exhausted",
+                    crate::AbstentionReason::PromptInjectionSuspected => {
+                        "prompt_injection_suspected"
+                    }
+                };
+                visitor("detail", BorrowedProjectionScalarV4::Text(detail));
+                visitor("reason", BorrowedProjectionScalarV4::Text(reason));
+            }
+            crate::ExecutionOutcome::Malformed { reason, diagnostic } => {
+                let reason = match reason {
+                    crate::MalformedOutputReason::SchemaViolation => "schema_violation",
+                    crate::MalformedOutputReason::UnresolvedSourceId => "unresolved_source_id",
+                    crate::MalformedOutputReason::UnknownObligationId => "unknown_obligation_id",
+                    crate::MalformedOutputReason::InvalidPolarity => "invalid_polarity",
+                    crate::MalformedOutputReason::ConfidenceOutOfRange => "confidence_out_of_range",
+                    crate::MalformedOutputReason::UnknownField => "unknown_field",
+                };
+                visitor("diagnostic", BorrowedProjectionScalarV4::Text(diagnostic));
+                visitor("reason", BorrowedProjectionScalarV4::Text(reason));
+            }
+            crate::ExecutionOutcome::ProviderFailure {
+                retryable,
+                diagnostic,
+            } => {
+                visitor("diagnostic", BorrowedProjectionScalarV4::Text(diagnostic));
+                visitor("retryable", BorrowedProjectionScalarV4::Bool(*retryable));
+            }
+        }
+    }
+}
+
+pub struct BorrowedExecutionClaimProjectionV4<'a> {
+    value: &'a ExecutionClaimV2,
+}
+pub struct BorrowedExecutionClaimIterV4<'a> {
+    inner: BorrowedExecutionClaimIterInnerV4<'a>,
+}
+enum BorrowedExecutionClaimIterInnerV4<'a> {
+    Slice(std::slice::Iter<'a, ExecutionClaimV2>),
+    Aggregate {
+        inner: std::collections::btree_map::Values<'a, StableId, ExecutionClaimV2>,
+        execution_id: &'a StableId,
+    },
+}
+impl<'a> Iterator for BorrowedExecutionClaimIterV4<'a> {
+    type Item = BorrowedExecutionClaimProjectionV4<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let value = match &mut self.inner {
+            BorrowedExecutionClaimIterInnerV4::Slice(inner) => inner.next(),
+            BorrowedExecutionClaimIterInnerV4::Aggregate {
+                inner,
+                execution_id,
+            } => inner.find(|value| value.execution_id() == *execution_id),
+        }?;
+        Some(BorrowedExecutionClaimProjectionV4 { value })
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let length = self.len();
+        (length, Some(length))
+    }
+}
+impl ExactSizeIterator for BorrowedExecutionClaimIterV4<'_> {
+    fn len(&self) -> usize {
+        match &self.inner {
+            BorrowedExecutionClaimIterInnerV4::Slice(inner) => inner.len(),
+            BorrowedExecutionClaimIterInnerV4::Aggregate {
+                inner,
+                execution_id,
+            } => inner
+                .clone()
+                .filter(|value| value.execution_id() == *execution_id)
+                .count(),
+        }
+    }
+}
+
+fn claim_polarity_text(value: crate::ClaimPolarity) -> &'static str {
+    match value {
+        crate::ClaimPolarity::IssuePresent => "issue_present",
+        crate::ClaimPolarity::IssueAbsent => "issue_absent",
+        crate::ClaimPolarity::Inconclusive => "inconclusive",
+        crate::ClaimPolarity::NotApplicable => "not_applicable",
+        crate::ClaimPolarity::Conflict => "conflict",
+    }
+}
+
+impl<'a> BorrowedExecutionClaimProjectionV4<'a> {
+    pub fn identity_body_hash(&self) -> crate::Result<ContentHash> {
+        self.value.identity_body_hash()
+    }
+    pub fn body_hash(&self) -> crate::Result<ContentHash> {
+        self.value.body_hash()
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn execution_id(&self) -> &'a StableId {
+        self.value.execution_id()
+    }
+    #[must_use]
+    pub fn obligation_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        BorrowedStableIdSetIterV4 {
+            inner: self.value.obligation_ids().iter(),
+        }
+    }
+    #[must_use]
+    pub fn property_id(&self) -> &'a str {
+        self.value.property_id()
+    }
+    #[must_use]
+    pub fn target_refs(&self) -> BorrowedStableIdSetIterV4<'a> {
+        BorrowedStableIdSetIterV4 {
+            inner: self.value.target_refs().iter(),
+        }
+    }
+    #[must_use]
+    pub fn polarity(&self) -> &'static str {
+        claim_polarity_text(self.value.polarity())
+    }
+    #[must_use]
+    pub fn disposition(&self) -> &'static str {
+        "proposed"
+    }
+    #[must_use]
+    pub fn summary(&self) -> &'a str {
+        self.value.summary()
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        BorrowedStableIdSetIterV4 {
+            inner: self.value.source_ids().iter(),
+        }
+    }
+    #[must_use]
+    pub fn assumptions(&self) -> BorrowedStringSetIterV4<'a> {
+        BorrowedStringSetIterV4 {
+            inner: self.value.assumptions().iter(),
+        }
+    }
+    #[must_use]
+    pub fn requested_evidence(&self) -> BorrowedStringSetIterV4<'a> {
+        BorrowedStringSetIterV4 {
+            inner: self.value.requested_evidence().iter(),
+        }
+    }
+    #[must_use]
+    pub const fn candidate_confidence(&self) -> Option<f64> {
+        self.value.candidate_confidence()
+    }
+    #[must_use]
+    pub fn author_kind(&self) -> &'static str {
+        "ai"
+    }
+    #[must_use]
+    pub fn review_status(&self) -> &'static str {
+        "unreviewed"
+    }
+}
+
+impl<'a> BorrowedReviewExecutionProjectionV4<'a> {
+    fn execution(&self) -> &'a ExecutionRecord {
+        match self.source {
+            BorrowedReviewExecutionSourceV4::Persisted(value) => &value.execution,
+            BorrowedReviewExecutionSourceV4::Aggregate { execution, .. } => execution,
+        }
+    }
+    pub fn identity_body_hash(&self) -> crate::Result<ContentHash> {
+        self.execution().identity_body_hash()
+    }
+    pub fn body_hash(&self) -> crate::Result<ContentHash> {
+        self.execution().body_hash()
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.execution().id()
+    }
+    #[must_use]
+    pub fn plan_id(&self) -> &'a StableId {
+        self.execution().plan_id()
+    }
+    #[must_use]
+    pub fn wave_id(&self) -> &'a StableId {
+        self.execution().wave_id()
+    }
+    #[must_use]
+    pub fn obligation_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        BorrowedStableIdSetIterV4 {
+            inner: self.execution().obligation_ids().iter(),
+        }
+    }
+    #[must_use]
+    pub fn envelope_id(&self) -> &'a StableId {
+        self.execution().envelope_id()
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        self.execution().snapshot_id()
+    }
+    #[must_use]
+    pub fn reviewer_kind(&self) -> &'a str {
+        self.execution().reviewer_kind()
+    }
+    #[must_use]
+    pub fn reviewer_id(&self) -> &'a str {
+        self.execution().reviewer_id()
+    }
+    #[must_use]
+    pub fn provider(&self) -> Option<&'a str> {
+        self.execution().provider()
+    }
+    #[must_use]
+    pub fn model(&self) -> Option<&'a str> {
+        self.execution().model()
+    }
+    #[must_use]
+    pub fn model_revision(&self) -> Option<&'a str> {
+        self.execution().model_revision()
+    }
+    #[must_use]
+    pub fn system_prompt_version(&self) -> &'a str {
+        self.execution().system_prompt_version()
+    }
+    #[must_use]
+    pub fn prompt_template_version(&self) -> &'a str {
+        self.execution().prompt_template_version()
+    }
+    #[must_use]
+    pub fn inference_settings(&self) -> BorrowedExecutionSettingIterV4<'a> {
+        BorrowedExecutionSettingIterV4 {
+            inner: self.execution().inference_settings().iter(),
+        }
+    }
+    #[must_use]
+    pub fn tool_policy_version(&self) -> &'a str {
+        self.execution().tool_policy_version()
+    }
+    #[must_use]
+    pub fn tool_call_count(&self) -> usize {
+        self.execution().tool_call_count()
+    }
+    #[must_use]
+    pub fn attempt(&self) -> u32 {
+        self.execution().attempt()
+    }
+    #[must_use]
+    pub fn raw_artifact_registration_id(&self) -> &'a StableId {
+        self.execution().raw_artifact_registration_id()
+    }
+    #[must_use]
+    pub fn raw_artifact_hash(&self) -> &'a ContentHash {
+        self.execution().raw_artifact_hash()
+    }
+    #[must_use]
+    pub fn parsed_claim_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        BorrowedStableIdSetIterV4 {
+            inner: self.execution().parsed_claim_ids().iter(),
+        }
+    }
+    #[must_use]
+    pub fn outcome(&self) -> BorrowedExecutionOutcomeProjectionV4<'a> {
+        BorrowedExecutionOutcomeProjectionV4 {
+            value: self.execution().outcome(),
+        }
+    }
+    #[must_use]
+    pub fn claims(&self) -> BorrowedExecutionClaimIterV4<'a> {
+        let inner = match self.source {
+            BorrowedReviewExecutionSourceV4::Persisted(value) => {
+                BorrowedExecutionClaimIterInnerV4::Slice(value.claims.iter())
+            }
+            BorrowedReviewExecutionSourceV4::Aggregate { execution, claims } => {
+                BorrowedExecutionClaimIterInnerV4::Aggregate {
+                    inner: claims.values(),
+                    execution_id: execution.id(),
+                }
+            }
+        };
+        BorrowedExecutionClaimIterV4 { inner }
+    }
+}
+
+impl<'a> BorrowedArtifactRegistrationProjectionV4<'a> {
+    #[must_use]
+    pub fn registration_id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn schema(&self) -> &'a str {
+        "reviewgraphen.artifact_registration.v4"
+    }
+    #[must_use]
+    pub fn run_id(&self) -> &'a StableId {
+        self.value.run_id()
+    }
+    #[must_use]
+    pub fn cas_hash(&self) -> &'a ContentHash {
+        self.value.cas_hash()
+    }
+    #[must_use]
+    pub fn media_type(&self) -> &'a str {
+        self.value.media_type()
+    }
+    #[must_use]
+    pub const fn size(&self) -> u64 {
+        self.value.size()
+    }
+    #[must_use]
+    pub const fn sensitivity(&self) -> ArtifactSensitivity {
+        self.value.sensitivity()
+    }
+    #[must_use]
+    pub fn source(&self) -> BorrowedArtifactSourceProjectionV4<'a> {
+        BorrowedArtifactSourceProjectionV4 {
+            value: self.value.source(),
+        }
+    }
+    /// The already authority-decoded descriptor bound to this M5
+    /// registration, if this is a `gluing_input` registration.  The complete
+    /// serializable descriptor is never returned.
+    #[must_use]
+    pub fn descriptor(&self) -> Option<BorrowedGluingInputDescriptorProjectionV4<'a>> {
+        self.descriptor
+            .map(|value| BorrowedGluingInputDescriptorProjectionV4 { value })
+    }
+}
+
+impl BorrowedArtifactSourceProjectionV4<'_> {
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self.value {
+            ArtifactSourceV4::RunGenesis { .. } => "run_genesis",
+            ArtifactSourceV4::SnapshotIngest { .. } => "snapshot_ingest",
+            ArtifactSourceV4::ReviewerExecution { .. } => "reviewer_execution",
+            ArtifactSourceV4::VerifierArtifact { .. } => "verifier_artifact",
+            ArtifactSourceV4::ExternalHarnessWitness { .. } => "external_harness_witness",
+            ArtifactSourceV4::GluingInput { .. } => "gluing_input",
+        }
+    }
+
+    /// Visits every source-object scalar exactly once in canonical key order.
+    pub fn visit_fields(
+        &self,
+        mut visitor: impl FnMut(&'static str, BorrowedProjectionScalarV4<'_>),
+    ) {
+        let kind = || BorrowedProjectionScalarV4::Text(self.kind());
+        match self.value {
+            ArtifactSourceV4::RunGenesis { run_id } => {
+                visitor("kind", kind());
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+            }
+            ArtifactSourceV4::SnapshotIngest {
+                adapter_id,
+                run_id,
+                snapshot_id,
+            } => {
+                visitor("adapter_id", BorrowedProjectionScalarV4::Text(adapter_id));
+                visitor("kind", kind());
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+                visitor(
+                    "snapshot_id",
+                    BorrowedProjectionScalarV4::StableId(snapshot_id),
+                );
+            }
+            ArtifactSourceV4::ReviewerExecution {
+                execution_id,
+                reviewer_id,
+                run_id,
+            } => {
+                visitor(
+                    "execution_id",
+                    BorrowedProjectionScalarV4::StableId(execution_id),
+                );
+                visitor("kind", kind());
+                visitor("reviewer_id", BorrowedProjectionScalarV4::Text(reviewer_id));
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+            }
+            ArtifactSourceV4::VerifierArtifact {
+                claim_id,
+                descriptor_id,
+                procedure_version,
+                role,
+                run_id,
+            } => {
+                visitor("claim_id", BorrowedProjectionScalarV4::StableId(claim_id));
+                visitor(
+                    "descriptor_id",
+                    BorrowedProjectionScalarV4::Text(descriptor_id),
+                );
+                visitor("kind", kind());
+                visitor(
+                    "procedure_version",
+                    BorrowedProjectionScalarV4::Text(procedure_version),
+                );
+                visitor(
+                    "role",
+                    BorrowedProjectionScalarV4::Text(match role {
+                        VerifierArtifactRoleV3::Input => "input",
+                        VerifierArtifactRoleV3::Output => "output",
+                    }),
+                );
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+            }
+            ArtifactSourceV4::ExternalHarnessWitness {
+                claim_body_hash,
+                claim_id,
+                descriptor_id,
+                genesis_hash,
+                harness_id,
+                harness_revision,
+                harness_source_hash,
+                policy_revision_hash,
+                procedure_version,
+                property_id,
+                repository_id,
+                repository_source_hash,
+                run_id,
+                snapshot_id,
+                test_artifact_id,
+                universe_id,
+            } => {
+                visitor(
+                    "claim_body_hash",
+                    BorrowedProjectionScalarV4::ContentHash(claim_body_hash),
+                );
+                visitor("claim_id", BorrowedProjectionScalarV4::StableId(claim_id));
+                visitor(
+                    "descriptor_id",
+                    BorrowedProjectionScalarV4::Text(descriptor_id),
+                );
+                visitor(
+                    "genesis_hash",
+                    BorrowedProjectionScalarV4::ContentHash(genesis_hash),
+                );
+                visitor("harness_id", BorrowedProjectionScalarV4::Text(harness_id));
+                visitor(
+                    "harness_revision",
+                    BorrowedProjectionScalarV4::Text(harness_revision),
+                );
+                visitor(
+                    "harness_source_hash",
+                    BorrowedProjectionScalarV4::ContentHash(harness_source_hash),
+                );
+                visitor("kind", kind());
+                visitor(
+                    "policy_revision_hash",
+                    BorrowedProjectionScalarV4::ContentHash(policy_revision_hash),
+                );
+                visitor(
+                    "procedure_version",
+                    BorrowedProjectionScalarV4::Text(procedure_version),
+                );
+                visitor("property_id", BorrowedProjectionScalarV4::Text(property_id));
+                visitor(
+                    "repository_id",
+                    BorrowedProjectionScalarV4::StableId(repository_id),
+                );
+                visitor(
+                    "repository_source_hash",
+                    BorrowedProjectionScalarV4::ContentHash(repository_source_hash),
+                );
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+                visitor(
+                    "snapshot_id",
+                    BorrowedProjectionScalarV4::StableId(snapshot_id),
+                );
+                visitor(
+                    "test_artifact_id",
+                    BorrowedProjectionScalarV4::StableId(test_artifact_id),
+                );
+                visitor(
+                    "universe_id",
+                    BorrowedProjectionScalarV4::StableId(universe_id),
+                );
+            }
+            ArtifactSourceV4::GluingInput {
+                context_id,
+                descriptor_hash,
+                descriptor_id,
+                descriptor_media_type,
+                descriptor_sensitivity,
+                descriptor_size,
+                genesis_hash,
+                plan_id,
+                policy_revision_hash,
+                profile_descriptor_id,
+                repository_id,
+                repository_source_hash,
+                run_id,
+                snapshot_id,
+                universe_id,
+            } => {
+                visitor(
+                    "context_id",
+                    BorrowedProjectionScalarV4::StableId(context_id),
+                );
+                visitor(
+                    "descriptor_hash",
+                    BorrowedProjectionScalarV4::ContentHash(descriptor_hash),
+                );
+                visitor(
+                    "descriptor_id",
+                    BorrowedProjectionScalarV4::StableId(descriptor_id),
+                );
+                visitor(
+                    "descriptor_media_type",
+                    BorrowedProjectionScalarV4::Text(descriptor_media_type),
+                );
+                visitor(
+                    "descriptor_sensitivity",
+                    BorrowedProjectionScalarV4::Text(artifact_sensitivity_name(
+                        *descriptor_sensitivity,
+                    )),
+                );
+                visitor(
+                    "descriptor_size",
+                    BorrowedProjectionScalarV4::U64(*descriptor_size),
+                );
+                visitor(
+                    "genesis_hash",
+                    BorrowedProjectionScalarV4::ContentHash(genesis_hash),
+                );
+                visitor("kind", kind());
+                visitor("plan_id", BorrowedProjectionScalarV4::StableId(plan_id));
+                visitor(
+                    "policy_revision_hash",
+                    BorrowedProjectionScalarV4::ContentHash(policy_revision_hash),
+                );
+                visitor(
+                    "profile_descriptor_id",
+                    BorrowedProjectionScalarV4::Text(profile_descriptor_id),
+                );
+                visitor(
+                    "repository_id",
+                    BorrowedProjectionScalarV4::StableId(repository_id),
+                );
+                visitor(
+                    "repository_source_hash",
+                    BorrowedProjectionScalarV4::ContentHash(repository_source_hash),
+                );
+                visitor("run_id", BorrowedProjectionScalarV4::StableId(run_id));
+                visitor(
+                    "snapshot_id",
+                    BorrowedProjectionScalarV4::StableId(snapshot_id),
+                );
+                visitor(
+                    "universe_id",
+                    BorrowedProjectionScalarV4::StableId(universe_id),
+                );
+            }
+        }
+    }
+}
+
+const fn artifact_sensitivity_name(value: ArtifactSensitivity) -> &'static str {
+    match value {
+        ArtifactSensitivity::CanonicalState => "canonical_state",
+        ArtifactSensitivity::WorkspaceSource => "workspace_source",
+        ArtifactSensitivity::Sensitive => "sensitive",
+    }
+}
+
+fn projection_id_set<'a>(values: &'a BTreeSet<StableId>) -> BorrowedStableIdSetIterV4<'a> {
+    BorrowedStableIdSetIterV4 {
+        inner: values.iter(),
+    }
+}
+
+impl<'a> BorrowedGluingInputDescriptorProjectionV4<'a> {
+    #[must_use]
+    pub fn schema(&self) -> &'a str {
+        self.value.projection_schema()
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn run_id(&self) -> &'a StableId {
+        self.value.run_id()
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        self.value.snapshot_id()
+    }
+    #[must_use]
+    pub fn universe_id(&self) -> &'a StableId {
+        self.value.universe_id()
+    }
+    #[must_use]
+    pub fn plan_id(&self) -> &'a StableId {
+        self.value.plan_id()
+    }
+    #[must_use]
+    pub fn profile_descriptor_id(&self) -> &'a str {
+        self.value.projection_profile_descriptor_id()
+    }
+    #[must_use]
+    pub fn context_id(&self) -> &'a StableId {
+        self.value.context_id()
+    }
+    #[must_use]
+    pub fn assignment_key(&self) -> &'a str {
+        self.value.projection_assignment_key()
+    }
+    #[must_use]
+    pub const fn assignment_value(&self) -> crate::AssignmentValueV4 {
+        self.value.assignment_value()
+    }
+    #[must_use]
+    pub fn qualification_source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.qualification_source_ids())
+    }
+}
+
+impl<'a> BorrowedContextCoverProjectionV4<'a> {
+    #[must_use]
+    pub fn schema(&self) -> &'a str {
+        self.value.projection_schema()
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn run_id(&self) -> &'a StableId {
+        self.value.run_id()
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        self.value.snapshot_id()
+    }
+    #[must_use]
+    pub fn universe_id(&self) -> &'a StableId {
+        self.value.universe_id()
+    }
+    #[must_use]
+    pub fn plan_id(&self) -> &'a StableId {
+        self.value.plan_id()
+    }
+    #[must_use]
+    pub fn profile_descriptor_id(&self) -> &'a str {
+        self.value.projection_profile_descriptor_id()
+    }
+    #[must_use]
+    pub fn selected_obligation_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.selected_obligation_ids())
+    }
+    #[must_use]
+    pub fn required_context_ids(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4::new(self.value.projection_required_context_ids())
+    }
+    #[must_use]
+    pub fn cover_domain_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.cover_domain_ids())
+    }
+    #[must_use]
+    pub fn covered_domain_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.covered_domain_ids())
+    }
+    #[must_use]
+    pub fn uncovered_domain_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.uncovered_domain_ids())
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.source_ids())
+    }
+}
+
+impl<'a> BorrowedSectionProjectionV4<'a> {
+    #[must_use]
+    pub fn schema(&self) -> &'a str {
+        self.value.projection_schema()
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn cover_id(&self) -> &'a StableId {
+        self.value.projection_cover_id()
+    }
+    #[must_use]
+    pub fn context_id(&self) -> &'a StableId {
+        self.value.context_id()
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        self.value.projection_snapshot_id()
+    }
+    #[must_use]
+    pub fn property_id(&self) -> &'a str {
+        self.value.projection_property_id()
+    }
+    #[must_use]
+    pub fn invariant_id(&self) -> &'a StableId {
+        self.value.projection_invariant_id()
+    }
+    #[must_use]
+    pub fn obligation_id(&self) -> &'a StableId {
+        self.value.projection_obligation_id()
+    }
+    #[must_use]
+    pub fn claim_id(&self) -> &'a StableId {
+        self.value.projection_claim_id()
+    }
+    #[must_use]
+    pub fn claim_assessment_id(&self) -> &'a StableId {
+        self.value.projection_claim_assessment_id()
+    }
+    #[must_use]
+    pub fn input_descriptor_id(&self) -> &'a StableId {
+        self.value.projection_input_descriptor_id()
+    }
+    #[must_use]
+    pub fn input_registration_id(&self) -> &'a StableId {
+        self.value.projection_input_registration_id()
+    }
+    #[must_use]
+    pub fn assignment_key(&self) -> &'a str {
+        self.value.projection_assignment_key()
+    }
+    #[must_use]
+    pub const fn assignment_value(&self) -> crate::AssignmentValueV4 {
+        self.value.assignment_value()
+    }
+    #[must_use]
+    pub const fn passed_current_verification(&self) -> bool {
+        self.value.passed_current_verification()
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_source_ids())
+    }
+    #[must_use]
+    pub fn qualification_source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_qualification_source_ids())
+    }
+    #[must_use]
+    pub fn binding_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_binding_ids())
+    }
+    #[must_use]
+    pub fn evidence_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_evidence_ids())
+    }
+    #[must_use]
+    pub fn verification_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_verification_ids())
+    }
+    #[must_use]
+    pub fn decision_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_decision_ids())
+    }
+    #[must_use]
+    pub fn finding_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_finding_ids())
+    }
+}
+
+impl<'a> BorrowedRestrictionProjectionV4<'a> {
+    #[must_use]
+    pub fn schema(&self) -> &'a str {
+        self.value.projection_schema()
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn section_id(&self) -> &'a StableId {
+        self.value.projection_section_id()
+    }
+    #[must_use]
+    pub fn context_pair(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4::new(self.value.projection_context_pair())
+    }
+    #[must_use]
+    pub fn overlap_member_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_overlap_member_ids())
+    }
+    #[must_use]
+    pub fn assignment_key(&self) -> &'a str {
+        self.value.projection_assignment_key()
+    }
+    #[must_use]
+    pub fn assignment_value(&self) -> crate::AssignmentValueV4 {
+        self.value.projection_assignment_value()
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_source_ids())
+    }
+    #[must_use]
+    pub fn qualification_source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_qualification_source_ids())
+    }
+    #[must_use]
+    pub fn claim_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_claim_ids())
+    }
+    #[must_use]
+    pub fn evidence_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_evidence_ids())
+    }
+    #[must_use]
+    pub fn verification_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_verification_ids())
+    }
+    #[must_use]
+    pub fn decision_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_decision_ids())
+    }
+    #[must_use]
+    pub fn finding_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_finding_ids())
+    }
+}
+
+impl<'a> BorrowedGluingAttemptProjectionV4<'a> {
+    #[must_use]
+    pub fn schema(&self) -> &'a str {
+        self.value.projection_schema()
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn cover_id(&self) -> &'a StableId {
+        self.value.projection_cover_id()
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        self.value.projection_snapshot_id()
+    }
+    #[must_use]
+    pub fn property_id(&self) -> &'a str {
+        self.value.projection_property_id()
+    }
+    #[must_use]
+    pub fn invariant_id(&self) -> &'a StableId {
+        self.value.projection_invariant_id()
+    }
+    #[must_use]
+    pub fn input_descriptor_ids(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4::new(self.value.projection_input_descriptor_ids())
+    }
+    #[must_use]
+    pub fn section_ids(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4::new(self.value.projection_section_ids())
+    }
+    #[must_use]
+    pub fn restriction_ids(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4::new(self.value.projection_restriction_ids())
+    }
+    #[must_use]
+    pub const fn result(&self) -> crate::GluingResultV4 {
+        self.value.result()
+    }
+    #[must_use]
+    pub fn global_candidate_id(&self) -> Option<&'a StableId> {
+        self.value.projection_global_candidate_id()
+    }
+    #[must_use]
+    pub fn obstruction_id(&self) -> Option<&'a StableId> {
+        self.value.projection_obstruction_id()
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_source_ids())
+    }
+    #[must_use]
+    pub fn claim_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_claim_ids())
+    }
+    #[must_use]
+    pub fn evidence_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_evidence_ids())
+    }
+    #[must_use]
+    pub fn verification_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_verification_ids())
+    }
+    #[must_use]
+    pub fn decision_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_decision_ids())
+    }
+    #[must_use]
+    pub fn finding_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_finding_ids())
+    }
+}
+
+impl<'a> BorrowedGlobalCandidateProjectionV4<'a> {
+    #[must_use]
+    pub fn schema(&self) -> &'a str {
+        self.value.projection_schema()
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.projection_id()
+    }
+    #[must_use]
+    pub fn cover_id(&self) -> &'a StableId {
+        self.value.projection_cover_id()
+    }
+    #[must_use]
+    pub fn invariant_id(&self) -> &'a StableId {
+        self.value.projection_invariant_id()
+    }
+    #[must_use]
+    pub fn property_id(&self) -> &'a str {
+        self.value.projection_property_id()
+    }
+    #[must_use]
+    pub fn required_section_ids(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4::new(self.value.projection_required_section_ids())
+    }
+    #[must_use]
+    pub fn restriction_ids(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4::new(self.value.projection_restriction_ids())
+    }
+    #[must_use]
+    pub fn qualification_source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_qualification_source_ids())
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_source_ids())
+    }
+    #[must_use]
+    pub fn claim_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_claim_ids())
+    }
+    #[must_use]
+    pub fn evidence_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_evidence_ids())
+    }
+    #[must_use]
+    pub fn verification_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_verification_ids())
+    }
+    #[must_use]
+    pub fn decision_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_decision_ids())
+    }
+    #[must_use]
+    pub fn finding_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_finding_ids())
+    }
+}
+
+impl<'a> BorrowedGluingObstructionProjectionV4<'a> {
+    #[must_use]
+    pub fn schema(&self) -> &'a str {
+        self.value.projection_schema()
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn attempt_id(&self) -> &'a StableId {
+        self.value.projection_attempt_id()
+    }
+    #[must_use]
+    pub const fn kind(&self) -> crate::GluingObstructionKindV4 {
+        self.value.kind()
+    }
+    #[must_use]
+    pub fn conflicting_context_ids(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4::new(self.value.projection_conflicting_context_ids())
+    }
+    #[must_use]
+    pub fn section_ids(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4::new(self.value.projection_section_ids())
+    }
+    #[must_use]
+    pub fn overlap_member_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_overlap_member_ids())
+    }
+    #[must_use]
+    pub fn assignment_key(&self) -> &'a str {
+        self.value.projection_assignment_key()
+    }
+    #[must_use]
+    pub fn left_assignment_value(&self) -> Option<crate::AssignmentValueV4> {
+        self.value.projection_left_assignment_value()
+    }
+    #[must_use]
+    pub fn right_assignment_value(&self) -> Option<crate::AssignmentValueV4> {
+        self.value.projection_right_assignment_value()
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_source_ids())
+    }
+    #[must_use]
+    pub fn claim_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_claim_ids())
+    }
+    #[must_use]
+    pub fn evidence_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_evidence_ids())
+    }
+    #[must_use]
+    pub fn verification_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_verification_ids())
+    }
+    #[must_use]
+    pub fn decision_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_decision_ids())
+    }
+    #[must_use]
+    pub fn finding_ids(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_finding_ids())
+    }
+    #[must_use]
+    pub fn affected_invariant_id(&self) -> &'a StableId {
+        self.value.projection_affected_invariant_id()
+    }
+    #[must_use]
+    pub fn severity(&self) -> crate::M5SeverityV4 {
+        self.value.projection_severity()
+    }
+    #[must_use]
+    pub fn required_resolution(&self) -> crate::GluingRequiredResolutionV4 {
+        self.value.projection_required_resolution()
+    }
+    #[must_use]
+    pub const fn human_decision_required(&self) -> bool {
+        self.value.human_decision_required()
+    }
+    #[must_use]
+    pub fn blocks(&self) -> BorrowedStableIdSetIterV4<'a> {
+        projection_id_set(self.value.projection_blocks())
+    }
+}
+
+impl<'a> BorrowedGluingBundleProjectionV4<'a> {
+    #[must_use]
+    pub fn schema(&self) -> &'a str {
+        self.value.projection_schema()
+    }
+    #[must_use]
+    pub fn input_descriptor_ids(&self) -> BorrowedStableIdSliceIterV4<'a> {
+        BorrowedStableIdSliceIterV4::new(self.value.projection_input_descriptor_ids())
+    }
+    #[must_use]
+    pub fn cover_id(&self) -> &'a StableId {
+        self.value.cover().id()
+    }
+    #[must_use]
+    pub fn cover(&self) -> BorrowedContextCoverProjectionV4<'a> {
+        BorrowedContextCoverProjectionV4 {
+            value: self.value.cover(),
+        }
+    }
+    #[must_use]
+    pub fn sections(&self) -> BorrowedSectionIterV4<'a> {
+        BorrowedSectionIterV4 {
+            inner: self.value.sections().iter(),
+        }
+    }
+    #[must_use]
+    pub fn restrictions(&self) -> BorrowedRestrictionIterV4<'a> {
+        BorrowedRestrictionIterV4 {
+            inner: self.value.restrictions().iter(),
+        }
+    }
+    #[must_use]
+    pub fn attempt(&self) -> BorrowedGluingAttemptProjectionV4<'a> {
+        BorrowedGluingAttemptProjectionV4 {
+            value: self.value.attempt(),
+        }
+    }
+    #[must_use]
+    pub fn global_candidate(&self) -> Option<BorrowedGlobalCandidateProjectionV4<'a>> {
+        self.value
+            .global_candidate()
+            .map(|value| BorrowedGlobalCandidateProjectionV4 { value })
+    }
+    #[must_use]
+    pub fn obstruction(&self) -> Option<BorrowedGluingObstructionProjectionV4<'a>> {
+        self.value
+            .obstruction()
+            .map(|value| BorrowedGluingObstructionProjectionV4 { value })
+    }
+}
+
+fn borrowed_projection_payload_v4<'a>(
+    payload: &'a PersistedPayload,
+    decoded_bundle: Option<&'a crate::GluingBundleV4>,
+    decoded_descriptor: Option<&'a crate::GluingInputDescriptorV4>,
+) -> Result<BorrowedProjectionPayloadV4<'a>> {
+    let _ = borrowed_projection_payload_ref_v4(payload, decoded_bundle, decoded_descriptor)?;
+    Ok(BorrowedProjectionPayloadV4 {
+        inner: BorrowedProjectionPayloadInnerV4::Persisted {
+            payload,
+            decoded_bundle,
+            decoded_descriptor,
+        },
+    })
+}
+
+fn borrowed_projection_payload_ref_v4<'a>(
+    payload: &'a PersistedPayload,
+    decoded_bundle: Option<&'a crate::GluingBundleV4>,
+    decoded_descriptor: Option<&'a crate::GluingInputDescriptorV4>,
+) -> Result<BorrowedProjectionPayloadRefV4<'a>> {
+    Ok(match payload {
+        PersistedPayload::RunGenesisManifestV4(value) => {
+            BorrowedProjectionPayloadRefV4::RunGenesisManifestV4(
+                BorrowedRunGenesisManifestProjectionV4 { value },
+            )
+        }
+        PersistedPayload::ObligationTransition {
+            obligation_id,
+            next,
+        } => BorrowedProjectionPayloadRefV4::ObligationTransition(
+            BorrowedObligationTransitionProjectionV4 {
+                obligation_id,
+                next: *next,
+            },
+        ),
+        PersistedPayload::ArtifactRegisteredV3(value) => {
+            BorrowedProjectionPayloadRefV4::ArtifactRegisteredV3(
+                BorrowedArtifactRegistrationProjectionV3 { value },
+            )
+        }
+        PersistedPayload::SnapshotSourcesRecorded(value) => {
+            BorrowedProjectionPayloadRefV4::SnapshotSourcesRecorded(
+                BorrowedSnapshotSourcesProjectionV4 { value },
+            )
+        }
+        PersistedPayload::ReviewPlanRecorded(value) => {
+            BorrowedProjectionPayloadRefV4::ReviewPlanRecorded(BorrowedReviewPlanProjectionV4 {
+                value,
+            })
+        }
+        PersistedPayload::ContextEnvelopeProjected(value) => {
+            BorrowedProjectionPayloadRefV4::ContextEnvelopeProjected(
+                BorrowedContextEnvelopeProjectionV4 { value },
+            )
+        }
+        PersistedPayload::ReviewExecutionRecorded(value) => {
+            BorrowedProjectionPayloadRefV4::ReviewExecutionRecorded(
+                BorrowedReviewExecutionProjectionV4 {
+                    source: BorrowedReviewExecutionSourceV4::Persisted(value),
+                },
+            )
+        }
+        PersistedPayload::EvidenceRecordedV3(value) => {
+            BorrowedProjectionPayloadRefV4::EvidenceRecordedV3(BorrowedEvidenceProjectionV3 {
+                value,
+            })
+        }
+        PersistedPayload::EvidenceBoundV3(value) => {
+            BorrowedProjectionPayloadRefV4::EvidenceBoundV3(BorrowedEvidenceBindingProjectionV3 {
+                value,
+            })
+        }
+        PersistedPayload::VerificationRecordedV3(value) => {
+            BorrowedProjectionPayloadRefV4::VerificationRecordedV3(
+                BorrowedVerificationProjectionV3 { value },
+            )
+        }
+        PersistedPayload::DecisionRecordedV3(value) => {
+            BorrowedProjectionPayloadRefV4::DecisionRecordedV3(BorrowedDecisionProjectionV3 {
+                value,
+            })
+        }
+        PersistedPayload::FindingRecordedV3(value) => {
+            BorrowedProjectionPayloadRefV4::FindingRecordedV3(BorrowedFindingProjectionV3 { value })
+        }
+        PersistedPayload::ArtifactRegisteredV4(value) => {
+            BorrowedProjectionPayloadRefV4::ArtifactRegisteredV4(
+                BorrowedArtifactRegistrationProjectionV4 {
+                    value,
+                    descriptor: decoded_descriptor,
+                },
+            )
+        }
+        PersistedPayload::GluingBundleRecordedV4(_) => {
+            BorrowedProjectionPayloadRefV4::GluingBundleRecordedV4(
+                BorrowedGluingBundleProjectionV4 {
+                    value: decoded_bundle.ok_or(DomainError::GluingBundleMismatch)?,
+                },
+            )
+        }
+        PersistedPayload::ClaimProposed(_)
+        | PersistedPayload::EvidenceRecorded(_)
+        | PersistedPayload::EvidenceBound(_)
+        | PersistedPayload::VerificationRecorded(_)
+        | PersistedPayload::DecisionRecorded(_)
+        | PersistedPayload::FindingRecorded(_)
+        | PersistedPayload::RunGenesisManifest(_)
+        | PersistedPayload::RunGenesisManifestV3(_)
+        | PersistedPayload::ArtifactRegistered(_) => {
+            return Err(DomainError::EventSequence(
+                "event-v4 projection encountered a payload outside its closed contract".to_owned(),
+            ));
+        }
+    })
 }
 
 fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
@@ -10360,7 +13221,120 @@ pub struct EventLogV4 {
     m5_bundle: Option<crate::GluingBundleV4>,
     manifest: RunGenesisManifestV4,
     envelopes: Vec<EventEnvelope>,
+    projection_trace: Vec<ProjectionTraceV4>,
     tail_hash: ContentHash,
+}
+
+/// Minimal lookup trace for the post-admission Store traversal. It retains no
+/// payload DTO, prose, source collection, canonical buffer, or authority.
+/// Dynamic ID bytes are a subset of the already bounded canonical payload;
+/// inline vector bytes are bounded independently by the replay event count.
+#[derive(Debug)]
+enum ProjectionTraceV4 {
+    ObligationTransition {
+        obligation_id: StableId,
+        next: ObligationLifecycle,
+    },
+    ArtifactRegisteredV3(StableId),
+    SnapshotSourcesRecorded(StableId),
+    ReviewPlanRecorded(StableId),
+    ContextEnvelopeProjected(StableId),
+    ReviewExecutionRecorded(StableId),
+    EvidenceRecordedV3(StableId),
+    EvidenceBoundV3(StableId),
+    VerificationRecordedV3(StableId),
+    DecisionRecordedV3(StableId),
+    FindingRecordedV3(StableId),
+    ArtifactRegisteredV4 {
+        registration_id: StableId,
+        context_id: StableId,
+    },
+    GluingBundleRecordedV4,
+}
+
+impl ProjectionTraceV4 {
+    fn dynamic_bytes(&self) -> usize {
+        match self {
+            Self::ObligationTransition { obligation_id, .. }
+            | Self::ArtifactRegisteredV3(obligation_id)
+            | Self::SnapshotSourcesRecorded(obligation_id)
+            | Self::ReviewPlanRecorded(obligation_id)
+            | Self::ContextEnvelopeProjected(obligation_id)
+            | Self::ReviewExecutionRecorded(obligation_id)
+            | Self::EvidenceRecordedV3(obligation_id)
+            | Self::EvidenceBoundV3(obligation_id)
+            | Self::VerificationRecordedV3(obligation_id)
+            | Self::DecisionRecordedV3(obligation_id)
+            | Self::FindingRecordedV3(obligation_id) => obligation_id.allocated_bytes(),
+            Self::ArtifactRegisteredV4 {
+                registration_id,
+                context_id,
+            } => registration_id
+                .allocated_bytes()
+                .saturating_add(context_id.allocated_bytes()),
+            Self::GluingBundleRecordedV4 => 0,
+        }
+    }
+}
+
+fn projection_trace_v4(payload: &PersistedPayload) -> Result<ProjectionTraceV4> {
+    Ok(match payload {
+        PersistedPayload::ObligationTransition {
+            obligation_id,
+            next,
+        } => ProjectionTraceV4::ObligationTransition {
+            obligation_id: obligation_id.clone(),
+            next: *next,
+        },
+        PersistedPayload::ArtifactRegisteredV3(value) => {
+            ProjectionTraceV4::ArtifactRegisteredV3(value.registration_id().clone())
+        }
+        PersistedPayload::SnapshotSourcesRecorded(value) => {
+            ProjectionTraceV4::SnapshotSourcesRecorded(value.snapshot_id().clone())
+        }
+        PersistedPayload::ReviewPlanRecorded(value) => {
+            ProjectionTraceV4::ReviewPlanRecorded(value.id().clone())
+        }
+        PersistedPayload::ContextEnvelopeProjected(value) => {
+            ProjectionTraceV4::ContextEnvelopeProjected(value.id().clone())
+        }
+        PersistedPayload::ReviewExecutionRecorded(value) => {
+            ProjectionTraceV4::ReviewExecutionRecorded(value.execution.id().clone())
+        }
+        PersistedPayload::EvidenceRecordedV3(value) => {
+            ProjectionTraceV4::EvidenceRecordedV3(value.id().clone())
+        }
+        PersistedPayload::EvidenceBoundV3(value) => {
+            ProjectionTraceV4::EvidenceBoundV3(value.id().clone())
+        }
+        PersistedPayload::VerificationRecordedV3(value) => {
+            ProjectionTraceV4::VerificationRecordedV3(value.id().clone())
+        }
+        PersistedPayload::DecisionRecordedV3(value) => {
+            ProjectionTraceV4::DecisionRecordedV3(value.id().clone())
+        }
+        PersistedPayload::FindingRecordedV3(value) => {
+            ProjectionTraceV4::FindingRecordedV3(value.id().clone())
+        }
+        PersistedPayload::ArtifactRegisteredV4(value) => {
+            let ArtifactSourceV4::GluingInput { context_id, .. } = value.source() else {
+                return Err(DomainError::EventSequence(
+                    "event-v4 projection trace requires a gluing-input registration".to_owned(),
+                ));
+            };
+            ProjectionTraceV4::ArtifactRegisteredV4 {
+                registration_id: value.id().clone(),
+                context_id: context_id.clone(),
+            }
+        }
+        PersistedPayload::GluingBundleRecordedV4(_) => ProjectionTraceV4::GluingBundleRecordedV4,
+        _ => {
+            return Err(DomainError::EventSequence(
+                "event-v4 projection trace encountered a payload outside its closed contract"
+                    .to_owned(),
+            ));
+        }
+    })
 }
 
 struct V4ResolverAsV3<'a, R>(&'a R);
@@ -10401,15 +13375,21 @@ fn preflight_v4_replay_import(
                 "V4 replay refuses a non-V4 envelope".to_owned(),
             ));
         }
+        let canonical_line_bytes = envelope.canonical_line_bytes_v4.ok_or_else(|| {
+            DomainError::EventSequence(
+                "V4 replay envelope is missing its validated canonical line length".to_owned(),
+            )
+        })?;
+        let canonical_body_bytes = canonical_line_bytes.checked_sub(1).ok_or_else(|| {
+            DomainError::EventSequence(
+                "V4 replay envelope has an invalid canonical line length".to_owned(),
+            )
+        })?;
         canonical_total = replay_add(
             "V4 replay canonical bytes",
             limits.max_canonical_bytes,
             canonical_total,
-            crate::canonical::canonical_json_count_bounded(
-                envelope,
-                usize::try_from(limits.max_canonical_bytes).unwrap_or(usize::MAX),
-                "V4 replay canonical envelope count",
-            )?,
+            canonical_body_bytes,
         )?;
     }
     Ok(())
@@ -10998,6 +13978,7 @@ impl EventLogV4 {
             m5_bundle: None,
             manifest,
             envelopes: vec![envelope],
+            projection_trace: Vec::new(),
             tail_hash,
         })
     }
@@ -11055,17 +14036,43 @@ impl EventLogV4 {
         .map_err(|error| DomainError::Validation(error.to_string()))
     }
 
-    /// Returns one assessment rebuilt from the confirmed V3 authority prefix.
-    /// This projection is descriptive only and grants no append authority.
-    #[must_use]
-    pub fn claim_assessment_v3(&self, claim_id: &StableId) -> Option<&crate::ClaimAssessmentV3> {
+    fn claim_assessment_record_v3(&self, claim_id: &StableId) -> Option<&crate::ClaimAssessmentV3> {
         self.v3_aggregate.assessments.get(claim_id)
     }
 
-    /// Returns one already replay-confirmed descriptor/registration pair for
-    /// idempotent Store reconstruction. The pair is descriptive only.
+    /// Returns an opaque assessment rebuilt from the confirmed V4 authority
+    /// prefix. This projection is descriptive only and grants no append,
+    /// serialization, or complete DTO access.
     #[must_use]
-    pub fn registered_gluing_input_v4(
+    pub fn claim_assessment_v3(
+        &self,
+        claim_id: &StableId,
+    ) -> Option<BorrowedClaimAssessmentProjectionV4<'_>> {
+        self.claim_assessment_record_v3(claim_id)
+            .map(|value| BorrowedClaimAssessmentProjectionV4 { value })
+    }
+
+    /// Iterates every assessment rebuilt by this confirmed V4 authority
+    /// replay in stable claim-ID order through opaque views. This is
+    /// descriptive, allocation-free, and grants no append, acceptance,
+    /// serialization, or complete DTO access.
+    pub fn claim_assessments_v3(&self) -> BorrowedClaimAssessmentIterV4<'_> {
+        BorrowedClaimAssessmentIterV4 {
+            inner: self.v3_aggregate.assessments.values(),
+        }
+    }
+
+    /// Returns the final replayed lifecycle for one accepted obligation.
+    /// Absence remains `None`; no lifecycle is inferred or mutated.
+    #[must_use]
+    pub fn obligation_lifecycle_v4(&self, obligation_id: &StableId) -> Option<ObligationLifecycle> {
+        self.aggregate
+            .obligations()
+            .find(|obligation| obligation.id() == obligation_id)
+            .map(crate::Obligation::lifecycle)
+    }
+
+    fn registered_gluing_input_v4(
         &self,
         context_id: &StableId,
     ) -> Option<(&ArtifactRegistrationV4, &crate::GluingInputDescriptorV4)> {
@@ -11083,11 +14090,82 @@ impl EventLogV4 {
         Some((registration, descriptor))
     }
 
-    /// The atomically replayed M5 topology, if and only if its single bundle
-    /// event is already part of this confirmed prefix.
+    /// Returns `None` when the context has no confirmed registration and
+    /// `Some(matches)` otherwise. This is the idempotency predicate Store may
+    /// use without receiving either complete replay DTO.
     #[must_use]
-    pub fn gluing_bundle_v4(&self) -> Option<&crate::GluingBundleV4> {
-        self.m5_bundle.as_ref()
+    pub fn registered_gluing_input_matches_v4(
+        &self,
+        trusted: &TrustedGluingInputSourceV4,
+        descriptor: &crate::GluingInputDescriptorV4,
+    ) -> Option<bool> {
+        self.registered_gluing_input_v4(trusted.context_id()).map(
+            |(registration, registered_descriptor)| {
+                registered_descriptor == descriptor
+                    && registration.id() == trusted.registration_id()
+                    && registration.cas_hash() == trusted.descriptor_hash()
+                    && registration.size() == trusted.descriptor_size()
+                    && registration.media_type() == trusted.descriptor_media_type()
+                    && registration.sensitivity() == trusted.descriptor_sensitivity()
+                    && registered_descriptor.id() == trusted.descriptor_id()
+            },
+        )
+    }
+
+    /// Same closed idempotency check when Store has not decoded the already
+    /// registered descriptor again. `None` means absent; `Some(false)` means
+    /// the occupied context does not match the trusted immutable-object key.
+    #[must_use]
+    pub fn registered_gluing_input_matches_trusted_v4(
+        &self,
+        trusted: &TrustedGluingInputSourceV4,
+    ) -> Option<bool> {
+        self.registered_gluing_input_v4(trusted.context_id()).map(
+            |(registration, registered_descriptor)| {
+                registration.id() == trusted.registration_id()
+                    && registration.cas_hash() == trusted.descriptor_hash()
+                    && registration.size() == trusted.descriptor_size()
+                    && registration.media_type() == trusted.descriptor_media_type()
+                    && registration.sensitivity() == trusted.descriptor_sensitivity()
+                    && registered_descriptor.id() == trusted.descriptor_id()
+                    && registered_descriptor.context_id() == trusted.context_id()
+            },
+        )
+    }
+
+    /// Opaque post-replay view of one confirmed descriptor/registration pair.
+    #[must_use]
+    pub fn registered_gluing_input_projection_v4(
+        &self,
+        context_id: &StableId,
+    ) -> Option<(
+        BorrowedArtifactRegistrationProjectionV4<'_>,
+        BorrowedGluingInputDescriptorProjectionV4<'_>,
+    )> {
+        self.registered_gluing_input_v4(context_id)
+            .map(|(registration, descriptor)| {
+                (
+                    BorrowedArtifactRegistrationProjectionV4 {
+                        value: registration,
+                        descriptor: Some(descriptor),
+                    },
+                    BorrowedGluingInputDescriptorProjectionV4 { value: descriptor },
+                )
+            })
+    }
+
+    /// Whether the atomically replayed M5 bundle event is already confirmed.
+    #[must_use]
+    pub const fn has_gluing_bundle_v4(&self) -> bool {
+        self.m5_bundle.is_some()
+    }
+
+    /// Opaque post-replay view of the atomic M5 topology.
+    #[must_use]
+    pub fn gluing_bundle_projection_v4(&self) -> Option<BorrowedGluingBundleProjectionV4<'_>> {
+        self.m5_bundle
+            .as_ref()
+            .map(|value| BorrowedGluingBundleProjectionV4 { value })
     }
 
     /// Mints a non-authority fixed-profile projection from one exact legal
@@ -12902,6 +15980,42 @@ impl EventLogV4 {
         limits: EventReplayLimits,
         session_identity: &OpaqueSessionIdentityV4,
     ) -> Result<(Self, AuthorityReplayBasisV4)> {
+        Self::replay_confirmed_v4_prefix_for_session_with_projection_visitor(
+            run_id,
+            canonical_genesis_bytes,
+            envelopes,
+            resolver,
+            roots,
+            limits,
+            session_identity,
+            |_, _| {},
+        )
+    }
+
+    /// Replays one complete V4 authority prefix while lending each already
+    /// decoded closed payload to a derived-index visitor exactly once.
+    ///
+    /// The visitor receives only private-field scalar metadata and a closed
+    /// borrowed DTO view: no envelope, raw JSON, or canonical byte producer.
+    /// Its higher-ranked references cannot outlive the call. A callback
+    /// observation is provisional: callers must discard all captured charges
+    /// or errors unless this method returns `Ok`, because a later event can
+    /// still invalidate the complete prefix. Callback code must not construct
+    /// authority or mutate Core replay state.
+    #[allow(clippy::too_many_arguments)]
+    pub fn replay_confirmed_v4_prefix_for_session_with_projection_visitor<F>(
+        run_id: StableId,
+        canonical_genesis_bytes: &[u8],
+        envelopes: &[EventEnvelope],
+        resolver: &impl AuthorityArtifactResolverV4,
+        roots: &AuthorityTrustRootsV4,
+        limits: EventReplayLimits,
+        session_identity: &OpaqueSessionIdentityV4,
+        mut projection_visitor: F,
+    ) -> Result<(Self, AuthorityReplayBasisV4)>
+    where
+        F: for<'event> FnMut(BorrowedV4EventMetadata<'event>, BorrowedProjectionPayloadV4<'event>),
+    {
         if envelopes.is_empty() {
             return Err(DomainError::EventSequence(
                 "V4 replay requires the sequence-one genesis manifest".to_owned(),
@@ -12938,10 +16052,23 @@ impl EventLogV4 {
                 "V4 sequence-one envelope is not the canonical bootstrap envelope".to_owned(),
             ));
         }
+        projection_visitor(
+            borrowed_v4_event_metadata(&envelopes[0])?,
+            BorrowedProjectionPayloadV4 {
+                inner: BorrowedProjectionPayloadInnerV4::Genesis(&log.manifest),
+            },
+        );
         log.envelopes
             .try_reserve_exact(envelopes.len().saturating_sub(1))
             .map_err(|_| DomainError::Incomplete {
                 operation: "V4 replay event output capacity",
+                limit: envelopes.len(),
+                observed: envelopes.len(),
+            })?;
+        log.projection_trace
+            .try_reserve_exact(envelopes.len().saturating_sub(1))
+            .map_err(|_| DomainError::Incomplete {
+                operation: "V4 replay projection trace capacity",
                 limit: envelopes.len(),
                 observed: envelopes.len(),
             })?;
@@ -13288,8 +16415,28 @@ impl EventLogV4 {
                     });
                 }
             }
+            let decoded_descriptor = match &payload {
+                PersistedPayload::ArtifactRegisteredV4(registration) => {
+                    match registration.source() {
+                        ArtifactSourceV4::GluingInput { context_id, .. } => {
+                            log.v4_gluing_descriptors.get(context_id)
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            projection_visitor(
+                borrowed_v4_event_metadata(envelope)?,
+                borrowed_projection_payload_v4(
+                    &payload,
+                    log.m5_bundle.as_ref(),
+                    decoded_descriptor,
+                )?,
+            );
             log.tail_hash = envelope.event_hash().clone();
             log.envelopes.push(envelope.clone());
+            log.projection_trace.push(projection_trace_v4(&payload)?);
         }
         for (event_sequence, registration_id) in deferred_registration_closures {
             let registration = log
@@ -13307,6 +16454,7 @@ impl EventLogV4 {
                     reason: error.to_string(),
                 })?;
         }
+        log.validate_projection_trace_v4()?;
         let basis = AuthorityReplayBasisV4::build(
             log.session_identity.clone(),
             run_id.clone(),
@@ -13330,6 +16478,217 @@ impl EventLogV4 {
         Ok((log, basis))
     }
 
+    fn borrowed_projection_from_trace_v4<'a>(
+        &'a self,
+        trace: &'a ProjectionTraceV4,
+    ) -> Result<BorrowedProjectionPayloadV4<'a>> {
+        let direct = match trace {
+            ProjectionTraceV4::ObligationTransition {
+                obligation_id,
+                next,
+            } => BorrowedDirectProjectionV4::ObligationTransition {
+                obligation_id,
+                next: *next,
+            },
+            ProjectionTraceV4::ArtifactRegisteredV3(id) => {
+                BorrowedDirectProjectionV4::ArtifactRegisteredV3(
+                    self.v3_aggregate.registrations.get(id).ok_or_else(|| {
+                        DomainError::DanglingReference {
+                            owner: "event-v4 projection trace",
+                            owner_id: id.clone(),
+                            reference: id.clone(),
+                        }
+                    })?,
+                )
+            }
+            ProjectionTraceV4::SnapshotSourcesRecorded(snapshot_id) => {
+                BorrowedDirectProjectionV4::SnapshotSourcesRecorded(
+                    self.aggregate
+                        .snapshot_sources_for(snapshot_id)
+                        .ok_or_else(|| DomainError::DanglingReference {
+                            owner: "event-v4 projection trace",
+                            owner_id: snapshot_id.clone(),
+                            reference: snapshot_id.clone(),
+                        })?,
+                )
+            }
+            ProjectionTraceV4::ReviewPlanRecorded(id) => {
+                BorrowedDirectProjectionV4::ReviewPlanRecorded(
+                    self.aggregate.review_plan(id).ok_or_else(|| {
+                        DomainError::DanglingReference {
+                            owner: "event-v4 projection trace",
+                            owner_id: id.clone(),
+                            reference: id.clone(),
+                        }
+                    })?,
+                )
+            }
+            ProjectionTraceV4::ContextEnvelopeProjected(id) => {
+                BorrowedDirectProjectionV4::ContextEnvelopeProjected(
+                    self.aggregate.context_envelope(id).ok_or_else(|| {
+                        DomainError::DanglingReference {
+                            owner: "event-v4 projection trace",
+                            owner_id: id.clone(),
+                            reference: id.clone(),
+                        }
+                    })?,
+                )
+            }
+            ProjectionTraceV4::ReviewExecutionRecorded(id) => {
+                BorrowedDirectProjectionV4::ReviewExecutionRecorded {
+                    execution: self.aggregate.execution(id).ok_or_else(|| {
+                        DomainError::DanglingReference {
+                            owner: "event-v4 projection trace",
+                            owner_id: id.clone(),
+                            reference: id.clone(),
+                        }
+                    })?,
+                    claims: self.aggregate.execution_claim_map(),
+                }
+            }
+            ProjectionTraceV4::EvidenceRecordedV3(id) => {
+                BorrowedDirectProjectionV4::EvidenceRecordedV3(
+                    self.v3_aggregate.evidence.get(id).ok_or_else(|| {
+                        DomainError::DanglingReference {
+                            owner: "event-v4 projection trace",
+                            owner_id: id.clone(),
+                            reference: id.clone(),
+                        }
+                    })?,
+                )
+            }
+            ProjectionTraceV4::EvidenceBoundV3(id) => BorrowedDirectProjectionV4::EvidenceBoundV3(
+                self.v3_aggregate.bindings.get(id).ok_or_else(|| {
+                    DomainError::DanglingReference {
+                        owner: "event-v4 projection trace",
+                        owner_id: id.clone(),
+                        reference: id.clone(),
+                    }
+                })?,
+            ),
+            ProjectionTraceV4::VerificationRecordedV3(id) => {
+                BorrowedDirectProjectionV4::VerificationRecordedV3(
+                    self.v3_aggregate.verifications.get(id).ok_or_else(|| {
+                        DomainError::DanglingReference {
+                            owner: "event-v4 projection trace",
+                            owner_id: id.clone(),
+                            reference: id.clone(),
+                        }
+                    })?,
+                )
+            }
+            ProjectionTraceV4::DecisionRecordedV3(id) => {
+                BorrowedDirectProjectionV4::DecisionRecordedV3(
+                    self.v3_aggregate.decisions.get(id).ok_or_else(|| {
+                        DomainError::DanglingReference {
+                            owner: "event-v4 projection trace",
+                            owner_id: id.clone(),
+                            reference: id.clone(),
+                        }
+                    })?,
+                )
+            }
+            ProjectionTraceV4::FindingRecordedV3(id) => {
+                BorrowedDirectProjectionV4::FindingRecordedV3(
+                    self.v3_aggregate.findings.get(id).ok_or_else(|| {
+                        DomainError::DanglingReference {
+                            owner: "event-v4 projection trace",
+                            owner_id: id.clone(),
+                            reference: id.clone(),
+                        }
+                    })?,
+                )
+            }
+            ProjectionTraceV4::ArtifactRegisteredV4 {
+                registration_id,
+                context_id,
+            } => BorrowedDirectProjectionV4::ArtifactRegisteredV4 {
+                registration: self.v4_registrations.get(registration_id).ok_or_else(|| {
+                    DomainError::DanglingReference {
+                        owner: "event-v4 projection trace",
+                        owner_id: registration_id.clone(),
+                        reference: registration_id.clone(),
+                    }
+                })?,
+                descriptor: self.v4_gluing_descriptors.get(context_id).ok_or_else(|| {
+                    DomainError::DanglingReference {
+                        owner: "event-v4 projection trace",
+                        owner_id: registration_id.clone(),
+                        reference: context_id.clone(),
+                    }
+                })?,
+            },
+            ProjectionTraceV4::GluingBundleRecordedV4 => {
+                BorrowedDirectProjectionV4::GluingBundleRecordedV4(
+                    self.m5_bundle
+                        .as_ref()
+                        .ok_or(DomainError::GluingBundleMismatch)?,
+                )
+            }
+        };
+        Ok(BorrowedProjectionPayloadV4 {
+            inner: BorrowedProjectionPayloadInnerV4::Direct(direct),
+        })
+    }
+
+    fn validate_projection_trace_v4(&self) -> Result<()> {
+        if self.envelopes.len() != self.projection_trace.len().saturating_add(1) {
+            return Err(DomainError::EventSequence(
+                "event-v4 projection trace differs from the confirmed envelope prefix".to_owned(),
+            ));
+        }
+        let trace_bytes = self
+            .projection_trace
+            .capacity()
+            .saturating_mul(std::mem::size_of::<ProjectionTraceV4>())
+            .saturating_add(
+                self.projection_trace
+                    .iter()
+                    .map(ProjectionTraceV4::dynamic_bytes)
+                    .sum::<usize>(),
+            );
+        let payload_bytes = self.envelopes[1..]
+            .iter()
+            .map(|envelope| envelope.payload.get().len())
+            .sum::<usize>();
+        let trace_bound = payload_bytes.saturating_add(
+            self.projection_trace
+                .len()
+                .saturating_mul(std::mem::size_of::<ProjectionTraceV4>()),
+        );
+        if trace_bytes > trace_bound {
+            return Err(DomainError::EventSequence(
+                "event-v4 projection trace exceeds its replay-derived bound".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reconstructs exact closed payload views from a successful authority
+    /// replay's bounded lookup trace and accepted aggregate state. This
+    /// post-replay traversal performs no payload decode and lends no raw or
+    /// canonical bytes, so Store can run exact phase-0 admission before
+    /// allocating its first projected row.
+    pub fn visit_confirmed_projection_v4<F>(&self, mut visitor: F) -> Result<()>
+    where
+        F: for<'event> FnMut(BorrowedV4EventMetadata<'event>, BorrowedProjectionPayloadV4<'event>),
+    {
+        self.validate_projection_trace_v4()?;
+        visitor(
+            borrowed_v4_event_metadata(&self.envelopes[0])?,
+            BorrowedProjectionPayloadV4 {
+                inner: BorrowedProjectionPayloadInnerV4::Genesis(&self.manifest),
+            },
+        );
+        for (envelope, trace) in self.envelopes[1..].iter().zip(&self.projection_trace) {
+            visitor(
+                borrowed_v4_event_metadata(envelope)?,
+                self.borrowed_projection_from_trace_v4(trace)?,
+            );
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn run_id(&self) -> &StableId {
         &self.run_id
@@ -13346,13 +16705,17 @@ impl EventLogV4 {
     pub fn envelopes(&self) -> &[EventEnvelope] {
         &self.envelopes
     }
+
     #[must_use]
     pub fn canonical_genesis_bytes(&self) -> &[u8] {
         &self.canonical_genesis_bytes
     }
+    /// Opaque post-replay view of the fixed V4 genesis manifest.
     #[must_use]
-    pub fn genesis_manifest(&self) -> &RunGenesisManifestV4 {
-        &self.manifest
+    pub fn genesis_manifest_projection_v4(&self) -> BorrowedRunGenesisManifestProjectionV4<'_> {
+        BorrowedRunGenesisManifestProjectionV4 {
+            value: &self.manifest,
+        }
     }
 }
 
@@ -21717,6 +25080,51 @@ mod tests {
     }
 
     #[test]
+    fn v4_descriptive_state_accessors_borrow_exact_replay_owned_values() {
+        let (log, _, _, _, _, claim_id) = fixture_v4_bundle_base();
+        let direct = log
+            .claim_assessment_v3(&claim_id)
+            .expect("direct claim assessment");
+        let iterated = log
+            .claim_assessments_v3()
+            .find(|assessment| assessment.claim_id() == direct.claim_id())
+            .expect("iterator borrows the direct assessment");
+        assert_eq!(iterated.disposition(), direct.disposition());
+        assert_eq!(iterated.review_status(), direct.review_status());
+        let actual = serde_json::json!({
+            "claim_id": direct.claim_id(),
+            "disposition": direct.disposition(),
+            "review_status": direct.review_status(),
+            "binding_ids": direct.binding_ids().collect::<Vec<_>>(),
+            "evidence_ids": direct.evidence_ids().collect::<Vec<_>>(),
+            "verification_ids": direct.verification_ids().collect::<Vec<_>>(),
+            "decision_ids": direct.decision_ids().collect::<Vec<_>>(),
+            "finding_ids": direct.finding_ids().collect::<Vec<_>>(),
+            "active_decision_id": direct.active_decision_id(),
+            "current_finding_id": direct.current_finding_id(),
+            "decision_conflict": direct.decision_conflict(),
+        });
+        assert_eq!(
+            actual,
+            canonical_json_value(serde_json::to_value(direct.value).expect("assessment JSON"))
+        );
+
+        let obligation = log
+            .aggregate
+            .obligations()
+            .next()
+            .expect("replayed obligation");
+        assert_eq!(
+            log.obligation_lifecycle_v4(obligation.id()),
+            Some(obligation.lifecycle())
+        );
+        assert_eq!(
+            log.obligation_lifecycle_v4(&id("obligation:not-in-replay")),
+            None
+        );
+    }
+
+    #[test]
     fn v4_fixture_bundle_requires_output_then_witness_durability_and_exact_admission() {
         let (log, basis, roots, mut resolver, session, claim_id) = fixture_v4_bundle_base();
         let limits = EventReplayLimits {
@@ -22358,6 +25766,173 @@ mod tests {
             .confirm_replayed(&log, &basis, &session)
             .expect("finding receipt");
         assert_eq!(basis.inherited_m4_entry_count(), authority_entries);
+
+        // The full static run contains every inherited D2/M4 event shape:
+        // D2 planning/context/execution/claim state followed by M4
+        // evidence/binding/verification/decision/finding state.  Compare the
+        // opaque callback view with the durable canonical DTO bytes/hash for
+        // each shape, so a projection accessor cannot silently omit or alter
+        // a byte-bearing field.
+        let seen_payload_kinds = std::cell::RefCell::new(BTreeSet::new());
+        EventLogV4::replay_confirmed_v4_prefix_for_session_with_projection_visitor(
+            log.run_id().clone(),
+            log.canonical_genesis_bytes(),
+            &confirmed,
+            &resolver,
+            &human_roots,
+            limits,
+            &OpaqueSessionIdentityV4::fresh(),
+            |metadata, projected| {
+                let envelope =
+                    &confirmed[usize::try_from(metadata.sequence() - 1).expect("event index")];
+                let durable =
+                    decode_canonical_payload(EventContractVersion::V4, envelope.payload.get())
+                        .expect("durable payload");
+                let kind = match &durable {
+                    PersistedPayload::RunGenesisManifestV4(_) => "run_genesis_manifest",
+                    PersistedPayload::ObligationTransition { .. } => "obligation_transition",
+                    PersistedPayload::ArtifactRegisteredV3(_) => "artifact_registered",
+                    PersistedPayload::SnapshotSourcesRecorded(_) => "snapshot_sources_recorded",
+                    PersistedPayload::ReviewPlanRecorded(_) => "review_plan_recorded",
+                    PersistedPayload::ContextEnvelopeProjected(_) => "context_envelope_projected",
+                    PersistedPayload::ReviewExecutionRecorded(_) => "review_execution_recorded",
+                    PersistedPayload::EvidenceRecordedV3(_) => "evidence_recorded_v3",
+                    PersistedPayload::EvidenceBoundV3(_) => "evidence_bound_v3",
+                    PersistedPayload::VerificationRecordedV3(_) => "verification_recorded_v3",
+                    PersistedPayload::DecisionRecordedV3(_) => "decision_recorded_v3",
+                    PersistedPayload::FindingRecordedV3(_) => "finding_recorded_v3",
+                    _ => "unexpected",
+                };
+                assert_ne!(kind, "unexpected");
+                seen_payload_kinds.borrow_mut().insert(kind);
+                match (durable, projected.view()) {
+                    (
+                        PersistedPayload::RunGenesisManifestV4(value),
+                        BorrowedProjectionPayloadRefV4::RunGenesisManifestV4(projection),
+                    ) => assert_eq!(
+                        projection.body_hash().expect("manifest body hash"),
+                        ContentHash::sha256(&canonical_json(&value).expect("manifest bytes"))
+                    ),
+                    (
+                        PersistedPayload::ObligationTransition {
+                            obligation_id,
+                            next,
+                        },
+                        BorrowedProjectionPayloadRefV4::ObligationTransition(projection),
+                    ) => {
+                        assert_eq!(projection.obligation_id(), &obligation_id);
+                        assert_eq!(projection.next(), next);
+                    }
+                    (
+                        PersistedPayload::ArtifactRegisteredV3(value),
+                        BorrowedProjectionPayloadRefV4::ArtifactRegisteredV3(projection),
+                    ) => assert_eq!(
+                        projection.body_hash().expect("registration body hash"),
+                        ContentHash::sha256(&canonical_json(&value).expect("registration bytes"))
+                    ),
+                    (
+                        PersistedPayload::SnapshotSourcesRecorded(value),
+                        BorrowedProjectionPayloadRefV4::SnapshotSourcesRecorded(projection),
+                    ) => assert_eq!(
+                        projection.body_hash().expect("snapshot sources body hash"),
+                        ContentHash::sha256(
+                            &canonical_json(&value).expect("snapshot sources bytes")
+                        )
+                    ),
+                    (
+                        PersistedPayload::ReviewPlanRecorded(value),
+                        BorrowedProjectionPayloadRefV4::ReviewPlanRecorded(projection),
+                    ) => assert_eq!(
+                        projection.body_hash().expect("plan body hash"),
+                        ContentHash::sha256(&value.canonical_bytes().expect("plan bytes"))
+                    ),
+                    (
+                        PersistedPayload::ContextEnvelopeProjected(value),
+                        BorrowedProjectionPayloadRefV4::ContextEnvelopeProjected(projection),
+                    ) => assert_eq!(
+                        projection.body_hash().expect("context body hash"),
+                        ContentHash::sha256(&value.canonical_bytes().expect("context bytes"))
+                    ),
+                    (
+                        PersistedPayload::ReviewExecutionRecorded(value),
+                        BorrowedProjectionPayloadRefV4::ReviewExecutionRecorded(projection),
+                    ) => {
+                        assert_eq!(
+                            projection.body_hash().expect("execution body hash"),
+                            value.execution.body_hash().expect("execution bytes")
+                        );
+                        let durable_claims = value.claims.iter().collect::<Vec<_>>();
+                        let projected_claims = projection.claims().collect::<Vec<_>>();
+                        assert_eq!(projected_claims.len(), durable_claims.len());
+                        for (projected_claim, durable_claim) in
+                            projected_claims.into_iter().zip(durable_claims)
+                        {
+                            assert_eq!(
+                                projected_claim.body_hash().expect("claim body hash"),
+                                durable_claim.body_hash().expect("claim bytes")
+                            );
+                        }
+                    }
+                    (
+                        PersistedPayload::EvidenceRecordedV3(value),
+                        BorrowedProjectionPayloadRefV4::EvidenceRecordedV3(projection),
+                    ) => assert_eq!(
+                        projection.body_hash().expect("evidence body hash"),
+                        value.body_hash().expect("evidence bytes")
+                    ),
+                    (
+                        PersistedPayload::EvidenceBoundV3(value),
+                        BorrowedProjectionPayloadRefV4::EvidenceBoundV3(projection),
+                    ) => assert_eq!(
+                        projection.body_hash().expect("binding body hash"),
+                        value.body_hash().expect("binding bytes")
+                    ),
+                    (
+                        PersistedPayload::VerificationRecordedV3(value),
+                        BorrowedProjectionPayloadRefV4::VerificationRecordedV3(projection),
+                    ) => assert_eq!(
+                        projection.body_hash().expect("verification body hash"),
+                        value.body_hash().expect("verification bytes")
+                    ),
+                    (
+                        PersistedPayload::DecisionRecordedV3(value),
+                        BorrowedProjectionPayloadRefV4::DecisionRecordedV3(projection),
+                    ) => assert_eq!(
+                        projection.body_hash().expect("decision body hash"),
+                        value.body_hash().expect("decision bytes")
+                    ),
+                    (
+                        PersistedPayload::FindingRecordedV3(value),
+                        BorrowedProjectionPayloadRefV4::FindingRecordedV3(projection),
+                    ) => assert_eq!(
+                        projection.body_hash().expect("finding body hash"),
+                        value.body_hash().expect("finding bytes")
+                    ),
+                    _ => panic!(
+                        "unexpected durable/opaque projection pair at sequence {}",
+                        metadata.sequence()
+                    ),
+                }
+            },
+        )
+        .expect("full inherited D2/M4 opaque projection replay");
+        assert_eq!(
+            *seen_payload_kinds.borrow(),
+            BTreeSet::from([
+                "run_genesis_manifest",
+                "obligation_transition",
+                "artifact_registered",
+                "snapshot_sources_recorded",
+                "review_plan_recorded",
+                "context_envelope_projected",
+                "review_execution_recorded",
+                "evidence_recorded_v3",
+                "evidence_bound_v3",
+                "verification_recorded_v3",
+                "decision_recorded_v3",
+                "finding_recorded_v3",
+            ])
+        );
     }
 
     #[test]
@@ -22488,6 +26063,481 @@ mod tests {
             ),
             Err(DomainError::EventSequence(_))
         ));
+    }
+
+    #[test]
+    fn v4_projection_visitor_reuses_the_authority_decode_and_refuses_other_contracts() {
+        let bootstrap =
+            EventLogV4::from_bootstrap_request(v4_bootstrap_request()).expect("v4 bootstrap");
+        let roots = empty_v4_roots(&aggregate());
+        let seed_session = OpaqueSessionIdentityV4::fresh();
+        let limits = EventReplayLimits {
+            max_events: 8,
+            max_canonical_bytes: 1_048_576,
+        };
+        let (seed_log, seed_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            bootstrap.envelopes(),
+            &EmptyV4Resolver,
+            &roots,
+            limits,
+            &seed_session,
+        )
+        .expect("seed replay");
+        let obligation_id = seed_log
+            .aggregate
+            .obligations()
+            .next()
+            .expect("fixture obligation")
+            .id()
+            .clone();
+        let prepared = seed_log
+            .prepare_inherited_d2_event_v4(
+                EventCommand::obligation_transition(
+                    obligation_id.clone(),
+                    ObligationLifecycle::Planned,
+                ),
+                &seed_basis,
+            )
+            .expect("prepared transition");
+        let mut envelopes = seed_log.envelopes().to_vec();
+        envelopes.push(
+            prepared
+                .envelope(&seed_log, &seed_basis, &seed_session)
+                .expect("prepared envelope")
+                .clone(),
+        );
+        let expected_line_bytes = envelopes
+            .iter()
+            .map(|envelope| {
+                u64::try_from(envelope.canonical_bytes().expect("canonical event").len() + 1)
+                    .expect("line bytes")
+            })
+            .collect::<Vec<_>>();
+
+        let baseline_decodes = {
+            let _scope = V3ReplayDecodeScope::enter();
+            EventLogV4::replay_confirmed_v4_prefix_for_session(
+                seed_log.run_id().clone(),
+                seed_log.canonical_genesis_bytes(),
+                &envelopes,
+                &EmptyV4Resolver,
+                &roots,
+                limits,
+                &OpaqueSessionIdentityV4::fresh(),
+            )
+            .expect("baseline replay");
+            V3_TEST_REPLAY_PAYLOAD_DECODE_COUNT.with(std::cell::Cell::get)
+        };
+
+        let callback_count = std::cell::Cell::new(0_u64);
+        let visitor_decodes = {
+            let _scope = V3ReplayDecodeScope::enter();
+            EventLogV4::replay_confirmed_v4_prefix_for_session_with_projection_visitor(
+                seed_log.run_id().clone(),
+                seed_log.canonical_genesis_bytes(),
+                &envelopes,
+                &EmptyV4Resolver,
+                &roots,
+                limits,
+                &OpaqueSessionIdentityV4::fresh(),
+                |metadata, payload| {
+                    callback_count.set(callback_count.get() + 1);
+                    assert_eq!(metadata.schema(), EventContractVersion::V4.schema());
+                    assert_eq!(metadata.logical_time(), metadata.sequence());
+                    assert_eq!(
+                        metadata.canonical_line_bytes(),
+                        expected_line_bytes
+                            [usize::try_from(metadata.sequence() - 1).expect("event index")]
+                    );
+                    match (metadata.sequence(), payload.view()) {
+                        (1, BorrowedProjectionPayloadRefV4::RunGenesisManifestV4(manifest)) => {
+                            assert_eq!(manifest.run_id(), seed_log.run_id());
+                        }
+                        (2, BorrowedProjectionPayloadRefV4::ObligationTransition(transition)) => {
+                            assert_eq!(transition.obligation_id(), &obligation_id);
+                            assert_eq!(transition.next(), ObligationLifecycle::Planned);
+                        }
+                        _ => panic!("unexpected borrowed projection variant"),
+                    }
+                },
+            )
+            .expect("visitor replay");
+            V3_TEST_REPLAY_PAYLOAD_DECODE_COUNT.with(std::cell::Cell::get)
+        };
+        assert_eq!(callback_count.get(), 2);
+        assert_eq!(visitor_decodes, baseline_decodes);
+
+        for schema in ["reviewgraphen.review_event.v3", "unknown.event.contract"] {
+            let callbacks = std::cell::Cell::new(0_u64);
+            let mut wrong = envelopes.clone();
+            wrong[0].schema = schema.to_owned();
+            let result = EventLogV4::replay_confirmed_v4_prefix_for_session_with_projection_visitor(
+                seed_log.run_id().clone(),
+                seed_log.canonical_genesis_bytes(),
+                &wrong,
+                &EmptyV4Resolver,
+                &roots,
+                limits,
+                &OpaqueSessionIdentityV4::fresh(),
+                |_, _| callbacks.set(callbacks.get() + 1),
+            );
+            assert!(result.is_err());
+            assert_eq!(callbacks.get(), 0);
+        }
+
+        let predecessor = envelopes.last().expect("transition envelope");
+        let invalid_later = EventEnvelope::new(
+            EventContractVersion::V4,
+            seed_log.run_id().clone(),
+            seed_log.genesis_hash().clone(),
+            3,
+            SYSTEM_ACTOR,
+            3,
+            predecessor.event_hash().clone(),
+            PersistedPayload::ObligationTransition {
+                obligation_id,
+                next: ObligationLifecycle::Planned,
+            },
+        )
+        .expect("structurally valid duplicate transition");
+        let mut invalid_prefix = envelopes;
+        invalid_prefix.push(invalid_later);
+        let provisional_callbacks = std::cell::Cell::new(0_u64);
+        let result = EventLogV4::replay_confirmed_v4_prefix_for_session_with_projection_visitor(
+            seed_log.run_id().clone(),
+            seed_log.canonical_genesis_bytes(),
+            &invalid_prefix,
+            &EmptyV4Resolver,
+            &roots,
+            limits,
+            &OpaqueSessionIdentityV4::fresh(),
+            |_, _| provisional_callbacks.set(provisional_callbacks.get() + 1),
+        );
+        assert!(result.is_err());
+        assert_eq!(provisional_callbacks.get(), 2);
+    }
+
+    #[test]
+    fn borrowed_context_policy_projection_covers_the_exact_fixed_policy() {
+        let policy = crate::ContextPolicyV1::baseline();
+        let projection = BorrowedContextPolicyProjectionV4 { value: &policy };
+        let mut object = serde_json::Map::new();
+        projection.visit_scalar_fields(|key, value| {
+            let value = match value {
+                BorrowedProjectionScalarV4::U64(value) => serde_json::json!(value),
+                BorrowedProjectionScalarV4::Text(value) => serde_json::json!(value),
+                other => panic!("unexpected context policy scalar: {other:?}"),
+            };
+            assert!(object.insert(key.to_owned(), value).is_none());
+        });
+        object.insert(
+            "edge_kind_direction_order".to_owned(),
+            serde_json::json!(projection.edge_kind_direction_order().collect::<Vec<_>>()),
+        );
+        object.insert(
+            "exclusion_reason_precedence".to_owned(),
+            serde_json::json!(projection.exclusion_reason_precedence().collect::<Vec<_>>()),
+        );
+        object.insert(
+            "loss_descriptions".to_owned(),
+            serde_json::json!(
+                projection
+                    .loss_descriptions()
+                    .map(|item| [item.key(), item.description()])
+                    .collect::<Vec<_>>()
+            ),
+        );
+        object.insert(
+            "rules".to_owned(),
+            serde_json::json!(projection.rules().collect::<Vec<_>>()),
+        );
+        object.insert(
+            "unknown_descriptions".to_owned(),
+            serde_json::json!(projection.unknown_descriptions().collect::<Vec<_>>()),
+        );
+        let expected: serde_json::Value =
+            serde_json::from_slice(&policy.canonical_bytes().expect("canonical context policy"))
+                .expect("context policy JSON");
+        assert_eq!(serde_json::Value::Object(object), expected);
+    }
+
+    #[test]
+    fn artifact_source_projection_visits_complete_canonical_scalar_objects() {
+        let hash = |name: &str| ContentHash::sha256(name.as_bytes());
+        let sources = vec![
+            ArtifactSourceV3::RunGenesis {
+                run_id: id("run:projection"),
+            },
+            ArtifactSourceV3::SnapshotIngest {
+                adapter_id: "adapter@1".to_owned(),
+                run_id: id("run:projection"),
+                snapshot_id: id("snapshot:projection"),
+            },
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id: id("execution:projection"),
+                reviewer_id: "reviewer@1".to_owned(),
+                run_id: id("run:projection"),
+            },
+            ArtifactSourceV3::VerifierArtifact {
+                claim_id: id("claim:projection"),
+                descriptor_id: "descriptor@1".to_owned(),
+                procedure_version: "procedure@1".to_owned(),
+                role: VerifierArtifactRoleV3::Input,
+                run_id: id("run:projection"),
+            },
+            ArtifactSourceV3::ExternalHarnessWitness {
+                claim_body_hash: hash("claim"),
+                claim_id: id("claim:projection"),
+                descriptor_id: "descriptor@1".to_owned(),
+                genesis_hash: hash("genesis"),
+                harness_id: "harness@1".to_owned(),
+                harness_revision: "revision@1".to_owned(),
+                harness_source_hash: hash("harness-source"),
+                policy_revision_hash: hash("policy"),
+                procedure_version: "procedure@1".to_owned(),
+                property_id: "property@1".to_owned(),
+                repository_id: id("repository:projection"),
+                repository_source_hash: hash("repository-source"),
+                run_id: id("run:projection"),
+                snapshot_id: id("snapshot:projection"),
+                test_artifact_id: id("test:projection"),
+                universe_id: id("universe:projection"),
+            },
+        ];
+        for source in &sources {
+            let projection = BorrowedArtifactSourceProjectionV3 { value: source };
+            let mut keys = Vec::new();
+            let mut object = serde_json::Map::new();
+            projection.visit_fields(|key, value| {
+                keys.push(key);
+                assert!(
+                    object
+                        .insert(
+                            key.to_owned(),
+                            serde_json::to_value(value).expect("projection scalar JSON"),
+                        )
+                        .is_none()
+                );
+            });
+            assert!(keys.windows(2).all(|pair| pair[0] < pair[1]));
+            let projected_bytes =
+                canonical_json(&serde_json::Value::Object(object)).expect("projected source");
+            let durable_bytes = canonical_json(source).expect("durable source");
+            assert_eq!(projected_bytes, durable_bytes);
+            assert_eq!(
+                ContentHash::sha256(&projected_bytes),
+                ContentHash::sha256(&durable_bytes)
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(BorrowedProjectionScalarV4::Null).unwrap(),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            serde_json::to_value(BorrowedProjectionScalarV4::Bool(true)).unwrap(),
+            serde_json::Value::Bool(true)
+        );
+        assert_eq!(
+            serde_json::to_value(BorrowedProjectionScalarV4::U64(7)).unwrap(),
+            serde_json::json!(7)
+        );
+        assert_eq!(
+            serde_json::to_value(BorrowedProjectionScalarV4::F64(0.5)).unwrap(),
+            serde_json::json!(0.5)
+        );
+    }
+
+    #[test]
+    fn artifact_source_v4_projection_visits_every_variant_byte_for_byte() {
+        let hash = |name: &str| ContentHash::sha256(name.as_bytes());
+        let sources = vec![
+            ArtifactSourceV4::RunGenesis {
+                run_id: id("run:projection"),
+            },
+            ArtifactSourceV4::SnapshotIngest {
+                adapter_id: "adapter@1".to_owned(),
+                run_id: id("run:projection"),
+                snapshot_id: id("snapshot:projection"),
+            },
+            ArtifactSourceV4::ReviewerExecution {
+                execution_id: id("execution:projection"),
+                reviewer_id: "reviewer@1".to_owned(),
+                run_id: id("run:projection"),
+            },
+            ArtifactSourceV4::VerifierArtifact {
+                claim_id: id("claim:projection"),
+                descriptor_id: "descriptor@1".to_owned(),
+                procedure_version: "procedure@1".to_owned(),
+                role: VerifierArtifactRoleV3::Output,
+                run_id: id("run:projection"),
+            },
+            ArtifactSourceV4::ExternalHarnessWitness {
+                claim_body_hash: hash("claim"),
+                claim_id: id("claim:projection"),
+                descriptor_id: "descriptor@1".to_owned(),
+                genesis_hash: hash("genesis"),
+                harness_id: "harness@1".to_owned(),
+                harness_revision: "revision@1".to_owned(),
+                harness_source_hash: hash("harness-source"),
+                policy_revision_hash: hash("policy"),
+                procedure_version: "procedure@1".to_owned(),
+                property_id: "property@1".to_owned(),
+                repository_id: id("repository:projection"),
+                repository_source_hash: hash("repository-source"),
+                run_id: id("run:projection"),
+                snapshot_id: id("snapshot:projection"),
+                test_artifact_id: id("test:projection"),
+                universe_id: id("universe:projection"),
+            },
+            ArtifactSourceV4::GluingInput {
+                context_id: id(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID),
+                descriptor_hash: hash("descriptor"),
+                descriptor_id: id("descriptor:projection"),
+                descriptor_media_type: crate::GLUING_INPUT_MEDIA_TYPE_V4.to_owned(),
+                descriptor_sensitivity: ArtifactSensitivity::CanonicalState,
+                descriptor_size: 42,
+                genesis_hash: hash("genesis"),
+                plan_id: id("plan:projection"),
+                policy_revision_hash: hash("policy"),
+                profile_descriptor_id: crate::DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID.to_owned(),
+                repository_id: id("repository:projection"),
+                repository_source_hash: hash("repository-source"),
+                run_id: id("run:projection"),
+                snapshot_id: id("snapshot:projection"),
+                universe_id: id("universe:projection"),
+            },
+        ];
+        for source in &sources {
+            let projection = BorrowedArtifactSourceProjectionV4 { value: source };
+            let mut keys = Vec::new();
+            let mut object = serde_json::Map::new();
+            projection.visit_fields(|key, value| {
+                keys.push(key);
+                assert!(
+                    object
+                        .insert(
+                            key.to_owned(),
+                            serde_json::to_value(value).expect("projection scalar JSON"),
+                        )
+                        .is_none()
+                );
+            });
+            assert!(keys.windows(2).all(|pair| pair[0] < pair[1]));
+            let projected_bytes =
+                canonical_json(&serde_json::Value::Object(object)).expect("projected source");
+            let durable_bytes = canonical_json(source).expect("durable source");
+            assert_eq!(projected_bytes, durable_bytes);
+            assert_eq!(
+                ContentHash::sha256(&projected_bytes),
+                ContentHash::sha256(&durable_bytes)
+            );
+        }
+    }
+
+    #[test]
+    fn registration_v4_and_descriptor_projection_match_the_canonical_dtos() {
+        let descriptor = crate::GluingInputDescriptorV4::new(
+            id("run:projection"),
+            id("snapshot:projection"),
+            id("universe:projection"),
+            id("plan:projection"),
+            id(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID),
+            crate::AssignmentValueV4::Required,
+            BTreeSet::from([id("evidence:qualification")]),
+        )
+        .expect("descriptor");
+        let descriptor_bytes = canonical_json(&descriptor).expect("descriptor bytes");
+        let descriptor_hash = ContentHash::sha256(&descriptor_bytes);
+        let source = ArtifactSourceV4::GluingInput {
+            context_id: descriptor.context_id().clone(),
+            descriptor_hash: descriptor_hash.clone(),
+            descriptor_id: descriptor.id().clone(),
+            descriptor_media_type: crate::GLUING_INPUT_MEDIA_TYPE_V4.to_owned(),
+            descriptor_sensitivity: ArtifactSensitivity::CanonicalState,
+            descriptor_size: descriptor_bytes.len() as u64,
+            genesis_hash: ContentHash::sha256(b"genesis:projection"),
+            plan_id: descriptor.plan_id().clone(),
+            policy_revision_hash: ContentHash::sha256(b"policy:projection"),
+            profile_descriptor_id: crate::DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID.to_owned(),
+            repository_id: id("repository:projection"),
+            repository_source_hash: ContentHash::sha256(b"repository:projection"),
+            run_id: descriptor.run_id().clone(),
+            snapshot_id: descriptor.snapshot_id().clone(),
+            universe_id: descriptor.universe_id().clone(),
+        };
+        let registration_id = ArtifactRegistrationV4::derived_id(
+            descriptor.run_id(),
+            &descriptor_hash,
+            crate::GLUING_INPUT_MEDIA_TYPE_V4,
+            descriptor_bytes.len() as u64,
+            ArtifactSensitivity::CanonicalState,
+            &source,
+        )
+        .expect("registration ID");
+        let registration = ArtifactRegistrationV4::from_json_bytes(
+            &canonical_json(&serde_json::json!({
+                "schema": "reviewgraphen.artifact_registration.v4",
+                "id": registration_id,
+                "run_id": descriptor.run_id(),
+                "cas_hash": descriptor_hash,
+                "media_type": crate::GLUING_INPUT_MEDIA_TYPE_V4,
+                "size": descriptor_bytes.len() as u64,
+                "sensitivity": ArtifactSensitivity::CanonicalState,
+                "source": source,
+            }))
+            .expect("registration bytes"),
+        )
+        .expect("registration");
+        let projection = BorrowedArtifactRegistrationProjectionV4 {
+            value: &registration,
+            descriptor: Some(&descriptor),
+        };
+        let mut projected_source = serde_json::Map::new();
+        projection.source().visit_fields(|key, value| {
+            projected_source.insert(
+                key.to_owned(),
+                serde_json::to_value(value).expect("source scalar"),
+            );
+        });
+        let actual = serde_json::json!({
+            "schema": projection.schema(),
+            "id": projection.registration_id(),
+            "run_id": projection.run_id(),
+            "cas_hash": projection.cas_hash(),
+            "media_type": projection.media_type(),
+            "size": projection.size(),
+            "sensitivity": projection.sensitivity(),
+            "source": projected_source,
+        });
+        let projected_registration_bytes = canonical_json(&actual).expect("projected registration");
+        let durable_registration_bytes =
+            canonical_json(&registration).expect("durable registration");
+        assert_eq!(projected_registration_bytes, durable_registration_bytes);
+        assert_eq!(
+            ContentHash::sha256(&projected_registration_bytes),
+            ContentHash::sha256(&durable_registration_bytes)
+        );
+
+        let descriptor = projection.descriptor().expect("bound descriptor");
+        let actual = serde_json::json!({
+            "schema": descriptor.schema(), "id": descriptor.id(),
+            "run_id": descriptor.run_id(), "snapshot_id": descriptor.snapshot_id(),
+            "universe_id": descriptor.universe_id(), "plan_id": descriptor.plan_id(),
+            "profile_descriptor_id": descriptor.profile_descriptor_id(),
+            "context_id": descriptor.context_id(), "assignment_key": descriptor.assignment_key(),
+            "assignment_value": descriptor.assignment_value(),
+            "qualification_source_ids": descriptor.qualification_source_ids().collect::<Vec<_>>(),
+        });
+        let projected_descriptor_bytes = canonical_json(&actual).expect("projected descriptor");
+        let durable_descriptor_bytes =
+            canonical_json(descriptor.value).expect("durable descriptor");
+        assert_eq!(projected_descriptor_bytes, durable_descriptor_bytes);
+        assert_eq!(
+            ContentHash::sha256(&projected_descriptor_bytes),
+            ContentHash::sha256(&durable_descriptor_bytes)
+        );
     }
 
     #[test]
@@ -24382,7 +28432,7 @@ mod tests {
         let next_sequence_before_bundle = sealed_two_basis.next_sequence();
         let tail_before_bundle = sealed_two_basis.confirmed_tail_hash().clone();
         let basis_digest_before_bundle = sealed_two_basis.basis_digest().clone();
-        assert!(sealed_two_log.gluing_bundle_v4().is_none());
+        assert!(!sealed_two_log.has_gluing_bundle_v4());
         let bundle = sealed_two_log
             .mint_gluing_bundle_v4(&sealed_two_basis, &sealed_session)
             .expect("atomic gluing bundle");
@@ -24405,7 +28455,166 @@ mod tests {
         let bundle_receipt = bundle
             .confirm_replayed(&complete_log, &complete_basis, &sealed_session)
             .expect("atomic bundle receipt");
-        assert!(complete_log.gluing_bundle_v4().is_some());
+        assert!(complete_log.has_gluing_bundle_v4());
+        // Exercise the opaque replay view against the canonical durable wire
+        // shape without exposing the decoded GluingBundleV4 DTO to Store.
+        let projected_bundle = complete_log
+            .gluing_bundle_projection_v4()
+            .expect("opaque bundle projection");
+        let PersistedPayload::GluingBundleRecordedV4(raw_bundle) =
+            decode_canonical_payload(EventContractVersion::V4, bundle_event.payload.get())
+                .expect("bundle payload")
+        else {
+            panic!("gluing bundle payload")
+        };
+        let durable_bundle: Value =
+            serde_json::from_str(raw_bundle.get()).expect("canonical bundle payload");
+        assert_eq!(
+            projected_bundle.schema(),
+            durable_bundle["schema"].as_str().expect("bundle schema")
+        );
+        assert_eq!(
+            projected_bundle
+                .input_descriptor_ids()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            durable_bundle["input_descriptor_ids"]
+                .as_array()
+                .expect("descriptor IDs")
+                .iter()
+                .map(|value| value.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        );
+        let cover = projected_bundle.cover();
+        assert_eq!(
+            cover.id().as_str(),
+            durable_bundle["cover"]["id"].as_str().expect("cover ID")
+        );
+        assert_eq!(
+            cover
+                .required_context_ids()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            durable_bundle["cover"]["required_context_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        );
+        let sections = projected_bundle.sections().collect::<Vec<_>>();
+        assert_eq!(
+            sections.len(),
+            durable_bundle["sections"].as_array().unwrap().len()
+        );
+        for (section, wire) in sections
+            .iter()
+            .zip(durable_bundle["sections"].as_array().unwrap())
+        {
+            assert_eq!(section.id().as_str(), wire["id"].as_str().unwrap());
+            assert_eq!(
+                section.context_id().as_str(),
+                wire["context_id"].as_str().unwrap()
+            );
+            assert_eq!(
+                section.input_descriptor_id().as_str(),
+                wire["input_descriptor_id"].as_str().unwrap()
+            );
+            assert_eq!(
+                section.claim_assessment_id().as_str(),
+                wire["claim_assessment_id"].as_str().unwrap()
+            );
+            assert_eq!(
+                section
+                    .source_ids()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                wire["source_ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            );
+        }
+        let restrictions = projected_bundle.restrictions().collect::<Vec<_>>();
+        assert_eq!(
+            restrictions.len(),
+            durable_bundle["restrictions"].as_array().unwrap().len()
+        );
+        for (restriction, wire) in restrictions
+            .iter()
+            .zip(durable_bundle["restrictions"].as_array().unwrap())
+        {
+            assert_eq!(restriction.id().as_str(), wire["id"].as_str().unwrap());
+            assert_eq!(
+                restriction.section_id().as_str(),
+                wire["section_id"].as_str().unwrap()
+            );
+            assert_eq!(
+                restriction
+                    .context_pair()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                wire["context_pair"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            );
+        }
+        let attempt = projected_bundle.attempt();
+        assert_eq!(
+            attempt.id().as_str(),
+            durable_bundle["attempt"]["id"]
+                .as_str()
+                .expect("attempt ID")
+        );
+        assert_eq!(
+            attempt
+                .section_ids()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            durable_bundle["attempt"]["section_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            projected_bundle.global_candidate().is_some(),
+            !durable_bundle["global_candidate"].is_null()
+        );
+        assert_eq!(
+            projected_bundle.obstruction().is_some(),
+            !durable_bundle["obstruction"].is_null()
+        );
+        if let Some(obstruction) = projected_bundle.obstruction() {
+            assert_eq!(
+                obstruction.id().as_str(),
+                durable_bundle["obstruction"]["id"].as_str().unwrap()
+            );
+            assert_eq!(
+                obstruction.attempt_id().as_str(),
+                durable_bundle["obstruction"]["attempt_id"]
+                    .as_str()
+                    .unwrap()
+            );
+            assert_eq!(
+                obstruction
+                    .section_ids()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                durable_bundle["obstruction"]["section_ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            );
+        }
         assert_eq!(bundle_receipt.result(), crate::GluingResultV4::Unknown);
         assert_eq!(
             complete_basis.inherited_m4_entry_count(),
@@ -25556,7 +29765,7 @@ mod tests {
             previous_event_hash: &previous_event_hash,
         })
         .expect("event hash");
-        EventEnvelope {
+        let mut envelope = EventEnvelope {
             schema: version.schema().to_owned(),
             id,
             run_id,
@@ -25568,7 +29777,12 @@ mod tests {
             payload_hash,
             previous_event_hash,
             event_hash,
-        }
+            canonical_line_bytes_v4: None,
+        };
+        envelope
+            .set_canonical_line_bytes_v4()
+            .expect("canonical V4 line bytes");
+        envelope
     }
 
     fn v2_log(run: &str) -> EventLog {

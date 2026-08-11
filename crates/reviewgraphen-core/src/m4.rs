@@ -5893,6 +5893,330 @@ impl ClaimAssessmentV3 {
     }
 }
 
+fn evidence_kind_projection_text(value: EvidenceKindV3) -> &'static str {
+    match value {
+        EvidenceKindV3::StaticFact => "static_fact",
+        EvidenceKindV3::TestWitness => "test_witness",
+    }
+}
+
+impl<'a> crate::BorrowedClaimAssessmentProjectionV4<'a> {
+    #[must_use]
+    pub fn claim_id(&self) -> &'a StableId {
+        self.value.claim_id()
+    }
+    #[must_use]
+    pub const fn disposition(&self) -> AssessmentDispositionV3 {
+        self.value.disposition()
+    }
+    #[must_use]
+    pub const fn review_status(&self) -> AssessmentReviewStatusV3 {
+        self.value.review_status()
+    }
+    #[must_use]
+    pub fn binding_ids(&self) -> crate::BorrowedStableIdSliceIterV4<'a> {
+        crate::BorrowedStableIdSliceIterV4::new(self.value.binding_ids())
+    }
+    #[must_use]
+    pub fn evidence_ids(&self) -> crate::BorrowedStableIdSliceIterV4<'a> {
+        crate::BorrowedStableIdSliceIterV4::new(self.value.evidence_ids())
+    }
+    #[must_use]
+    pub fn verification_ids(&self) -> crate::BorrowedStableIdSliceIterV4<'a> {
+        crate::BorrowedStableIdSliceIterV4::new(self.value.verification_ids())
+    }
+    #[must_use]
+    pub fn decision_ids(&self) -> crate::BorrowedStableIdSliceIterV4<'a> {
+        crate::BorrowedStableIdSliceIterV4::new(self.value.decision_ids())
+    }
+    #[must_use]
+    pub fn finding_ids(&self) -> crate::BorrowedStableIdSliceIterV4<'a> {
+        crate::BorrowedStableIdSliceIterV4::new(self.value.finding_ids())
+    }
+    #[must_use]
+    pub fn active_decision_id(&self) -> Option<&'a StableId> {
+        self.value.active_decision_id()
+    }
+    #[must_use]
+    pub fn current_finding_id(&self) -> Option<&'a StableId> {
+        self.value.current_finding_id()
+    }
+    #[must_use]
+    pub const fn decision_conflict(&self) -> bool {
+        self.value.decision_conflict()
+    }
+}
+
+fn evidence_observation_projection_text(value: EvidenceObservationV3) -> &'static str {
+    match value {
+        EvidenceObservationV3::FactPresent => "fact_present",
+        EvidenceObservationV3::Witnessed => "witnessed",
+    }
+}
+
+fn evidence_relation_projection_text(value: EvidenceRelationV3) -> &'static str {
+    match value {
+        EvidenceRelationV3::Qualifies => "qualifies",
+        EvidenceRelationV3::Reproduces => "reproduces",
+    }
+}
+
+fn verification_outcome_projection_text(value: VerificationOutcomeV3) -> &'static str {
+    match value {
+        VerificationOutcomeV3::Passed => "passed",
+        VerificationOutcomeV3::Inconclusive => "inconclusive",
+        VerificationOutcomeV3::Unsupported => "unsupported",
+    }
+}
+
+fn decision_outcome_projection_text(value: DecisionOutcomeV3) -> &'static str {
+    match value {
+        DecisionOutcomeV3::Accept => "accept",
+        DecisionOutcomeV3::Reject => "reject",
+        DecisionOutcomeV3::Defer => "defer",
+        DecisionOutcomeV3::Exception => "exception",
+    }
+}
+
+fn finding_status_projection_text(value: FindingStatusV3) -> &'static str {
+    match value {
+        FindingStatusV3::UnverifiedCandidate => "unverified_candidate",
+        FindingStatusV3::VerifiedCandidate => "verified_candidate",
+        FindingStatusV3::Accepted => "accepted",
+        FindingStatusV3::Rejected => "rejected",
+    }
+}
+
+impl<'a> crate::BorrowedEvidenceProjectionV3<'a> {
+    pub fn body_hash(&self) -> M4Result<ContentHash> {
+        self.value.body_hash()
+    }
+    #[must_use]
+    pub const fn schema(&self) -> &'static str {
+        "reviewgraphen.evidence.v3"
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        evidence_kind_projection_text(self.value.kind)
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        self.value.snapshot_id()
+    }
+    #[must_use]
+    pub fn subject_ids(&self) -> crate::BorrowedStableIdSliceIterV4<'a> {
+        crate::BorrowedStableIdSliceIterV4::new(self.value.subject_ids())
+    }
+    #[must_use]
+    pub fn descriptor_id(&self) -> &'static str {
+        self.value.descriptor().id()
+    }
+    #[must_use]
+    pub fn procedure_version(&self) -> &'static str {
+        self.value.procedure().id()
+    }
+    #[must_use]
+    pub fn input_registration_id(&self) -> &'a StableId {
+        self.value.input_registration_id()
+    }
+    #[must_use]
+    pub fn output_registration_id(&self) -> &'a StableId {
+        self.value.output_registration_id()
+    }
+    #[must_use]
+    pub fn observation(&self) -> &'static str {
+        evidence_observation_projection_text(self.value.observation)
+    }
+}
+
+impl<'a> crate::BorrowedEvidenceBindingProjectionV3<'a> {
+    pub fn body_hash(&self) -> M4Result<ContentHash> {
+        self.value.body_hash()
+    }
+    #[must_use]
+    pub const fn schema(&self) -> &'static str {
+        "reviewgraphen.evidence_binding.v3"
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn claim_id(&self) -> &'a StableId {
+        self.value.claim_id()
+    }
+    #[must_use]
+    pub fn evidence_id(&self) -> &'a StableId {
+        self.value.evidence_id()
+    }
+    #[must_use]
+    pub fn relation(&self) -> &'static str {
+        evidence_relation_projection_text(self.value.relation())
+    }
+    #[must_use]
+    pub fn property_id(&self) -> &'a str {
+        self.value.property_id()
+    }
+}
+
+impl<'a> crate::BorrowedVerificationProjectionV3<'a> {
+    pub fn body_hash(&self) -> M4Result<ContentHash> {
+        self.value.body_hash()
+    }
+    #[must_use]
+    pub const fn schema(&self) -> &'static str {
+        "reviewgraphen.verification.v3"
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn claim_id(&self) -> &'a StableId {
+        self.value.claim_id()
+    }
+    #[must_use]
+    pub fn descriptor_id(&self) -> &'static str {
+        self.value.descriptor().id()
+    }
+    #[must_use]
+    pub fn procedure_version(&self) -> &'static str {
+        self.value.procedure().id()
+    }
+    #[must_use]
+    pub fn input_registration_id(&self) -> &'a StableId {
+        self.value.input_registration_id()
+    }
+    #[must_use]
+    pub fn output_registration_id(&self) -> &'a StableId {
+        self.value.output_registration_id()
+    }
+    #[must_use]
+    pub fn evidence_ids(&self) -> crate::BorrowedStableIdSliceIterV4<'a> {
+        crate::BorrowedStableIdSliceIterV4::new(self.value.evidence_ids())
+    }
+    #[must_use]
+    pub fn outcome(&self) -> &'static str {
+        verification_outcome_projection_text(self.value.outcome())
+    }
+    #[must_use]
+    pub fn limitations(&self) -> crate::BorrowedStringSliceIterV4<'a> {
+        crate::BorrowedStringSliceIterV4::new(&self.value.limitations)
+    }
+}
+
+impl<'a> crate::BorrowedDecisionProjectionV3<'a> {
+    pub fn body_hash(&self) -> M4Result<ContentHash> {
+        self.value.body_hash()
+    }
+    #[must_use]
+    pub const fn schema(&self) -> &'static str {
+        "reviewgraphen.human_decision.v3"
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub fn policy_revision_hash(&self) -> &'a ContentHash {
+        self.value.policy_revision_hash()
+    }
+    #[must_use]
+    pub fn run_id(&self) -> &'a StableId {
+        self.value.run_id()
+    }
+    #[must_use]
+    pub fn universe_id(&self) -> &'a StableId {
+        self.value.universe_id()
+    }
+    #[must_use]
+    pub fn claim_id(&self) -> &'a StableId {
+        self.value.claim_id()
+    }
+    #[must_use]
+    pub fn property_id(&self) -> &'a str {
+        self.value.property_id()
+    }
+    #[must_use]
+    pub fn outcome(&self) -> &'static str {
+        decision_outcome_projection_text(self.value.outcome())
+    }
+    #[must_use]
+    pub fn actor(&self) -> &'a str {
+        self.value.actor()
+    }
+    #[must_use]
+    pub fn authority_id(&self) -> &'a str {
+        self.value.authority_id()
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &'a StableId {
+        self.value.snapshot_id()
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> crate::BorrowedStableIdSliceIterV4<'a> {
+        crate::BorrowedStableIdSliceIterV4::new(self.value.source_ids())
+    }
+    #[must_use]
+    pub fn rationale(&self) -> &'a str {
+        &self.value.rationale
+    }
+    #[must_use]
+    pub fn issued_at(&self) -> &'a str {
+        self.value.issued_at()
+    }
+    #[must_use]
+    pub fn expires_at(&self) -> Option<&'a str> {
+        self.value.expires_at()
+    }
+}
+
+impl<'a> crate::BorrowedFindingProjectionV3<'a> {
+    pub fn body_hash(&self) -> M4Result<ContentHash> {
+        self.value.body_hash()
+    }
+    #[must_use]
+    pub const fn schema(&self) -> &'static str {
+        "reviewgraphen.finding.v3"
+    }
+    #[must_use]
+    pub fn id(&self) -> &'a StableId {
+        self.value.id()
+    }
+    #[must_use]
+    pub const fn projection_descriptor_id(&self) -> &'static str {
+        FINDING_PROJECTION_ID
+    }
+    #[must_use]
+    pub fn claim_id(&self) -> &'a StableId {
+        self.value.claim_id()
+    }
+    #[must_use]
+    pub fn status(&self) -> &'static str {
+        finding_status_projection_text(self.value.status())
+    }
+    #[must_use]
+    pub fn evidence_ids(&self) -> crate::BorrowedStableIdSliceIterV4<'a> {
+        crate::BorrowedStableIdSliceIterV4::new(self.value.evidence_ids())
+    }
+    #[must_use]
+    pub fn verification_ids(&self) -> crate::BorrowedStableIdSliceIterV4<'a> {
+        crate::BorrowedStableIdSliceIterV4::new(self.value.verification_ids())
+    }
+    #[must_use]
+    pub fn decision_id(&self) -> Option<&'a StableId> {
+        self.value.decision_id()
+    }
+    #[must_use]
+    pub fn supersedes_finding_id(&self) -> Option<&'a StableId> {
+        self.value.supersedes_finding_id()
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn m5_test_passed_assessment() -> (ExecutionClaimV2, ClaimAssessmentV3) {
     let id = |kind: &str, name: &str| StableId::parse(format!("{kind}:{name}")).unwrap();

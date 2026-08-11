@@ -863,6 +863,62 @@ M5 performs no process/network/tool operation. Recovery, v5 rebuild, and report 
 
 ### 8. Index v5 and report v4
 
+Index v5 observes payloads only through Core's complete authority replay. The
+session-bound replay entry has an optional synchronous projection visitor that
+is called once per event with private-field, non-Clone, non-Serde
+`BorrowedV4EventMetadata<'_>` and a private-constructed closed
+`BorrowedProjectionPayloadV4<'_>`. Metadata exposes only the index-required
+sequence, ID, fixed schema, event/payload hashes, actor, logical time, and the
+exact canonical JSONL byte count including LF. Core computes that count once
+when it validates/constructs the V4 envelope, and full-prefix preflight and the
+visitor reuse the number; neither callback nor Store may call a canonical byte
+producer. Payload variants contain private-field, non-`Clone`, non-Serde
+projection wrappers over the already decoded genesis, inherited D2/M4 DTO, v4
+registration, or validated M5 bundle while that replay step is live. Those
+wrappers expose only scalar borrows and opaque nested item iterators required
+by index v5; they expose neither a complete DTO reference nor a canonical
+byte/JSON producer. Fixed context-policy arrays are likewise enumerated by
+Core-owned opaque iterators, so Store does not duplicate policy constants. The
+visitor exposes no `EventEnvelope`, `RawValue`, JSON string, mutable aggregate,
+admission, or authority constructor. Core's visitor implementation performs no
+second decode, serialization, clone, or retained typed-payload allocation. A
+Store scalar adapter may stream the exposed scalar borrows into its
+allocation-free measurement/accounting path, including scalar serialization
+needed for that measurement; it must not construct an owned DTO or a canonical
+JSON/byte buffer from the visitor. Higher-ranked references cannot escape the
+callback. All callback observations are
+provisional and Store discards them unless the complete replay, deferred CAS
+closures, replay basis construction, and session binding return `Ok`. Thus an
+early valid event in a later-invalid prefix cannot create an index fact. The
+ordinary replay entry delegates to the same implementation with a no-op
+visitor, so V1--V3 behavior and V4 authority semantics are unchanged.
+
+For the post-admission index pass, a successful V4 replay retains one bounded
+lookup-trace entry per non-genesis event. An entry contains only its closed
+payload variant, the minimum stable lookup IDs, and (for an obligation
+transition) its lifecycle scalar; it never contains a payload DTO, source
+collection, prose, canonical JSON, raw bytes, or authority. Core reserves the
+trace to the exact replay event count. The aggregate dynamic ID allocation must
+fit within the already bounded canonical payload bytes, plus one fixed inline
+trace value per event, and replay refuses success if that derived bound or the
+one-to-one envelope/trace cardinality is violated. After replay, Core uses this
+trace only to reconstruct higher-ranked borrowed opaque wrappers from accepted
+aggregate state; this traversal performs no second payload decode.
+
+Store's synchronous replay callback retains only allocation-free scalar
+accounting, confirmed byte offset, and event count. Index v5 first admits the
+complete exact phase-0 resource charge. Only after that admission may Store run
+the trace traversal, allocate each projected row exactly once, verify the
+materialized offset, event count, and every event-derived array length against
+phase 0, and move those vectors into the snapshot without cloning or retaining
+a second row cache. Recovery-created editable sessions reconstruct the same
+scalar charge from the successful replay trace before exposing index v5.
+
+After successful replay, Store may read only the final descriptive state it
+cannot retain through the callback: an allocation-free obligation-lifecycle
+lookup and a stable borrowed iterator over replayed claim assessments. These
+surfaces expose no mutable aggregate, serialization, admission, or authority.
+
 `SCHEMA_V5` is one literal, never `SCHEMA_V4 + patch`. It copies every inherited D2/M4 domain table byte-for-byte except the required event/index metadata contract replacements below, then adds the complete M5 tables. Every `*_canonical_json` is bounded-decoded, requires sorted/unique set order as applicable, canonical-reserializes byte-identically before insert and after query.
 
 ```sql

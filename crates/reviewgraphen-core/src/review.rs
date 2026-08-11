@@ -3510,6 +3510,14 @@ impl ReviewAggregate {
         self.executions.values()
     }
 
+    pub(crate) fn execution(&self, id: &StableId) -> Option<&ExecutionRecord> {
+        self.executions.get(id)
+    }
+
+    pub(crate) const fn execution_claim_map(&self) -> &BTreeMap<StableId, ExecutionClaimV2> {
+        &self.execution_claims
+    }
+
     /// Authority-free, always-proposed D2 claims in stable ID order.
     pub fn execution_claims(&self) -> impl Iterator<Item = &ExecutionClaimV2> {
         self.execution_claims.values()

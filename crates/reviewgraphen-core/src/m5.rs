@@ -1761,6 +1761,15 @@ impl GluingInputDescriptorV4 {
     pub fn qualification_source_ids(&self) -> &BTreeSet<StableId> {
         &self.qualification_source_ids
     }
+    pub(crate) fn projection_schema(&self) -> &str {
+        &self.schema
+    }
+    pub(crate) fn projection_profile_descriptor_id(&self) -> &str {
+        &self.profile_descriptor_id
+    }
+    pub(crate) fn projection_assignment_key(&self) -> &str {
+        &self.assignment_key
+    }
 }
 
 /// Exact post-registration input closure. Event-v4 integration is the only
@@ -2154,6 +2163,15 @@ impl ContextCoverV4 {
     pub fn source_ids(&self) -> &BTreeSet<StableId> {
         &self.source_ids
     }
+    pub(crate) fn projection_schema(&self) -> &str {
+        &self.schema
+    }
+    pub(crate) fn projection_profile_descriptor_id(&self) -> &str {
+        &self.profile_descriptor_id
+    }
+    pub(crate) fn projection_required_context_ids(&self) -> &[StableId] {
+        &self.required_context_ids
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2481,6 +2499,60 @@ impl SectionV4 {
     pub const fn passed_current_verification(&self) -> bool {
         self.passed_current_verification
     }
+    pub(crate) fn projection_schema(&self) -> &str {
+        &self.schema
+    }
+    pub(crate) fn projection_cover_id(&self) -> &StableId {
+        &self.cover_id
+    }
+    pub(crate) fn projection_snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+    pub(crate) fn projection_property_id(&self) -> &str {
+        &self.property_id
+    }
+    pub(crate) fn projection_invariant_id(&self) -> &StableId {
+        &self.invariant_id
+    }
+    pub(crate) fn projection_obligation_id(&self) -> &StableId {
+        &self.obligation_id
+    }
+    pub(crate) fn projection_claim_id(&self) -> &StableId {
+        &self.claim_id
+    }
+    pub(crate) fn projection_claim_assessment_id(&self) -> &StableId {
+        &self.claim_assessment_id
+    }
+    pub(crate) fn projection_input_descriptor_id(&self) -> &StableId {
+        &self.input_descriptor_id
+    }
+    pub(crate) fn projection_input_registration_id(&self) -> &StableId {
+        &self.input_registration_id
+    }
+    pub(crate) fn projection_assignment_key(&self) -> &str {
+        &self.assignment_key
+    }
+    pub(crate) fn projection_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub(crate) fn projection_qualification_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.qualification_source_ids
+    }
+    pub(crate) fn projection_binding_ids(&self) -> &BTreeSet<StableId> {
+        &self.binding_ids
+    }
+    pub(crate) fn projection_evidence_ids(&self) -> &BTreeSet<StableId> {
+        &self.evidence_ids
+    }
+    pub(crate) fn projection_verification_ids(&self) -> &BTreeSet<StableId> {
+        &self.verification_ids
+    }
+    pub(crate) fn projection_decision_ids(&self) -> &BTreeSet<StableId> {
+        &self.decision_ids
+    }
+    pub(crate) fn projection_finding_ids(&self) -> &BTreeSet<StableId> {
+        &self.finding_ids
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2631,6 +2703,45 @@ impl RestrictionV4 {
     pub fn id(&self) -> &StableId {
         &self.id
     }
+    pub(crate) fn projection_schema(&self) -> &str {
+        &self.schema
+    }
+    pub(crate) fn projection_section_id(&self) -> &StableId {
+        &self.section_id
+    }
+    pub(crate) fn projection_context_pair(&self) -> &[StableId] {
+        &self.context_pair
+    }
+    pub(crate) fn projection_overlap_member_ids(&self) -> &BTreeSet<StableId> {
+        &self.overlap_member_ids
+    }
+    pub(crate) fn projection_assignment_key(&self) -> &str {
+        &self.assignment_key
+    }
+    pub(crate) fn projection_assignment_value(&self) -> AssignmentValueV4 {
+        self.assignment_value
+    }
+    pub(crate) fn projection_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub(crate) fn projection_qualification_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.qualification_source_ids
+    }
+    pub(crate) fn projection_claim_ids(&self) -> &BTreeSet<StableId> {
+        &self.claim_ids
+    }
+    pub(crate) fn projection_evidence_ids(&self) -> &BTreeSet<StableId> {
+        &self.evidence_ids
+    }
+    pub(crate) fn projection_verification_ids(&self) -> &BTreeSet<StableId> {
+        &self.verification_ids
+    }
+    pub(crate) fn projection_decision_ids(&self) -> &BTreeSet<StableId> {
+        &self.decision_ids
+    }
+    pub(crate) fn projection_finding_ids(&self) -> &BTreeSet<StableId> {
+        &self.finding_ids
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2687,6 +2798,48 @@ impl GlobalCandidateV4 {
         )?;
         require_same("Candidate derived ID", &expected, &self.id)
     }
+    pub(crate) fn projection_schema(&self) -> &str {
+        &self.schema
+    }
+    pub(crate) fn projection_id(&self) -> &StableId {
+        &self.id
+    }
+    pub(crate) fn projection_cover_id(&self) -> &StableId {
+        &self.cover_id
+    }
+    pub(crate) fn projection_invariant_id(&self) -> &StableId {
+        &self.invariant_id
+    }
+    pub(crate) fn projection_property_id(&self) -> &str {
+        &self.property_id
+    }
+    pub(crate) fn projection_required_section_ids(&self) -> &[StableId] {
+        &self.required_section_ids
+    }
+    pub(crate) fn projection_restriction_ids(&self) -> &[StableId] {
+        &self.restriction_ids
+    }
+    pub(crate) fn projection_qualification_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.qualification_source_ids
+    }
+    pub(crate) fn projection_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub(crate) fn projection_claim_ids(&self) -> &BTreeSet<StableId> {
+        &self.claim_ids
+    }
+    pub(crate) fn projection_evidence_ids(&self) -> &BTreeSet<StableId> {
+        &self.evidence_ids
+    }
+    pub(crate) fn projection_verification_ids(&self) -> &BTreeSet<StableId> {
+        &self.verification_ids
+    }
+    pub(crate) fn projection_decision_ids(&self) -> &BTreeSet<StableId> {
+        &self.decision_ids
+    }
+    pub(crate) fn projection_finding_ids(&self) -> &BTreeSet<StableId> {
+        &self.finding_ids
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2717,6 +2870,54 @@ impl GluingAttemptV4 {
     }
     pub const fn result(&self) -> GluingResultV4 {
         self.result
+    }
+    pub(crate) fn projection_schema(&self) -> &str {
+        &self.schema
+    }
+    pub(crate) fn projection_cover_id(&self) -> &StableId {
+        &self.cover_id
+    }
+    pub(crate) fn projection_snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+    pub(crate) fn projection_property_id(&self) -> &str {
+        &self.property_id
+    }
+    pub(crate) fn projection_invariant_id(&self) -> &StableId {
+        &self.invariant_id
+    }
+    pub(crate) fn projection_input_descriptor_ids(&self) -> &[StableId] {
+        &self.input_descriptor_ids
+    }
+    pub(crate) fn projection_section_ids(&self) -> &[StableId] {
+        &self.section_ids
+    }
+    pub(crate) fn projection_restriction_ids(&self) -> &[StableId] {
+        &self.restriction_ids
+    }
+    pub(crate) fn projection_global_candidate_id(&self) -> Option<&StableId> {
+        self.global_candidate_id.as_ref()
+    }
+    pub(crate) fn projection_obstruction_id(&self) -> Option<&StableId> {
+        self.obstruction_id.as_ref()
+    }
+    pub(crate) fn projection_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub(crate) fn projection_claim_ids(&self) -> &BTreeSet<StableId> {
+        &self.claim_ids
+    }
+    pub(crate) fn projection_evidence_ids(&self) -> &BTreeSet<StableId> {
+        &self.evidence_ids
+    }
+    pub(crate) fn projection_verification_ids(&self) -> &BTreeSet<StableId> {
+        &self.verification_ids
+    }
+    pub(crate) fn projection_decision_ids(&self) -> &BTreeSet<StableId> {
+        &self.decision_ids
+    }
+    pub(crate) fn projection_finding_ids(&self) -> &BTreeSet<StableId> {
+        &self.finding_ids
     }
     fn validate(&self) -> M5Result<()> {
         if self.schema != "reviewgraphen.gluing_attempt.v4"
@@ -2801,6 +3002,60 @@ impl GluingObstructionV4 {
     }
     pub const fn human_decision_required(&self) -> bool {
         self.human_decision_required
+    }
+    pub(crate) fn projection_schema(&self) -> &str {
+        &self.schema
+    }
+    pub(crate) fn projection_attempt_id(&self) -> &StableId {
+        &self.attempt_id
+    }
+    pub(crate) fn projection_conflicting_context_ids(&self) -> &[StableId] {
+        &self.conflicting_context_ids
+    }
+    pub(crate) fn projection_section_ids(&self) -> &[StableId] {
+        &self.section_ids
+    }
+    pub(crate) fn projection_overlap_member_ids(&self) -> &BTreeSet<StableId> {
+        &self.overlap_member_ids
+    }
+    pub(crate) fn projection_assignment_key(&self) -> &str {
+        &self.assignment_key
+    }
+    pub(crate) fn projection_left_assignment_value(&self) -> Option<AssignmentValueV4> {
+        self.left_assignment_value
+    }
+    pub(crate) fn projection_right_assignment_value(&self) -> Option<AssignmentValueV4> {
+        self.right_assignment_value
+    }
+    pub(crate) fn projection_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub(crate) fn projection_claim_ids(&self) -> &BTreeSet<StableId> {
+        &self.claim_ids
+    }
+    pub(crate) fn projection_evidence_ids(&self) -> &BTreeSet<StableId> {
+        &self.evidence_ids
+    }
+    pub(crate) fn projection_verification_ids(&self) -> &BTreeSet<StableId> {
+        &self.verification_ids
+    }
+    pub(crate) fn projection_decision_ids(&self) -> &BTreeSet<StableId> {
+        &self.decision_ids
+    }
+    pub(crate) fn projection_finding_ids(&self) -> &BTreeSet<StableId> {
+        &self.finding_ids
+    }
+    pub(crate) fn projection_affected_invariant_id(&self) -> &StableId {
+        &self.affected_invariant_id
+    }
+    pub(crate) fn projection_severity(&self) -> M5SeverityV4 {
+        self.severity
+    }
+    pub(crate) fn projection_required_resolution(&self) -> GluingRequiredResolutionV4 {
+        self.required_resolution
+    }
+    pub(crate) fn projection_blocks(&self) -> &BTreeSet<StableId> {
+        &self.blocks
     }
     fn validate(&self) -> M5Result<()> {
         if self.schema != "reviewgraphen.gluing_obstruction.v4"
@@ -3490,6 +3745,12 @@ impl GluingBundleV4 {
             WireShape::Bundle,
         )
     }
+    pub(crate) fn projection_schema(&self) -> &str {
+        &self.schema
+    }
+    pub(crate) fn projection_input_descriptor_ids(&self) -> &[StableId] {
+        &self.input_descriptor_ids
+    }
     pub fn cover(&self) -> &ContextCoverV4 {
         &self.cover
     }
@@ -3601,6 +3862,167 @@ mod tests {
             BTreeSet::new(),
         )
         .unwrap()
+    }
+
+    // This deliberately reconstructs the complete M5 wire DTO only through
+    // the opaque projection accessors.  It is a parity oracle for the Store
+    // visitor: a missing scalar, a changed iterator order, or a different
+    // enum spelling changes the canonical bytes and therefore the hash.
+    fn opaque_bundle_wire(
+        projection: crate::BorrowedGluingBundleProjectionV4<'_>,
+    ) -> serde_json::Value {
+        let cover = projection.cover();
+        let cover = serde_json::json!({
+            "schema": cover.schema(),
+            "id": cover.id(),
+            "run_id": cover.run_id(),
+            "snapshot_id": cover.snapshot_id(),
+            "universe_id": cover.universe_id(),
+            "plan_id": cover.plan_id(),
+            "profile_descriptor_id": cover.profile_descriptor_id(),
+            "selected_obligation_ids": cover.selected_obligation_ids().collect::<Vec<_>>(),
+            "required_context_ids": cover.required_context_ids().collect::<Vec<_>>(),
+            "cover_domain_ids": cover.cover_domain_ids().collect::<Vec<_>>(),
+            "covered_domain_ids": cover.covered_domain_ids().collect::<Vec<_>>(),
+            "uncovered_domain_ids": cover.uncovered_domain_ids().collect::<Vec<_>>(),
+            "source_ids": cover.source_ids().collect::<Vec<_>>(),
+        });
+        let sections = projection
+            .sections()
+            .map(|section| {
+                serde_json::json!({
+                    "schema": section.schema(),
+                    "id": section.id(),
+                    "cover_id": section.cover_id(),
+                    "context_id": section.context_id(),
+                    "snapshot_id": section.snapshot_id(),
+                    "property_id": section.property_id(),
+                    "invariant_id": section.invariant_id(),
+                    "obligation_id": section.obligation_id(),
+                    "claim_id": section.claim_id(),
+                    "claim_assessment_id": section.claim_assessment_id(),
+                    "input_descriptor_id": section.input_descriptor_id(),
+                    "input_registration_id": section.input_registration_id(),
+                    "assignment_key": section.assignment_key(),
+                    "assignment_value": section.assignment_value(),
+                    "passed_current_verification": section.passed_current_verification(),
+                    "source_ids": section.source_ids().collect::<Vec<_>>(),
+                    "qualification_source_ids": section.qualification_source_ids().collect::<Vec<_>>(),
+                    "binding_ids": section.binding_ids().collect::<Vec<_>>(),
+                    "evidence_ids": section.evidence_ids().collect::<Vec<_>>(),
+                    "verification_ids": section.verification_ids().collect::<Vec<_>>(),
+                    "decision_ids": section.decision_ids().collect::<Vec<_>>(),
+                    "finding_ids": section.finding_ids().collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let restrictions = projection
+            .restrictions()
+            .map(|restriction| {
+                serde_json::json!({
+                    "schema": restriction.schema(),
+                    "id": restriction.id(),
+                    "section_id": restriction.section_id(),
+                    "context_pair": restriction.context_pair().collect::<Vec<_>>(),
+                    "overlap_member_ids": restriction.overlap_member_ids().collect::<Vec<_>>(),
+                    "assignment_key": restriction.assignment_key(),
+                    "assignment_value": restriction.assignment_value(),
+                    "source_ids": restriction.source_ids().collect::<Vec<_>>(),
+                    "qualification_source_ids": restriction.qualification_source_ids().collect::<Vec<_>>(),
+                    "claim_ids": restriction.claim_ids().collect::<Vec<_>>(),
+                    "evidence_ids": restriction.evidence_ids().collect::<Vec<_>>(),
+                    "verification_ids": restriction.verification_ids().collect::<Vec<_>>(),
+                    "decision_ids": restriction.decision_ids().collect::<Vec<_>>(),
+                    "finding_ids": restriction.finding_ids().collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let attempt = projection.attempt();
+        let attempt = serde_json::json!({
+            "schema": attempt.schema(),
+            "id": attempt.id(),
+            "cover_id": attempt.cover_id(),
+            "snapshot_id": attempt.snapshot_id(),
+            "property_id": attempt.property_id(),
+            "invariant_id": attempt.invariant_id(),
+            "input_descriptor_ids": attempt.input_descriptor_ids().collect::<Vec<_>>(),
+            "section_ids": attempt.section_ids().collect::<Vec<_>>(),
+            "restriction_ids": attempt.restriction_ids().collect::<Vec<_>>(),
+            "result": attempt.result(),
+            "global_candidate_id": attempt.global_candidate_id(),
+            "obstruction_id": attempt.obstruction_id(),
+            "source_ids": attempt.source_ids().collect::<Vec<_>>(),
+            "claim_ids": attempt.claim_ids().collect::<Vec<_>>(),
+            "evidence_ids": attempt.evidence_ids().collect::<Vec<_>>(),
+            "verification_ids": attempt.verification_ids().collect::<Vec<_>>(),
+            "decision_ids": attempt.decision_ids().collect::<Vec<_>>(),
+            "finding_ids": attempt.finding_ids().collect::<Vec<_>>(),
+        });
+        let global_candidate = projection.global_candidate().map(|candidate| {
+            serde_json::json!({
+                "schema": candidate.schema(),
+                "id": candidate.id(),
+                "cover_id": candidate.cover_id(),
+                "invariant_id": candidate.invariant_id(),
+                "property_id": candidate.property_id(),
+                "required_section_ids": candidate.required_section_ids().collect::<Vec<_>>(),
+                "restriction_ids": candidate.restriction_ids().collect::<Vec<_>>(),
+                "qualification_source_ids": candidate.qualification_source_ids().collect::<Vec<_>>(),
+                "source_ids": candidate.source_ids().collect::<Vec<_>>(),
+                "claim_ids": candidate.claim_ids().collect::<Vec<_>>(),
+                "evidence_ids": candidate.evidence_ids().collect::<Vec<_>>(),
+                "verification_ids": candidate.verification_ids().collect::<Vec<_>>(),
+                "decision_ids": candidate.decision_ids().collect::<Vec<_>>(),
+                "finding_ids": candidate.finding_ids().collect::<Vec<_>>(),
+            })
+        });
+        let obstruction = projection.obstruction().map(|obstruction| {
+            serde_json::json!({
+                "schema": obstruction.schema(),
+                "id": obstruction.id(),
+                "attempt_id": obstruction.attempt_id(),
+                "kind": obstruction.kind(),
+                "conflicting_context_ids": obstruction.conflicting_context_ids().collect::<Vec<_>>(),
+                "section_ids": obstruction.section_ids().collect::<Vec<_>>(),
+                "overlap_member_ids": obstruction.overlap_member_ids().collect::<Vec<_>>(),
+                "assignment_key": obstruction.assignment_key(),
+                "left_assignment_value": obstruction.left_assignment_value(),
+                "right_assignment_value": obstruction.right_assignment_value(),
+                "source_ids": obstruction.source_ids().collect::<Vec<_>>(),
+                "claim_ids": obstruction.claim_ids().collect::<Vec<_>>(),
+                "evidence_ids": obstruction.evidence_ids().collect::<Vec<_>>(),
+                "verification_ids": obstruction.verification_ids().collect::<Vec<_>>(),
+                "decision_ids": obstruction.decision_ids().collect::<Vec<_>>(),
+                "finding_ids": obstruction.finding_ids().collect::<Vec<_>>(),
+                "affected_invariant_id": obstruction.affected_invariant_id(),
+                "severity": obstruction.severity(),
+                "required_resolution": obstruction.required_resolution(),
+                "human_decision_required": obstruction.human_decision_required(),
+                "blocks": obstruction.blocks().collect::<Vec<_>>(),
+            })
+        });
+        serde_json::json!({
+            "schema": projection.schema(),
+            "cover": cover,
+            "input_descriptor_ids": projection.input_descriptor_ids().collect::<Vec<_>>(),
+            "sections": sections,
+            "restrictions": restrictions,
+            "attempt": attempt,
+            "global_candidate": global_candidate,
+            "obstruction": obstruction,
+        })
+    }
+
+    fn assert_opaque_bundle_canonical_parity(bundle: &GluingBundleV4) {
+        let projected =
+            opaque_bundle_wire(crate::BorrowedGluingBundleProjectionV4 { value: bundle });
+        let projected_bytes = crate::canonical_json(&projected).expect("projected canonical bytes");
+        let durable_bytes = crate::canonical_json(bundle).expect("durable canonical bytes");
+        assert_eq!(projected_bytes, durable_bytes);
+        assert_eq!(
+            crate::ContentHash::sha256(&projected_bytes),
+            crate::ContentHash::sha256(&durable_bytes)
+        );
     }
 
     #[test]
@@ -4304,6 +4726,126 @@ mod tests {
             assert_eq!(bundle.attempt().result(), expected);
             assert!(bundle.global_candidate().is_some());
             assert!(bundle.obstruction().is_none());
+        }
+    }
+
+    #[test]
+    fn opaque_bundle_projection_matches_complete_canonical_bytes_for_success_conflict_and_unknown()
+    {
+        let (cover, mut descriptors, registrations, overlap) = base();
+        descriptors[1] = GluingInputDescriptorV4::new(
+            cover.run_id().clone(),
+            cover.snapshot_id().clone(),
+            cover.universe_id().clone(),
+            cover.plan_id().clone(),
+            id(DOUBLE_SUBMIT_UI_CONTEXT_ID),
+            AssignmentValueV4::Unknown,
+            BTreeSet::new(),
+        )
+        .expect("unknown descriptor");
+        let unknown = GluingBundleV4::derive(
+            cover.clone(),
+            descriptors,
+            registrations.clone(),
+            vec![
+                section(
+                    &cover,
+                    &GluingInputDescriptorV4::new(
+                        cover.run_id().clone(),
+                        cover.snapshot_id().clone(),
+                        cover.universe_id().clone(),
+                        cover.plan_id().clone(),
+                        id(DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID),
+                        AssignmentValueV4::Required,
+                        BTreeSet::new(),
+                    )
+                    .expect("payment descriptor"),
+                    registrations[0].clone(),
+                ),
+                section(
+                    &cover,
+                    &GluingInputDescriptorV4::new(
+                        cover.run_id().clone(),
+                        cover.snapshot_id().clone(),
+                        cover.universe_id().clone(),
+                        cover.plan_id().clone(),
+                        id(DOUBLE_SUBMIT_UI_CONTEXT_ID),
+                        AssignmentValueV4::Unknown,
+                        BTreeSet::new(),
+                    )
+                    .expect("unknown descriptor"),
+                    registrations[1].clone(),
+                ),
+            ],
+            overlap.clone(),
+        )
+        .expect("unknown bundle");
+        assert_eq!(unknown.attempt().result(), GluingResultV4::Unknown);
+
+        let (cover, mut descriptors, registrations, overlap) = base();
+        descriptors[1] = GluingInputDescriptorV4::new(
+            cover.run_id().clone(),
+            cover.snapshot_id().clone(),
+            cover.universe_id().clone(),
+            cover.plan_id().clone(),
+            id(DOUBLE_SUBMIT_UI_CONTEXT_ID),
+            AssignmentValueV4::Satisfied,
+            BTreeSet::new(),
+        )
+        .expect("conflict descriptor");
+        let conflict = GluingBundleV4::derive(
+            cover.clone(),
+            descriptors,
+            registrations.clone(),
+            vec![
+                section(
+                    &cover,
+                    &GluingInputDescriptorV4::new(
+                        cover.run_id().clone(),
+                        cover.snapshot_id().clone(),
+                        cover.universe_id().clone(),
+                        cover.plan_id().clone(),
+                        id(DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID),
+                        AssignmentValueV4::Required,
+                        BTreeSet::new(),
+                    )
+                    .expect("payment descriptor"),
+                    registrations[0].clone(),
+                ),
+                section(
+                    &cover,
+                    &GluingInputDescriptorV4::new(
+                        cover.run_id().clone(),
+                        cover.snapshot_id().clone(),
+                        cover.universe_id().clone(),
+                        cover.plan_id().clone(),
+                        id(DOUBLE_SUBMIT_UI_CONTEXT_ID),
+                        AssignmentValueV4::Satisfied,
+                        BTreeSet::new(),
+                    )
+                    .expect("conflict descriptor"),
+                    registrations[1].clone(),
+                ),
+            ],
+            overlap.clone(),
+        )
+        .expect("conflict bundle");
+        assert_eq!(conflict.attempt().result(), GluingResultV4::Failed);
+
+        let (cover, descriptors, registrations, overlap) = base();
+        let mut sections = vec![
+            section(&cover, &descriptors[0], registrations[0].clone()),
+            section(&cover, &descriptors[1], registrations[1].clone()),
+        ];
+        for section in &mut sections {
+            section.passed_current_verification = true;
+        }
+        let success = GluingBundleV4::derive(cover, descriptors, registrations, sections, overlap)
+            .expect("success bundle");
+        assert_eq!(success.attempt().result(), GluingResultV4::Glued);
+
+        for bundle in [&unknown, &conflict, &success] {
+            assert_opaque_bundle_canonical_parity(bundle);
         }
     }
 
