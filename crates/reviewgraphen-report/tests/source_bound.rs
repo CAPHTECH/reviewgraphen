@@ -715,6 +715,7 @@ fn actual_source_bound_report_enforces_exact_and_plus_one_output_and_working_lim
         rows: 3,
         canonical_bytes: accounting.canonical_report_bytes,
         working_bytes: exact_working,
+        ..ReportLimits::default()
     };
     assert!(
         generate_v2_with_limits(

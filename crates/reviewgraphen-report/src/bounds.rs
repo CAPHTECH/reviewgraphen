@@ -15,6 +15,13 @@ pub struct ReportLimits {
     pub executions: u64,
     pub raw_registrations: u64,
     pub claims: u64,
+    /// M4 evidence rows in a v3 report.
+    pub evidence: u64,
+    pub evidence_bindings: u64,
+    pub verifications: u64,
+    pub decisions: u64,
+    pub findings: u64,
+    pub claim_assessments: u64,
     pub obstructions: u64,
     pub views: u64,
     pub information_loss_records: u64,
@@ -29,6 +36,12 @@ impl Default for ReportLimits {
             executions: 8_192,
             raw_registrations: 8_192,
             claims: 131_072,
+            evidence: 131_072,
+            evidence_bindings: 131_072,
+            verifications: 131_072,
+            decisions: 131_072,
+            findings: 131_072,
+            claim_assessments: 131_072,
             obstructions: 8_192,
             views: 3,
             information_loss_records: 4_096,
@@ -39,12 +52,18 @@ impl Default for ReportLimits {
     }
 }
 
-/// The six row classes which make up the report-row denominator.
+/// Every ADR-0021 v3 report-row class which makes up the report-row denominator.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ReportCounts {
     pub registrations: u64,
     pub executions: u64,
     pub claims: u64,
+    pub evidence: u64,
+    pub evidence_bindings: u64,
+    pub verifications: u64,
+    pub decisions: u64,
+    pub findings: u64,
+    pub claim_assessments: u64,
     pub obstructions: u64,
     pub views: u64,
     pub information_loss_records: u64,
@@ -60,6 +79,12 @@ impl ReportCounts {
                 self.registrations,
                 self.executions,
                 self.claims,
+                self.evidence,
+                self.evidence_bindings,
+                self.verifications,
+                self.decisions,
+                self.findings,
+                self.claim_assessments,
                 self.obstructions,
                 self.views,
                 self.information_loss_records,
@@ -742,6 +767,20 @@ impl ReportLimits {
             counts.registrations,
         )?;
         check_limit("claims", self.claims, counts.claims)?;
+        check_limit("evidence", self.evidence, counts.evidence)?;
+        check_limit(
+            "evidence_bindings",
+            self.evidence_bindings,
+            counts.evidence_bindings,
+        )?;
+        check_limit("verifications", self.verifications, counts.verifications)?;
+        check_limit("decisions", self.decisions, counts.decisions)?;
+        check_limit("findings", self.findings, counts.findings)?;
+        check_limit(
+            "claim_assessments",
+            self.claim_assessments,
+            counts.claim_assessments,
+        )?;
         check_limit("obstructions", self.obstructions, counts.obstructions)?;
         check_limit("projection_views", self.views, counts.views)?;
         check_limit(
@@ -792,6 +831,12 @@ mod tests {
             executions: 2,
             raw_registrations: 2,
             claims: 3,
+            evidence: 3,
+            evidence_bindings: 3,
+            verifications: 3,
+            decisions: 3,
+            findings: 3,
+            claim_assessments: 3,
             obstructions: 2,
             views: 3,
             information_loss_records: 4,
@@ -809,6 +854,12 @@ mod tests {
                 executions: 8_192,
                 raw_registrations: 8_192,
                 claims: 131_072,
+                evidence: 131_072,
+                evidence_bindings: 131_072,
+                verifications: 131_072,
+                decisions: 131_072,
+                findings: 131_072,
+                claim_assessments: 131_072,
                 obstructions: 8_192,
                 views: 3,
                 information_loss_records: 4_096,
@@ -857,6 +908,72 @@ mod tests {
                 },
             ),
             (
+                "evidence",
+                ReportCounts {
+                    evidence: 3,
+                    ..Default::default()
+                },
+                ReportCounts {
+                    evidence: 4,
+                    ..Default::default()
+                },
+            ),
+            (
+                "evidence_bindings",
+                ReportCounts {
+                    evidence_bindings: 3,
+                    ..Default::default()
+                },
+                ReportCounts {
+                    evidence_bindings: 4,
+                    ..Default::default()
+                },
+            ),
+            (
+                "verifications",
+                ReportCounts {
+                    verifications: 3,
+                    ..Default::default()
+                },
+                ReportCounts {
+                    verifications: 4,
+                    ..Default::default()
+                },
+            ),
+            (
+                "decisions",
+                ReportCounts {
+                    decisions: 3,
+                    ..Default::default()
+                },
+                ReportCounts {
+                    decisions: 4,
+                    ..Default::default()
+                },
+            ),
+            (
+                "findings",
+                ReportCounts {
+                    findings: 3,
+                    ..Default::default()
+                },
+                ReportCounts {
+                    findings: 4,
+                    ..Default::default()
+                },
+            ),
+            (
+                "claim_assessments",
+                ReportCounts {
+                    claim_assessments: 3,
+                    ..Default::default()
+                },
+                ReportCounts {
+                    claim_assessments: 4,
+                    ..Default::default()
+                },
+            ),
+            (
                 "obstructions",
                 ReportCounts {
                     obstructions: 2,
@@ -897,13 +1014,15 @@ mod tests {
                 Err(BoundsError::Incomplete {
                     operation,
                     limit: match operation {
-                        "claims" => 3,
+                        "claims" | "evidence" | "evidence_bindings" | "verifications"
+                        | "decisions" | "findings" | "claim_assessments" => 3,
                         "projection_views" => 3,
                         "information_loss_records" => 4,
                         _ => 2,
                     },
                     observed: match operation {
-                        "claims" => 4,
+                        "claims" | "evidence" | "evidence_bindings" | "verifications"
+                        | "decisions" | "findings" | "claim_assessments" => 4,
                         "projection_views" => 4,
                         "information_loss_records" => 5,
                         _ => 3,
@@ -914,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_are_the_checked_sum_of_all_six_classes() {
+    fn rows_are_the_checked_sum_of_every_v3_record_class() {
         let exact = ReportCounts {
             registrations: 2,
             executions: 2,
@@ -922,6 +1041,7 @@ mod tests {
             obstructions: 2,
             views: 3,
             information_loss_records: 4,
+            ..ReportCounts::default()
         };
         assert!(limits().preflight(exact, 0, 0, 0).is_ok());
         let plus_one = ReportCounts {

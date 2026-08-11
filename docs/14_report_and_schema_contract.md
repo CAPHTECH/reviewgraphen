@@ -14,10 +14,24 @@ must be regenerated from confirmed v2 event/CAS data.
 The checked-in [v2 report example](../schemas/reviewgraphen.report.v2.example.json)
 is local-only. It proves shape and report-local self-consistency, not the tail,
 CAS bytes, index, denominator, plan/envelope closure, or lifecycle. No
-source-bound fixture is checked in until it can be generated from actual core
+v2 source-bound fixture is checked in until it can be generated from actual core
 canonical output and rebuilt through the actual v3 index implementation; the
 bundle validator never reconstructs or fabricates those sources from report
 assertions.
+
+M4 adds the closed, source-bound
+[`reviewgraphen.review.report.v3`](../schemas/reviewgraphen.report.v3.schema.json)
+contract. V3 is generated only from a confirmed event-v3 journal, its verified
+index-v4 projection, and authority-root/CAS checks. Its coverage keeps selected,
+visited, completed, evidence-supported, verified, fresh-verified, and accepted
+as separate explicit ID sets; an accepted finding additionally requires the
+current finding, active human `accept` decision, and complete passed evidence
+trace. The checked-in v3 example is emitted by the public source-bound test
+fixture after an actual event-v3 replay, fixed-witness verification, explicit
+human acceptance, current-finding projection, completed lifecycle transition,
+and index-v4 rebuild. Its integration test requires byte equality (apart from
+the text file's terminal newline), confirmed-tail/CAS closure, deterministic
+repeat and rebuild output, and exact construction-accounting bounds.
 
 ## 1. Report-first principle
 

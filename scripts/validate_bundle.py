@@ -89,6 +89,7 @@ def validate_schemas() -> list[str]:
         ("reviewgraphen.obligation.schema.json", "reviewgraphen.obligation.example.json"),
         ("reviewgraphen.report.schema.json", "reviewgraphen.report.example.json"),
         ("reviewgraphen.report.v2.schema.json", "reviewgraphen.report.v2.example.json"),
+        ("reviewgraphen.report.v3.schema.json", "reviewgraphen.report.v3.example.json"),
     ]
     for schema_name, example_name in pairs:
         schema = load_json(SCHEMAS / schema_name)
@@ -758,6 +759,647 @@ def validate_report_v2_contract(
     return ["report v2 local ordering/status/reference-oracle mutations: PASS"]
 
 
+def validate_report_v3_contract(
+    report: dict[str, Any] | None = None,
+    *,
+    run_mutations: bool = True,
+) -> list[str]:
+    """Validate the closed M4 report projection beyond JSON Schema.
+
+    This remains intentionally local: journal/CAS/replay-root equality is
+    enforced by the Rust source-bound generator.  Here we reject every
+    report-internal way of laundering that trace into coverage or a finding.
+    """
+    if report is None:
+        report = load_json(SCHEMAS / "reviewgraphen.report.v3.example.json")
+    metadata = report["metadata"]
+    scenario = report["scenario"]
+    result = report["result"]
+    coverage = report["coverage"]
+    validate_all_string_bytes(report)
+    validate_d2_float_domain(report)
+
+    # JSON Schema counts code points. Core's M4 boundary counts exact UTF-8
+    # bytes, so repeat every bounded wire-string check here.
+    for registration in result["artifact_registrations"]:
+        require_utf8_bytes(registration["media_type"], 256, "v3 registration.media_type")
+        source = registration["source"]
+        for field in (
+            "adapter_id", "reviewer_id", "descriptor_id", "procedure_version",
+            "harness_id", "harness_revision", "property_id",
+        ):
+            if field in source:
+                require_utf8_bytes(source[field], 256, f"v3 registration.source.{field}")
+    for row in result["evidence"]:
+        for field in ("schema", "kind", "descriptor_id", "procedure_version", "observation"):
+            require_utf8_bytes(row[field], 256, f"v3 evidence.{field}")
+    for row in result["evidence_bindings"]:
+        for field in ("schema", "relation", "property_id"):
+            require_utf8_bytes(row[field], 256, f"v3 binding.{field}")
+    for row in result["verifications"]:
+        for field in ("schema", "descriptor_id", "procedure_version", "outcome"):
+            require_utf8_bytes(row[field], 256, f"v3 verification.{field}")
+        for limitation in row["limitations"]:
+            require_utf8_bytes(limitation, 2_048, "v3 verification.limitations")
+    for row in result["decisions"]:
+        for field in ("schema", "property_id", "outcome", "actor", "authority_id", "issued_at"):
+            require_utf8_bytes(row[field], 256, f"v3 decision.{field}")
+        if row["expires_at"] is not None:
+            require_utf8_bytes(row["expires_at"], 256, "v3 decision.expires_at")
+        require_utf8_bytes(row["rationale"], 8_192, "v3 decision.rationale")
+    for row in result["findings"]:
+        for field in ("schema", "projection_descriptor_id", "status"):
+            require_utf8_bytes(row[field], 256, f"v3 finding.{field}")
+    for row in result["claim_assessments"]:
+        for field in ("disposition", "review_status"):
+            require_utf8_bytes(row[field], 256, f"v3 assessment.{field}")
+
+    arrays = (
+        ("artifact_registrations", "registration_id"),
+        ("executions", "id"),
+        ("claims", "id"),
+        ("evidence", "id"),
+        ("evidence_bindings", "id"),
+        ("verifications", "id"),
+        ("decisions", "id"),
+        ("findings", "id"),
+        ("claim_assessments", "claim_id"),
+    )
+    for name, key in arrays:
+        rows = result[name]
+        if name == "claim_assessments":
+            assert_canonical_order(rows, lambda row: row[key], f"v3 {name}")
+        else:
+            assert_canonical_order(
+                rows, lambda row: (row["event_sequence"], row[key]), f"v3 {name}"
+            )
+        if any(row.get("event_sequence", 0) > metadata["confirmed_event_count"] for row in rows):
+            fail(f"report v3 {name} exceeds confirmed event count")
+
+    def ids(name: str, key: str = "id") -> set[str]:
+        return {row[key] for row in result[name]}
+
+    registrations = {row["registration_id"]: row for row in result["artifact_registrations"]}
+    executions = {row["id"]: row for row in result["executions"]}
+    claims = {row["id"]: row for row in result["claims"]}
+    evidence = {row["id"]: row for row in result["evidence"]}
+    bindings = {row["id"]: row for row in result["evidence_bindings"]}
+    verifications = {row["id"]: row for row in result["verifications"]}
+    decisions = {row["id"]: row for row in result["decisions"]}
+    findings = {row["id"]: row for row in result["findings"]}
+    assessments = {row["claim_id"]: row for row in result["claim_assessments"]}
+
+    for registration_id, registration in registrations.items():
+        source = registration["source"]
+        kind = source["kind"]
+        if source["run_id"] != registration["run_id"] or source["run_id"] != metadata["run_id"]:
+            fail("report v3 registration source run closure")
+        if kind == "run_genesis":
+            if registration["cas_hash"] != metadata["genesis_hash"]:
+                fail("report v3 run-genesis source closure")
+        elif kind == "snapshot_ingest":
+            if source["snapshot_id"] != scenario["snapshot_id"]:
+                fail("report v3 snapshot-ingest source closure")
+        elif kind == "reviewer_execution":
+            execution = executions.get(source["execution_id"])
+            if (
+                execution is None
+                or execution["raw_artifact_registration_id"] != registration_id
+                or execution["reviewer_id"] != source["reviewer_id"]
+            ):
+                fail("report v3 reviewer registration source closure")
+        elif kind == "verifier_artifact":
+            if source["claim_id"] not in claims:
+                fail("report v3 verifier registration claim closure")
+            references = [
+                row
+                for row in [*evidence.values(), *verifications.values()]
+                if registration_id in {
+                    row["input_registration_id"], row["output_registration_id"]
+                }
+            ]
+            if not references or any(
+                row["descriptor_id"] != source["descriptor_id"]
+                or row["procedure_version"] != source["procedure_version"]
+                for row in references
+            ):
+                fail("report v3 verifier registration procedure closure")
+        elif kind == "external_harness_witness":
+            claim = claims.get(source["claim_id"])
+            if (
+                claim is None
+                or source["repository_id"] != scenario["repository_id"]
+                or source["genesis_hash"] != metadata["genesis_hash"]
+                or source["snapshot_id"] != scenario["snapshot_id"]
+                or source["universe_id"] != scenario["universe_id"]
+                or source["property_id"] != claim["property_id"]
+                or source["claim_body_hash"] != claim["body_hash"]
+                or source["policy_revision_hash"]
+                != metadata["authority_policy_revision_hash"]
+                or registration["cas_hash"]
+                != "sha256:8d673f965d089dfc08fb3e9c85453f4654894de71e0bd331a9f3cf97bcea5355"
+                or registration["size"] != 145
+                or registration["media_type"]
+                != "application/vnd.reviewgraphen.test-witness+json;version=1"
+                or registration["sensitivity"] != "canonical_state"
+            ):
+                fail("report v3 external witness registration source closure")
+        else:
+            fail("report v3 unknown registration source kind")
+
+    for values, label in (
+        (scenario["selected_obligation_ids"], "scenario.selected_obligation_ids"),
+        (scenario["artifact_registration_ids"], "scenario.artifact_registration_ids"),
+        (coverage["denominator_obligation_ids"], "coverage.denominator"),
+        (coverage["visited_obligation_ids"], "coverage.visited"),
+        (coverage["completed_obligation_ids"], "coverage.completed"),
+        (coverage["evidence_supported_obligation_ids"], "coverage.evidence_supported"),
+        (coverage["verified_obligation_ids"], "coverage.verified"),
+        (coverage["fresh_verified_obligation_ids"], "coverage.fresh_verified"),
+        (coverage["accepted_obligation_ids"], "coverage.accepted"),
+    ):
+        assert_canonical_order(values, lambda value: value, f"report v3 {label}")
+
+    parsed = {claim_id for row in executions.values() for claim_id in row["parsed_claim_ids"]}
+    if parsed != set(claims):
+        fail("report v3 claims are not the complete execution claim union")
+    for claim in claims.values():
+        execution = executions.get(claim["execution_id"])
+        if execution is None or claim["id"] not in execution["parsed_claim_ids"]:
+            fail("report v3 claim/execution closure")
+        if claim["event_sequence"] != execution["event_sequence"] or claim["event_id"] != execution["event_id"]:
+            fail("report v3 atomic execution claim closure")
+    for row in evidence.values():
+        if row["schema"] != "reviewgraphen.evidence.v3":
+            fail("report v3 evidence discriminator")
+        if row["input_registration_id"] not in registrations or row["output_registration_id"] not in registrations:
+            fail("report v3 evidence registration closure")
+    for row in bindings.values():
+        if row["schema"] != "reviewgraphen.evidence_binding.v3" or row["claim_id"] not in claims or row["evidence_id"] not in evidence:
+            fail("report v3 binding closure")
+        if row["property_id"] != claims[row["claim_id"]]["property_id"]:
+            fail("report v3 binding property closure")
+    for row in verifications.values():
+        if row["schema"] != "reviewgraphen.verification.v3" or row["claim_id"] not in claims:
+            fail("report v3 verification claim closure")
+        if row["input_registration_id"] not in registrations or row["output_registration_id"] not in registrations:
+            fail("report v3 verification registration closure")
+        if not set(row["evidence_ids"]) <= set(evidence):
+            fail("report v3 verification evidence closure")
+        if row["outcome"] == "unsupported" and row["evidence_ids"]:
+            fail("report v3 unsupported verification must have no evidence")
+
+    def claim_trace(claim_id: str, before: int | None = None) -> dict[str, set[str]]:
+        def current(row: dict[str, Any]) -> bool:
+            return before is None or row["event_sequence"] < before
+
+        claim_bindings = {
+            row["id"]: row
+            for row in bindings.values()
+            if row["claim_id"] == claim_id and current(row)
+        }
+        connected_evidence = {row["evidence_id"] for row in claim_bindings.values()}
+        reproduces_evidence = {
+            row["evidence_id"]
+            for row in claim_bindings.values()
+            if row["relation"] == "reproduces"
+        }
+        claim_verifications = {
+            row["id"]: row
+            for row in verifications.values()
+            if row["claim_id"] == claim_id and current(row)
+        }
+        passed = {
+            row["id"]
+            for row in claim_verifications.values()
+            if row["outcome"] == "passed"
+            and row["evidence_ids"]
+            and set(row["evidence_ids"]) <= reproduces_evidence
+        }
+        nonpassed = {
+            row["id"]
+            for row in claim_verifications.values()
+            if row["outcome"] in {"inconclusive", "unsupported"}
+        }
+        return {
+            "binding_ids": set(claim_bindings),
+            "evidence_ids": connected_evidence,
+            "reproduces_evidence": reproduces_evidence,
+            "verification_ids": set(claim_verifications),
+            "passed": passed,
+            "nonpassed": nonpassed,
+        }
+
+    for row in verifications.values():
+        if row["outcome"] == "passed" and row["id"] not in claim_trace(row["claim_id"])["passed"]:
+            fail("report v3 passed verification lacks complete reproduces trace")
+    for row in decisions.values():
+        if row["schema"] != "reviewgraphen.human_decision.v3" or row["claim_id"] not in claims:
+            fail("report v3 decision claim closure")
+        claim = claims[row["claim_id"]]
+        if (
+            row["run_id"] != metadata["run_id"]
+            or row["universe_id"] != scenario["universe_id"]
+            or row["snapshot_id"] != scenario["snapshot_id"]
+            or row["property_id"] != claim["property_id"]
+        ):
+            fail("report v3 decision authority closure")
+        trace = claim_trace(row["claim_id"], row["event_sequence"])
+        if row["outcome"] == "accept":
+            expected_sources = {
+                row["claim_id"], *trace["reproduces_evidence"], *trace["passed"],
+                *{
+                    binding_id
+                    for binding_id in trace["binding_ids"]
+                    if bindings[binding_id]["relation"] == "reproduces"
+                },
+            }
+            if not trace["reproduces_evidence"] or not trace["passed"]:
+                fail("report v3 accept decision lacks evidence authority")
+        elif row["outcome"] == "defer":
+            cited_evidence = {
+                evidence_id
+                for verification_id in trace["nonpassed"]
+                for evidence_id in verifications[verification_id]["evidence_ids"]
+            }
+            expected_sources = {
+                row["claim_id"], *trace["nonpassed"], *cited_evidence,
+                *{
+                    binding_id
+                    for binding_id in trace["binding_ids"]
+                    if bindings[binding_id]["evidence_id"] in cited_evidence
+                },
+            }
+        else:
+            expected_sources = {row["claim_id"]}
+        if set(row["source_ids"]) != expected_sources:
+            fail("report v3 decision source closure")
+    findings_by_claim: dict[str, list[dict[str, Any]]] = {}
+    for row in findings.values():
+        if row["schema"] != "reviewgraphen.finding.v3" or row["claim_id"] not in claims:
+            fail("report v3 finding claim closure")
+        if row["decision_id"] is not None and row["decision_id"] not in decisions:
+            fail("report v3 finding decision closure")
+        if not set(row["evidence_ids"]) <= set(evidence) or not set(row["verification_ids"]) <= set(verifications):
+            fail("report v3 finding trace closure")
+        trace = claim_trace(row["claim_id"], row["event_sequence"])
+        if row["status"] == "unverified_candidate":
+            expected_evidence = trace["evidence_ids"]
+            expected_verifications = trace["nonpassed"]
+            expected_decision = None
+        elif row["status"] == "verified_candidate":
+            expected_evidence = trace["reproduces_evidence"]
+            expected_verifications = trace["passed"]
+            expected_decision = None
+            if not expected_verifications:
+                fail("report v3 verified candidate lacks passed trace")
+        elif row["status"] == "accepted":
+            expected_evidence = trace["reproduces_evidence"]
+            expected_verifications = trace["passed"]
+            expected_decision = row["decision_id"]
+            decision = decisions.get(expected_decision)
+            if decision is None or decision["claim_id"] != row["claim_id"] or decision["outcome"] != "accept":
+                fail("report v3 accepted finding decision trace")
+        else:
+            expected_evidence = set()
+            expected_verifications = set()
+            expected_decision = row["decision_id"]
+            decision = decisions.get(expected_decision)
+            if decision is None or decision["claim_id"] != row["claim_id"] or decision["outcome"] != "reject":
+                fail("report v3 rejected finding decision trace")
+        if (
+            set(row["evidence_ids"]) != expected_evidence
+            or set(row["verification_ids"]) != expected_verifications
+            or row["decision_id"] != expected_decision
+        ):
+            fail("report v3 finding status trace is not exact")
+        findings_by_claim.setdefault(row["claim_id"], []).append(row)
+    for rows in findings_by_claim.values():
+        rows.sort(key=lambda row: (row["event_sequence"], row["id"]))
+        previous = None
+        for row in rows:
+            if row["supersedes_finding_id"] != previous:
+                fail("report v3 finding supersession chain")
+            previous = row["id"]
+    if set(assessments) != set(claims):
+        fail("report v3 claim assessment closure")
+    for claim_id, row in assessments.items():
+        trace = claim_trace(claim_id)
+        expected_sets = {
+            "binding_ids": trace["binding_ids"],
+            "evidence_ids": trace["evidence_ids"],
+            "verification_ids": trace["verification_ids"],
+            "decision_ids": {item["id"] for item in decisions.values() if item["claim_id"] == claim_id},
+            "finding_ids": {item["id"] for item in findings.values() if item["claim_id"] == claim_id},
+        }
+        if any(set(row[field]) != expected for field, expected in expected_sets.items()):
+            fail("report v3 assessment accumulated trace is not exact")
+        if row["active_decision_id"] is not None and row["active_decision_id"] not in decisions:
+            fail("report v3 active decision closure")
+        if row["current_finding_id"] is not None and row["current_finding_id"] not in findings:
+            fail("report v3 current finding closure")
+        if row["current_finding_id"] is not None and findings[row["current_finding_id"]]["claim_id"] != claim_id:
+            fail("report v3 current finding claim mismatch")
+        if row["decision_conflict"] and (row["active_decision_id"] is not None or row["current_finding_id"] is not None):
+            fail("report v3 conflicting assessment cannot retain a current finding")
+        baseline = "supported" if trace["reproduces_evidence"] else "proposed"
+        active = decisions.get(row["active_decision_id"])
+        if active is None:
+            expected_state = (baseline, "human_reviewed" if row["decision_conflict"] else "unreviewed")
+        elif active["outcome"] == "accept":
+            expected_state = ("accepted", "accepted")
+        elif active["outcome"] == "reject":
+            expected_state = ("rejected", "rejected")
+        else:
+            expected_state = (baseline, "human_reviewed")
+        if (row["disposition"], row["review_status"]) != expected_state:
+            fail("report v3 assessment state does not match active authority")
+        if row["current_finding_id"] is not None:
+            finding = findings[row["current_finding_id"]]
+            if row["active_decision_id"] is not None and active is not None:
+                expected_status = "accepted" if active["outcome"] == "accept" else (
+                    "rejected" if active["outcome"] == "reject" else None
+                )
+            else:
+                expected_status = "verified_candidate" if trace["passed"] else "unverified_candidate"
+            if expected_status is None or finding["status"] != expected_status:
+                fail("report v3 current finding status does not match assessment")
+            claim_findings = findings_by_claim.get(claim_id, [])
+            if claim_findings and finding["id"] != claim_findings[-1]["id"]:
+                fail("report v3 current finding is not the latest projection")
+            if finding["status"] == "accepted":
+                decision_id = row["active_decision_id"]
+                decision = decisions.get(decision_id)
+                if (
+                    row["decision_conflict"]
+                    or decision is None
+                    or decision["outcome"] != "accept"
+                    or finding["decision_id"] != decision_id
+                    or set(finding["evidence_ids"]) != trace["reproduces_evidence"]
+                    or set(finding["verification_ids"]) != trace["passed"]
+                    or not finding["verification_ids"]
+                ):
+                    fail("report v3 accepted finding lacks exact active authority trace")
+
+    selected = set(scenario["selected_obligation_ids"])
+    denominator = set(coverage["denominator_obligation_ids"])
+    stages = (
+        "visited", "completed", "evidence_supported", "verified", "fresh_verified", "accepted"
+    )
+    if coverage["universe_id"] != scenario["universe_id"] or not selected <= denominator:
+        fail("report v3 coverage universe/denominator closure")
+    for stage in stages:
+        actual = set(coverage[f"{stage}_obligation_ids"])
+        if not actual <= selected or coverage[stage] != len(actual):
+            fail(f"report v3 {stage} coverage closure")
+    if coverage["selected"] != len(selected):
+        fail("report v3 selected coverage count")
+    visited_expected = {
+        obligation_id
+        for execution in executions.values()
+        for obligation_id in execution["obligation_ids"]
+        if obligation_id in selected
+    }
+    structured = {
+        obligation_id
+        for execution in executions.values()
+        if execution["outcome"]["kind"] == "structured"
+        for obligation_id in execution["obligation_ids"]
+    }
+    claim_obligation = {
+        claim_id: claim["obligation_ids"][0]
+        for claim_id, claim in claims.items()
+    }
+    evidence_supported_expected = {
+        claim_obligation[claim_id]
+        for claim_id in claims
+        if claim_trace(claim_id)["reproduces_evidence"]
+    }
+    verified_expected = {
+        claim_obligation[claim_id]
+        for claim_id in claims
+        if claim_trace(claim_id)["passed"]
+    }
+    accepted_expected = {
+        claim_obligation[claim_id]
+        for claim_id, assessment in assessments.items()
+        if not assessment["decision_conflict"]
+        and assessment["disposition"] == "accepted"
+        and assessment["review_status"] == "accepted"
+        and assessment["current_finding_id"] is not None
+        and findings[assessment["current_finding_id"]]["status"] == "accepted"
+    }
+    if set(coverage["visited_obligation_ids"]) != visited_expected:
+        fail("report v3 visited coverage is not execution-derived")
+    # Completed additionally depends on lifecycle state, which is deliberately
+    # source-bound and absent from the report body; its local upper bound is
+    # the exact structured/visited set.
+    if not set(coverage["completed_obligation_ids"]) <= structured & visited_expected:
+        fail("report v3 completed coverage exceeds its source-bound upper bound")
+    if set(coverage["evidence_supported_obligation_ids"]) != evidence_supported_expected:
+        fail("report v3 evidence-supported coverage is not trace-derived")
+    if set(coverage["verified_obligation_ids"]) != verified_expected:
+        fail("report v3 verified coverage is not trace-derived")
+    if set(coverage["accepted_obligation_ids"]) != accepted_expected:
+        fail("report v3 accepted coverage is not current-authority-derived")
+    if set(coverage["fresh_verified_obligation_ids"]) != set(coverage["verified_obligation_ids"]):
+        fail("report v3 fresh_verified must equal verified in M4")
+    if not set(coverage["accepted_obligation_ids"]) <= set(coverage["verified_obligation_ids"]):
+        fail("report v3 accepted coverage must be verified")
+    if set(scenario["artifact_registration_ids"]) != set(registrations):
+        fail("report v3 registration scenario closure")
+    referenced = {row["raw_artifact_registration_id"] for row in executions.values()}
+    for row in [*evidence.values(), *verifications.values()]:
+        referenced |= {row["input_registration_id"], row["output_registration_id"]}
+    if referenced != set(registrations):
+        fail("report v3 registration trace is not exact")
+
+    if not run_mutations:
+        return ["report v3 local ordering/cross-record checks: PASS"]
+    schema = load_json(SCHEMAS / "reviewgraphen.report.v3.schema.json")
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+
+    def schema_must_fail(name: str, value: dict[str, Any]) -> None:
+        if not list(validator.iter_errors(value)):
+            fail(f"report v3 schema mutation unexpectedly passed: {name}")
+
+    def contract_must_fail(name: str, value: dict[str, Any]) -> None:
+        if list(validator.iter_errors(value)):
+            fail(f"report v3 contract mutation is not schema-valid: {name}")
+        try:
+            validate_report_v3_contract(value, run_mutations=False)
+        except AssertionError:
+            return
+        fail(f"report v3 contract mutation unexpectedly passed: {name}")
+
+    def fragment_validator(name: str) -> Draft202012Validator:
+        return Draft202012Validator(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$ref": f"#/$defs/{name}",
+                "$defs": schema["$defs"],
+            },
+            format_checker=FormatChecker(),
+        )
+
+    def fragment_must_pass(name: str, value: Any) -> None:
+        errors = list(fragment_validator(name).iter_errors(value))
+        if errors:
+            fail(f"report v3 valid {name} fragment failed: {errors[0].message}")
+
+    def fragment_must_fail(name: str, value: Any, mutation: str) -> None:
+        if not list(fragment_validator(name).iter_errors(value)):
+            fail(f"report v3 {name} mutation unexpectedly passed: {mutation}")
+
+    missing = deepcopy(report)
+    del missing["metadata"]["authority_replay_basis_digest"]
+    schema_must_fail("missing authority replay digest", missing)
+    extra = deepcopy(report)
+    extra["result"]["evidence"][0:0] = []
+    extra["result"]["unknown"] = []
+    schema_must_fail("extra result field", extra)
+    if evidence:
+        wrong = deepcopy(report)
+        wrong["result"]["evidence"][0]["schema"] = "reviewgraphen.evidence.v2"
+        schema_must_fail("wrong evidence discriminator", wrong)
+    digest = "sha256:" + "0" * 64
+    evidence_fragment = {
+        "event_sequence": 1, "event_id": "event:one", "id": "evidence:one",
+        "schema": "reviewgraphen.evidence.v3", "kind": "test_witness",
+        "snapshot_id": "snapshot:one", "subject_ids": ["test:one"],
+        "descriptor_id": "reviewgraphen.fixture_test_verifier@1",
+        "procedure_version": "reviewgraphen.fixture_test.duplicate_submit@1",
+        "input_registration_id": "registration:input",
+        "output_registration_id": "registration:output", "observation": "witnessed",
+        "body_hash": digest,
+    }
+    fragment_must_pass("evidence", evidence_fragment)
+    wrong_evidence = deepcopy(evidence_fragment)
+    wrong_evidence["schema"] = "reviewgraphen.evidence.v2"
+    fragment_must_fail("evidence", wrong_evidence, "wrong discriminator")
+    wrong_combo = deepcopy(evidence_fragment)
+    wrong_combo["observation"] = "fact_present"
+    fragment_must_fail("evidence", wrong_combo, "kind/observation mismatch")
+
+    scenario_fragment = deepcopy(scenario)
+    scenario_fragment["artifact_registration_ids"] = [
+        f"registration:item-{index:04x}" for index in range(8192)
+    ]
+    fragment_must_pass("scenario", scenario_fragment)
+    scenario_over = deepcopy(scenario_fragment)
+    scenario_over["artifact_registration_ids"].append("registration:item-over")
+    fragment_must_fail("scenario", scenario_over, "8193 registrations")
+
+    finding_fragment = {
+        "event_sequence": 1, "event_id": "event:one", "id": "finding:one",
+        "schema": "reviewgraphen.finding.v3",
+        "projection_descriptor_id": "reviewgraphen.finding_projection@1",
+        "claim_id": "claim:one", "status": "verified_candidate",
+        "evidence_ids": [f"evidence:item-{index:02x}" for index in range(64)],
+        "verification_ids": [f"verification:item-{index:02x}" for index in range(64)],
+        "decision_id": None, "supersedes_finding_id": None, "body_hash": digest,
+    }
+    fragment_must_pass("finding", finding_fragment)
+    finding_over = deepcopy(finding_fragment)
+    finding_over["evidence_ids"].append("evidence:item-over")
+    fragment_must_fail("finding", finding_over, "65 evidence IDs")
+    finding_over = deepcopy(finding_fragment)
+    finding_over["verification_ids"].append("verification:item-over")
+    fragment_must_fail("finding", finding_over, "65 verification IDs")
+
+    decision_fragment = {
+        "event_sequence": 1, "event_id": "event:one", "id": "decision:one",
+        "schema": "reviewgraphen.human_decision.v3", "policy_revision_hash": digest,
+        "run_id": "run:one", "universe_id": "universe:one", "claim_id": "claim:one",
+        "property_id": "payment.at_most_once", "outcome": "defer",
+        "actor": "human:one", "authority_id": "authority", "snapshot_id": "snapshot:one",
+        "source_ids": [f"source:item-{index:03x}" for index in range(256)],
+        "rationale": "rationale", "issued_at": "2026-08-10T00:00:00Z",
+        "expires_at": None, "body_hash": digest,
+    }
+    fragment_must_pass("decision", decision_fragment)
+    decision_over = deepcopy(decision_fragment)
+    decision_over["source_ids"].append("source:item-over")
+    fragment_must_fail("decision", decision_over, "257 source IDs")
+
+    assessment_fragment = {
+        "claim_id": "claim:one", "disposition": "proposed", "review_status": "unreviewed",
+        "binding_ids": [f"binding:item-{index:02x}" for index in range(64)],
+        "evidence_ids": [], "verification_ids": [], "decision_ids": [], "finding_ids": [],
+        "active_decision_id": None, "current_finding_id": None,
+        "decision_conflict": False, "confirmed_event_sequence": 1,
+    }
+    fragment_must_pass("assessment", assessment_fragment)
+    assessment_over = deepcopy(assessment_fragment)
+    assessment_over["binding_ids"].append("binding:item-over")
+    fragment_must_fail("assessment", assessment_over, "65 accumulated IDs")
+
+    for label, exact, limit in (
+        ("descriptor", "é" * 128, 256),
+        ("procedure", "é" * 128, 256),
+        ("limitation", "é" * 1024, 2_048),
+        ("rationale", "é" * 4096, 8_192),
+    ):
+        require_utf8_bytes(exact, limit, f"v3 exact {label}")
+        try:
+            require_utf8_bytes(exact + "x", limit, f"v3 plus-one {label}")
+        except AssertionError:
+            pass
+        else:
+            fail(f"report v3 UTF-8 plus-one unexpectedly passed: {label}")
+    bad_hash = deepcopy(report)
+    bad_hash["metadata"]["genesis_hash"] = "sha256:" + "A" * 64
+    schema_must_fail("uppercase hash", bad_hash)
+    bad_loss = deepcopy(report)
+    bad_loss["projection"]["views"][0]["information_loss"][0]["recoverable"] = False
+    schema_must_fail("nonrecoverable loss retaining recovery ref", bad_loss)
+    bad_coverage = deepcopy(report)
+    bad_coverage["coverage"]["accepted"] += 1
+    contract_must_fail("coverage count mismatch", bad_coverage)
+    if findings:
+        bad_trace = deepcopy(report)
+        bad_trace["result"]["findings"][0]["claim_id"] = "claim:missing"
+        contract_must_fail("dangling finding claim", bad_trace)
+
+    run_genesis_source = {"kind": "run_genesis", "run_id": "run:one"}
+    fragment_must_pass("source", run_genesis_source)
+    bad_run_genesis = deepcopy(run_genesis_source)
+    bad_run_genesis["snapshot_id"] = "snapshot:extra"
+    fragment_must_fail("source", bad_run_genesis, "run-genesis extra field")
+    snapshot_source = {
+        "kind": "snapshot_ingest",
+        "adapter_id": "adapter@1",
+        "run_id": "run:one",
+        "snapshot_id": "snapshot:one",
+    }
+    fragment_must_pass("source", snapshot_source)
+    bad_snapshot = deepcopy(snapshot_source)
+    del bad_snapshot["adapter_id"]
+    fragment_must_fail("source", bad_snapshot, "snapshot-ingest missing adapter")
+
+    source_indexes = {
+        row["source"]["kind"]: index
+        for index, row in enumerate(result["artifact_registrations"])
+    }
+    bad_reviewer = deepcopy(report)
+    bad_reviewer["result"]["artifact_registrations"][
+        source_indexes["reviewer_execution"]
+    ]["source"]["run_id"] = "run:wrong"
+    contract_must_fail("reviewer registration run mismatch", bad_reviewer)
+    bad_verifier = deepcopy(report)
+    bad_verifier["result"]["artifact_registrations"][
+        source_indexes["verifier_artifact"]
+    ]["source"]["claim_id"] = "claim:missing"
+    contract_must_fail("verifier registration claim mismatch", bad_verifier)
+    bad_external = deepcopy(report)
+    bad_external["result"]["artifact_registrations"][
+        source_indexes["external_harness_witness"]
+    ]["cas_hash"] = "sha256:" + "1" * 64
+    contract_must_fail("external witness result tuple mismatch", bad_external)
+
+    return ["report v3 local schema/cross-record mutations: PASS"]
+
+
 def validate_markdown() -> list[str]:
     link_pattern = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
     relative_links = 0
@@ -1330,6 +1972,7 @@ def main() -> int:
         validate_json_and_toml,
         validate_schemas,
         validate_report_v2_contract,
+        validate_report_v3_contract,
         validate_markdown,
         validate_semantics,
         validate_semantic_mutations,

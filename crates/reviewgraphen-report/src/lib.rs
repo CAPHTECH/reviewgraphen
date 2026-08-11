@@ -4,11 +4,13 @@
 //! index, and verified CAS objects. It does not treat a report as state.
 
 mod bounds;
+mod report_v3;
 
 pub use bounds::{
     BoundsError, LogicalCharge, OwnershipError, ReportAccounting, ReportCounts, ReportLimits,
     ownership_charge,
 };
+pub use report_v3::{ReportRequestV3, generate_v3, generate_v3_with_limits};
 
 use reviewgraphen_core::{DecodedPayload, EventContractVersion, ObligationLifecycle, StableId};
 use reviewgraphen_store::{
@@ -269,6 +271,7 @@ fn build_from_snapshot(
             obstructions: preliminary_obstructions,
             views: 1,
             information_loss_records: 1,
+            ..ReportCounts::default()
         },
         journal_bytes,
         index_bytes,
@@ -470,6 +473,7 @@ fn build_from_snapshot(
         },
         views: 1,
         information_loss_records: 1,
+        ..ReportCounts::default()
     };
     let reserved_report_bytes = report_shape_charge(
         ReportShapeSources {
@@ -741,7 +745,7 @@ impl Write for JsonByteCounter {
     }
 }
 
-fn json_encoded_len<T: Serialize>(
+pub(crate) fn json_encoded_len<T: Serialize>(
     value: &T,
     operation: &'static str,
     limit: u64,
@@ -759,6 +763,50 @@ fn json_encoded_len<T: Serialize>(
         }
     })?;
     Ok(counter.bytes)
+}
+
+/// Serialize a previously measured JSON value into exactly its bounded output
+/// capacity.  v3 uses the same writer seam as v2 so an output-limit refusal
+/// cannot leave a partially returned report buffer.
+pub(crate) fn bounded_json_bytes<T: Serialize>(
+    value: &T,
+    output_bytes: u64,
+    limits: ReportLimits,
+) -> Result<Vec<u8>, ReportError> {
+    let output_capacity = usize::try_from(output_bytes).map_err(|_| ReportError::Incomplete {
+        operation: "canonical_report_bytes",
+        limit: limits.canonical_bytes,
+        observed: output_bytes,
+    })?;
+    let mut output_buffer = Vec::new();
+    output_buffer
+        .try_reserve_exact(output_capacity)
+        .map_err(|_| ReportError::Incomplete {
+            operation: "canonical_report_bytes",
+            limit: limits.canonical_bytes,
+            observed: output_bytes,
+        })?;
+    let mut bounded_output = BoundedOutput {
+        bytes: output_buffer,
+        limit: output_capacity,
+    };
+    serde_json::to_writer(&mut bounded_output, value).map_err(|error| {
+        if error.is_io() {
+            ReportError::Incomplete {
+                operation: "canonical_report_bytes",
+                limit: limits.canonical_bytes,
+                observed: output_bytes.saturating_add(1),
+            }
+        } else {
+            ReportError::Json
+        }
+    })?;
+    if bounded_output.bytes.len() != output_capacity {
+        return Err(ReportError::Source(
+            "report counting/serialization mismatch",
+        ));
+    }
+    Ok(bounded_output.bytes)
 }
 
 #[derive(Deserialize)]
