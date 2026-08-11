@@ -12,6 +12,7 @@ use crate::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
+use std::mem::size_of;
 use thiserror::Error;
 
 const MAX: usize = 4_096;
@@ -463,6 +464,91 @@ impl ReviewContextEnvelope {
             .saturating_add(assumptions)
             .saturating_add(losses)
             .saturating_add(self.projection_hash.allocated_bytes())
+    }
+
+    /// Portable dynamic allocation made by `self.clone()`. Unlike
+    /// [`Self::allocated_bytes`], this models `Clone`'s freshly allocated
+    /// buffers (vector capacity and string backing equal the source length),
+    /// so replay reducers can charge a cloned context without inheriting spare
+    /// capacity from a decoded event DTO.
+    #[allow(dead_code)] // Consumed by the V5 replay reducer's clone accounting.
+    pub(crate) fn cloned_allocated_bytes(&self) -> usize {
+        fn id(value: &StableId) -> usize {
+            value.as_str().len()
+        }
+        fn hash(value: &ContentHash) -> usize {
+            value.as_str().len()
+        }
+        fn ids(values: &BTreeSet<StableId>) -> usize {
+            values
+                .len()
+                .saturating_mul(std::mem::size_of::<StableId>())
+                .saturating_add(values.iter().map(id).sum::<usize>())
+        }
+        fn strings(values: &BTreeSet<String>) -> usize {
+            values
+                .len()
+                .saturating_mul(std::mem::size_of::<String>())
+                .saturating_add(values.iter().map(String::len).sum::<usize>())
+        }
+        let included = self.included_sources.iter().fold(
+            self.included_sources
+                .len()
+                .saturating_mul(std::mem::size_of::<SourceArtifactRef>()),
+            |total, source| {
+                total
+                    .saturating_add(id(&source.registration_id))
+                    .saturating_add(id(&source.artifact_id))
+                    .saturating_add(hash(&source.content_hash))
+                    .saturating_add(hash(&source.cas_hash))
+                    .saturating_add(hash(&source.excerpt_hash))
+            },
+        );
+        let excluded = self.excluded_sources.iter().fold(
+            self.excluded_sources
+                .len()
+                .saturating_mul(std::mem::size_of::<ExcludedSourceRef>()),
+            |total, source| total.saturating_add(id(&source.artifact_id)),
+        );
+        let unknowns = self.unknowns.iter().fold(
+            self.unknowns
+                .len()
+                .saturating_mul(std::mem::size_of::<EnvelopeUnknown>()),
+            |total, unknown| {
+                total
+                    .saturating_add(unknown.description.len())
+                    .saturating_add(ids(&unknown.source_ids))
+            },
+        );
+        let losses = self.losses.iter().fold(
+            self.losses
+                .len()
+                .saturating_mul(std::mem::size_of::<EnvelopeLoss>()),
+            |total, loss| {
+                total
+                    .saturating_add(loss.description.len())
+                    .saturating_add(strings(&loss.affected_properties))
+                    .saturating_add(ids(&loss.source_ids))
+            },
+        );
+        id(&self.id)
+            .saturating_add(ids(&self.obligation_ids))
+            .saturating_add(id(&self.snapshot_id))
+            .saturating_add(self.projection_policy_version.len())
+            .saturating_add(hash(&self.context_policy_hash))
+            .saturating_add(ids(&self.candidate_source_ids))
+            .saturating_add(included)
+            .saturating_add(ids(&self.normalized_included_source_ids))
+            .saturating_add(excluded)
+            .saturating_add(unknowns)
+            .saturating_add(
+                self.assumptions
+                    .len()
+                    .saturating_mul(std::mem::size_of::<String>())
+                    .saturating_add(self.assumptions.iter().map(String::len).sum::<usize>()),
+            )
+            .saturating_add(losses)
+            .saturating_add(hash(&self.projection_hash))
     }
 
     pub(crate) fn from_event_bytes(input: &[u8]) -> ContextResult<Self> {
@@ -986,6 +1072,8 @@ pub struct BuiltContextProjection {
     envelope: ReviewContextEnvelope,
     #[allow(dead_code)] // deliberately opaque; event.rs owns its eventual consumption.
     admission: ContextProjectionAdmission,
+    #[cfg(test)]
+    finish_actual_bytes: u64,
 }
 impl BuiltContextProjection {
     pub fn envelope(&self) -> &ReviewContextEnvelope {
@@ -995,6 +1083,11 @@ impl BuiltContextProjection {
     #[allow(dead_code)] // consumed by event.rs in the next implementation unit.
     pub(crate) fn into_parts(self) -> (ReviewContextEnvelope, ContextProjectionAdmission) {
         (self.envelope, self.admission)
+    }
+
+    #[cfg(test)]
+    fn finish_actual_bytes(&self) -> u64 {
+        self.finish_actual_bytes
     }
 }
 
@@ -1052,10 +1145,708 @@ pub struct ContextBuildSession {
     index: usize,
     pending: Option<ContextSourceRequest>,
     included: Vec<SourceArtifactRef>,
-    excluded: BTreeMap<StableId, ExclusionReason>,
+    excluded: Vec<ExcludedSourceRef>,
     resolved_bytes: u64,
     excerpt_bytes: usize,
+    /// Sealed category-by-category working reservation. Its unused capacity
+    /// remains live until `finish`, so byte-dependent branches cannot borrow
+    /// capacity from an unrelated category.
+    #[allow(dead_code)] // Capacity is the working contract; inspected by tests.
+    working_reservation: ContextWorkingReservation,
     session_digest: ContentHash,
+    #[allow(dead_code)] // Exposed to reservation-accounting tests only.
+    reservation: ContextResourceOracle,
+}
+
+/// CAS-free resource reservation for rebuilding one live context projection.
+///
+/// The projection event is deliberately not an input: its included-source
+/// list is output from `prepare_context`, not authority for choosing a CAS
+/// object.  `max_source_cas_bytes` is therefore the largest source which may
+/// survive the metadata-only source-request gate.  The byte-dependent excerpt
+/// outcome is intentionally not guessed before that object is read.
+#[allow(dead_code)] // Consumed by the V5 D2 pre-CAS replay gate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ContextResourceOracle {
+    candidate_count: u64,
+    max_source_cas_bytes: u64,
+    session_retained_bytes: u64,
+    session_working_bytes: u64,
+    layout: ContextReservationLayout,
+    typed_capacities: ContextTypedCapacities,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ContextReservationLayout {
+    candidate_clone_backing: u64,
+    source_clone_backing: u64,
+    request_backing: u64,
+    anchor_and_discovery_backing: u64,
+    partition_and_loss_backing: u64,
+    finish_and_admission_backing: u64,
+    excerpt_backing: u64,
+    canonical_backing: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ContextTypedCapacities {
+    candidates: u64,
+    anchors: u64,
+    unknowns: u64,
+    included: u64,
+    excluded: u64,
+    losses: u64,
+    discovery_vectors: u64,
+}
+
+impl ContextTypedCapacities {
+    fn requested(candidate_count: u64) -> ContextResult<Self> {
+        Ok(Self {
+            candidates: candidate_count,
+            anchors: checked_resource_mul(
+                candidate_count,
+                u64::try_from(MAX_ANCHORS).unwrap_or(u64::MAX),
+                "context requested anchor capacity",
+            )?,
+            unknowns: 64,
+            included: u64::try_from(MAX_FILES).unwrap_or(u64::MAX),
+            excluded: candidate_count,
+            losses: 64,
+            discovery_vectors: checked_resource_mul(
+                u64::try_from(MAX).unwrap_or(u64::MAX),
+                u64::try_from(
+                    size_of::<StableId>() * 4
+                        + size_of::<(StableId, (usize, Vec<u8>, Vec<StableId>))>(),
+                )
+                .unwrap_or(u64::MAX),
+                "context requested discovery vector capacity",
+            )?,
+        })
+    }
+}
+
+impl ContextReservationLayout {
+    fn arena_bytes(self) -> ContextResult<u64> {
+        [
+            self.candidate_clone_backing,
+            self.source_clone_backing,
+            self.request_backing,
+            self.anchor_and_discovery_backing,
+            self.partition_and_loss_backing,
+            self.finish_and_admission_backing,
+            self.excerpt_backing,
+            self.canonical_backing,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, value| {
+            checked_resource_add(total, value, "context reservation arena bytes")
+        })
+    }
+
+    #[cfg(test)]
+    fn covers(self, actual: Self) -> bool {
+        self.candidate_clone_backing >= actual.candidate_clone_backing
+            && self.source_clone_backing >= actual.source_clone_backing
+            && self.request_backing >= actual.request_backing
+            && self.anchor_and_discovery_backing >= actual.anchor_and_discovery_backing
+            && self.partition_and_loss_backing >= actual.partition_and_loss_backing
+            && self.finish_and_admission_backing >= actual.finish_and_admission_backing
+            && self.excerpt_backing >= actual.excerpt_backing
+            && self.canonical_backing >= actual.canonical_backing
+    }
+}
+
+#[derive(Debug)]
+struct ContextWorkingReservation {
+    candidate_clone_backing: Vec<u8>,
+    source_clone_backing: Vec<u8>,
+    request_backing: Vec<u8>,
+    anchor_and_discovery_backing: Vec<u8>,
+    partition_and_loss_backing: Vec<u8>,
+    finish_and_admission_backing: Vec<u8>,
+    excerpt_backing: Vec<u8>,
+    canonical_backing: Vec<u8>,
+    #[allow(dead_code)] // Checked by the independent actual walker.
+    sealed_allocated_bytes: u64,
+}
+
+impl ContextWorkingReservation {
+    fn seal(layout: ContextReservationLayout) -> ContextResult<Self> {
+        fn arena(bytes: u64, operation: &'static str) -> ContextResult<Vec<u8>> {
+            let bytes = usize::try_from(bytes)
+                .map_err(|_| incomplete(operation, usize::MAX, usize::MAX))?;
+            let mut arena = Vec::new();
+            reserve_exact(&mut arena, bytes, operation)?;
+            Ok(arena)
+        }
+        let value = Self {
+            candidate_clone_backing: arena(
+                layout.candidate_clone_backing,
+                "context candidate clone arena",
+            )?,
+            source_clone_backing: arena(layout.source_clone_backing, "context source clone arena")?,
+            request_backing: arena(layout.request_backing, "context request arena")?,
+            anchor_and_discovery_backing: arena(
+                layout.anchor_and_discovery_backing,
+                "context anchor/discovery arena",
+            )?,
+            partition_and_loss_backing: arena(
+                layout.partition_and_loss_backing,
+                "context partition/loss arena",
+            )?,
+            finish_and_admission_backing: arena(
+                layout.finish_and_admission_backing,
+                "context finish/admission arena",
+            )?,
+            excerpt_backing: arena(layout.excerpt_backing, "context excerpt arena")?,
+            canonical_backing: arena(layout.canonical_backing, "context canonical arena")?,
+            sealed_allocated_bytes: 0,
+        };
+        let sealed_allocated_bytes = value.allocated_bytes()?;
+        Ok(Self {
+            sealed_allocated_bytes,
+            ..value
+        })
+    }
+
+    fn allocated_bytes(&self) -> ContextResult<u64> {
+        [
+            self.candidate_clone_backing.capacity(),
+            self.source_clone_backing.capacity(),
+            self.request_backing.capacity(),
+            self.anchor_and_discovery_backing.capacity(),
+            self.partition_and_loss_backing.capacity(),
+            self.finish_and_admission_backing.capacity(),
+            self.excerpt_backing.capacity(),
+            self.canonical_backing.capacity(),
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, value| {
+            checked_resource_add(
+                total,
+                u64::try_from(value).unwrap_or(u64::MAX),
+                "context sealed reservation bytes",
+            )
+        })
+    }
+
+    fn sealed_layout(&self) -> ContextReservationLayout {
+        let capacity = |value: &Vec<u8>| u64::try_from(value.capacity()).unwrap_or(u64::MAX);
+        ContextReservationLayout {
+            candidate_clone_backing: capacity(&self.candidate_clone_backing),
+            source_clone_backing: capacity(&self.source_clone_backing),
+            request_backing: capacity(&self.request_backing),
+            anchor_and_discovery_backing: capacity(&self.anchor_and_discovery_backing),
+            partition_and_loss_backing: capacity(&self.partition_and_loss_backing),
+            finish_and_admission_backing: capacity(&self.finish_and_admission_backing),
+            excerpt_backing: capacity(&self.excerpt_backing),
+            canonical_backing: capacity(&self.canonical_backing),
+        }
+    }
+}
+
+#[allow(dead_code)] // The event-side gate is wired in a separate implementation unit.
+impl ContextResourceOracle {
+    pub(crate) const fn candidate_count(self) -> u64 {
+        self.candidate_count
+    }
+
+    pub(crate) const fn max_source_cas_bytes(self) -> u64 {
+        self.max_source_cas_bytes
+    }
+
+    pub(crate) const fn session_retained_bytes(self) -> u64 {
+        self.session_retained_bytes
+    }
+
+    pub(crate) const fn session_working_bytes(self) -> u64 {
+        self.session_working_bytes
+    }
+}
+
+fn reserve_exact<T>(
+    values: &mut Vec<T>,
+    additional: usize,
+    operation: &'static str,
+) -> ContextResult<()> {
+    values
+        .try_reserve_exact(additional)
+        .map_err(|_| incomplete(operation, additional, additional))?;
+    Ok(())
+}
+
+fn value_clone_slots(value: &serde_json::Value) -> ContextResult<u64> {
+    let slot = |count: usize, size: usize| {
+        checked_resource_mul(
+            u64::try_from(count).unwrap_or(u64::MAX),
+            u64::try_from(size).unwrap_or(u64::MAX),
+            "context artifact attribute slots",
+        )
+    };
+    match value {
+        serde_json::Value::Array(values) => values.iter().try_fold(
+            slot(values.len(), size_of::<serde_json::Value>())?,
+            |total, value| {
+                checked_resource_add(
+                    total,
+                    value_clone_slots(value)?,
+                    "context artifact attribute slots",
+                )
+            },
+        ),
+        serde_json::Value::Object(values) => values.iter().try_fold(
+            slot(values.len(), size_of::<(String, serde_json::Value)>())?,
+            |total, (key, value)| {
+                checked_resource_add(
+                    checked_resource_add(
+                        total,
+                        u64::try_from(key.len()).unwrap_or(u64::MAX),
+                        "context artifact attribute slots",
+                    )?,
+                    value_clone_slots(value)?,
+                    "context artifact attribute slots",
+                )
+            },
+        ),
+        serde_json::Value::String(value) => Ok(u64::try_from(value.len()).unwrap_or(u64::MAX)),
+        _ => Ok(0),
+    }
+}
+
+/// Allocation-free serialized size is a conservative backing arena for every
+/// private provenance string. Attribute container slots are added separately
+/// because a compact JSON representation can be smaller than `Value` slots.
+fn serialized_size(value: &impl Serialize) -> ContextResult<u64> {
+    struct Counter(u64);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+                .ok_or_else(|| std::io::Error::other("context artifact JSON size overflow"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, value)
+        .map_err(|error| DomainError::Json(error.to_string()))?;
+    Ok(counter.0)
+}
+
+fn artifact_clone_backing_reservation(artifact: &Artifact) -> ContextResult<u64> {
+    let serialized = serialized_size(artifact)?;
+    artifact
+        .attributes
+        .values()
+        .try_fold(serialized, |total, value| {
+            checked_resource_add(
+                total,
+                value_clone_slots(value)?,
+                "context candidate clone backing",
+            )
+        })
+}
+
+fn source_clone_backing_reservation(source: &SnapshotSourceRecordEntry) -> ContextResult<u64> {
+    [
+        source.artifact_id().as_str().len(),
+        source.path().len(),
+        source.content_hash().as_str().len(),
+        source.registration_id().as_str().len(),
+        source.cas_hash().as_str().len(),
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, value| {
+        checked_resource_add(
+            total,
+            u64::try_from(value).unwrap_or(u64::MAX),
+            "context source clone backing",
+        )
+    })
+}
+
+/// Prediction-side owned backing for the aggregate obligation that will be
+/// cloned into the session. Container slots and every nested backing buffer
+/// come from the type's ownership accessor; wire size is never a resource
+/// proxy.
+fn obligation_clone_backing_reservation(obligation: &Obligation) -> ContextResult<u64> {
+    u64::try_from(obligation.allocated_bytes())
+        .map_err(|_| incomplete("context obligation clone backing", usize::MAX, usize::MAX).into())
+}
+
+/// Computes the CAS and owned-session reservation before a context session,
+/// a resolver buffer, or any discovery collection is materialized.
+///
+/// This is a counting visitor over the same accepted snapshot-source closure
+/// that `candidates` clones into the builder.  It intentionally reserves for
+/// the complete bounded discovery/output domain: source-byte-dependent
+/// `giant_line` and excerpt exclusions cannot safely shrink a pre-CAS
+/// reservation.  A caller can reject `working_bytes` before its first source
+/// read even if a persisted envelope omits, adds, or reorders sources.
+#[allow(dead_code)] // The event-side gate is wired in a separate implementation unit.
+pub(crate) fn context_resource_oracle(
+    aggregate: &ReviewAggregate,
+    obligation_id: &StableId,
+) -> ContextResult<ContextResourceOracle> {
+    let obligation =
+        aggregate
+            .obligation(obligation_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "context resource oracle",
+                owner_id: obligation_id.clone(),
+                reference: obligation_id.clone(),
+            })?;
+    let program = aggregate.program();
+    let snapshot_id = program.snapshot_id();
+    if obligation.version().snapshot() != snapshot_id {
+        return Err(DomainError::Validation(
+            "context obligation must bind aggregate snapshot".to_owned(),
+        )
+        .into());
+    }
+    text(obligation.property_id())?;
+    let sources = aggregate.snapshot_sources_for(snapshot_id).ok_or_else(|| {
+        DomainError::Validation("missing exact snapshot source closure".to_owned())
+    })?;
+
+    let mut count = 0_usize;
+    let mut max_source = 0_u64;
+    let mut candidate_clone_backing = 0_u64;
+    let mut source_clone_backing = 0_u64;
+    let mut candidate_id_backing = 0_u64;
+    let mut max_candidate_id_backing = 0_u64;
+    let mut request_backing = 0_u64;
+    visit_candidate_metadata(
+        aggregate,
+        program,
+        sources,
+        snapshot_id,
+        |artifact, source, size| {
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| incomplete("context resource candidate count", MAX, usize::MAX))?;
+            let artifact_backing = artifact_clone_backing_reservation(artifact)?;
+            candidate_clone_backing = checked_resource_add(
+                candidate_clone_backing,
+                checked_resource_add(
+                    artifact_backing,
+                    u64::try_from(artifact.id.as_str().len()).unwrap_or(u64::MAX),
+                    "context candidate rank ID backing",
+                )?,
+                "context candidate clone backing",
+            )?;
+            let source_backing = source_clone_backing_reservation(source)?;
+            source_clone_backing = checked_resource_add(
+                source_clone_backing,
+                source_backing,
+                "context source clone backing",
+            )?;
+            let artifact_id = u64::try_from(artifact.id.as_str().len()).unwrap_or(u64::MAX);
+            candidate_id_backing = checked_resource_add(
+                candidate_id_backing,
+                artifact_id,
+                "context candidate ID backing",
+            )?;
+            max_candidate_id_backing = max_candidate_id_backing.max(artifact_id);
+            let request = [
+                artifact.id.as_str().len(),
+                source.registration_id().as_str().len(),
+                source.content_hash().as_str().len(),
+                source.cas_hash().as_str().len(),
+                71,
+            ]
+            .into_iter()
+            .try_fold(0_u64, |total, value| {
+                checked_resource_add(
+                    total,
+                    u64::try_from(value).unwrap_or(u64::MAX),
+                    "context request backing",
+                )
+            })?;
+            request_backing = request_backing.max(request);
+            // These are exactly the metadata-only exclusions applied before a
+            // `ContextSourceRequest` is emitted.  A later candidate can always
+            // be the first request after byte-dependent exclusions, so do not use
+            // an envelope's historical included list to narrow this maximum.
+            if size <= MAX_FILE_BYTES {
+                max_source = max_source.max(size);
+            }
+            Ok(())
+        },
+    )?;
+    let candidate_count = u64::try_from(count)
+        .map_err(|_| incomplete("context resource candidate count", MAX, usize::MAX))?;
+    let mut max_structural_id_backing = max_candidate_id_backing;
+    for artifact in program.artifacts() {
+        max_structural_id_backing = max_structural_id_backing
+            .max(u64::try_from(artifact.id.as_str().len()).unwrap_or(u64::MAX));
+    }
+    for relation in program.relations() {
+        max_structural_id_backing = max_structural_id_backing
+            .max(u64::try_from(relation.id.as_str().len()).unwrap_or(u64::MAX))
+            .max(u64::try_from(relation.source_id.as_str().len()).unwrap_or(u64::MAX));
+        for target in &relation.target_ids {
+            max_structural_id_backing = max_structural_id_backing
+                .max(u64::try_from(target.as_str().len()).unwrap_or(u64::MAX));
+        }
+    }
+    for context in program.contexts() {
+        max_structural_id_backing = max_structural_id_backing
+            .max(u64::try_from(context.id.as_str().len()).unwrap_or(u64::MAX));
+        for member in &context.member_ids {
+            max_structural_id_backing = max_structural_id_backing
+                .max(u64::try_from(member.as_str().len()).unwrap_or(u64::MAX));
+        }
+    }
+    for invariant in program.invariants() {
+        max_structural_id_backing = max_structural_id_backing
+            .max(u64::try_from(invariant.id.as_str().len()).unwrap_or(u64::MAX));
+        for scope in &invariant.scope_ids {
+            max_structural_id_backing = max_structural_id_backing
+                .max(u64::try_from(scope.as_str().len()).unwrap_or(u64::MAX));
+        }
+    }
+    candidate_clone_backing = [
+        obligation_clone_backing_reservation(obligation)?,
+        u64::try_from(snapshot_id.as_str().len()).unwrap_or(u64::MAX),
+        71,
+        71,
+    ]
+    .into_iter()
+    .try_fold(candidate_clone_backing, |total, value| {
+        checked_resource_add(total, value, "context session identity backing")
+    })?;
+    let anchor_ids = checked_resource_mul(
+        checked_resource_mul(
+            candidate_count,
+            u64::try_from(MAX_ANCHORS).unwrap_or(u64::MAX),
+            "context anchor ID backing",
+        )?,
+        max_structural_id_backing,
+        "context anchor ID backing",
+    )?;
+    let discovery_ids = checked_resource_mul(
+        checked_resource_mul(
+            u64::try_from(MAX).unwrap_or(u64::MAX),
+            9,
+            "context discovery ID backing",
+        )?,
+        max_structural_id_backing.max(1),
+        "context discovery ID backing",
+    )?;
+    let partition_backing =
+        checked_resource_mul(candidate_id_backing, 4, "context partition/loss backing")?;
+    let finish_backing = checked_resource_add(
+        checked_resource_mul(candidate_id_backing, 3, "context finish/admission backing")?,
+        checked_resource_mul(source_clone_backing, 2, "context finish/admission backing")?,
+        "context finish/admission backing",
+    )?;
+    let layout = ContextReservationLayout {
+        candidate_clone_backing,
+        source_clone_backing,
+        request_backing,
+        anchor_and_discovery_backing: checked_resource_add(
+            anchor_ids,
+            discovery_ids,
+            "context anchor/discovery backing",
+        )?,
+        partition_and_loss_backing: partition_backing,
+        finish_and_admission_backing: finish_backing,
+        excerpt_backing: u64::try_from(MAX_TOTAL_EXCERPT).unwrap_or(u64::MAX),
+        canonical_backing: u64::try_from(MAX_BODY).unwrap_or(u64::MAX),
+    };
+    let typed_capacities = ContextTypedCapacities::requested(candidate_count)?;
+    let session_retained_bytes =
+        context_resource_formula(candidate_count, max_source, layout, typed_capacities)?;
+    let session_working_bytes = checked_resource_add(
+        checked_resource_add(
+            session_retained_bytes,
+            max_source,
+            "context resource working bytes",
+        )?,
+        u64::try_from(MAX_BODY)
+            .map_err(|_| incomplete("context resource working bytes", usize::MAX, usize::MAX))?,
+        "context resource working bytes",
+    )?;
+    Ok(ContextResourceOracle {
+        candidate_count,
+        max_source_cas_bytes: max_source,
+        session_retained_bytes,
+        session_working_bytes,
+        layout,
+        typed_capacities,
+    })
+}
+
+/// Portable owned-byte formula.  It charges the fixed session plus all
+/// bounded containers which can coexist while discovery, resolution, and
+/// final envelope canonicalization overlap.  These are reservation slots,
+/// not allocator-private B-tree node headers.
+fn checked_resource_add(left: u64, right: u64, operation: &'static str) -> ContextResult<u64> {
+    left.checked_add(right)
+        .ok_or_else(|| incomplete(operation, usize::MAX, usize::MAX).into())
+}
+
+fn checked_resource_mul(left: u64, right: u64, operation: &'static str) -> ContextResult<u64> {
+    left.checked_mul(right)
+        .ok_or_else(|| incomplete(operation, usize::MAX, usize::MAX).into())
+}
+
+fn typed_vec_capacity_bytes<T>(capacity: usize, operation: &'static str) -> ContextResult<u64> {
+    checked_resource_mul(
+        u64::try_from(capacity).map_err(|_| incomplete(operation, usize::MAX, usize::MAX))?,
+        u64::try_from(size_of::<T>()).map_err(|_| incomplete(operation, usize::MAX, usize::MAX))?,
+        operation,
+    )
+}
+
+fn context_resource_formula(
+    candidate_count: u64,
+    max_source: u64,
+    layout: ContextReservationLayout,
+    typed: ContextTypedCapacities,
+) -> ContextResult<u64> {
+    fn count(value: usize, operation: &'static str) -> ContextResult<u64> {
+        u64::try_from(value).map_err(|_| incomplete(operation, usize::MAX, usize::MAX).into())
+    }
+    fn add(total: &mut u64, value: u64, operation: &'static str) -> ContextResult<()> {
+        *total = checked_resource_add(*total, value, operation)?;
+        Ok(())
+    }
+
+    if candidate_count > u64::try_from(MAX).unwrap_or(u64::MAX) {
+        return Err(incomplete("context resource candidate count", MAX, usize::MAX).into());
+    }
+    if max_source > MAX_FILE_BYTES {
+        return Err(incomplete(
+            "context resource CAS source bytes",
+            MAX_FILE_BYTES as usize,
+            usize::MAX,
+        )
+        .into());
+    }
+    let discovered = u64::try_from(MAX).unwrap_or(u64::MAX);
+    let mut total = count(size_of::<ContextBuildSession>(), "context resource session")?;
+    // Candidate vector plus the complete discovery state (structural IDs,
+    // predecessor keys/paths, containing-file map, rank/distance maps and
+    // path/test partitions).  The traversal has nine predecessor domains per
+    // discovered ID: calls 3+2, contains 1+1, covers 1+1.
+    add(
+        &mut total,
+        checked_resource_mul(
+            typed.candidates,
+            count(size_of::<Candidate>(), "context resource candidate slots")?,
+            "context resource candidate slots",
+        )?,
+        "context resource retained bytes",
+    )?;
+    add(
+        &mut total,
+        typed.discovery_vectors,
+        "context resource discovery vector capacity",
+    )?;
+    add(
+        &mut total,
+        checked_resource_mul(
+            typed.anchors,
+            count(
+                size_of::<(u64, u64, StableId)>(),
+                "context resource anchor slots",
+            )?,
+            "context resource anchor slots",
+        )?,
+        "context resource retained bytes",
+    )?;
+    add(
+        &mut total,
+        checked_resource_mul(
+            discovered,
+            count(size_of::<StableId>(), "context resource structural IDs")?,
+            "context resource structural IDs",
+        )?,
+        "context resource retained bytes",
+    )?;
+    add(
+        &mut total,
+        checked_resource_mul(
+            discovered,
+            count(
+                size_of::<(u8, StableId, usize)>(),
+                "context resource predecessor keys",
+            )?
+            .checked_mul(9)
+            .ok_or_else(|| {
+                incomplete("context resource predecessor keys", usize::MAX, usize::MAX)
+            })?,
+            "context resource predecessor keys",
+        )?,
+        "context resource retained bytes",
+    )?;
+    // Included/excluded refs, unknown/loss descriptors, and all normalized
+    // excerpt bookkeeping can coexist with candidates until `finish`.
+    add(
+        &mut total,
+        checked_resource_mul(
+            typed.included,
+            count(
+                size_of::<SourceArtifactRef>(),
+                "context resource included slots",
+            )?,
+            "context resource included slots",
+        )?,
+        "context resource retained bytes",
+    )?;
+    add(
+        &mut total,
+        checked_resource_mul(
+            typed.excluded,
+            count(
+                size_of::<ExcludedSourceRef>(),
+                "context resource excluded slots",
+            )?,
+            "context resource excluded slots",
+        )?,
+        "context resource retained bytes",
+    )?;
+    add(
+        &mut total,
+        checked_resource_mul(
+            typed.unknowns,
+            count(
+                size_of::<EnvelopeUnknown>(),
+                "context resource unknown slots",
+            )?,
+            "context resource unknown slots",
+        )?,
+        "context resource retained bytes",
+    )?;
+    add(
+        &mut total,
+        checked_resource_mul(
+            typed.losses,
+            count(size_of::<EnvelopeLoss>(), "context resource loss slots")?,
+            "context resource loss slots",
+        )?,
+        "context resource retained bytes",
+    )?;
+    // Each category owns its sealed byte arena, and separately covers the
+    // real typed backing that the builder cannot allocate from a byte arena.
+    // Counting twice is intentional and category-local, never cross-category
+    // slack: one copy is live arena ownership and one is the permitted actual
+    // backing for that same category.
+    add(
+        &mut total,
+        checked_resource_mul(
+            layout.arena_bytes()?,
+            2,
+            "context reservation arena and covered backing",
+        )?,
+        "context resource retained bytes",
+    )?;
+    Ok(total)
 }
 
 /// Validates aggregate metadata then prepares a resolver-driven session.
@@ -1063,6 +1854,13 @@ pub fn prepare_context(
     aggregate: &ReviewAggregate,
     obligation_id: StableId,
 ) -> ContextResult<ContextBuildSession> {
+    let mut reservation = context_resource_oracle(aggregate, &obligation_id)?;
+    // Seal every arena before candidate/discovery materialization. Event
+    // callers perform the scalar limit check before entering this function;
+    // no CAS read occurs until the returned session emits a request.
+    let working_reservation = ContextWorkingReservation::seal(reservation.layout)?;
+    let sealed_layout = working_reservation.sealed_layout();
+    reservation.layout = sealed_layout;
     let obligation = aggregate
         .obligation(&obligation_id)
         .ok_or_else(|| DomainError::DanglingReference {
@@ -1088,6 +1886,12 @@ pub fn prepare_context(
             DomainError::Validation("missing exact snapshot source closure".to_owned())
         })?;
     let candidates = candidates(aggregate, program, sources, &snapshot_id)?;
+    if u64::try_from(candidates.len()).unwrap_or(u64::MAX) != reservation.candidate_count() {
+        return Err(DomainError::Validation(
+            "context resource candidate count drifted from builder metadata".to_owned(),
+        )
+        .into());
+    }
     let (
         reached,
         structural,
@@ -1097,8 +1901,15 @@ pub fn prepare_context(
         ranks,
         path_cap,
         test_cap,
-        unknowns,
+        mut unknowns,
+        discovery_vector_capacity,
     ) = discover(program, &obligation)?;
+    let missing_unknown_capacity = 64_usize.saturating_sub(unknowns.capacity());
+    reserve_exact(
+        &mut unknowns,
+        missing_unknown_capacity,
+        "context resource unknown reservation",
+    )?;
     let mut candidates = candidates;
     for candidate in &mut candidates {
         candidate.exclusion =
@@ -1174,7 +1985,7 @@ pub fn prepare_context(
     }
     candidates.sort_by(|a, b| a.rank.cmp(&b.rank));
     let session_digest = manifest_digest(&snapshot_id, obligation.id(), &policy_hash, &candidates)?;
-    Ok(ContextBuildSession {
+    let mut session = ContextBuildSession {
         snapshot_id,
         obligation,
         policy_hash,
@@ -1182,15 +1993,309 @@ pub fn prepare_context(
         unknowns,
         index: 0,
         pending: None,
-        included: Vec::new(),
-        excluded: BTreeMap::new(),
+        included: {
+            let mut included = Vec::new();
+            reserve_exact(
+                &mut included,
+                MAX_FILES,
+                "context resource included reservation",
+            )?;
+            included
+        },
+        excluded: {
+            let mut excluded = Vec::new();
+            reserve_exact(
+                &mut excluded,
+                usize::try_from(reservation.candidate_count()).unwrap_or(usize::MAX),
+                "context resource excluded reservation",
+            )?;
+            excluded
+        },
         resolved_bytes: 0,
         excerpt_bytes: 0,
+        working_reservation,
         session_digest,
-    })
+        reservation,
+    };
+    session.reservation.typed_capacities.discovery_vectors = discovery_vector_capacity;
+    let typed_capacities = session.measured_typed_capacities()?;
+    session.reservation.typed_capacities = typed_capacities;
+    session.reservation.session_retained_bytes = context_resource_formula(
+        session.reservation.candidate_count,
+        session.reservation.max_source_cas_bytes,
+        session.reservation.layout,
+        typed_capacities,
+    )?;
+    session.reservation.session_working_bytes = checked_resource_add(
+        checked_resource_add(
+            session.reservation.session_retained_bytes,
+            session.reservation.max_source_cas_bytes,
+            "context sealed working bytes",
+        )?,
+        u64::try_from(MAX_BODY)
+            .map_err(|_| incomplete("context sealed working bytes", usize::MAX, usize::MAX))?,
+        "context sealed working bytes",
+    )?;
+    Ok(session)
 }
 
 impl ContextBuildSession {
+    fn measured_typed_capacities(&self) -> ContextResult<ContextTypedCapacities> {
+        let anchors = self.candidates.iter().try_fold(0_u64, |total, candidate| {
+            checked_resource_add(
+                total,
+                u64::try_from(candidate.anchors.capacity()).unwrap_or(u64::MAX),
+                "context sealed anchor capacity",
+            )
+        })?;
+        Ok(ContextTypedCapacities {
+            candidates: u64::try_from(self.candidates.capacity()).unwrap_or(u64::MAX),
+            anchors,
+            unknowns: u64::try_from(self.unknowns.capacity()).unwrap_or(u64::MAX),
+            included: u64::try_from(self.included.capacity()).unwrap_or(u64::MAX),
+            excluded: u64::try_from(self.excluded.capacity()).unwrap_or(u64::MAX),
+            losses: 64,
+            // Discovery vectors are transient; `discover` measured their
+            // allocator capacities before dropping them and threaded the
+            // byte total into this reservation.
+            discovery_vectors: self.reservation.typed_capacities.discovery_vectors,
+        })
+    }
+
+    /// Returns allocator-measured capacities after every category arena and
+    /// typed vector has been sealed, and before the first source request can
+    /// be emitted. Event replay may apply its exact/-1 limit at this seam
+    /// without reading CAS bytes.
+    #[allow(dead_code)] // Event integration is maintained in event.rs.
+    pub(crate) const fn sealed_resource_oracle(&self) -> ContextResourceOracle {
+        self.reservation
+    }
+
+    #[cfg(test)]
+    fn actual_dynamic_layout(&self) -> ContextResult<ContextReservationLayout> {
+        fn add(total: &mut u64, value: usize, operation: &'static str) -> ContextResult<()> {
+            *total =
+                checked_resource_add(*total, u64::try_from(value).unwrap_or(u64::MAX), operation)?;
+            Ok(())
+        }
+        let mut actual = ContextReservationLayout {
+            candidate_clone_backing: [
+                u64::try_from(self.obligation.allocated_bytes()).unwrap_or(u64::MAX),
+                u64::try_from(self.snapshot_id.allocated_bytes()).unwrap_or(u64::MAX),
+                u64::try_from(self.policy_hash.allocated_bytes()).unwrap_or(u64::MAX),
+                u64::try_from(self.session_digest.allocated_bytes()).unwrap_or(u64::MAX),
+            ]
+            .into_iter()
+            .try_fold(0_u64, |total, value| {
+                checked_resource_add(total, value, "context actual candidate backing")
+            })?,
+            ..ContextReservationLayout::default()
+        };
+        for candidate in &self.candidates {
+            actual.candidate_clone_backing = checked_resource_add(
+                actual.candidate_clone_backing,
+                checked_resource_add(
+                    artifact_clone_backing_reservation(&candidate.artifact)?,
+                    u64::try_from(candidate.rank.3.allocated_bytes()).unwrap_or(u64::MAX),
+                    "context actual candidate backing",
+                )?,
+                "context actual candidate backing",
+            )?;
+            actual.source_clone_backing = checked_resource_add(
+                actual.source_clone_backing,
+                source_clone_backing_reservation(&candidate.source)?,
+                "context actual source backing",
+            )?;
+            for (_, _, owner) in &candidate.anchors {
+                add(
+                    &mut actual.anchor_and_discovery_backing,
+                    owner.allocated_bytes(),
+                    "context actual anchor backing",
+                )?;
+            }
+        }
+        if let Some(pending) = &self.pending {
+            for value in [
+                pending.artifact_id.allocated_bytes(),
+                pending.registration_id.allocated_bytes(),
+                pending.content_hash.allocated_bytes(),
+                pending.cas_hash.allocated_bytes(),
+                pending.digest.allocated_bytes(),
+            ] {
+                add(
+                    &mut actual.request_backing,
+                    value,
+                    "context actual request backing",
+                )?;
+            }
+        }
+        for unknown in &self.unknowns {
+            add(
+                &mut actual.partition_and_loss_backing,
+                unknown.description.capacity(),
+                "context actual partition backing",
+            )?;
+            for source_id in &unknown.source_ids {
+                add(
+                    &mut actual.partition_and_loss_backing,
+                    source_id.allocated_bytes(),
+                    "context actual partition backing",
+                )?;
+            }
+        }
+        for source in &self.excluded {
+            add(
+                &mut actual.partition_and_loss_backing,
+                source.artifact_id.allocated_bytes(),
+                "context actual partition backing",
+            )?;
+        }
+        for source in &self.included {
+            for value in [
+                source.registration_id.allocated_bytes(),
+                source.artifact_id.allocated_bytes(),
+                source.content_hash.allocated_bytes(),
+                source.cas_hash.allocated_bytes(),
+                source.excerpt_hash.allocated_bytes(),
+            ] {
+                add(
+                    &mut actual.finish_and_admission_backing,
+                    value,
+                    "context actual finish backing",
+                )?;
+            }
+        }
+        Ok(actual)
+    }
+
+    /// Observable live reservation owned after `prepare_context` and before
+    /// `finish`. This deliberately counts unused vector capacity: the fixed
+    /// pre-CAS reservation, rather than byte-dependent projection content, is
+    /// the working-memory contract.
+    #[cfg(test)]
+    fn realized_reservation_bytes(&self) -> ContextResult<u64> {
+        fn add(total: &mut u64, value: usize) -> ContextResult<()> {
+            *total = checked_resource_add(
+                *total,
+                u64::try_from(value).map_err(|_| {
+                    incomplete("context realized reservation", usize::MAX, usize::MAX)
+                })?,
+                "context realized reservation",
+            )?;
+            Ok(())
+        }
+        let mut total = 0_u64;
+        add(&mut total, size_of::<Self>())?;
+        add(&mut total, self.snapshot_id.allocated_bytes())?;
+        add(&mut total, self.obligation.allocated_bytes())?;
+        add(&mut total, self.policy_hash.allocated_bytes())?;
+        add(&mut total, self.session_digest.allocated_bytes())?;
+        add(
+            &mut total,
+            self.candidates
+                .capacity()
+                .saturating_mul(size_of::<Candidate>()),
+        )?;
+        for candidate in &self.candidates {
+            add(
+                &mut total,
+                usize::try_from(artifact_clone_backing_reservation(&candidate.artifact)?)
+                    .unwrap_or(usize::MAX),
+            )?;
+            add(
+                &mut total,
+                usize::try_from(source_clone_backing_reservation(&candidate.source)?)
+                    .unwrap_or(usize::MAX),
+            )?;
+            add(&mut total, candidate.rank.3.allocated_bytes())?;
+            add(
+                &mut total,
+                candidate
+                    .anchors
+                    .capacity()
+                    .saturating_mul(size_of::<(u64, u64, StableId)>()),
+            )?;
+            for (_, _, owner) in &candidate.anchors {
+                add(&mut total, owner.allocated_bytes())?;
+            }
+        }
+        add(
+            &mut total,
+            self.unknowns
+                .capacity()
+                .saturating_mul(size_of::<EnvelopeUnknown>()),
+        )?;
+        for unknown in &self.unknowns {
+            add(&mut total, unknown.description.capacity())?;
+            add(
+                &mut total,
+                unknown
+                    .source_ids
+                    .len()
+                    .saturating_mul(size_of::<StableId>()),
+            )?;
+            for source_id in &unknown.source_ids {
+                add(&mut total, source_id.allocated_bytes())?;
+            }
+        }
+        add(
+            &mut total,
+            self.included
+                .capacity()
+                .saturating_mul(size_of::<SourceArtifactRef>()),
+        )?;
+        for source in &self.included {
+            for value in [
+                source.registration_id.allocated_bytes(),
+                source.artifact_id.allocated_bytes(),
+                source.content_hash.allocated_bytes(),
+                source.cas_hash.allocated_bytes(),
+                source.excerpt_hash.allocated_bytes(),
+            ] {
+                add(&mut total, value)?;
+            }
+        }
+        add(
+            &mut total,
+            self.excluded
+                .capacity()
+                .saturating_mul(size_of::<ExcludedSourceRef>()),
+        )?;
+        for source in &self.excluded {
+            add(&mut total, source.artifact_id.allocated_bytes())?;
+        }
+        if let Some(pending) = &self.pending {
+            for value in [
+                pending.artifact_id.allocated_bytes(),
+                pending.registration_id.allocated_bytes(),
+                pending.content_hash.allocated_bytes(),
+                pending.cas_hash.allocated_bytes(),
+                pending.digest.allocated_bytes(),
+            ] {
+                add(&mut total, value)?;
+            }
+        }
+        add(
+            &mut total,
+            usize::try_from(self.working_reservation.allocated_bytes()?).unwrap_or(usize::MAX),
+        )?;
+        debug_assert_eq!(
+            self.working_reservation.sealed_allocated_bytes,
+            self.working_reservation.allocated_bytes()?
+        );
+        debug_assert!(
+            self.reservation
+                .layout
+                .covers(self.actual_dynamic_layout()?)
+        );
+        Ok(total)
+    }
+
+    #[cfg(test)]
+    fn reservation(&self) -> ContextResourceOracle {
+        self.reservation
+    }
+
     /// Returns the next required source in exact rank order, performing only
     /// metadata-only exclusions before asking the resolver for bytes.
     pub fn next_source_request(&mut self) -> ContextResult<Option<ContextSourceRequest>> {
@@ -1330,21 +2435,18 @@ impl ContextBuildSession {
             .map(|c| c.artifact.id.clone())
             .collect::<BTreeSet<_>>();
         if included_ids.len() + self.excluded.len() != candidates.len()
-            || !included_ids.is_disjoint(&self.excluded.keys().cloned().collect())
+            || self
+                .excluded
+                .iter()
+                .any(|source| included_ids.contains(&source.artifact_id))
         {
             return Err(DomainError::Validation(
                 "context candidate partition is incomplete".to_owned(),
             )
             .into());
         }
-        let excluded_sources = self
-            .excluded
-            .into_iter()
-            .map(|(artifact_id, reason)| ExcludedSourceRef {
-                artifact_id,
-                reason,
-            })
-            .collect::<Vec<_>>();
+        let mut excluded_sources = self.excluded;
+        excluded_sources.sort_by(|left, right| left.artifact_id.cmp(&right.artifact_id));
         let losses = losses(
             &excluded_sources,
             &included_sources,
@@ -1378,7 +2480,9 @@ impl ContextBuildSession {
             losses,
             projection_hash: projection_hash.clone(),
         };
-        envelope.canonical_bytes()?;
+        let canonical_envelope = envelope.canonical_bytes()?;
+        #[cfg(not(test))]
+        drop(canonical_envelope);
         let admitted_sources = envelope
             .included_sources
             .iter()
@@ -1395,13 +2499,68 @@ impl ContextBuildSession {
             projection_hash,
             sources: admitted_sources,
         };
+        #[cfg(test)]
+        let finish_actual_bytes = {
+            let mut remaining_candidates = checked_resource_mul(
+                u64::try_from(self.candidates.capacity()).unwrap_or(u64::MAX),
+                u64::try_from(size_of::<Candidate>()).unwrap_or(u64::MAX),
+                "context finish remaining candidates",
+            )?;
+            for candidate in &self.candidates {
+                for value in [
+                    artifact_clone_backing_reservation(&candidate.artifact)?,
+                    source_clone_backing_reservation(&candidate.source)?,
+                    u64::try_from(candidate.rank.3.allocated_bytes()).unwrap_or(u64::MAX),
+                    checked_resource_mul(
+                        u64::try_from(candidate.anchors.capacity()).unwrap_or(u64::MAX),
+                        u64::try_from(size_of::<(u64, u64, StableId)>()).unwrap_or(u64::MAX),
+                        "context finish remaining anchors",
+                    )?,
+                ] {
+                    remaining_candidates = checked_resource_add(
+                        remaining_candidates,
+                        value,
+                        "context finish remaining candidates",
+                    )?;
+                }
+                for (_, _, owner) in &candidate.anchors {
+                    remaining_candidates = checked_resource_add(
+                        remaining_candidates,
+                        u64::try_from(owner.allocated_bytes()).unwrap_or(u64::MAX),
+                        "context finish remaining anchor IDs",
+                    )?;
+                }
+            }
+            [
+                u64::try_from(envelope.allocated_bytes()).unwrap_or(u64::MAX),
+                u64::try_from(admission.allocated_bytes()).unwrap_or(u64::MAX),
+                u64::try_from(body.capacity()).unwrap_or(u64::MAX),
+                u64::try_from(canonical_envelope.capacity()).unwrap_or(u64::MAX),
+                self.working_reservation.allocated_bytes()?,
+                u64::try_from(self.obligation.allocated_bytes()).unwrap_or(u64::MAX),
+                remaining_candidates,
+            ]
+            .into_iter()
+            .try_fold(0_u64, |total, value| {
+                checked_resource_add(total, value, "context finish actual bytes")
+            })?
+        };
+        #[cfg(test)]
+        debug_assert!(finish_actual_bytes <= self.reservation.session_working_bytes());
         Ok(BuiltContextProjection {
             envelope,
             admission,
+            #[cfg(test)]
+            finish_actual_bytes,
         })
     }
     fn exclude(&mut self, id: StableId, reason: ExclusionReason) {
-        self.excluded.entry(id).or_insert(reason);
+        if !self.excluded.iter().any(|source| source.artifact_id == id) {
+            self.excluded.push(ExcludedSourceRef {
+                artifact_id: id,
+                reason,
+            });
+        }
     }
 }
 
@@ -1448,21 +2607,77 @@ fn candidates(
     sources: &crate::SnapshotSourcesRecorded,
     snapshot: &StableId,
 ) -> ContextResult<Vec<Candidate>> {
-    let mut files = Vec::new();
-    for artifact in program.artifacts().iter().filter(|a| a.kind == "file") {
-        if files.len() == MAX {
-            return Err(incomplete("context candidate files", MAX, MAX + 1).into());
-        }
-        files.push(artifact);
+    let candidate_count = candidate_count(program)?;
+    let mut out = Vec::new();
+    reserve_exact(
+        &mut out,
+        candidate_count,
+        "context resource candidate reservation",
+    )?;
+    visit_candidate_metadata(
+        aggregate,
+        program,
+        sources,
+        snapshot,
+        |artifact, source, size| {
+            let mut anchors = Vec::new();
+            reserve_exact(
+                &mut anchors,
+                MAX_ANCHORS,
+                "context resource anchor reservation",
+            )?;
+            out.push(Candidate {
+                artifact: artifact.clone(),
+                source: source.clone(),
+                registration_size: size,
+                rank: (1, usize::MAX, usize::MAX, artifact.id.clone()),
+                exclusion: None,
+                anchors,
+            });
+            Ok(())
+        },
+    )?;
+    Ok(out)
+}
+
+fn candidate_count(program: &ProgramSpace) -> ContextResult<usize> {
+    let count = program
+        .artifacts()
+        .iter()
+        .filter(|artifact| artifact.kind == "file")
+        .try_fold(0_usize, |count, _| {
+            count
+                .checked_add(1)
+                .ok_or_else(|| incomplete("context candidate files", MAX, usize::MAX))
+        })?;
+    if count > MAX {
+        return Err(incomplete("context candidate files", MAX, count).into());
     }
-    if sources.entries().len() != files.len() {
+    Ok(count)
+}
+
+/// Shared, allocation-free candidate-closure visitor.  `prepare_context` and
+/// the pre-CAS resource oracle use this exact validation and candidate order;
+/// a persisted projection cannot replace this accepted-state derivation.
+fn visit_candidate_metadata(
+    aggregate: &ReviewAggregate,
+    program: &ProgramSpace,
+    sources: &crate::SnapshotSourcesRecorded,
+    snapshot: &StableId,
+    mut visit: impl FnMut(&Artifact, &SnapshotSourceRecordEntry, u64) -> ContextResult<()>,
+) -> ContextResult<()> {
+    let candidate_count = candidate_count(program)?;
+    if sources.entries().len() != candidate_count {
         return Err(DomainError::Validation(
             "snapshot source closure must exactly cover file candidates".to_owned(),
         )
         .into());
     }
-    let mut out = Vec::new();
-    for artifact in files {
+    for artifact in program
+        .artifacts()
+        .iter()
+        .filter(|artifact| artifact.kind == "file")
+    {
         let source = sources
             .entries()
             .iter()
@@ -1475,7 +2690,11 @@ fn candidates(
             .ok_or_else(|| {
                 DomainError::Validation("missing candidate artifact registration".to_owned())
             })?;
-        if source.path() != artifact.location.as_ref().map_or("", |l| l.path.as_str())
+        if source.path()
+            != artifact
+                .location
+                .as_ref()
+                .map_or("", |location| location.path.as_str())
             || artifact.content_hash.as_ref() != Some(source.content_hash())
             || registration.cas_hash() != source.cas_hash()
             || registration.sensitivity() != ArtifactSensitivity::WorkspaceSource
@@ -1486,16 +2705,9 @@ fn candidates(
             )
             .into());
         }
-        out.push(Candidate {
-            artifact: (*artifact).clone(),
-            source: source.clone(),
-            registration_size: registration.size(),
-            rank: (1, usize::MAX, usize::MAX, artifact.id.clone()),
-            exclusion: None,
-            anchors: Vec::new(),
-        });
+        visit(artifact, source, registration.size())?;
     }
-    Ok(out)
+    Ok(())
 }
 
 // Returns reached candidate files and deterministic path-derived annotations.
@@ -1513,6 +2725,7 @@ fn discover(
     BTreeSet<StableId>,
     BTreeSet<StableId>,
     Vec<EnvelopeUnknown>,
+    u64,
 )> {
     if program.relations().len() > MAX_RELATIONS {
         return Err(incomplete(
@@ -1527,6 +2740,10 @@ fn discover(
     all.extend(obligation.context_ids().iter().cloned());
     all.sort();
     all.dedup();
+    let seed_vector_capacity = typed_vec_capacity_bytes::<StableId>(
+        all.capacity(),
+        "context sealed discovery seed vector capacity",
+    )?;
     let mut structural = BTreeSet::new();
     let mut unknown = BTreeMap::<&str, BTreeSet<StableId>>::new();
     let contexts = program
@@ -1541,7 +2758,7 @@ fn discover(
         return Err(incomplete("context discovered structural IDs", MAX, structural.len()).into());
     }
     let seeds = structural.clone();
-    let adjacency = adjacency(program)?;
+    let (adjacency, adjacency_vector_capacity) = adjacency(program)?;
     // There is no independent queue cap: the exact predecessor domain is
     // already finite at nine states per structural ID (calls 3+2,
     // contains 1+1, covers 1+1), and structural IDs are capped at MAX before
@@ -1618,9 +2835,14 @@ fn discover(
         }
     }
     let mut contains = 0usize;
+    let mut todo_vector_capacity = 0_u64;
     let mut file_for = BTreeMap::<StableId, BTreeSet<StableId>>::new();
     for id in &structural {
         let mut todo = vec![id.clone()];
+        todo_vector_capacity = todo_vector_capacity.max(typed_vec_capacity_bytes::<StableId>(
+            todo.capacity(),
+            "context sealed discovery todo vector capacity",
+        )?);
         let mut seen = BTreeSet::new();
         while let Some(child) = todo.pop() {
             for (_, parent, _) in adjacency
@@ -1641,7 +2863,12 @@ fn discover(
                         .or_default()
                         .insert(parent.clone());
                 } else if seen.insert(parent.clone()) {
-                    todo.push(parent.clone())
+                    todo.push(parent.clone());
+                    todo_vector_capacity =
+                        todo_vector_capacity.max(typed_vec_capacity_bytes::<StableId>(
+                            todo.capacity(),
+                            "context sealed discovery todo vector capacity",
+                        )?);
                 }
             }
         }
@@ -1714,8 +2941,57 @@ fn discover(
             source_ids,
         })
         .collect();
+    let path_vector_capacity = path_entries.iter().try_fold(
+        typed_vec_capacity_bytes::<(StableId, (usize, Vec<u8>, Vec<StableId>))>(
+            path_entries.capacity(),
+            "context sealed discovery path vector capacity",
+        )?,
+        |total, (_, (_, tokens, nodes))| {
+            let total = checked_resource_add(
+                total,
+                typed_vec_capacity_bytes::<u8>(
+                    tokens.capacity(),
+                    "context sealed discovery token vector capacity",
+                )?,
+                "context sealed discovery vector capacity",
+            )?;
+            checked_resource_add(
+                total,
+                typed_vec_capacity_bytes::<StableId>(
+                    nodes.capacity(),
+                    "context sealed discovery node vector capacity",
+                )?,
+                "context sealed discovery vector capacity",
+            )
+        },
+    )?;
+    let test_vector_capacity =
+        typed_vec_capacity_bytes::<&(StableId, (usize, Vec<u8>, Vec<StableId>))>(
+            tests.capacity(),
+            "context sealed discovery test vector capacity",
+        )?;
+    let discovery_vector_capacity = [
+        seed_vector_capacity,
+        adjacency_vector_capacity,
+        todo_vector_capacity,
+        path_vector_capacity,
+        test_vector_capacity,
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, bytes| {
+        checked_resource_add(total, bytes, "context sealed discovery vector capacity")
+    })?;
     Ok((
-        candidates, structural, file_for, direct, dist, rank, path_cap, test_cap, unknowns,
+        candidates,
+        structural,
+        file_for,
+        direct,
+        dist,
+        rank,
+        path_cap,
+        test_cap,
+        unknowns,
+        discovery_vector_capacity,
     ))
 }
 
@@ -1805,7 +3081,7 @@ fn add_seed_reference(
 #[allow(clippy::type_complexity)]
 fn adjacency(
     program: &ProgramSpace,
-) -> ContextResult<BTreeMap<StableId, Vec<(u8, StableId, usize)>>> {
+) -> ContextResult<(BTreeMap<StableId, Vec<(u8, StableId, usize)>>, u64)> {
     let mut result = BTreeMap::<StableId, Vec<(u8, StableId, usize)>>::new();
     let mut scanned = 0_usize;
     for relation in program.relations() {
@@ -1842,7 +3118,17 @@ fn adjacency(
         edges.sort();
         edges.dedup();
     }
-    Ok(result)
+    let vector_capacity = result.values().try_fold(0_u64, |total, edges| {
+        checked_resource_add(
+            total,
+            typed_vec_capacity_bytes::<(u8, StableId, usize)>(
+                edges.capacity(),
+                "context sealed discovery adjacency vector capacity",
+            )?,
+            "context sealed discovery adjacency vector capacity",
+        )
+    })?;
+    Ok((result, vector_capacity))
 }
 
 const fn initial_remaining(token: u8, maximum: usize) -> usize {
@@ -1975,15 +3261,17 @@ fn losses(
         return Err(incomplete("context losses", 64, groups.len()).into());
     }
     let props = BTreeSet::from([property.to_owned()]);
-    Ok(groups
-        .into_iter()
-        .map(|(description, source_ids)| EnvelopeLoss {
+    let mut losses = Vec::new();
+    reserve_exact(&mut losses, 64, "context resource loss reservation")?;
+    for (description, source_ids) in groups {
+        losses.push(EnvelopeLoss {
             description,
             severity: Severity::Low,
             affected_properties: props.clone(),
             source_ids,
-        })
-        .collect())
+        });
+    }
+    Ok(losses)
 }
 // Every argument is identity-bearing; grouping them would obscure the exact
 // complete-preimage rule at the only identity construction boundary.
@@ -3624,6 +4912,7 @@ mod tests {
         );
         let (aggregate, bytes) = fixture_with_source_bytes(source_bytes);
         let mut session = prepare_context(&aggregate, obligation).unwrap();
+        let sealed = session.sealed_resource_oracle();
         for candidate in &mut session.candidates {
             candidate.exclusion = None;
         }
@@ -3638,7 +4927,9 @@ mod tests {
             .submit_source(&second, &bytes[second.artifact_id()])
             .unwrap();
         assert!(session.next_source_request().unwrap().is_none());
+        assert!(session.realized_reservation_bytes().unwrap() <= sealed.session_retained_bytes());
         let built = session.finish().unwrap();
+        assert!(built.finish_actual_bytes() <= sealed.session_working_bytes());
         assert_eq!(
             built
                 .envelope()
@@ -3780,6 +5071,10 @@ mod tests {
         let session = prepare_context(&aggregate, obligation).unwrap();
         assert_eq!(session.candidates.len(), MAX);
         assert!(is_sha256(&session.session_digest));
+        assert!(
+            session.realized_reservation_bytes().unwrap()
+                <= session.sealed_resource_oracle().session_retained_bytes()
+        );
     }
 
     #[test]
@@ -3853,5 +5148,270 @@ mod tests {
                 .submit_source(&request, &bytes[request.artifact_id()])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn resource_oracle_uses_accepted_metadata_not_projected_sources() {
+        let (aggregate, bytes) = fixture();
+        let obligation = aggregate.obligations().next().unwrap().id().clone();
+        let oracle = context_resource_oracle(&aggregate, &obligation).unwrap();
+        assert_eq!(oracle.candidate_count(), 2);
+
+        let expected = bytes
+            .values()
+            .map(|value| u64::try_from(value.len()).unwrap())
+            .max()
+            .unwrap();
+        assert_eq!(oracle.max_source_cas_bytes(), expected);
+
+        // Real source requests are byte-dependent after their first request;
+        // the oracle must still reserve for their observed maximum without
+        // consulting a persisted envelope.
+        let mut session = prepare_context(&aggregate, obligation).unwrap();
+        let sealed = session.sealed_resource_oracle();
+        assert_eq!(session.reservation(), sealed);
+        assert_eq!(sealed.candidate_count(), oracle.candidate_count());
+        assert_eq!(sealed.max_source_cas_bytes(), oracle.max_source_cas_bytes());
+        assert!(sealed.session_retained_bytes() <= oracle.session_retained_bytes());
+        let admits = |limit| sealed.session_working_bytes() <= limit;
+        assert!(admits(sealed.session_working_bytes()));
+        assert!(!admits(sealed.session_working_bytes() - 1));
+        assert!(session.realized_reservation_bytes().unwrap() <= sealed.session_retained_bytes());
+        let mut realized = 0_u64;
+        while let Some(request) = session.next_source_request().unwrap() {
+            realized = realized.max(request.expected_length());
+            session
+                .submit_source(&request, &bytes[request.artifact_id()])
+                .unwrap();
+        }
+        assert!(realized <= oracle.max_source_cas_bytes());
+        assert!(session.realized_reservation_bytes().unwrap() <= oracle.session_retained_bytes());
+    }
+
+    #[test]
+    fn cloned_envelope_accounting_models_fresh_clone_capacity() {
+        let (aggregate, bytes) = fixture();
+        let envelope = build_projection(&aggregate, &bytes).envelope().clone();
+        assert_eq!(
+            envelope.clone().allocated_bytes(),
+            envelope.cloned_allocated_bytes()
+        );
+    }
+
+    #[test]
+    fn resource_oracle_is_sensitive_to_registered_source_sizes() {
+        let mut small = default_source_bytes();
+        small.insert("src/payment_repository.rs", b"x\n".to_vec());
+        let (small_aggregate, _) = fixture_with_source_bytes(small);
+        let small_obligation = small_aggregate.obligations().next().unwrap().id().clone();
+        let small_oracle = context_resource_oracle(&small_aggregate, &small_obligation).unwrap();
+
+        let mut large = default_source_bytes();
+        large.insert("src/payment_repository.rs", b"x\n".repeat(500));
+        let (large_aggregate, _) = fixture_with_source_bytes(large);
+        let large_obligation = large_aggregate.obligations().next().unwrap().id().clone();
+        let large_oracle = context_resource_oracle(&large_aggregate, &large_obligation).unwrap();
+
+        assert!(large_oracle.max_source_cas_bytes() > small_oracle.max_source_cas_bytes());
+        assert!(large_oracle.session_working_bytes() > small_oracle.session_working_bytes());
+    }
+
+    #[test]
+    fn byte_dependent_giant_line_branch_keeps_the_same_pre_cas_reservation() {
+        let mut giant_checkout = Vec::new();
+        for _ in 0..13 {
+            giant_checkout.extend_from_slice(b"x\n");
+        }
+        giant_checkout.extend(std::iter::repeat_n(b'x', 299_799));
+        giant_checkout.push(b'\n');
+        for _ in 0..87 {
+            giant_checkout.extend_from_slice(b"x\n");
+        }
+        assert_eq!(giant_checkout.len(), 300_000);
+        assert_eq!(
+            giant_checkout.iter().filter(|byte| **byte == b'\n').count(),
+            101
+        );
+
+        let mut normal_checkout = Vec::new();
+        for _ in 0..101 {
+            normal_checkout.extend(std::iter::repeat_n(b'x', 2_969));
+            normal_checkout.push(b'\n');
+        }
+        normal_checkout.extend(std::iter::repeat_n(b'x', 30));
+        assert_eq!(normal_checkout.len(), giant_checkout.len());
+        assert_eq!(
+            normal_checkout
+                .iter()
+                .filter(|byte| **byte == b'\n')
+                .count(),
+            giant_checkout.iter().filter(|byte| **byte == b'\n').count()
+        );
+
+        let mut giant_sources = default_source_bytes();
+        giant_sources.insert("src/checkout_controller.rs", giant_checkout);
+        let (giant_aggregate, giant_bytes) = fixture_with_source_bytes(giant_sources);
+        let giant_obligation = giant_aggregate.obligations().next().unwrap().id().clone();
+        let giant_oracle = context_resource_oracle(&giant_aggregate, &giant_obligation).unwrap();
+        let mut giant_session = prepare_context(&giant_aggregate, giant_obligation).unwrap();
+        let giant_actual = giant_session.realized_reservation_bytes().unwrap();
+        while let Some(request) = giant_session.next_source_request().unwrap() {
+            giant_session
+                .submit_source(&request, &giant_bytes[request.artifact_id()])
+                .unwrap();
+        }
+        let giant_projection = giant_session.finish().unwrap();
+
+        let mut normal_sources = default_source_bytes();
+        normal_sources.insert("src/checkout_controller.rs", normal_checkout);
+        let (normal_aggregate, normal_bytes) = fixture_with_source_bytes(normal_sources);
+        let normal_obligation = normal_aggregate.obligations().next().unwrap().id().clone();
+        let normal_oracle = context_resource_oracle(&normal_aggregate, &normal_obligation).unwrap();
+        let mut normal_session = prepare_context(&normal_aggregate, normal_obligation).unwrap();
+        let normal_actual = normal_session.realized_reservation_bytes().unwrap();
+        while let Some(request) = normal_session.next_source_request().unwrap() {
+            normal_session
+                .submit_source(&request, &normal_bytes[request.artifact_id()])
+                .unwrap();
+        }
+        let normal_projection = normal_session.finish().unwrap();
+
+        assert_eq!(giant_oracle, normal_oracle);
+        assert_eq!(giant_actual, normal_actual);
+        assert!(giant_actual <= giant_oracle.session_retained_bytes());
+        assert!(normal_actual <= normal_oracle.session_retained_bytes());
+        assert!(giant_projection.finish_actual_bytes() <= giant_oracle.session_working_bytes());
+        assert!(normal_projection.finish_actual_bytes() <= normal_oracle.session_working_bytes());
+        let checkout = StableId::parse("file:checkout-controller").unwrap();
+        assert!(
+            giant_projection
+                .envelope()
+                .excluded_sources()
+                .iter()
+                .any(|source| {
+                    source.artifact_id() == &checkout
+                        && source.reason() == ExclusionReason::GiantLine
+                })
+        );
+        assert!(
+            normal_projection
+                .envelope()
+                .included_sources()
+                .iter()
+                .any(|source| { source.artifact_id() == &checkout })
+        );
+    }
+
+    #[test]
+    fn resource_formula_has_an_inclusive_exact_boundary() {
+        let retained = context_resource_formula(
+            2,
+            17,
+            ContextReservationLayout::default(),
+            ContextTypedCapacities::requested(2).unwrap(),
+        )
+        .unwrap();
+        let required = checked_resource_add(
+            checked_resource_add(retained, 17, "test working bytes").unwrap(),
+            u64::try_from(MAX_BODY).unwrap(),
+            "test working bytes",
+        )
+        .unwrap();
+        assert_eq!(required, retained + 17 + u64::try_from(MAX_BODY).unwrap());
+        let admits = |limit| required <= limit;
+        assert!(admits(required));
+        assert!(!admits(required - 1));
+    }
+
+    #[test]
+    fn resource_formula_refuses_each_checked_arithmetic_overflow_phase() {
+        for operation in [
+            "context resource retained bytes",
+            "context resource working bytes",
+            "context resource predecessor keys",
+        ] {
+            assert!(matches!(
+                checked_resource_add(u64::MAX, 1, operation),
+                Err(ContextError::Domain(DomainError::Incomplete { operation: actual, .. }))
+                    if actual == operation
+            ));
+            assert!(matches!(
+                checked_resource_mul(u64::MAX, 2, operation),
+                Err(ContextError::Domain(DomainError::Incomplete { operation: actual, .. }))
+                    if actual == operation
+            ));
+        }
+        assert!(matches!(
+            context_resource_formula(
+                u64::try_from(MAX).unwrap() + 1,
+                0,
+                ContextReservationLayout::default(),
+                ContextTypedCapacities::default(),
+            ),
+            Err(ContextError::Domain(DomainError::Incomplete {
+                operation: "context resource candidate count",
+                ..
+            }))
+        ));
+        assert!(matches!(
+            context_resource_formula(
+                0,
+                MAX_FILE_BYTES + 1,
+                ContextReservationLayout::default(),
+                ContextTypedCapacities::default(),
+            ),
+            Err(ContextError::Domain(DomainError::Incomplete {
+                operation: "context resource CAS source bytes",
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn resource_formula_charges_allocator_excess_typed_capacity_exactly() {
+        let requested = ContextTypedCapacities::requested(2).unwrap();
+        let mut excess = requested;
+        excess.candidates += 3;
+        excess.anchors += 5;
+        excess.unknowns += 7;
+        excess.included += 11;
+        excess.excluded += 13;
+        excess.losses += 17;
+        excess.discovery_vectors += 19;
+        let base =
+            context_resource_formula(2, 0, ContextReservationLayout::default(), requested).unwrap();
+        let observed =
+            context_resource_formula(2, 0, ContextReservationLayout::default(), excess).unwrap();
+        let expected_delta = 3 * size_of::<Candidate>()
+            + 5 * size_of::<(u64, u64, StableId)>()
+            + 7 * size_of::<EnvelopeUnknown>()
+            + 11 * size_of::<SourceArtifactRef>()
+            + 13 * size_of::<ExcludedSourceRef>()
+            + 17 * size_of::<EnvelopeLoss>()
+            + 19;
+        assert_eq!(observed - base, u64::try_from(expected_delta).unwrap());
+    }
+
+    #[test]
+    fn obligation_reservation_uses_deep_owned_collections_not_wire_size() {
+        let base = obligation_with_seed("file:seed-00");
+        let mut value = serde_json::to_value(&base).unwrap();
+        let ids = (0..64)
+            .map(|index| format!("file:s{index:02}"))
+            .collect::<Vec<_>>();
+        for field in [
+            "target_refs",
+            "normalized_target_refs",
+            "source_ids",
+            "normalized_source_ids",
+        ] {
+            value[field] = json!(ids);
+        }
+        let expanded: Obligation = serde_json::from_value(value).unwrap();
+        let predicted = obligation_clone_backing_reservation(&expanded).unwrap();
+        let actual = u64::try_from(expanded.allocated_bytes()).unwrap();
+        assert_eq!(predicted, actual);
+        assert!(predicted > obligation_clone_backing_reservation(&base).unwrap());
+        assert!(actual > serialized_size(&expanded).unwrap());
     }
 }
