@@ -11,16 +11,22 @@ mod journal;
 
 #[cfg(target_os = "linux")]
 pub use index::{
-    DerivedIndex, DerivedIndexV4, INDEX_SCHEMA_VERSION_V4, IndexAccountingV4,
-    IndexArtifactRegistration, IndexArtifactRegistrationV4, IndexClaim, IndexClaimAssessmentV3,
-    IndexContextEnvelope, IndexDecisionV3, IndexError, IndexEvent, IndexEvidenceBindingV3,
-    IndexEvidenceV3, IndexExecution, IndexFinding, IndexFindingV3, IndexLimits, IndexMarker,
-    IndexMarkerV4, IndexObligation, IndexObligationLifecycle, IndexProgramObject,
-    IndexProgramRelation, IndexRebuildReceipt, IndexRebuildReceiptV4, IndexReviewPlan, IndexShadow,
-    IndexSnapshot, IndexSnapshotSource, IndexSnapshotV4, IndexUniverse, IndexVerificationV3,
-    PROJECTION_CONTRACT_VERSION_V4, V4CoverageAxis, V4SelectionCounts, V4SelectionItem,
-    V4SelectionRequest, V4SelectionSummary, V4SelectionVisitError, V4SelectionVisitor,
-    ValidatedIndexSnapshotV4,
+    ArtifactRegistrationV4IndexItem, ContextCoverV4IndexItem, DerivedIndex, DerivedIndexV4,
+    DerivedIndexV5, GlobalCandidateV4IndexItem, GluingAttemptV4IndexItem,
+    GluingInputDescriptorV4IndexItem, GluingObstructionV4IndexItem, INDEX_SCHEMA_VERSION_V4,
+    INDEX_SCHEMA_VERSION_V5, IndexAccountingV4, IndexAccountingV5, IndexArtifactRegistration,
+    IndexArtifactRegistrationV4, IndexClaim, IndexClaimAssessmentV3, IndexContextEnvelope,
+    IndexDecisionV3, IndexError, IndexEvent, IndexEvidenceBindingV3, IndexEvidenceV3,
+    IndexExecution, IndexFinding, IndexFindingV3, IndexLimits, IndexMarker, IndexMarkerV4,
+    IndexObligation, IndexObligationLifecycle, IndexProgramObject, IndexProgramRelation,
+    IndexRebuildReceipt, IndexRebuildReceiptV4, IndexRebuildReceiptV5, IndexReviewPlan,
+    IndexShadow, IndexSnapshot, IndexSnapshotSource, IndexSnapshotV4, IndexSnapshotV5,
+    IndexUniverse, IndexVerificationV3, PROJECTION_CONTRACT_VERSION_V4,
+    PROJECTION_CONTRACT_VERSION_V5, RestrictionV4IndexItem, SectionV4IndexItem, V4CoverageAxis,
+    V4SelectionCounts, V4SelectionItem, V4SelectionRequest, V4SelectionSummary,
+    V4SelectionVisitError, V4SelectionVisitor, V5CoverageAxis, V5SelectionCounts, V5SelectionItem,
+    V5SelectionRequest, V5SelectionSummary, V5SelectionVisitError, V5SelectionVisitor,
+    ValidatedIndexSnapshotV4, ValidatedIndexSnapshotV5,
 };
 #[cfg(target_os = "linux")]
 pub use journal::{
@@ -28,12 +34,12 @@ pub use journal::{
     JournalAppendReceipt, JournalError, JournalGenesis, JournalIdentity, JournalLimits,
     JournalReader, JournalRecoveryReceipt, JournalWriter, M4BundleMarkerActionV4,
     M4BundleMarkerRecoveryReceiptV4, M4BundlePrefixClassificationV4, M4BundlePrefixStageV4,
-    RecoveredM4BundleV4Session, RecoveredV4Session, RecoveredVerificationBundleV3Session,
-    RecoveryCompletion, RecoveryInspectionV4, RecoveryIntent, RecoveryKeyV4, RecoveryKindV4,
-    RecoveryOutcomeV4, RecoveryProvenanceV4, RecoveryReceiptV4, ReplayedV2RunSession,
-    ReplayedV3RunSession, ReplayedV4RunSession, V3VerificationBundleAppendReceipt,
-    V4EventAppendReceipt, V4GluingBundleAppendReceipt, V4VerificationBundleAppendReceipt,
-    VerificationBundleDurableStageV3,
+    M5GluingProfileSessionV4, RecoveredM4BundleV4Session, RecoveredV4Session,
+    RecoveredVerificationBundleV3Session, RecoveryCompletion, RecoveryInspectionV4, RecoveryIntent,
+    RecoveryKeyV4, RecoveryKindV4, RecoveryOutcomeV4, RecoveryProvenanceV4, RecoveryReceiptV4,
+    ReplayedV2RunSession, ReplayedV3RunSession, ReplayedV4RunSession,
+    V3VerificationBundleAppendReceipt, V4EventAppendReceipt, V4GluingBundleAppendReceipt,
+    V4VerificationBundleAppendReceipt, VerificationBundleDurableStageV3,
 };
 
 #[cfg(target_os = "linux")]

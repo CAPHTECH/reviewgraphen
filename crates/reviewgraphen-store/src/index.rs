@@ -35,6 +35,10 @@ use thiserror::Error;
 mod v4;
 pub use v4::*;
 
+#[path = "index_v5.rs"]
+mod v5;
+pub use v5::*;
+
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(test)]
