@@ -8,7 +8,7 @@
 
 use crate::{
     ClaimAssessmentV3, DomainError, EventLog, EvidenceRelationV3, ExecutionClaimV2, Obligation,
-    StableId, VerificationOutcomeV3,
+    ReviewAggregate, StableId, VerificationOutcomeV3,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -1116,6 +1116,290 @@ impl CurrentVerificationProofV4 {
     }
 }
 
+/// Exact current-state registration closure shared by event-v4 admission and
+/// final M5 minting. It owns only the deterministic cover domain and the one
+/// chosen assessment trace per eligible fixed context.
+pub(crate) struct M5RegistrationClosureV4 {
+    cover: ContextCoverV4,
+    overlap_member_ids: BTreeSet<StableId>,
+    chosen_contexts: Vec<M5ChosenContextClosureV4>,
+}
+
+struct M5ChosenContextClosureV4 {
+    context_id: StableId,
+    context_member_ids: BTreeSet<StableId>,
+    obligation_id: StableId,
+    claim_id: StableId,
+    claim_source_ids: BTreeSet<StableId>,
+    binding_ids: BTreeSet<StableId>,
+    evidence_ids: BTreeSet<StableId>,
+    verification_ids: BTreeSet<StableId>,
+    decision_ids: BTreeSet<StableId>,
+    finding_ids: BTreeSet<StableId>,
+    verification_passed: bool,
+}
+
+impl M5ChosenContextClosureV4 {
+    fn contains_trace_id(&self, id: &StableId) -> bool {
+        self.binding_ids.contains(id)
+            || self.evidence_ids.contains(id)
+            || self.verification_ids.contains(id)
+            || self.decision_ids.contains(id)
+            || self.finding_ids.contains(id)
+    }
+}
+
+impl M5RegistrationClosureV4 {
+    pub(crate) fn allows_qualification(
+        &self,
+        context_id: &StableId,
+        qualification_id: &StableId,
+    ) -> bool {
+        self.cover.cover_domain_ids.contains(qualification_id)
+            || self
+                .chosen_contexts
+                .iter()
+                .find(|chosen| &chosen.context_id == context_id)
+                .is_some_and(|chosen| chosen.contains_trace_id(qualification_id))
+    }
+}
+
+pub(crate) fn derive_registration_closure_v4<'a>(
+    aggregate: &ReviewAggregate,
+    run_id: &StableId,
+    plan_id: &StableId,
+    assessment_for: impl Fn(&StableId) -> Option<&'a ClaimAssessmentV3>,
+) -> M5Result<M5RegistrationClosureV4> {
+    let program = aggregate.program();
+    let universe = aggregate.universe();
+    let plan = aggregate
+        .review_plan(plan_id)
+        .ok_or_else(|| M5Error::Validation("M5 plan is not current durable state".into()))?;
+    require_same("plan snapshot", program.snapshot_id(), plan.snapshot_id())?;
+    require_same("plan universe", universe.id(), plan.universe_id())?;
+
+    let plan_obligation_ids = || plan.waves().iter().flat_map(|wave| wave.obligation_ids());
+    let mut selected_count = 0_usize;
+    for (position, obligation_id) in plan_obligation_ids().enumerate() {
+        if plan_obligation_ids()
+            .take(position)
+            .any(|earlier| earlier == obligation_id)
+        {
+            continue;
+        }
+        let Some(obligation) = aggregate.obligation(obligation_id) else {
+            continue;
+        };
+        if obligation.property_id() != DOUBLE_SUBMIT_PROPERTY_ID {
+            continue;
+        }
+        require_id_bytes(obligation_id, "M5 selected obligation ID bytes")?;
+        selected_count = selected_count.checked_add(1).ok_or(M5Error::Incomplete {
+            operation: "M5 selected obligations",
+            limit: MAX_M5_SELECTED_OBLIGATIONS,
+            observed: usize::MAX,
+        })?;
+        bounded_len(
+            selected_count,
+            MAX_M5_SELECTED_OBLIGATIONS,
+            "M5 selected obligations",
+        )?;
+    }
+    if selected_count == 0 {
+        return Err(M5Error::Empty {
+            field: "selected payment obligations",
+        });
+    }
+    let mut selected_obligations = Vec::with_capacity(selected_count);
+    let mut selected_obligation_ids = BTreeSet::new();
+    for obligation_id in plan_obligation_ids() {
+        let Some(obligation) = aggregate.obligation(obligation_id) else {
+            continue;
+        };
+        if obligation.property_id() == DOUBLE_SUBMIT_PROPERTY_ID
+            && selected_obligation_ids.insert(obligation_id.clone())
+        {
+            selected_obligations.push(obligation);
+        }
+    }
+    debug_assert_eq!(selected_obligations.len(), selected_count);
+    if !selected_obligation_ids.is_subset(universe.obligation_ids()) {
+        return Err(M5Error::Validation(
+            "M5 selected obligations are outside the current universe".into(),
+        ));
+    }
+
+    let mut invariants = program.invariants().iter().filter(|item| {
+        item.id.as_str() == DOUBLE_SUBMIT_INVARIANT_ID
+            && item.property_id == DOUBLE_SUBMIT_PROPERTY_ID
+    });
+    let Some(invariant) = invariants.next() else {
+        return Err(M5Error::Validation(
+            "M5 requires exactly one fixed payment invariant".into(),
+        ));
+    };
+    if invariants.next().is_some() {
+        return Err(M5Error::Validation(
+            "M5 requires exactly one fixed payment invariant".into(),
+        ));
+    }
+
+    let context_ids = required_contexts();
+    let find_context = |id: &StableId| -> M5Result<_> {
+        let mut found = program
+            .contexts()
+            .iter()
+            .filter(|context| &context.id == id);
+        let context = found.next().ok_or_else(|| {
+            M5Error::Validation("M5 requires each fixed context exactly once".into())
+        })?;
+        if found.next().is_some() {
+            return Err(M5Error::Validation(
+                "M5 requires each fixed context exactly once".into(),
+            ));
+        }
+        bounded_len(
+            context.member_ids.len(),
+            MAX_M5_CONTEXT_MEMBER_IDS,
+            "M5 context members",
+        )?;
+        for member_id in &context.member_ids {
+            require_id_bytes(member_id, "M5 context member ID bytes")?;
+        }
+        Ok(context)
+    };
+    let local_contexts = [
+        find_context(&context_ids[0])?,
+        find_context(&context_ids[1])?,
+    ];
+    let cover_domain_admission = preflight_mint_cover_domain(
+        &invariant.scope_ids,
+        &local_contexts[0].member_ids,
+        &local_contexts[1].member_ids,
+        &selected_obligations,
+    )?;
+    let overlap_count = local_contexts[0]
+        .member_ids
+        .intersection(&local_contexts[1].member_ids)
+        .try_fold(0_usize, |count, id| {
+            require_id_bytes(id, "M5 overlap ID bytes")?;
+            let next = count.checked_add(1).ok_or(M5Error::Incomplete {
+                operation: "M5 overlap_member_ids",
+                limit: MAX_M5_OVERLAP_IDS,
+                observed: usize::MAX,
+            })?;
+            bounded_len(next, MAX_M5_OVERLAP_IDS, "M5 overlap_member_ids")?;
+            Ok::<usize, M5Error>(next)
+        })?;
+    let overlap_member_ids = local_contexts[0]
+        .member_ids
+        .intersection(&local_contexts[1].member_ids)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    debug_assert_eq!(overlap_member_ids.len(), overlap_count);
+    note_cover_domain_target_allocation();
+    let mut obligation_domain = BTreeSet::new();
+    for obligation in &selected_obligations {
+        obligation_domain.extend(obligation.normalized_target_refs().iter().cloned());
+        obligation_domain.extend(obligation.normalized_source_ids().iter().cloned());
+    }
+    let combined_domain_count = preflight_union(
+        &[
+            &invariant.scope_ids,
+            &local_contexts[0].member_ids,
+            &local_contexts[1].member_ids,
+            &obligation_domain,
+        ],
+        &[],
+        MAX_M5_COVER_DOMAIN_IDS,
+        "M5 admitted cover domain",
+    )?;
+    if combined_domain_count != cover_domain_admission.count {
+        return Err(M5Error::Validation(
+            "M5 cover domain changed after borrowed admission".into(),
+        ));
+    }
+    let cover = ContextCoverV4::derive(
+        run_id.clone(),
+        program.snapshot_id().clone(),
+        universe.id().clone(),
+        plan.id().clone(),
+        selected_obligation_ids,
+        invariant.scope_ids.clone(),
+        local_contexts[0].member_ids.clone(),
+        local_contexts[1].member_ids.clone(),
+        obligation_domain,
+    )?;
+
+    let mut chosen_contexts = Vec::new();
+    for context in local_contexts {
+        let mut eligible = None;
+        for claim in aggregate.execution_claims() {
+            if claim.property_id() != DOUBLE_SUBMIT_PROPERTY_ID
+                || claim.obligation_ids().len() != 1
+                || claim.source_ids().is_disjoint(&context.member_ids)
+            {
+                continue;
+            }
+            let Some(obligation_id) = claim.obligation_ids().first() else {
+                continue;
+            };
+            let Some(obligation) = selected_obligations
+                .iter()
+                .find(|item| item.id() == obligation_id)
+                .copied()
+            else {
+                continue;
+            };
+            if !obligation.normalized_context_ids().contains(&context.id) {
+                continue;
+            }
+            let Some(assessment) = exact_current_assessment_for(
+                assessment_for(claim.id()),
+                claim,
+                run_id,
+                program.snapshot_id(),
+                universe.id(),
+            ) else {
+                continue;
+            };
+            let proof = CurrentVerificationProofV4::derive(
+                assessment,
+                claim,
+                obligation.id(),
+                program.snapshot_id(),
+            )?;
+            if eligible.is_some() {
+                return Err(M5Error::Validation(
+                    "M5 Section eligibility is ambiguous".into(),
+                ));
+            }
+            eligible = Some((claim, obligation, assessment, proof));
+        }
+        let Some((claim, obligation, assessment, proof)) = eligible else {
+            continue;
+        };
+        chosen_contexts.push(M5ChosenContextClosureV4 {
+            context_id: context.id.clone(),
+            context_member_ids: context.member_ids.clone(),
+            obligation_id: obligation.id().clone(),
+            claim_id: claim.id().clone(),
+            claim_source_ids: claim.source_ids().clone(),
+            binding_ids: assessment.binding_ids().iter().cloned().collect(),
+            evidence_ids: assessment.evidence_ids().iter().cloned().collect(),
+            verification_ids: assessment.verification_ids().iter().cloned().collect(),
+            decision_ids: assessment.decision_ids().iter().cloned().collect(),
+            finding_ids: assessment.finding_ids().iter().cloned().collect(),
+            verification_passed: proof.passed,
+        });
+    }
+    Ok(M5RegistrationClosureV4 {
+        cover,
+        overlap_member_ids,
+        chosen_contexts,
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GluingInputDescriptorV4 {
@@ -1373,225 +1657,41 @@ impl ValidatedM5SourceV4 {
             &plan_id,
             registered_inputs[1].descriptor.plan_id(),
         )?;
-        let plan = aggregate
-            .review_plan(&plan_id)
-            .ok_or_else(|| M5Error::Validation("M5 plan is not current durable state".into()))?;
-        require_same("plan snapshot", program.snapshot_id(), plan.snapshot_id())?;
-        require_same("plan universe", universe.id(), plan.universe_id())?;
-
-        let plan_obligation_ids = || plan.waves().iter().flat_map(|wave| wave.obligation_ids());
-        let mut selected_count = 0_usize;
-        for (position, obligation_id) in plan_obligation_ids().enumerate() {
-            if plan_obligation_ids()
-                .take(position)
-                .any(|earlier| earlier == obligation_id)
-            {
-                continue;
-            }
-            let Some(obligation) = aggregate.obligation(obligation_id) else {
-                continue;
-            };
-            if obligation.property_id() != DOUBLE_SUBMIT_PROPERTY_ID {
-                continue;
-            }
-            require_id_bytes(obligation_id, "M5 selected obligation ID bytes")?;
-            selected_count = selected_count.checked_add(1).ok_or(M5Error::Incomplete {
-                operation: "M5 selected obligations",
-                limit: MAX_M5_SELECTED_OBLIGATIONS,
-                observed: usize::MAX,
+        let closure =
+            derive_registration_closure_v4(aggregate, view.run_id(), &plan_id, |claim_id| {
+                view.claim_assessment_v3(claim_id)
             })?;
-            bounded_len(
-                selected_count,
-                MAX_M5_SELECTED_OBLIGATIONS,
-                "M5 selected obligations",
-            )?;
-        }
-        if selected_count == 0 {
-            return Err(M5Error::Empty {
-                field: "selected payment obligations",
-            });
-        }
-        let mut selected_obligations = Vec::with_capacity(selected_count);
-        let mut selected_obligation_ids = BTreeSet::new();
-        for obligation_id in plan_obligation_ids() {
-            let Some(obligation) = aggregate.obligation(obligation_id) else {
-                continue;
-            };
-            if obligation.property_id() == DOUBLE_SUBMIT_PROPERTY_ID
-                && selected_obligation_ids.insert(obligation_id.clone())
-            {
-                selected_obligations.push(obligation);
-            }
-        }
-        debug_assert_eq!(selected_obligations.len(), selected_count);
-        if !selected_obligation_ids.is_subset(universe.obligation_ids()) {
-            return Err(M5Error::Validation(
-                "M5 selected obligations are outside the current universe".into(),
-            ));
-        }
-        let mut invariants = program.invariants().iter().filter(|item| {
-            item.id.as_str() == DOUBLE_SUBMIT_INVARIANT_ID
-                && item.property_id == DOUBLE_SUBMIT_PROPERTY_ID
-        });
-        let Some(invariant) = invariants.next() else {
-            return Err(M5Error::Validation(
-                "M5 requires exactly one fixed payment invariant".into(),
-            ));
-        };
-        if invariants.next().is_some() {
-            return Err(M5Error::Validation(
-                "M5 requires exactly one fixed payment invariant".into(),
-            ));
-        }
-        let find_context = |id: &StableId| -> M5Result<_> {
-            let mut found = program
-                .contexts()
+        let M5RegistrationClosureV4 {
+            cover,
+            overlap_member_ids,
+            chosen_contexts,
+        } = closure;
+        let mut sections = Vec::with_capacity(chosen_contexts.len());
+        for chosen in chosen_contexts {
+            let index = contexts
                 .iter()
-                .filter(|context| &context.id == id);
-            let context = found.next().ok_or_else(|| {
-                M5Error::Validation("M5 requires each fixed context exactly once".into())
-            })?;
-            if found.next().is_some() {
-                return Err(M5Error::Validation(
-                    "M5 requires each fixed context exactly once".into(),
-                ));
-            }
-            bounded_len(
-                context.member_ids.len(),
-                MAX_M5_CONTEXT_MEMBER_IDS,
-                "M5 context members",
-            )?;
-            for member_id in &context.member_ids {
-                require_id_bytes(member_id, "M5 context member ID bytes")?;
-            }
-            Ok(context)
-        };
-        let local_contexts = [find_context(&contexts[0])?, find_context(&contexts[1])?];
-        let cover_domain_admission = preflight_mint_cover_domain(
-            &invariant.scope_ids,
-            &local_contexts[0].member_ids,
-            &local_contexts[1].member_ids,
-            &selected_obligations,
-        )?;
-        let overlap_count = local_contexts[0]
-            .member_ids
-            .intersection(&local_contexts[1].member_ids)
-            .try_fold(0_usize, |count, id| {
-                require_id_bytes(id, "M5 overlap ID bytes")?;
-                let next = count.checked_add(1).ok_or(M5Error::Incomplete {
-                    operation: "M5 overlap_member_ids",
-                    limit: MAX_M5_OVERLAP_IDS,
-                    observed: usize::MAX,
+                .position(|context_id| context_id == &chosen.context_id)
+                .ok_or_else(|| {
+                    M5Error::Validation("M5 chosen context is outside the fixed cover".into())
                 })?;
-                bounded_len(next, MAX_M5_OVERLAP_IDS, "M5 overlap_member_ids")?;
-                Ok::<usize, M5Error>(next)
-            })?;
-        let overlap_member_ids = local_contexts[0]
-            .member_ids
-            .intersection(&local_contexts[1].member_ids)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        debug_assert_eq!(overlap_member_ids.len(), overlap_count);
-        note_cover_domain_target_allocation();
-        let mut obligation_domain = BTreeSet::new();
-        for obligation in &selected_obligations {
-            obligation_domain.extend(obligation.normalized_target_refs().iter().cloned());
-            obligation_domain.extend(obligation.normalized_source_ids().iter().cloned());
-        }
-        let combined_domain_count = preflight_union(
-            &[
-                &invariant.scope_ids,
-                &local_contexts[0].member_ids,
-                &local_contexts[1].member_ids,
-                &obligation_domain,
-            ],
-            &[],
-            MAX_M5_COVER_DOMAIN_IDS,
-            "M5 admitted cover domain",
-        )?;
-        if combined_domain_count != cover_domain_admission.count {
-            return Err(M5Error::Validation(
-                "M5 cover domain changed after borrowed admission".into(),
-            ));
-        }
-        let cover = ContextCoverV4::derive(
-            view.run_id().clone(),
-            program.snapshot_id().clone(),
-            universe.id().clone(),
-            plan.id().clone(),
-            selected_obligation_ids,
-            invariant.scope_ids.clone(),
-            local_contexts[0].member_ids.clone(),
-            local_contexts[1].member_ids.clone(),
-            obligation_domain,
-        )?;
-
-        let mut sections = Vec::new();
-        for index in 0..2 {
-            let context = local_contexts[index];
-            let mut eligible = None;
-            for claim in aggregate.execution_claims() {
-                if claim.property_id() != DOUBLE_SUBMIT_PROPERTY_ID
-                    || claim.obligation_ids().len() != 1
-                    || claim.source_ids().is_disjoint(&context.member_ids)
-                {
-                    continue;
-                }
-                let Some(obligation_id) = claim.obligation_ids().first() else {
-                    continue;
-                };
-                let Some(obligation) = selected_obligations
-                    .iter()
-                    .find(|item| item.id() == obligation_id)
-                    .copied()
-                else {
-                    continue;
-                };
-                if !obligation.normalized_context_ids().contains(&context.id) {
-                    continue;
-                }
-                let Some(assessment) = exact_current_assessment_for(
-                    view.claim_assessment_v3(claim.id()),
-                    claim,
-                    view.run_id(),
-                    program.snapshot_id(),
-                    universe.id(),
-                ) else {
-                    continue;
-                };
-                let proof = CurrentVerificationProofV4::derive(
-                    assessment,
-                    claim,
-                    obligation.id(),
-                    program.snapshot_id(),
-                )?;
-                if eligible.is_some() {
-                    return Err(M5Error::Validation(
-                        "M5 Section eligibility is ambiguous".into(),
-                    ));
-                }
-                eligible = Some((claim, obligation, assessment, proof));
-            }
-            let Some((claim, obligation, assessment, proof)) = eligible else {
-                continue;
-            };
             let input = &registered_inputs[index];
-            let section = SectionV4::derive_with_verification_state(
+            sections.push(SectionV4::derive_with_verification_state(
                 &cover,
                 &input.descriptor,
                 input.registration_id.clone(),
-                obligation.id().clone(),
-                claim.id().clone(),
-                proof,
-                &context.member_ids,
-                claim.source_ids().clone(),
-                assessment.binding_ids().iter().cloned().collect(),
-                assessment.evidence_ids().iter().cloned().collect(),
-                assessment.verification_ids().iter().cloned().collect(),
-                assessment.decision_ids().iter().cloned().collect(),
-                assessment.finding_ids().iter().cloned().collect(),
-            )?;
-            sections.push(section);
+                chosen.obligation_id,
+                chosen.claim_id,
+                CurrentVerificationProofV4 {
+                    passed: chosen.verification_passed,
+                },
+                &chosen.context_member_ids,
+                chosen.claim_source_ids,
+                chosen.binding_ids,
+                chosen.evidence_ids,
+                chosen.verification_ids,
+                chosen.decision_ids,
+                chosen.finding_ids,
+            )?);
         }
         validate_context_qualifications(
             &cover,
