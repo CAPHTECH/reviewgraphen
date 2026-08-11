@@ -6155,6 +6155,14 @@ impl AuthorityTrustRootsV3 {
         &self.policy_revision_hash
     }
 
+    /// The repository identity bound into this nonserializable authority root.
+    /// Source-bound projections use it only to reject a caller-supplied
+    /// repository mismatch; it does not broaden any replay authority.
+    #[must_use]
+    pub fn repository_id(&self) -> &StableId {
+        &self.repository_id
+    }
+
     fn harness_for_source(
         &self,
         registration: &ArtifactRegisteredV3,
@@ -14714,6 +14722,16 @@ mod tests {
             Vec::new(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn authority_roots_expose_the_bound_repository_identity() {
+        let (log, _, claim_id, _) = fixture_stage_base();
+        let roots = fixture_stage_roots(&log, claim_id);
+        assert_eq!(
+            roots.repository_id(),
+            log.aggregate().program().repository_id()
+        );
     }
 
     #[test]
