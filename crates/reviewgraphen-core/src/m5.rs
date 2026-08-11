@@ -7,7 +7,7 @@
 #![allow(dead_code)] // Activated by the separately reviewed event-v4 integration unit.
 
 use crate::{
-    ClaimAssessmentV3, DomainError, EvidenceRelationV3, ExecutionClaimV2, Obligation,
+    ClaimAssessmentV3, ContentHash, DomainError, EvidenceRelationV3, ExecutionClaimV2, Obligation,
     ReviewAggregate, StableId, VerificationOutcomeV3,
 };
 use serde::{Deserialize, Serialize};
@@ -1595,6 +1595,9 @@ pub struct GluingInputDescriptorV4 {
 }
 
 impl GluingInputDescriptorV4 {
+    pub(crate) fn complete_body_hash(&self) -> crate::Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(self)?))
+    }
     pub fn new(
         run_id: StableId,
         snapshot_id: StableId,
@@ -1919,6 +1922,9 @@ pub struct ContextCoverV4 {
 }
 
 impl ContextCoverV4 {
+    pub(crate) fn complete_body_hash(&self) -> crate::Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(self)?))
+    }
     #[allow(clippy::too_many_arguments)]
     fn derive(
         run_id: StableId,
@@ -2202,6 +2208,9 @@ pub struct SectionV4 {
 }
 
 impl SectionV4 {
+    pub(crate) fn complete_body_hash(&self) -> crate::Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(self)?))
+    }
     #[allow(clippy::too_many_arguments)]
     fn derive_unverified(
         cover: &ContextCoverV4,
@@ -2575,6 +2584,9 @@ pub struct RestrictionV4 {
 }
 
 impl RestrictionV4 {
+    pub(crate) fn complete_body_hash(&self) -> crate::Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(self)?))
+    }
     fn derive(section: &SectionV4, overlap_member_ids: &BTreeSet<StableId>) -> M5Result<Self> {
         bounded(
             overlap_member_ids,
@@ -2764,6 +2776,9 @@ pub struct GlobalCandidateV4 {
 }
 
 impl GlobalCandidateV4 {
+    pub(crate) fn complete_body_hash(&self) -> crate::Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(self)?))
+    }
     fn validate(&self) -> M5Result<()> {
         if self.schema != "reviewgraphen.global_candidate.v4"
             || self.property_id != DOUBLE_SUBMIT_PROPERTY_ID
@@ -2865,6 +2880,9 @@ pub struct GluingAttemptV4 {
     finding_ids: BTreeSet<StableId>,
 }
 impl GluingAttemptV4 {
+    pub(crate) fn complete_body_hash(&self) -> crate::Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(self)?))
+    }
     pub fn id(&self) -> &StableId {
         &self.id
     }
@@ -2994,6 +3012,9 @@ pub struct GluingObstructionV4 {
     blocks: BTreeSet<StableId>,
 }
 impl GluingObstructionV4 {
+    pub(crate) fn complete_body_hash(&self) -> crate::Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(self)?))
+    }
     pub fn id(&self) -> &StableId {
         &self.id
     }

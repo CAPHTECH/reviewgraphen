@@ -168,4 +168,17 @@ pub enum DomainError {
     /// and D2/M4 replay closure or was moved to another position.
     #[error("event-v4 gluing bundle does not match its sealed current closure")]
     GluingBundleMismatch,
+
+    /// M6 source binding requires the one complete atomic M5 baseline.
+    #[error("event-v4 historical projection requires exactly one complete M5 baseline")]
+    IncompleteSourceM5Baseline,
+
+    /// The pinned V4 historical topology contains an unknown, duplicate, or
+    /// otherwise non-canonical record/dependency relation.
+    #[error("event-v4 historical prefix mismatch: {0}")]
+    HistoricalPrefixMismatch(&'static str),
+
+    /// Historical predecessor references do not form the required DAG.
+    #[error("event-v4 historical dependency graph contains a cycle")]
+    HistoricalDependencyCycle,
 }

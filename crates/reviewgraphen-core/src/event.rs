@@ -9447,7 +9447,7 @@ fn event_vector_retained(events: &Vec<Event>) -> Result<u64> {
 /// in the following authority integration unit; this foundation owns only the
 /// versioned manifest and exact registration namespace.
 #[derive(Clone, Debug, Default)]
-struct V3RunAggregate {
+pub(crate) struct V3RunAggregate {
     genesis_manifest: Option<RunGenesisManifestV3>,
     registrations: BTreeMap<StableId, ArtifactRegisteredV3>,
     assessments: BTreeMap<StableId, crate::ClaimAssessmentV3>,
@@ -9753,6 +9753,30 @@ fn v3_reducer_growth_upper_bound(payload: &PersistedPayload) -> Result<u64> {
 }
 
 impl V3RunAggregate {
+    pub(crate) fn historical_assessments(&self) -> &BTreeMap<StableId, crate::ClaimAssessmentV3> {
+        &self.assessments
+    }
+
+    pub(crate) fn historical_evidence(&self) -> &BTreeMap<StableId, EvidenceV3> {
+        &self.evidence
+    }
+
+    pub(crate) fn historical_bindings(&self) -> &BTreeMap<StableId, EvidenceBindingV3> {
+        &self.bindings
+    }
+
+    pub(crate) fn historical_verifications(&self) -> &BTreeMap<StableId, VerificationV3> {
+        &self.verifications
+    }
+
+    pub(crate) fn historical_decisions(&self) -> &BTreeMap<StableId, DecisionV3> {
+        &self.decisions
+    }
+
+    pub(crate) fn historical_findings(&self) -> &BTreeMap<StableId, FindingV3> {
+        &self.findings
+    }
+
     fn retained_bytes(&self) -> Result<u64> {
         let mut total = u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX);
         if let Some(manifest) = &self.genesis_manifest {
@@ -13686,6 +13710,325 @@ pub struct EventLogV4 {
     tail_hash: ContentHash,
 }
 
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+const MAX_V4_HISTORICAL_SOURCE_RECORDS: usize = 8_192;
+
+/// Narrow, borrow-only input to the V4 historical coverage reducer. It can be
+/// produced only from one replayed log whose sole atomic M5 bundle is present.
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+pub(crate) struct HistoricalCoverageSourceV4<'a> {
+    aggregate: &'a ReviewAggregate,
+    v3: &'a V3RunAggregate,
+    cover: &'a crate::ContextCoverV4,
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+impl<'a> HistoricalCoverageSourceV4<'a> {
+    pub(crate) const fn aggregate(&self) -> &'a ReviewAggregate {
+        self.aggregate
+    }
+
+    pub(crate) const fn v3(&self) -> &'a V3RunAggregate {
+        self.v3
+    }
+
+    pub(crate) const fn cover(&self) -> &'a crate::ContextCoverV4 {
+        self.cover
+    }
+}
+
+/// Portable admission estimate for the peak reached while materializing the
+/// immutable historical projection.  The estimate deliberately charges the
+/// already-live replay state as well as every owned collection introduced by
+/// this operation; no allocator-specific B-tree node layout participates in
+/// the contract.
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HistoricalProjectionWorkingOracleV4 {
+    replay_ownership_bytes: u64,
+    aggregate_validation_bytes: u64,
+    dependency_graph_bytes: u64,
+    record_index_bytes: u64,
+    coverage_numerator_bytes: u64,
+    canonical_scratch_bytes: u64,
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+impl HistoricalProjectionWorkingOracleV4 {
+    fn total(self) -> Result<u64> {
+        [
+            self.replay_ownership_bytes,
+            self.aggregate_validation_bytes,
+            self.dependency_graph_bytes,
+            self.record_index_bytes,
+            self.coverage_numerator_bytes,
+            self.canonical_scratch_bytes,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, bytes| {
+            total.checked_add(bytes).ok_or(DomainError::Incomplete {
+                operation: "event-v4 historical projection working bytes",
+                limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })
+        })
+    }
+
+    fn admit(self, limit: u64) -> Result<u64> {
+        let observed = self.total()?;
+        if observed > limit {
+            return Err(DomainError::Incomplete {
+                operation: "event-v4 historical projection working bytes",
+                limit: usize::try_from(limit).unwrap_or(usize::MAX),
+                observed: usize::try_from(observed).unwrap_or(usize::MAX),
+            });
+        }
+        Ok(observed)
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static HISTORICAL_PROJECTION_MATERIALIZATIONS_V4: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// Closed order used by ADR 0023 §8. Declaration order is semantic.
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum HistoricalSourceRecordKindV4 {
+    Obligation,
+    ReviewPlan,
+    ContextEnvelope,
+    Execution,
+    Claim,
+    ClaimAssessment,
+    ArtifactRegistrationV3,
+    ArtifactRegistrationV4,
+    Evidence,
+    EvidenceBinding,
+    Verification,
+    Decision,
+    Finding,
+    GluingInputDescriptor,
+    ContextCover,
+    Section,
+    Restriction,
+    GluingAttempt,
+    GlobalCandidate,
+    GluingObstruction,
+    Coverage,
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+impl HistoricalSourceRecordKindV4 {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Obligation => "obligation",
+            Self::ReviewPlan => "review_plan",
+            Self::ContextEnvelope => "context_envelope",
+            Self::Execution => "execution",
+            Self::Claim => "claim",
+            Self::ClaimAssessment => "claim_assessment",
+            Self::ArtifactRegistrationV3 => "artifact_registration_v3",
+            Self::ArtifactRegistrationV4 => "artifact_registration_v4",
+            Self::Evidence => "evidence",
+            Self::EvidenceBinding => "evidence_binding",
+            Self::Verification => "verification",
+            Self::Decision => "decision",
+            Self::Finding => "finding",
+            Self::GluingInputDescriptor => "gluing_input_descriptor",
+            Self::ContextCover => "context_cover",
+            Self::Section => "section",
+            Self::Restriction => "restriction",
+            Self::GluingAttempt => "gluing_attempt",
+            Self::GlobalCandidate => "global_candidate",
+            Self::GluingObstruction => "gluing_obstruction",
+            Self::Coverage => "coverage",
+        }
+    }
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+#[derive(Clone, Copy)]
+pub(crate) enum HistoricalSourceRecordValueV4<'a> {
+    Obligation(&'a crate::Obligation),
+    ReviewPlan(&'a ReviewPlan),
+    ContextEnvelope(&'a ReviewContextEnvelope),
+    Execution(&'a ExecutionRecord),
+    Claim(&'a ExecutionClaimV2),
+    ClaimAssessment(&'a crate::ClaimAssessmentV3),
+    ArtifactRegistrationV3(&'a ArtifactRegisteredV3),
+    ArtifactRegistrationV4(&'a ArtifactRegistrationV4),
+    Evidence(&'a EvidenceV3),
+    EvidenceBinding(&'a EvidenceBindingV3),
+    Verification(&'a VerificationV3),
+    Decision(&'a DecisionV3),
+    Finding(&'a FindingV3),
+    GluingInputDescriptor(&'a crate::GluingInputDescriptorV4),
+    ContextCover(&'a crate::ContextCoverV4),
+    Section(&'a crate::SectionV4),
+    Restriction(&'a crate::RestrictionV4),
+    GluingAttempt(&'a crate::GluingAttemptV4),
+    GlobalCandidate(&'a crate::GlobalCandidateV4),
+    GluingObstruction(&'a crate::GluingObstructionV4),
+    Coverage(&'a crate::coverage::HistoricalCoverageSnapshotV4),
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+pub(crate) struct HistoricalSourceRecordProjectionV4<'a> {
+    kind: HistoricalSourceRecordKindV4,
+    id: &'a StableId,
+    body_hash: ContentHash,
+    pinned_active_or_current: bool,
+    value: HistoricalSourceRecordValueV4<'a>,
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+impl<'a> HistoricalSourceRecordProjectionV4<'a> {
+    pub(crate) const fn kind(&self) -> HistoricalSourceRecordKindV4 {
+        self.kind
+    }
+    pub(crate) const fn id(&self) -> &'a StableId {
+        self.id
+    }
+    pub(crate) const fn body_hash(&self) -> &ContentHash {
+        &self.body_hash
+    }
+    pub(crate) const fn pinned_active_or_current(&self) -> bool {
+        self.pinned_active_or_current
+    }
+    pub(crate) const fn value(&self) -> &HistoricalSourceRecordValueV4<'a> {
+        &self.value
+    }
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+struct HistoricalSourceRecordBorrowV4<'a> {
+    kind: HistoricalSourceRecordKindV4,
+    id: &'a StableId,
+    body_hash: ContentHash,
+    pinned_active_or_current: bool,
+    value: HistoricalSourceRecordValueV4<'a>,
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+fn validate_historical_dependency_graph_v4<'a>(
+    universe_ids: &'a BTreeSet<StableId>,
+    obligations: impl Iterator<Item = (&'a StableId, &'a BTreeSet<StableId>)>,
+) -> Result<()> {
+    let mut indegree = BTreeMap::<&StableId, usize>::new();
+    let mut dependents = BTreeMap::<&StableId, BTreeSet<&StableId>>::new();
+    for (obligation_id, dependencies) in obligations {
+        if !universe_ids.contains(obligation_id) {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "obligation owner is outside the pinned universe",
+            ));
+        }
+        if indegree.insert(obligation_id, dependencies.len()).is_some() {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "duplicate historical obligation owner",
+            ));
+        }
+        for dependency in dependencies {
+            if !universe_ids.contains(dependency) {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "obligation dependency is outside the pinned universe",
+                ));
+            }
+            dependents
+                .entry(dependency)
+                .or_default()
+                .insert(obligation_id);
+        }
+    }
+    if indegree.len() != universe_ids.len() {
+        return Err(DomainError::HistoricalPrefixMismatch(
+            "historical obligation owners do not equal the pinned universe",
+        ));
+    }
+    let mut ready = indegree
+        .iter()
+        .filter(|(_, count)| **count == 0)
+        .map(|(id, _)| *id)
+        .collect::<BTreeSet<_>>();
+    let mut visited = 0_usize;
+    while let Some(id) = ready.pop_first() {
+        visited += 1;
+        for dependent in dependents.get(id).into_iter().flatten() {
+            let count =
+                indegree
+                    .get_mut(dependent)
+                    .ok_or(DomainError::HistoricalPrefixMismatch(
+                        "obligation dependency owner is unknown",
+                    ))?;
+            *count -= 1;
+            if *count == 0 {
+                ready.insert(dependent);
+            }
+        }
+    }
+    if visited != universe_ids.len() {
+        return Err(DomainError::HistoricalDependencyCycle);
+    }
+    Ok(())
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+fn insert_historical_record_key_v4<'a>(
+    keys: &mut BTreeSet<(HistoricalSourceRecordKindV4, &'a StableId)>,
+    kind: HistoricalSourceRecordKindV4,
+    id: &'a StableId,
+) -> Result<()> {
+    if !keys.insert((kind, id)) {
+        return Err(DomainError::HistoricalPrefixMismatch(
+            "duplicate historical source kind/ID",
+        ));
+    }
+    Ok(())
+}
+
+/// One tail-pinned, authority-free historical source topology. The record
+/// values borrow the replay aggregate/bundle and cannot outlive or mutate it.
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+pub(crate) struct HistoricalPrefixProjectionV4<'a> {
+    tail_hash: &'a ContentHash,
+    records: Vec<HistoricalSourceRecordBorrowV4<'a>>,
+    coverage: crate::coverage::HistoricalCoverageSnapshotV4,
+    coverage_body_hash: ContentHash,
+}
+
+#[allow(dead_code)] // consumed by the following M6 reducer slice
+impl HistoricalPrefixProjectionV4<'_> {
+    pub(crate) fn tail_hash(&self) -> &ContentHash {
+        self.tail_hash
+    }
+    pub(crate) fn record_count(&self) -> usize {
+        self.records.len() + 1
+    }
+    pub(crate) fn visit_records(
+        &self,
+        mut visitor: impl FnMut(HistoricalSourceRecordProjectionV4<'_>),
+    ) {
+        for record in &self.records {
+            visitor(HistoricalSourceRecordProjectionV4 {
+                kind: record.kind,
+                id: record.id,
+                body_hash: record.body_hash.clone(),
+                pinned_active_or_current: record.pinned_active_or_current,
+                value: record.value,
+            });
+        }
+        visitor(HistoricalSourceRecordProjectionV4 {
+            kind: HistoricalSourceRecordKindV4::Coverage,
+            id: self.coverage.id(),
+            body_hash: self.coverage_body_hash.clone(),
+            pinned_active_or_current: false,
+            value: HistoricalSourceRecordValueV4::Coverage(&self.coverage),
+        });
+    }
+}
+
 /// Minimal lookup trace for the post-admission Store traversal. It retains no
 /// payload DTO, prose, source collection, canonical buffer, or authority.
 /// Dynamic ID bytes are a subset of the already bounded canonical payload;
@@ -14648,6 +14991,668 @@ impl EventLogV4 {
         self.m5_bundle
             .as_ref()
             .map(|value| BorrowedGluingBundleProjectionV4 { value })
+    }
+
+    /// Atomically pins and projects the complete V4 historical source
+    /// topology used by M6 §8. No event, append token, replay basis, raw DTO,
+    /// or mutable aggregate escapes this borrow.
+    #[allow(dead_code)] // consumed by the following M6 reducer slice
+    pub(crate) fn historical_coverage_source_v4(&self) -> Result<HistoricalCoverageSourceV4<'_>> {
+        let bundle = self
+            .m5_bundle
+            .as_ref()
+            .ok_or(DomainError::IncompleteSourceM5Baseline)?;
+        Ok(HistoricalCoverageSourceV4 {
+            aggregate: &self.aggregate,
+            v3: &self.v3_aggregate,
+            cover: bundle.cover(),
+        })
+    }
+
+    #[allow(dead_code)] // consumed by the following M6 reducer slice
+    pub(crate) fn historical_prefix_projection_v4(
+        &self,
+    ) -> Result<HistoricalPrefixProjectionV4<'_>> {
+        self.historical_prefix_projection_v4_with_limit(MAX_V5_REPLAY_WORKING_BYTES)
+    }
+
+    #[allow(dead_code)] // consumed by the following M6 reducer slice
+    fn historical_projection_working_oracle_v4(
+        &self,
+        record_count: usize,
+    ) -> Result<HistoricalProjectionWorkingOracleV4> {
+        fn add(operation: &'static str, total: &mut u64, bytes: u64) -> Result<()> {
+            *total = total.checked_add(bytes).ok_or(DomainError::Incomplete {
+                operation,
+                limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+            Ok(())
+        }
+
+        fn multiply(operation: &'static str, left: u64, right: u64) -> Result<u64> {
+            left.checked_mul(right).ok_or(DomainError::Incomplete {
+                operation,
+                limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })
+        }
+
+        let operation = "event-v4 historical projection working bytes";
+        let aggregate_bytes = self.aggregate.retained_bytes_v3()?;
+        let v3_aggregate_bytes = self.v3_aggregate.retained_bytes()?;
+        let mut replay_ownership_bytes = self.initial.retained_bytes_v3()?;
+        add(operation, &mut replay_ownership_bytes, aggregate_bytes)?;
+        add(operation, &mut replay_ownership_bytes, v3_aggregate_bytes)?;
+        // Envelope payloads are the immutable replay basis for every decoded
+        // V4 value.  A fixed 32x portable charge also covers decoded V4/M5
+        // map/vector slots and their owned scalar/string buffers without
+        // depending on allocator node headers.
+        add(
+            operation,
+            &mut replay_ownership_bytes,
+            multiply(operation, self.retained_envelope_bytes_for_store()?, 32)?,
+        )?;
+        add(
+            operation,
+            &mut replay_ownership_bytes,
+            u64::try_from(self.canonical_genesis_bytes.capacity()).unwrap_or(u64::MAX),
+        )?;
+        add(
+            operation,
+            &mut replay_ownership_bytes,
+            u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX),
+        )?;
+
+        let obligation_count =
+            u64::try_from(self.aggregate.universe().obligation_ids().len()).unwrap_or(u64::MAX);
+        let dependency_count = self
+            .aggregate
+            .obligations()
+            .try_fold(0_u64, |total, value| {
+                total
+                    .checked_add(
+                        u64::try_from(value.normalized_depends_on().len()).unwrap_or(u64::MAX),
+                    )
+                    .ok_or(DomainError::Incomplete {
+                        operation,
+                        limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                        observed: usize::MAX,
+                    })
+            })?;
+        let obligation_id_bytes =
+            self.aggregate
+                .universe()
+                .obligation_ids()
+                .iter()
+                .try_fold(0_u64, |total, id| {
+                    total
+                        .checked_add(u64::try_from(id.allocated_bytes()).unwrap_or(u64::MAX))
+                        .ok_or(DomainError::Incomplete {
+                            operation,
+                            limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES)
+                                .unwrap_or(usize::MAX),
+                            observed: usize::MAX,
+                        })
+                })?;
+
+        let dependency_slot_bytes = u64::try_from(
+            size_of::<(&StableId, usize)>()
+                + size_of::<(&StableId, BTreeSet<&StableId>)>()
+                + size_of::<&StableId>(),
+        )
+        .unwrap_or(u64::MAX);
+        let dependency_edge_bytes =
+            u64::try_from(size_of::<(&StableId, &StableId)>() + size_of::<&StableId>())
+                .unwrap_or(u64::MAX);
+        let dependency_graph_bytes = multiply(operation, obligation_count, dependency_slot_bytes)?
+            .checked_add(multiply(
+                operation,
+                dependency_count,
+                dependency_edge_bytes,
+            )?)
+            .ok_or(DomainError::Incomplete {
+                operation,
+                limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+
+        let record_count = u64::try_from(record_count).unwrap_or(u64::MAX);
+        let record_slot_bytes = u64::try_from(
+            size_of::<HistoricalSourceRecordBorrowV4<'static>>()
+                + size_of::<(HistoricalSourceRecordKindV4, &StableId)>()
+                + 128,
+        )
+        .unwrap_or(u64::MAX);
+        let record_index_bytes = multiply(operation, record_count, record_slot_bytes)?;
+
+        // Denominator plus five distinct numerator ID sets. Their IDs are
+        // cloned independently; charging all six at denominator cardinality
+        // is the exact worst case and does not conflate numerator semantics.
+        let coverage_slot_bytes = u64::try_from(size_of::<StableId>()).unwrap_or(u64::MAX);
+        let coverage_numerator_bytes = multiply(
+            operation,
+            6,
+            multiply(operation, obligation_count, coverage_slot_bytes)?
+                .checked_add(obligation_id_bytes)
+                .ok_or(DomainError::Incomplete {
+                    operation,
+                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+        )?;
+
+        // Allocation-free upper image of every simultaneously owned helper
+        // collection in HistoricalCoverageSnapshotV4::derive_from_pinned_v4.
+        // Counts and backing-string capacities come from the pinned aggregate;
+        // no caller estimate and no allocator node-layout guess participates.
+        let execution_count =
+            u64::try_from(self.aggregate.executions().count()).unwrap_or(u64::MAX);
+        let execution_id_bytes =
+            self.aggregate
+                .executions()
+                .try_fold(0_u64, |total, execution| {
+                    total
+                        .checked_add(
+                            u64::try_from(execution.id().allocated_bytes()).unwrap_or(u64::MAX),
+                        )
+                        .ok_or(DomainError::Incomplete {
+                            operation,
+                            limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES)
+                                .unwrap_or(usize::MAX),
+                            observed: usize::MAX,
+                        })
+                })?;
+        let claim_count =
+            u64::try_from(self.aggregate.execution_claims().count()).unwrap_or(u64::MAX);
+        let (claim_id_bytes, claim_obligation_id_bytes) = self
+            .aggregate
+            .execution_claims()
+            .try_fold((0_u64, 0_u64), |(claim_total, obligation_total), claim| {
+                let claim_total = claim_total
+                    .checked_add(u64::try_from(claim.id().allocated_bytes()).unwrap_or(u64::MAX))
+                    .ok_or(DomainError::Incomplete {
+                        operation,
+                        limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                        observed: usize::MAX,
+                    })?;
+                let obligation_total =
+                    claim
+                        .obligation_ids()
+                        .iter()
+                        .try_fold(obligation_total, |total, id| {
+                            total
+                                .checked_add(
+                                    u64::try_from(id.allocated_bytes()).unwrap_or(u64::MAX),
+                                )
+                                .ok_or(DomainError::Incomplete {
+                                    operation,
+                                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES)
+                                        .unwrap_or(usize::MAX),
+                                    observed: usize::MAX,
+                                })
+                        })?;
+                Ok::<_, DomainError>((claim_total, obligation_total))
+            })?;
+        let binding_count = u64::try_from(self.v3_aggregate.bindings.len()).unwrap_or(u64::MAX);
+        let binding_reference_id_bytes =
+            self.v3_aggregate
+                .bindings
+                .values()
+                .try_fold(0_u64, |total, binding| {
+                    [binding.claim_id(), binding.evidence_id()]
+                        .into_iter()
+                        .try_fold(total, |total, id| {
+                            total
+                                .checked_add(
+                                    u64::try_from(id.allocated_bytes()).unwrap_or(u64::MAX),
+                                )
+                                .ok_or(DomainError::Incomplete {
+                                    operation,
+                                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES)
+                                        .unwrap_or(usize::MAX),
+                                    observed: usize::MAX,
+                                })
+                        })
+                })?;
+        let verification_count =
+            u64::try_from(self.v3_aggregate.verifications.len()).unwrap_or(u64::MAX);
+        let verification_reference_id_bytes =
+            self.v3_aggregate
+                .verifications
+                .values()
+                .try_fold(0_u64, |total, verification| {
+                    [verification.claim_id(), verification.id()]
+                        .into_iter()
+                        .try_fold(total, |total, id| {
+                            total
+                                .checked_add(
+                                    u64::try_from(id.allocated_bytes()).unwrap_or(u64::MAX),
+                                )
+                                .ok_or(DomainError::Incomplete {
+                                    operation,
+                                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES)
+                                        .unwrap_or(usize::MAX),
+                                    observed: usize::MAX,
+                                })
+                        })
+                })?;
+        let stable_id_slot = u64::try_from(size_of::<StableId>()).unwrap_or(u64::MAX);
+        let nested_owner_slot =
+            u64::try_from(size_of::<(StableId, BTreeSet<StableId>)>()).unwrap_or(u64::MAX);
+        let claim_obligation_slot =
+            u64::try_from(size_of::<(StableId, StableId)>()).unwrap_or(u64::MAX);
+        let nested_value_slot =
+            nested_owner_slot
+                .checked_add(stable_id_slot)
+                .ok_or(DomainError::Incomplete {
+                    operation,
+                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?;
+        let nested_claim_slots = multiply(operation, claim_count, stable_id_slot)?;
+        let mut coverage_reduction_bytes = 0_u64;
+        // execution_ids
+        add(
+            operation,
+            &mut coverage_reduction_bytes,
+            multiply(operation, execution_count, stable_id_slot)?
+                .checked_add(execution_id_bytes)
+                .ok_or(DomainError::Incomplete {
+                    operation,
+                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+        )?;
+        // claim_ids
+        add(
+            operation,
+            &mut coverage_reduction_bytes,
+            multiply(operation, claim_count, stable_id_slot)?
+                .checked_add(claim_id_bytes)
+                .ok_or(DomainError::Incomplete {
+                    operation,
+                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+        )?;
+        // claim_obligation
+        add(
+            operation,
+            &mut coverage_reduction_bytes,
+            multiply(operation, claim_count, claim_obligation_slot)?
+                .checked_add(claim_id_bytes)
+                .and_then(|value| value.checked_add(claim_obligation_id_bytes))
+                .ok_or(DomainError::Incomplete {
+                    operation,
+                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+        )?;
+        // claims_by_execution owners plus nested claim IDs.
+        add(
+            operation,
+            &mut coverage_reduction_bytes,
+            multiply(operation, execution_count, nested_owner_slot)?
+                .checked_add(execution_id_bytes)
+                .and_then(|value| value.checked_add(nested_claim_slots))
+                .and_then(|value| value.checked_add(claim_id_bytes))
+                .ok_or(DomainError::Incomplete {
+                    operation,
+                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+        )?;
+        // reproduces_by_claim: worst case every binding has a distinct owner.
+        add(
+            operation,
+            &mut coverage_reduction_bytes,
+            multiply(operation, binding_count, nested_value_slot)?
+                .checked_add(binding_reference_id_bytes)
+                .ok_or(DomainError::Incomplete {
+                    operation,
+                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+        )?;
+        // passed_by_claim: worst case every verification has a distinct owner.
+        add(
+            operation,
+            &mut coverage_reduction_bytes,
+            multiply(operation, verification_count, nested_value_slot)?
+                .checked_add(verification_reference_id_bytes)
+                .ok_or(DomainError::Incomplete {
+                    operation,
+                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+        )?;
+
+        // Coverage can repeat every denominator ID in all five numerators.
+        // Charge that actual aggregate-dependent upper bound rather than
+        // assuming one ordinary event-line buffer. Stable IDs are ASCII by
+        // construction; the remaining user strings use JSON's six-byte
+        // worst-case escaping bound.
+        let universe = self.aggregate.universe();
+        let coverage_scalar_bytes = [
+            universe.id().allocated_bytes(),
+            universe.snapshot_id().allocated_bytes(),
+            universe.profile_id().len(),
+            universe.policy_version().len(),
+            universe.rule_set_hash().as_str().len(),
+            universe.extractor_set_hash().as_str().len(),
+            universe.rule_pack_version().len(),
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, bytes| {
+            total
+                .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation,
+                    limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })
+        })?;
+        let coverage_id_delimiters = multiply(operation, obligation_count, 18)?;
+        let coverage_escaped_scalars = multiply(operation, coverage_scalar_bytes, 6)?;
+        let coverage_canonical_upper = 16_384_u64
+            .checked_add(multiply(operation, obligation_id_bytes, 6)?)
+            .and_then(|value| value.checked_add(coverage_id_delimiters))
+            .and_then(|value| value.checked_add(coverage_escaped_scalars))
+            .ok_or(DomainError::Incomplete {
+                operation,
+                limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let canonical_peak = coverage_canonical_upper
+            .max(u64::try_from(MAX_D1_EVENT_LINE_BYTES).unwrap_or(u64::MAX));
+
+        Ok(HistoricalProjectionWorkingOracleV4 {
+            replay_ownership_bytes,
+            aggregate_validation_bytes: coverage_reduction_bytes,
+            dependency_graph_bytes,
+            record_index_bytes,
+            coverage_numerator_bytes,
+            // Identity and complete-body canonical encodings are sequential,
+            // but two protocol-sized buffers cover hash input plus serializer
+            // scratch at the peak.
+            canonical_scratch_bytes: multiply(operation, canonical_peak, 2)?,
+        })
+    }
+
+    #[allow(dead_code)] // production entry uses the fixed limit; tests pin the seam
+    fn historical_prefix_projection_v4_with_limit(
+        &self,
+        working_limit: u64,
+    ) -> Result<HistoricalPrefixProjectionV4<'_>> {
+        let bundle = self
+            .m5_bundle
+            .as_ref()
+            .ok_or(DomainError::IncompleteSourceM5Baseline)?;
+
+        // Count-only preflight. No record vector, ID set, canonical buffer, or
+        // coverage numerator is allocated before this inclusive bound.
+        let counts = [
+            self.aggregate.obligations().count(),
+            self.aggregate.review_plans().count(),
+            self.aggregate.context_envelopes().count(),
+            self.aggregate.executions().count(),
+            self.aggregate.execution_claims().count(),
+            self.v3_aggregate.assessments.len(),
+            self.v3_aggregate.registrations.len(),
+            self.v4_registrations.len(),
+            self.v3_aggregate.evidence.len(),
+            self.v3_aggregate.bindings.len(),
+            self.v3_aggregate.verifications.len(),
+            self.v3_aggregate.decisions.len(),
+            self.v3_aggregate.findings.len(),
+            self.v4_gluing_descriptors.len(),
+            1,
+            bundle.sections().len(),
+            bundle.restrictions().len(),
+            1,
+            usize::from(bundle.global_candidate().is_some()),
+            usize::from(bundle.obstruction().is_some()),
+            1,
+        ];
+        let record_count = counts.into_iter().try_fold(0_usize, |total, count| {
+            total.checked_add(count).ok_or(DomainError::Incomplete {
+                operation: "event-v4 historical source record count",
+                limit: MAX_V4_HISTORICAL_SOURCE_RECORDS,
+                observed: usize::MAX,
+            })
+        })?;
+        if record_count > MAX_V4_HISTORICAL_SOURCE_RECORDS {
+            return Err(DomainError::Incomplete {
+                operation: "event-v4 historical source record count",
+                limit: MAX_V4_HISTORICAL_SOURCE_RECORDS,
+                observed: record_count,
+            });
+        }
+
+        self.historical_projection_working_oracle_v4(record_count)?
+            .admit(working_limit)?;
+
+        #[cfg(test)]
+        HISTORICAL_PROJECTION_MATERIALIZATIONS_V4.with(|count| count.set(count.get() + 1));
+
+        // The obligation predecessor graph is the only raw historical graph
+        // permitted to introduce topological recursion at this foundation
+        // seam. External references and cycles are closed typed failures.
+        validate_historical_dependency_graph_v4(
+            self.aggregate.universe().obligation_ids(),
+            self.aggregate
+                .obligations()
+                .map(|value| (value.id(), value.normalized_depends_on())),
+        )?;
+
+        let coverage = crate::coverage::HistoricalCoverageSnapshotV4::derive(self)?;
+        crate::canonical::canonical_json_count_bounded(
+            &coverage,
+            MAX_D1_EVENT_LINE_BYTES,
+            "event-v4 historical coverage canonical bytes",
+        )?;
+        let coverage_body_hash = coverage.body_hash()?;
+        let mut records = Vec::new();
+        records
+            .try_reserve_exact(record_count.saturating_sub(1))
+            .map_err(|_| DomainError::Incomplete {
+                operation: "event-v4 historical source record allocation",
+                limit: MAX_V4_HISTORICAL_SOURCE_RECORDS,
+                observed: record_count,
+            })?;
+        let mut keys = BTreeSet::new();
+        macro_rules! push_record {
+            ($kind:ident, $id:expr, $hash:expr, $value:expr) => {{
+                let id = $id;
+                let kind = HistoricalSourceRecordKindV4::$kind;
+                insert_historical_record_key_v4(&mut keys, kind, id)?;
+                records.push(HistoricalSourceRecordBorrowV4 {
+                    kind,
+                    id,
+                    body_hash: $hash,
+                    pinned_active_or_current: false,
+                    value: HistoricalSourceRecordValueV4::$kind($value),
+                });
+            }};
+        }
+
+        for value in self.aggregate.obligations() {
+            push_record!(Obligation, value.id(), value.complete_body_hash()?, value);
+        }
+        for value in self.aggregate.review_plans() {
+            push_record!(
+                ReviewPlan,
+                value.id(),
+                ContentHash::sha256(&value.canonical_bytes()?),
+                value
+            );
+        }
+        for value in self.aggregate.context_envelopes() {
+            push_record!(
+                ContextEnvelope,
+                value.id(),
+                ContentHash::sha256(&value.canonical_bytes().map_err(context_domain_error)?),
+                value
+            );
+        }
+        for value in self.aggregate.executions() {
+            push_record!(Execution, value.id(), value.body_hash()?, value);
+        }
+        for value in self.aggregate.execution_claims() {
+            push_record!(Claim, value.id(), value.body_hash()?, value);
+        }
+        for value in self.v3_aggregate.assessments.values() {
+            push_record!(
+                ClaimAssessment,
+                value.claim_id(),
+                value.body_hash().map_err(m4_domain_error)?,
+                value
+            );
+        }
+        for value in self.v3_aggregate.registrations.values() {
+            push_record!(
+                ArtifactRegistrationV3,
+                value.registration_id(),
+                ContentHash::sha256(&canonical_json(value)?),
+                value
+            );
+        }
+        for value in self.v4_registrations.values() {
+            push_record!(
+                ArtifactRegistrationV4,
+                value.id(),
+                ContentHash::sha256(&canonical_json(value)?),
+                value
+            );
+        }
+        for value in self.v3_aggregate.evidence.values() {
+            push_record!(
+                Evidence,
+                value.id(),
+                value.body_hash().map_err(m4_domain_error)?,
+                value
+            );
+        }
+        for value in self.v3_aggregate.bindings.values() {
+            push_record!(
+                EvidenceBinding,
+                value.id(),
+                value.body_hash().map_err(m4_domain_error)?,
+                value
+            );
+        }
+        for value in self.v3_aggregate.verifications.values() {
+            push_record!(
+                Verification,
+                value.id(),
+                value.body_hash().map_err(m4_domain_error)?,
+                value
+            );
+        }
+        for assessment in self.v3_aggregate.assessments.values() {
+            if assessment
+                .active_decision_id()
+                .is_some_and(|id| !self.v3_aggregate.decisions.contains_key(id))
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "pinned assessment active decision is missing",
+                ));
+            }
+        }
+        for value in self.v3_aggregate.decisions.values() {
+            push_record!(
+                Decision,
+                value.id(),
+                value.body_hash().map_err(m4_domain_error)?,
+                value
+            );
+            records.last_mut().unwrap().pinned_active_or_current = self
+                .v3_aggregate
+                .assessments
+                .values()
+                .any(|assessment| assessment.active_decision_id() == Some(value.id()));
+        }
+        for assessment in self.v3_aggregate.assessments.values() {
+            if assessment
+                .current_finding_id()
+                .is_some_and(|id| !self.v3_aggregate.findings.contains_key(id))
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "pinned assessment current finding is missing",
+                ));
+            }
+        }
+        for value in self.v3_aggregate.findings.values() {
+            push_record!(
+                Finding,
+                value.id(),
+                value.body_hash().map_err(m4_domain_error)?,
+                value
+            );
+            records.last_mut().unwrap().pinned_active_or_current = self
+                .v3_aggregate
+                .assessments
+                .values()
+                .any(|assessment| assessment.current_finding_id() == Some(value.id()));
+        }
+        for value in self.v4_gluing_descriptors.values() {
+            push_record!(
+                GluingInputDescriptor,
+                value.id(),
+                value.complete_body_hash()?,
+                value
+            );
+        }
+        let value = bundle.cover();
+        push_record!(ContextCover, value.id(), value.complete_body_hash()?, value);
+        for value in bundle.sections() {
+            push_record!(Section, value.id(), value.complete_body_hash()?, value);
+        }
+        for value in bundle.restrictions() {
+            push_record!(Restriction, value.id(), value.complete_body_hash()?, value);
+        }
+        let value = bundle.attempt();
+        push_record!(
+            GluingAttempt,
+            value.id(),
+            value.complete_body_hash()?,
+            value
+        );
+        if let Some(value) = bundle.global_candidate() {
+            push_record!(
+                GlobalCandidate,
+                value.projection_id(),
+                value.complete_body_hash()?,
+                value
+            );
+        }
+        if let Some(value) = bundle.obstruction() {
+            push_record!(
+                GluingObstruction,
+                value.id(),
+                value.complete_body_hash()?,
+                value
+            );
+        }
+        if records.windows(2).any(|pair| {
+            pair[0].kind > pair[1].kind || pair[0].kind == pair[1].kind && pair[0].id >= pair[1].id
+        }) {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "historical source records are not strict kind/ID ordered",
+            ));
+        }
+        if records.len() + 1 != record_count {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "historical source record preflight count changed during projection",
+            ));
+        }
+        Ok(HistoricalPrefixProjectionV4 {
+            tail_hash: &self.tail_hash,
+            records,
+            coverage,
+            coverage_body_hash,
+        })
     }
 
     /// Mints a non-authority fixed-profile projection from one exact legal
@@ -16785,6 +17790,9 @@ impl EventLogV4 {
                     });
                 }
             } else if let PersistedPayload::GluingBundleRecordedV4(raw_bundle) = &payload {
+                if log.m5_bundle.is_some() {
+                    return Err(DomainError::AlreadyComplete);
+                }
                 if log.v4_registrations.len() != 2
                     || log.v4_gluing_descriptors.len() != 2
                     || gluing_input_entries.len() != 2
@@ -29450,12 +30458,126 @@ mod tests {
     }
 
     #[test]
+    fn v4_historical_projection_closes_duplicate_unknown_and_cycle_failures() {
+        let first = id("obligation:historical-first");
+        let second = id("obligation:historical-second");
+        let unknown = id("obligation:historical-unknown");
+        let universe = BTreeSet::from([first.clone(), second.clone()]);
+        let empty = BTreeSet::new();
+        assert!(matches!(
+            validate_historical_dependency_graph_v4(
+                &universe,
+                [(&first, &empty), (&first, &empty)].into_iter(),
+            ),
+            Err(DomainError::HistoricalPrefixMismatch(
+                "duplicate historical obligation owner"
+            ))
+        ));
+
+        let unknown_dependency = BTreeSet::from([unknown]);
+        assert!(matches!(
+            validate_historical_dependency_graph_v4(
+                &universe,
+                [(&first, &unknown_dependency), (&second, &empty)].into_iter(),
+            ),
+            Err(DomainError::HistoricalPrefixMismatch(
+                "obligation dependency is outside the pinned universe"
+            ))
+        ));
+
+        let first_dependencies = BTreeSet::from([second.clone()]);
+        let second_dependencies = BTreeSet::from([first.clone()]);
+        assert!(matches!(
+            validate_historical_dependency_graph_v4(
+                &universe,
+                [
+                    (&first, &first_dependencies),
+                    (&second, &second_dependencies),
+                ]
+                .into_iter(),
+            ),
+            Err(DomainError::HistoricalDependencyCycle)
+        ));
+
+        let mut keys = BTreeSet::new();
+        insert_historical_record_key_v4(
+            &mut keys,
+            HistoricalSourceRecordKindV4::Obligation,
+            &first,
+        )
+        .expect("first key");
+        assert!(matches!(
+            insert_historical_record_key_v4(
+                &mut keys,
+                HistoricalSourceRecordKindV4::Obligation,
+                &first,
+            ),
+            Err(DomainError::HistoricalPrefixMismatch(
+                "duplicate historical source kind/ID"
+            ))
+        ));
+    }
+
+    #[test]
     fn v4_gluing_replay_accepts_only_the_zero_one_two_context_prefixes() {
         let (mut v3, initial, plan, obligation_id, context, sources) = d2_v3_m4_m5_log();
         assert_eq!(
             v3.aggregate().program().profile_key(),
             crate::DOUBLE_SUBMIT_PROFILE_ID
         );
+        let (cover_external_obligation_id, cover_external_context) = plan
+            .waves()
+            .iter()
+            .flat_map(|wave| wave.obligation_ids())
+            .filter(|candidate| {
+                v3.aggregate()
+                    .obligation(candidate)
+                    .is_some_and(|obligation| obligation.property_id() != M4_PROPERTY_ID)
+            })
+            .find_map(|candidate| {
+                let mut session = crate::prepare_context(v3.aggregate(), candidate.clone()).ok()?;
+                loop {
+                    let request = match session.next_source_request() {
+                        Ok(Some(request)) => request,
+                        Ok(None) => break,
+                        Err(_) => return None,
+                    };
+                    session
+                        .submit_source(&request, &sources[request.artifact_id()])
+                        .ok()?;
+                }
+                let built = session.finish().ok()?;
+                (!built.envelope().normalized_included_source_ids().is_empty())
+                    .then(|| (candidate.clone(), built))
+            })
+            .expect("source-grounded M5-cover-external plan obligation");
+        for lifecycle in [
+            ObligationLifecycle::Planned,
+            ObligationLifecycle::InProgress,
+        ] {
+            v3.append(EventCommand::obligation_transition(
+                cover_external_obligation_id.clone(),
+                lifecycle,
+            ))
+            .expect("start M5-cover-external obligation");
+        }
+        let cover_external_envelope = cover_external_context.envelope().clone();
+        v3.append(EventCommand::context_envelope_projected(
+            cover_external_context,
+        ))
+        .expect("append M5-cover-external context");
+        append_d2_attempt_v3(
+            &mut v3,
+            &plan,
+            &cover_external_obligation_id,
+            &cover_external_envelope,
+            &sources,
+        );
+        v3.append(EventCommand::obligation_transition(
+            cover_external_obligation_id.clone(),
+            ObligationLifecycle::Completed,
+        ))
+        .expect("complete M5-cover-external obligation");
         let (_, claim_id) = append_d2_attempt_v3_with_polarity(
             &mut v3,
             &plan,
@@ -29464,6 +30586,11 @@ mod tests {
             &sources,
             ClaimPolarity::IssuePresent,
         );
+        v3.append(EventCommand::obligation_transition(
+            obligation_id.clone(),
+            ObligationLifecycle::Completed,
+        ))
+        .expect("complete M4-covered obligation");
         let claim = v3
             .aggregate()
             .execution_claims()
@@ -29477,8 +30604,58 @@ mod tests {
         let evaluation =
             crate::evaluate_static_fact_v1(v3.aggregate().program(), obligation, claim)
                 .expect("static evaluation");
-        let v3_roots =
-            authority_roots_for_claim(&v3, claim_id.clone(), ContentHash::sha256(b"v4-policy"));
+        let v4_policy = ContentHash::sha256(b"v4-policy");
+        let repository_id = v3.aggregate().program().repository_id().clone();
+        let repository_source_hash = v3
+            .aggregate()
+            .program()
+            .repository_source()
+            .content_hash()
+            .expect("fixture repository hash")
+            .clone();
+        let v3_roots = AuthorityTrustRootsV3::new(
+            v4_policy.clone(),
+            repository_id.clone(),
+            repository_source_hash.clone(),
+            vec![HarnessTrustRootInputV3 {
+                policy_revision_hash: v4_policy.clone(),
+                repository_id: repository_id.clone(),
+                repository_source_hash: repository_source_hash.clone(),
+                harness_id: FIXTURE_HARNESS_ID.to_owned(),
+                harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+                harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH)
+                    .expect("fixture harness source hash"),
+                test_artifact_id: id(FIXTURE_TEST_ARTIFACT_ID),
+                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH)
+                    .expect("fixture witness hash"),
+                result_size: FIXTURE_WITNESS_SIZE,
+                result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+                result_sensitivity: ArtifactSensitivity::CanonicalState,
+                run_id: v3.run_id().clone(),
+                genesis_hash: v3.genesis_hash().clone(),
+                snapshot_id: v3.aggregate().program().snapshot_id().clone(),
+                universe_id: v3.aggregate().universe().id().clone(),
+                property_id: M4_PROPERTY_ID.to_owned(),
+                claim_id: claim_id.clone(),
+                claim_body_hash: claim_body_hash.clone(),
+            }],
+            vec![HumanTrustGrantInputV3 {
+                policy_revision_hash: v4_policy.clone(),
+                actor: "human:reviewer".to_owned(),
+                authority_id: "review-board".to_owned(),
+                capabilities: BTreeSet::from([HumanAuthorityCapabilityV3::AcceptFinding]),
+                run_id: v3.run_id().clone(),
+                snapshot_id: v3.aggregate().program().snapshot_id().clone(),
+                universe_id: v3.aggregate().universe().id().clone(),
+                property_ids: BTreeSet::from([M4_PROPERTY_ID.to_owned()]),
+                claim_ids: BTreeSet::from([claim_id.clone()]),
+                valid_from: "2026-01-01T00:00:00Z".to_owned(),
+                valid_until: "2027-01-01T00:00:00Z".to_owned(),
+            }],
+        )
+        .expect("combined fixture and human roots");
         let mut v3_basis = v3
             .fresh_authority_basis_v3(&v3_roots)
             .expect("V3 authority basis");
@@ -29534,11 +30711,82 @@ mod tests {
             .expect("static verification bundle");
         v3.append_verification_bundle_v3(static_bundle, &mut v3_basis)
             .expect("append static verification bundle");
-        let selected_evidence_id = v3
+        let mut fixture_receipt = v3
+            .execute_fixture_harness_v1(&claim_id, &v3_roots, &v3_basis)
+            .expect("execute fixture harness");
+        authority_resolver.insert(fixture_receipt.witness_bytes().to_vec());
+        authority_resolver.insert(fixture_receipt.fixture_result_bytes().to_vec());
+        let fixture_witness = v3
+            .prepare_external_fixture_witness_registration_v3(
+                &mut fixture_receipt,
+                &authority_resolver,
+                &v3_basis,
+            )
+            .expect("prepare fixture witness registration");
+        let fixture_witness_id = fixture_witness.registration_id().clone();
+        v3.append_authority_registration_v3(fixture_witness, &mut v3_basis)
+            .expect("append fixture witness registration");
+        let fixture_output = v3
+            .prepare_fixture_verifier_output_registration_v3(
+                &mut fixture_receipt,
+                &authority_resolver,
+                &v3_basis,
+            )
+            .expect("prepare fixture verifier output registration");
+        let fixture_output_id = fixture_output.registration_id().clone();
+        v3.append_authority_registration_v3(fixture_output, &mut v3_basis)
+            .expect("append fixture verifier output registration");
+        let fixture_admission = v3
+            .admit_external_witness_v3(
+                &mut fixture_receipt,
+                &fixture_witness_id,
+                &authority_resolver,
+                &v3_basis,
+            )
+            .expect("admit fixture witness");
+        let fixture_bundle = v3
+            .mint_fixture_verification_bundle_v3(
+                fixture_admission,
+                &fixture_output_id,
+                &authority_resolver,
+                &v3_basis,
+            )
+            .expect("mint fixture verification bundle");
+        v3.append_verification_bundle_v3(fixture_bundle, &mut v3_basis)
+            .expect("append fixture verification bundle");
+        let decision = v3
+            .mint_decision_v3(
+                &claim_id,
+                DecisionInputV3::new(
+                    crate::DecisionOutcomeV3::Accept,
+                    "human:reviewer",
+                    "review-board",
+                    "fixture verification passed",
+                    "2026-08-10T00:00:00Z",
+                    None,
+                ),
+                &v3_roots,
+                &v3_basis,
+            )
+            .expect("mint accept decision");
+        v3.append_decision_v3(decision, &mut v3_basis)
+            .expect("append accept decision");
+        let finding = v3
+            .mint_finding_v3(&claim_id, crate::FINDING_PROJECTION_ID, &v3_basis)
+            .expect("mint accepted finding");
+        v3.append_finding_v3(finding, &mut v3_basis)
+            .expect("append accepted finding");
+        let payment_assessment = v3
             .claim_assessment_v3(&claim_id)
-            .and_then(|assessment| assessment.evidence_ids().first())
+            .expect("payment claim assessment");
+        let selected_evidence_id = payment_assessment
+            .evidence_ids()
+            .first()
             .expect("selected payment assessment evidence")
             .clone();
+        let mut payment_qualification_source_ids: BTreeSet<_> =
+            payment_assessment.evidence_ids().iter().cloned().collect();
+        payment_qualification_source_ids.insert(id(crate::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID));
         let genesis = RunGenesisSnapshot::from_aggregate_v3(&initial)
             .expect("V4 genesis")
             .canonical_bytes_v3()
@@ -29563,10 +30811,7 @@ mod tests {
             plan.id(),
             crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
             crate::AssignmentValueV4::Required,
-            BTreeSet::from([
-                id(crate::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID),
-                selected_evidence_id.clone(),
-            ]),
+            payment_qualification_source_ids.clone(),
         );
         let (ui, ui_binding, ui_bytes) = v4_gluing_registration(
             &bootstrap,
@@ -29582,10 +30827,7 @@ mod tests {
             plan.id(),
             crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
             crate::AssignmentValueV4::Required,
-            BTreeSet::from([
-                id(crate::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID),
-                selected_evidence_id.clone(),
-            ]),
+            payment_qualification_source_ids.clone(),
         );
         let (_, ui_admission_binding, _) = v4_gluing_registration(
             &bootstrap,
@@ -29601,10 +30843,7 @@ mod tests {
             plan.id(),
             crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
             crate::AssignmentValueV4::Required,
-            BTreeSet::from([
-                id(crate::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID),
-                selected_evidence_id.clone(),
-            ]),
+            payment_qualification_source_ids.clone(),
         );
         let (_, preseed_exact_binding, _) = v4_gluing_registration(
             &bootstrap,
@@ -29612,10 +30851,7 @@ mod tests {
             plan.id(),
             crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
             crate::AssignmentValueV4::Required,
-            BTreeSet::from([
-                id(crate::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID),
-                selected_evidence_id.clone(),
-            ]),
+            payment_qualification_source_ids.clone(),
         );
         let (_, preseed_substitute_binding, _) = v4_gluing_registration(
             &bootstrap,
@@ -29671,26 +30907,60 @@ mod tests {
         );
         objects.insert(cross_context.cas_hash().clone(), cross_context_bytes);
         let resolver = V4CasResolver { objects };
-        let roots = AuthorityTrustRootsV4::new(
-            ContentHash::sha256(b"v4-policy"),
-            aggregate.program().repository_id().clone(),
-            aggregate
-                .program()
-                .repository_source()
-                .content_hash()
-                .expect("fixture repository hash")
-                .clone(),
-            Vec::new(),
-            Vec::new(),
-            vec![
-                payment_binding,
-                ui_binding,
-                stale_binding,
-                unrelated_program_binding,
-                cross_context_binding,
-            ],
-        )
-        .expect("roots");
+        let harness_tuple = || AuthorityHarnessBindingV3Tuple {
+            policy_revision_hash: v4_policy.clone(),
+            repository_id: repository_id.clone(),
+            repository_source_hash: repository_source_hash.clone(),
+            harness_id: FIXTURE_HARNESS_ID.to_owned(),
+            harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+            harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH)
+                .expect("fixture harness source hash"),
+            test_artifact_id: id(FIXTURE_TEST_ARTIFACT_ID),
+            descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+            procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+            result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH).expect("fixture witness hash"),
+            result_size: FIXTURE_WITNESS_SIZE,
+            result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+            result_sensitivity: ArtifactSensitivity::CanonicalState,
+            run_id: v3.run_id().clone(),
+            genesis_hash: v3.genesis_hash().clone(),
+            snapshot_id: aggregate.program().snapshot_id().clone(),
+            universe_id: aggregate.universe().id().clone(),
+            property_id: M4_PROPERTY_ID.to_owned(),
+            claim_id: claim_id.clone(),
+            claim_body_hash: claim_body_hash.clone(),
+        };
+        let human_tuple = || AuthorityHumanGrantV3Tuple {
+            policy_revision_hash: v4_policy.clone(),
+            actor: "human:reviewer".to_owned(),
+            authority_id: "review-board".to_owned(),
+            capabilities: BTreeSet::from([HumanAuthorityCapabilityV3::AcceptFinding]),
+            run_id: v3.run_id().clone(),
+            snapshot_id: aggregate.program().snapshot_id().clone(),
+            universe_id: aggregate.universe().id().clone(),
+            property_ids: BTreeSet::from([M4_PROPERTY_ID.to_owned()]),
+            claim_ids: BTreeSet::from([claim_id.clone()]),
+            valid_from: "2026-01-01T00:00:00Z".to_owned(),
+            valid_until: "2027-01-01T00:00:00Z".to_owned(),
+        };
+        let inherited_v4_roots = |gluing_input_bindings| {
+            AuthorityTrustRootsV4::new(
+                v4_policy.clone(),
+                repository_id.clone(),
+                repository_source_hash.clone(),
+                vec![harness_tuple()],
+                vec![human_tuple()],
+                gluing_input_bindings,
+            )
+            .expect("inherited V4 roots")
+        };
+        let roots = inherited_v4_roots(vec![
+            payment_binding,
+            ui_binding,
+            stale_binding,
+            unrelated_program_binding,
+            cross_context_binding,
+        ]);
         let limits = EventReplayLimits {
             max_events: 100,
             max_canonical_bytes: 16_777_216,
@@ -29715,7 +30985,7 @@ mod tests {
             bootstrap.canonical_genesis_bytes(),
             &base_envelopes,
             &exact_preflight_resolver,
-            empty_v4_roots(aggregate),
+            inherited_v4_roots(Vec::new()),
             EventReplayLimits {
                 max_events: exact_event_count,
                 max_canonical_bytes: exact_canonical_bytes,
@@ -29771,7 +31041,7 @@ mod tests {
             bootstrap.canonical_genesis_bytes(),
             &base_envelopes,
             &resolver,
-            empty_v4_roots(aggregate),
+            inherited_v4_roots(Vec::new()),
             limits,
             assignments,
         )
@@ -29875,46 +31145,6 @@ mod tests {
             Err(DomainError::GluingInputAdmissionMismatch)
         ));
 
-        let harness_tuple = || AuthorityHarnessBindingV3Tuple {
-            policy_revision_hash: ContentHash::sha256(b"v4-policy"),
-            repository_id: aggregate.program().repository_id().clone(),
-            repository_source_hash: aggregate
-                .program()
-                .repository_source()
-                .content_hash()
-                .unwrap()
-                .clone(),
-            harness_id: FIXTURE_HARNESS_ID.to_owned(),
-            harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
-            harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH).unwrap(),
-            test_artifact_id: id(FIXTURE_TEST_ARTIFACT_ID),
-            descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
-            procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
-            result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH).unwrap(),
-            result_size: 145,
-            result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
-            result_sensitivity: ArtifactSensitivity::CanonicalState,
-            run_id: bootstrap.run_id().clone(),
-            genesis_hash: bootstrap.genesis_hash().clone(),
-            snapshot_id: aggregate.program().snapshot_id().clone(),
-            universe_id: aggregate.universe().id().clone(),
-            property_id: M4_PROPERTY_ID.to_owned(),
-            claim_id: claim_id.clone(),
-            claim_body_hash: claim_body_hash.clone(),
-        };
-        let human_tuple = || AuthorityHumanGrantV3Tuple {
-            policy_revision_hash: ContentHash::sha256(b"v4-policy"),
-            actor: "human:profile-preservation".to_owned(),
-            authority_id: "authority:profile-preservation".to_owned(),
-            capabilities: BTreeSet::from([HumanAuthorityCapabilityV3::DeferFinding]),
-            run_id: bootstrap.run_id().clone(),
-            snapshot_id: aggregate.program().snapshot_id().clone(),
-            universe_id: aggregate.universe().id().clone(),
-            property_ids: BTreeSet::from([M4_PROPERTY_ID.to_owned()]),
-            claim_ids: BTreeSet::from([claim_id.clone()]),
-            valid_from: "2026-01-01T00:00:00Z".to_owned(),
-            valid_until: "2026-12-31T23:59:59Z".to_owned(),
-        };
         let preserved_inspection = EventLogV4::inspect_m5_gluing_profile_v4(
             bootstrap.run_id().clone(),
             bootstrap.canonical_genesis_bytes(),
@@ -30053,7 +31283,7 @@ mod tests {
             bootstrap.canonical_genesis_bytes(),
             &sealed_confirmed,
             &resolver,
-            empty_v4_roots(aggregate),
+            inherited_v4_roots(Vec::new()),
             limits,
             assignments,
         )
@@ -30064,7 +31294,7 @@ mod tests {
                 bootstrap.canonical_genesis_bytes(),
                 &sealed_confirmed,
                 &resolver,
-                empty_v4_roots(aggregate),
+                inherited_v4_roots(Vec::new()),
                 limits,
                 M5DoubleSubmitAssignmentsV4::new(
                     crate::AssignmentValueV4::Satisfied,
@@ -30200,7 +31430,7 @@ mod tests {
             bootstrap.canonical_genesis_bytes(),
             &sealed_confirmed,
             &resolver,
-            empty_v4_roots(aggregate),
+            inherited_v4_roots(Vec::new()),
             limits,
             assignments,
         )
@@ -30237,6 +31467,353 @@ mod tests {
             .confirm_replayed(&complete_log, &complete_basis, &sealed_session)
             .expect("atomic bundle receipt");
         assert!(complete_log.has_gluing_bundle_v4());
+
+        let complete_tail_before_duplicate = complete_log.tail_hash().clone();
+        let duplicate_bundle_payload =
+            decode_canonical_payload(EventContractVersion::V4, bundle_event.payload.get())
+                .expect("duplicate bundle payload");
+        let duplicate_bundle_event = EventEnvelope::new(
+            EventContractVersion::V4,
+            bootstrap.run_id().clone(),
+            complete_log.genesis_hash().clone(),
+            complete_basis.next_sequence(),
+            "engine:reviewgraphen.m5_gluing@1",
+            complete_basis.next_sequence(),
+            complete_tail_before_duplicate.clone(),
+            duplicate_bundle_payload,
+        )
+        .expect("well-formed duplicate bundle envelope");
+        sealed_confirmed.push(duplicate_bundle_event);
+        assert!(matches!(
+            EventLogV4::replay_confirmed_v4_prefix_for_session(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &sealed_confirmed,
+                &resolver,
+                &roots,
+                limits,
+                &sealed_session,
+            ),
+            Err(DomainError::AlreadyComplete)
+        ));
+        sealed_confirmed.pop();
+        assert_eq!(complete_log.tail_hash(), &complete_tail_before_duplicate);
+
+        assert!(matches!(
+            sealed_two_log.historical_prefix_projection_v4(),
+            Err(DomainError::IncompleteSourceM5Baseline)
+        ));
+
+        // The resource oracle is evaluated before the first owned DAG/index/
+        // coverage collection. Its observed total is an inclusive boundary,
+        // and a one-byte-short limit cannot reach the materialization seam.
+        let historical_record_count = complete_log
+            .historical_prefix_projection_v4()
+            .expect("complete historical projection")
+            .record_count();
+        let historical_oracle = complete_log
+            .historical_projection_working_oracle_v4(historical_record_count)
+            .expect("historical working oracle");
+        let exact_historical_working_bytes = historical_oracle.total().expect("oracle total");
+        assert!(exact_historical_working_bytes <= MAX_V5_REPLAY_WORKING_BYTES);
+        HISTORICAL_PROJECTION_MATERIALIZATIONS_V4.with(|count| count.set(0));
+        assert!(matches!(
+            complete_log
+                .historical_prefix_projection_v4_with_limit(exact_historical_working_bytes - 1),
+            Err(DomainError::Incomplete {
+                operation: "event-v4 historical projection working bytes",
+                ..
+            })
+        ));
+        HISTORICAL_PROJECTION_MATERIALIZATIONS_V4.with(|count| assert_eq!(count.get(), 0));
+        let historical = complete_log
+            .historical_prefix_projection_v4_with_limit(exact_historical_working_bytes)
+            .expect("inclusive historical working limit");
+        HISTORICAL_PROJECTION_MATERIALIZATIONS_V4.with(|count| assert_eq!(count.get(), 1));
+        assert!(matches!(
+            (HistoricalProjectionWorkingOracleV4 {
+                replay_ownership_bytes: u64::MAX,
+                aggregate_validation_bytes: 1,
+                dependency_graph_bytes: 0,
+                record_index_bytes: 0,
+                coverage_numerator_bytes: 0,
+                canonical_scratch_bytes: 0,
+            })
+            .total(),
+            Err(DomainError::Incomplete {
+                operation: "event-v4 historical projection working bytes",
+                observed: usize::MAX,
+                ..
+            })
+        ));
+
+        let mut historical_keys = Vec::new();
+        let mut historical_kind_counts = BTreeMap::new();
+        let mut historical_hash_count = 0_usize;
+        let mut decision_count = 0_usize;
+        let mut finding_count = 0_usize;
+        let mut coverage_sets = None;
+        historical.visit_records(|record| {
+            historical_keys.push((record.kind(), record.id().clone()));
+            *historical_kind_counts
+                .entry(record.kind())
+                .or_insert(0_usize) += 1;
+            let independent_hash = match *record.value() {
+                HistoricalSourceRecordValueV4::ContextEnvelope(value) => {
+                    ContentHash::sha256(&value.canonical_bytes().expect("context canonical bytes"))
+                }
+                HistoricalSourceRecordValueV4::Execution(value) => ContentHash::sha256(
+                    &value.canonical_bytes().expect("execution canonical bytes"),
+                ),
+                HistoricalSourceRecordValueV4::Claim(value) => {
+                    ContentHash::sha256(&value.canonical_bytes().expect("claim canonical bytes"))
+                }
+                HistoricalSourceRecordValueV4::Obligation(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("obligation canonical body"))
+                }
+                HistoricalSourceRecordValueV4::ReviewPlan(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("plan canonical body"))
+                }
+                HistoricalSourceRecordValueV4::ClaimAssessment(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("assessment canonical body"))
+                }
+                HistoricalSourceRecordValueV4::ArtifactRegistrationV3(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("v3 registration body"))
+                }
+                HistoricalSourceRecordValueV4::ArtifactRegistrationV4(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("v4 registration body"))
+                }
+                HistoricalSourceRecordValueV4::Evidence(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("evidence body"))
+                }
+                HistoricalSourceRecordValueV4::EvidenceBinding(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("binding body"))
+                }
+                HistoricalSourceRecordValueV4::Verification(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("verification body"))
+                }
+                HistoricalSourceRecordValueV4::Decision(value) => {
+                    decision_count += 1;
+                    let expected_active = complete_log
+                        .v3_aggregate
+                        .assessments
+                        .values()
+                        .any(|assessment| assessment.active_decision_id() == Some(value.id()));
+                    assert_eq!(record.pinned_active_or_current(), expected_active);
+                    ContentHash::sha256(&canonical_json(value).expect("decision body"))
+                }
+                HistoricalSourceRecordValueV4::Finding(value) => {
+                    finding_count += 1;
+                    let expected_current = complete_log
+                        .v3_aggregate
+                        .assessments
+                        .values()
+                        .any(|assessment| assessment.current_finding_id() == Some(value.id()));
+                    assert_eq!(record.pinned_active_or_current(), expected_current);
+                    ContentHash::sha256(&canonical_json(value).expect("finding body"))
+                }
+                HistoricalSourceRecordValueV4::GluingInputDescriptor(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("descriptor body"))
+                }
+                HistoricalSourceRecordValueV4::ContextCover(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("cover body"))
+                }
+                HistoricalSourceRecordValueV4::Section(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("section body"))
+                }
+                HistoricalSourceRecordValueV4::Restriction(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("restriction body"))
+                }
+                HistoricalSourceRecordValueV4::GluingAttempt(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("attempt body"))
+                }
+                HistoricalSourceRecordValueV4::GlobalCandidate(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("candidate body"))
+                }
+                HistoricalSourceRecordValueV4::GluingObstruction(value) => {
+                    ContentHash::sha256(&canonical_json(value).expect("obstruction body"))
+                }
+                HistoricalSourceRecordValueV4::Coverage(value) => {
+                    assert_eq!(
+                        value.denominator_obligation_ids(),
+                        complete_log.aggregate.universe().obligation_ids()
+                    );
+                    coverage_sets = Some((
+                        value.completed_obligation_ids().clone(),
+                        value.evidence_supported_obligation_ids().clone(),
+                        value.verified_obligation_ids().clone(),
+                        value.fresh_obligation_ids().clone(),
+                        value.human_accepted_obligation_ids().clone(),
+                    ));
+
+                    let complete_body = serde_json::to_value(value).expect("coverage JSON body");
+                    let mut identity = complete_body.clone();
+                    let identity_object = identity.as_object_mut().expect("coverage object");
+                    identity_object.remove("schema");
+                    identity_object.remove("id");
+                    let independent_id = StableId::parse(format!(
+                        "historical-coverage-snapshot-v4:{}",
+                        ContentHash::sha256(
+                            &canonical_json(&identity).expect("coverage identity bytes")
+                        )
+                    ))
+                    .expect("coverage derived ID");
+                    assert_eq!(value.id(), &independent_id);
+
+                    let mut mutated_body = complete_body;
+                    let accepted_count = mutated_body["human_accepted_count"]
+                        .as_u64()
+                        .expect("accepted count");
+                    mutated_body["human_accepted_count"] = Value::from(accepted_count + 1);
+                    assert_ne!(
+                        ContentHash::sha256(
+                            &canonical_json(&mutated_body).expect("mutated coverage body")
+                        ),
+                        value.body_hash().expect("coverage body hash")
+                    );
+                    let mutated_object = mutated_body.as_object_mut().expect("coverage object");
+                    mutated_object.remove("schema");
+                    mutated_object.remove("id");
+                    let mutated_id = StableId::parse(format!(
+                        "historical-coverage-snapshot-v4:{}",
+                        ContentHash::sha256(
+                            &canonical_json(&mutated_body).expect("mutated coverage identity")
+                        )
+                    ))
+                    .expect("mutated coverage ID");
+                    assert_ne!(mutated_id, *value.id());
+                    ContentHash::sha256(&canonical_json(value).expect("coverage body"))
+                }
+            };
+            assert_eq!(record.body_hash(), &independent_hash);
+            historical_hash_count += 1;
+        });
+        assert_eq!(historical.tail_hash(), complete_log.tail_hash());
+        assert_eq!(historical_hash_count, historical.record_count());
+        assert_eq!(decision_count, complete_log.v3_aggregate.decisions.len());
+        assert_eq!(finding_count, complete_log.v3_aggregate.findings.len());
+        let complete_bundle = complete_log.m5_bundle.as_ref().expect("complete M5 bundle");
+        assert_eq!(
+            historical_kind_counts,
+            BTreeMap::from([
+                (
+                    HistoricalSourceRecordKindV4::Obligation,
+                    complete_log.aggregate.obligations().count(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::ReviewPlan,
+                    complete_log.aggregate.review_plans().count(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::ContextEnvelope,
+                    complete_log.aggregate.context_envelopes().count(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Execution,
+                    complete_log.aggregate.executions().count(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Claim,
+                    complete_log.aggregate.execution_claims().count(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::ClaimAssessment,
+                    complete_log.v3_aggregate.assessments.len(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::ArtifactRegistrationV3,
+                    complete_log.v3_aggregate.registrations.len(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::ArtifactRegistrationV4,
+                    complete_log.v4_registrations.len(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Evidence,
+                    complete_log.v3_aggregate.evidence.len(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::EvidenceBinding,
+                    complete_log.v3_aggregate.bindings.len(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Verification,
+                    complete_log.v3_aggregate.verifications.len(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Decision,
+                    complete_log.v3_aggregate.decisions.len(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Finding,
+                    complete_log.v3_aggregate.findings.len(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::GluingInputDescriptor,
+                    complete_log.v4_gluing_descriptors.len(),
+                ),
+                (HistoricalSourceRecordKindV4::ContextCover, 1),
+                (
+                    HistoricalSourceRecordKindV4::Section,
+                    complete_bundle.sections().len(),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::Restriction,
+                    complete_bundle.restrictions().len(),
+                ),
+                (HistoricalSourceRecordKindV4::GluingAttempt, 1),
+                (
+                    HistoricalSourceRecordKindV4::GlobalCandidate,
+                    usize::from(complete_bundle.global_candidate().is_some()),
+                ),
+                (
+                    HistoricalSourceRecordKindV4::GluingObstruction,
+                    usize::from(complete_bundle.obstruction().is_some()),
+                ),
+                (HistoricalSourceRecordKindV4::Coverage, 1),
+            ])
+            .into_iter()
+            .filter(|(_, count)| *count != 0)
+            .collect(),
+        );
+        assert_eq!(
+            historical_keys.last().unwrap().0,
+            HistoricalSourceRecordKindV4::Coverage
+        );
+        assert!(historical_keys.windows(2).all(|pair| pair[0] < pair[1]));
+        let coverage_sets = coverage_sets.expect("historical coverage sets");
+        let selected = complete_bundle.cover().selected_obligation_ids();
+        assert!(!selected.is_empty());
+        assert!(!selected.contains(&cover_external_obligation_id));
+        assert_eq!(
+            coverage_sets.0,
+            BTreeSet::from([cover_external_obligation_id.clone(), obligation_id.clone(),])
+        );
+        let expected_m4_coverage = BTreeSet::from([obligation_id.clone()]);
+        assert_eq!(coverage_sets.1, expected_m4_coverage);
+        assert_eq!(coverage_sets.2, expected_m4_coverage);
+        assert_eq!(coverage_sets.3, expected_m4_coverage);
+        assert_eq!(coverage_sets.4, expected_m4_coverage);
+        let repeated = complete_log
+            .historical_prefix_projection_v4()
+            .expect("deterministic historical projection");
+        let mut repeated_keys = Vec::new();
+        repeated.visit_records(|record| {
+            repeated_keys.push((
+                record.kind(),
+                record.id().clone(),
+                record.body_hash().clone(),
+            ));
+        });
+        let mut original_keys = Vec::new();
+        historical.visit_records(|record| {
+            original_keys.push((
+                record.kind(),
+                record.id().clone(),
+                record.body_hash().clone(),
+            ));
+        });
+        assert_eq!(original_keys, repeated_keys);
         // Exercise the opaque replay view against the canonical durable wire
         // shape without exposing the decoded GluingBundleV4 DTO to Store.
         let projected_bundle = complete_log
@@ -30428,7 +32005,7 @@ mod tests {
             bootstrap.canonical_genesis_bytes(),
             &sealed_confirmed,
             &resolver,
-            empty_v4_roots(aggregate),
+            inherited_v4_roots(Vec::new()),
             limits,
             assignments,
         )

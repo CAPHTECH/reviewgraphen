@@ -300,6 +300,10 @@ impl Obligation {
             .saturating_add(id_set(&self.normalized_source_ids))
     }
 
+    pub(crate) fn complete_body_hash(&self) -> Result<crate::ContentHash> {
+        Ok(crate::ContentHash::sha256(&crate::canonical_json(self)?))
+    }
+
     pub(crate) fn new(parts: ObligationParts) -> Result<Self> {
         if parts.target_kind.is_empty()
             || parts.semantic_key.is_empty()

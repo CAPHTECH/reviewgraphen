@@ -875,6 +875,21 @@ record kind uses this closed reduction:
 | gluing_obstruction | attempt/kind/contexts/Sections/overlap/assignment/resolution/blocks/M4 trace | all attempt inputs except the ownership back-reference cycle excluded by M5 | obstruction inside target bundle with substituted-equal kind/body; never a finding | union of attempt input M/C sets |
 | coverage | universe denominator and every numerator ID/count | all obligations and current M4/M6 records contributing to numerators | no structural successor: target coverage is always freshly recomputed and source coverage is superseded | `M(all denominator deps)`, `C(denominator)` |
 
+The source `coverage` row is the internal immutable derived projection
+`HistoricalCoverageSnapshotV4`. It is not an event, table row, authority, or
+appendable DTO. Its schema is
+`reviewgraphen.historical_coverage_snapshot.v4`, its StableId kind is
+`historical-coverage-snapshot-v4`, and its ID preimage is its complete body
+excluding only `schema` and `id`. The body is exactly source universe ID,
+snapshot ID, profile ID, policy version, rule-set hash, extractor-set hash,
+rule-pack version, sorted denominator obligation IDs and count, and the sorted
+completed, evidence-supported, verified, fresh, and human-accepted numerator
+obligation IDs with each exact count. Numerators remain separate and no state
+axis implies another. It is derived from the one pinned replayed V4 aggregate,
+is included exactly once as the final historical source record, and is always
+`superseded`; it has no structural successor even when its complete body is
+equal to newly recomputed target coverage.
+
 For each row, an unequal direct field is direct stale; a stale required
 predecessor is indirect stale; both yield `direct_and_indirect`. No row may use a
 target record merely because its label, prose, confidence, or suffix matches.
