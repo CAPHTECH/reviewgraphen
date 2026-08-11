@@ -8106,6 +8106,10 @@ pub struct AuthorityReplayBasisV4 {
     confirmed_event_count: u64,
     next_sequence: u64,
     policy_revision_hash: ContentHash,
+    repository_id: StableId,
+    repository_source_hash: ContentHash,
+    snapshot_id: StableId,
+    universe_id: StableId,
     inherited_m4_entries: Vec<AuthorityReplayEntryV3AtV4>,
     gluing_input_entries: Vec<GluingInputReplayEntryV4>,
     basis_digest: ContentHash,
@@ -8113,13 +8117,16 @@ pub struct AuthorityReplayBasisV4 {
 
 #[allow(clippy::too_many_arguments)] // Every exact basis field is an independent digest input.
 fn authority_replay_basis_digest_v4(
-    session_identity: &ContentHash,
     run_id: &StableId,
     genesis_hash: &ContentHash,
     confirmed_tail_hash: &ContentHash,
     confirmed_event_count: u64,
     next_sequence: u64,
     policy_revision_hash: &ContentHash,
+    repository_id: &StableId,
+    repository_source_hash: &ContentHash,
+    snapshot_id: &StableId,
+    universe_id: &StableId,
     inherited_m4_entries: &[AuthorityReplayEntryV3AtV4],
     gluing_input_entries: &[GluingInputReplayEntryV4],
 ) -> Result<ContentHash> {
@@ -8140,9 +8147,12 @@ fn authority_replay_basis_digest_v4(
         inherited_m4_entries: &'entries [AuthorityReplayEntryV3AtV4Digest<'data>],
         next_sequence: u64,
         policy_revision_hash: &'data ContentHash,
+        repository_id: &'data StableId,
+        repository_source_hash: &'data ContentHash,
         run_id: &'data StableId,
         schema: &'static str,
-        session_identity: &'data ContentHash,
+        snapshot_id: &'data StableId,
+        universe_id: &'data StableId,
     }
     Ok(ContentHash::sha256(&canonical_json(&Body {
         confirmed_event_count,
@@ -8152,9 +8162,12 @@ fn authority_replay_basis_digest_v4(
         inherited_m4_entries: &inherited_m4_entry_digests,
         next_sequence,
         policy_revision_hash,
+        repository_id,
+        repository_source_hash,
         run_id,
         schema: "reviewgraphen.authority_replay_basis.v4",
-        session_identity,
+        snapshot_id,
+        universe_id,
     })?))
 }
 
@@ -8167,6 +8180,10 @@ impl AuthorityReplayBasisV4 {
         confirmed_tail_hash: ContentHash,
         confirmed_event_count: u64,
         policy_revision_hash: ContentHash,
+        repository_id: StableId,
+        repository_source_hash: ContentHash,
+        snapshot_id: StableId,
+        universe_id: StableId,
         inherited_m4_entries: Vec<AuthorityReplayEntryV3AtV4>,
         gluing_input_entries: Vec<GluingInputReplayEntryV4>,
     ) -> Result<Self> {
@@ -8175,13 +8192,16 @@ impl AuthorityReplayBasisV4 {
         })?;
         let schema = "reviewgraphen.authority_replay_basis.v4";
         let basis_digest = authority_replay_basis_digest_v4(
-            &session_identity,
             &run_id,
             &genesis_hash,
             &confirmed_tail_hash,
             confirmed_event_count,
             next_sequence,
             &policy_revision_hash,
+            &repository_id,
+            &repository_source_hash,
+            &snapshot_id,
+            &universe_id,
             &inherited_m4_entries,
             &gluing_input_entries,
         )?;
@@ -8194,6 +8214,10 @@ impl AuthorityReplayBasisV4 {
             confirmed_event_count,
             next_sequence,
             policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            snapshot_id,
+            universe_id,
             inherited_m4_entries,
             gluing_input_entries,
             basis_digest,
@@ -8215,6 +8239,22 @@ impl AuthorityReplayBasisV4 {
     #[must_use]
     pub fn policy_revision_hash(&self) -> &ContentHash {
         &self.policy_revision_hash
+    }
+    #[must_use]
+    pub fn repository_id(&self) -> &StableId {
+        &self.repository_id
+    }
+    #[must_use]
+    pub fn repository_source_hash(&self) -> &ContentHash {
+        &self.repository_source_hash
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+    #[must_use]
+    pub fn universe_id(&self) -> &StableId {
+        &self.universe_id
     }
     #[must_use]
     pub fn inherited_m4_entry_count(&self) -> usize {
@@ -8252,6 +8292,16 @@ impl AuthorityReplayBasisV4 {
         if self.run_id != log.run_id
             || self.session_identity != log.session_identity
             || self.genesis_hash != log.genesis_hash
+            || self.repository_id != *log.aggregate.program().repository_id()
+            || self.repository_source_hash
+                != *log
+                    .aggregate
+                    .program()
+                    .repository_source()
+                    .content_hash()
+                    .ok_or(DomainError::AuthorityReplayBasisMismatch)?
+            || self.snapshot_id != *log.aggregate.program().snapshot_id()
+            || self.universe_id != *log.aggregate.universe().id()
             || self.confirmed_tail_hash != log.tail_hash
             || self.confirmed_event_count != event_count
             || self.next_sequence
@@ -8260,13 +8310,16 @@ impl AuthorityReplayBasisV4 {
                 })?
             || self.basis_digest
                 != authority_replay_basis_digest_v4(
-                    &self.session_identity,
                     &self.run_id,
                     &self.genesis_hash,
                     &self.confirmed_tail_hash,
                     self.confirmed_event_count,
                     self.next_sequence,
                     &self.policy_revision_hash,
+                    &self.repository_id,
+                    &self.repository_source_hash,
+                    &self.snapshot_id,
+                    &self.universe_id,
                     &self.inherited_m4_entries,
                     &self.gluing_input_entries,
                 )?
@@ -8308,6 +8361,7 @@ pub struct TrustedGluingInputAdmissionV4 {
 /// registration. It grants no authority for another append.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ArtifactRegistrationReceiptV4 {
+    session_identity: ContentHash,
     registration_id: StableId,
     descriptor_id: StableId,
     context_id: StableId,
@@ -8408,6 +8462,7 @@ impl TrustedGluingInputAdmissionV4 {
             return Err(DomainError::GluingInputAdmissionMismatch);
         }
         Ok(ArtifactRegistrationReceiptV4 {
+            session_identity: self.session_identity,
             registration_id: self.registration.id().clone(),
             descriptor_id: self.descriptor_id,
             context_id: self.context_id,
@@ -8444,6 +8499,7 @@ pub struct ValidatedGluingBundleV4 {
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct GluingBundleReceiptV4 {
+    session_identity: ContentHash,
     event_id: StableId,
     cover_id: StableId,
     attempt_id: StableId,
@@ -8524,6 +8580,7 @@ impl ValidatedGluingBundleV4 {
             return Err(DomainError::GluingBundleMismatch);
         }
         Ok(GluingBundleReceiptV4 {
+            session_identity: self.session_identity,
             event_id: self.envelope.id().clone(),
             cover_id: self.bundle.cover().id().clone(),
             attempt_id: self.bundle.attempt().id().clone(),
@@ -9066,6 +9123,7 @@ pub struct PreparedInheritedD2EventV4 {
 /// Descriptive result of one confirmed authority-free inherited D2 append.
 #[derive(Debug, Eq, PartialEq)]
 pub struct InheritedD2EventReceiptV4 {
+    session_identity: ContentHash,
     event_sequence: u64,
     event_id: StableId,
     confirmed_tail_hash: ContentHash,
@@ -9314,6 +9372,7 @@ pub struct ValidatedVerificationBundleV4 {
 /// roots-revalidated confirmed prefix.
 #[derive(Debug, Eq, PartialEq)]
 pub struct VerificationBundleReceiptV4 {
+    session_identity: ContentHash,
     event_ids: Vec<StableId>,
     verification_id: StableId,
     confirmed_tail_hash: ContentHash,
@@ -9603,6 +9662,7 @@ impl VerificationBundleResumeAuthorityV4 {
             return Err(DomainError::BundleResumeAuthorityMismatch);
         }
         Ok(VerificationBundleReceiptV4 {
+            session_identity: self.session_identity,
             event_ids: self.planned_event_ids,
             verification_id: self.verification_id,
             confirmed_tail_hash: basis.confirmed_tail_hash.clone(),
@@ -9830,6 +9890,7 @@ impl ValidatedVerificationBundleV4 {
             .map(|event| event.event_id.clone())
             .collect();
         Ok(VerificationBundleReceiptV4 {
+            session_identity: self.session_identity,
             event_ids,
             verification_id: self.verification_id,
             confirmed_tail_hash: basis.confirmed_tail_hash.clone(),
@@ -9964,6 +10025,7 @@ pub struct ValidatedDecisionV4 {
 /// Descriptive confirmed-decision receipt.
 #[derive(Debug, Eq, PartialEq)]
 pub struct DecisionReceiptV4 {
+    session_identity: ContentHash,
     event_id: StableId,
     decision_id: StableId,
     confirmed_tail_hash: ContentHash,
@@ -9983,6 +10045,7 @@ pub struct ValidatedFindingV4 {
 /// Descriptive confirmed-finding receipt.
 #[derive(Debug, Eq, PartialEq)]
 pub struct FindingReceiptV4 {
+    session_identity: ContentHash,
     event_id: StableId,
     finding_id: StableId,
     confirmed_tail_hash: ContentHash,
@@ -10095,6 +10158,7 @@ impl ValidatedDecisionV4 {
             return Err(DomainError::DecisionAdmissionMismatch);
         }
         Ok(DecisionReceiptV4 {
+            session_identity: self.admission.0.session_identity,
             event_id: self.envelope.id().clone(),
             decision_id: self.decision_id,
             confirmed_tail_hash: basis.confirmed_tail_hash.clone(),
@@ -10154,6 +10218,7 @@ impl ValidatedFindingV4 {
             return Err(DomainError::AuthorityReplayBasisMismatch);
         }
         Ok(FindingReceiptV4 {
+            session_identity: self.position.session_identity,
             event_id: self.envelope.id().clone(),
             finding_id: self.finding_id,
             confirmed_tail_hash: basis.confirmed_tail_hash.clone(),
@@ -10270,6 +10335,7 @@ impl PreparedInheritedD2EventV4 {
             return Err(DomainError::AuthorityReplayBasisMismatch);
         }
         Ok(InheritedD2EventReceiptV4 {
+            session_identity: self.position.session_identity,
             event_sequence: self.position.event_sequence,
             event_id: self.envelope.id().clone(),
             confirmed_tail_hash: self.envelope.event_hash().clone(),
@@ -13248,6 +13314,10 @@ impl EventLogV4 {
             log.tail_hash.clone(),
             count,
             roots.policy_revision_hash().clone(),
+            roots.repository_id.clone(),
+            roots.repository_source_hash.clone(),
+            log.aggregate.program().snapshot_id().clone(),
+            log.aggregate.universe().id().clone(),
             inherited_m4_entries,
             gluing_input_entries,
         )?;
@@ -21105,6 +21175,24 @@ mod tests {
         StableId::parse(value).expect("test identifier")
     }
 
+    fn recompute_v4_basis_digest(basis: &AuthorityReplayBasisV4) -> ContentHash {
+        authority_replay_basis_digest_v4(
+            &basis.run_id,
+            &basis.genesis_hash,
+            &basis.confirmed_tail_hash,
+            basis.confirmed_event_count,
+            basis.next_sequence,
+            &basis.policy_revision_hash,
+            &basis.repository_id,
+            &basis.repository_source_hash,
+            &basis.snapshot_id,
+            &basis.universe_id,
+            &basis.inherited_m4_entries,
+            &basis.gluing_input_entries,
+        )
+        .expect("test basis digest")
+    }
+
     fn aggregate() -> ReviewAggregate {
         let program = ProgramSpace::from_json_slice(FIXTURE).expect("fixture program");
         let (universe, obligations) = MvpRulePack::synthesize(&program)
@@ -22537,7 +22625,34 @@ mod tests {
             first_basis.session_identity_digest(),
             second_basis.session_identity_digest()
         );
-        assert_ne!(first_basis.basis_digest(), second_basis.basis_digest());
+        assert_eq!(first_basis.basis_digest(), second_basis.basis_digest());
+        let different_roots = AuthorityTrustRootsV4::new(
+            ContentHash::sha256(b"different deterministic basis policy"),
+            roots.repository_id.clone(),
+            roots.repository_source_hash.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("different V4 root");
+        let third_session = OpaqueSessionIdentityV4::fresh();
+        let (_, different_root_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            bootstrap.envelopes(),
+            &EmptyV4Resolver,
+            &different_roots,
+            EventReplayLimits {
+                max_events: 8,
+                max_canonical_bytes: 1_048_576,
+            },
+            &third_session,
+        )
+        .expect("different-root replay");
+        assert_ne!(
+            first_basis.basis_digest(),
+            different_root_basis.basis_digest()
+        );
 
         let obligation_id = first_log
             .aggregate
@@ -24155,7 +24270,7 @@ mod tests {
                 .expect("UI envelope")
                 .clone(),
         );
-        let (sealed_two_log, sealed_two_basis) =
+        let (sealed_two_log, mut sealed_two_basis) =
             EventLogV4::replay_confirmed_v4_prefix_for_session(
                 bootstrap.run_id().clone(),
                 bootstrap.canonical_genesis_bytes(),
@@ -24170,6 +24285,85 @@ mod tests {
             .confirm_replayed(&sealed_two_log, &sealed_two_basis, &sealed_session)
             .expect("UI receipt");
         assert_eq!(sealed_two_basis.gluing_input_entry_count(), 2);
+        let stable_basis_digest = sealed_two_basis.basis_digest().clone();
+        assert_eq!(
+            recompute_v4_basis_digest(&sealed_two_basis),
+            stable_basis_digest
+        );
+
+        let original_tail = std::mem::replace(
+            &mut sealed_two_basis.confirmed_tail_hash,
+            ContentHash::sha256(b"changed basis tail"),
+        );
+        assert_ne!(
+            recompute_v4_basis_digest(&sealed_two_basis),
+            stable_basis_digest
+        );
+        sealed_two_basis.confirmed_tail_hash = original_tail;
+
+        let original_policy = std::mem::replace(
+            &mut sealed_two_basis.policy_revision_hash,
+            ContentHash::sha256(b"changed basis policy"),
+        );
+        assert_ne!(
+            recompute_v4_basis_digest(&sealed_two_basis),
+            stable_basis_digest
+        );
+        sealed_two_basis.policy_revision_hash = original_policy;
+
+        let original_repository = std::mem::replace(
+            &mut sealed_two_basis.repository_id,
+            id("repository:changed-basis"),
+        );
+        assert_ne!(
+            recompute_v4_basis_digest(&sealed_two_basis),
+            stable_basis_digest
+        );
+        sealed_two_basis.repository_id = original_repository;
+
+        let original_snapshot = std::mem::replace(
+            &mut sealed_two_basis.snapshot_id,
+            id("snapshot:changed-basis"),
+        );
+        assert_ne!(
+            recompute_v4_basis_digest(&sealed_two_basis),
+            stable_basis_digest
+        );
+        sealed_two_basis.snapshot_id = original_snapshot;
+
+        let original_universe = std::mem::replace(
+            &mut sealed_two_basis.universe_id,
+            id("universe:changed-basis"),
+        );
+        assert_ne!(
+            recompute_v4_basis_digest(&sealed_two_basis),
+            stable_basis_digest
+        );
+        sealed_two_basis.universe_id = original_universe;
+
+        let original_inherited_body = std::mem::replace(
+            &mut sealed_two_basis.inherited_m4_entries[0].record_body_hash,
+            ContentHash::sha256(b"changed inherited entry body"),
+        );
+        assert_ne!(
+            recompute_v4_basis_digest(&sealed_two_basis),
+            stable_basis_digest
+        );
+        sealed_two_basis.inherited_m4_entries[0].record_body_hash = original_inherited_body;
+
+        let original_descriptor_hash = std::mem::replace(
+            &mut sealed_two_basis.gluing_input_entries[0].descriptor_hash,
+            ContentHash::sha256(b"changed gluing entry descriptor"),
+        );
+        assert_ne!(
+            recompute_v4_basis_digest(&sealed_two_basis),
+            stable_basis_digest
+        );
+        sealed_two_basis.gluing_input_entries[0].descriptor_hash = original_descriptor_hash;
+        assert_eq!(
+            recompute_v4_basis_digest(&sealed_two_basis),
+            stable_basis_digest
+        );
         let two_inspection = EventLogV4::inspect_m5_gluing_profile_v4(
             bootstrap.run_id().clone(),
             bootstrap.canonical_genesis_bytes(),

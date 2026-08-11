@@ -134,7 +134,18 @@ GluingInputTrustBindingV4 {
 
 The two `*V3Tuple` field sets and validation semantics are exactly ADR 0021's trust-root tuples; v4 copies them into its host capability rather than embedding, accepting, or translating an `AuthorityTrustRootsV3` value. `OpaqueSessionIdentity`, the lock guard, mutable aggregate, and health state never cross the API. `NonEditable` exposes no append/snapshot operation and can only be dropped.
 
-`basis_digest` is SHA-256 over the complete canonical basis except that field. `v4_position_digest` is SHA-256 over the inherited ADR 0021 trust preimage plus the actual v4 run/genesis/predecessor/sequence/event tuple. `trust_binding_digest` is SHA-256 over the complete gluing-input trust binding. The basis contains no secret and grants no fresh append authority.
+`basis_digest` is the deterministic SHA-256 projection of the canonical basis body containing
+`schema`, run/genesis, repository ID/source hash, snapshot/universe, policy revision, confirmed
+tail/count, next sequence, and every complete ordered field of every inherited-M4 and gluing-input
+replay entry. It excludes only `basis_digest` itself and the process-local `session_identity`.
+Thus two fresh sessions that fully replay the same confirmed prefix under the same roots have the
+same digest for index metadata, while a changed root, tail, coordinate, or entry field changes it.
+`session_identity` remains a separate exact field in the in-memory basis and in every prepared
+value, admission, confirmation seal/lease, and receipt; all use it independently of the digest to
+reject cross-session token reuse and replay forks. It is never persisted in index metadata.
+`v4_position_digest` is SHA-256 over the inherited ADR 0021 trust preimage plus the actual v4
+run/genesis/predecessor/sequence/event tuple. `trust_binding_digest` is SHA-256 over the complete
+gluing-input trust binding. The basis contains no secret and grants no fresh append authority.
 
 Recovery is inspected read-only, then keyed and attributed explicitly. The inspection descriptor is closed, and the key is an opaque, private-field, non-`Serialize`, non-`Deserialize`, non-`Clone` one-shot value with no public constructor. Receipts are descriptive and never replay or append authority:
 
@@ -1117,6 +1128,12 @@ CREATE TABLE gluing_obstructions_v4 (
   FOREIGN KEY(event_sequence,event_id) REFERENCES events(sequence,event_id)
 ) STRICT;
 ```
+
+`index_meta.authority_replay_basis_digest` is the session-independent `basis_digest` defined in
+§1, recomputed from the same confirmed prefix and complete authority-entry contents during every
+v5 rebuild. No `session_identity`, prepared token, lease, admission, or receipt is projected into
+v5. Equality of this digest means equality of that deterministic replay-basis projection only;
+it grants no append authority and does not make tokens substitutable across sessions.
 
 `IndexSnapshotV5` retains every complete top-level `IndexSnapshotV4` field and adds these independent arrays; it does not hide v4 registrations inside descriptor rows:
 
