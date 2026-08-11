@@ -27,10 +27,12 @@ pub use journal::{
     EventJournal, GenesisCommitReceiptV4, GenesisRecoveryV4, JournalAppendReceipt, JournalError,
     JournalGenesis, JournalIdentity, JournalLimits, JournalReader, JournalRecoveryReceipt,
     JournalWriter, M4BundleMarkerActionV4, M4BundleMarkerRecoveryReceiptV4,
-    M4BundlePrefixClassificationV4, M4BundlePrefixStageV4, RecoveredVerificationBundleV3Session,
-    RecoveryCompletion, RecoveryInspectionV4, RecoveryIntent, RecoveryKeyV4, RecoveryKindV4,
-    RecoveryOutcomeV4, RecoveryProvenanceV4, RecoveryReceiptV4, ReplayedV2RunSession,
-    ReplayedV3RunSession, V3VerificationBundleAppendReceipt, VerificationBundleDurableStageV3,
+    M4BundlePrefixClassificationV4, M4BundlePrefixStageV4, RecoveredM4BundleV4Session,
+    RecoveredV4Session, RecoveredVerificationBundleV3Session, RecoveryCompletion,
+    RecoveryInspectionV4, RecoveryIntent, RecoveryKeyV4, RecoveryKindV4, RecoveryOutcomeV4,
+    RecoveryProvenanceV4, RecoveryReceiptV4, ReplayedV2RunSession, ReplayedV3RunSession,
+    ReplayedV4RunSession, V3VerificationBundleAppendReceipt, V4VerificationBundleAppendReceipt,
+    VerificationBundleDurableStageV3,
 };
 
 #[cfg(target_os = "linux")]

@@ -9,16 +9,19 @@ use super::{
     verify_fd_kind_mode,
 };
 use reviewgraphen_core::{
-    ArtifactRegisteredV3, AuthorityArtifactResolverV3, AuthorityReplayBasisV3,
-    AuthorityTrustRootsV3, BuiltContextProjection, ContentHash, DecisionInputV3, EventAdmissions,
-    EventCommand, EventContractVersion, EventEnvelope, EventLog, EventLogV4, EventReplayLimits,
+    ArtifactRegisteredV3, AuthorityArtifactResolverV3, AuthorityArtifactResolverV4,
+    AuthorityReplayBasisV3, AuthorityReplayBasisV4, AuthorityTrustRootsV3, AuthorityTrustRootsV4,
+    BuiltContextProjection, ContentHash, DecisionInputV3, EventAdmissions, EventCommand,
+    EventContractVersion, EventEnvelope, EventLog, EventLogV4, EventReplayLimits,
     EventStreamGenesis, ExpectedVerificationAttemptV3, ExternalWitnessAdmissionV3,
     FixtureExecutionReceiptV1, FixtureRegistrationResumeAuthorityV3, ObligationLifecycle,
+    OpaqueSessionIdentityV4, RecoveredM4BundleV4Session as CoreRecoveredM4BundleV4Session,
     ReviewPlan, SnapshotSourcesRecorded, StableId, StaticFactEvaluationV1,
     StaticVerificationAttemptInspectionV3, ValidatedArtifactRegistrationV3, ValidatedDecisionV3,
     ValidatedExecutionBundle, ValidatedFindingV3, ValidatedVerificationBundleV3,
-    VerificationAttemptStageV3, VerificationBundleReceiptV3, VerificationBundleResumeAuthorityV3,
-    VerifierArtifactRoleV3, canonical_json,
+    VerificationAttemptStageV3, VerificationBundleReceiptV3, VerificationBundleReceiptV4,
+    VerificationBundleRecoveryV4, VerificationBundleResumeAuthorityV3,
+    VerificationBundleResumeAuthorityV4, VerifierArtifactRoleV3, canonical_json,
 };
 use rustix::{
     fd::OwnedFd,
@@ -55,6 +58,7 @@ const BUNDLE_PENDING_MARKER: &str = "verification-bundle.pending.json";
 const BUNDLE_PENDING_STAGE: &str = "verification-bundle.pending.stage";
 const BUNDLE_MARKER_SCHEMA: &str = "reviewgraphen.verification_bundle_append.v1";
 const RECOVERY_RECEIPT_SCHEMA_V4: &str = "reviewgraphen.recovery_receipt.v4";
+const EVENT_CONTRACT_SCHEMA_V4: &str = "reviewgraphen.review_event.v4";
 
 /// Immutable material which determines the event-chain genesis sentinel.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -377,8 +381,6 @@ pub enum JournalError {
         "event-v4 recovery key is stale, foreign, or does not describe the current durable state"
     )]
     RecoveryKeyMismatchV4,
-    #[error("event-v4 recovery kind is not implemented by this bootstrap foundation")]
-    RecoveryKindUnsupportedV4,
     #[error("event-v4 genesis publication is uncertain; inspect and recover before retrying")]
     GenesisSessionUncertainV4,
     #[error("event-v4 genesis was not committed at {stage}")]
@@ -411,6 +413,7 @@ pub enum RecoveryKindV4 {
 pub struct RecoveryInspectionV4 {
     run_id: StableId,
     genesis_hash: ContentHash,
+    event_contract_version: &'static str,
     expected_kind: RecoveryKindV4,
 }
 
@@ -420,6 +423,7 @@ impl RecoveryInspectionV4 {
         Self {
             run_id,
             genesis_hash,
+            event_contract_version: EVENT_CONTRACT_SCHEMA_V4,
             expected_kind,
         }
     }
@@ -432,6 +436,7 @@ impl RecoveryInspectionV4 {
 pub struct RecoveryKeyV4 {
     run_id: StableId,
     genesis_hash: ContentHash,
+    event_contract_version: &'static str,
     expected_kind: RecoveryKindV4,
     pre_recovery_offset: u64,
     pre_recovery_tail_hash: ContentHash,
@@ -460,6 +465,23 @@ pub struct M4BundlePrefixStageV4 {
     classification: M4BundlePrefixClassificationV4,
     confirmed_events: u64,
     expected_events: u64,
+}
+
+impl M4BundlePrefixStageV4 {
+    #[must_use]
+    pub const fn classification(&self) -> M4BundlePrefixClassificationV4 {
+        self.classification
+    }
+
+    #[must_use]
+    pub const fn confirmed_events(&self) -> u64 {
+        self.confirmed_events
+    }
+
+    #[must_use]
+    pub const fn expected_events(&self) -> u64 {
+        self.expected_events
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -577,6 +599,10 @@ impl RecoveryReceiptV4 {
     #[must_use]
     pub fn genesis_hash(&self) -> &ContentHash {
         &self.key.genesis_hash
+    }
+    #[must_use]
+    pub const fn event_contract_version(&self) -> &'static str {
+        self.key.event_contract_version
     }
     #[must_use]
     pub const fn pre_recovery_offset(&self) -> u64 {
@@ -866,6 +892,20 @@ pub struct ReplayedV3RunSession<'root, 'roots> {
     state: ReplayedV3RunSessionState,
 }
 
+/// A lock-held homogeneous V4 log whose authority basis was rebuilt from the
+/// complete canonical prefix, exact CAS bytes, and the caller's V4 trust
+/// roots. Private fields prevent Store state or Core authority from escaping
+/// the session boundary.
+#[allow(dead_code)] // Subsequent V4 append units consume this closed session state.
+pub struct ReplayedV4RunSession<'root, 'roots> {
+    writer: JournalWriter,
+    log: EventLogV4,
+    resolver: JournalAuthorityResolverV4<'root>,
+    roots: &'roots AuthorityTrustRootsV4,
+    session_identity: OpaqueSessionIdentityV4,
+    state: ReplayedV4RunSessionState,
+}
+
 /// Authority-replayed historical prefix used only to validate a disposable
 /// derived-index image before it may be classified as stale.
 pub(crate) struct IndexV4ReplayedPrefix {
@@ -914,10 +954,45 @@ pub struct RecoveredVerificationBundleV3Session<'root, 'roots> {
     confirmed_events: usize,
 }
 
+/// Resume-only V4 session returned solely for a strict-interior M4 bundle.
+/// It exposes no ordinary append or read API; consuming the exact Core
+/// authority is its only transition back to an editable session.
+pub struct RecoveredM4BundleV4Session<'root, 'roots> {
+    writer: JournalWriter,
+    resolver: JournalAuthorityResolverV4<'root>,
+    roots: &'roots AuthorityTrustRootsV4,
+    session_identity: OpaqueSessionIdentityV4,
+    core_session: CoreRecoveredM4BundleV4Session,
+    marker: VerificationBundlePendingMarkerV3,
+    confirmed_events: usize,
+}
+
+// Keep both closed recovery branches inline: the strict-interior branch
+// exposes neither an editable log nor a replay basis until its sealed suffix
+// has been durably confirmed.
+#[allow(clippy::large_enum_variant)]
+pub enum RecoveredV4Session<'root, 'roots> {
+    Editable {
+        session: ReplayedV4RunSession<'root, 'roots>,
+        basis: AuthorityReplayBasisV4,
+    },
+    M4BundleResumeRequired {
+        session: RecoveredM4BundleV4Session<'root, 'roots>,
+        resume_authority: VerificationBundleResumeAuthorityV4,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReplayedV3RunSessionState {
     Healthy,
     ResumeOnly,
+    Uncertain,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // Later V4 append units consume the uncertainty state.
+enum ReplayedV4RunSessionState {
+    Healthy,
     Uncertain,
 }
 
@@ -926,6 +1001,23 @@ enum ReplayedV3RunSessionState {
 pub struct V3VerificationBundleAppendReceipt {
     authority: VerificationBundleReceiptV3,
     journal: Vec<JournalAppendReceipt>,
+}
+
+pub struct V4VerificationBundleAppendReceipt {
+    authority: VerificationBundleReceiptV4,
+    journal: Vec<JournalAppendReceipt>,
+}
+
+impl V4VerificationBundleAppendReceipt {
+    #[must_use]
+    pub fn authority(&self) -> &VerificationBundleReceiptV4 {
+        &self.authority
+    }
+
+    #[must_use]
+    pub fn journal(&self) -> &[JournalAppendReceipt] {
+        &self.journal
+    }
 }
 
 impl V3VerificationBundleAppendReceipt {
@@ -960,6 +1052,31 @@ impl AuthorityArtifactResolverV3 for JournalAuthorityResolverV3<'_> {
             .map_err(|error| {
                 reviewgraphen_core::DomainError::Validation(format!(
                     "authority CAS resolution failed: {error}"
+                ))
+            })
+    }
+}
+
+struct JournalAuthorityResolverV4<'a> {
+    reader: CasReader<'a>,
+}
+
+impl AuthorityArtifactResolverV4 for JournalAuthorityResolverV4<'_> {
+    fn read_exact(
+        &self,
+        cas_hash: &ContentHash,
+        destination: &mut [u8],
+    ) -> reviewgraphen_core::Result<()> {
+        let hash = CasHash::parse(cas_hash.as_str().to_owned()).map_err(|error| {
+            reviewgraphen_core::DomainError::Validation(format!(
+                "event-v4 authority CAS hash is not admissible: {error}"
+            ))
+        })?;
+        self.reader
+            .read_exact_slice(&hash, destination)
+            .map_err(|error| {
+                reviewgraphen_core::DomainError::Validation(format!(
+                    "event-v4 authority CAS resolution failed: {error}"
                 ))
             })
     }
@@ -1798,6 +1915,71 @@ impl<'root, 'roots> RecoveredVerificationBundleV3Session<'root, 'roots> {
     }
 }
 
+impl<'root, 'roots> RecoveredM4BundleV4Session<'root, 'roots> {
+    #[must_use]
+    pub fn durable_stage(&self) -> M4BundlePrefixStageV4 {
+        M4BundlePrefixStageV4 {
+            classification: M4BundlePrefixClassificationV4::StrictInterior,
+            confirmed_events: u64::try_from(self.confirmed_events).unwrap_or(u64::MAX),
+            expected_events: self.marker.expected_count,
+        }
+    }
+
+    pub fn resume_verification_bundle(
+        mut self,
+        authority: VerificationBundleResumeAuthorityV4,
+    ) -> Result<
+        (
+            ReplayedV4RunSession<'root, 'roots>,
+            AuthorityReplayBasisV4,
+            V4VerificationBundleAppendReceipt,
+        ),
+        JournalError,
+    > {
+        let prepared = self
+            .core_session
+            .prepare_resume(authority, &self.session_identity)?;
+        let suffix = prepared.envelopes().to_vec();
+        let journal = match self.writer.resume_verification_bundle_suffix(
+            &self.marker,
+            &suffix,
+            self.confirmed_events,
+        ) {
+            Ok(receipts) => receipts,
+            Err(error @ JournalError::BundleAppendInterrupted { .. }) => return Err(error),
+            Err(_) if self.writer.append_durability == AppendDurability::Uncertain => {
+                return Err(JournalError::SessionUncertain);
+            }
+            Err(error) => return Err(error),
+        };
+        let (log, next_basis, authority_receipt) = prepared.confirm_replayed(
+            &self.writer.state.events,
+            &self.resolver,
+            self.roots,
+            EventReplayLimits::new(
+                self.writer.limits.max_events,
+                self.writer.limits.max_replay_bytes,
+            ),
+            &self.session_identity,
+        )?;
+        Ok((
+            ReplayedV4RunSession {
+                writer: self.writer,
+                log,
+                resolver: self.resolver,
+                roots: self.roots,
+                session_identity: self.session_identity,
+                state: ReplayedV4RunSessionState::Healthy,
+            },
+            next_basis,
+            V4VerificationBundleAppendReceipt {
+                authority: authority_receipt,
+                journal,
+            },
+        ))
+    }
+}
+
 fn same_authority_basis(left: &AuthorityReplayBasisV3, right: &AuthorityReplayBasisV3) -> bool {
     left.basis_digest() == right.basis_digest()
         && left.confirmed_tail_hash() == right.confirmed_tail_hash()
@@ -1876,6 +2058,7 @@ enum V4RecoveryFault {
     GenesisDirectory,
     TailFile,
     TailDirectory,
+    M4Directory,
 }
 
 #[cfg(test)]
@@ -1941,6 +2124,7 @@ struct RecoveryAudit {
 
 struct BundlePendingInspection {
     marker: VerificationBundlePendingMarkerV3,
+    marker_hash: ContentHash,
     planned: Vec<EventEnvelope>,
     pre_state: ScanState,
     current_state: ScanState,
@@ -2068,15 +2252,20 @@ impl<'a> EventJournal<'a> {
         ))
     }
 
-    /// Reads V4 recovery state under the same root->run lock ordering used by
-    /// mutation, but makes no filesystem change.  The returned key seals the
-    /// observed complete-file hash, prefix cursor, tail, and marker digest.
+    /// Reads V4 recovery state under the same root -> run -> journal lock
+    /// ordering used by mutation, but makes no filesystem change. The
+    /// returned key seals the observed complete-file hash, prefix cursor,
+    /// tail, and marker digest.
     pub fn inspect_recovery_v4(
         root: &StoreRoot,
         inspection: RecoveryInspectionV4,
     ) -> Result<RecoveryKeyV4, JournalError> {
-        if inspection.run_id.kind() != "run" {
-            return Err(JournalError::Identity("V4 recovery requires a run ID"));
+        if inspection.run_id.kind() != "run"
+            || inspection.event_contract_version != EVENT_CONTRACT_SCHEMA_V4
+        {
+            return Err(JournalError::Identity(
+                "V4 recovery requires its exact event contract and a run ID",
+            ));
         }
         let root_lock = acquire_v4_root_lock(root)?;
         let limits = JournalLimits::from_store(root.limits());
@@ -2105,12 +2294,11 @@ impl<'a> EventJournal<'a> {
                 Err(JournalError::Missing) => return Err(JournalError::RecoveryKeyMismatchV4),
                 Err(error) => return Err(error),
             };
-            let run_lock = dup(&run).map_err(StoreError::Io)?;
-            fs::flock(&run_lock, FlockOperation::LockExclusive).map_err(StoreError::Io)?;
+            let _run_lock = acquire_v4_run_lock(&run)?;
             let append_pending = marker_exists(&run, APPEND_PENDING_MARKER, APPEND_PENDING_BYTES)?;
             let bundle_pending = bundle_file_exists(&run, BUNDLE_PENDING_MARKER)?
                 || bundle_file_exists(&run, BUNDLE_PENDING_STAGE)?;
-            let file = match open_verified_log(&run, false) {
+            let mut file = match open_verified_log(&run, false) {
                 Ok(fd) => File::from(fd),
                 Err(JournalError::Missing)
                     if inspection.expected_kind == RecoveryKindV4::GenesisBootstrap
@@ -2126,7 +2314,7 @@ impl<'a> EventJournal<'a> {
             let genesis = CasStore::open(root)?
                 .read(&CasHash::parse(inspection.genesis_hash.to_string())?)?;
             let observed = inspect_v4_file(
-                file,
+                file.try_clone()?,
                 &inspection.run_id,
                 &inspection.genesis_hash,
                 &genesis,
@@ -2138,12 +2326,29 @@ impl<'a> EventJournal<'a> {
                 }
                 let identity =
                     JournalIdentity::new(inspection.run_id.clone(), JournalGenesis::V4(genesis))?;
-                let Some(marker) = read_bundle_pending(&run, &identity, limits)? else {
+                let Some(pending) =
+                    inspect_bundle_pending_file_locked(&run, &identity, limits, &mut file)?
+                else {
                     return Err(JournalError::RecoveryKeyMismatchV4);
                 };
-                let _ = marker.envelopes(limits)?;
-                let _ = read_bundle_stage(&run, marker.expected_count)?;
-                return Err(JournalError::RecoveryKindUnsupportedV4);
+                if !pending.discarded.is_empty() {
+                    return Err(JournalError::CorruptNeedsRecovery {
+                        good_offset: pending.current_state.confirmed_offset,
+                        auto_recoverable: false,
+                    });
+                }
+                let _ = read_bundle_stage(&run, pending.marker.expected_count)?;
+                let _ = v4_bundle_prefix_stage(&pending)?;
+                return Ok(RecoveryKeyV4 {
+                    run_id: inspection.run_id,
+                    genesis_hash: inspection.genesis_hash,
+                    event_contract_version: inspection.event_contract_version,
+                    expected_kind: inspection.expected_kind,
+                    pre_recovery_offset: observed.good_offset,
+                    pre_recovery_tail_hash: observed.tail_hash,
+                    pre_recovery_file_hash: Some(observed.file_hash),
+                    pending_digest: Some(pending.marker_hash),
+                });
             }
             if bundle_pending {
                 return Err(JournalError::RecoveryKeyMismatchV4);
@@ -2165,6 +2370,7 @@ impl<'a> EventJournal<'a> {
             Ok(RecoveryKeyV4 {
                 run_id: inspection.run_id,
                 genesis_hash: inspection.genesis_hash,
+                event_contract_version: inspection.event_contract_version,
                 expected_kind: inspection.expected_kind,
                 pre_recovery_offset: observed.good_offset,
                 pre_recovery_tail_hash: observed.tail_hash,
@@ -2184,7 +2390,9 @@ impl<'a> EventJournal<'a> {
         key: RecoveryKeyV4,
         provenance: RecoveryProvenanceV4,
     ) -> Result<GenesisRecoveryV4<'a>, JournalError> {
-        if key.expected_kind != RecoveryKindV4::GenesisBootstrap {
+        if key.expected_kind != RecoveryKindV4::GenesisBootstrap
+            || key.event_contract_version != EVENT_CONTRACT_SCHEMA_V4
+        {
             return Err(JournalError::RecoveryKeyMismatchV4);
         }
         let root_lock = acquire_v4_root_lock(root)?;
@@ -2201,7 +2409,9 @@ impl<'a> EventJournal<'a> {
         key: RecoveryKeyV4,
         provenance: RecoveryProvenanceV4,
     ) -> Result<RecoveryReceiptV4, JournalError> {
-        if key.expected_kind != RecoveryKindV4::CanonicalTail {
+        if key.expected_kind != RecoveryKindV4::CanonicalTail
+            || key.event_contract_version != EVENT_CONTRACT_SCHEMA_V4
+        {
             return Err(JournalError::RecoveryKeyMismatchV4);
         }
         let root_lock = acquire_v4_root_lock(root)?;
@@ -2210,64 +2420,205 @@ impl<'a> EventJournal<'a> {
         result
     }
 
+    /// Rechecks one inspected M4 marker under root -> run -> journal locks,
+    /// delegates all authority/plan validation to Core, and returns either an
+    /// ordinary editable replay or the sole resume-only strict-interior path.
+    pub fn recover_replayed_v4_session<'roots>(
+        &self,
+        roots: &'roots AuthorityTrustRootsV4,
+        key: RecoveryKeyV4,
+        provenance: RecoveryProvenanceV4,
+    ) -> Result<(RecoveryReceiptV4, RecoveredV4Session<'a, 'roots>), JournalError> {
+        if self.identity.version() != EventContractVersion::V4
+            || key.expected_kind != RecoveryKindV4::M4BundleResume
+            || key.event_contract_version != EVENT_CONTRACT_SCHEMA_V4
+            || key.run_id != self.identity.run_id
+            || key.genesis_hash != self.identity.genesis_hash()
+        {
+            return Err(JournalError::RecoveryKeyMismatchV4);
+        }
+        let timestamp_unix_seconds = v4_timestamp()?;
+        let root_lock = acquire_v4_root_lock(self.root)?;
+        let run_lock = acquire_v4_run_lock(&self.run)?;
+        let result = (|| {
+            if marker_exists(&self.run, APPEND_PENDING_MARKER, APPEND_PENDING_BYTES)? {
+                return Err(JournalError::RecoveryKeyMismatchV4);
+            }
+            let fd = open_verified_log(&self.run, true)?;
+            let mut file = File::from(fd);
+            fs::flock(file.as_fd(), FlockOperation::LockExclusive).map_err(StoreError::Io)?;
+            let JournalGenesis::V4Shared(genesis) = &self.identity.genesis else {
+                return Err(JournalError::Identity(
+                    "V4 M4 recovery requires verified genesis bytes",
+                ));
+            };
+            let observed = inspect_v4_file(
+                file.try_clone()?,
+                &key.run_id,
+                &key.genesis_hash,
+                genesis,
+                self.limits,
+            )?;
+            let pending = inspect_bundle_pending_file_locked(
+                &self.run,
+                &self.identity,
+                self.limits,
+                &mut file,
+            )?
+            .ok_or(JournalError::RecoveryKeyMismatchV4)?;
+            if !pending.discarded.is_empty()
+                || !v4_key_matches(&key, &observed, Some(&pending.marker_hash))
+            {
+                return Err(JournalError::RecoveryKeyMismatchV4);
+            }
+            let _ = read_bundle_stage(&self.run, pending.marker.expected_count)?;
+            let store_stage = v4_bundle_prefix_stage(&pending)?;
+            let (intents, completions) = self.recovery_dirs()?;
+            let audit = recovery_audit(&intents, &completions, &self.identity, self.limits)?;
+            sync_recovery_dirs(&intents, &completions)?;
+            validate_completed_receipts(&mut file, &self.identity, self.limits, &audit.completed)?;
+            if let Some(intent) = audit.pending {
+                return Err(JournalError::CorruptNeedsRecovery {
+                    good_offset: intent.good_offset,
+                    auto_recoverable: true,
+                });
+            }
+            let resolver = JournalAuthorityResolverV4 {
+                reader: CasReader::open_existing(self.root)?,
+            };
+            let session_identity = OpaqueSessionIdentityV4::fresh();
+            let recovery = EventLogV4::recover_verification_bundle_v4_for_session(
+                self.identity.run_id.clone(),
+                genesis,
+                &pending.current_state.events,
+                &pending.planned,
+                &resolver,
+                roots,
+                EventReplayLimits::new(self.limits.max_events, self.limits.max_replay_bytes),
+                &session_identity,
+            )
+            .map_err(map_bundle_resume_domain_error)?;
+            if recovery.confirmed_bundle_events() != store_stage.confirmed_events
+                || recovery.expected_bundle_events() != store_stage.expected_events
+            {
+                return Err(JournalError::BundleResumeAuthorityMismatch);
+            }
+            let pre_file_hash = observed.file_hash;
+            let marker_hash = pending.marker_hash;
+            let writer = JournalWriter {
+                file,
+                identity: self.identity.clone(),
+                limits: self.limits,
+                state: pending.current_state,
+                intents,
+                completions,
+                run: dup(&run_lock).map_err(StoreError::Io)?,
+                poisoned: false,
+                append_durability: AppendDurability::Confirmed,
+                #[cfg(test)]
+                faults: std::collections::VecDeque::new(),
+            };
+            match recovery {
+                VerificationBundleRecoveryV4::Stage0 { log, basis, .. }
+                | VerificationBundleRecoveryV4::AlreadyComplete { log, basis, .. } => {
+                    if !matches!(
+                        store_stage.classification,
+                        M4BundlePrefixClassificationV4::Stage0
+                            | M4BundlePrefixClassificationV4::AlreadyComplete
+                    ) {
+                        return Err(JournalError::BundleResumeAuthorityMismatch);
+                    }
+                    let outcome = RecoveryOutcomeV4::M4BundleCleanupOrdinary {
+                        prefix_stage: store_stage,
+                    };
+                    clear_v4_bundle_marker(&self.run, &outcome)?;
+                    let receipt = RecoveryReceiptV4 {
+                        schema: RECOVERY_RECEIPT_SCHEMA_V4,
+                        kind: key.expected_kind,
+                        outcome,
+                        pre_file_hash: Some(pre_file_hash.clone()),
+                        post_file_hash: Some(pre_file_hash),
+                        key,
+                        provenance,
+                        timestamp_unix_seconds,
+                        marker_recovery: Some(M4BundleMarkerRecoveryReceiptV4 {
+                            prefix_stage: store_stage,
+                            action: M4BundleMarkerActionV4::ClearedAndSynced,
+                            pre_marker_hash: marker_hash,
+                            post_marker_hash: None,
+                        }),
+                    };
+                    Ok((
+                        receipt,
+                        RecoveredV4Session::Editable {
+                            session: ReplayedV4RunSession {
+                                writer,
+                                log,
+                                resolver,
+                                roots,
+                                session_identity,
+                                state: ReplayedV4RunSessionState::Healthy,
+                            },
+                            basis,
+                        },
+                    ))
+                }
+                VerificationBundleRecoveryV4::StrictInterior {
+                    session: core_session,
+                    authority,
+                    ..
+                } => {
+                    if store_stage.classification != M4BundlePrefixClassificationV4::StrictInterior
+                    {
+                        return Err(JournalError::BundleResumeAuthorityMismatch);
+                    }
+                    let outcome = RecoveryOutcomeV4::M4BundleResumeRequired {
+                        prefix_stage: store_stage,
+                    };
+                    let receipt = RecoveryReceiptV4 {
+                        schema: RECOVERY_RECEIPT_SCHEMA_V4,
+                        kind: key.expected_kind,
+                        outcome,
+                        pre_file_hash: Some(pre_file_hash.clone()),
+                        post_file_hash: Some(pre_file_hash),
+                        key,
+                        provenance,
+                        timestamp_unix_seconds,
+                        marker_recovery: Some(M4BundleMarkerRecoveryReceiptV4 {
+                            prefix_stage: store_stage,
+                            action: M4BundleMarkerActionV4::RetainedForResume,
+                            pre_marker_hash: marker_hash.clone(),
+                            post_marker_hash: Some(marker_hash),
+                        }),
+                    };
+                    Ok((
+                        receipt,
+                        RecoveredV4Session::M4BundleResumeRequired {
+                            session: RecoveredM4BundleV4Session {
+                                writer,
+                                resolver,
+                                roots,
+                                session_identity,
+                                core_session,
+                                marker: pending.marker,
+                                confirmed_events: pending.confirmed_events,
+                            },
+                            resume_authority: authority,
+                        },
+                    ))
+                }
+            }
+        })();
+        drop(run_lock);
+        drop(root_lock);
+        result
+    }
+
     fn inspect_bundle_pending_locked(
         &self,
         file: &mut File,
     ) -> Result<Option<BundlePendingInspection>, JournalError> {
-        let Some(marker) = read_bundle_pending(&self.run, &self.identity, self.limits)? else {
-            return Ok(None);
-        };
-        let planned = marker.envelopes(self.limits)?;
-        let mut current_state = scan_with_torn(file, &self.identity, self.limits, true)?;
-        let mut discarded = Vec::new();
-        if let Some(torn) = current_state.torn.take() {
-            if torn.good_offset < marker.pre_offset {
-                return Err(JournalError::ReceiptCorruption {
-                    name: BUNDLE_PENDING_MARKER.to_owned(),
-                });
-            }
-            current_state.confirmed_offset = torn.good_offset;
-            discarded = torn.discarded;
-        }
-        let pre_bytes = read_prefix(file, marker.pre_offset)?;
-        let pre_state = scan_bytes(&pre_bytes, &self.identity, self.limits, true)?;
-        if pre_state.torn.is_some()
-            || pre_state.confirmed_offset != marker.pre_offset
-            || pre_state.tail_hash != marker.pre_tail_hash
-            || current_state.events.len() < pre_state.events.len()
-        {
-            return Err(JournalError::ReceiptCorruption {
-                name: BUNDLE_PENDING_MARKER.to_owned(),
-            });
-        }
-        let confirmed = current_state.events.len() - pre_state.events.len();
-        if confirmed > planned.len() {
-            return Err(JournalError::ReceiptCorruption {
-                name: BUNDLE_PENDING_MARKER.to_owned(),
-            });
-        }
-        for (actual, expected) in current_state.events[pre_state.events.len()..]
-            .iter()
-            .zip(&planned)
-        {
-            if actual.id() != expected.id()
-                || actual.event_hash() != expected.event_hash()
-                || actual.canonical_bytes()? != expected.canonical_bytes()?
-            {
-                return Err(JournalError::BundleResumeAuthorityMismatch);
-            }
-        }
-        let mut complete_candidate = pre_state.events.clone();
-        complete_candidate.extend(planned.iter().cloned());
-        validate_prefix(&self.identity, &complete_candidate)?;
-        Ok(Some(BundlePendingInspection {
-            marker,
-            planned,
-            pre_state,
-            current_state,
-            confirmed_events: confirmed,
-            discarded,
-        }))
+        inspect_bundle_pending_file_locked(&self.run, &self.identity, self.limits, file)
     }
 
     fn clear_bundle_pending_after_receipt(
@@ -2622,6 +2973,48 @@ impl<'a> EventJournal<'a> {
                 roots,
                 store_root_identity: self.root.identity().clone(),
                 state: ReplayedV3RunSessionState::Healthy,
+            },
+            basis,
+        ))
+    }
+
+    /// Acquires the exclusive journal lock and rebuilds one V4 replay basis
+    /// from the complete confirmed prefix, CAS objects, and exact host roots.
+    /// A pending bundle is recovery-only and is never admitted here.
+    pub fn replayed_v4_session<'roots>(
+        &self,
+        roots: &'roots AuthorityTrustRootsV4,
+    ) -> Result<(ReplayedV4RunSession<'a, 'roots>, AuthorityReplayBasisV4), JournalError> {
+        if self.identity.version() != EventContractVersion::V4 {
+            return Err(JournalError::Identity("V4 replay requires a V4 journal"));
+        }
+        let writer = self.writer_v4()?;
+        let JournalGenesis::V4Shared(genesis) = &writer.identity.genesis else {
+            return Err(JournalError::Identity(
+                "V4 replay requires verified genesis bytes",
+            ));
+        };
+        let resolver = JournalAuthorityResolverV4 {
+            reader: CasReader::open_existing(self.root)?,
+        };
+        let session_identity = OpaqueSessionIdentityV4::fresh();
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            writer.identity.run_id.clone(),
+            genesis,
+            &writer.state.events,
+            &resolver,
+            roots,
+            EventReplayLimits::new(writer.limits.max_events, writer.limits.max_replay_bytes),
+            &session_identity,
+        )?;
+        Ok((
+            ReplayedV4RunSession {
+                writer,
+                log,
+                resolver,
+                roots,
+                session_identity,
+                state: ReplayedV4RunSessionState::Healthy,
             },
             basis,
         ))
@@ -3096,6 +3489,13 @@ impl<'a> EventJournal<'a> {
     fn writer_v3(&self) -> Result<JournalWriter, JournalError> {
         if self.identity.version() != EventContractVersion::V3 {
             return Err(JournalError::Identity("V3 writer requires a V3 journal"));
+        }
+        self.writer_locked()
+    }
+
+    fn writer_v4(&self) -> Result<JournalWriter, JournalError> {
+        if self.identity.version() != EventContractVersion::V4 {
+            return Err(JournalError::Identity("V4 writer requires a V4 journal"));
         }
         self.writer_locked()
     }
@@ -3775,6 +4175,24 @@ fn acquire_v4_root_lock(root: &StoreRoot) -> Result<V4RootLock, JournalError> {
     Ok(V4RootLock { _fd: fd })
 }
 
+fn acquire_v4_run_lock(run: &OwnedFd) -> Result<OwnedFd, JournalError> {
+    let fd = fs::openat(
+        run,
+        ".",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(StoreError::Io)?;
+    verify_fd_kind_mode(&fd, "event-v4 run lock", FileType::Directory, 0o700)?;
+    let anchor = fs::fstat(run).map_err(StoreError::Io)?;
+    let opened = fs::fstat(&fd).map_err(StoreError::Io)?;
+    if anchor.st_dev != opened.st_dev || anchor.st_ino != opened.st_ino {
+        return Err(JournalError::Identity("event-v4 run lock identity changed"));
+    }
+    fs::flock(&fd, FlockOperation::LockExclusive).map_err(StoreError::Io)?;
+    Ok(fd)
+}
+
 #[cfg(test)]
 fn try_acquire_v4_root_lock(root: &StoreRoot) -> Result<Option<V4RootLock>, JournalError> {
     let fd = open_v4_root_lock_fd(root)?;
@@ -3800,6 +4218,7 @@ fn v4_absent_recovery_key(inspection: RecoveryInspectionV4) -> RecoveryKeyV4 {
         pre_recovery_tail_hash: v4_chain_genesis_hash(&inspection.run_id, &inspection.genesis_hash),
         run_id: inspection.run_id,
         genesis_hash: inspection.genesis_hash,
+        event_contract_version: inspection.event_contract_version,
         expected_kind: inspection.expected_kind,
         pre_recovery_offset: 0,
         pre_recovery_file_hash: None,
@@ -3930,10 +4349,38 @@ fn v4_key_matches(
     observed: &V4RecoveryObservation,
     pending_digest: Option<&ContentHash>,
 ) -> bool {
-    key.pre_recovery_offset == observed.good_offset
+    key.event_contract_version == EVENT_CONTRACT_SCHEMA_V4
+        && key.pre_recovery_offset == observed.good_offset
         && key.pre_recovery_tail_hash == observed.tail_hash
         && key.pre_recovery_file_hash.as_ref() == Some(&observed.file_hash)
         && key.pending_digest.as_ref() == pending_digest
+}
+
+fn v4_bundle_prefix_stage(
+    pending: &BundlePendingInspection,
+) -> Result<M4BundlePrefixStageV4, JournalError> {
+    let confirmed_events = u64::try_from(pending.confirmed_events)
+        .map_err(|_| JournalError::BundleResumeAuthorityMismatch)?;
+    let expected_events = u64::try_from(pending.planned.len())
+        .map_err(|_| JournalError::BundleResumeAuthorityMismatch)?;
+    if expected_events == 0
+        || expected_events != pending.marker.expected_count
+        || confirmed_events > expected_events
+    {
+        return Err(JournalError::BundleResumeAuthorityMismatch);
+    }
+    let classification = if confirmed_events == 0 {
+        M4BundlePrefixClassificationV4::Stage0
+    } else if confirmed_events == expected_events {
+        M4BundlePrefixClassificationV4::AlreadyComplete
+    } else {
+        M4BundlePrefixClassificationV4::StrictInterior
+    };
+    Ok(M4BundlePrefixStageV4 {
+        classification,
+        confirmed_events,
+        expected_events,
+    })
 }
 
 fn v4_timestamp() -> Result<u64, JournalError> {
@@ -4167,6 +4614,32 @@ fn recover_canonical_tail_v4_locked(
     })();
     drop(run_lock);
     result
+}
+
+fn clear_v4_bundle_marker(run: &OwnedFd, outcome: &RecoveryOutcomeV4) -> Result<(), JournalError> {
+    let mut namespace_mutated = false;
+    if bundle_file_exists(run, BUNDLE_PENDING_STAGE)? {
+        fs::unlinkat(run, BUNDLE_PENDING_STAGE, AtFlags::empty()).map_err(StoreError::Io)?;
+        namespace_mutated = true;
+    }
+    if let Err(error) = fs::unlinkat(run, BUNDLE_PENDING_MARKER, AtFlags::empty()) {
+        if namespace_mutated {
+            return Err(JournalError::RecoveryDurabilityUncertainV4 {
+                outcome: outcome.clone(),
+            });
+        }
+        return Err(StoreError::Io(error).into());
+    }
+    #[cfg(test)]
+    let injected = take_v4_recovery_fault(V4RecoveryFault::M4Directory);
+    #[cfg(not(test))]
+    let injected = false;
+    if injected || fs::fsync(run).is_err() {
+        return Err(JournalError::RecoveryDurabilityUncertainV4 {
+            outcome: outcome.clone(),
+        });
+    }
+    Ok(())
 }
 
 impl JournalReader {
@@ -5015,6 +5488,14 @@ fn read_bundle_pending(
     identity: &JournalIdentity,
     limits: JournalLimits,
 ) -> Result<Option<VerificationBundlePendingMarkerV3>, JournalError> {
+    Ok(read_bundle_pending_with_hash(run, identity, limits)?.map(|(marker, _)| marker))
+}
+
+fn read_bundle_pending_with_hash(
+    run: &OwnedFd,
+    identity: &JournalIdentity,
+    limits: JournalLimits,
+) -> Result<Option<(VerificationBundlePendingMarkerV3, ContentHash)>, JournalError> {
     let marker_exists = bundle_file_exists(run, BUNDLE_PENDING_MARKER)?;
     if !marker_exists {
         return Ok(None);
@@ -5070,7 +5551,71 @@ fn read_bundle_pending(
         });
     }
     marker.validate(identity, limits)?;
-    Ok(Some(marker))
+    let marker_hash = ContentHash::sha256(&bytes);
+    Ok(Some((marker, marker_hash)))
+}
+
+fn inspect_bundle_pending_file_locked(
+    run: &OwnedFd,
+    identity: &JournalIdentity,
+    limits: JournalLimits,
+    file: &mut File,
+) -> Result<Option<BundlePendingInspection>, JournalError> {
+    let Some((marker, marker_hash)) = read_bundle_pending_with_hash(run, identity, limits)? else {
+        return Ok(None);
+    };
+    let planned = marker.envelopes(limits)?;
+    let mut current_state = scan_with_torn(file, identity, limits, true)?;
+    let mut discarded = Vec::new();
+    if let Some(torn) = current_state.torn.take() {
+        if torn.good_offset < marker.pre_offset {
+            return Err(JournalError::ReceiptCorruption {
+                name: BUNDLE_PENDING_MARKER.to_owned(),
+            });
+        }
+        current_state.confirmed_offset = torn.good_offset;
+        discarded = torn.discarded;
+    }
+    let pre_bytes = read_prefix(file, marker.pre_offset)?;
+    let pre_state = scan_bytes(&pre_bytes, identity, limits, true)?;
+    if pre_state.torn.is_some()
+        || pre_state.confirmed_offset != marker.pre_offset
+        || pre_state.tail_hash != marker.pre_tail_hash
+        || current_state.events.len() < pre_state.events.len()
+    {
+        return Err(JournalError::ReceiptCorruption {
+            name: BUNDLE_PENDING_MARKER.to_owned(),
+        });
+    }
+    let confirmed = current_state.events.len() - pre_state.events.len();
+    if confirmed > planned.len() {
+        return Err(JournalError::ReceiptCorruption {
+            name: BUNDLE_PENDING_MARKER.to_owned(),
+        });
+    }
+    for (actual, expected) in current_state.events[pre_state.events.len()..]
+        .iter()
+        .zip(&planned)
+    {
+        if actual.id() != expected.id()
+            || actual.event_hash() != expected.event_hash()
+            || actual.canonical_bytes()? != expected.canonical_bytes()?
+        {
+            return Err(JournalError::BundleResumeAuthorityMismatch);
+        }
+    }
+    let mut complete_candidate = pre_state.events.clone();
+    complete_candidate.extend(planned.iter().cloned());
+    validate_prefix(identity, &complete_candidate)?;
+    Ok(Some(BundlePendingInspection {
+        marker,
+        marker_hash,
+        planned,
+        pre_state,
+        current_state,
+        confirmed_events: confirmed,
+        discarded,
+    }))
 }
 
 fn read_bundle_stage(run: &OwnedFd, expected: u64) -> Result<u64, JournalError> {
@@ -7058,8 +7603,8 @@ mod tests {
         HumanAuthorityCapabilityV3, HumanTrustGrantInputV3, M4_PROPERTY_ID, MvpRulePack,
         ObligationLifecycle, PlanBudget, ProgramSpace, ReviewAggregate,
         RunGenesisBootstrapRequestV4, SnapshotSourceRecordEntry, SnapshotSourcesRecorded,
-        ValidatedExecutionBundle, VerificationAttemptStageV3, evaluate_static_fact_v1, plan,
-        prepare_context,
+        ValidatedExecutionBundle, VerificationAttemptStageV3, VerificationBundleRequestV4,
+        evaluate_static_fact_v1, plan, prepare_context,
     };
     use serde_json::Value;
     use std::{
@@ -7178,6 +7723,14 @@ mod tests {
         .unwrap()
     }
 
+    fn v4_marker_at_current_tail(
+        journal: &EventJournal<'_>,
+        planned: &[EventEnvelope],
+    ) -> VerificationBundlePendingMarkerV3 {
+        let reader = journal.reader().unwrap();
+        VerificationBundlePendingMarkerV3::new(&journal.identity, &reader.state, planned).unwrap()
+    }
+
     fn put_test_cas(root: &StoreRoot, bytes: &[u8]) {
         let hash = CasHash::parse(ContentHash::sha256(bytes).to_string()).unwrap();
         super::super::CasStore::open(root)
@@ -7238,6 +7791,12 @@ mod tests {
         AuthorityTrustRootsV3,
         StableId,
         HarnessTrustRootInputV3,
+        EventLogV4,
+        Vec<EventEnvelope>,
+        StaticFactEvaluationV1,
+        BuiltContextProjection,
+        ArtifactRegisteredV3,
+        ValidatedExecutionBundle,
     ) {
         let mut input: Value = serde_json::from_slice(include_bytes!(
             "../../../examples/double-submit-payment/program-space.json"
@@ -7360,6 +7919,13 @@ mod tests {
                     .then(|| (candidate.clone(), built))
             })
             .unwrap();
+        let mut v4_context = prepare_context(log.aggregate(), obligation_id.clone()).unwrap();
+        while let Some(request) = v4_context.next_source_request().unwrap() {
+            v4_context
+                .submit_source(&request, &source_by_id[request.artifact_id()])
+                .unwrap();
+        }
+        let v4_built = v4_context.finish().unwrap();
         log.append(EventCommand::obligation_transition(
             obligation_id.clone(),
             ObligationLifecycle::Planned,
@@ -7425,6 +7991,15 @@ mod tests {
         )
         .unwrap();
         let source_buffers = source_by_id.values().collect::<Vec<_>>();
+        let v4_execution = ValidatedExecutionBundle::fake_v3(
+            execution_input.clone(),
+            &raw_registration,
+            raw.clone(),
+            source_buffers.clone(),
+            vec![claim.clone()],
+            ExecutionOutcome::Structured,
+        )
+        .unwrap();
         let execution = ValidatedExecutionBundle::fake_v3(
             execution_input,
             &raw_registration,
@@ -7444,6 +8019,15 @@ mod tests {
             .execution_claims()
             .find(|claim| claim.id() == &claim_id)
             .unwrap();
+        let evaluation = evaluate_static_fact_v1(
+            log.aggregate().program(),
+            log.aggregate()
+                .obligations()
+                .find(|obligation| obligation.id() == &obligation_id)
+                .unwrap(),
+            claim_record,
+        )
+        .unwrap();
         let harness_root = HarnessTrustRootInputV3 {
             policy_revision_hash: policy.clone(),
             repository_id: repository_id.clone(),
@@ -7491,6 +8075,19 @@ mod tests {
             .unwrap()
             .canonical_bytes()
             .unwrap();
+        let v4_bootstrap = EventLogV4::from_bootstrap_request(
+            RunGenesisBootstrapRequestV4::new(
+                run_id.clone(),
+                genesis.clone(),
+                log.aggregate().program().repository_identity(),
+                log.aggregate().program().snapshot_id().clone(),
+                log.aggregate().program().profile_id(),
+                log.aggregate().program().profile_version(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let v3_envelopes = log.envelopes().cloned().collect::<Vec<_>>();
         put_test_cas(root, &genesis);
         let identity = JournalIdentity::new(run_id, JournalGenesis::V3(genesis)).unwrap();
         let manifest = log.events()[0].envelope().clone();
@@ -7502,7 +8099,356 @@ mod tests {
         let mut writer = journal.writer_v3().unwrap();
         writer.append_batch(&prefix).unwrap();
         drop(writer);
-        (journal, roots, claim_id, harness_root)
+        (
+            journal,
+            roots,
+            claim_id,
+            harness_root,
+            v4_bootstrap,
+            v3_envelopes,
+            evaluation,
+            v4_built,
+            raw_registration,
+            v4_execution,
+        )
+    }
+
+    fn rewrap_v3_fixture_prefix_as_v4(
+        v3: &[EventEnvelope],
+        bootstrap: &EventLogV4,
+    ) -> Vec<EventEnvelope> {
+        let mut result = vec![bootstrap.envelopes()[0].clone()];
+        for legacy in v3.iter().skip(1) {
+            let mut value: Value =
+                serde_json::from_slice(&legacy.canonical_bytes().unwrap()).unwrap();
+            let sequence = result.last().unwrap().sequence() + 1;
+            let actor = value["actor"].as_str().unwrap().to_owned();
+            let payload_hash =
+                ContentHash::parse(value["payload_hash"].as_str().unwrap().to_owned()).unwrap();
+            let previous_event_hash = result.last().unwrap().event_hash().clone();
+            let id_bindings = BTreeMap::from([
+                ("actor".to_owned(), Value::String(actor.clone())),
+                (
+                    "genesis_hash".to_owned(),
+                    Value::String(bootstrap.genesis_hash().to_string()),
+                ),
+                (
+                    "logical_time".to_owned(),
+                    Value::Number(serde_json::Number::from(sequence)),
+                ),
+                (
+                    "payload_hash".to_owned(),
+                    Value::String(payload_hash.to_string()),
+                ),
+                (
+                    "previous_event_hash".to_owned(),
+                    Value::String(previous_event_hash.to_string()),
+                ),
+                (
+                    "run".to_owned(),
+                    Value::String(bootstrap.run_id().to_string()),
+                ),
+                (
+                    "schema".to_owned(),
+                    Value::String(EVENT_CONTRACT_SCHEMA_V4.to_owned()),
+                ),
+                (
+                    "sequence".to_owned(),
+                    Value::Number(serde_json::Number::from(sequence)),
+                ),
+            ]);
+            let event_id = StableId::derived("event", &id_bindings).unwrap();
+            let hash_bindings = BTreeMap::from([
+                ("actor".to_owned(), Value::String(actor)),
+                ("event_id".to_owned(), Value::String(event_id.to_string())),
+                (
+                    "genesis_hash".to_owned(),
+                    Value::String(bootstrap.genesis_hash().to_string()),
+                ),
+                (
+                    "logical_time".to_owned(),
+                    Value::Number(serde_json::Number::from(sequence)),
+                ),
+                (
+                    "payload_hash".to_owned(),
+                    Value::String(payload_hash.to_string()),
+                ),
+                (
+                    "previous_event_hash".to_owned(),
+                    Value::String(previous_event_hash.to_string()),
+                ),
+                (
+                    "run".to_owned(),
+                    Value::String(bootstrap.run_id().to_string()),
+                ),
+                (
+                    "schema".to_owned(),
+                    Value::String(EVENT_CONTRACT_SCHEMA_V4.to_owned()),
+                ),
+                (
+                    "sequence".to_owned(),
+                    Value::Number(serde_json::Number::from(sequence)),
+                ),
+            ]);
+            let event_hash = ContentHash::sha256(&canonical_json(&hash_bindings).unwrap());
+            value["schema"] = Value::String(EVENT_CONTRACT_SCHEMA_V4.to_owned());
+            value["id"] = Value::String(event_id.to_string());
+            value["run_id"] = Value::String(bootstrap.run_id().to_string());
+            value["genesis_hash"] = Value::String(bootstrap.genesis_hash().to_string());
+            value["sequence"] = Value::Number(serde_json::Number::from(sequence));
+            value["logical_time"] = Value::Number(serde_json::Number::from(sequence));
+            value["previous_event_hash"] = Value::String(previous_event_hash.to_string());
+            value["event_hash"] = Value::String(event_hash.to_string());
+            result.push(
+                EventEnvelope::from_json_slice(&canonical_json(&value).unwrap()).unwrap_or_else(
+                    |error| panic!("V3-to-V4 rewrap failed at {sequence}: {error}"),
+                ),
+            );
+        }
+        result
+    }
+
+    fn public_v4_static_bundle_journal<'a>(
+        root: &'a StoreRoot,
+        run: &str,
+    ) -> (EventJournal<'a>, AuthorityTrustRootsV4, Vec<EventEnvelope>) {
+        let source_workspace = tempfile::tempdir().unwrap();
+        let source_root =
+            StoreRoot::open(source_workspace.path(), crate::StoreLimits::default()).unwrap();
+        let (
+            _source_journal,
+            _v3_roots,
+            claim_id,
+            harness_root,
+            bootstrap,
+            v3_envelopes,
+            evaluation,
+            v4_built,
+            raw_registration,
+            v4_execution,
+        ) = public_v3_fixture_journal(&source_root, run);
+        for (path, _) in test_cas_inventory(&source_root) {
+            put_test_cas(root, &std::fs::read(path).unwrap());
+        }
+        let roots = AuthorityTrustRootsV4::new(
+            harness_root.policy_revision_hash.clone(),
+            harness_root.repository_id.clone(),
+            harness_root.repository_source_hash.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let prefix = rewrap_v3_fixture_prefix_as_v4(&v3_envelopes[..7], &bootstrap);
+        let (journal, _) = EventJournal::publish_new_v4(root, bootstrap).unwrap();
+        let mut writer = journal.writer_v4().unwrap();
+        writer.append_batch(&prefix[1..]).unwrap();
+        drop(writer);
+
+        let input_bytes = evaluation.input().canonical_bytes().unwrap();
+        let output_bytes = evaluation.result().canonical_bytes().unwrap();
+        put_test_cas(root, &input_bytes);
+        put_test_cas(root, &output_bytes);
+        let (mut session, mut basis) = journal.replayed_v4_session(&roots).unwrap();
+        let context = session
+            .log
+            .prepare_inherited_d2_event_v4(
+                EventCommand::context_envelope_projected(v4_built),
+                &basis,
+            )
+            .unwrap();
+        let context_envelope = context
+            .envelope(&session.log, &basis, &session.session_identity)
+            .unwrap()
+            .clone();
+        session.writer.append(context_envelope).unwrap();
+        let JournalGenesis::V4Shared(genesis) = &session.writer.identity.genesis else {
+            unreachable!()
+        };
+        let (next_log, next_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            session.writer.identity.run_id.clone(),
+            genesis,
+            &session.writer.state.events,
+            &session.resolver,
+            &roots,
+            EventReplayLimits::new(
+                session.writer.limits.max_events,
+                session.writer.limits.max_replay_bytes,
+            ),
+            &session.session_identity,
+        )
+        .unwrap();
+        context
+            .confirm_replayed(&next_log, &next_basis, &session.session_identity)
+            .unwrap();
+        session.log = next_log;
+        basis = next_basis;
+
+        let raw_admission = session
+            .log
+            .prepare_reviewer_raw_artifact_registration_v3_at_v4(
+                raw_registration,
+                &v4_execution,
+                &basis,
+            )
+            .unwrap();
+        let raw_envelope = raw_admission
+            .envelope(&session.log, &basis, &session.session_identity)
+            .unwrap()
+            .clone();
+        session.writer.append(raw_envelope).unwrap();
+        let JournalGenesis::V4Shared(genesis) = &session.writer.identity.genesis else {
+            unreachable!()
+        };
+        let (next_log, next_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            session.writer.identity.run_id.clone(),
+            genesis,
+            &session.writer.state.events,
+            &session.resolver,
+            &roots,
+            EventReplayLimits::new(
+                session.writer.limits.max_events,
+                session.writer.limits.max_replay_bytes,
+            ),
+            &session.session_identity,
+        )
+        .unwrap();
+        raw_admission
+            .confirm_replayed(&next_log, &next_basis, &session.session_identity)
+            .unwrap();
+        session.log = next_log;
+        basis = next_basis;
+
+        let execution = session
+            .log
+            .prepare_inherited_d2_event_v4(
+                EventCommand::review_execution_recorded(v4_execution),
+                &basis,
+            )
+            .unwrap();
+        let execution_envelope = execution
+            .envelope(&session.log, &basis, &session.session_identity)
+            .unwrap()
+            .clone();
+        session.writer.append(execution_envelope).unwrap();
+        let JournalGenesis::V4Shared(genesis) = &session.writer.identity.genesis else {
+            unreachable!()
+        };
+        let (next_log, next_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            session.writer.identity.run_id.clone(),
+            genesis,
+            &session.writer.state.events,
+            &session.resolver,
+            &roots,
+            EventReplayLimits::new(
+                session.writer.limits.max_events,
+                session.writer.limits.max_replay_bytes,
+            ),
+            &session.session_identity,
+        )
+        .unwrap();
+        execution
+            .confirm_replayed(&next_log, &next_basis, &session.session_identity)
+            .unwrap();
+        session.log = next_log;
+        basis = next_basis;
+
+        let input = session
+            .log
+            .prepare_static_verifier_input_registration_v3_at_v4(
+                &claim_id,
+                ContentHash::sha256(&input_bytes),
+                input_bytes.len() as u64,
+                &session.resolver,
+                &roots,
+                &basis,
+            )
+            .unwrap();
+        let input_envelope = input
+            .envelope(&session.log, &basis, &session.session_identity)
+            .unwrap()
+            .clone();
+        session.writer.append(input_envelope).unwrap();
+        let JournalGenesis::V4Shared(genesis) = &session.writer.identity.genesis else {
+            unreachable!()
+        };
+        let (next_log, next_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            session.writer.identity.run_id.clone(),
+            genesis,
+            &session.writer.state.events,
+            &session.resolver,
+            &roots,
+            EventReplayLimits::new(
+                session.writer.limits.max_events,
+                session.writer.limits.max_replay_bytes,
+            ),
+            &session.session_identity,
+        )
+        .unwrap();
+        let input_receipt = input
+            .confirm_replayed(&next_log, &next_basis, &session.session_identity)
+            .unwrap();
+        session.log = next_log;
+        basis = next_basis;
+
+        let output = session
+            .log
+            .prepare_static_verifier_output_registration_v3_at_v4(
+                &claim_id,
+                ContentHash::sha256(&output_bytes),
+                output_bytes.len() as u64,
+                &session.resolver,
+                &roots,
+                &basis,
+            )
+            .unwrap();
+        let output_envelope = output
+            .envelope(&session.log, &basis, &session.session_identity)
+            .unwrap()
+            .clone();
+        session.writer.append(output_envelope).unwrap();
+        let JournalGenesis::V4Shared(genesis) = &session.writer.identity.genesis else {
+            unreachable!()
+        };
+        let (next_log, next_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            session.writer.identity.run_id.clone(),
+            genesis,
+            &session.writer.state.events,
+            &session.resolver,
+            &roots,
+            EventReplayLimits::new(
+                session.writer.limits.max_events,
+                session.writer.limits.max_replay_bytes,
+            ),
+            &session.session_identity,
+        )
+        .unwrap();
+        let output_receipt = output
+            .confirm_replayed(&next_log, &next_basis, &session.session_identity)
+            .unwrap();
+        session.log = next_log;
+        basis = next_basis;
+        let bundle = session
+            .log
+            .mint_verification_bundle_v4(
+                VerificationBundleRequestV4::static_fact(
+                    claim_id,
+                    input_receipt.registration_id().clone(),
+                    output_receipt.registration_id().clone(),
+                ),
+                None,
+                &session.resolver,
+                &roots,
+                &basis,
+            )
+            .unwrap();
+        let planned = bundle
+            .envelopes(&session.log, &basis, &session.session_identity)
+            .unwrap()
+            .to_vec();
+        assert_eq!(planned.len(), 3);
+        drop(session);
+        (journal, roots, planned)
     }
 
     fn public_v4_rebuild_with_limits(
@@ -7510,7 +8456,8 @@ mod tests {
     ) -> Result<crate::IndexRebuildReceiptV4, crate::IndexError> {
         let workspace = tempfile::tempdir().unwrap();
         let root = StoreRoot::open(workspace.path(), limits).unwrap();
-        let (journal, roots, _, _) = public_v3_fixture_journal(&root, "run:store-public-v4-limits");
+        let (journal, roots, _, _, _, _, _, _, _, _) =
+            public_v3_fixture_journal(&root, "run:store-public-v4-limits");
         crate::DerivedIndexV4::open(&root)
             .unwrap()
             .rebuild_v4(&journal, &roots)
@@ -7582,7 +8529,7 @@ mod tests {
     fn public_v4_snapshot_query_and_working_limits_are_exact_and_one_less_refuses() {
         let workspace = tempfile::tempdir().unwrap();
         let root = StoreRoot::open(workspace.path(), crate::StoreLimits::default()).unwrap();
-        let (journal, roots, _, _) =
+        let (journal, roots, _, _, _, _, _, _, _, _) =
             public_v3_fixture_journal(&root, "run:store-public-v4-snapshot-limits");
         let identity = journal.identity.clone();
         let receipt = crate::DerivedIndexV4::open(&root)
@@ -7648,7 +8595,7 @@ mod tests {
 
         let workspace = tempfile::tempdir().unwrap();
         let root = StoreRoot::open(workspace.path(), crate::StoreLimits::default()).unwrap();
-        let (journal, roots, _, _) =
+        let (journal, roots, _, _, _, _, _, _, _, _) =
             public_v3_fixture_journal(&root, "run:store-public-v4-json-staging");
         let index = crate::DerivedIndexV4::open(&root).unwrap();
         index.rebuild_v4(&journal, &roots).unwrap();
@@ -7784,7 +8731,7 @@ mod tests {
 
         let workspace = tempfile::tempdir().unwrap();
         let root = StoreRoot::open(workspace.path(), crate::StoreLimits::default()).unwrap();
-        let (journal, roots, _, _) =
+        let (journal, roots, _, _, _, _, _, _, _, _) =
             public_v3_fixture_journal(&root, "run:store-validated-v4-handle");
         let index = crate::DerivedIndexV4::open(&root).unwrap();
         index.rebuild_v4(&journal, &roots).unwrap();
@@ -7861,7 +8808,7 @@ mod tests {
         assert_eq!(tamper.0, 0);
         std::fs::write(&active_path, original_image).unwrap();
 
-        let (wrong_journal, _, _, _) =
+        let (wrong_journal, _, _, _, _, _, _, _, _, _) =
             public_v3_fixture_journal(&root, "run:store-validated-v4-wrong-journal");
         let mut wrong = CountingVisitor(0);
         assert!(matches!(
@@ -7889,7 +8836,7 @@ mod tests {
 
         let workspace = tempfile::tempdir().unwrap();
         let root = StoreRoot::open(workspace.path(), crate::StoreLimits::default()).unwrap();
-        let (journal, roots, _, _) =
+        let (journal, roots, _, _, _, _, _, _, _, _) =
             public_v3_fixture_journal(&root, "run:store-public-v4-selection-limits");
         let identity = journal.identity.clone();
         let index = crate::DerivedIndexV4::open(&root).unwrap();
@@ -8221,7 +9168,8 @@ mod tests {
         ] {
             let (_workspace, root) = root();
             let run = format!("run:store-public-v3-e2e-{index}");
-            let (journal, roots, claim_id, harness_root) = public_v3_fixture_journal(&root, &run);
+            let (journal, roots, claim_id, harness_root, _, _, _, _, _, _) =
+                public_v3_fixture_journal(&root, &run);
             if index == 0 {
                 let before_cas = test_cas_inventory(&root);
                 let mut wrong_harness = clone_test_harness_root(&harness_root);
@@ -11773,7 +12721,7 @@ mod tests {
     }
 
     #[test]
-    fn v4_m4_bundle_recovery_is_explicitly_unsupported_until_authority_plan_arrives() {
+    fn v4_m4_inspection_refuses_an_absent_foreign_run_without_creating_state() {
         let (_workspace, root) = root();
         assert!(matches!(
             EventJournal::inspect_recovery_v4(
@@ -12005,32 +12953,71 @@ mod tests {
     }
 
     #[test]
-    fn v4_m4_marker_is_recognized_before_the_unsupported_seam() {
+    fn v4_m4_marker_inspection_seals_the_exact_marker_hash() {
         let (_workspace, root) = root();
         let run = "run:journal-v4-m4-marker";
         let log = v4_bootstrap_log(run);
-        let run_id = log.run_id().clone();
-        let genesis_hash = log.genesis_hash().clone();
         let planned = log.envelopes()[0].clone();
         let (journal, _) = EventJournal::publish_new_v4(&root, log).unwrap();
-        let reader = journal.reader().unwrap();
-        let marker =
-            VerificationBundlePendingMarkerV3::new(&journal.identity, &reader.state, &[planned])
-                .unwrap();
-        drop(reader);
+        let marker = v4_marker_at_current_tail(&journal, &[planned]);
         publish_bundle_file(
             &journal.run,
             BUNDLE_PENDING_MARKER,
             &canonical_json(&marker).unwrap(),
         )
         .unwrap();
-        assert!(matches!(
-            EventJournal::inspect_recovery_v4(
-                &root,
-                RecoveryInspectionV4::new(run_id, genesis_hash, RecoveryKindV4::M4BundleResume,),
+        let marker_bytes = canonical_json(&marker).unwrap();
+        let (_, observed_hash) = read_bundle_pending_with_hash(
+            &journal.run,
+            &journal.identity,
+            JournalLimits::from_store(root.limits()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(observed_hash, ContentHash::sha256(&marker_bytes));
+    }
+
+    #[test]
+    fn v4_m4_prefix_stage_classification_is_exhaustive_for_every_legal_prefix() {
+        let (_workspace, root) = root();
+        let log = v4_bootstrap_log("run:journal-v4-m4-prefix-stages");
+        let planned_event = log.envelopes()[0].clone();
+        let (journal, _) = EventJournal::publish_new_v4(&root, log).unwrap();
+        let reader = journal.reader().unwrap();
+        let pre_state = ScanState {
+            events: Vec::new(),
+            confirmed_offset: 0,
+            tail_hash: v4_chain_genesis_hash(
+                &journal.identity.run_id,
+                &journal.identity.genesis_hash(),
             ),
-            Err(JournalError::RecoveryKindUnsupportedV4)
-        ));
+            torn: None,
+        };
+        for (confirmed, expected) in [
+            (0, M4BundlePrefixClassificationV4::Stage0),
+            (1, M4BundlePrefixClassificationV4::StrictInterior),
+            (2, M4BundlePrefixClassificationV4::StrictInterior),
+            (3, M4BundlePrefixClassificationV4::AlreadyComplete),
+        ] {
+            let planned = vec![planned_event.clone(); 3];
+            let marker =
+                VerificationBundlePendingMarkerV3::new(&journal.identity, &pre_state, &planned)
+                    .unwrap();
+            let marker_hash = ContentHash::sha256(&canonical_json(&marker).unwrap());
+            let pending = BundlePendingInspection {
+                marker,
+                marker_hash,
+                planned,
+                pre_state: pre_state.clone(),
+                current_state: reader.state.clone(),
+                confirmed_events: confirmed,
+                discarded: Vec::new(),
+            };
+            let stage = v4_bundle_prefix_stage(&pending).unwrap();
+            assert_eq!(stage.classification(), expected);
+            assert_eq!(stage.confirmed_events(), confirmed as u64);
+            assert_eq!(stage.expected_events(), 3);
+        }
     }
 
     #[test]
@@ -12042,11 +13029,7 @@ mod tests {
         let genesis_hash = log.genesis_hash().clone();
         let planned = log.envelopes()[0].clone();
         let (journal, _) = EventJournal::publish_new_v4(&first_root, log).unwrap();
-        let reader = journal.reader().unwrap();
-        let mut marker =
-            VerificationBundlePendingMarkerV3::new(&journal.identity, &reader.state, &[planned])
-                .unwrap();
-        drop(reader);
+        let mut marker = v4_marker_at_current_tail(&journal, &[planned]);
         marker.expected_event_hashes[0] = ContentHash::sha256(b"foreign-event-hash");
         publish_bundle_file(
             &journal.run,
@@ -12065,15 +13048,9 @@ mod tests {
         let (_workspace, second_root) = root();
         let run = "run:journal-v4-m4-stage-corruption";
         let log = v4_bootstrap_log(run);
-        let run_id = log.run_id().clone();
-        let genesis_hash = log.genesis_hash().clone();
         let planned = log.envelopes()[0].clone();
         let (journal, _) = EventJournal::publish_new_v4(&second_root, log).unwrap();
-        let reader = journal.reader().unwrap();
-        let marker =
-            VerificationBundlePendingMarkerV3::new(&journal.identity, &reader.state, &[planned])
-                .unwrap();
-        drop(reader);
+        let marker = v4_marker_at_current_tail(&journal, &[planned]);
         publish_bundle_file(
             &journal.run,
             BUNDLE_PENDING_MARKER,
@@ -12082,12 +13059,417 @@ mod tests {
         .unwrap();
         publish_bundle_file(&journal.run, BUNDLE_PENDING_STAGE, b"invalid\n").unwrap();
         assert!(matches!(
-            EventJournal::inspect_recovery_v4(
-                &second_root,
-                RecoveryInspectionV4::new(run_id, genesis_hash, RecoveryKindV4::M4BundleResume,),
-            ),
+            read_bundle_stage(&journal.run, marker.expected_count),
             Err(JournalError::ReceiptCorruption { .. })
         ));
+    }
+
+    #[test]
+    fn v4_m4_recovery_rechecks_the_key_and_never_cleans_an_invalid_authority_plan() {
+        let (_workspace, root) = root();
+        let program_bytes =
+            include_bytes!("../../../examples/double-submit-payment/program-space.json");
+        let program = ProgramSpace::from_json_slice(program_bytes).unwrap();
+        let program_json: Value = serde_json::from_slice(program_bytes).unwrap();
+        let repository_source_hash = ContentHash::parse(
+            program_json["source"]["content_hash"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        )
+        .unwrap();
+        let roots = AuthorityTrustRootsV4::new(
+            ContentHash::sha256(b"m4-key-recheck-policy"),
+            program.repository_id().clone(),
+            repository_source_hash,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let (_, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let obligation_id = obligations.first().unwrap().id().clone();
+        let log = v4_bootstrap_log("run:journal-v4-m4-key-recheck");
+        let run_id = log.run_id().clone();
+        let genesis_hash = log.genesis_hash().clone();
+        let genesis_bytes = log.canonical_genesis_bytes().to_vec();
+        let confirmed = log.envelopes().to_vec();
+        let (journal, _) = EventJournal::publish_new_v4(&root, log).unwrap();
+        let resolver = JournalAuthorityResolverV4 {
+            reader: CasReader::open_existing(&root).unwrap(),
+        };
+        let session_identity = OpaqueSessionIdentityV4::fresh();
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            run_id.clone(),
+            &genesis_bytes,
+            &confirmed,
+            &resolver,
+            &roots,
+            EventReplayLimits::new(16, 2 * 1024 * 1024),
+            &session_identity,
+        )
+        .unwrap();
+        let prepared = log
+            .prepare_inherited_d2_event_v4(
+                EventCommand::obligation_transition(obligation_id, ObligationLifecycle::Planned),
+                &basis,
+            )
+            .unwrap();
+        let planned = prepared
+            .envelope(&log, &basis, &session_identity)
+            .unwrap()
+            .clone();
+        let path = root
+            .path()
+            .join(RUNS_DIR)
+            .join(run_dir_name(&run_id))
+            .join(JOURNAL_FILE);
+        let marker = v4_marker_at_current_tail(&journal, std::slice::from_ref(&planned));
+        publish_bundle_file(
+            &journal.run,
+            BUNDLE_PENDING_MARKER,
+            &canonical_json(&marker).unwrap(),
+        )
+        .unwrap();
+        let invalid_plan_key = EventJournal::inspect_recovery_v4(
+            &root,
+            RecoveryInspectionV4::new(
+                run_id.clone(),
+                genesis_hash.clone(),
+                RecoveryKindV4::M4BundleResume,
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            journal.recover_replayed_v4_session(
+                &roots,
+                invalid_plan_key,
+                RecoveryProvenanceV4::new("test", "m4-invalid-plan").unwrap(),
+            ),
+            Err(JournalError::BundleResumeAuthorityMismatch)
+        ));
+        assert!(bundle_file_exists(&journal.run, BUNDLE_PENDING_MARKER).unwrap());
+        let stale_key = EventJournal::inspect_recovery_v4(
+            &root,
+            RecoveryInspectionV4::new(
+                run_id.clone(),
+                genesis_hash.clone(),
+                RecoveryKindV4::M4BundleResume,
+            ),
+        )
+        .unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let mut line = planned.canonical_bytes().unwrap();
+        line.push(b'\n');
+        file.write_all(&line).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        assert!(matches!(
+            journal.recover_replayed_v4_session(
+                &roots,
+                stale_key,
+                RecoveryProvenanceV4::new("test", "m4-key-recheck").unwrap(),
+            ),
+            Err(JournalError::RecoveryKeyMismatchV4)
+        ));
+        assert!(bundle_file_exists(&journal.run, BUNDLE_PENDING_MARKER).unwrap());
+    }
+
+    #[test]
+    fn v4_m4_store_recovery_covers_every_real_static_prefix_and_resumes_only_interior() {
+        for confirmed in 0..=3_usize {
+            let (_workspace, root) = root();
+            let run = format!("run:journal-v4-m4-real-prefix-{confirmed}");
+            let (journal, roots, planned) = public_v4_static_bundle_journal(&root, &run);
+            let mut writer = journal.writer_v4().unwrap();
+            let marker =
+                VerificationBundlePendingMarkerV3::new(&journal.identity, &writer.state, &planned)
+                    .unwrap();
+            let JournalGenesis::V4Shared(genesis) = &writer.identity.genesis else {
+                unreachable!()
+            };
+            let resolver = JournalAuthorityResolverV4 {
+                reader: CasReader::open_existing(&root).unwrap(),
+            };
+            let recovery_session = OpaqueSessionIdentityV4::fresh();
+            EventLogV4::recover_verification_bundle_v4_for_session(
+                writer.identity.run_id.clone(),
+                genesis,
+                &writer.state.events,
+                &planned,
+                &resolver,
+                &roots,
+                EventReplayLimits::new(writer.limits.max_events, writer.limits.max_replay_bytes),
+                &recovery_session,
+            )
+            .unwrap();
+            let marker_hash = ContentHash::sha256(&canonical_json(&marker).unwrap());
+            publish_bundle_file(
+                &journal.run,
+                BUNDLE_PENDING_MARKER,
+                &canonical_json(&marker).unwrap(),
+            )
+            .unwrap();
+            publish_bundle_file(&journal.run, BUNDLE_PENDING_STAGE, b"0\n").unwrap();
+            if confirmed != 0 {
+                writer.file.seek(SeekFrom::End(0)).unwrap();
+                for envelope in &planned[..confirmed] {
+                    writer
+                        .file
+                        .write_all(&envelope.canonical_bytes().unwrap())
+                        .unwrap();
+                    writer.file.write_all(b"\n").unwrap();
+                }
+                writer.file.sync_data().unwrap();
+                persist_bundle_stage_file(&journal.run, confirmed as u64).unwrap();
+            }
+            drop(writer);
+
+            let key = EventJournal::inspect_recovery_v4(
+                &root,
+                RecoveryInspectionV4::new(
+                    journal.identity.run_id.clone(),
+                    journal.identity.genesis_hash(),
+                    RecoveryKindV4::M4BundleResume,
+                ),
+            )
+            .unwrap();
+            let (receipt, recovered) = journal
+                .recover_replayed_v4_session(
+                    &roots,
+                    key,
+                    RecoveryProvenanceV4::new("test", format!("m4-prefix-{confirmed}")).unwrap(),
+                )
+                .unwrap_or_else(|error| panic!("real M4 prefix {confirmed} failed: {error}"));
+            assert_eq!(receipt.pre_file_hash(), receipt.post_file_hash());
+            let durable_file_hash = ContentHash::sha256(
+                &std::fs::read(
+                    root.path()
+                        .join(RUNS_DIR)
+                        .join(run_dir_name(&journal.identity.run_id))
+                        .join(JOURNAL_FILE),
+                )
+                .unwrap(),
+            );
+            assert_eq!(receipt.post_file_hash(), Some(&durable_file_hash));
+            assert_eq!(receipt.event_contract_version(), EVENT_CONTRACT_SCHEMA_V4);
+            assert_eq!(receipt.provenance().actor(), "test");
+            assert_eq!(
+                receipt.provenance().tool_version(),
+                format!("m4-prefix-{confirmed}")
+            );
+            let marker_receipt = receipt.marker_recovery().unwrap();
+            assert_eq!(marker_receipt.pre_marker_hash, marker_hash);
+            assert_eq!(
+                marker_receipt.prefix_stage.confirmed_events(),
+                confirmed as u64
+            );
+            assert_eq!(marker_receipt.prefix_stage.expected_events(), 3);
+
+            match (confirmed, recovered) {
+                (
+                    0 | 3,
+                    RecoveredV4Session::Editable {
+                        session,
+                        basis: _basis,
+                    },
+                ) => {
+                    assert!(matches!(
+                        receipt.outcome(),
+                        RecoveryOutcomeV4::M4BundleCleanupOrdinary { .. }
+                    ));
+                    assert_eq!(
+                        marker_receipt.action,
+                        M4BundleMarkerActionV4::ClearedAndSynced
+                    );
+                    assert_eq!(marker_receipt.post_marker_hash, None);
+                    assert!(!bundle_file_exists(&journal.run, BUNDLE_PENDING_MARKER).unwrap());
+                    let competing = journal.open_file(false).unwrap();
+                    assert_eq!(
+                        fs::flock(&competing, FlockOperation::NonBlockingLockExclusive),
+                        Err(rustix::io::Errno::WOULDBLOCK)
+                    );
+                    drop(session);
+                    fs::flock(&competing, FlockOperation::NonBlockingLockExclusive).unwrap();
+                }
+                (
+                    1 | 2,
+                    RecoveredV4Session::M4BundleResumeRequired {
+                        session,
+                        resume_authority,
+                    },
+                ) => {
+                    assert!(matches!(
+                        receipt.outcome(),
+                        RecoveryOutcomeV4::M4BundleResumeRequired { .. }
+                    ));
+                    assert_eq!(
+                        marker_receipt.action,
+                        M4BundleMarkerActionV4::RetainedForResume
+                    );
+                    assert_eq!(marker_receipt.post_marker_hash.as_ref(), Some(&marker_hash));
+                    assert!(bundle_file_exists(&journal.run, BUNDLE_PENDING_MARKER).unwrap());
+                    assert_eq!(session.durable_stage().confirmed_events(), confirmed as u64);
+                    let competing = journal.open_file(false).unwrap();
+                    assert_eq!(
+                        fs::flock(&competing, FlockOperation::NonBlockingLockExclusive),
+                        Err(rustix::io::Errno::WOULDBLOCK)
+                    );
+                    let (session, _basis, append) = session
+                        .resume_verification_bundle(resume_authority)
+                        .unwrap();
+                    assert_eq!(append.journal().len(), 3 - confirmed);
+                    assert_eq!(append.authority().event_ids().len(), 3);
+                    assert!(!bundle_file_exists(&journal.run, BUNDLE_PENDING_MARKER).unwrap());
+                    assert_eq!(
+                        fs::flock(&competing, FlockOperation::NonBlockingLockExclusive),
+                        Err(rustix::io::Errno::WOULDBLOCK)
+                    );
+                    drop(session);
+                    fs::flock(&competing, FlockOperation::NonBlockingLockExclusive).unwrap();
+                    fs::flock(&competing, FlockOperation::Unlock).unwrap();
+                    drop(competing);
+                    assert!(matches!(
+                        EventJournal::inspect_recovery_v4(
+                            &root,
+                            RecoveryInspectionV4::new(
+                                journal.identity.run_id.clone(),
+                                journal.identity.genesis_hash(),
+                                RecoveryKindV4::M4BundleResume,
+                            ),
+                        ),
+                        Err(JournalError::RecoveryKeyMismatchV4)
+                    ));
+                }
+                _ => panic!("M4 recovery returned a branch inconsistent with prefix stage"),
+            }
+        }
+    }
+
+    #[test]
+    fn v4_m4_store_refuses_nonprefix_real_plans_and_overlong_suffix_without_cleanup() {
+        let (_workspace, root) = root();
+        let (journal, _roots, planned) =
+            public_v4_static_bundle_journal(&root, "run:journal-v4-m4-real-refusals");
+        let before = std::fs::read(
+            root.path()
+                .join(RUNS_DIR)
+                .join(run_dir_name(&journal.identity.run_id))
+                .join(JOURNAL_FILE),
+        )
+        .unwrap();
+        for candidate in [
+            vec![planned[0].clone(), planned[0].clone(), planned[2].clone()],
+            vec![planned[0].clone(), planned[2].clone()],
+            vec![planned[1].clone(), planned[0].clone(), planned[2].clone()],
+        ] {
+            let reader = journal.reader().unwrap();
+            let marker = VerificationBundlePendingMarkerV3::new(
+                &journal.identity,
+                &reader.state,
+                &candidate,
+            )
+            .unwrap();
+            drop(reader);
+            publish_bundle_file(
+                &journal.run,
+                BUNDLE_PENDING_MARKER,
+                &canonical_json(&marker).unwrap(),
+            )
+            .unwrap();
+            assert!(
+                EventJournal::inspect_recovery_v4(
+                    &root,
+                    RecoveryInspectionV4::new(
+                        journal.identity.run_id.clone(),
+                        journal.identity.genesis_hash(),
+                        RecoveryKindV4::M4BundleResume,
+                    ),
+                )
+                .is_err()
+            );
+            assert!(bundle_file_exists(&journal.run, BUNDLE_PENDING_MARKER).unwrap());
+            assert_eq!(
+                std::fs::read(
+                    root.path()
+                        .join(RUNS_DIR)
+                        .join(run_dir_name(&journal.identity.run_id))
+                        .join(JOURNAL_FILE),
+                )
+                .unwrap(),
+                before
+            );
+            fs::unlinkat(&journal.run, BUNDLE_PENDING_MARKER, AtFlags::empty()).unwrap();
+            fs::fsync(&journal.run).unwrap();
+        }
+
+        let mut writer = journal.writer_v4().unwrap();
+        let marker =
+            VerificationBundlePendingMarkerV3::new(&journal.identity, &writer.state, &planned[..2])
+                .unwrap();
+        publish_bundle_file(
+            &journal.run,
+            BUNDLE_PENDING_MARKER,
+            &canonical_json(&marker).unwrap(),
+        )
+        .unwrap();
+        writer.file.seek(SeekFrom::End(0)).unwrap();
+        for envelope in &planned {
+            writer
+                .file
+                .write_all(&envelope.canonical_bytes().unwrap())
+                .unwrap();
+            writer.file.write_all(b"\n").unwrap();
+        }
+        writer.file.sync_data().unwrap();
+        drop(writer);
+        assert!(
+            EventJournal::inspect_recovery_v4(
+                &root,
+                RecoveryInspectionV4::new(
+                    journal.identity.run_id.clone(),
+                    journal.identity.genesis_hash(),
+                    RecoveryKindV4::M4BundleResume,
+                ),
+            )
+            .is_err()
+        );
+        assert!(bundle_file_exists(&journal.run, BUNDLE_PENDING_MARKER).unwrap());
+    }
+
+    #[test]
+    fn v4_m4_cleanup_directory_sync_failure_is_typed_after_marker_mutation() {
+        let (_workspace, root) = root();
+        let log = v4_bootstrap_log("run:journal-v4-m4-cleanup-sync");
+        let planned = log.envelopes()[0].clone();
+        let (journal, _) = EventJournal::publish_new_v4(&root, log).unwrap();
+        let marker = v4_marker_at_current_tail(&journal, &[planned]);
+        publish_bundle_file(
+            &journal.run,
+            BUNDLE_PENDING_MARKER,
+            &canonical_json(&marker).unwrap(),
+        )
+        .unwrap();
+        publish_bundle_file(&journal.run, BUNDLE_PENDING_STAGE, b"0\n").unwrap();
+        let outcome = RecoveryOutcomeV4::M4BundleCleanupOrdinary {
+            prefix_stage: M4BundlePrefixStageV4 {
+                classification: M4BundlePrefixClassificationV4::Stage0,
+                confirmed_events: 0,
+                expected_events: 1,
+            },
+        };
+        inject_v4_recovery_fault(V4RecoveryFault::M4Directory);
+        assert!(matches!(
+            clear_v4_bundle_marker(&journal.run, &outcome),
+            Err(JournalError::RecoveryDurabilityUncertainV4 {
+                outcome: RecoveryOutcomeV4::M4BundleCleanupOrdinary { .. }
+            })
+        ));
+        assert!(!bundle_file_exists(&journal.run, BUNDLE_PENDING_MARKER).unwrap());
+        assert!(!bundle_file_exists(&journal.run, BUNDLE_PENDING_STAGE).unwrap());
     }
 
     #[test]
