@@ -6109,6 +6109,7 @@ mod tests {
             reviewgraphen_core::EventStreamGenesis::V1(_) => unreachable!(),
             reviewgraphen_core::EventStreamGenesis::V2Verified(_) => unreachable!(),
             reviewgraphen_core::EventStreamGenesis::V3(_) => unreachable!(),
+            reviewgraphen_core::EventStreamGenesis::V4(_) => unreachable!(),
         };
         reader.with_locked_snapshot(|events, _, _| {
             let view = EventEnvelope::validated_view(
