@@ -5,22 +5,28 @@
 //! bytes.  Projection and authority reconciliation remain core/index work.
 
 use super::{
-    CasHash, CasReader, CasStore, StoreError, StoreRoot, StoreRootIdentity, open_or_create_dir,
-    verify_fd_kind_mode,
+    CasHash, CasReader, CasReceipt, CasStore, StoreError, StoreRoot, StoreRootIdentity,
+    open_or_create_dir, verify_fd_kind_mode,
 };
 use reviewgraphen_core::{
-    ArtifactRegisteredV3, AuthorityArtifactResolverV3, AuthorityArtifactResolverV4,
-    AuthorityReplayBasisV3, AuthorityReplayBasisV4, AuthorityTrustRootsV3, AuthorityTrustRootsV4,
-    BuiltContextProjection, ContentHash, DecisionInputV3, EventAdmissions, EventCommand,
-    EventContractVersion, EventEnvelope, EventLog, EventLogV4, EventReplayLimits,
-    EventStreamGenesis, ExpectedVerificationAttemptV3, ExternalWitnessAdmissionV3,
-    FixtureExecutionReceiptV1, FixtureRegistrationResumeAuthorityV3, ObligationLifecycle,
-    OpaqueSessionIdentityV4, RecoveredM4BundleV4Session as CoreRecoveredM4BundleV4Session,
-    ReviewPlan, SnapshotSourcesRecorded, StableId, StaticFactEvaluationV1,
-    StaticVerificationAttemptInspectionV3, ValidatedArtifactRegistrationV3, ValidatedDecisionV3,
-    ValidatedExecutionBundle, ValidatedFindingV3, ValidatedVerificationBundleV3,
-    VerificationAttemptStageV3, VerificationBundleReceiptV3, VerificationBundleReceiptV4,
-    VerificationBundleRecoveryV4, VerificationBundleResumeAuthorityV3,
+    ArtifactRegisteredV3, ArtifactRegistrationReceiptV4, ArtifactRegistrationV3AtV4Admission,
+    ArtifactRegistrationV3AtV4Receipt, ArtifactSensitivity, AuthorityArtifactResolverV3,
+    AuthorityArtifactResolverV4, AuthorityReplayBasisV3, AuthorityReplayBasisV4,
+    AuthorityTrustRootsV3, AuthorityTrustRootsV4, BuiltContextProjection, ContentHash,
+    DecisionInputV3, EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
+    EventLogV4, EventReplayLimits, EventStreamGenesis, ExpectedVerificationAttemptV3,
+    ExternalWitnessAdmissionV3, FixtureExecutionReceiptV1, FixtureRegistrationResumeAuthorityV3,
+    GLUING_INPUT_MEDIA_TYPE_V4, GluingBundleReceiptV4, GluingInputDescriptorV4,
+    InheritedD2EventReceiptV4, MAX_M5_DESCRIPTOR_CANONICAL_BYTES, ObligationLifecycle,
+    OpaqueSessionIdentityV4, PreparedInheritedD2EventV4,
+    RecoveredM4BundleV4Session as CoreRecoveredM4BundleV4Session, ReviewPlan, SnapshotSourceBundle,
+    SnapshotSourcesRecorded, StableId, StaticFactEvaluationV1,
+    StaticVerificationAttemptInspectionV3, TrustedGluingInputAdmissionV4,
+    TrustedGluingInputSourceV4, ValidatedArtifactRegistrationV3, ValidatedDecisionV3,
+    ValidatedExecutionBundle, ValidatedFindingV3, ValidatedGluingBundleV4,
+    ValidatedVerificationBundleV3, ValidatedVerificationBundleV4, VerificationAttemptStageV3,
+    VerificationBundleReceiptV3, VerificationBundleReceiptV4, VerificationBundleRecoveryV4,
+    VerificationBundleRequestV4, VerificationBundleResumeAuthorityV3,
     VerificationBundleResumeAuthorityV4, VerifierArtifactRoleV3, canonical_json,
 };
 use rustix::{
@@ -377,6 +383,10 @@ pub enum JournalError {
     Incomplete { limit: u64, observed: u64 },
     #[error("CAS object {hash} exists without its exact durable V3 registration")]
     OrphanCasObjectV3 { hash: ContentHash },
+    #[error("canonical gluing-input object {hash} is not the exact next adoptable V4 input")]
+    OrphanCanonicalInput { hash: ContentHash },
+    #[error("event-v4 gluing-input publication stopped at {stage}")]
+    GluingInputPublicationInterruptedV4 { stage: &'static str },
     #[error(
         "event-v4 recovery key is stale, foreign, or does not describe the current durable state"
     )]
@@ -898,6 +908,8 @@ pub struct ReplayedV3RunSession<'root, 'roots> {
 /// the session boundary.
 #[allow(dead_code)] // Subsequent V4 append units consume this closed session state.
 pub struct ReplayedV4RunSession<'root, 'roots> {
+    _root_lock: V4RootLock,
+    _run_lock: OwnedFd,
     writer: JournalWriter,
     log: EventLogV4,
     resolver: JournalAuthorityResolverV4<'root>,
@@ -958,6 +970,8 @@ pub struct RecoveredVerificationBundleV3Session<'root, 'roots> {
 /// It exposes no ordinary append or read API; consuming the exact Core
 /// authority is its only transition back to an editable session.
 pub struct RecoveredM4BundleV4Session<'root, 'roots> {
+    root_lock: V4RootLock,
+    run_lock: OwnedFd,
     writer: JournalWriter,
     resolver: JournalAuthorityResolverV4<'root>,
     roots: &'roots AuthorityTrustRootsV4,
@@ -1007,6 +1021,42 @@ pub struct V4VerificationBundleAppendReceipt {
     authority: VerificationBundleReceiptV4,
     journal: Vec<JournalAppendReceipt>,
 }
+
+/// Store durability plus Core replay confirmation for one exact V4 event.
+/// The Core receipt is descriptive; neither field grants another append.
+pub struct V4EventAppendReceipt<T> {
+    core: T,
+    journal: JournalAppendReceipt,
+}
+
+impl<T> V4EventAppendReceipt<T> {
+    #[must_use]
+    pub fn core(&self) -> &T {
+        &self.core
+    }
+
+    #[must_use]
+    pub fn journal(&self) -> &JournalAppendReceipt {
+        &self.journal
+    }
+}
+
+/// Exact result of publishing or adopting one canonical M5 input. An
+/// already-confirmed pair is reconstructed from replay and never appended a
+/// second time.
+pub enum GluingInputPublicationV4 {
+    Confirmed {
+        cas: CasReceipt,
+        append: V4EventAppendReceipt<ArtifactRegistrationReceiptV4>,
+    },
+    AlreadyRegistered {
+        context_id: StableId,
+        descriptor_id: StableId,
+        registration_id: StableId,
+    },
+}
+
+pub type V4GluingBundleAppendReceipt = V4EventAppendReceipt<GluingBundleReceiptV4>;
 
 impl V4VerificationBundleAppendReceipt {
     #[must_use]
@@ -1915,6 +1965,475 @@ impl<'root, 'roots> RecoveredVerificationBundleV3Session<'root, 'roots> {
     }
 }
 
+impl<'root, 'roots> ReplayedV4RunSession<'root, 'roots> {
+    /// Seals one authority-free inherited D2 command against this exact
+    /// lock-held V4 tail. No durable state changes during preparation.
+    pub fn prepare_inherited_d2_event(
+        &self,
+        command: EventCommand,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<PreparedInheritedD2EventV4, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.prepare_inherited_d2_event_v4(command, basis)?)
+    }
+
+    /// Durably appends one previously sealed D2 event, then rebuilds and
+    /// confirms the complete prefix under this same session identity.
+    pub fn append_inherited_d2_event(
+        &mut self,
+        prepared: PreparedInheritedD2EventV4,
+        basis: &mut AuthorityReplayBasisV4,
+    ) -> Result<V4EventAppendReceipt<InheritedD2EventReceiptV4>, JournalError> {
+        self.require_healthy()?;
+        let envelope = prepared
+            .envelope(&self.log, basis, &self.session_identity)?
+            .clone();
+        let journal = self.append_one_v4(envelope)?;
+        let (next_log, next_basis) = self.replay_candidate_v4_after_durable()?;
+        let core = prepared
+            .confirm_replayed(&next_log, &next_basis, &self.session_identity)
+            .map_err(|error| {
+                self.state = ReplayedV4RunSessionState::Uncertain;
+                JournalError::Domain(error)
+            })?;
+        self.log = next_log;
+        *basis = next_basis;
+        Ok(V4EventAppendReceipt { core, journal })
+    }
+
+    pub fn prepare_snapshot_artifact_registration(
+        &self,
+        registration: ArtifactRegisteredV3,
+        source_bundle: &SnapshotSourceBundle,
+        artifact_id: &StableId,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.prepare_snapshot_artifact_registration_v3_at_v4(
+            registration,
+            source_bundle,
+            artifact_id,
+            basis,
+        )?)
+    }
+
+    pub fn prepare_reviewer_raw_artifact_registration(
+        &self,
+        registration: ArtifactRegisteredV3,
+        execution_bundle: &ValidatedExecutionBundle,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .prepare_reviewer_raw_artifact_registration_v3_at_v4(
+                registration,
+                execution_bundle,
+                basis,
+            )?)
+    }
+
+    pub fn prepare_static_verifier_input_registration(
+        &self,
+        claim_id: &StableId,
+        cas_hash: ContentHash,
+        size: u64,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .prepare_static_verifier_input_registration_v3_at_v4(
+                claim_id,
+                cas_hash,
+                size,
+                &self.resolver,
+                self.roots,
+                basis,
+            )?)
+    }
+
+    pub fn prepare_static_verifier_output_registration(
+        &self,
+        claim_id: &StableId,
+        cas_hash: ContentHash,
+        size: u64,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .prepare_static_verifier_output_registration_v3_at_v4(
+                claim_id,
+                cas_hash,
+                size,
+                &self.resolver,
+                self.roots,
+                basis,
+            )?)
+    }
+
+    pub fn append_inherited_artifact_registration(
+        &mut self,
+        prepared: ArtifactRegistrationV3AtV4Admission,
+        basis: &mut AuthorityReplayBasisV4,
+    ) -> Result<V4EventAppendReceipt<ArtifactRegistrationV3AtV4Receipt>, JournalError> {
+        self.require_healthy()?;
+        let envelope = prepared
+            .envelope(&self.log, basis, &self.session_identity)?
+            .clone();
+        let journal = self.append_one_v4(envelope)?;
+        let (next_log, next_basis) = self.replay_candidate_v4_after_durable()?;
+        let core = prepared
+            .confirm_replayed(&next_log, &next_basis, &self.session_identity)
+            .map_err(|error| {
+                self.state = ReplayedV4RunSessionState::Uncertain;
+                JournalError::Domain(error)
+            })?;
+        self.log = next_log;
+        *basis = next_basis;
+        Ok(V4EventAppendReceipt { core, journal })
+    }
+
+    pub fn mint_verification_bundle(
+        &self,
+        request: VerificationBundleRequestV4,
+        witness: Option<reviewgraphen_core::ExternalWitnessAdmissionV4>,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ValidatedVerificationBundleV4, JournalError> {
+        self.require_healthy()?;
+        Ok(self.log.mint_verification_bundle_v4(
+            request,
+            witness,
+            &self.resolver,
+            self.roots,
+            basis,
+        )?)
+    }
+
+    pub fn append_verification_bundle(
+        &mut self,
+        prepared: ValidatedVerificationBundleV4,
+        basis: &mut AuthorityReplayBasisV4,
+    ) -> Result<V4VerificationBundleAppendReceipt, JournalError> {
+        self.require_healthy()?;
+        let envelopes = prepared
+            .envelopes(&self.log, basis, &self.session_identity)?
+            .to_vec();
+        let journal = match self.writer.append_verification_bundle_suffix(&envelopes) {
+            Ok(receipts) => receipts,
+            Err(error @ JournalError::BundleAppendInterrupted { .. }) => {
+                self.state = ReplayedV4RunSessionState::Uncertain;
+                return Err(error);
+            }
+            Err(_) if self.writer.append_durability == AppendDurability::Uncertain => {
+                self.state = ReplayedV4RunSessionState::Uncertain;
+                return Err(JournalError::SessionUncertain);
+            }
+            Err(error) => return Err(error),
+        };
+        let (next_log, next_basis) = self.replay_candidate_v4_after_durable()?;
+        let authority = prepared
+            .confirm_replayed(&next_log, &next_basis, &self.session_identity)
+            .map_err(|error| {
+                self.state = ReplayedV4RunSessionState::Uncertain;
+                JournalError::Domain(error)
+            })?;
+        self.log = next_log;
+        *basis = next_basis;
+        Ok(V4VerificationBundleAppendReceipt { authority, journal })
+    }
+
+    /// Canonicalizes and durably publishes one trusted descriptor before
+    /// sealing its exact registration. The CAS receipt remains storage-only;
+    /// Core admission is independently required before any event append.
+    pub fn publish_gluing_input(
+        &mut self,
+        trusted: TrustedGluingInputSourceV4,
+        descriptor: GluingInputDescriptorV4,
+        basis: &mut AuthorityReplayBasisV4,
+    ) -> Result<GluingInputPublicationV4, JournalError> {
+        self.require_healthy()?;
+        let bytes = canonical_json(&descriptor)?;
+        if bytes.len() > MAX_M5_DESCRIPTOR_CANONICAL_BYTES {
+            return Err(JournalError::Incomplete {
+                limit: u64::try_from(MAX_M5_DESCRIPTOR_CANONICAL_BYTES).unwrap_or(u64::MAX),
+                observed: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            });
+        }
+        self.validate_gluing_source_bytes(&trusted, &descriptor, &bytes)?;
+        if let Some(existing) = self.reconstruct_registered_gluing_input(&trusted, &descriptor)? {
+            return Ok(existing);
+        }
+        let descriptor_hash = trusted.descriptor_hash().clone();
+        let descriptor_size = trusted.descriptor_size();
+        let admission = self.log.admit_gluing_input_registration_v4(
+            trusted,
+            &bytes,
+            self.roots,
+            basis,
+            &self.session_identity,
+        )?;
+        #[cfg(test)]
+        if take_v4_gluing_fault(V4GluingFault::BeforeCasPublication) {
+            return Err(JournalError::GluingInputPublicationInterruptedV4 {
+                stage: "before CAS publication",
+            });
+        }
+        let hash = CasHash::parse(descriptor_hash.to_string())?;
+        let cas = CasStore::open(self.resolver.reader.root)?.put(
+            &hash,
+            Some(descriptor_size),
+            std::io::Cursor::new(&bytes),
+        )?;
+        #[cfg(test)]
+        if take_v4_gluing_fault(V4GluingFault::AfterCasPublication) {
+            return Err(JournalError::GluingInputPublicationInterruptedV4 {
+                stage: "after CAS publication",
+            });
+        }
+        let append = self.append_gluing_input_registration(admission, basis)?;
+        Ok(GluingInputPublicationV4::Confirmed { cas, append })
+    }
+
+    /// Adopts only the immutable object named by one trusted binding. The
+    /// object is read through the admitted CAS descriptor, strictly decoded,
+    /// and then independently admitted by Core at the exact next context.
+    pub fn adopt_gluing_input(
+        &mut self,
+        trusted: TrustedGluingInputSourceV4,
+        basis: &mut AuthorityReplayBasisV4,
+    ) -> Result<GluingInputPublicationV4, JournalError> {
+        self.require_healthy()?;
+        let hash_value = trusted.descriptor_hash().clone();
+        if let Some((_, descriptor)) = self.log.registered_gluing_input_v4(trusted.context_id()) {
+            if self.registered_gluing_input_matches(&trusted, descriptor) {
+                return Ok(GluingInputPublicationV4::AlreadyRegistered {
+                    context_id: trusted.context_id().clone(),
+                    descriptor_id: trusted.descriptor_id().clone(),
+                    registration_id: trusted.registration_id().clone(),
+                });
+            }
+            return Err(JournalError::OrphanCanonicalInput { hash: hash_value });
+        }
+        let size = usize::try_from(trusted.descriptor_size()).map_err(|_| {
+            JournalError::OrphanCanonicalInput {
+                hash: hash_value.clone(),
+            }
+        })?;
+        if size > MAX_M5_DESCRIPTOR_CANONICAL_BYTES {
+            return Err(JournalError::OrphanCanonicalInput { hash: hash_value });
+        }
+        let cas_hash = CasHash::parse(hash_value.to_string()).map_err(|_| {
+            JournalError::OrphanCanonicalInput {
+                hash: hash_value.clone(),
+            }
+        })?;
+        let mut bytes = vec![0_u8; size];
+        self.resolver
+            .reader
+            .read_exact_slice(&cas_hash, &mut bytes)
+            .map_err(|_| JournalError::OrphanCanonicalInput {
+                hash: hash_value.clone(),
+            })?;
+        let descriptor = GluingInputDescriptorV4::from_json_bytes(&bytes).map_err(|_| {
+            JournalError::OrphanCanonicalInput {
+                hash: hash_value.clone(),
+            }
+        })?;
+        self.validate_gluing_source_bytes(&trusted, &descriptor, &bytes)
+            .map_err(|_| JournalError::OrphanCanonicalInput {
+                hash: hash_value.clone(),
+            })?;
+        let admission = self
+            .log
+            .admit_gluing_input_registration_v4(
+                trusted,
+                &bytes,
+                self.roots,
+                basis,
+                &self.session_identity,
+            )
+            .map_err(|_| JournalError::OrphanCanonicalInput {
+                hash: hash_value.clone(),
+            })?;
+        let append = self.append_gluing_input_registration(admission, basis)?;
+        Ok(GluingInputPublicationV4::Confirmed {
+            cas: CasReceipt {
+                hash: cas_hash,
+                size: u64::try_from(size).unwrap_or(u64::MAX),
+                existed: true,
+            },
+            append,
+        })
+    }
+
+    pub fn mint_gluing_bundle(
+        &self,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ValidatedGluingBundleV4, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .mint_gluing_bundle_v4(basis, &self.session_identity)?)
+    }
+
+    /// Appends the whole M5 topology as one ordinary V4 line. It deliberately
+    /// uses `append.pending`, not the M4 multi-event marker, so a partial M5
+    /// topology is impossible and CanonicalTail is the sole uncertainty path.
+    pub fn append_gluing_bundle(
+        &mut self,
+        prepared: ValidatedGluingBundleV4,
+        basis: &mut AuthorityReplayBasisV4,
+    ) -> Result<V4GluingBundleAppendReceipt, JournalError> {
+        self.require_healthy()?;
+        let envelope = prepared
+            .envelope(&self.log, basis, &self.session_identity)?
+            .clone();
+        let journal = self.append_one_v4(envelope)?;
+        let (next_log, next_basis) = self.replay_candidate_v4_after_durable()?;
+        let core = prepared
+            .confirm_replayed(&next_log, &next_basis, &self.session_identity)
+            .map_err(|error| {
+                self.state = ReplayedV4RunSessionState::Uncertain;
+                JournalError::Domain(error)
+            })?;
+        self.log = next_log;
+        *basis = next_basis;
+        Ok(V4EventAppendReceipt { core, journal })
+    }
+
+    fn append_gluing_input_registration(
+        &mut self,
+        prepared: TrustedGluingInputAdmissionV4,
+        basis: &mut AuthorityReplayBasisV4,
+    ) -> Result<V4EventAppendReceipt<ArtifactRegistrationReceiptV4>, JournalError> {
+        let envelope = prepared
+            .envelope(&self.log, basis, &self.session_identity)?
+            .clone();
+        let journal = self.append_one_v4(envelope)?;
+        let (next_log, next_basis) = self.replay_candidate_v4_after_durable()?;
+        let core = prepared
+            .confirm_replayed(&next_log, &next_basis, &self.session_identity)
+            .map_err(|error| {
+                self.state = ReplayedV4RunSessionState::Uncertain;
+                JournalError::Domain(error)
+            })?;
+        self.log = next_log;
+        *basis = next_basis;
+        Ok(V4EventAppendReceipt { core, journal })
+    }
+
+    fn validate_gluing_source_bytes(
+        &self,
+        trusted: &TrustedGluingInputSourceV4,
+        descriptor: &GluingInputDescriptorV4,
+        bytes: &[u8],
+    ) -> Result<(), JournalError> {
+        let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if trusted.descriptor_hash() != &ContentHash::sha256(bytes)
+            || trusted.descriptor_size() != size
+            || trusted.descriptor_media_type() != GLUING_INPUT_MEDIA_TYPE_V4
+            || trusted.descriptor_sensitivity() != ArtifactSensitivity::CanonicalState
+            || trusted.descriptor_id() != descriptor.id()
+            || trusted.context_id() != descriptor.context_id()
+        {
+            return Err(reviewgraphen_core::DomainError::GluingInputAdmissionMismatch.into());
+        }
+        Ok(())
+    }
+
+    fn reconstruct_registered_gluing_input(
+        &self,
+        trusted: &TrustedGluingInputSourceV4,
+        descriptor: &GluingInputDescriptorV4,
+    ) -> Result<Option<GluingInputPublicationV4>, JournalError> {
+        let Some((_, registered_descriptor)) =
+            self.log.registered_gluing_input_v4(trusted.context_id())
+        else {
+            return Ok(None);
+        };
+        if !self.registered_gluing_input_matches(trusted, registered_descriptor)
+            || registered_descriptor != descriptor
+        {
+            return Err(JournalError::OrphanCanonicalInput {
+                hash: trusted.descriptor_hash().clone(),
+            });
+        }
+        Ok(Some(GluingInputPublicationV4::AlreadyRegistered {
+            context_id: trusted.context_id().clone(),
+            descriptor_id: trusted.descriptor_id().clone(),
+            registration_id: trusted.registration_id().clone(),
+        }))
+    }
+
+    fn registered_gluing_input_matches(
+        &self,
+        trusted: &TrustedGluingInputSourceV4,
+        descriptor: &GluingInputDescriptorV4,
+    ) -> bool {
+        self.log
+            .registered_gluing_input_v4(trusted.context_id())
+            .is_some_and(|(registration, registered_descriptor)| {
+                registered_descriptor == descriptor
+                    && registration.id() == trusted.registration_id()
+                    && registration.cas_hash() == trusted.descriptor_hash()
+                    && registration.size() == trusted.descriptor_size()
+                    && registration.media_type() == trusted.descriptor_media_type()
+                    && registration.sensitivity() == trusted.descriptor_sensitivity()
+                    && registered_descriptor.id() == trusted.descriptor_id()
+            })
+    }
+
+    fn append_one_v4(
+        &mut self,
+        envelope: EventEnvelope,
+    ) -> Result<JournalAppendReceipt, JournalError> {
+        match self.writer.append(envelope) {
+            Ok(receipt) => Ok(receipt),
+            Err(_) if self.writer.append_durability == AppendDurability::Uncertain => {
+                self.state = ReplayedV4RunSessionState::Uncertain;
+                Err(JournalError::SessionUncertain)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn replay_candidate_v4_after_durable(
+        &mut self,
+    ) -> Result<(EventLogV4, AuthorityReplayBasisV4), JournalError> {
+        let JournalGenesis::V4Shared(genesis) = &self.writer.identity.genesis else {
+            self.state = ReplayedV4RunSessionState::Uncertain;
+            return Err(JournalError::Identity(
+                "V4 session lost its verified genesis",
+            ));
+        };
+        EventLogV4::replay_confirmed_v4_prefix_for_session(
+            self.writer.identity.run_id.clone(),
+            genesis,
+            &self.writer.state.events,
+            &self.resolver,
+            self.roots,
+            EventReplayLimits::new(
+                self.writer.limits.max_events,
+                self.writer.limits.max_replay_bytes,
+            ),
+            &self.session_identity,
+        )
+        .map_err(|error| {
+            self.state = ReplayedV4RunSessionState::Uncertain;
+            JournalError::Domain(error)
+        })
+    }
+
+    fn require_healthy(&self) -> Result<(), JournalError> {
+        match self.state {
+            ReplayedV4RunSessionState::Healthy => self.writer.refuse_bundle_resume_gate(),
+            ReplayedV4RunSessionState::Uncertain => Err(JournalError::SessionUncertain),
+        }
+    }
+}
+
 impl<'root, 'roots> RecoveredM4BundleV4Session<'root, 'roots> {
     #[must_use]
     pub fn durable_stage(&self) -> M4BundlePrefixStageV4 {
@@ -1964,6 +2483,8 @@ impl<'root, 'roots> RecoveredM4BundleV4Session<'root, 'roots> {
         )?;
         Ok((
             ReplayedV4RunSession {
+                _root_lock: self.root_lock,
+                _run_lock: self.run_lock,
                 writer: self.writer,
                 log,
                 resolver: self.resolver,
@@ -2062,9 +2583,17 @@ enum V4RecoveryFault {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum V4GluingFault {
+    BeforeCasPublication,
+    AfterCasPublication,
+}
+
+#[cfg(test)]
 thread_local! {
     static V4_BOOTSTRAP_FAULT: std::cell::Cell<Option<V4BootstrapFault>> = const { std::cell::Cell::new(None) };
     static V4_RECOVERY_FAULT: std::cell::Cell<Option<V4RecoveryFault>> = const { std::cell::Cell::new(None) };
+    static V4_GLUING_FAULT: std::cell::Cell<Option<V4GluingFault>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -2092,6 +2621,23 @@ fn inject_v4_recovery_fault(fault: V4RecoveryFault) {
 #[cfg(test)]
 fn take_v4_recovery_fault(expected: V4RecoveryFault) -> bool {
     V4_RECOVERY_FAULT.with(|fault| {
+        if fault.get() == Some(expected) {
+            fault.set(None);
+            true
+        } else {
+            false
+        }
+    })
+}
+
+#[cfg(test)]
+fn inject_v4_gluing_fault(fault: V4GluingFault) {
+    V4_GLUING_FAULT.set(Some(fault));
+}
+
+#[cfg(test)]
+fn take_v4_gluing_fault(expected: V4GluingFault) -> bool {
+    V4_GLUING_FAULT.with(|fault| {
         if fault.get() == Some(expected) {
             fault.set(None);
             true
@@ -2401,10 +2947,11 @@ impl<'a> EventJournal<'a> {
         result
     }
 
-    /// Recovers an inspected V4 torn canonical tail.  This is intentionally
-    /// storage-only; roots-bound V4 replay/session construction remains the
-    /// subsequent admission unit.
-    pub fn recover_canonical_tail_v4(
+    /// Storage-only helper retained for low-level recovery fault tests. The
+    /// public M5 path is `recover_replayed_v4_session`, which does not release
+    /// any lock between this mutation and roots-bound replay.
+    #[cfg(test)]
+    fn recover_canonical_tail_v4(
         root: &StoreRoot,
         key: RecoveryKeyV4,
         provenance: RecoveryProvenanceV4,
@@ -2420,9 +2967,10 @@ impl<'a> EventJournal<'a> {
         result
     }
 
-    /// Rechecks one inspected M4 marker under root -> run -> journal locks,
-    /// delegates all authority/plan validation to Core, and returns either an
-    /// ordinary editable replay or the sole resume-only strict-interior path.
+    /// Rechecks and mutates one inspected V4 recovery under root -> run ->
+    /// journal locks, then performs the complete roots-bound Core replay while
+    /// retaining those same locks. Canonical-tail recovery always returns an
+    /// editable session; only a strict-interior M4 bundle is resume-only.
     pub fn recover_replayed_v4_session<'roots>(
         &self,
         roots: &'roots AuthorityTrustRootsV4,
@@ -2430,7 +2978,10 @@ impl<'a> EventJournal<'a> {
         provenance: RecoveryProvenanceV4,
     ) -> Result<(RecoveryReceiptV4, RecoveredV4Session<'a, 'roots>), JournalError> {
         if self.identity.version() != EventContractVersion::V4
-            || key.expected_kind != RecoveryKindV4::M4BundleResume
+            || !matches!(
+                key.expected_kind,
+                RecoveryKindV4::CanonicalTail | RecoveryKindV4::M4BundleResume
+            )
             || key.event_contract_version != EVENT_CONTRACT_SCHEMA_V4
             || key.run_id != self.identity.run_id
             || key.genesis_hash != self.identity.genesis_hash()
@@ -2440,7 +2991,148 @@ impl<'a> EventJournal<'a> {
         let timestamp_unix_seconds = v4_timestamp()?;
         let root_lock = acquire_v4_root_lock(self.root)?;
         let run_lock = acquire_v4_run_lock(&self.run)?;
-        let result = (|| {
+        if key.expected_kind == RecoveryKindV4::CanonicalTail {
+            return (|| {
+                let fd = open_verified_log(&self.run, true)?;
+                let mut file = File::from(fd);
+                fs::flock(file.as_fd(), FlockOperation::LockExclusive).map_err(StoreError::Io)?;
+                let JournalGenesis::V4Shared(genesis) = &self.identity.genesis else {
+                    return Err(JournalError::Identity(
+                        "V4 canonical-tail recovery requires verified genesis bytes",
+                    ));
+                };
+                let observed = inspect_v4_file(
+                    file.try_clone()?,
+                    &key.run_id,
+                    &key.genesis_hash,
+                    genesis,
+                    self.limits,
+                )?;
+                let append_pending =
+                    marker_exists(&self.run, APPEND_PENDING_MARKER, APPEND_PENDING_BYTES)?;
+                let pending_digest =
+                    append_pending.then(|| ContentHash::sha256(APPEND_PENDING_BYTES));
+                if bundle_file_exists(&self.run, BUNDLE_PENDING_MARKER)?
+                    || bundle_file_exists(&self.run, BUNDLE_PENDING_STAGE)?
+                    || !v4_key_matches(&key, &observed, pending_digest.as_ref())
+                    || observed.event_count == 0
+                {
+                    return Err(JournalError::RecoveryKeyMismatchV4);
+                }
+                if !append_pending {
+                    ensure_v4_append_pending(&self.run)?;
+                }
+                let discarded_hash = if observed.torn {
+                    let discarded = read_suffix(
+                        &mut file,
+                        observed.good_offset,
+                        self.limits.max_replay_bytes,
+                    )?;
+                    let outcome = RecoveryOutcomeV4::TailRecovered {
+                        good_offset: observed.good_offset,
+                        discarded_hash: ContentHash::sha256(&discarded),
+                    };
+                    file.set_len(observed.good_offset)?;
+                    #[cfg(test)]
+                    let injected = take_v4_recovery_fault(V4RecoveryFault::TailFile);
+                    #[cfg(not(test))]
+                    let injected = false;
+                    if injected || file.sync_all().is_err() {
+                        return Err(JournalError::RecoveryDurabilityUncertainV4 { outcome });
+                    }
+                    ContentHash::sha256(&discarded)
+                } else {
+                    ContentHash::sha256(&[])
+                };
+                let outcome = RecoveryOutcomeV4::TailRecovered {
+                    good_offset: observed.good_offset,
+                    discarded_hash,
+                };
+                fs::unlinkat(&self.run, APPEND_PENDING_MARKER, AtFlags::empty())
+                    .map_err(StoreError::Io)?;
+                #[cfg(test)]
+                let injected = take_v4_recovery_fault(V4RecoveryFault::TailDirectory);
+                #[cfg(not(test))]
+                let injected = false;
+                if injected || fs::fsync(&self.run).is_err() {
+                    return Err(JournalError::RecoveryDurabilityUncertainV4 { outcome });
+                }
+
+                let state = scan(&mut file, &self.identity, self.limits, true)?;
+                validate_prefix(&self.identity, &state.events)?;
+                let (intents, completions) = self.recovery_dirs()?;
+                let audit = recovery_audit(&intents, &completions, &self.identity, self.limits)?;
+                sync_recovery_dirs(&intents, &completions)?;
+                validate_completed_receipts(
+                    &mut file,
+                    &self.identity,
+                    self.limits,
+                    &audit.completed,
+                )?;
+                if let Some(intent) = audit.pending {
+                    return Err(JournalError::CorruptNeedsRecovery {
+                        good_offset: intent.good_offset,
+                        auto_recoverable: true,
+                    });
+                }
+                let resolver = JournalAuthorityResolverV4 {
+                    reader: CasReader::open_existing(self.root)?,
+                };
+                let session_identity = OpaqueSessionIdentityV4::fresh();
+                let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+                    self.identity.run_id.clone(),
+                    genesis,
+                    &state.events,
+                    &resolver,
+                    roots,
+                    EventReplayLimits::new(self.limits.max_events, self.limits.max_replay_bytes),
+                    &session_identity,
+                )?;
+                let post_file_hash =
+                    ContentHash::sha256(&read_prefix(&mut file, state.confirmed_offset)?);
+                let receipt = RecoveryReceiptV4 {
+                    schema: RECOVERY_RECEIPT_SCHEMA_V4,
+                    kind: key.expected_kind,
+                    outcome,
+                    pre_file_hash: Some(observed.file_hash),
+                    post_file_hash: Some(post_file_hash),
+                    key,
+                    provenance,
+                    timestamp_unix_seconds,
+                    marker_recovery: None,
+                };
+                let writer = JournalWriter {
+                    file,
+                    identity: self.identity.clone(),
+                    limits: self.limits,
+                    state,
+                    intents,
+                    completions,
+                    run: dup(&run_lock).map_err(StoreError::Io)?,
+                    poisoned: false,
+                    append_durability: AppendDurability::Confirmed,
+                    #[cfg(test)]
+                    faults: std::collections::VecDeque::new(),
+                };
+                Ok((
+                    receipt,
+                    RecoveredV4Session::Editable {
+                        session: ReplayedV4RunSession {
+                            _root_lock: root_lock,
+                            _run_lock: run_lock,
+                            writer,
+                            log,
+                            resolver,
+                            roots,
+                            session_identity,
+                            state: ReplayedV4RunSessionState::Healthy,
+                        },
+                        basis,
+                    },
+                ))
+            })();
+        }
+        (|| {
             if marker_exists(&self.run, APPEND_PENDING_MARKER, APPEND_PENDING_BYTES)? {
                 return Err(JournalError::RecoveryKeyMismatchV4);
             }
@@ -2552,6 +3244,8 @@ impl<'a> EventJournal<'a> {
                         receipt,
                         RecoveredV4Session::Editable {
                             session: ReplayedV4RunSession {
+                                _root_lock: root_lock,
+                                _run_lock: run_lock,
                                 writer,
                                 log,
                                 resolver,
@@ -2595,6 +3289,8 @@ impl<'a> EventJournal<'a> {
                         receipt,
                         RecoveredV4Session::M4BundleResumeRequired {
                             session: RecoveredM4BundleV4Session {
+                                root_lock,
+                                run_lock,
                                 writer,
                                 resolver,
                                 roots,
@@ -2608,10 +3304,7 @@ impl<'a> EventJournal<'a> {
                     ))
                 }
             }
-        })();
-        drop(run_lock);
-        drop(root_lock);
-        result
+        })()
     }
 
     fn inspect_bundle_pending_locked(
@@ -2988,6 +3681,8 @@ impl<'a> EventJournal<'a> {
         if self.identity.version() != EventContractVersion::V4 {
             return Err(JournalError::Identity("V4 replay requires a V4 journal"));
         }
+        let root_lock = acquire_v4_root_lock(self.root)?;
+        let run_lock = acquire_v4_run_lock(&self.run)?;
         let writer = self.writer_v4()?;
         let JournalGenesis::V4Shared(genesis) = &writer.identity.genesis else {
             return Err(JournalError::Identity(
@@ -3009,6 +3704,8 @@ impl<'a> EventJournal<'a> {
         )?;
         Ok((
             ReplayedV4RunSession {
+                _root_lock: root_lock,
+                _run_lock: run_lock,
                 writer,
                 log,
                 resolver,
@@ -4533,6 +5230,7 @@ fn recover_new_v4_locked<'a>(
     result
 }
 
+#[cfg(test)]
 fn recover_canonical_tail_v4_locked(
     root: &StoreRoot,
     key: RecoveryKeyV4,
@@ -7594,17 +8292,17 @@ mod tests {
     use super::*;
     use reviewgraphen_core::{
         ArtifactRegistered, ArtifactRegisteredV3, ArtifactSensitivity, ArtifactSource,
-        ArtifactSourceV3, AssessmentDispositionV3, AssessmentReviewStatusV3, AuthorityTrustRootsV3,
-        ClaimPolarity, DecisionInputV3, DecisionOutcomeV3, EventCommand, EventLog, EventLogV4,
-        ExecutionClaimInputV2, ExecutionOutcome, ExecutionRecordInput, FAKE_REVIEWER_ID,
-        FIXTURE_DESCRIPTOR_ID, FIXTURE_HARNESS_ID, FIXTURE_HARNESS_REVISION,
-        FIXTURE_HARNESS_SOURCE_HASH, FIXTURE_MEDIA_TYPE, FIXTURE_PROCEDURE_ID,
-        FIXTURE_TEST_ARTIFACT_ID, FIXTURE_WITNESS_HASH, HarnessTrustRootInputV3,
-        HumanAuthorityCapabilityV3, HumanTrustGrantInputV3, M4_PROPERTY_ID, MvpRulePack,
-        ObligationLifecycle, PlanBudget, ProgramSpace, ReviewAggregate,
-        RunGenesisBootstrapRequestV4, SnapshotSourceRecordEntry, SnapshotSourcesRecorded,
-        ValidatedExecutionBundle, VerificationAttemptStageV3, VerificationBundleRequestV4,
-        evaluate_static_fact_v1, plan, prepare_context,
+        ArtifactSourceV3, ArtifactSourceV4, AssessmentDispositionV3, AssessmentReviewStatusV3,
+        AssignmentValueV4, AuthorityTrustRootsV3, ClaimPolarity, DecisionInputV3,
+        DecisionOutcomeV3, EventCommand, EventLog, EventLogV4, ExecutionClaimInputV2,
+        ExecutionOutcome, ExecutionRecordInput, FAKE_REVIEWER_ID, FIXTURE_DESCRIPTOR_ID,
+        FIXTURE_HARNESS_ID, FIXTURE_HARNESS_REVISION, FIXTURE_HARNESS_SOURCE_HASH,
+        FIXTURE_MEDIA_TYPE, FIXTURE_PROCEDURE_ID, FIXTURE_TEST_ARTIFACT_ID, FIXTURE_WITNESS_HASH,
+        GluingInputTrustBindingV4, HarnessTrustRootInputV3, HumanAuthorityCapabilityV3,
+        HumanTrustGrantInputV3, M4_PROPERTY_ID, MvpRulePack, ObligationLifecycle, PlanBudget,
+        ProgramSpace, ReviewAggregate, RunGenesisBootstrapRequestV4, SnapshotSourceRecordEntry,
+        SnapshotSourcesRecorded, ValidatedExecutionBundle, VerificationAttemptStageV3,
+        VerificationBundleRequestV4, evaluate_static_fact_v1, plan, prepare_context,
     };
     use serde_json::Value;
     use std::{
@@ -7798,10 +8496,53 @@ mod tests {
         ArtifactRegisteredV3,
         ValidatedExecutionBundle,
     ) {
+        public_v3_fixture_journal_for_profile(root, run, false)
+    }
+
+    fn public_v3_fixture_journal_for_profile<'a>(
+        root: &'a StoreRoot,
+        run: &str,
+        exact_m5_profile: bool,
+    ) -> (
+        EventJournal<'a>,
+        AuthorityTrustRootsV3,
+        StableId,
+        HarnessTrustRootInputV3,
+        EventLogV4,
+        Vec<EventEnvelope>,
+        StaticFactEvaluationV1,
+        BuiltContextProjection,
+        ArtifactRegisteredV3,
+        ValidatedExecutionBundle,
+    ) {
         let mut input: Value = serde_json::from_slice(include_bytes!(
             "../../../examples/double-submit-payment/program-space.json"
         ))
         .unwrap();
+        if exact_m5_profile {
+            input["profile"]["id"] = Value::String("double-submit-payment".to_owned());
+            input["profile"]["version"] = Value::String("1".to_owned());
+            for context in input["contexts"].as_array_mut().unwrap() {
+                if context["id"] == reviewgraphen_core::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID {
+                    let members = context["member_ids"].as_array_mut().unwrap();
+                    members.extend([
+                        Value::String("file:checkout-controller".to_owned()),
+                        Value::String("file:payment-repository".to_owned()),
+                    ]);
+                    members
+                        .sort_by(|left, right| left.as_str().unwrap().cmp(right.as_str().unwrap()));
+                }
+            }
+            input["evidence"] = serde_json::json!([{
+                "id": "evidence:seeded-payment-source",
+                "kind": "static_analysis",
+                "target_ids": ["function:payment-charge"],
+                "artifact_ref": null,
+                "content_hash": null,
+                "attributes": {"seeded": true},
+                "provenance": input["artifacts"][0]["provenance"].clone(),
+            }]);
+        }
         let mut contains = input["relations"][0].clone();
         contains["id"] = Value::String("relation:file-contains-payment-charge".to_owned());
         contains["kind"] = Value::String("contains".to_owned());
@@ -8208,10 +8949,123 @@ mod tests {
         result
     }
 
+    struct PublicV4GluingInput {
+        descriptor: GluingInputDescriptorV4,
+        sources: Vec<TrustedGluingInputSourceV4>,
+    }
+
+    fn public_v4_gluing_input(
+        bootstrap: &EventLogV4,
+        harness_root: &HarnessTrustRootInputV3,
+        plan_id: &StableId,
+        context_id: &str,
+        assignment: AssignmentValueV4,
+        qualification_source_ids: BTreeSet<StableId>,
+    ) -> (
+        GluingInputDescriptorV4,
+        GluingInputTrustBindingV4,
+        Vec<TrustedGluingInputSourceV4>,
+    ) {
+        let context_id = StableId::parse(context_id).unwrap();
+        let descriptor = GluingInputDescriptorV4::new(
+            bootstrap.run_id().clone(),
+            harness_root.snapshot_id.clone(),
+            harness_root.universe_id.clone(),
+            plan_id.clone(),
+            context_id.clone(),
+            assignment,
+            qualification_source_ids,
+        )
+        .unwrap();
+        let bytes = canonical_json(&descriptor).unwrap();
+        let hash = ContentHash::sha256(&bytes);
+        let size = u64::try_from(bytes.len()).unwrap();
+        let source = ArtifactSourceV4::GluingInput {
+            context_id: context_id.clone(),
+            descriptor_hash: hash.clone(),
+            descriptor_id: descriptor.id().clone(),
+            descriptor_media_type: GLUING_INPUT_MEDIA_TYPE_V4.to_owned(),
+            descriptor_sensitivity: ArtifactSensitivity::CanonicalState,
+            descriptor_size: size,
+            genesis_hash: bootstrap.genesis_hash().clone(),
+            plan_id: plan_id.clone(),
+            policy_revision_hash: harness_root.policy_revision_hash.clone(),
+            profile_descriptor_id: reviewgraphen_core::DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID
+                .to_owned(),
+            repository_id: harness_root.repository_id.clone(),
+            repository_source_hash: harness_root.repository_source_hash.clone(),
+            run_id: bootstrap.run_id().clone(),
+            snapshot_id: harness_root.snapshot_id.clone(),
+            universe_id: harness_root.universe_id.clone(),
+        };
+        let make_binding = || {
+            GluingInputTrustBindingV4::new(
+                harness_root.policy_revision_hash.clone(),
+                harness_root.repository_id.clone(),
+                harness_root.repository_source_hash.clone(),
+                bootstrap.run_id().clone(),
+                bootstrap.genesis_hash().clone(),
+                harness_root.snapshot_id.clone(),
+                harness_root.universe_id.clone(),
+                plan_id.clone(),
+                reviewgraphen_core::DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID,
+                context_id.clone(),
+                descriptor.id().clone(),
+                hash.clone(),
+                size,
+                GLUING_INPUT_MEDIA_TYPE_V4,
+                ArtifactSensitivity::CanonicalState,
+                source.clone(),
+            )
+            .unwrap()
+        };
+        let root_binding = make_binding();
+        let trusted = (0..3)
+            .map(|_| TrustedGluingInputSourceV4::from_trusted_host(make_binding()).unwrap())
+            .collect();
+        (descriptor, root_binding, trusted)
+    }
+
     fn public_v4_static_bundle_journal<'a>(
         root: &'a StoreRoot,
         run: &str,
     ) -> (EventJournal<'a>, AuthorityTrustRootsV4, Vec<EventEnvelope>) {
+        let (journal, roots, planned, _, _) =
+            public_v4_static_bundle_journal_with_append(root, run, false, false);
+        (journal, roots, planned)
+    }
+
+    fn public_v4_gluing_journal<'a>(
+        root: &'a StoreRoot,
+        run: &str,
+    ) -> (
+        EventJournal<'a>,
+        AuthorityTrustRootsV4,
+        [PublicV4GluingInput; 2],
+    ) {
+        let (journal, roots, _, receipt, inputs) =
+            public_v4_static_bundle_journal_with_append(root, run, true, true);
+        assert!(receipt.is_some());
+        (
+            journal,
+            roots,
+            inputs.expect("exact M5 profile gluing inputs"),
+        )
+    }
+
+    fn public_v4_static_bundle_journal_with_append<'a>(
+        root: &'a StoreRoot,
+        run: &str,
+        append_bundle: bool,
+        exact_m5_profile: bool,
+    ) -> (
+        EventJournal<'a>,
+        AuthorityTrustRootsV4,
+        Vec<EventEnvelope>,
+        Option<V4VerificationBundleAppendReceipt>,
+        Option<[PublicV4GluingInput; 2]>,
+    ) {
+        assert!(!exact_m5_profile || append_bundle);
         let source_workspace = tempfile::tempdir().unwrap();
         let source_root =
             StoreRoot::open(source_workspace.path(), crate::StoreLimits::default()).unwrap();
@@ -8226,10 +9080,11 @@ mod tests {
             v4_built,
             raw_registration,
             v4_execution,
-        ) = public_v3_fixture_journal(&source_root, run);
+        ) = public_v3_fixture_journal_for_profile(&source_root, run, exact_m5_profile);
         for (path, _) in test_cas_inventory(&source_root) {
             put_test_cas(root, &std::fs::read(path).unwrap());
         }
+        let plan_id = v4_execution.execution().plan_id().clone();
         let roots = AuthorityTrustRootsV4::new(
             harness_root.policy_revision_hash.clone(),
             harness_root.repository_id.clone(),
@@ -8251,194 +9106,60 @@ mod tests {
         put_test_cas(root, &output_bytes);
         let (mut session, mut basis) = journal.replayed_v4_session(&roots).unwrap();
         let context = session
-            .log
-            .prepare_inherited_d2_event_v4(
-                EventCommand::context_envelope_projected(v4_built),
-                &basis,
-            )
+            .prepare_inherited_d2_event(EventCommand::context_envelope_projected(v4_built), &basis)
             .unwrap();
-        let context_envelope = context
-            .envelope(&session.log, &basis, &session.session_identity)
-            .unwrap()
-            .clone();
-        session.writer.append(context_envelope).unwrap();
-        let JournalGenesis::V4Shared(genesis) = &session.writer.identity.genesis else {
-            unreachable!()
-        };
-        let (next_log, next_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
-            session.writer.identity.run_id.clone(),
-            genesis,
-            &session.writer.state.events,
-            &session.resolver,
-            &roots,
-            EventReplayLimits::new(
-                session.writer.limits.max_events,
-                session.writer.limits.max_replay_bytes,
-            ),
-            &session.session_identity,
-        )
-        .unwrap();
-        context
-            .confirm_replayed(&next_log, &next_basis, &session.session_identity)
+        session
+            .append_inherited_d2_event(context, &mut basis)
             .unwrap();
-        session.log = next_log;
-        basis = next_basis;
 
         let raw_admission = session
-            .log
-            .prepare_reviewer_raw_artifact_registration_v3_at_v4(
-                raw_registration,
-                &v4_execution,
-                &basis,
-            )
+            .prepare_reviewer_raw_artifact_registration(raw_registration, &v4_execution, &basis)
             .unwrap();
-        let raw_envelope = raw_admission
-            .envelope(&session.log, &basis, &session.session_identity)
-            .unwrap()
-            .clone();
-        session.writer.append(raw_envelope).unwrap();
-        let JournalGenesis::V4Shared(genesis) = &session.writer.identity.genesis else {
-            unreachable!()
-        };
-        let (next_log, next_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
-            session.writer.identity.run_id.clone(),
-            genesis,
-            &session.writer.state.events,
-            &session.resolver,
-            &roots,
-            EventReplayLimits::new(
-                session.writer.limits.max_events,
-                session.writer.limits.max_replay_bytes,
-            ),
-            &session.session_identity,
-        )
-        .unwrap();
-        raw_admission
-            .confirm_replayed(&next_log, &next_basis, &session.session_identity)
+        session
+            .append_inherited_artifact_registration(raw_admission, &mut basis)
             .unwrap();
-        session.log = next_log;
-        basis = next_basis;
 
         let execution = session
-            .log
-            .prepare_inherited_d2_event_v4(
+            .prepare_inherited_d2_event(
                 EventCommand::review_execution_recorded(v4_execution),
                 &basis,
             )
             .unwrap();
-        let execution_envelope = execution
-            .envelope(&session.log, &basis, &session.session_identity)
-            .unwrap()
-            .clone();
-        session.writer.append(execution_envelope).unwrap();
-        let JournalGenesis::V4Shared(genesis) = &session.writer.identity.genesis else {
-            unreachable!()
-        };
-        let (next_log, next_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
-            session.writer.identity.run_id.clone(),
-            genesis,
-            &session.writer.state.events,
-            &session.resolver,
-            &roots,
-            EventReplayLimits::new(
-                session.writer.limits.max_events,
-                session.writer.limits.max_replay_bytes,
-            ),
-            &session.session_identity,
-        )
-        .unwrap();
-        execution
-            .confirm_replayed(&next_log, &next_basis, &session.session_identity)
+        session
+            .append_inherited_d2_event(execution, &mut basis)
             .unwrap();
-        session.log = next_log;
-        basis = next_basis;
 
         let input = session
-            .log
-            .prepare_static_verifier_input_registration_v3_at_v4(
+            .prepare_static_verifier_input_registration(
                 &claim_id,
                 ContentHash::sha256(&input_bytes),
                 input_bytes.len() as u64,
-                &session.resolver,
-                &roots,
                 &basis,
             )
             .unwrap();
-        let input_envelope = input
-            .envelope(&session.log, &basis, &session.session_identity)
-            .unwrap()
-            .clone();
-        session.writer.append(input_envelope).unwrap();
-        let JournalGenesis::V4Shared(genesis) = &session.writer.identity.genesis else {
-            unreachable!()
-        };
-        let (next_log, next_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
-            session.writer.identity.run_id.clone(),
-            genesis,
-            &session.writer.state.events,
-            &session.resolver,
-            &roots,
-            EventReplayLimits::new(
-                session.writer.limits.max_events,
-                session.writer.limits.max_replay_bytes,
-            ),
-            &session.session_identity,
-        )
-        .unwrap();
-        let input_receipt = input
-            .confirm_replayed(&next_log, &next_basis, &session.session_identity)
+        let input_receipt = session
+            .append_inherited_artifact_registration(input, &mut basis)
             .unwrap();
-        session.log = next_log;
-        basis = next_basis;
 
         let output = session
-            .log
-            .prepare_static_verifier_output_registration_v3_at_v4(
+            .prepare_static_verifier_output_registration(
                 &claim_id,
                 ContentHash::sha256(&output_bytes),
                 output_bytes.len() as u64,
-                &session.resolver,
-                &roots,
                 &basis,
             )
             .unwrap();
-        let output_envelope = output
-            .envelope(&session.log, &basis, &session.session_identity)
-            .unwrap()
-            .clone();
-        session.writer.append(output_envelope).unwrap();
-        let JournalGenesis::V4Shared(genesis) = &session.writer.identity.genesis else {
-            unreachable!()
-        };
-        let (next_log, next_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
-            session.writer.identity.run_id.clone(),
-            genesis,
-            &session.writer.state.events,
-            &session.resolver,
-            &roots,
-            EventReplayLimits::new(
-                session.writer.limits.max_events,
-                session.writer.limits.max_replay_bytes,
-            ),
-            &session.session_identity,
-        )
-        .unwrap();
-        let output_receipt = output
-            .confirm_replayed(&next_log, &next_basis, &session.session_identity)
+        let output_receipt = session
+            .append_inherited_artifact_registration(output, &mut basis)
             .unwrap();
-        session.log = next_log;
-        basis = next_basis;
         let bundle = session
-            .log
-            .mint_verification_bundle_v4(
+            .mint_verification_bundle(
                 VerificationBundleRequestV4::static_fact(
-                    claim_id,
-                    input_receipt.registration_id().clone(),
-                    output_receipt.registration_id().clone(),
+                    claim_id.clone(),
+                    input_receipt.core().registration_id().clone(),
+                    output_receipt.core().registration_id().clone(),
                 ),
                 None,
-                &session.resolver,
-                &roots,
                 &basis,
             )
             .unwrap();
@@ -8446,9 +9167,67 @@ mod tests {
             .envelopes(&session.log, &basis, &session.session_identity)
             .unwrap()
             .to_vec();
+        let receipt = append_bundle.then(|| {
+            session
+                .append_verification_bundle(bundle, &mut basis)
+                .unwrap()
+        });
         assert_eq!(planned.len(), 3);
+        let gluing = exact_m5_profile.then(|| {
+            let selected_evidence_id = session
+                .log
+                .claim_assessment_v3(&claim_id)
+                .and_then(|assessment| assessment.evidence_ids().first())
+                .expect("selected M5 payment assessment evidence")
+                .clone();
+            let (payment_descriptor, payment_binding, payment_sources) = public_v4_gluing_input(
+                &session.log,
+                &harness_root,
+                &plan_id,
+                reviewgraphen_core::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+                AssignmentValueV4::Required,
+                BTreeSet::from([
+                    StableId::parse(reviewgraphen_core::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID).unwrap(),
+                    selected_evidence_id,
+                ]),
+            );
+            let (ui_descriptor, ui_binding, ui_sources) = public_v4_gluing_input(
+                &session.log,
+                &harness_root,
+                &plan_id,
+                reviewgraphen_core::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+                AssignmentValueV4::Satisfied,
+                BTreeSet::new(),
+            );
+            (
+                [
+                    PublicV4GluingInput {
+                        descriptor: payment_descriptor,
+                        sources: payment_sources,
+                    },
+                    PublicV4GluingInput {
+                        descriptor: ui_descriptor,
+                        sources: ui_sources,
+                    },
+                ],
+                vec![payment_binding, ui_binding],
+            )
+        });
         drop(session);
-        (journal, roots, planned)
+        let (inputs, bindings) = match gluing {
+            Some((inputs, bindings)) => (Some(inputs), bindings),
+            None => (None, Vec::new()),
+        };
+        let roots = AuthorityTrustRootsV4::new(
+            harness_root.policy_revision_hash.clone(),
+            harness_root.repository_id.clone(),
+            harness_root.repository_source_hash.clone(),
+            Vec::new(),
+            Vec::new(),
+            bindings,
+        )
+        .unwrap();
+        (journal, roots, planned, receipt, inputs)
     }
 
     fn public_v4_rebuild_with_limits(
@@ -12659,7 +13438,16 @@ mod tests {
         let log = v4_bootstrap_log("run:journal-v4-tail");
         let run_id = log.run_id().clone();
         let genesis_hash = log.genesis_hash().clone();
-        let (_journal, _published) = EventJournal::publish_new_v4(&root, log).unwrap();
+        let roots = AuthorityTrustRootsV4::new(
+            ContentHash::sha256(b"v4-tail-policy"),
+            StableId::parse("repository:double-submit-payment").unwrap(),
+            ContentHash::parse("sha256:1111111111111111").unwrap(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let (journal, _published) = EventJournal::publish_new_v4(&root, log).unwrap();
         let path = root
             .path()
             .join(RUNS_DIR)
@@ -12682,16 +13470,23 @@ mod tests {
             ),
         )
         .unwrap();
-        let receipt = EventJournal::recover_canonical_tail_v4(
-            &root,
-            key,
-            RecoveryProvenanceV4::new("test", "v4-tail").unwrap(),
-        )
-        .unwrap();
+        let (receipt, recovered) = journal
+            .recover_replayed_v4_session(
+                &roots,
+                key,
+                RecoveryProvenanceV4::new("test", "v4-tail").unwrap(),
+            )
+            .unwrap();
         assert!(matches!(
             receipt.outcome(),
             RecoveryOutcomeV4::TailRecovered { .. }
         ));
+        let RecoveredV4Session::Editable { session, basis } = recovered else {
+            panic!("canonical-tail recovery must be editable")
+        };
+        assert_eq!(basis.confirmed_event_count(), 1);
+        assert!(try_acquire_v4_root_lock(&root).unwrap().is_none());
+        drop(session);
         assert_eq!(std::fs::read(&path).unwrap().last(), Some(&b'\n'));
 
         let mut file = std::fs::OpenOptions::new()
@@ -12711,8 +13506,8 @@ mod tests {
         file.sync_all().unwrap();
         drop(file);
         assert!(matches!(
-            EventJournal::recover_canonical_tail_v4(
-                &root,
+            journal.recover_replayed_v4_session(
+                &roots,
                 stale_key,
                 RecoveryProvenanceV4::new("test", "v4-stale").unwrap(),
             ),
@@ -13347,6 +14142,431 @@ mod tests {
                 _ => panic!("M4 recovery returned a branch inconsistent with prefix stage"),
             }
         }
+    }
+
+    #[test]
+    fn v4_public_store_surface_durably_appends_fresh_m4_and_holds_all_session_locks() {
+        let (_workspace, root) = root();
+        let (journal, roots, planned, receipt, _) = public_v4_static_bundle_journal_with_append(
+            &root,
+            "run:journal-v4-fresh-m4-store-surface",
+            true,
+            false,
+        );
+        let receipt = receipt.expect("fresh M4 append receipt");
+        assert_eq!(receipt.journal().len(), planned.len());
+        assert_eq!(receipt.authority().event_ids().len(), planned.len());
+        assert_eq!(
+            receipt.authority().confirmed_tail_hash(),
+            planned.last().unwrap().event_hash()
+        );
+
+        let (session, basis) = journal.replayed_v4_session(&roots).unwrap();
+        assert_eq!(
+            basis.confirmed_event_count(),
+            session.writer.events().len() as u64
+        );
+        assert_eq!(
+            basis.confirmed_tail_hash(),
+            planned.last().unwrap().event_hash()
+        );
+        assert!(try_acquire_v4_root_lock(&root).unwrap().is_none());
+        let blocked_reader = journal.open_file(false).unwrap();
+        assert!(fs::flock(&blocked_reader, FlockOperation::NonBlockingLockShared).is_err());
+        drop(blocked_reader);
+        drop(session);
+        assert!(try_acquire_v4_root_lock(&root).unwrap().is_some());
+        let unlocked_reader = journal.open_file(false).unwrap();
+        fs::flock(&unlocked_reader, FlockOperation::NonBlockingLockShared).unwrap();
+    }
+
+    #[test]
+    fn v4_store_publishes_two_gluing_inputs_and_one_atomic_bundle() {
+        let (_workspace, root) = root();
+        let (journal, roots, [mut payment, mut ui]) =
+            public_v4_gluing_journal(&root, "run:journal-v4-gluing-happy");
+        let (mut session, mut basis) = journal.replayed_v4_session(&roots).unwrap();
+        let before = basis.confirmed_event_count();
+        let payment_result = session
+            .publish_gluing_input(
+                payment.sources.remove(0),
+                payment.descriptor.clone(),
+                &mut basis,
+            )
+            .unwrap();
+        let GluingInputPublicationV4::Confirmed {
+            cas: payment_cas,
+            append: payment_append,
+        } = payment_result
+        else {
+            panic!("payment input was not newly confirmed")
+        };
+        assert!(!payment_cas.existed);
+        assert_eq!(
+            payment_append.core().context_id(),
+            payment.descriptor.context_id()
+        );
+        assert_eq!(basis.gluing_input_entry_count(), 1);
+
+        let ui_result = session
+            .publish_gluing_input(ui.sources.remove(0), ui.descriptor.clone(), &mut basis)
+            .unwrap();
+        assert!(matches!(
+            ui_result,
+            GluingInputPublicationV4::Confirmed { .. }
+        ));
+        assert_eq!(basis.gluing_input_entry_count(), 2);
+        assert_eq!(basis.confirmed_event_count(), before + 2);
+
+        let bundle = session.mint_gluing_bundle(&basis).unwrap();
+        let bundle_receipt = session.append_gluing_bundle(bundle, &mut basis).unwrap();
+        assert_eq!(
+            bundle_receipt.core().result(),
+            reviewgraphen_core::GluingResultV4::Unknown
+        );
+        assert_eq!(basis.confirmed_event_count(), before + 3);
+        assert!(matches!(
+            session.mint_gluing_bundle(&basis),
+            Err(JournalError::Domain(
+                reviewgraphen_core::DomainError::AlreadyComplete
+            ))
+        ));
+
+        let count = basis.confirmed_event_count();
+        let existing = session
+            .publish_gluing_input(
+                payment.sources.remove(0),
+                payment.descriptor.clone(),
+                &mut basis,
+            )
+            .unwrap();
+        assert!(matches!(
+            existing,
+            GluingInputPublicationV4::AlreadyRegistered { ref context_id, .. }
+                if context_id == payment.descriptor.context_id()
+        ));
+        assert_eq!(basis.confirmed_event_count(), count);
+        drop(session);
+
+        let (replayed, replayed_basis) = journal.replayed_v4_session(&roots).unwrap();
+        assert_eq!(replayed_basis.confirmed_event_count(), count);
+        assert_eq!(replayed_basis.gluing_input_entry_count(), 2);
+        assert!(
+            replayed
+                .log
+                .registered_gluing_input_v4(payment.descriptor.context_id())
+                .is_some()
+        );
+        assert!(
+            replayed
+                .log
+                .registered_gluing_input_v4(ui.descriptor.context_id())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn v4_gluing_cas_crash_boundary_preserves_no_event_and_adopts_only_exact_bytes() {
+        for (index, fault) in [
+            V4GluingFault::BeforeCasPublication,
+            V4GluingFault::AfterCasPublication,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (_workspace, root) = root();
+            let run = format!("run:journal-v4-gluing-cas-fault-{index}");
+            let (journal, roots, [mut payment, _]) = public_v4_gluing_journal(&root, &run);
+            let (mut session, mut basis) = journal.replayed_v4_session(&roots).unwrap();
+            let before = basis.confirmed_event_count();
+            let hash = payment.sources[0].descriptor_hash().clone();
+            let cas_hash = CasHash::parse(hash.to_string()).unwrap();
+            inject_v4_gluing_fault(fault);
+            assert!(matches!(
+                session.publish_gluing_input(
+                    payment.sources.remove(0),
+                    payment.descriptor.clone(),
+                    &mut basis,
+                ),
+                Err(JournalError::GluingInputPublicationInterruptedV4 { .. })
+            ));
+            assert_eq!(basis.confirmed_event_count(), before);
+            assert_eq!(basis.gluing_input_entry_count(), 0);
+            assert!(
+                session
+                    .log
+                    .registered_gluing_input_v4(payment.descriptor.context_id())
+                    .is_none()
+            );
+            let reader = CasReader::open_existing(&root).unwrap();
+            match fault {
+                V4GluingFault::BeforeCasPublication => {
+                    let mut destination =
+                        vec![0; canonical_json(&payment.descriptor).unwrap().len()];
+                    assert!(matches!(
+                        reader.read_exact_slice(&cas_hash, &mut destination),
+                        Err(StoreError::MissingArtifact)
+                    ));
+                    let confirmed = session
+                        .publish_gluing_input(
+                            payment.sources.remove(0),
+                            payment.descriptor,
+                            &mut basis,
+                        )
+                        .unwrap();
+                    assert!(matches!(
+                        confirmed,
+                        GluingInputPublicationV4::Confirmed { ref cas, .. } if !cas.existed
+                    ));
+                }
+                V4GluingFault::AfterCasPublication => {
+                    let expected = canonical_json(&payment.descriptor).unwrap();
+                    let mut observed = vec![0; expected.len()];
+                    reader.read_exact_slice(&cas_hash, &mut observed).unwrap();
+                    assert_eq!(observed, expected);
+                    let mut colliding = expected.clone();
+                    colliding[0] ^= 1;
+                    assert!(matches!(
+                        CasStore::open(&root).unwrap().put(
+                            &cas_hash,
+                            Some(colliding.len() as u64),
+                            colliding.as_slice(),
+                        ),
+                        Err(StoreError::HashMismatch)
+                    ));
+                    reader.read_exact_slice(&cas_hash, &mut observed).unwrap();
+                    assert_eq!(observed, expected);
+                    let adopted = session
+                        .adopt_gluing_input(payment.sources.remove(0), &mut basis)
+                        .unwrap();
+                    assert!(matches!(
+                        adopted,
+                        GluingInputPublicationV4::Confirmed { ref cas, .. } if cas.existed
+                    ));
+                }
+            }
+            assert_eq!(basis.confirmed_event_count(), before + 1);
+            assert_eq!(basis.gluing_input_entry_count(), 1);
+        }
+
+        let (_workspace, root) = root();
+        let (journal, roots, [_, mut ui]) =
+            public_v4_gluing_journal(&root, "run:journal-v4-gluing-out-of-order-orphan");
+        let (mut session, mut basis) = journal.replayed_v4_session(&roots).unwrap();
+        let ui_hash = ui.sources[0].descriptor_hash().clone();
+        let ui_cas_hash = CasHash::parse(ui_hash.to_string()).unwrap();
+        let ui_bytes = canonical_json(&ui.descriptor).unwrap();
+        assert!(matches!(
+            session.publish_gluing_input(ui.sources.remove(0), ui.descriptor.clone(), &mut basis,),
+            Err(JournalError::Domain(
+                reviewgraphen_core::DomainError::GluingInputAdmissionMismatch
+            ))
+        ));
+        let reader = CasReader::open_existing(&root).unwrap();
+        let mut destination = vec![0; ui_bytes.len()];
+        assert!(matches!(
+            reader.read_exact_slice(&ui_cas_hash, &mut destination),
+            Err(StoreError::MissingArtifact)
+        ));
+        CasStore::open(&root)
+            .unwrap()
+            .put(
+                &ui_cas_hash,
+                Some(ui_bytes.len() as u64),
+                ui_bytes.as_slice(),
+            )
+            .unwrap();
+        assert!(matches!(
+            session.adopt_gluing_input(ui.sources.remove(0), &mut basis),
+            Err(JournalError::OrphanCanonicalInput { ref hash }) if hash == &ui_hash
+        ));
+        assert_eq!(basis.gluing_input_entry_count(), 0);
+    }
+
+    #[test]
+    fn v4_gluing_registration_post_sync_uncertainty_requires_keyed_tail_recovery() {
+        let (_workspace, root) = root();
+        let (journal, roots, [mut payment, _]) =
+            public_v4_gluing_journal(&root, "run:journal-v4-gluing-registration-uncertain");
+        let run_id = journal.identity.run_id.clone();
+        let genesis_hash = journal.identity.genesis_hash();
+        let (mut session, mut basis) = journal.replayed_v4_session(&roots).unwrap();
+        let before = basis.confirmed_event_count();
+        session
+            .writer
+            .inject_faults([AppendFault::ClearMarkerDirectorySync]);
+        assert!(matches!(
+            session.publish_gluing_input(
+                payment.sources.remove(0),
+                payment.descriptor.clone(),
+                &mut basis,
+            ),
+            Err(JournalError::SessionUncertain)
+        ));
+        assert_eq!(basis.confirmed_event_count(), before);
+        assert_eq!(basis.gluing_input_entry_count(), 0);
+        assert!(bundle_file_exists(&journal.run, APPEND_PENDING_MARKER).unwrap());
+        drop(session);
+
+        let key = EventJournal::inspect_recovery_v4(
+            &root,
+            RecoveryInspectionV4::new(run_id, genesis_hash, RecoveryKindV4::CanonicalTail),
+        )
+        .unwrap();
+        let (receipt, recovered) = journal
+            .recover_replayed_v4_session(
+                &roots,
+                key,
+                RecoveryProvenanceV4::new("test", "v4-gluing-registration-uncertain").unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(
+            receipt.outcome(),
+            RecoveryOutcomeV4::TailRecovered { .. }
+        ));
+        assert!(!bundle_file_exists(&journal.run, APPEND_PENDING_MARKER).unwrap());
+        let RecoveredV4Session::Editable {
+            session: replayed,
+            basis: recovered_basis,
+        } = recovered
+        else {
+            panic!("canonical-tail recovery must return an editable session")
+        };
+        assert!(try_acquire_v4_root_lock(&root).unwrap().is_none());
+        let competing = journal.open_file(false).unwrap();
+        assert_eq!(
+            fs::flock(&competing, FlockOperation::NonBlockingLockExclusive),
+            Err(rustix::io::Errno::WOULDBLOCK)
+        );
+        assert_eq!(recovered_basis.confirmed_event_count(), before + 1);
+        assert_eq!(recovered_basis.gluing_input_entry_count(), 1);
+        assert!(
+            replayed
+                .log
+                .registered_gluing_input_v4(payment.descriptor.context_id())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn v4_gluing_tail_recovery_returns_no_session_when_roots_replay_fails() {
+        let (_workspace, root) = root();
+        let (journal, roots, [mut payment, _]) =
+            public_v4_gluing_journal(&root, "run:journal-v4-gluing-recovery-wrong-roots");
+        let (mut session, mut basis) = journal.replayed_v4_session(&roots).unwrap();
+        session
+            .writer
+            .inject_faults([AppendFault::ClearMarkerDirectorySync]);
+        assert!(matches!(
+            session
+                .publish_gluing_input(payment.sources.remove(0), payment.descriptor, &mut basis,),
+            Err(JournalError::SessionUncertain)
+        ));
+        drop(session);
+
+        let key = EventJournal::inspect_recovery_v4(
+            &root,
+            RecoveryInspectionV4::new(
+                journal.identity.run_id.clone(),
+                journal.identity.genesis_hash(),
+                RecoveryKindV4::CanonicalTail,
+            ),
+        )
+        .unwrap();
+        let missing_gluing_roots = AuthorityTrustRootsV4::new(
+            ContentHash::sha256(b"store-public-v3-fixture-policy"),
+            StableId::parse("repository:double-submit-payment").unwrap(),
+            ContentHash::parse("sha256:1111111111111111").unwrap(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            journal.recover_replayed_v4_session(
+                &missing_gluing_roots,
+                key,
+                RecoveryProvenanceV4::new("test", "v4-gluing-wrong-roots").unwrap(),
+            ),
+            Err(JournalError::Domain(_))
+        ));
+        assert!(!bundle_file_exists(&journal.run, APPEND_PENDING_MARKER).unwrap());
+        assert!(try_acquire_v4_root_lock(&root).unwrap().is_some());
+        let (_session, recovered_basis) = journal.replayed_v4_session(&roots).unwrap();
+        assert_eq!(recovered_basis.gluing_input_entry_count(), 1);
+    }
+
+    #[test]
+    fn v4_gluing_bundle_is_one_line_with_rollback_or_keyed_uncertainty() {
+        let (_workspace, root) = root();
+        let (journal, roots, [mut payment, mut ui]) =
+            public_v4_gluing_journal(&root, "run:journal-v4-gluing-bundle-uncertain");
+        let run_id = journal.identity.run_id.clone();
+        let genesis_hash = journal.identity.genesis_hash();
+        let (mut session, mut basis) = journal.replayed_v4_session(&roots).unwrap();
+        session
+            .publish_gluing_input(payment.sources.remove(0), payment.descriptor, &mut basis)
+            .unwrap();
+        session
+            .publish_gluing_input(ui.sources.remove(0), ui.descriptor, &mut basis)
+            .unwrap();
+        let before = basis.confirmed_event_count();
+
+        let first = session.mint_gluing_bundle(&basis).unwrap();
+        session.writer.inject_faults([AppendFault::PartialWrite]);
+        assert!(matches!(
+            session.append_gluing_bundle(first, &mut basis),
+            Err(JournalError::Io(_))
+        ));
+        assert_eq!(basis.confirmed_event_count(), before);
+        assert!(!bundle_file_exists(&journal.run, APPEND_PENDING_MARKER).unwrap());
+        assert_eq!(session.writer.events().len() as u64, before);
+
+        let second = session.mint_gluing_bundle(&basis).unwrap();
+        session
+            .writer
+            .inject_faults([AppendFault::ClearMarkerDirectorySync]);
+        assert!(matches!(
+            session.append_gluing_bundle(second, &mut basis),
+            Err(JournalError::SessionUncertain)
+        ));
+        assert_eq!(basis.confirmed_event_count(), before);
+        assert!(bundle_file_exists(&journal.run, APPEND_PENDING_MARKER).unwrap());
+        drop(session);
+
+        let key = EventJournal::inspect_recovery_v4(
+            &root,
+            RecoveryInspectionV4::new(run_id, genesis_hash, RecoveryKindV4::CanonicalTail),
+        )
+        .unwrap();
+        let (receipt, recovered) = journal
+            .recover_replayed_v4_session(
+                &roots,
+                key,
+                RecoveryProvenanceV4::new("test", "v4-gluing-bundle-uncertain").unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(
+            receipt.outcome(),
+            RecoveryOutcomeV4::TailRecovered { .. }
+        ));
+        let RecoveredV4Session::Editable {
+            session: replayed,
+            basis: recovered_basis,
+        } = recovered
+        else {
+            panic!("canonical-tail recovery must return an editable session")
+        };
+        assert_eq!(recovered_basis.confirmed_event_count(), before + 1);
+        assert_eq!(recovered_basis.gluing_input_entry_count(), 2);
+        assert!(matches!(
+            replayed.mint_gluing_bundle(&recovered_basis),
+            Err(JournalError::Domain(
+                reviewgraphen_core::DomainError::AlreadyComplete
+            ))
+        ));
+        assert!(!bundle_file_exists(&journal.run, BUNDLE_PENDING_MARKER).unwrap());
+        assert!(!bundle_file_exists(&journal.run, BUNDLE_PENDING_STAGE).unwrap());
     }
 
     #[test]
