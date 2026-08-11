@@ -8,6 +8,9 @@
   a replay basis escapes before the sealed suffix is durable and fully replay-confirmed. This
   prevents a resume-only holder from leaking basis-shaped state that callers could mistake for
   ordinary append authority.
+- Amended: 2026-08-11 — added the opaque read-only runtime profile-basis projection used to
+  derive the fixed descriptor CAS objects and augment existing V4 host roots without rebuilding
+  fixed IDs, qualification IDs, or private inherited-root tuples outside Core.
 - Scope: Defines the M5 vertical slice over the Accepted M4 contract: a fresh homogeneous event-v4 run, context cover, profile-owned local Sections, deterministic pairwise restrictions and gluing, source-bound gluing obstructions, index v5, and report v4. It does not implement a verifier, decision, finding, policy gate, provider adapter, generic command runner, generic context taxonomy, change morphism, or staleness.
 
 ## Context
@@ -488,6 +491,65 @@ ReplayedV4RunSession::append_artifact_registration_v4(
 ```
 
 `TrustedGluingInputSourceV4` is host-constructed, nonserializable, and contains exactly one `GluingInputTrustBindingV4`; session admission requires equality with the trust-root member and CAS object. No raw `ArtifactRegistrationV4` append is public.
+
+Runtime construction uses a narrower Core-owned projection. From an exact confirmed legal
+zero/one/two-descriptor pre-bundle V4 prefix and its matching `AuthorityReplayBasisV4`, Core may mint one opaque
+`M5GluingProfileBasisV4`. Minting requires the fixed profile, the unique current plan, the exact
+ProgramSpace/universe/property/context/overlap closure, and the current M4 assessment closure.
+The basis is non-`Clone`, non-`Serialize`, non-`Deserialize`, has no public constructor, and is
+bound to the observed run, genesis, tail, event count, policy, repository, snapshot, universe,
+and plan. It cannot be minted from an index, report, descriptor, prose, or caller-provided IDs.
+
+The only semantic caller input is a closed pair
+`M5DoubleSubmitAssignmentsV4::new(payment, ui_event)` using `AssignmentValueV4`; contexts,
+order, assignment key, profile descriptor, plan, property, and qualification IDs are not caller
+arguments. Consuming the basis derives exactly two canonical descriptor byte strings in
+payment-then-ui order and two matching trust-root bindings. It verifies every already registered
+descriptor against that exact derivation and emits one-shot source objects only for the remaining
+legal suffix. The payment qualification set is the required overlap plus
+the selected current payment assessment's evidence IDs when that assessment exists; with no
+eligible payment assessment, or an eligible assessment whose evidence set is empty, it is the
+required overlap alone. The UI qualification set is empty for this profile. A missing assessment
+does not block descriptor generation: it remains absent from `S` and produces the normative
+`required_section_missing` result in §4–§5. Ambiguous eligible claim/assessment closure and
+qualification overflow refuse rather than silently selecting or dropping a source.
+
+The exact profile projection source set is:
+
+```text
+RP = cover.source_ids ∪ O
+     ∪ ⋃{ {c,o(c),q(c)} ∪ M(c) ∪ source_ids(q(c))
+           ∪ B(c) ∪ E(c) ∪ V(c) ∪ J(c) ∪ F(c) | eligible c }
+     ∪ {descriptor and registration IDs already present in the legal prefix}
+```
+
+Because `O`, `c`, and `M(c)` are already in `cover.source_ids`, its dedicated conservative count
+bound is `16,387 + 2*(2 + 128 + 5*64) + 4 = 17,291` IDs. Its retained-byte bound is
+`17,291 * (size_of::<StableId>() + 256)`. Core performs a borrowed union count, checked retained-
+byte sum, and per-ID 256-byte check before cloning/extending the target set, then rechecks the
+final 0/1/2-prefix union after adding existing descriptor/registration IDs. The attempt-source
+bound of 4,944 is unrelated and is never reused for this projection.
+
+The projection exposes its complete source-ID set and the fixed meaningful-information-loss
+declaration `non_qualification_assessment_detail_omitted`. It does not expose a serializable
+canonical authority record. Its host material consumes an existing `AuthorityTrustRootsV4`,
+requires the exact policy/repository tuple and no pre-existing gluing roots, and returns a new
+root set containing the same private inherited harness/human roots plus exactly the derived pair.
+Public augmentation refuses even one preseeded exact gluing binding; only Core's private second
+pass may replace the exact pair it minted during the same inspection operation.
+This root augmentation grants no append by itself: Runtime must drop the inspection session,
+freshly replay the identical prefix under the augmented roots, CAS-put the returned exact bytes,
+and pass each one-shot source through ordinary locked admission. Bindings and descriptor bytes
+remain stable across legal 0/1/2 restarts; append position/session binding is performed only by
+ordinary admission against the fresh replay. A cross-run, stale-prefix, reordered, substituted,
+or post-bundle mint refuses; after the bundle, only the existing read-only bundle projection is
+available.
+
+Before inspection scans or decodes a payload discriminator or calls the CAS resolver, it applies
+the same checked V4 replay preflight to the complete input: `event_count <= max_events` and the
+checked sum of canonical envelope bytes is `<= max_canonical_bytes`. The subsequent M5-start scan
+reads only the top-level closed `type` discriminator without allocation; complete payload decode
+and trust validation occur only in the two authority replay passes.
 
 An unregistered descriptor CAS object left by a crash is adoptable only as those exact immutable bytes; adoption never deletes, rewrites, or substitutes the object. Under the session lock, Store must strictly canonical-decode it as one `GluingInputDescriptorV4`, verify its hash/size/media type/sensitivity and complete run/genesis/snapshot/universe/plan/profile/context closure, require equality with exactly one `allowed_gluing_input_binding`, require that no v4 registration exists for that descriptor or context, and require that its context is the next legal context in payment-then-ui order. Successful adoption uses the same derived descriptor/registration IDs and emits the same registration event as a fresh CAS put. An ambiguous binding, extra or out-of-order object, byte/closure mismatch, or object not eligible for the next registration is `OrphanCanonicalInput`; an already registered descriptor is reconstructed from the journal and never appended again. A `CasStore::put` result such as `existed=true` is storage information only and grants no admission or replay authority.
 

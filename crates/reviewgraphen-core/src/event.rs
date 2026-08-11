@@ -6990,12 +6990,31 @@ impl GluingInputTrustBindingV4 {
 #[derive(Debug)]
 pub struct TrustedGluingInputSourceV4 {
     binding: GluingInputTrustBindingV4,
+    expected_predecessor_tail: Option<ContentHash>,
+    expected_confirmed_event_count: Option<u64>,
 }
 
 impl TrustedGluingInputSourceV4 {
     pub fn from_trusted_host(binding: GluingInputTrustBindingV4) -> Result<Self> {
         binding.validate()?;
-        Ok(Self { binding })
+        Ok(Self {
+            binding,
+            expected_predecessor_tail: None,
+            expected_confirmed_event_count: None,
+        })
+    }
+
+    fn from_profile_basis(
+        binding: GluingInputTrustBindingV4,
+        expected_predecessor_tail: ContentHash,
+        expected_confirmed_event_count: u64,
+    ) -> Result<Self> {
+        binding.validate()?;
+        Ok(Self {
+            binding,
+            expected_predecessor_tail: Some(expected_predecessor_tail),
+            expected_confirmed_event_count: Some(expected_confirmed_event_count),
+        })
     }
 
     #[must_use]
@@ -7031,6 +7050,358 @@ impl TrustedGluingInputSourceV4 {
     #[must_use]
     pub fn registration_id(&self) -> &StableId {
         &self.binding.registration_id
+    }
+}
+
+/// The only caller-selected semantics for the fixed double-submit profile.
+/// Context IDs, ordering, assignment keys, and qualifications remain Core-owned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct M5DoubleSubmitAssignmentsV4 {
+    payment: crate::AssignmentValueV4,
+    ui_event: crate::AssignmentValueV4,
+}
+
+impl M5DoubleSubmitAssignmentsV4 {
+    #[must_use]
+    pub const fn new(
+        payment: crate::AssignmentValueV4,
+        ui_event: crate::AssignmentValueV4,
+    ) -> Self {
+        Self { payment, ui_event }
+    }
+}
+
+/// Fixed disclosure of what the runtime profile projection deliberately does
+/// not retain as descriptor qualification authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum M5GluingProfileInformationLossV4 {
+    NonQualificationAssessmentDetailOmitted,
+}
+
+impl M5GluingProfileInformationLossV4 {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NonQualificationAssessmentDetailOmitted => {
+                "non_qualification_assessment_detail_omitted"
+            }
+        }
+    }
+}
+
+/// Read-only, source-bound projection of the fixed M5 profile from one exact
+/// confirmed V4 prefix. It is neither event authority nor a canonical record.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::M5GluingProfileBasisV4>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::M5GluingProfileBasisV4>();
+/// ```
+#[derive(Debug)]
+pub struct M5GluingProfileBasisV4 {
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    confirmed_tail_hash: ContentHash,
+    confirmed_event_count: u64,
+    policy_revision_hash: ContentHash,
+    repository_id: StableId,
+    repository_source_hash: ContentHash,
+    snapshot_id: StableId,
+    universe_id: StableId,
+    plan_id: StableId,
+    source_ids: BTreeSet<StableId>,
+    payment_qualification_source_ids: BTreeSet<StableId>,
+    existing_inputs: Vec<(crate::GluingInputDescriptorV4, StableId)>,
+}
+
+impl M5GluingProfileBasisV4 {
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+
+    #[must_use]
+    pub const fn meaningful_information_loss(&self) -> M5GluingProfileInformationLossV4 {
+        M5GluingProfileInformationLossV4::NonQualificationAssessmentDetailOmitted
+    }
+
+    #[must_use]
+    pub fn confirmed_tail_hash(&self) -> &ContentHash {
+        &self.confirmed_tail_hash
+    }
+
+    #[must_use]
+    pub fn registered_input_count(&self) -> usize {
+        self.existing_inputs.len()
+    }
+
+    /// Consumes the read-only basis and derives the stable descriptor/binding
+    /// pair plus only the remaining one-shot registration sources.
+    pub fn into_host_material(
+        self,
+        assignments: M5DoubleSubmitAssignmentsV4,
+    ) -> Result<M5GluingProfileHostMaterialV4> {
+        let payment = crate::GluingInputDescriptorV4::new(
+            self.run_id.clone(),
+            self.snapshot_id.clone(),
+            self.universe_id.clone(),
+            self.plan_id.clone(),
+            StableId::parse(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID)?,
+            assignments.payment,
+            self.payment_qualification_source_ids.clone(),
+        )
+        .map_err(|error| DomainError::Validation(error.to_string()))?;
+        let ui = crate::GluingInputDescriptorV4::new(
+            self.run_id.clone(),
+            self.snapshot_id.clone(),
+            self.universe_id.clone(),
+            self.plan_id.clone(),
+            StableId::parse(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID)?,
+            assignments.ui_event,
+            BTreeSet::new(),
+        )
+        .map_err(|error| DomainError::Validation(error.to_string()))?;
+        let descriptors = [payment, ui];
+        let canonical_bytes = [
+            canonical_json(&descriptors[0])?,
+            canonical_json(&descriptors[1])?,
+        ];
+        let bindings = [
+            m5_profile_binding(&self, &descriptors[0], &canonical_bytes[0])?,
+            m5_profile_binding(&self, &descriptors[1], &canonical_bytes[1])?,
+        ];
+        for (position, (existing, registration_id)) in self.existing_inputs.iter().enumerate() {
+            if existing != &descriptors[position]
+                || registration_id != &bindings[position].registration_id
+            {
+                return Err(DomainError::GluingInputAdmissionMismatch);
+            }
+        }
+
+        let mut expected_tail = self.confirmed_tail_hash.clone();
+        let mut expected_count = self.confirmed_event_count;
+        let mut remaining_inputs = Vec::with_capacity(2 - self.existing_inputs.len());
+        for position in self.existing_inputs.len()..2 {
+            let source_binding =
+                m5_profile_binding(&self, &descriptors[position], &canonical_bytes[position])?;
+            let trusted_source = TrustedGluingInputSourceV4::from_profile_basis(
+                source_binding,
+                expected_tail.clone(),
+                expected_count,
+            )?;
+            remaining_inputs.push(M5GluingProfileInputV4 {
+                descriptor_bytes: canonical_bytes[position].clone(),
+                trusted_source,
+            });
+            let registration = ArtifactRegistrationV4::from_gluing_binding(&bindings[position])?;
+            let sequence = expected_count.checked_add(1).ok_or_else(|| {
+                DomainError::EventSequence("event-v4 profile sequence overflow".to_owned())
+            })?;
+            let envelope = EventEnvelope::new(
+                EventContractVersion::V4,
+                self.run_id.clone(),
+                self.genesis_hash.clone(),
+                sequence,
+                "engine:reviewgraphen.m5_gluing_input@1",
+                sequence,
+                expected_tail,
+                PersistedPayload::ArtifactRegisteredV4(registration),
+            )?;
+            expected_tail = envelope.event_hash().clone();
+            expected_count = sequence;
+        }
+        Ok(M5GluingProfileHostMaterialV4 {
+            policy_revision_hash: self.policy_revision_hash,
+            repository_id: self.repository_id,
+            repository_source_hash: self.repository_source_hash,
+            root_bindings: bindings.into(),
+            remaining_inputs,
+            source_ids: self.source_ids,
+        })
+    }
+}
+
+fn m5_profile_binding(
+    basis: &M5GluingProfileBasisV4,
+    descriptor: &crate::GluingInputDescriptorV4,
+    descriptor_bytes: &[u8],
+) -> Result<GluingInputTrustBindingV4> {
+    let descriptor_hash = ContentHash::sha256(descriptor_bytes);
+    let descriptor_size =
+        u64::try_from(descriptor_bytes.len()).map_err(|_| DomainError::Incomplete {
+            operation: "runtime M5 descriptor bytes",
+            limit: crate::MAX_M5_DESCRIPTOR_CANONICAL_BYTES,
+            observed: usize::MAX,
+        })?;
+    let source = ArtifactSourceV4::GluingInput {
+        context_id: descriptor.context_id().clone(),
+        descriptor_hash: descriptor_hash.clone(),
+        descriptor_id: descriptor.id().clone(),
+        descriptor_media_type: GLUING_INPUT_MEDIA_TYPE_V4.to_owned(),
+        descriptor_sensitivity: ArtifactSensitivity::CanonicalState,
+        descriptor_size,
+        genesis_hash: basis.genesis_hash.clone(),
+        plan_id: basis.plan_id.clone(),
+        policy_revision_hash: basis.policy_revision_hash.clone(),
+        profile_descriptor_id: crate::DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID.to_owned(),
+        repository_id: basis.repository_id.clone(),
+        repository_source_hash: basis.repository_source_hash.clone(),
+        run_id: basis.run_id.clone(),
+        snapshot_id: basis.snapshot_id.clone(),
+        universe_id: basis.universe_id.clone(),
+    };
+    GluingInputTrustBindingV4::new(
+        basis.policy_revision_hash.clone(),
+        basis.repository_id.clone(),
+        basis.repository_source_hash.clone(),
+        basis.run_id.clone(),
+        basis.genesis_hash.clone(),
+        basis.snapshot_id.clone(),
+        basis.universe_id.clone(),
+        basis.plan_id.clone(),
+        crate::DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID,
+        descriptor.context_id().clone(),
+        descriptor.id().clone(),
+        descriptor_hash,
+        descriptor_size,
+        GLUING_INPUT_MEDIA_TYPE_V4,
+        ArtifactSensitivity::CanonicalState,
+        source,
+    )
+}
+
+/// One remaining canonical CAS object plus a source admitted only at its
+/// exact legal predecessor prefix.
+#[derive(Debug)]
+pub struct M5GluingProfileInputV4 {
+    descriptor_bytes: Vec<u8>,
+    trusted_source: TrustedGluingInputSourceV4,
+}
+
+impl M5GluingProfileInputV4 {
+    #[must_use]
+    pub fn descriptor_bytes(&self) -> &[u8] {
+        &self.descriptor_bytes
+    }
+
+    #[must_use]
+    pub fn context_id(&self) -> &StableId {
+        self.trusted_source.context_id()
+    }
+
+    #[must_use]
+    pub fn descriptor_hash(&self) -> &ContentHash {
+        self.trusted_source.descriptor_hash()
+    }
+
+    #[must_use]
+    pub fn into_trusted_source(self) -> TrustedGluingInputSourceV4 {
+        self.trusted_source
+    }
+}
+
+/// Non-authority host material which can only preserve and augment one exact
+/// V4 root set before returning the remaining ordered descriptor inputs.
+#[derive(Debug)]
+pub struct M5GluingProfileHostMaterialV4 {
+    policy_revision_hash: ContentHash,
+    repository_id: StableId,
+    repository_source_hash: ContentHash,
+    root_bindings: Vec<GluingInputTrustBindingV4>,
+    remaining_inputs: Vec<M5GluingProfileInputV4>,
+    source_ids: BTreeSet<StableId>,
+}
+
+impl M5GluingProfileHostMaterialV4 {
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+
+    pub fn augment_roots(
+        self,
+        roots: AuthorityTrustRootsV4,
+    ) -> Result<(AuthorityTrustRootsV4, Vec<M5GluingProfileInputV4>)> {
+        self.augment_roots_internal(roots, false)
+    }
+
+    fn augment_reinspection_roots(
+        self,
+        roots: AuthorityTrustRootsV4,
+    ) -> Result<(AuthorityTrustRootsV4, Vec<M5GluingProfileInputV4>)> {
+        self.augment_roots_internal(roots, true)
+    }
+
+    fn augment_roots_internal(
+        self,
+        roots: AuthorityTrustRootsV4,
+        exact_reinspection: bool,
+    ) -> Result<(AuthorityTrustRootsV4, Vec<M5GluingProfileInputV4>)> {
+        let AuthorityTrustRootsV4 {
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            allowed_gluing_input_bindings,
+        } = roots;
+        if policy_revision_hash != self.policy_revision_hash
+            || repository_id != self.repository_id
+            || repository_source_hash != self.repository_source_hash
+            || (!exact_reinspection && !allowed_gluing_input_bindings.is_empty())
+            || (exact_reinspection
+                && (allowed_gluing_input_bindings.len() != self.root_bindings.len()
+                    || allowed_gluing_input_bindings
+                        .iter()
+                        .any(|existing| !self.root_bindings.iter().any(|exact| exact == existing))))
+        {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
+        let augmented = AuthorityTrustRootsV4::new(
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            self.root_bindings,
+        )?;
+        Ok((augmented, self.remaining_inputs))
+    }
+}
+
+/// Closed output of inspection-only two-pass replay. It contains augmented
+/// host roots and only the registration inputs still absent from the journal;
+/// no editable log or replay basis escapes the inspection pass.
+#[derive(Debug)]
+pub struct M5GluingProfileInspectionV4 {
+    roots: AuthorityTrustRootsV4,
+    remaining_inputs: Vec<M5GluingProfileInputV4>,
+    source_ids: BTreeSet<StableId>,
+}
+
+impl M5GluingProfileInspectionV4 {
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+
+    #[must_use]
+    pub const fn meaningful_information_loss(&self) -> M5GluingProfileInformationLossV4 {
+        M5GluingProfileInformationLossV4::NonQualificationAssessmentDetailOmitted
+    }
+
+    #[must_use]
+    pub fn remaining_input_count(&self) -> usize {
+        self.remaining_inputs.len()
+    }
+
+    #[must_use]
+    pub fn into_parts(self) -> (AuthorityTrustRootsV4, Vec<M5GluingProfileInputV4>) {
+        (self.roots, self.remaining_inputs)
     }
 }
 
@@ -7091,7 +7462,7 @@ pub struct AuthorityTrustRootsV4 {
 
 /// The exact ADR 0021 fixture-harness tuple copied into a V4 host root.
 /// It is deliberately a V4 API value, not a wrapped or accepted V3 root.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct AuthorityHarnessBindingV3Tuple {
     pub policy_revision_hash: ContentHash,
     pub repository_id: StableId,
@@ -7117,7 +7488,7 @@ pub struct AuthorityHarnessBindingV3Tuple {
 
 /// The exact ADR 0021 human-grant tuple copied into a V4 host root.
 /// This remains host input only and has no serde implementation.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct AuthorityHumanGrantV3Tuple {
     pub policy_revision_hash: ContentHash,
     pub actor: String,
@@ -9941,6 +10312,124 @@ fn snapshot_line_count_v4(bytes: &[u8]) -> Result<u64> {
         .map_err(|_| DomainError::EventSequence("snapshot line count overflow".to_owned()))
 }
 
+fn preflight_v4_replay_import(
+    envelopes: &[EventEnvelope],
+    limits: EventReplayLimits,
+) -> Result<()> {
+    let count = u64::try_from(envelopes.len()).map_err(|_| DomainError::Incomplete {
+        operation: "V4 replay event count",
+        limit: usize::try_from(limits.max_events).unwrap_or(usize::MAX),
+        observed: usize::MAX,
+    })?;
+    if count > limits.max_events {
+        return Err(replay_incomplete(
+            "V4 replay event count",
+            limits.max_events,
+            count,
+        ));
+    }
+    let mut canonical_total = 0_u64;
+    for envelope in envelopes {
+        if envelope.contract_version()? != EventContractVersion::V4 {
+            return Err(DomainError::Validation(
+                "V4 replay refuses a non-V4 envelope".to_owned(),
+            ));
+        }
+        canonical_total = replay_add(
+            "V4 replay canonical bytes",
+            limits.max_canonical_bytes,
+            canonical_total,
+            crate::canonical::canonical_json_count_bounded(
+                envelope,
+                usize::try_from(limits.max_canonical_bytes).unwrap_or(usize::MAX),
+                "V4 replay canonical envelope count",
+            )?,
+        )?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum M5PayloadDiscriminatorV4 {
+    Registration,
+    Bundle,
+    Other,
+}
+
+/// Reads only the top-level canonical `type` string and allocates nothing.
+/// Complete DTO decoding remains the responsibility of the authority replay.
+fn m5_payload_discriminator_v4(raw: &RawValue) -> M5PayloadDiscriminatorV4 {
+    let bytes = raw.get().as_bytes();
+    let mut depth = 0_usize;
+    let mut index = 0_usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'{' | b'[' => {
+                depth = depth.saturating_add(1);
+                index += 1;
+            }
+            b'}' | b']' => {
+                depth = depth.saturating_sub(1);
+                index += 1;
+            }
+            b'"' => {
+                let start = index + 1;
+                index = start;
+                let mut escaped = false;
+                while index < bytes.len() {
+                    match bytes[index] {
+                        b'\\' => {
+                            escaped = true;
+                            index = index.saturating_add(2);
+                        }
+                        b'"' => break,
+                        _ => index += 1,
+                    }
+                }
+                if index >= bytes.len() {
+                    return M5PayloadDiscriminatorV4::Other;
+                }
+                let end = index;
+                index += 1;
+                if depth != 1 || escaped || &bytes[start..end] != b"type" {
+                    continue;
+                }
+                while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+                    index += 1;
+                }
+                if bytes.get(index) != Some(&b':') {
+                    continue;
+                }
+                index += 1;
+                while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+                    index += 1;
+                }
+                if bytes.get(index) != Some(&b'"') {
+                    return M5PayloadDiscriminatorV4::Other;
+                }
+                let value_start = index + 1;
+                index = value_start;
+                while index < bytes.len() && bytes[index] != b'"' {
+                    if bytes[index] == b'\\' {
+                        return M5PayloadDiscriminatorV4::Other;
+                    }
+                    index += 1;
+                }
+                if index >= bytes.len() {
+                    return M5PayloadDiscriminatorV4::Other;
+                }
+                return match &bytes[value_start..index] {
+                    b"artifact_registered_v4" => M5PayloadDiscriminatorV4::Registration,
+                    b"gluing_bundle_recorded_v4" => M5PayloadDiscriminatorV4::Bundle,
+                    _ => M5PayloadDiscriminatorV4::Other,
+                };
+            }
+            _ => index += 1,
+        }
+    }
+    M5PayloadDiscriminatorV4::Other
+}
+
 fn artifact_registration_v3_at_v4_binding_digest(
     binding: &ArtifactRegistrationV3AtV4TrustBinding,
 ) -> Result<ContentHash> {
@@ -10535,6 +11024,91 @@ impl EventLogV4 {
         self.m5_bundle.as_ref()
     }
 
+    /// Mints a non-authority fixed-profile projection from one exact legal
+    /// confirmed 0/1/2-descriptor pre-bundle prefix.
+    pub fn m5_gluing_profile_basis_v4(
+        &self,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<M5GluingProfileBasisV4> {
+        basis.validate_for_log_v4(self)?;
+        if self.m5_bundle.is_some() {
+            return Err(DomainError::AlreadyComplete);
+        }
+        if self.v4_registrations.len() > 2
+            || self.v4_gluing_descriptors.len() != self.v4_registrations.len()
+            || basis.gluing_input_entries.len() != self.v4_registrations.len()
+        {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
+        let mut plans = self.aggregate.review_plans();
+        let plan = plans.next().ok_or_else(|| {
+            DomainError::Validation("runtime M5 profile requires one current plan".to_owned())
+        })?;
+        if plans.next().is_some() {
+            return Err(DomainError::Validation(
+                "runtime M5 profile requires one current plan".to_owned(),
+            ));
+        }
+        let closure = crate::m5::derive_registration_closure_v4(
+            &self.aggregate,
+            &self.run_id,
+            plan.id(),
+            |claim_id| self.v3_aggregate.assessments.get(claim_id),
+        )
+        .map_err(|error| DomainError::Validation(error.to_string()))?;
+        let (mut source_ids, payment_qualification_source_ids) = closure
+            .runtime_profile_projection()
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        let mut existing_inputs = Vec::with_capacity(self.v4_registrations.len());
+        for context in [
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+        ] {
+            let context_id = StableId::parse(context)?;
+            let Some((registration, descriptor)) = self.registered_gluing_input_v4(&context_id)
+            else {
+                break;
+            };
+            existing_inputs.push((descriptor.clone(), registration.id().clone()));
+        }
+        if existing_inputs.len() != self.v4_registrations.len() {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
+        let existing_source_ids = existing_inputs
+            .iter()
+            .flat_map(|(descriptor, registration_id)| [descriptor.id(), registration_id])
+            .collect::<Vec<_>>();
+        crate::m5::extend_runtime_profile_sources(&mut source_ids, &existing_source_ids)
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        let confirmed_event_count = u64::try_from(self.envelopes.len())
+            .map_err(|_| DomainError::EventSequence("event-v4 event count overflow".to_owned()))?;
+        Ok(M5GluingProfileBasisV4 {
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            confirmed_tail_hash: self.tail_hash.clone(),
+            confirmed_event_count,
+            policy_revision_hash: basis.policy_revision_hash.clone(),
+            repository_id: self.aggregate.program().repository_id().clone(),
+            repository_source_hash: self
+                .aggregate
+                .program()
+                .repository_source()
+                .content_hash()
+                .ok_or_else(|| {
+                    DomainError::Validation(
+                        "runtime M5 profile requires repository source hash".to_owned(),
+                    )
+                })?
+                .clone(),
+            snapshot_id: self.aggregate.program().snapshot_id().clone(),
+            universe_id: self.aggregate.universe().id().clone(),
+            plan_id: plan.id().clone(),
+            source_ids,
+            payment_qualification_source_ids,
+            existing_inputs,
+        })
+    }
+
     /// Admits exact canonical descriptor bytes at the sole legal 0/1
     /// registration position and seals one V4 registration envelope.
     #[allow(clippy::too_many_arguments)]
@@ -10547,6 +11121,20 @@ impl EventLogV4 {
         session_identity: &OpaqueSessionIdentityV4,
     ) -> Result<TrustedGluingInputAdmissionV4> {
         basis.validate_for_log_v4(self)?;
+        let confirmed_event_count = u64::try_from(self.envelopes.len())
+            .map_err(|_| DomainError::EventSequence("event-v4 event count overflow".to_owned()))?;
+        if trusted
+            .expected_predecessor_tail
+            .as_ref()
+            .is_some_and(|tail| tail != &self.tail_hash)
+            || trusted
+                .expected_confirmed_event_count
+                .is_some_and(|count| count != confirmed_event_count)
+            || trusted.expected_predecessor_tail.is_some()
+                != trusted.expected_confirmed_event_count.is_some()
+        {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
         let binding = trusted.binding;
         binding.validate()?;
         let expected_context = match self.v4_registrations.len() {
@@ -12154,6 +12742,67 @@ impl EventLogV4 {
 
     /// Replays a confirmed homogeneous v4 prefix from canonical bytes and
     /// host roots. Persisted metadata never creates replay authority.
+    #[allow(clippy::too_many_arguments)]
+    pub fn inspect_m5_gluing_profile_v4(
+        run_id: StableId,
+        canonical_genesis_bytes: &[u8],
+        envelopes: &[EventEnvelope],
+        resolver: &impl AuthorityArtifactResolverV4,
+        base_roots: AuthorityTrustRootsV4,
+        limits: EventReplayLimits,
+        assignments: M5DoubleSubmitAssignmentsV4,
+    ) -> Result<M5GluingProfileInspectionV4> {
+        preflight_v4_replay_import(envelopes, limits)?;
+        let mut first_m5_event = None;
+        for (index, envelope) in envelopes.iter().enumerate() {
+            match m5_payload_discriminator_v4(&envelope.payload) {
+                M5PayloadDiscriminatorV4::Registration | M5PayloadDiscriminatorV4::Bundle => {
+                    first_m5_event.get_or_insert(index);
+                }
+                M5PayloadDiscriminatorV4::Other if first_m5_event.is_some() => {
+                    return Err(DomainError::GluingInputAdmissionMismatch);
+                }
+                M5PayloadDiscriminatorV4::Other => {}
+            }
+        }
+        let inherited_prefix_end = first_m5_event.unwrap_or(envelopes.len());
+        let (inherited_log, inherited_basis) = Self::replay_confirmed_v4_prefix(
+            run_id.clone(),
+            canonical_genesis_bytes,
+            &envelopes[..inherited_prefix_end],
+            resolver,
+            &base_roots,
+            limits,
+        )?;
+        let initial_material = inherited_log
+            .m5_gluing_profile_basis_v4(&inherited_basis)?
+            .into_host_material(assignments)?;
+        let (augmented_roots, _) = initial_material.augment_roots(base_roots)?;
+        drop(inherited_log);
+        drop(inherited_basis);
+
+        let (confirmed_log, confirmed_basis) = Self::replay_confirmed_v4_prefix(
+            run_id,
+            canonical_genesis_bytes,
+            envelopes,
+            resolver,
+            &augmented_roots,
+            limits,
+        )?;
+        let final_basis = confirmed_log.m5_gluing_profile_basis_v4(&confirmed_basis)?;
+        let source_ids = final_basis.source_ids().clone();
+        let final_material = final_basis.into_host_material(assignments)?;
+        let (roots, remaining_inputs) =
+            final_material.augment_reinspection_roots(augmented_roots)?;
+        Ok(M5GluingProfileInspectionV4 {
+            roots,
+            remaining_inputs,
+            source_ids,
+        })
+    }
+
+    /// Replays a confirmed homogeneous v4 prefix from canonical bytes and
+    /// host roots. Persisted metadata never creates replay authority.
     pub fn replay_confirmed_v4_prefix(
         run_id: StableId,
         canonical_genesis_bytes: &[u8],
@@ -12192,36 +12841,12 @@ impl EventLogV4 {
                 "V4 replay requires the sequence-one genesis manifest".to_owned(),
             ));
         }
+        preflight_v4_replay_import(envelopes, limits)?;
         let count = u64::try_from(envelopes.len()).map_err(|_| DomainError::Incomplete {
             operation: "V4 replay event count",
             limit: usize::try_from(limits.max_events).unwrap_or(usize::MAX),
             observed: usize::MAX,
         })?;
-        if count > limits.max_events {
-            return Err(replay_incomplete(
-                "V4 replay event count",
-                limits.max_events,
-                count,
-            ));
-        }
-        let mut canonical_total = 0_u64;
-        for envelope in envelopes {
-            if envelope.contract_version()? != EventContractVersion::V4 {
-                return Err(DomainError::Validation(
-                    "V4 replay refuses a non-V4 envelope".to_owned(),
-                ));
-            }
-            canonical_total = replay_add(
-                "V4 replay canonical bytes",
-                limits.max_canonical_bytes,
-                canonical_total,
-                crate::canonical::canonical_json_count_bounded(
-                    envelope,
-                    usize::try_from(limits.max_canonical_bytes).unwrap_or(usize::MAX),
-                    "V4 replay canonical envelope count",
-                )?,
-            )?;
-        }
         let snapshot = RunGenesisSnapshot::from_canonical_bytes_v3(canonical_genesis_bytes)?;
         let request = RunGenesisBootstrapRequestV4::new(
             run_id.clone(),
@@ -20539,6 +21164,27 @@ mod tests {
         target_reads: std::cell::Cell<u64>,
     }
 
+    struct CountingAllV4Resolver {
+        objects: BTreeMap<ContentHash, Vec<u8>>,
+        reads: std::cell::Cell<u64>,
+    }
+
+    impl AuthorityArtifactResolverV4 for CountingAllV4Resolver {
+        fn read_exact(&self, cas_hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+            self.reads.set(self.reads.get() + 1);
+            let bytes = self.objects.get(cas_hash).ok_or_else(|| {
+                DomainError::Validation("missing counting-all V4 CAS object".to_owned())
+            })?;
+            if bytes.len() != destination.len() {
+                return Err(DomainError::Validation(
+                    "counting-all V4 CAS length mismatch".to_owned(),
+                ));
+            }
+            destination.copy_from_slice(bytes);
+            Ok(())
+        }
+    }
+
     impl AuthorityArtifactResolverV4 for CountingV4Resolver {
         fn read_exact(&self, cas_hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
             if cas_hash == &self.target {
@@ -22877,6 +23523,7 @@ mod tests {
             .execution_claims()
             .find(|claim| claim.id() == &claim_id)
             .expect("M5 payment claim");
+        let claim_body_hash = claim.body_hash().expect("M5 payment claim body hash");
         let obligation = v3
             .aggregate()
             .obligation(&obligation_id)
@@ -23013,6 +23660,28 @@ mod tests {
                 selected_evidence_id.clone(),
             ]),
         );
+        let (_, preseed_exact_binding, _) = v4_gluing_registration(
+            &bootstrap,
+            aggregate,
+            plan.id(),
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            crate::AssignmentValueV4::Required,
+            BTreeSet::from([
+                id(crate::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID),
+                selected_evidence_id.clone(),
+            ]),
+        );
+        let (_, preseed_substitute_binding, _) = v4_gluing_registration(
+            &bootstrap,
+            aggregate,
+            plan.id(),
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            crate::AssignmentValueV4::Satisfied,
+            BTreeSet::from([
+                id(crate::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID),
+                selected_evidence_id.clone(),
+            ]),
+        );
         let (_, ui_out_of_order_binding, _) = v4_gluing_registration(
             &bootstrap,
             aggregate,
@@ -23080,6 +23749,138 @@ mod tests {
             max_events: 100,
             max_canonical_bytes: 16_777_216,
         };
+        let assignments = M5DoubleSubmitAssignmentsV4::new(
+            crate::AssignmentValueV4::Required,
+            crate::AssignmentValueV4::Satisfied,
+        );
+        let exact_event_count = u64::try_from(base_envelopes.len()).unwrap();
+        let exact_canonical_bytes = base_envelopes
+            .iter()
+            .try_fold(0_u64, |total, envelope| {
+                total.checked_add(u64::try_from(envelope.canonical_bytes().unwrap().len()).unwrap())
+            })
+            .unwrap();
+        let exact_preflight_resolver = CountingAllV4Resolver {
+            objects: resolver.objects.clone(),
+            reads: std::cell::Cell::new(0),
+        };
+        EventLogV4::inspect_m5_gluing_profile_v4(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &base_envelopes,
+            &exact_preflight_resolver,
+            empty_v4_roots(aggregate),
+            EventReplayLimits {
+                max_events: exact_event_count,
+                max_canonical_bytes: exact_canonical_bytes,
+            },
+            assignments,
+        )
+        .expect("exact inspection import bounds");
+        assert!(exact_preflight_resolver.reads.get() > 0);
+
+        let event_overflow_resolver = CountingAllV4Resolver {
+            objects: resolver.objects.clone(),
+            reads: std::cell::Cell::new(0),
+        };
+        assert!(matches!(
+            EventLogV4::inspect_m5_gluing_profile_v4(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &base_envelopes,
+                &event_overflow_resolver,
+                empty_v4_roots(aggregate),
+                EventReplayLimits {
+                    max_events: exact_event_count - 1,
+                    max_canonical_bytes: exact_canonical_bytes,
+                },
+                assignments,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(event_overflow_resolver.reads.get(), 0);
+
+        let byte_overflow_resolver = CountingAllV4Resolver {
+            objects: resolver.objects.clone(),
+            reads: std::cell::Cell::new(0),
+        };
+        assert!(matches!(
+            EventLogV4::inspect_m5_gluing_profile_v4(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &base_envelopes,
+                &byte_overflow_resolver,
+                empty_v4_roots(aggregate),
+                EventReplayLimits {
+                    max_events: exact_event_count,
+                    max_canonical_bytes: exact_canonical_bytes - 1,
+                },
+                assignments,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(byte_overflow_resolver.reads.get(), 0);
+        let zero_inspection = EventLogV4::inspect_m5_gluing_profile_v4(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &base_envelopes,
+            &resolver,
+            empty_v4_roots(aggregate),
+            limits,
+            assignments,
+        )
+        .expect("inspection-only zero-prefix profile");
+        assert!(matches!(
+            EventLogV4::inspect_m5_gluing_profile_v4(
+                id("run:cross-run-profile-inspection"),
+                bootstrap.canonical_genesis_bytes(),
+                &base_envelopes,
+                &resolver,
+                empty_v4_roots(aggregate),
+                limits,
+                assignments,
+            ),
+            Err(DomainError::Validation(_) | DomainError::EventSequence(_))
+        ));
+        assert!(matches!(
+            EventLogV4::inspect_m5_gluing_profile_v4(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &base_envelopes,
+                &resolver,
+                empty_v4_roots(aggregate),
+                EventReplayLimits {
+                    max_events: 1,
+                    max_canonical_bytes: limits.max_canonical_bytes,
+                },
+                assignments,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        assert_eq!(zero_inspection.remaining_input_count(), 2);
+        assert!(!zero_inspection.source_ids().is_empty());
+        assert_eq!(
+            zero_inspection.meaningful_information_loss(),
+            M5GluingProfileInformationLossV4::NonQualificationAssessmentDetailOmitted
+        );
+        let (_, mut zero_profile_inputs) = zero_inspection.into_parts();
+        assert_eq!(
+            zero_profile_inputs[0].context_id().as_str(),
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID
+        );
+        assert_eq!(
+            zero_profile_inputs[1].context_id().as_str(),
+            crate::DOUBLE_SUBMIT_UI_CONTEXT_ID
+        );
+        assert_eq!(
+            zero_profile_inputs[0].descriptor_bytes(),
+            resolver.objects[payment.cas_hash()]
+        );
+        assert_eq!(
+            zero_profile_inputs[1].descriptor_bytes(),
+            resolver.objects[ui.cas_hash()]
+        );
+        let stale_profile_payment_source = zero_profile_inputs.remove(0).into_trusted_source();
         let zero = EventLogV4::replay_confirmed_v4_prefix(
             bootstrap.run_id().clone(),
             bootstrap.canonical_genesis_bytes(),
@@ -23090,6 +23891,110 @@ mod tests {
         )
         .expect("zero prefix");
         assert_eq!(zero.1.gluing_input_entry_count(), 0);
+
+        let preseed_roots = |binding| {
+            AuthorityTrustRootsV4::new(
+                ContentHash::sha256(b"v4-policy"),
+                aggregate.program().repository_id().clone(),
+                aggregate
+                    .program()
+                    .repository_source()
+                    .content_hash()
+                    .unwrap()
+                    .clone(),
+                Vec::new(),
+                Vec::new(),
+                vec![binding],
+            )
+            .unwrap()
+        };
+        let exact_preseed_material = zero
+            .0
+            .m5_gluing_profile_basis_v4(&zero.1)
+            .unwrap()
+            .into_host_material(assignments)
+            .unwrap();
+        assert!(matches!(
+            exact_preseed_material.augment_roots(preseed_roots(preseed_exact_binding)),
+            Err(DomainError::GluingInputAdmissionMismatch)
+        ));
+        let substitute_preseed_material = zero
+            .0
+            .m5_gluing_profile_basis_v4(&zero.1)
+            .unwrap()
+            .into_host_material(assignments)
+            .unwrap();
+        assert!(matches!(
+            substitute_preseed_material.augment_roots(preseed_roots(preseed_substitute_binding)),
+            Err(DomainError::GluingInputAdmissionMismatch)
+        ));
+
+        let harness_tuple = || AuthorityHarnessBindingV3Tuple {
+            policy_revision_hash: ContentHash::sha256(b"v4-policy"),
+            repository_id: aggregate.program().repository_id().clone(),
+            repository_source_hash: aggregate
+                .program()
+                .repository_source()
+                .content_hash()
+                .unwrap()
+                .clone(),
+            harness_id: FIXTURE_HARNESS_ID.to_owned(),
+            harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+            harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH).unwrap(),
+            test_artifact_id: id(FIXTURE_TEST_ARTIFACT_ID),
+            descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+            procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+            result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH).unwrap(),
+            result_size: 145,
+            result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+            result_sensitivity: ArtifactSensitivity::CanonicalState,
+            run_id: bootstrap.run_id().clone(),
+            genesis_hash: bootstrap.genesis_hash().clone(),
+            snapshot_id: aggregate.program().snapshot_id().clone(),
+            universe_id: aggregate.universe().id().clone(),
+            property_id: M4_PROPERTY_ID.to_owned(),
+            claim_id: claim_id.clone(),
+            claim_body_hash: claim_body_hash.clone(),
+        };
+        let human_tuple = || AuthorityHumanGrantV3Tuple {
+            policy_revision_hash: ContentHash::sha256(b"v4-policy"),
+            actor: "human:profile-preservation".to_owned(),
+            authority_id: "authority:profile-preservation".to_owned(),
+            capabilities: BTreeSet::from([HumanAuthorityCapabilityV3::DeferFinding]),
+            run_id: bootstrap.run_id().clone(),
+            snapshot_id: aggregate.program().snapshot_id().clone(),
+            universe_id: aggregate.universe().id().clone(),
+            property_ids: BTreeSet::from([M4_PROPERTY_ID.to_owned()]),
+            claim_ids: BTreeSet::from([claim_id.clone()]),
+            valid_from: "2026-01-01T00:00:00Z".to_owned(),
+            valid_until: "2026-12-31T23:59:59Z".to_owned(),
+        };
+        let preserved_inspection = EventLogV4::inspect_m5_gluing_profile_v4(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &base_envelopes,
+            &resolver,
+            AuthorityTrustRootsV4::new(
+                ContentHash::sha256(b"v4-policy"),
+                aggregate.program().repository_id().clone(),
+                aggregate
+                    .program()
+                    .repository_source()
+                    .content_hash()
+                    .unwrap()
+                    .clone(),
+                vec![harness_tuple()],
+                vec![human_tuple()],
+                Vec::new(),
+            )
+            .unwrap(),
+            limits,
+            assignments,
+        )
+        .expect("private inherited root preservation");
+        let (preserved_roots, _) = preserved_inspection.into_parts();
+        assert_eq!(preserved_roots.harnesses, vec![harness_tuple()]);
+        assert_eq!(preserved_roots.human_grants, vec![human_tuple()]);
 
         let sealed_session = OpaqueSessionIdentityV4::fresh();
         let (sealed_zero_log, sealed_zero_basis) =
@@ -23187,6 +24092,51 @@ mod tests {
                 .registered_gluing_input_v4(&id(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID))
                 .is_some()
         );
+        assert!(matches!(
+            sealed_one_log.admit_gluing_input_registration_v4(
+                stale_profile_payment_source,
+                &resolver.objects[payment.cas_hash()],
+                &roots,
+                &sealed_one_basis,
+                &sealed_session,
+            ),
+            Err(DomainError::GluingInputAdmissionMismatch)
+        ));
+        let one_inspection = EventLogV4::inspect_m5_gluing_profile_v4(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &sealed_confirmed,
+            &resolver,
+            empty_v4_roots(aggregate),
+            limits,
+            assignments,
+        )
+        .expect("inspection-only one-prefix restart");
+        assert!(
+            EventLogV4::inspect_m5_gluing_profile_v4(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &sealed_confirmed,
+                &resolver,
+                empty_v4_roots(aggregate),
+                limits,
+                M5DoubleSubmitAssignmentsV4::new(
+                    crate::AssignmentValueV4::Satisfied,
+                    crate::AssignmentValueV4::Satisfied,
+                ),
+            )
+            .is_err()
+        );
+        assert_eq!(one_inspection.remaining_input_count(), 1);
+        let (_, one_remaining) = one_inspection.into_parts();
+        assert_eq!(
+            one_remaining[0].context_id().as_str(),
+            crate::DOUBLE_SUBMIT_UI_CONTEXT_ID
+        );
+        assert_eq!(
+            one_remaining[0].descriptor_bytes(),
+            resolver.objects[ui.cas_hash()]
+        );
 
         let ui_source = TrustedGluingInputSourceV4::from_trusted_host(ui_admission_binding)
             .expect("trusted UI source");
@@ -23220,6 +24170,17 @@ mod tests {
             .confirm_replayed(&sealed_two_log, &sealed_two_basis, &sealed_session)
             .expect("UI receipt");
         assert_eq!(sealed_two_basis.gluing_input_entry_count(), 2);
+        let two_inspection = EventLogV4::inspect_m5_gluing_profile_v4(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &sealed_confirmed,
+            &resolver,
+            empty_v4_roots(aggregate),
+            limits,
+            assignments,
+        )
+        .expect("inspection-only two-prefix restart");
+        assert_eq!(two_inspection.remaining_input_count(), 0);
 
         let authority_entries_before_bundle = sealed_two_basis.inherited_m4_entry_count();
         let gluing_entries_before_bundle = sealed_two_basis.gluing_input_entry_count();
@@ -23276,6 +24237,18 @@ mod tests {
         assert_ne!(complete_basis.basis_digest(), &basis_digest_before_bundle);
         assert!(matches!(
             complete_log.mint_gluing_bundle_v4(&complete_basis, &sealed_session),
+            Err(DomainError::AlreadyComplete)
+        ));
+        assert!(matches!(
+            EventLogV4::inspect_m5_gluing_profile_v4(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &sealed_confirmed,
+                &resolver,
+                empty_v4_roots(aggregate),
+                limits,
+                assignments,
+            ),
             Err(DomainError::AlreadyComplete)
         ));
 

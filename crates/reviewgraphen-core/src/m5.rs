@@ -40,6 +40,14 @@ pub const MAX_M5_ATTEMPT_SOURCE_IDS: usize = 4_944;
 pub const MAX_M5_DESCRIPTOR_CANONICAL_BYTES: usize = 65_536;
 pub const MAX_M5_BUNDLE_CANONICAL_BYTES: usize = 1_048_576;
 pub const MAX_M5_STABLE_ID_BYTES: usize = 256;
+/// `cover.source_ids` plus, for each of at most two selected Sections, the
+/// obligation/claim IDs, claim sources, and five exact M4 trace sets, plus the
+/// two descriptor/registration pairs retained by a legal 0/1/2 prefix.
+pub const MAX_M5_PROFILE_SOURCE_IDS: usize = MAX_M5_COVER_SOURCE_IDS
+    + MAX_M5_SECTIONS * (2 + MAX_M5_CLAIM_SOURCE_IDS + 5 * MAX_M5_SECTION_TRACE_IDS)
+    + 2 * MAX_M5_REQUIRED_CONTEXTS;
+pub const MAX_M5_PROFILE_SOURCE_RETAINED_BYTES: usize =
+    MAX_M5_PROFILE_SOURCE_IDS * (std::mem::size_of::<StableId>() + MAX_M5_STABLE_ID_BYTES);
 
 pub type M5Result<T> = std::result::Result<T, M5Error>;
 
@@ -1162,6 +1170,169 @@ impl M5RegistrationClosureV4 {
                 .find(|chosen| &chosen.context_id == context_id)
                 .is_some_and(|chosen| chosen.contains_trace_id(qualification_id))
     }
+
+    /// Projects the exact source trace and fixed qualification policy used by
+    /// the runtime profile-basis seam. No caller-provided IDs participate.
+    pub(crate) fn runtime_profile_projection(
+        &self,
+    ) -> M5Result<(BTreeSet<StableId>, BTreeSet<StableId>)> {
+        let required_overlap = fixed_id(DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID);
+        if !self.overlap_member_ids.contains(&required_overlap) {
+            return Err(M5Error::Validation(
+                "runtime M5 profile requires the fixed overlap member".into(),
+            ));
+        }
+        for context_id in required_contexts() {
+            if self
+                .chosen_contexts
+                .iter()
+                .filter(|chosen| chosen.context_id == context_id)
+                .count()
+                > 1
+            {
+                return Err(M5Error::Validation(
+                    "runtime M5 profile context assessment is ambiguous".into(),
+                ));
+            }
+        }
+        let payment_context = fixed_id(DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID);
+        let payment = self
+            .chosen_contexts
+            .iter()
+            .find(|chosen| chosen.context_id == payment_context);
+
+        let qualification_count = payment
+            .map_or(0, |chosen| chosen.evidence_ids.len())
+            .checked_add(1)
+            .ok_or(M5Error::Incomplete {
+                operation: "runtime M5 payment qualifications",
+                limit: MAX_M5_DESCRIPTOR_QUALIFICATION_IDS,
+                observed: usize::MAX,
+            })?;
+        bounded_len(
+            qualification_count,
+            MAX_M5_DESCRIPTOR_QUALIFICATION_IDS,
+            "runtime M5 payment qualifications",
+        )?;
+        let mut payment_qualifications = payment
+            .map(|chosen| chosen.evidence_ids.clone())
+            .unwrap_or_default();
+        payment_qualifications.insert(required_overlap);
+
+        let mut source_sets = Vec::with_capacity(2 + self.chosen_contexts.len() * 7);
+        source_sets.push(&self.cover.source_ids);
+        source_sets.push(&self.overlap_member_ids);
+        let mut fixed_sources = Vec::with_capacity(self.chosen_contexts.len() * 3);
+        for chosen in &self.chosen_contexts {
+            source_sets.push(&chosen.context_member_ids);
+            source_sets.push(&chosen.claim_source_ids);
+            source_sets.push(&chosen.binding_ids);
+            source_sets.push(&chosen.evidence_ids);
+            source_sets.push(&chosen.verification_ids);
+            source_sets.push(&chosen.decision_ids);
+            source_sets.push(&chosen.finding_ids);
+            fixed_sources.extend([&chosen.context_id, &chosen.obligation_id, &chosen.claim_id]);
+        }
+        let admission = preflight_profile_source_union(&source_sets, &fixed_sources)?;
+        let mut source_ids = self.cover.source_ids.clone();
+        source_ids.extend(self.overlap_member_ids.iter().cloned());
+        for chosen in &self.chosen_contexts {
+            source_ids.insert(chosen.context_id.clone());
+            source_ids.insert(chosen.obligation_id.clone());
+            source_ids.insert(chosen.claim_id.clone());
+            source_ids.extend(chosen.context_member_ids.iter().cloned());
+            source_ids.extend(chosen.claim_source_ids.iter().cloned());
+            source_ids.extend(chosen.binding_ids.iter().cloned());
+            source_ids.extend(chosen.evidence_ids.iter().cloned());
+            source_ids.extend(chosen.verification_ids.iter().cloned());
+            source_ids.extend(chosen.decision_ids.iter().cloned());
+            source_ids.extend(chosen.finding_ids.iter().cloned());
+        }
+        if source_ids.len() != admission.count {
+            return Err(M5Error::Validation(
+                "runtime M5 profile source union changed after admission".into(),
+            ));
+        }
+        Ok((source_ids, payment_qualifications))
+    }
+}
+
+fn preflight_profile_source_union(
+    sets: &[&BTreeSet<StableId>],
+    fixed: &[&StableId],
+) -> M5Result<UnionAdmission> {
+    let mut admission = UnionAdmission {
+        count: 0,
+        retained_bytes: 0,
+    };
+    for (set_index, set) in sets.iter().enumerate() {
+        for id in *set {
+            if sets[..set_index].iter().any(|earlier| earlier.contains(id)) {
+                continue;
+            }
+            admit_profile_source_id(&mut admission, id)?;
+        }
+    }
+    for (index, id) in fixed.iter().enumerate() {
+        if fixed[..index].contains(id) || sets.iter().any(|set| set.contains(*id)) {
+            continue;
+        }
+        admit_profile_source_id(&mut admission, id)?;
+    }
+    Ok(admission)
+}
+
+fn admit_profile_source_id(admission: &mut UnionAdmission, id: &StableId) -> M5Result<()> {
+    admission.count = admission.count.checked_add(1).ok_or(M5Error::Incomplete {
+        operation: "runtime M5 profile source IDs",
+        limit: MAX_M5_PROFILE_SOURCE_IDS,
+        observed: usize::MAX,
+    })?;
+    bounded_len(
+        admission.count,
+        MAX_M5_PROFILE_SOURCE_IDS,
+        "runtime M5 profile source IDs",
+    )?;
+    require_id_bytes(id, "runtime M5 profile source ID bytes")?;
+    let retained = std::mem::size_of::<StableId>()
+        .checked_add(id.as_str().len())
+        .ok_or(M5Error::Incomplete {
+            operation: "runtime M5 profile source retained bytes",
+            limit: MAX_M5_PROFILE_SOURCE_RETAINED_BYTES,
+            observed: usize::MAX,
+        })?;
+    admission.retained_bytes = admission
+        .retained_bytes
+        .checked_add(u64::try_from(retained).unwrap_or(u64::MAX))
+        .ok_or(M5Error::Incomplete {
+            operation: "runtime M5 profile source retained bytes",
+            limit: MAX_M5_PROFILE_SOURCE_RETAINED_BYTES,
+            observed: usize::MAX,
+        })?;
+    if admission.retained_bytes > MAX_M5_PROFILE_SOURCE_RETAINED_BYTES as u64 {
+        return Err(M5Error::Incomplete {
+            operation: "runtime M5 profile source retained bytes",
+            limit: MAX_M5_PROFILE_SOURCE_RETAINED_BYTES,
+            observed: usize::try_from(admission.retained_bytes).unwrap_or(usize::MAX),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn extend_runtime_profile_sources(
+    source_ids: &mut BTreeSet<StableId>,
+    existing_ids: &[&StableId],
+) -> M5Result<()> {
+    let admission = preflight_profile_source_union(&[source_ids], existing_ids)?;
+    for id in existing_ids {
+        source_ids.insert((*id).clone());
+    }
+    if source_ids.len() != admission.count {
+        return Err(M5Error::Validation(
+            "runtime M5 existing source union changed after admission".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn derive_registration_closure_v4<'a>(
@@ -3523,6 +3694,162 @@ mod tests {
         );
     }
 
+    fn profile_chosen_context(
+        context: &str,
+        evidence_ids: BTreeSet<StableId>,
+    ) -> M5ChosenContextClosureV4 {
+        M5ChosenContextClosureV4 {
+            context_id: id(context),
+            context_member_ids: BTreeSet::from([id(DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID)]),
+            obligation_id: id(&format!("obligation:{context}")),
+            claim_id: id(&format!("claim:{context}")),
+            claim_source_ids: BTreeSet::new(),
+            binding_ids: BTreeSet::new(),
+            evidence_ids,
+            verification_ids: BTreeSet::new(),
+            decision_ids: BTreeSet::new(),
+            finding_ids: BTreeSet::new(),
+            verification_passed: false,
+        }
+    }
+
+    fn runtime_projection_closure(
+        chosen_contexts: Vec<M5ChosenContextClosureV4>,
+    ) -> M5RegistrationClosureV4 {
+        let (cover, _, _, overlap_member_ids) = base();
+        M5RegistrationClosureV4 {
+            cover,
+            overlap_member_ids,
+            chosen_contexts,
+        }
+    }
+
+    #[test]
+    fn runtime_profile_qualifications_preserve_missing_and_empty_assessment_semantics() {
+        let overlap = id(DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID);
+        for chosen_contexts in [
+            Vec::new(),
+            vec![profile_chosen_context(
+                DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+                BTreeSet::new(),
+            )],
+            vec![profile_chosen_context(
+                DOUBLE_SUBMIT_UI_CONTEXT_ID,
+                BTreeSet::from([id("evidence:ui-is-not-a-qualification")]),
+            )],
+        ] {
+            let (_, qualifications) = runtime_projection_closure(chosen_contexts)
+                .runtime_profile_projection()
+                .expect("missing/empty assessment remains descriptor-eligible");
+            assert_eq!(qualifications, BTreeSet::from([overlap.clone()]));
+        }
+
+        let payment_evidence = id("evidence:payment-current");
+        let (_, qualifications) = runtime_projection_closure(vec![profile_chosen_context(
+            DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            BTreeSet::from([payment_evidence.clone()]),
+        )])
+        .runtime_profile_projection()
+        .expect("payment evidence qualification");
+        assert_eq!(qualifications, BTreeSet::from([overlap, payment_evidence]));
+    }
+
+    #[test]
+    fn runtime_profile_projection_refuses_each_context_ambiguity() {
+        for context in [
+            DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            DOUBLE_SUBMIT_UI_CONTEXT_ID,
+        ] {
+            let closure = runtime_projection_closure(vec![
+                profile_chosen_context(context, BTreeSet::new()),
+                profile_chosen_context(context, BTreeSet::new()),
+            ]);
+            assert!(matches!(
+                closure.runtime_profile_projection(),
+                Err(M5Error::Validation(message)) if message.contains("ambiguous")
+            ));
+        }
+    }
+
+    #[test]
+    fn runtime_profile_source_bound_checks_exact_plus_one_and_arithmetic_overflow() {
+        let exact = ids("source", MAX_M5_PROFILE_SOURCE_IDS);
+        let exact_admission = preflight_profile_source_union(&[&exact], &[])
+            .expect("exact runtime profile source bound");
+        assert_eq!(exact_admission.count, MAX_M5_PROFILE_SOURCE_IDS);
+
+        let over = ids("source", MAX_M5_PROFILE_SOURCE_IDS + 1);
+        assert!(matches!(
+            preflight_profile_source_union(&[&over], &[]),
+            Err(M5Error::Incomplete { observed, .. })
+                if observed == MAX_M5_PROFILE_SOURCE_IDS + 1
+        ));
+
+        let existing = [
+            id("gluing-input-descriptor-v4:payment"),
+            id("registration-v4:payment"),
+            id("gluing-input-descriptor-v4:ui"),
+            id("registration-v4:ui"),
+        ];
+        let existing_refs = existing.iter().collect::<Vec<_>>();
+        let mut exact_with_existing = ids("source", MAX_M5_PROFILE_SOURCE_IDS - existing.len());
+        extend_runtime_profile_sources(&mut exact_with_existing, &existing_refs)
+            .expect("exact final two-prefix source bound");
+        assert_eq!(exact_with_existing.len(), MAX_M5_PROFILE_SOURCE_IDS);
+
+        let mut over_with_existing = ids("source", MAX_M5_PROFILE_SOURCE_IDS - existing.len() + 1);
+        let preflight_len = over_with_existing.len();
+        assert!(matches!(
+            extend_runtime_profile_sources(&mut over_with_existing, &existing_refs),
+            Err(M5Error::Incomplete { .. })
+        ));
+        assert_eq!(over_with_existing.len(), preflight_len);
+
+        let sample = id("source:overflow");
+        let mut count_overflow = UnionAdmission {
+            count: usize::MAX,
+            retained_bytes: 0,
+        };
+        assert!(matches!(
+            admit_profile_source_id(&mut count_overflow, &sample),
+            Err(M5Error::Incomplete {
+                observed: usize::MAX,
+                ..
+            })
+        ));
+        let mut byte_overflow = UnionAdmission {
+            count: 0,
+            retained_bytes: u64::MAX,
+        };
+        assert!(matches!(
+            admit_profile_source_id(&mut byte_overflow, &sample),
+            Err(M5Error::Incomplete {
+                observed: usize::MAX,
+                ..
+            })
+        ));
+
+        let retained = std::mem::size_of::<StableId>() + sample.as_str().len();
+        let mut exact_bytes = UnionAdmission {
+            count: 0,
+            retained_bytes: u64::try_from(MAX_M5_PROFILE_SOURCE_RETAINED_BYTES - retained).unwrap(),
+        };
+        admit_profile_source_id(&mut exact_bytes, &sample).expect("exact retained-byte boundary");
+        assert_eq!(
+            exact_bytes.retained_bytes,
+            MAX_M5_PROFILE_SOURCE_RETAINED_BYTES as u64
+        );
+        let mut plus_one_byte = UnionAdmission {
+            count: 0,
+            retained_bytes: u64::try_from(MAX_M5_PROFILE_SOURCE_RETAINED_BYTES - retained + 1)
+                .unwrap(),
+        };
+        assert!(matches!(
+            admit_profile_source_id(&mut plus_one_byte, &sample),
+            Err(M5Error::Incomplete { .. })
+        ));
+    }
+
     #[test]
     fn cover_partition_and_ids_are_deterministic() {
         let (a, _, _, _) = base();
@@ -3901,6 +4228,26 @@ mod tests {
                 section.passed_current_verification = passed;
             }
             GluingBundleV4::derive(cover, descriptors, regs, sections, overlap).unwrap()
+        }
+
+        for retained_position in [None, Some(0_usize), Some(1_usize)] {
+            let (cover, descriptors, regs, overlap) = base();
+            let sections = retained_position
+                .map(|position| {
+                    vec![section(
+                        &cover,
+                        &descriptors[position],
+                        regs[position].clone(),
+                    )]
+                })
+                .unwrap_or_default();
+            let missing = GluingBundleV4::derive(cover, descriptors, regs, sections, overlap)
+                .expect("missing assessment/Section result");
+            assert_eq!(missing.attempt().result(), GluingResultV4::Unknown);
+            assert_eq!(
+                missing.obstruction().unwrap().kind(),
+                GluingObstructionKindV4::RequiredSectionMissing
+            );
         }
 
         let missing_overlap = derive_case(
