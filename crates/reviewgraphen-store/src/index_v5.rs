@@ -870,6 +870,14 @@ pub struct ValidatedIndexSnapshotV5<'index, 'root, 'roots> {
     marker_fingerprint: [u8; 32],
 }
 
+/// Index-first lock token used by the incremental mapping admission path.
+/// It carries no journal replay and therefore lets Store apply the physical
+/// source-prefix bound before any projection or index materialization.
+pub(crate) struct PinnedIncrementalIndexValidationV5<'index, 'root> {
+    lock: super::IndexLock<'index>,
+    index: &'index DerivedIndexV5<'root>,
+}
+
 impl ValidatedIndexSnapshotV5<'_, '_, '_> {
     #[must_use]
     pub const fn snapshot(&self) -> &IndexSnapshotV5 {
@@ -957,13 +965,26 @@ impl<'a> DerivedIndexV5<'a> {
         journal: &EventJournal<'_>,
         roots: &'roots AuthorityTrustRootsV4,
     ) -> Result<ValidatedIndexSnapshotV5<'index, 'a, 'roots>, IndexError> {
+        let pin = self.pin_incremental_validation_v5()?;
+        let (session, basis) = journal.replayed_v4_read_only_session(roots)?;
+        pin.validate_pinned_source(journal, &session, &basis, roots)
+    }
+
+    pub(crate) fn pin_incremental_validation_v5<'index>(
+        &'index self,
+    ) -> Result<PinnedIncrementalIndexValidationV5<'index, 'a>, IndexError> {
         let lock = self.inner.lock_shared()?;
-        self.inner.audit_candidates(false)?;
-        let (session, basis) = journal.replayed_v4_session(roots)?;
-        if !journal.matches_store_root(self.inner.root) {
-            return Err(IndexError::ProjectionContractViolation);
-        }
-        let projected = project_verified_source(&session, &basis, self.inner.limits)?;
+        Ok(PinnedIncrementalIndexValidationV5 { lock, index: self })
+    }
+
+    fn validated_snapshot_from_pinned_source_v5<'index, 'roots>(
+        &'index self,
+        lock: super::IndexLock<'index>,
+        session: &crate::journal::PinnedV4SourceSession<'_, 'roots>,
+        basis: &AuthorityReplayBasisV4,
+        roots: &'roots AuthorityTrustRootsV4,
+    ) -> Result<ValidatedIndexSnapshotV5<'index, 'a, 'roots>, IndexError> {
+        let projected = project_verified_source(session, basis, self.inner.limits)?;
         let expected = projected.snapshot;
         let retained = projected.accounting.owned_bytes;
         let sqlite_limits = v5_sqlite_limits(self.inner.limits)?;
@@ -1081,6 +1102,23 @@ impl<'a> DerivedIndexV5<'a> {
     }
 }
 
+impl<'index, 'root> PinnedIncrementalIndexValidationV5<'index, 'root> {
+    pub(crate) fn validate_pinned_source<'roots>(
+        self,
+        journal: &EventJournal<'_>,
+        session: &crate::journal::PinnedV4SourceSession<'_, 'roots>,
+        basis: &AuthorityReplayBasisV4,
+        roots: &'roots AuthorityTrustRootsV4,
+    ) -> Result<ValidatedIndexSnapshotV5<'index, 'root, 'roots>, IndexError> {
+        if !journal.matches_store_root(self.index.inner.root) {
+            return Err(IndexError::ProjectionContractViolation);
+        }
+        self.index.inner.audit_candidates(false)?;
+        self.index
+            .validated_snapshot_from_pinned_source_v5(self.lock, session, basis, roots)
+    }
+}
+
 impl ValidatedIndexSnapshotV5<'_, '_, '_> {
     /// Visits a selection against this exact retained snapshot. The active
     /// image and roots-bound journal marker are revalidated under their locks,
@@ -1133,7 +1171,7 @@ impl ValidatedIndexSnapshotV5<'_, '_, '_> {
             return Err(IndexError::ProjectionContractViolation.into());
         }
         let (session, basis) = journal
-            .replayed_v4_session(self.roots)
+            .replayed_v4_read_only_session(self.roots)
             .map_err(IndexError::from)?;
         let session_matches_root = journal.matches_store_root(self.index.inner.root);
         let session_offset = session
@@ -2239,6 +2277,45 @@ fn obligation_body_hash_at_lifecycle(
 }
 
 impl ProjectionSourceV5 for crate::ReplayedV4RunSession<'_, '_> {
+    fn genesis(&self) -> Result<&RunGenesisSnapshot, IndexError> {
+        Ok(self.index_v5_genesis()?)
+    }
+
+    fn replay_projection(&self) -> Result<&ReplayProjectionChargeV5, IndexError> {
+        Ok(self.index_v5_replay_projection()?)
+    }
+
+    fn visit_projection(
+        &self,
+        visitor: &mut dyn for<'event> FnMut(
+            BorrowedV4EventMetadata<'event>,
+            CoreBorrowedProjectionPayloadV4<'event>,
+        ),
+    ) -> Result<(), IndexError> {
+        Ok(self.index_v5_visit_projection(visitor)?)
+    }
+
+    fn confirmed_offset(&self) -> Result<u64, IndexError> {
+        Ok(self.index_v5_confirmed_offset()?)
+    }
+
+    fn obligation_lifecycle(
+        &self,
+        obligation_id: &StableId,
+    ) -> Result<reviewgraphen_core::ObligationLifecycle, IndexError> {
+        self.index_v5_obligation_lifecycle(obligation_id)?
+            .ok_or(IndexError::ProjectionContractViolation)
+    }
+
+    fn for_each_claim_assessment(
+        &self,
+        visitor: &mut dyn FnMut(reviewgraphen_core::BorrowedClaimAssessmentProjectionV4<'_>),
+    ) -> Result<(), IndexError> {
+        Ok(self.index_v5_for_each_claim_assessment(visitor)?)
+    }
+}
+
+impl ProjectionSourceV5 for crate::journal::PinnedV4SourceSession<'_, '_> {
     fn genesis(&self) -> Result<&RunGenesisSnapshot, IndexError> {
         Ok(self.index_v5_genesis()?)
     }

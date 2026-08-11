@@ -81,6 +81,27 @@ fn admit_incremental_source_journal_bytes(observed: u64) -> Result<u64, JournalE
     Ok(observed)
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static INCREMENTAL_SOURCE_BYTES_OVERRIDE: std::cell::Cell<Option<u64>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+#[cfg(test)]
+fn set_incremental_source_bytes_override(observed: Option<u64>) {
+    INCREMENTAL_SOURCE_BYTES_OVERRIDE.with(|value| value.set(observed));
+}
+
+fn admit_incremental_source_file(file: &File) -> Result<u64, JournalError> {
+    let observed = file.metadata()?.len();
+    #[cfg(test)]
+    let observed = INCREMENTAL_SOURCE_BYTES_OVERRIDE
+        .with(|value| value.get())
+        .unwrap_or(observed);
+    admit_incremental_source_journal_bytes(observed)
+}
+
 /// Immutable material which determines the event-chain genesis sentinel.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JournalGenesis {
@@ -1003,6 +1024,20 @@ pub struct ReplayedV4RunSession<'root, 'roots> {
     index_projection: Option<crate::index::ReplayProjectionChargeV5>,
 }
 
+/// Immutable roots-replayed V4 prefix pinned by shared root, run, and journal
+/// locks. It owns only a read-only file descriptor and exposes no append or
+/// recovery operation.
+pub(crate) struct PinnedV4SourceSession<'root, 'roots> {
+    _root_lock: V4RootLock,
+    _run_lock: OwnedFd,
+    reader: JournalReader,
+    log: EventLogV4,
+    index_genesis: RunGenesisSnapshot,
+    resolver: JournalAuthorityResolverV4<'root>,
+    roots: &'roots AuthorityTrustRootsV4,
+    index_projection: crate::index::ReplayProjectionChargeV5,
+}
+
 /// Lock-held structural V5 target prefix. It contains no M6 append authority;
 /// only the dual-run admission module may consume it into a session proof.
 pub(crate) struct ReplayedV5RunSession {
@@ -1230,7 +1265,7 @@ fn retain_largest_canonical_event_line(
 struct IncrementalSessionProofV5<'source_root, 'roots, 'index> {
     root: &'source_root StoreRoot,
     _source_index: crate::ValidatedIndexSnapshotV5<'index, 'source_root, 'roots>,
-    _source_session: ReplayedV4RunSession<'source_root, 'roots>,
+    _source_session: PinnedV4SourceSession<'source_root, 'roots>,
     source_basis: AuthorityReplayBasisV4,
     completed: M5CompletedGluingProfileV4,
     target_index: crate::ValidatedIndexSnapshotV6,
@@ -1276,7 +1311,7 @@ impl<'root, 'roots, 'index> IncrementalSessionProofV5<'root, 'roots, 'index> {
                     "largest source CAS observation has no retained registration",
                 ));
             }
-            let hash = self._source_session.log.genesis_hash();
+            let hash = self._source_session.log().genesis_hash();
             let cas_hash = CasHash::parse(hash.to_string()).map_err(JournalError::Store)?;
             let mut bytes = Vec::new();
             bytes
@@ -1364,7 +1399,7 @@ impl<'root, 'roots, 'index> IncrementalSessionProofV5<'root, 'roots, 'index> {
             )
         };
         let accounting = DualSessionAccountingV5::checked([
-            self._source_session.writer.state.confirmed_offset,
+            self._source_session.index_v5_confirmed_offset()?,
             self.target_index.confirmed_journal_bytes(),
             u64::try_from(self.source_index_canonical_bytes.len()).map_err(|_| {
                 IncrementalSessionError::Incomplete {
@@ -1426,7 +1461,7 @@ impl<'root, 'roots, 'index> IncrementalSessionProofV5<'root, 'roots, 'index> {
         }
         self._live_buffers = Some(live_buffers);
         let proposal = derive_untrusted_incremental_mapping_proposal_v5(
-            &self._source_session.log,
+            self._source_session.log(),
             &self.source_basis,
             &self.completed,
             &ContentHash::sha256(&self.source_index_canonical_bytes),
@@ -1502,10 +1537,19 @@ impl CompletedM5ReportAuthorityV4 {
             ));
         }
 
-        // Rebuild the complete source projection first.  The following source
-        // replay lock then freezes that exact prefix before the target lock is
-        // acquired, preserving source -> target lock order.
-        let source_view = self.validated_snapshot_v5(source_index, source_journal)?;
+        // Preserve the global index -> root -> run -> journal lock order, but
+        // do not replay or allocate the source projection until the bounded
+        // source prefix is pinned. The same replay then validates both the
+        // current index and the mapping authority, closing the TOCTOU seam.
+        let source_index_pin = source_index.pin_incremental_validation_v5()?;
+        let (source_session, source_basis, target_session) =
+            source_journal.replayed_incremental_pair_v5(target_journal, &self.roots)?;
+        let source_view = source_index_pin.validate_pinned_source(
+            source_journal,
+            &source_session,
+            &source_basis,
+            &self.roots,
+        )?;
         let source_snapshot = source_view.snapshot();
         let source_index_canonical_bytes = source_view.canonical_snapshot_bytes()?;
 
@@ -1534,8 +1578,6 @@ impl CompletedM5ReportAuthorityV4 {
             ));
         }
 
-        let (source_session, source_basis, target_session) =
-            source_journal.replayed_incremental_pair_v5(target_journal, &self.roots)?;
         if source_basis.confirmed_tail_hash() != &source_snapshot.marker.tail_hash
             || source_basis.confirmed_event_count() != source_snapshot.marker.event_count
             || source_basis.policy_revision_hash() != &source_snapshot.marker.policy_revision_hash
@@ -2867,6 +2909,62 @@ impl ReplayedV5RunSession {
     }
 }
 
+fn replay_v4_read_only_locked<'root, 'roots>(
+    root: &'root StoreRoot,
+    root_lock: V4RootLock,
+    run_lock: OwnedFd,
+    reader: JournalReader,
+    roots: &'roots AuthorityTrustRootsV4,
+) -> Result<(PinnedV4SourceSession<'root, 'roots>, AuthorityReplayBasisV4), JournalError> {
+    let JournalGenesis::V4Shared(genesis) = &reader.identity.genesis else {
+        return Err(JournalError::Identity(
+            "read-only V4 replay requires verified genesis bytes",
+        ));
+    };
+    let resolver = JournalAuthorityResolverV4 {
+        reader: CasReader::open_existing(root)?,
+    };
+    let session_identity = OpaqueSessionIdentityV4::fresh();
+    let mut index_projection = crate::index::ReplayProjectionChargeV5::default();
+    let mut projection_error = None;
+    let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session_with_projection_visitor(
+        reader.identity.run_id.clone(),
+        genesis,
+        &reader.state.events,
+        &resolver,
+        roots,
+        EventReplayLimits::new(reader.limits.max_events, reader.limits.max_replay_bytes),
+        &session_identity,
+        |metadata, payload| {
+            if projection_error.is_none()
+                && let Err(error) = index_projection.observe(metadata, payload)
+            {
+                projection_error = Some(error);
+            }
+        },
+    )?;
+    if projection_error.is_some() {
+        return Err(JournalError::Incomplete {
+            limit: reader.limits.max_replay_bytes,
+            observed: u64::MAX,
+        });
+    }
+    let index_genesis = decode_index_v5_genesis(genesis)?;
+    Ok((
+        PinnedV4SourceSession {
+            _root_lock: root_lock,
+            _run_lock: run_lock,
+            reader,
+            log,
+            index_genesis,
+            resolver,
+            roots,
+            index_projection,
+        },
+        basis,
+    ))
+}
+
 fn replay_v5_locked(
     root: &StoreRoot,
     run_lock: OwnedFd,
@@ -3417,27 +3515,6 @@ impl<'root, 'roots> ReplayedV4RunSession<'root, 'roots> {
         Ok(&self.index_genesis)
     }
 
-    fn retain_confirmed_prefix_bytes(&mut self) -> Result<Vec<u8>, JournalError> {
-        self.require_healthy()?;
-        read_prefix(&mut self.writer.file, self.writer.state.confirmed_offset)
-    }
-
-    fn retained_event_bytes(&self) -> Result<u64, JournalError> {
-        self.require_healthy()?;
-        self.writer
-            .state
-            .retained_envelope_bytes()?
-            .checked_add(
-                self.log
-                    .retained_envelope_bytes_for_store()
-                    .map_err(JournalError::Domain)?,
-            )
-            .ok_or(JournalError::Incomplete {
-                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
-                observed: u64::MAX,
-            })
-    }
-
     pub(crate) fn index_v5_replay_projection(
         &self,
     ) -> Result<&crate::index::ReplayProjectionChargeV5, JournalError> {
@@ -3484,27 +3561,101 @@ impl<'root, 'roots> ReplayedV4RunSession<'root, 'roots> {
         Ok(self.writer.state.confirmed_offset)
     }
 
+    fn require_healthy(&self) -> Result<(), JournalError> {
+        match self.state {
+            ReplayedV4RunSessionState::Healthy => self.writer.refuse_bundle_resume_gate(),
+            ReplayedV4RunSessionState::Uncertain => Err(JournalError::SessionUncertain),
+        }
+    }
+}
+
+impl PinnedV4SourceSession<'_, '_> {
+    pub(crate) const fn log(&self) -> &EventLogV4 {
+        &self.log
+    }
+
+    pub(crate) const fn index_v5_genesis(&self) -> Result<&RunGenesisSnapshot, JournalError> {
+        Ok(&self.index_genesis)
+    }
+
+    fn retain_confirmed_prefix_bytes(&mut self) -> Result<Vec<u8>, JournalError> {
+        read_prefix(&mut self.reader.file, self.reader.state.confirmed_offset)
+    }
+
+    fn retained_event_bytes(&self) -> Result<u64, JournalError> {
+        self.reader
+            .state
+            .retained_envelope_bytes()?
+            .checked_add(
+                self.log
+                    .retained_envelope_bytes_for_store()
+                    .map_err(JournalError::Domain)?,
+            )
+            .ok_or(JournalError::Incomplete {
+                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                observed: u64::MAX,
+            })
+    }
+
+    pub(crate) const fn index_v5_replay_projection(
+        &self,
+    ) -> Result<&crate::index::ReplayProjectionChargeV5, JournalError> {
+        Ok(&self.index_projection)
+    }
+
+    pub(crate) fn index_v5_visit_projection(
+        &self,
+        visitor: &mut dyn for<'event> FnMut(
+            reviewgraphen_core::BorrowedV4EventMetadata<'event>,
+            reviewgraphen_core::BorrowedProjectionPayloadV4<'event>,
+        ),
+    ) -> Result<(), JournalError> {
+        self.log
+            .visit_confirmed_projection_v4(visitor)
+            .map_err(JournalError::Domain)
+    }
+
+    pub(crate) fn index_v5_obligation_lifecycle(
+        &self,
+        obligation_id: &StableId,
+    ) -> Result<Option<ObligationLifecycle>, JournalError> {
+        Ok(self.log.obligation_lifecycle_v4(obligation_id))
+    }
+
+    pub(crate) fn index_v5_for_each_claim_assessment(
+        &self,
+        visitor: &mut dyn FnMut(reviewgraphen_core::BorrowedClaimAssessmentProjectionV4<'_>),
+    ) -> Result<(), JournalError> {
+        for assessment in self.log.claim_assessments_v3() {
+            visitor(assessment);
+        }
+        Ok(())
+    }
+
+    pub(crate) const fn index_v5_confirmed_offset(&self) -> Result<u64, JournalError> {
+        Ok(self.reader.state.confirmed_offset)
+    }
+
     pub(crate) fn index_v5_replay_prefix(
         &self,
         event_count: u64,
         confirmed_offset: u64,
     ) -> Result<IndexV5ReplayedPrefix, JournalError> {
-        self.require_healthy()?;
         let count = usize::try_from(event_count).map_err(|_| JournalError::Incomplete {
-            limit: self.writer.limits.max_events,
+            limit: self.reader.limits.max_events,
             observed: event_count,
         })?;
         let prefix = self
-            .writer
+            .reader
             .state
             .events
             .get(..count)
             .ok_or(JournalError::Identity(
                 "index prefix event count exceeds journal",
             ))?;
-        let JournalGenesis::V4Shared(genesis) = &self.writer.identity.genesis else {
+        let JournalGenesis::V4Shared(genesis) = &self.reader.identity.genesis else {
             return Err(JournalError::Identity(
-                "V4 session lost its verified genesis",
+                "read-only V4 source lost its verified genesis",
             ));
         };
         let session_identity = OpaqueSessionIdentityV4::fresh();
@@ -3512,14 +3663,14 @@ impl<'root, 'roots> ReplayedV4RunSession<'root, 'roots> {
         let mut projection_error = None;
         let (log, basis) =
             EventLogV4::replay_confirmed_v4_prefix_for_session_with_projection_visitor(
-                self.writer.identity.run_id.clone(),
+                self.reader.identity.run_id.clone(),
                 genesis,
                 prefix,
                 &self.resolver,
                 self.roots,
                 EventReplayLimits::new(
-                    self.writer.limits.max_events,
-                    self.writer.limits.max_replay_bytes,
+                    self.reader.limits.max_events,
+                    self.reader.limits.max_replay_bytes,
                 ),
                 &session_identity,
                 |envelope, payload| {
@@ -3532,7 +3683,7 @@ impl<'root, 'roots> ReplayedV4RunSession<'root, 'roots> {
             )?;
         if projection_error.is_some() {
             return Err(JournalError::Incomplete {
-                limit: self.writer.limits.max_replay_bytes,
+                limit: self.reader.limits.max_replay_bytes,
                 observed: u64::MAX,
             });
         }
@@ -3548,13 +3699,6 @@ impl<'root, 'roots> ReplayedV4RunSession<'root, 'roots> {
             confirmed_offset,
             projection,
         })
-    }
-
-    fn require_healthy(&self) -> Result<(), JournalError> {
-        match self.state {
-            ReplayedV4RunSessionState::Healthy => self.writer.refuse_bundle_resume_gate(),
-            ReplayedV4RunSessionState::Uncertain => Err(JournalError::SessionUncertain),
-        }
     }
 }
 
@@ -4984,13 +5128,30 @@ impl<'a> EventJournal<'a> {
         replay_v5_locked(self.root, run_lock, writer)
     }
 
+    /// Pins a complete V4 prefix with shared locks and replays it without
+    /// acquiring append or recovery authority.
+    pub(crate) fn replayed_v4_read_only_session<'roots>(
+        &self,
+        roots: &'roots AuthorityTrustRootsV4,
+    ) -> Result<(PinnedV4SourceSession<'a, 'roots>, AuthorityReplayBasisV4), JournalError> {
+        if self.identity.version() != EventContractVersion::V4 {
+            return Err(JournalError::Identity(
+                "read-only V4 replay requires a V4 journal",
+            ));
+        }
+        let root_lock = acquire_v4_root_shared_lock(self.root)?;
+        let run_lock = acquire_v4_run_shared_lock(&self.run)?;
+        let reader = self.reader()?;
+        replay_v4_read_only_locked(self.root, root_lock, run_lock, reader, roots)
+    }
+
     fn replayed_incremental_pair_v5<'roots>(
         &self,
         target: &EventJournal<'a>,
         roots: &'roots AuthorityTrustRootsV4,
     ) -> Result<
         (
-            ReplayedV4RunSession<'a, 'roots>,
+            PinnedV4SourceSession<'a, 'roots>,
             AuthorityReplayBasisV4,
             ReplayedV5RunSession,
         ),
@@ -5005,83 +5166,39 @@ impl<'a> EventJournal<'a> {
                 "incremental pair requires distinct V4 source and V5 target in one StoreRoot",
             ));
         }
-        let root_lock = acquire_v4_root_lock(self.root)?;
-        let (source_run_lock, source_writer, target_run_lock, target_writer) =
+        let root_lock = acquire_v4_root_shared_lock(self.root)?;
+        self.preflight_incremental_source_bytes_locked()?;
+        let (source_run_lock, source_reader, target_run_lock, target_writer) =
             if self.identity.run_id < target.identity.run_id {
-                let source_run_lock = acquire_v4_run_lock(&self.run)?;
-                let source_writer = self.writer_v4()?;
+                let source_run_lock = acquire_v4_run_shared_lock(&self.run)?;
+                let source_reader = self.incremental_v4_reader()?;
                 let target_run_lock = acquire_v4_run_lock(&target.run)?;
                 let target_writer = target.writer_v5()?;
                 (
                     source_run_lock,
-                    source_writer,
+                    source_reader,
                     target_run_lock,
                     target_writer,
                 )
             } else {
                 let target_run_lock = acquire_v4_run_lock(&target.run)?;
                 let target_writer = target.writer_v5()?;
-                let source_run_lock = acquire_v4_run_lock(&self.run)?;
-                let source_writer = self.writer_v4()?;
+                let source_run_lock = acquire_v4_run_shared_lock(&self.run)?;
+                let source_reader = self.incremental_v4_reader()?;
                 (
                     source_run_lock,
-                    source_writer,
+                    source_reader,
                     target_run_lock,
                     target_writer,
                 )
             };
-
-        let JournalGenesis::V4Shared(source_genesis) = &source_writer.identity.genesis else {
-            return Err(JournalError::Identity(
-                "incremental source requires verified V4 genesis bytes",
-            ));
-        };
-        admit_incremental_source_journal_bytes(source_writer.state.confirmed_offset)?;
-        let resolver = JournalAuthorityResolverV4 {
-            reader: CasReader::open_existing(self.root)?,
-        };
-        let session_identity = OpaqueSessionIdentityV4::fresh();
-        let mut index_projection = crate::index::ReplayProjectionChargeV5::default();
-        let mut projection_error = None;
-        let (source_log, source_basis) =
-            EventLogV4::replay_confirmed_v4_prefix_for_session_with_projection_visitor(
-                source_writer.identity.run_id.clone(),
-                source_genesis,
-                &source_writer.state.events,
-                &resolver,
-                roots,
-                EventReplayLimits::new(
-                    source_writer.limits.max_events,
-                    source_writer.limits.max_replay_bytes,
-                ),
-                &session_identity,
-                |metadata, payload| {
-                    if projection_error.is_none()
-                        && let Err(error) = index_projection.observe(metadata, payload)
-                    {
-                        projection_error = Some(error);
-                    }
-                },
-            )?;
-        if projection_error.is_some() {
-            return Err(JournalError::Incomplete {
-                limit: source_writer.limits.max_replay_bytes,
-                observed: u64::MAX,
-            });
-        }
-        let index_genesis = decode_index_v5_genesis(source_genesis)?;
-        let source_session = ReplayedV4RunSession {
-            _root_lock: root_lock,
-            _run_lock: source_run_lock,
-            writer: source_writer,
-            log: source_log,
-            index_genesis,
-            resolver,
+        let (source_session, source_basis) = replay_v4_read_only_locked(
+            self.root,
+            root_lock,
+            source_run_lock,
+            source_reader,
             roots,
-            session_identity,
-            state: ReplayedV4RunSessionState::Healthy,
-            index_projection: Some(index_projection),
-        };
+        )?;
         let target_session = replay_v5_locked(self.root, target_run_lock, target_writer)?;
         Ok((source_session, source_basis, target_session))
     }
@@ -5756,7 +5873,7 @@ impl<'a> EventJournal<'a> {
     }
 
     pub fn reader(&self) -> Result<JournalReader, JournalError> {
-        self.reader_with_working_limit(None)
+        self.reader_with_limits(None, false)
     }
 
     /// Opens the index-only streaming reader. Unlike the public materialized
@@ -5882,13 +5999,17 @@ impl<'a> EventJournal<'a> {
         Ok(reader)
     }
 
-    fn reader_with_working_limit(
+    fn reader_with_limits(
         &self,
         working_limit: Option<u64>,
+        incremental_source_limit: bool,
     ) -> Result<JournalReader, JournalError> {
         let fd = self.open_file(false)?;
         fs::flock(&fd, FlockOperation::LockShared).map_err(StoreError::Io)?;
         let mut file = File::from(fd);
+        if incremental_source_limit {
+            admit_incremental_source_file(&file)?;
+        }
         self.refuse_pending_markers()?;
         let (intents, completions) = self.recovery_dirs()?;
         let audit = recovery_audit(&intents, &completions, &self.identity, self.limits)?;
@@ -5911,6 +6032,31 @@ impl<'a> EventJournal<'a> {
             limits: self.limits,
             state,
         })
+    }
+
+    fn incremental_v4_reader(&self) -> Result<JournalReader, JournalError> {
+        if self.identity.version() != EventContractVersion::V4 {
+            return Err(JournalError::Identity(
+                "incremental source reader requires a V4 journal",
+            ));
+        }
+        self.reader_with_limits(None, true)
+    }
+
+    /// Checks the physical source file while the caller retains the shared
+    /// root lock. No authorized writer or recovery operation can change the
+    /// source between this preflight and the ordered run-lock acquisition.
+    fn preflight_incremental_source_bytes_locked(&self) -> Result<(), JournalError> {
+        if self.identity.version() != EventContractVersion::V4 {
+            return Err(JournalError::Identity(
+                "incremental source preflight requires a V4 journal",
+            ));
+        }
+        let fd = self.open_file(false)?;
+        fs::flock(&fd, FlockOperation::LockShared).map_err(StoreError::Io)?;
+        let file = File::from(fd);
+        admit_incremental_source_file(&file)?;
+        Ok(())
     }
     pub fn writer(&self) -> Result<JournalWriter, JournalError> {
         match self.identity.version() {
@@ -6620,7 +6766,13 @@ fn acquire_v4_root_lock(root: &StoreRoot) -> Result<V4RootLock, JournalError> {
     Ok(V4RootLock { _fd: fd })
 }
 
-fn acquire_v4_run_lock(run: &OwnedFd) -> Result<OwnedFd, JournalError> {
+fn acquire_v4_root_shared_lock(root: &StoreRoot) -> Result<V4RootLock, JournalError> {
+    let fd = open_v4_root_lock_fd(root)?;
+    fs::flock(&fd, FlockOperation::LockShared).map_err(StoreError::Io)?;
+    Ok(V4RootLock { _fd: fd })
+}
+
+fn open_v4_run_lock_fd(run: &OwnedFd) -> Result<OwnedFd, JournalError> {
     let fd = fs::openat(
         run,
         ".",
@@ -6634,7 +6786,18 @@ fn acquire_v4_run_lock(run: &OwnedFd) -> Result<OwnedFd, JournalError> {
     if anchor.st_dev != opened.st_dev || anchor.st_ino != opened.st_ino {
         return Err(JournalError::Identity("event-v4 run lock identity changed"));
     }
+    Ok(fd)
+}
+
+fn acquire_v4_run_lock(run: &OwnedFd) -> Result<OwnedFd, JournalError> {
+    let fd = open_v4_run_lock_fd(run)?;
     fs::flock(&fd, FlockOperation::LockExclusive).map_err(StoreError::Io)?;
+    Ok(fd)
+}
+
+fn acquire_v4_run_shared_lock(run: &OwnedFd) -> Result<OwnedFd, JournalError> {
+    let fd = open_v4_run_lock_fd(run)?;
+    fs::flock(&fd, FlockOperation::LockShared).map_err(StoreError::Io)?;
     Ok(fd)
 }
 
@@ -16642,15 +16805,21 @@ mod tests {
     }
 
     #[test]
-    fn incremental_pair_locks_both_run_orders_and_retains_both_journals() {
+    fn incremental_pair_shares_source_and_excludes_source_writer_and_target_peer() {
         for source_run in ["run:a-source-before-target", "run:z-source-after-target"] {
             let (_workspace, root) = root();
             let (source, roots, _) = public_v4_gluing_journal(&root, source_run);
             let target_log = crate::index::v6::tests::planned_target(&root);
             let (target, _) = EventJournal::publish_new_v5(&root, target_log).unwrap();
+            let source_path = log_path_for(&root, &source.identity.run_id);
+            let source_before = std::fs::read(&source_path).unwrap();
             let (source_session, _, target_session) = source
                 .replayed_incremental_pair_v5(&target, &roots)
                 .unwrap();
+            assert!(try_acquire_v4_root_lock(&root).unwrap().is_none());
+            let mut read_only_duplicate =
+                File::from(dup(source_session.reader.file.as_fd()).unwrap());
+            assert!(read_only_duplicate.write_all(b"forbidden").is_err());
             let source_competing = source.open_file(false).unwrap();
             let target_competing = target.open_file(false).unwrap();
             assert_eq!(
@@ -16663,9 +16832,84 @@ mod tests {
             );
             drop(target_session);
             drop(source_session);
+            drop(read_only_duplicate);
             fs::flock(&source_competing, FlockOperation::NonBlockingLockExclusive).unwrap();
             fs::flock(&target_competing, FlockOperation::NonBlockingLockExclusive).unwrap();
+            assert_eq!(std::fs::read(source_path).unwrap(), source_before);
         }
+    }
+
+    #[test]
+    fn two_incremental_pairs_share_one_source_while_targets_remain_exclusive() {
+        let (_workspace, root) = root();
+        let (source, roots, _) = public_v4_gluing_journal(&root, "run:m-shared-incremental-source");
+        let target_a_log =
+            crate::index::v6::tests::planned_target_with_run(&root, "run:a-shared-target");
+        let target_b_log =
+            crate::index::v6::tests::planned_target_with_run(&root, "run:z-shared-target");
+        let (target_a, _) = EventJournal::publish_new_v5(&root, target_a_log).unwrap();
+        let (target_b, _) = EventJournal::publish_new_v5(&root, target_b_log).unwrap();
+        let source_path = log_path_for(&root, &source.identity.run_id);
+        let source_before = std::fs::read(&source_path).unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (release_a_tx, release_a_rx) = mpsc::channel();
+        let (release_b_tx, release_b_rx) = mpsc::channel();
+
+        std::thread::scope(|scope| {
+            let ready_a = ready_tx.clone();
+            let source_a = &source;
+            let roots_a = &roots;
+            let target_a_ref = &target_a;
+            scope.spawn(move || {
+                let (session, _, target_session) = source_a
+                    .replayed_incremental_pair_v5(target_a_ref, roots_a)
+                    .unwrap();
+                let mut read_only = File::from(dup(session.reader.file.as_fd()).unwrap());
+                assert!(read_only.write_all(b"forbidden").is_err());
+                ready_a.send(()).unwrap();
+                release_a_rx.recv().unwrap();
+                drop(target_session);
+                drop(session);
+            });
+            let source_b = &source;
+            let roots_b = &roots;
+            let target_b_ref = &target_b;
+            scope.spawn(move || {
+                let (session, _, target_session) = source_b
+                    .replayed_incremental_pair_v5(target_b_ref, roots_b)
+                    .unwrap();
+                let mut read_only = File::from(dup(session.reader.file.as_fd()).unwrap());
+                assert!(read_only.write_all(b"forbidden").is_err());
+                ready_tx.send(()).unwrap();
+                release_b_rx.recv().unwrap();
+                drop(target_session);
+                drop(session);
+            });
+
+            let timeout = std::time::Duration::from_secs(5);
+            ready_rx.recv_timeout(timeout).unwrap();
+            ready_rx.recv_timeout(timeout).unwrap();
+            assert!(try_acquire_v4_root_lock(&root).unwrap().is_none());
+            let source_writer = source.open_file(false).unwrap();
+            let target_a_peer = target_a.open_file(false).unwrap();
+            let target_b_peer = target_b.open_file(false).unwrap();
+            assert_eq!(
+                fs::flock(&source_writer, FlockOperation::NonBlockingLockExclusive),
+                Err(rustix::io::Errno::WOULDBLOCK)
+            );
+            assert_eq!(
+                fs::flock(&target_a_peer, FlockOperation::NonBlockingLockExclusive),
+                Err(rustix::io::Errno::WOULDBLOCK)
+            );
+            assert_eq!(
+                fs::flock(&target_b_peer, FlockOperation::NonBlockingLockExclusive),
+                Err(rustix::io::Errno::WOULDBLOCK)
+            );
+            release_a_tx.send(()).unwrap();
+            release_b_tx.send(()).unwrap();
+        });
+
+        assert_eq!(std::fs::read(source_path).unwrap(), source_before);
     }
 
     #[test]
@@ -16717,6 +16961,29 @@ mod tests {
             admit_incremental_source_journal_bytes(MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES + 1),
             Err(JournalError::Incomplete { observed, .. })
                 if observed == MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES + 1
+        ));
+    }
+
+    #[test]
+    fn incremental_pair_preflights_physical_source_bytes_before_replay() {
+        let (_workspace, root) = root();
+        let (source, roots, _) =
+            public_v4_gluing_journal(&root, "run:incremental-source-over-prefix-limit");
+        let target_log = crate::index::v6::tests::planned_target(&root);
+        let (target, _) = EventJournal::publish_new_v5(&root, target_log).unwrap();
+        let source_path = log_path_for(&root, &source.identity.run_id);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(source_path)
+            .unwrap()
+            .set_len(MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES + 1)
+            .unwrap();
+
+        assert!(matches!(
+            source.replayed_incremental_pair_v5(&target, &roots),
+            Err(JournalError::Incomplete { limit, observed })
+                if limit == MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES
+                    && observed == MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES + 1
         ));
     }
 
@@ -17159,9 +17426,11 @@ mod tests {
         let target_index = crate::DerivedIndexV6::open(&root).unwrap();
         target_index.rebuild_pre_incremental_v6(&target).unwrap();
 
+        set_incremental_source_bytes_override(Some(MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES));
         let accepted = authority
             .derive_incremental_mapping_v5(&source, &source_index, &target, &target_index)
             .unwrap();
+        set_incremental_source_bytes_override(None);
         assert_eq!(
             accepted.morphism().source_closure_id(),
             accepted.closure().id()
@@ -17195,6 +17464,44 @@ mod tests {
         assert_eq!(
             buffers.target_event_line,
             retain_largest_canonical_event_line(&proof.target_journal_bytes, target_line,).unwrap()
+        );
+        drop(accepted);
+
+        crate::index::reset_v5_full_snapshot_construction_count_for_test();
+        set_incremental_source_bytes_override(Some(MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES + 1));
+        assert!(matches!(
+            authority.derive_incremental_mapping_v5(
+                &source,
+                &source_index,
+                &target,
+                &target_index,
+            ),
+            Err(IncrementalSessionError::Journal(JournalError::Incomplete {
+                limit,
+                observed,
+            })) if limit == MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES
+                && observed == MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES + 1
+        ));
+        set_incremental_source_bytes_override(None);
+        assert_eq!(
+            crate::index::v5_post_phase0_counts_for_test(),
+            (0, 0, 0, 0, 0),
+            "public +1-byte refusal must precede source projection and index allocation"
+        );
+
+        let source_path = log_path_for(&root, &source.identity.run_id);
+        let mut source_tail = std::fs::OpenOptions::new()
+            .append(true)
+            .open(source_path)
+            .unwrap();
+        source_tail.write_all(b"{").unwrap();
+        source_tail.sync_all().unwrap();
+        drop(source_tail);
+        assert!(
+            authority
+                .derive_incremental_mapping_v5(&source, &source_index, &target, &target_index,)
+                .is_err(),
+            "source tail drift must refuse a mapping derived from the pinned index prefix"
         );
     }
 

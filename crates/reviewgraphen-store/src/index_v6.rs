@@ -460,7 +460,11 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn planned_target(root: &StoreRoot) -> EventLogV5 {
-        planned_target_with_schema(root, true, BASE_COMMIT_OID, BASE_TREE_HASH)
+        planned_target_with_schema(root, true, BASE_COMMIT_OID, BASE_TREE_HASH, "run:v6-target")
+    }
+
+    pub(crate) fn planned_target_with_run(root: &StoreRoot, run_id: &str) -> EventLogV5 {
+        planned_target_with_schema(root, true, BASE_COMMIT_OID, BASE_TREE_HASH, run_id)
     }
 
     pub(crate) fn planned_target_with_base(
@@ -468,7 +472,7 @@ pub(crate) mod tests {
         base_commit_oid: &str,
         base_tree_hash: &str,
     ) -> EventLogV5 {
-        planned_target_with_schema(root, true, base_commit_oid, base_tree_hash)
+        planned_target_with_schema(root, true, base_commit_oid, base_tree_hash, "run:v6-target")
     }
 
     fn planned_target_with_schema(
@@ -476,6 +480,7 @@ pub(crate) mod tests {
         incremental_v3: bool,
         base_commit_oid: &str,
         base_tree_hash: &str,
+        run_id: &str,
     ) -> EventLogV5 {
         let mut input: Value = serde_json::from_slice(FIXTURE).unwrap();
         if incremental_v3 {
@@ -493,7 +498,7 @@ pub(crate) mod tests {
         let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&input).unwrap()).unwrap();
         let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
         let aggregate = ReviewAggregate::new(program, universe, obligations).unwrap();
-        let run_id = StableId::parse("run:v6-target").unwrap();
+        let run_id = StableId::parse(run_id).unwrap();
         let snapshot_id = aggregate.program().snapshot_id().clone();
         let mut local = EventLog::new_v3(run_id.clone(), aggregate).unwrap();
         let genesis_bytes = local
@@ -576,7 +581,13 @@ pub(crate) mod tests {
     fn v6_projection_refuses_program_space_v2() {
         let workspace = tempfile::tempdir().unwrap();
         let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
-        let legacy = planned_target_with_schema(&root, false, BASE_COMMIT_OID, BASE_TREE_HASH);
+        let legacy = planned_target_with_schema(
+            &root,
+            false,
+            BASE_COMMIT_OID,
+            BASE_TREE_HASH,
+            "run:v6-target",
+        );
         let (journal, _) = EventJournal::publish_new_v5(&root, legacy).unwrap();
         let index = DerivedIndexV6::open(&root).unwrap();
         assert!(matches!(
