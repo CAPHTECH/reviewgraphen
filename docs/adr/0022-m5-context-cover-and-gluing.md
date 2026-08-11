@@ -4,6 +4,10 @@
 - Date: 2026-08-10
 - Amended: 2026-08-11 — closed the Core/Store bootstrap and recovery boundary, orphan adoption,
   v5 reciprocal-FK/index-item/accounting details, and the legal pre-bundle prefix.
+- Amended: 2026-08-11 — strengthened strict-interior M4 recovery so neither an editable log nor
+  a replay basis escapes before the sealed suffix is durable and fully replay-confirmed. This
+  prevents a resume-only holder from leaking basis-shaped state that callers could mistake for
+  ordinary append authority.
 - Scope: Defines the M5 vertical slice over the Accepted M4 contract: a fresh homogeneous event-v4 run, context cover, profile-owned local Sections, deterministic pairwise restrictions and gluing, source-bound gluing obstructions, index v5, and report v4. It does not implement a verifier, decision, finding, policy gate, provider adapter, generic command runner, generic context taxonomy, change morphism, or staleness.
 
 ## Context
@@ -181,7 +185,6 @@ RecoveredV4Session =
   Editable { session: ReplayedV4RunSession, basis: AuthorityReplayBasisV4 }
 | M4BundleResumeRequired {
     session: RecoveredM4BundleV4Session,
-    basis: AuthorityReplayBasisV4,
     resume_authority: VerificationBundleResumeAuthorityV4,
   };
 EventJournal::recover_replayed_v4_session(
@@ -199,13 +202,13 @@ Kind and outcome are exhaustive and may not be mixed:
 | --- | --- | --- |
 | `GenesisBootstrap` | `GenesisNotCommitted` or `GenesisCommitted` | closed `GenesisRecoveryV4` branch; never a session/basis |
 | `CanonicalTail` | `TailRecovered` | ordinary `Editable` replay session and basis |
-| `M4BundleResume` | `M4BundleCleanupOrdinary` for `Stage0` or `AlreadyComplete`; `M4BundleResumeRequired` only for `StrictInterior` | ordinary `Editable` session/basis after cleanup, or resume-only recovered M4 bundle session/basis/authority |
+| `M4BundleResume` | `M4BundleCleanupOrdinary` for `Stage0` or `AlreadyComplete`; `M4BundleResumeRequired` only for `StrictInterior` | ordinary `Editable` session/basis after cleanup, or opaque resume-only recovered M4 bundle holder plus one-shot authority; no basis is exposed in the strict branch |
 
-The M4 marker classification is exhaustive relative to the exact deterministic plan sealed by that marker. `expected_events>0`. `Stage0` means `confirmed_events=0` and no planned bundle event is durable. `StrictInterior` means `0<confirmed_events<expected_events` and the durable events are exactly the first `confirmed_events` entries of the ADR 0021 plan, including its static no-evidence stage omissions. `AlreadyComplete` means `confirmed_events=expected_events` and the entire exact plan is durable. Stage0 and already-complete recovery revalidate the complete marker/plan/trust closure, remove the marker, fsync the marker directory, then return an ordinary editable session and rebuilt basis; they never mint resume authority. Strict-interior recovery retains the marker and returns only the resume-only session, rebuilt basis, and exact remaining-suffix authority. A duplicate, gap, reorder, overlong prefix, unexpected planned-kind omission, foreign event, wrong body/ID/position, malformed marker, or suffix beyond the sealed plan is corrupt and refuses without marker cleanup, receipt, session, basis, or authority.
+The M4 marker classification is exhaustive relative to the exact deterministic plan sealed by that marker. `expected_events>0`. `Stage0` means `confirmed_events=0` and no planned bundle event is durable. `StrictInterior` means `0<confirmed_events<expected_events` and the durable events are exactly the first `confirmed_events` entries of the ADR 0021 plan, including its static no-evidence stage omissions. `AlreadyComplete` means `confirmed_events=expected_events` and the entire exact plan is durable. Stage0 and already-complete recovery revalidate the complete marker/plan/trust closure, remove the marker, fsync the marker directory, then return an ordinary editable session and rebuilt basis; they never mint resume authority. Strict-interior recovery retains the marker and returns only an opaque resume-only holder and exact remaining-suffix authority. The rebuilt log and basis remain private inside that holder; neither is returned or inspectable before the sealed suffix is durable and the complete prefix has been replay-confirmed. A duplicate, gap, reorder, overlong prefix, unexpected planned-kind omission, foreign event, wrong body/ID/position, malformed marker, or suffix beyond the sealed plan is corrupt and refuses without marker cleanup, receipt, session, basis, or authority.
 
 `marker_recovery` is `None` for the other two kinds and required for every successful `M4BundleResume` recovery. Its `prefix_stage` equals the outcome stage. Cleanup outcomes record `ClearedAndSynced` with `post_marker_hash=None`; strict-interior outcomes record `RetainedForResume` with `post_marker_hash=Some(pre_marker_hash)`. Any other classification/action/hash/outcome combination is invalid.
 
-Both session APIs hold the exclusive journal lock. `open` scans the confirmed canonical v4 prefix, revalidates every inherited M4 authority event from original registered CAS bytes using the exact ADR 0021 rules plus its v4 position, validates every gluing-input registration against the exact v4 trust binding, and reconstructs the aggregate and basis. `recover` accepts only a `CanonicalTail` or `M4BundleResume` key, performs its keyed recovery, and then performs the identical scan. `CanonicalTail` and cleanup-only `M4BundleResume` return `Editable`; only a strict-interior M4 prefix returns the resume-only branch. Missing/mismatched trust roots, CAS bytes, policy revision, inherited authority, recovery key, or uncertain prefix return a typed refusal and no session.
+Both session APIs hold the exclusive journal lock. `open` scans the confirmed canonical v4 prefix, revalidates every inherited M4 authority event from original registered CAS bytes using the exact ADR 0021 rules plus its v4 position, validates every gluing-input registration against the exact v4 trust binding, and reconstructs the aggregate and basis. `recover` accepts only a `CanonicalTail` or `M4BundleResume` key, performs its keyed recovery, and then performs the identical scan. `CanonicalTail` and cleanup-only `M4BundleResume` return `Editable`; only a strict-interior M4 prefix returns the opaque resume-only branch, with its reconstructed state held privately until durable completion. Missing/mismatched trust roots, CAS bytes, policy revision, inherited authority, recovery key, or uncertain prefix return a typed refusal and no session.
 
 Every v4 registration or bundle append takes `&mut AuthorityReplayBasisV4`, verifies its exact tail and next sequence, and consumes a sealed tail-bound prepared value. Only `Ok(receipt)` replaces `confirmed_tail_hash`, increments `confirmed_event_count` and `next_sequence`, and recomputes `basis_digest`; a successful trusted descriptor registration also appends its one `GluingInputReplayEntryV4`, while the authority-free M5 bundle appends no replay entry. A confirmed pre-durability failure leaves the basis unchanged. `SessionUncertain` and any interrupted inherited M4 bundle leave it byte-for-byte unchanged, consume the prepared value, make the session non-editable, and require `recover_replayed_v4_session`; a partial M4 bundle additionally requires the v4 one-shot resume authority defined below. No retry is inferred from a basis.
 
@@ -338,10 +341,19 @@ ReplayedV4RunSession::mint_verification_bundle(
 ReplayedV4RunSession::append_verification_bundle(
   ValidatedVerificationBundleV4, &mut AuthorityReplayBasisV4,
 ) -> Result<VerificationBundleReceiptV4>;
+RecoveredM4BundleV4Session::prepare_resume(
+  self, VerificationBundleResumeAuthorityV4, &OpaqueSessionIdentityV4,
+) -> Result<PreparedVerificationBundleResumeV4>;
+PreparedVerificationBundleResumeV4::envelopes(
+  &self,
+) -> &[EventEnvelope];
+PreparedVerificationBundleResumeV4::confirm_replayed(
+  self, confirmed_envelopes, resolver, roots, limits, session_identity,
+) -> Result<(EventLogV4, AuthorityReplayBasisV4, VerificationBundleReceiptV4)>;
 RecoveredM4BundleV4Session::resume_verification_bundle(
-  self,
-  VerificationBundleResumeAuthorityV4, &mut AuthorityReplayBasisV4,
-) -> Result<(ReplayedV4RunSession, VerificationBundleReceiptV4)>;
+  self, VerificationBundleResumeAuthorityV4,
+) -> Result<(ReplayedV4RunSession, AuthorityReplayBasisV4,
+             V4VerificationBundleAppendReceipt)>;
 ReplayedV4RunSession::mint_decision(
   TrustedHumanAdmissionV4, HumanDecisionRequestV4,
 ) -> Result<ValidatedDecisionV4>;
@@ -362,8 +374,9 @@ AuthorityAppendSealV4 {
   payload_kind, record_id, record_body_hash, actor,
 }
 ExternalWitnessAdmissionV4 {
-  seal: AuthorityAppendSealV4, witness_registration_id,
-  harness_binding: AuthorityHarnessBindingV3Tuple,
+  session_identity, run_id, genesis_hash, confirmed_tail_hash,
+  expected_next_sequence, registration_id,
+  harness_binding: HarnessBindingRoleV4,
 }
 EvidenceAdmissionV4(AuthorityAppendSealV4);
 EvidenceBindingAdmissionV4(AuthorityAppendSealV4);
@@ -371,29 +384,45 @@ VerificationAdmissionV4(AuthorityAppendSealV4);
 DecisionAdmissionV4(AuthorityAppendSealV4);
 ValidatedVerificationBundleV4 {
   session_identity, start_predecessor_hash, start_sequence,
-  authority_scope_digest, expected_events: Vec<ExpectedAuthorityEventV4>,
-  sealed_admissions,
+  basis_digest, start_authority_entry_count, authority_scope_digest,
+  expected_events: Vec<ExpectedAuthorityEventV4>, sealed_admissions,
+  envelopes: Vec<EventEnvelope>, verification_id,
 }
 VerificationBundleResumeAuthorityV4 {
   session_identity, policy_revision_hash, repository_id,
   repository_source_hash, run_id, genesis_hash, snapshot_id, universe_id,
-  property_id, claim_id, claim_body_hash, harness_id, harness_revision,
-  harness_source_hash, test_artifact_id, descriptor_id, procedure_version,
-  result_hash, result_size, result_media_type, result_sensitivity,
+  property_id, claim_id, claim_body_hash, scope: VerificationResumeScopeV4,
   prefix_stage, confirmed_tail_hash, expected_next_sequence,
-  remaining: Vec<ExpectedAuthorityEventV4>,
+  plan_digest, planned_event_ids,
+  expected_events: Vec<ExpectedAuthorityEventV4>,
+  remaining_envelopes: Vec<EventEnvelope>,
+  start_authority_entry_count, verification_id,
+}
+VerificationResumeScopeV4 =
+  Static { descriptor_id, procedure_version }
+| Fixture(HarnessBindingRoleV4);
+// HarnessBindingRoleV4 has exactly the AuthorityHarnessBindingV3Tuple field set.
+RecoveredM4BundleV4Session {
+  log: EventLogV4,
+  basis: AuthorityReplayBasisV4,
+}
+PreparedVerificationBundleResumeV4 {
+  pre_log: EventLogV4,
+  pre_basis: AuthorityReplayBasisV4,
+  authority: VerificationBundleResumeAuthorityV4,
 }
 ExpectedAuthorityEventV4 {
   event_schema: "reviewgraphen.review_event.v4",
   sequence, predecessor_event_hash, payload_kind, record_id, record_body_hash,
+  event_id, event_hash,
 }
 ```
 
-For static verification the harness/result fields in resume authority are the exact compiled-static descriptor tuple defined by ADR 0021 rather than optional/wildcard values; a distinct closed static resume variant is used on the wire-internal enum. The `remaining` list is exactly the deterministic suffix of registration/evidence/binding/verification stages and may never be supplied by a caller.
+For static verification `VerificationResumeScopeV4::Static` is exactly the compiled-static descriptor/procedure tuple defined by ADR 0021; fixture recovery instead carries the complete copied harness binding in the distinct closed `Fixture` variant. `planned_event_ids` covers the complete deterministic plan, while `expected_events` and `remaining_envelopes` are the same exact strict suffix of evidence/binding/verification stages. None may be supplied by a caller. The recovered holder and prepared stage layouts are implementation-private despite being named here normatively; their fields have no public accessor except the prepared stage's immutable exact-suffix borrow.
 
-All listed values are one-shot, private-field, nonserializable, non-`Clone`, and bind `session_identity`, v4 run/genesis/predecessor/tail/next sequence, policy revision, snapshot/universe/property/claim body, and the exact ADR 0021 authority scope. `TrustedFixtureHarnessV4` may be constructed only by the trusted host that actually ran the compiled harness and contains the complete `AuthorityHarnessBindingV3Tuple` plus the v4 envelope position. `TrustedHumanAdmissionV4` may be constructed only by the trusted host from one exact `AuthorityHumanGrantV3Tuple`, requested decision body, and v4 envelope position. Session minting checks those values against `AuthorityTrustRootsV4`; store/session never constructs trust.
+The authority-bearing and resume-state values listed above are one-shot, private-field, nonserializable, non-`Clone`, and collectively bind `session_identity`, v4 run/genesis/predecessor/tail/next sequence, policy revision, snapshot/universe/property/claim body, and the exact ADR 0021 authority scope. `ExpectedAuthorityEventV4` is the sole descriptive exception: its public read-only accessors describe an exact planned position/body/event tuple but grant no append authority. `TrustedFixtureHarnessV4` may be constructed only by the trusted host that actually ran the compiled harness and contains the complete `AuthorityHarnessBindingV3Tuple` plus the v4 envelope position. `TrustedHumanAdmissionV4` may be constructed only by the trusted host from one exact `AuthorityHumanGrantV3Tuple`, requested decision body, and v4 envelope position. Session minting checks those values against `AuthorityTrustRootsV4`; store/session never constructs trust.
 
-The mint path internally creates the v4 evidence/binding/verification/decision admissions for exact next positions; no admission accessor is public. `M4BundleResume` recovery scans the confirmed v4 prefix and pending marker. For a strict interior only, it reconstructs `VerificationBundleResumeAuthorityV4` from the matching v4 trust root, CAS registrations, claim closure, and exact remaining v3-schema M4 bodies at v4 positions. Stage0 and already-complete recovery construct no resume authority and return the ordinary editable branch after marker cleanup. `RecoveredM4BundleV4Session` is private, nonserializable, non-`Clone`, and resume-only: it exposes no snapshot, mint, ordinary append, or raw-event operation. Its sole method durably writes the exact remaining suffix, clears and fsyncs the marker after the suffix is complete, and returns an editable `ReplayedV4RunSession` only after success; uncertainty consumes it and requires another inspected `M4BundleResume` key. Resume follows ADR 0021's exhaustive prefix table but replaces every session/admission/resume position binding with v4. No `*V3`, `TrustedFixtureHarnessV1`, `AuthorityTrustRootsV3`, or `VerificationBundleResumeAuthorityV3` value is accepted by any v4 API.
+The mint path internally creates the v4 evidence/binding/verification/decision admissions for exact next positions; no admission accessor is public. `M4BundleResume` recovery scans the confirmed v4 prefix and pending marker. For a strict interior only, it reconstructs `VerificationBundleResumeAuthorityV4` from the matching v4 trust root, CAS registrations, claim closure, and exact remaining v3-schema M4 bodies at v4 positions. Stage0 and already-complete recovery construct no resume authority and return the ordinary editable branch after marker cleanup. `RecoveredM4BundleV4Session` is public only as an opaque, private-field, nonserializable, non-`Clone` resume-only holder: it exposes no log, basis, snapshot, mint, ordinary append, or raw-event operation. Consuming the holder and one-shot authority creates a non-`Clone`, nonserializable `PreparedVerificationBundleResumeV4` whose sole borrow exposes the exact immutable suffix to Store's durability stage. Only after that stage is durably complete may consuming confirmation replay the full prefix under the same session identity and roots and release the editable log, rebuilt basis, and receipt. Store clears and fsyncs the marker only after the exact suffix is complete. Any interruption or uncertainty consumes the holder/stage, exposes no basis, and requires another inspected `M4BundleResume` key. Resume follows ADR 0021's exhaustive prefix table but replaces every session/admission/resume position binding with v4. No `*V3`, `TrustedFixtureHarnessV1`, `AuthorityTrustRootsV3`, or `VerificationBundleResumeAuthorityV3` value is accepted by any v4 API.
 
 Every successful v4 append, including authority-free registration, finding, and M5 bundle events, advances basis tail/count/next sequence and recomputes its digest. A successful evidence, binding, verification, or decision append additionally adds exactly one `AuthorityReplayEntryV3AtV4` per durable authority-bearing event; a successful gluing-input registration adds exactly one gluing-input entry. Interrupted/uncertain multi-event M4 append updates neither caller basis nor exposed session state and recovery rebuilds both entry vectors from the confirmed prefix.
 
@@ -1209,7 +1238,7 @@ Implementation uses deterministic fake/M4 fixture inputs only and includes:
 12. `ArtifactRegistrationV4` accepts the exact closed `gluing_input` source/actor/outer tuple and rejects inherited-v3 substitution, every old/new source-kind confusion, nested/outer hash-size-media-sensitivity mismatch, unknown field, wrong actor, and wrong `registration-v4` identity preimage.
 13. Each snapshot-ingest, reviewer-raw, verifier-input, verifier-output, and external-witness v3 registration body can append at a v4 position only through its matching sealed bridge role. The full all-pairs source-role substitution matrix refuses. Snapshot tests mutate run/snapshot/adapter, actor, selected CAS tuple, ProgramSpace fact, bundle hash/count/total bytes/order/missing/extra entry, tail, and sequence; success updates basis tail/count only, uncertainty updates nothing. External witness admission is possible only immediately after its exact confirmed receipt.
 14. `IndexSnapshotV5.artifact_registrations_v4` is independently present in context order with every exact field/body hash/actor/descriptor FK; the seven topology items use their exact nested shapes. Omission, flattened substitution, nesting-only registration projection, duplicate row, wrong order/FK, crossed reciprocal pair, same-ID/different-event restriction or candidate ownership, or exclusion from `Qbytes5`/`Owned5`/`Rows5` refuses the whole snapshot.
-15. Pure `EventLogV4::from_bootstrap_request` and `replay_confirmed_v4_prefix` accept only the exact source closure or supplied canonical envelopes and perform no storage effect; Store-only `EventJournal::publish_new_v4` accepts only Core's opaque validated log and cannot construct or edit event 1. Crash tests cover orphan CAS before event durability, complete event uncertainty followed by inspected exact-key attributed recovery, absent-log `None` hashes, recoverable partial line, malformed complete line, duplicate genesis, retry-before-inspection refusal, closed `GenesisRecoveryV4` branches, and successful committed recovery before basis construction. Every kind/outcome cross-product outside the allowed table cells, every wrong-kind key, and every file/tail/marker mutation between inspection and recovery refuses without mutation. M4 marker tests cover stage0 cleanup to ordinary editable, every strict-interior ADR 0021 prefix to resume-only authority, already-complete cleanup to ordinary editable, exact marker receipt stage/action/hashes, and duplicate/gapped/reordered/overlong/wrong-body/wrong-suffix/malformed refusal with no cleanup.
+15. Pure `EventLogV4::from_bootstrap_request` and `replay_confirmed_v4_prefix` accept only the exact source closure or supplied canonical envelopes and perform no storage effect; Store-only `EventJournal::publish_new_v4` accepts only Core's opaque validated log and cannot construct or edit event 1. Crash tests cover orphan CAS before event durability, complete event uncertainty followed by inspected exact-key attributed recovery, absent-log `None` hashes, recoverable partial line, malformed complete line, duplicate genesis, retry-before-inspection refusal, closed `GenesisRecoveryV4` branches, and successful committed recovery before basis construction. Every kind/outcome cross-product outside the allowed table cells, every wrong-kind key, and every file/tail/marker mutation between inspection and recovery refuses without mutation. M4 marker tests cover stage0 cleanup to ordinary editable, every strict-interior ADR 0021 prefix to an opaque resume-only holder plus one-shot authority with no public basis, sealed exact-suffix durability, editable session/basis release only after full replay confirmation, uncertainty requiring re-recovery, already-complete cleanup to ordinary editable, exact marker receipt stage/action/hashes, and duplicate/gapped/reordered/overlong/wrong-body/wrong-suffix/malformed refusal with no cleanup.
 
 ## Consequences
 
