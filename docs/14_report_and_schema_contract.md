@@ -33,6 +33,17 @@ and index-v4 rebuild. Its integration test requires byte equality (apart from
 the text file's terminal newline), confirmed-tail/CAS closure, deterministic
 repeat and rebuild output, and exact construction-accounting bounds.
 
+M5 adds the additive, source-bound
+[`reviewgraphen.review.report.v4`](../schemas/reviewgraphen.report.v4.schema.json)
+contract without changing the frozen v1-v3 contracts. V4 retains the complete
+v3 report and coverage shape, binds generation to a completed double-submit
+M5 bundle and a verified index-v5 snapshot, and adds the two nested input
+registrations/descriptors plus context-cover, section, restriction, gluing
+attempt, global-candidate, and gluing-obstruction arrays. Each projection view
+declares one recoverable loss for every nonempty M5 array it omits; the checked
+example and SHA-256 are emitted by the public journal/CAS/index/runtime/report
+pipeline and checked byte-for-byte against a repeated generation.
+
 ## 1. Report-first principle
 
 ReviewGraphenはCLI表示より先にstable report contractを定義します。

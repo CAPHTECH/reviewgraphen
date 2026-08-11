@@ -1,16 +1,23 @@
-//! Source-bound projection for `reviewgraphen.review.report.v2`.
+//! Source-bound review-report projections through
+//! `reviewgraphen.review.report.v4`.
 //!
-//! This crate deliberately consumes only a lock-bound journal, the v3 derived
-//! index, and verified CAS objects. It does not treat a report as state.
+//! The source-bound paths deliberately consume only lock-bound journals,
+//! verified derived indexes, explicit authority roots, and verified CAS
+//! objects. They do not treat a report as state.
 
 mod bounds;
 mod report_v3;
+mod report_v4;
 
 pub use bounds::{
     BoundsError, LogicalCharge, OwnershipError, ReportAccounting, ReportCounts, ReportLimits,
     ownership_charge,
 };
 pub use report_v3::{ReportRequestV3, generate_v3, generate_v3_with_limits};
+pub use report_v4::{
+    M5BundleIncomplete, ReportLimitsV4, ReportRequestV4, ReportV4SemanticError, generate_v4,
+    generate_v4_with_limits, validate_v4_semantics,
+};
 
 use reviewgraphen_core::{DecodedPayload, EventContractVersion, ObligationLifecycle, StableId};
 use reviewgraphen_store::{
@@ -65,6 +72,8 @@ pub enum ReportError {
     Journal(#[from] reviewgraphen_store::JournalError),
     #[error(transparent)]
     Core(#[from] reviewgraphen_core::DomainError),
+    #[error(transparent)]
+    M5BundleIncomplete(#[from] M5BundleIncomplete),
     #[error("report source closure is invalid: {0}")]
     Source(&'static str),
     #[error("report-v2 metadata {field} must be a full lowercase sha256 digest: {hash}")]

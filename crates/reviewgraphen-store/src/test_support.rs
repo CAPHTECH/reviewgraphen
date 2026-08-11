@@ -152,7 +152,13 @@ impl M5M4PrefixFixtureManifestV4 {
     /// decoded canonical JSON must both round-trip byte-for-byte before any
     /// Store operation occurs.
     pub fn committed() -> Result<Self, FixtureError> {
-        let bytes = decode_canonical_base64(M5_V4_FIXTURE_MANIFEST_B64)?;
+        let encoded = M5_V4_FIXTURE_MANIFEST_B64
+            .strip_suffix('\n')
+            .unwrap_or(M5_V4_FIXTURE_MANIFEST_B64);
+        if encoded.bytes().any(|byte| byte.is_ascii_whitespace()) {
+            return Err(FixtureError::Manifest);
+        }
+        let bytes = decode_canonical_base64(encoded)?;
         let manifest: Self = serde_json::from_slice(&bytes)?;
         if reviewgraphen_core::canonical_json(&manifest)? != bytes {
             return Err(FixtureError::Manifest);
@@ -353,6 +359,56 @@ pub fn materialize_foreign_profile_m5_m4_prefix_v4<'a>(
     Ok(MaterializedM5M4PrefixFixtureV4 { journal, manifest })
 }
 
+/// Builds a canonical V4 fixture whose otherwise legal ProgramSpace retains
+/// the legacy abbreviated rule/extractor hashes. Report V4 must refuse this
+/// source instead of emitting output that violates its full-SHA schema.
+pub fn materialize_short_metadata_hash_m5_m4_prefix_v4<'a>(
+    root: &'a StoreRoot,
+) -> Result<MaterializedM5M4PrefixFixtureV4<'a>, FixtureError> {
+    let mut manifest = build_fixture_manifest_with_hash_mode(FixtureHashMode::AllShort)?;
+    materialize_source_manifest(root, &mut manifest)?;
+    manifest.validate()?;
+    let identity = JournalIdentity::new(
+        manifest.run_id.clone(),
+        JournalGenesis::V4(manifest.genesis_bytes()?),
+    )?;
+    let journal = EventJournal::open(root, identity)?;
+    Ok(MaterializedM5M4PrefixFixtureV4 { journal, manifest })
+}
+
+/// Builds a legal V4 source with only the extractor-set metadata hash left in
+/// its legacy abbreviated form, so Report V4's second metadata check is
+/// exercised independently of `rule_set_hash`.
+pub fn materialize_short_extractor_hash_m5_m4_prefix_v4<'a>(
+    root: &'a StoreRoot,
+) -> Result<MaterializedM5M4PrefixFixtureV4<'a>, FixtureError> {
+    let mut manifest = build_fixture_manifest_with_hash_mode(FixtureHashMode::ExtractorShort)?;
+    materialize_source_manifest(root, &mut manifest)?;
+    manifest.validate()?;
+    let identity = JournalIdentity::new(
+        manifest.run_id.clone(),
+        JournalGenesis::V4(manifest.genesis_bytes()?),
+    )?;
+    let journal = EventJournal::open(root, identity)?;
+    Ok(MaterializedM5M4PrefixFixtureV4 { journal, manifest })
+}
+
+/// Builds a legal V4 source whose rule/extractor metadata hashes are full but
+/// whose repository-source root retains the legacy abbreviated digest.
+pub fn materialize_short_repository_source_hash_m5_m4_prefix_v4<'a>(
+    root: &'a StoreRoot,
+) -> Result<MaterializedM5M4PrefixFixtureV4<'a>, FixtureError> {
+    let mut manifest = build_fixture_manifest_with_hash_mode(FixtureHashMode::RepositoryShort)?;
+    materialize_source_manifest(root, &mut manifest)?;
+    manifest.validate()?;
+    let identity = JournalIdentity::new(
+        manifest.run_id.clone(),
+        JournalGenesis::V4(manifest.genesis_bytes()?),
+    )?;
+    let journal = EventJournal::open(root, identity)?;
+    Ok(MaterializedM5M4PrefixFixtureV4 { journal, manifest })
+}
+
 /// Deterministically regenerates all source-bound bytes.  This routine does
 /// not publish anything and does not accept a caller-provided record ID.
 pub fn regenerate_m5_m4_prefix_manifest_v4() -> Result<M5M4PrefixFixtureManifestV4, FixtureError> {
@@ -371,9 +427,35 @@ fn fixture_program() -> Result<(ProgramSpace, BTreeMap<StableId, Vec<u8>>), Fixt
 fn fixture_program_with_profile(
     profile_id: &str,
 ) -> Result<(ProgramSpace, BTreeMap<StableId, Vec<u8>>), FixtureError> {
+    fixture_program_with_profile_and_hash_mode(profile_id, FixtureHashMode::Full)
+}
+
+#[derive(Clone, Copy)]
+enum FixtureHashMode {
+    Full,
+    AllShort,
+    ExtractorShort,
+    RepositoryShort,
+}
+
+fn fixture_program_with_profile_and_hash_mode(
+    profile_id: &str,
+    hash_mode: FixtureHashMode,
+) -> Result<(ProgramSpace, BTreeMap<StableId, Vec<u8>>), FixtureError> {
     let mut value: Value = serde_json::from_slice(include_bytes!(
         "../../../examples/double-submit-payment/program-space.json"
     ))?;
+    let legacy_repository_source_hash = value["source"]["content_hash"].clone();
+    let legacy_extractor_hash = value["extraction"]["adapter_set_hash"].clone();
+    if !matches!(hash_mode, FixtureHashMode::AllShort) {
+        expand_legacy_fixture_hashes(&mut value);
+    }
+    if matches!(hash_mode, FixtureHashMode::ExtractorShort) {
+        value["extraction"]["adapter_set_hash"] = legacy_extractor_hash;
+    }
+    if matches!(hash_mode, FixtureHashMode::RepositoryShort) {
+        value["source"]["content_hash"] = legacy_repository_source_hash;
+    }
     value["profile"]["id"] = Value::String(profile_id.to_owned());
     value["profile"]["version"] = Value::String("1".to_owned());
     for context in value["contexts"]
@@ -460,6 +542,34 @@ fn fixture_program_with_profile(
     ))
 }
 
+/// The repository's human-readable M1 example predates the strict full-SHA
+/// source contract. The committed M5 fixture is a new V4 authority source, so
+/// its generator upgrades every legacy 16-hex placeholder before constructing
+/// ProgramSpace, genesis, authority roots, events, or report metadata.
+fn expand_legacy_fixture_hashes(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                expand_legacy_fixture_hashes(value);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                expand_legacy_fixture_hashes(value);
+            }
+        }
+        Value::String(text) => {
+            if let Some(hex) = text.strip_prefix("sha256:")
+                && hex.len() == 16
+                && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                *text = format!("sha256:{hex}{hex}{hex}{hex}");
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
 /// Runs the source manifest through the ordinary Store path exactly once and
 /// captures only canonical, already-durable bytes afterwards.  It accepts no
 /// envelopes as input and therefore cannot turn a fixture file into append
@@ -512,16 +622,30 @@ fn materialize_source_manifest(
 }
 
 fn build_fixture_manifest() -> Result<M5M4PrefixFixtureManifestV4, FixtureError> {
-    build_fixture_manifest_with_profile("double-submit-payment")
+    build_fixture_manifest_with_hash_mode(FixtureHashMode::Full)
 }
 
 fn build_fixture_manifest_with_profile(
     profile_id: &str,
 ) -> Result<M5M4PrefixFixtureManifestV4, FixtureError> {
+    build_fixture_manifest_with_profile_and_hash_mode(profile_id, FixtureHashMode::Full)
+}
+
+fn build_fixture_manifest_with_hash_mode(
+    hash_mode: FixtureHashMode,
+) -> Result<M5M4PrefixFixtureManifestV4, FixtureError> {
+    build_fixture_manifest_with_profile_and_hash_mode("double-submit-payment", hash_mode)
+}
+
+fn build_fixture_manifest_with_profile_and_hash_mode(
+    profile_id: &str,
+    hash_mode: FixtureHashMode,
+) -> Result<M5M4PrefixFixtureManifestV4, FixtureError> {
     // Materialize once in a private, public-API-only in-memory workflow.  The
     // exact published stream is captured by a separate Store root in tests;
     // this construction produces the deterministic source and root inputs.
-    let (program, source_by_id) = fixture_program_with_profile(profile_id)?;
+    let (program, source_by_id) =
+        fixture_program_with_profile_and_hash_mode(profile_id, hash_mode)?;
     let (universe, obligations) = MvpRulePack::synthesize(&program)?.into_parts();
     let aggregate = ReviewAggregate::new(program.clone(), universe, obligations)?;
     let run_id = StableId::parse("run:m5-m4-prefix-fixture")?;
@@ -530,7 +654,7 @@ fn build_fixture_manifest_with_profile(
     let base_roots = FixtureBaseRootsV4 {
         policy_revision_hash: ContentHash::sha256(b"reviewgraphen-m5-fixture-policy-v1"),
         repository_id: program.repository_id().clone(),
-        repository_source_hash: fixture_repository_source_hash()?,
+        repository_source_hash: fixture_repository_source_hash_with_mode(hash_mode)?,
     };
     let mut artifacts = source_by_id
         .values()
@@ -956,10 +1080,18 @@ fn fixture_profile_version(input: &[u8]) -> Result<String, FixtureError> {
         .to_owned())
 }
 
-fn fixture_repository_source_hash() -> Result<ContentHash, FixtureError> {
-    let value: Value = serde_json::from_slice(include_bytes!(
+fn fixture_repository_source_hash_with_mode(
+    hash_mode: FixtureHashMode,
+) -> Result<ContentHash, FixtureError> {
+    let mut value: Value = serde_json::from_slice(include_bytes!(
         "../../../examples/double-submit-payment/program-space.json"
     ))?;
+    if matches!(
+        hash_mode,
+        FixtureHashMode::Full | FixtureHashMode::ExtractorShort
+    ) {
+        expand_legacy_fixture_hashes(&mut value);
+    }
     Ok(ContentHash::parse(
         value["source"]["content_hash"]
             .as_str()
@@ -1010,5 +1142,57 @@ mod tests {
         assignments.build().unwrap();
         let (_session, basis) = journal.replayed_v4_session(&roots).unwrap();
         assert!(basis.confirmed_event_count() > 1);
+    }
+
+    #[test]
+    fn compatible_m5_bundle_rebuilds_one_candidate_in_v5() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), crate::StoreLimits::default()).unwrap();
+        let fixture = materialize_m5_m4_prefix_v4(&root).unwrap();
+        let (journal, roots, _) = fixture.into_parts();
+        let assignments = FixtureAssignmentsV4 {
+            payment: FixtureAssignmentValueV4::Satisfied,
+            ui_event: FixtureAssignmentValueV4::Satisfied,
+        };
+
+        journal
+            .with_m5_gluing_profile_session(
+                roots.build().unwrap(),
+                assignments.build().unwrap(),
+                |profile| {
+                    while profile.publish_next_gluing_input()?.is_some() {}
+                    profile.append_gluing_bundle()?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        let (completed, first) = journal
+            .completed_m5_v5_snapshot_for_test_support(
+                roots.build().unwrap(),
+                assignments.build().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            completed.result(),
+            reviewgraphen_core::GluingResultV4::Candidate
+        );
+        assert!(completed.obstruction_id().is_none());
+        assert_eq!(first.gluing_attempts.len(), 1);
+        assert_eq!(first.global_candidates.len(), 1);
+        assert!(first.gluing_obstructions.is_empty());
+        assert_eq!(
+            first.gluing_attempts[0].attempt["global_candidate_id"],
+            first.global_candidates[0].candidate["id"]
+        );
+        assert!(first.gluing_attempts[0].attempt["obstruction_id"].is_null());
+
+        let (_, second) = journal
+            .completed_m5_v5_snapshot_for_test_support(
+                roots.build().unwrap(),
+                assignments.build().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(first, second);
     }
 }

@@ -8515,7 +8515,7 @@ fn insert_snapshot(tx: &rusqlite::Transaction<'_>, s: &IndexSnapshotV5) -> Resul
     }
     for r in &s.global_candidates {
         let o = canonical_object(&r.candidate)?;
-        tx.execute("INSERT INTO global_candidates_v4 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)", params![
+        tx.execute("INSERT INTO global_candidates_v4 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)", params![
             super::to_i64(r.event_sequence)?, r.event_id.to_string(), r.attempt_id.to_string(), id(&o,"id")?.to_string(), string(&o,"schema")?, id(&o,"cover_id")?.to_string(),
             id(&o,"invariant_id")?.to_string(), string(&o,"property_id")?, canonical_component(&o,"required_section_ids")?, canonical_component(&o,"restriction_ids")?,
             canonical_component(&o,"qualification_source_ids")?, canonical_component(&o,"source_ids")?, canonical_component(&o,"claim_ids")?, canonical_component(&o,"evidence_ids")?,

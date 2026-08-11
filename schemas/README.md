@@ -14,6 +14,11 @@
 | `reviewgraphen.report.schema.json` | `reviewgraphen.review.report.v1` — end-to-end review report。 |
 | `reviewgraphen.report.v2.schema.json` | Accepted authority-free `reviewgraphen.review.report.v2` D2 design contract (ADR 0018); it requires declared tail metadata, fixed proposed/unreviewed claims, and zero verified/accepted coverage, while source confirmation remains outside JSON Schema and v1 stays frozen。 |
 | `reviewgraphen.report.v2.example.json` | Local-only, claim-free fake-reviewer abstention example; it demonstrates explicit null model fields, no-tools trace, honest partial coverage, recoverable and nonrecoverable per-view losses, and no fabricated review claim。 |
+| `reviewgraphen.report.v3.schema.json` | Frozen source-bound M4 `reviewgraphen.review.report.v3` contract。 |
+| `reviewgraphen.report.v3.example.json` | Public-pipeline M4 source-bound report fixture。 |
+| `reviewgraphen.report.v4.schema.json` | Closed additive M5 `reviewgraphen.review.report.v4` contract with nested input registrations/descriptors and index-v5 gluing records。 |
+| `reviewgraphen.report.v4.example.json` | Canonical conflict-path Report V4 emitted by the public journal/CAS/index/runtime/report pipeline。 |
+| `reviewgraphen.report.v4.example.sha256` | SHA-256 of the Report V4 example's canonical bytes, checked against a fresh public-pipeline generation。 |
 | `reviewgraphen.migration.schema.json` | `reviewgraphen.program_space.migration.v1` — explicit v1→v2 `MigrationRecord` output of `migrate_program_space_v1_to_v2`。 |
 | `reviewgraphen.input.example.json` | Current v2 double-submit ProgramSpace fixture, with source-traced `CapabilityDeclaration` capabilities。 |
 | `reviewgraphen.input.v1.example.json` | Preserved `reviewgraphen.program_space.input.v1` double-submit ProgramSpace fixture。 |
@@ -52,12 +57,11 @@ float-free local reference encoding. That is not proof that the core emitted
 canonical bytes; runtime must still perform the cross-record checks that JSON
 Schema and this example cannot express.
 
-The report-only gate cannot confirm its own tail or source closure. No
-source-bound fixture is checked in yet: it must eventually be generated from
-the actual core canonical event/CAS output and actual v3 index rebuild, not
-authored as arbitrary JSON. The current example and validator deliberately
-make no source-proof, confirmed-tail, CAS-presence, denominator, or lifecycle
-claim.
+The report-only v2 gate cannot confirm its own tail or source closure. Its
+local example deliberately makes no source-proof, confirmed-tail,
+CAS-presence, denominator, or lifecycle claim. The later v3 and v4 examples
+are checked separately against actual public source-bound pipelines and are
+not authority for reconstructing the journal, CAS, or index from report prose.
 
 `python3 scripts/validate_bundle.py` includes the v2 schema/example pair in its
 actual gate. It additionally checks canonical preimages/order, exact internal

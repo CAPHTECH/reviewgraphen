@@ -933,6 +933,36 @@ pub struct M5GluingProfileSessionV4<'session, 'root, 'roots> {
     source_ids: std::collections::BTreeSet<StableId>,
 }
 
+/// Opaque completed-profile authority used by Report V4. The augmented trust
+/// roots remain private while the caller can request one fully revalidated
+/// schema-v5 snapshot.
+pub struct CompletedM5ReportAuthorityV4 {
+    roots: AuthorityTrustRootsV4,
+}
+
+pub enum M5ReportAuthorityInspectionV4 {
+    Complete(CompletedM5ReportAuthorityV4),
+    Incomplete { registered_inputs: u64 },
+}
+
+impl CompletedM5ReportAuthorityV4 {
+    pub fn rebuild_v5(
+        &self,
+        index: &crate::DerivedIndexV5<'_>,
+        journal: &EventJournal<'_>,
+    ) -> Result<crate::IndexRebuildReceiptV5, crate::IndexError> {
+        index.rebuild_v5(journal, &self.roots)
+    }
+
+    pub fn validated_snapshot_v5<'index, 'root>(
+        &self,
+        index: &'index crate::DerivedIndexV5<'root>,
+        journal: &EventJournal<'_>,
+    ) -> Result<crate::ValidatedIndexSnapshotV5<'index, 'root, '_>, crate::IndexError> {
+        index.validated_snapshot_current_v5(journal, &self.roots)
+    }
+}
+
 /// Result of one profile-specific canonical-tail recovery. The complete
 /// branch proves that the uncertain bundle was already durable through the
 /// same full roots-bound replay; no callback or second append is attempted.
@@ -4148,6 +4178,47 @@ impl<'a> EventJournal<'a> {
         )? {
             LockedM5ProfileSessionResult::AlreadyComplete { completed, .. } => Ok(*completed),
             LockedM5ProfileSessionResult::Continued(()) => Err(JournalError::M5ProfileIncompleteV4),
+        }
+    }
+
+    /// Replays the fixed M5 profile from base host roots and returns either an
+    /// opaque completed authority for Report V4 or the exact legal durable
+    /// 0/1/2 gluing-input prefix count. Augmented roots never escape.
+    pub fn inspect_m5_report_authority_v4(
+        &self,
+        base_roots: AuthorityTrustRootsV4,
+        assignments: M5DoubleSubmitAssignmentsV4,
+    ) -> Result<M5ReportAuthorityInspectionV4, JournalError> {
+        if self.identity.version() != EventContractVersion::V4 {
+            return Err(JournalError::Identity(
+                "M5 report inspection requires a V4 journal",
+            ));
+        }
+        let root_lock = acquire_v4_root_lock(self.root)?;
+        let run_lock = acquire_v4_run_lock(&self.run)?;
+        let writer = self.writer_v4()?;
+        match run_locked_m5_profile_session(
+            self.root,
+            root_lock,
+            run_lock,
+            writer,
+            base_roots,
+            assignments,
+            |profile| {
+                let remaining = u64::try_from(profile.remaining_input_count()).map_err(|_| {
+                    JournalError::Identity("M5 report input count does not fit u64")
+                })?;
+                2_u64.checked_sub(remaining).ok_or(JournalError::Identity(
+                    "M5 report input count exceeds the closed two-input profile",
+                ))
+            },
+        )? {
+            LockedM5ProfileSessionResult::AlreadyComplete { roots, .. } => Ok(
+                M5ReportAuthorityInspectionV4::Complete(CompletedM5ReportAuthorityV4 { roots }),
+            ),
+            LockedM5ProfileSessionResult::Continued(registered_inputs) => {
+                Ok(M5ReportAuthorityInspectionV4::Incomplete { registered_inputs })
+            }
         }
     }
 

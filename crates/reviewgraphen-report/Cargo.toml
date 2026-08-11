@@ -21,5 +21,6 @@ thiserror.workspace = true
 jsonschema.workspace = true
 reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer" }
 reviewgraphen-runtime = { path = "../reviewgraphen-runtime" }
+reviewgraphen-store = { path = "../reviewgraphen-store", features = ["test-support"] }
 serde_json.workspace = true
 tempfile.workspace = true

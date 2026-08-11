@@ -10543,6 +10543,11 @@ impl AuthorityTrustRootsV4 {
         &self.policy_revision_hash
     }
 
+    #[must_use]
+    pub fn repository_id(&self) -> &StableId {
+        &self.repository_id
+    }
+
     fn rebuild_v3_validation_roots(&self) -> Result<AuthorityTrustRootsV3> {
         AuthorityTrustRootsV3::new(
             self.policy_revision_hash.clone(),

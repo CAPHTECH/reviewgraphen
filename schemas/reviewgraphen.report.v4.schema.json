@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capht.tech/schemas/reviewgraphen/review-report.v4.schema.json",
+  "title": "ReviewGraphen Review Report v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "report_type", "report_version", "metadata", "scenario", "result", "coverage", "projection"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.review.report.v4"},
+    "report_type": {"const": "review"},
+    "report_version": {"const": 4},
+    "metadata": {"$ref": "#/$defs/metadata"},
+    "scenario": {"$ref": "#/$defs/scenario"},
+    "result": {"$ref": "#/$defs/result"},
+    "coverage": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/coverage"},
+    "projection": {"$ref": "#/$defs/projection"}
+  },
+  "$defs": {
+    "id": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/id"},
+    "hash": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/hash"},
+    "nonEmpty": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/nonEmpty"},
+    "idSet": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/idSet"},
+    "propertyId": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/propertyId"},
+    "informationLoss": {"oneOf": [{"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/informationLoss"}, {"$ref": "#/$defs/m5InformationLoss"}]},
+    "m5InformationLoss": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "reason", "source_ids", "affected_properties", "meaningful", "recoverable", "recovery_ref"],
+      "properties": {
+        "kind": {"const": "omitted_m5_gluing_records"},
+        "reason": {"type": "string"},
+        "source_ids": {"allOf": [{"$ref": "#/$defs/idSet"}, {"minItems": 1}]},
+        "affected_properties": {"const": ["payment.at_most_once"]},
+        "meaningful": {"const": true},
+        "recoverable": {"const": true},
+        "recovery_ref": {"type": "string"}
+      },
+      "oneOf": [
+        {"properties": {"recovery_ref": {"const": "reviewgraphen.review.report.v4#/result/gluing_input_descriptors"}, "reason": {"const": "view omits complete records from gluing_input_descriptors"}}, "required": ["recovery_ref", "reason"]},
+        {"properties": {"recovery_ref": {"const": "reviewgraphen.review.report.v4#/result/context_covers"}, "reason": {"const": "view omits complete records from context_covers"}}, "required": ["recovery_ref", "reason"]},
+        {"properties": {"recovery_ref": {"const": "reviewgraphen.review.report.v4#/result/sections"}, "reason": {"const": "view omits complete records from sections"}}, "required": ["recovery_ref", "reason"]},
+        {"properties": {"recovery_ref": {"const": "reviewgraphen.review.report.v4#/result/gluing_attempts"}, "reason": {"const": "view omits complete records from gluing_attempts"}}, "required": ["recovery_ref", "reason"]},
+        {"properties": {"recovery_ref": {"const": "reviewgraphen.review.report.v4#/result/restrictions"}, "reason": {"const": "view omits complete records from restrictions"}}, "required": ["recovery_ref", "reason"]},
+        {"properties": {"recovery_ref": {"const": "reviewgraphen.review.report.v4#/result/global_candidates"}, "reason": {"const": "view omits complete records from global_candidates"}}, "required": ["recovery_ref", "reason"]},
+        {"properties": {"recovery_ref": {"const": "reviewgraphen.review.report.v4#/result/gluing_obstructions"}, "reason": {"const": "view omits complete records from gluing_obstructions"}}, "required": ["recovery_ref", "reason"]}
+      ]
+    },
+    "projectionView": {"type": "object", "additionalProperties": false, "required": ["kind", "source_ids", "information_loss", "payload"], "properties": {"kind": {"enum": ["human", "ci", "machine"]}, "source_ids": {"allOf": [{"$ref": "#/$defs/idSet"}, {"minItems": 1}]}, "information_loss": {"type": "array", "minItems": 1, "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "#/$defs/informationLoss"}}, "payload": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/projectionPayload"}}},
+    "projection": {"type": "object", "additionalProperties": false, "required": ["views"], "properties": {"views": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/projectionView"}}}},
+    "metadata": {
+      "type": "object", "additionalProperties": false,
+      "required": ["report_id", "run_id", "profile_id", "rule_set_hash", "extractor_set_hash", "policy_version", "event_contract_version", "index_projection_version", "genesis_hash", "confirmed_offset", "confirmed_tail_hash", "confirmed_event_count", "tool_versions", "authority_policy_revision_hash", "authority_replay_basis_digest", "gluing_profile_descriptor_id"],
+      "properties": {
+        "report_id": {"$ref": "#/$defs/id"}, "run_id": {"$ref": "#/$defs/id"}, "profile_id": {"$ref": "#/$defs/nonEmpty"},
+        "rule_set_hash": {"$ref": "#/$defs/hash"}, "extractor_set_hash": {"$ref": "#/$defs/hash"}, "policy_version": {"$ref": "#/$defs/nonEmpty"},
+        "event_contract_version": {"const": "reviewgraphen.review_event.v4"}, "index_projection_version": {"const": "reviewgraphen.index_projection.v5"},
+        "genesis_hash": {"$ref": "#/$defs/hash"}, "confirmed_offset": {"type": "integer", "minimum": 0}, "confirmed_tail_hash": {"$ref": "#/$defs/hash"}, "confirmed_event_count": {"type": "integer", "minimum": 0},
+        "tool_versions": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/nonEmpty"}},
+        "authority_policy_revision_hash": {"$ref": "#/$defs/hash"}, "authority_replay_basis_digest": {"$ref": "#/$defs/hash"},
+        "gluing_profile_descriptor_id": {"const": "reviewgraphen.double_submit_gluing@1"}
+      }
+    },
+    "scenario": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repository_id", "snapshot_id", "program_space_ref", "universe_id", "plan_id", "selected_obligation_ids", "artifact_registration_ids", "context_cover_ids"],
+      "properties": {
+        "repository_id": {"$ref": "#/$defs/id"}, "snapshot_id": {"$ref": "#/$defs/id"}, "program_space_ref": {"$ref": "#/$defs/id"}, "universe_id": {"$ref": "#/$defs/id"}, "plan_id": {"$ref": "#/$defs/id"},
+        "selected_obligation_ids": {"allOf": [{"$ref": "#/$defs/idSet"}, {"minItems": 1, "maxItems": 2048}]},
+        "artifact_registration_ids": {"allOf": [{"$ref": "#/$defs/idSet"}, {"maxItems": 8192}]},
+        "context_cover_ids": {"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}
+      }
+    },
+    "assignmentValue": {"enum": ["satisfied", "required", "unknown"]},
+    "m5IdSet": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "contextPair": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"const": "context:payment"}, {"const": "context:ui-event"}], "items": false},
+    "sourceV4": {
+      "oneOf": [
+        {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/source"},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "descriptor_id", "profile_descriptor_id", "policy_revision_hash", "repository_id", "repository_source_hash", "run_id", "genesis_hash", "snapshot_id", "universe_id", "plan_id", "context_id", "descriptor_hash", "descriptor_size", "descriptor_media_type", "descriptor_sensitivity"], "properties": {
+          "kind": {"const": "gluing_input"}, "descriptor_id": {"$ref": "#/$defs/id"}, "profile_descriptor_id": {"const": "reviewgraphen.double_submit_gluing@1"}, "policy_revision_hash": {"$ref": "#/$defs/hash"}, "repository_id": {"$ref": "#/$defs/id"}, "repository_source_hash": {"$ref": "#/$defs/hash"}, "run_id": {"$ref": "#/$defs/id"}, "genesis_hash": {"$ref": "#/$defs/hash"}, "snapshot_id": {"$ref": "#/$defs/id"}, "universe_id": {"$ref": "#/$defs/id"}, "plan_id": {"$ref": "#/$defs/id"}, "context_id": {"enum": ["context:payment", "context:ui-event"]}, "descriptor_hash": {"$ref": "#/$defs/hash"}, "descriptor_size": {"type": "integer", "minimum": 0, "maximum": 65536}, "descriptor_media_type": {"const": "application/vnd.reviewgraphen.gluing-input.v4+json"}, "descriptor_sensitivity": {"const": "canonical_state"}
+        }}
+      ]
+    },
+    "artifactRegistrationV4": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "id", "run_id", "cas_hash", "media_type", "size", "sensitivity", "source"],
+      "properties": {"schema": {"const": "reviewgraphen.artifact_registration.v4"}, "id": {"$ref": "#/$defs/id"}, "run_id": {"$ref": "#/$defs/id"}, "cas_hash": {"$ref": "#/$defs/hash"}, "media_type": {"$ref": "#/$defs/nonEmpty"}, "size": {"type": "integer", "minimum": 0}, "sensitivity": {"enum": ["canonical_state", "workspace_source", "sensitive"]}, "source": {"$ref": "#/$defs/sourceV4"}}
+    },
+    "gluingRegistration": {"allOf": [{"$ref": "#/$defs/artifactRegistrationV4"}, {"properties": {"media_type": {"const": "application/vnd.reviewgraphen.gluing-input.v4+json"}, "sensitivity": {"const": "canonical_state"}, "source": {"type": "object", "properties": {"kind": {"const": "gluing_input"}}, "required": ["kind"]}}}]},
+    "registrationItem": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "event_sequence", "event_id", "event_actor", "registration", "body_hash"],
+      "properties": {"schema": {"const": "reviewgraphen.artifact_registration.v4.report_item"}, "event_sequence": {"type": "integer", "minimum": 1}, "event_id": {"$ref": "#/$defs/id"}, "event_actor": {"const": "engine:reviewgraphen.m5_gluing_input@1"}, "registration": {"$ref": "#/$defs/gluingRegistration"}, "body_hash": {"$ref": "#/$defs/hash"}}
+    },
+    "descriptor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "id", "run_id", "snapshot_id", "universe_id", "plan_id", "profile_descriptor_id", "context_id", "assignment_key", "assignment_value", "qualification_source_ids"],
+      "properties": {"schema": {"const": "reviewgraphen.gluing_input_descriptor.v4"}, "id": {"$ref": "#/$defs/id"}, "run_id": {"$ref": "#/$defs/id"}, "snapshot_id": {"$ref": "#/$defs/id"}, "universe_id": {"$ref": "#/$defs/id"}, "plan_id": {"$ref": "#/$defs/id"}, "profile_descriptor_id": {"const": "reviewgraphen.double_submit_gluing@1"}, "context_id": {"enum": ["context:payment", "context:ui-event"]}, "assignment_key": {"const": "caller_duplicate_protection"}, "assignment_value": {"$ref": "#/$defs/assignmentValue"}, "qualification_source_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 32}]}}
+    },
+    "descriptorItem": {"type": "object", "additionalProperties": false, "required": ["schema", "descriptor", "descriptor_body_hash", "registration_id", "registration"], "properties": {"schema": {"const": "reviewgraphen.gluing_input_descriptor.v4.report_item"}, "descriptor": {"$ref": "#/$defs/descriptor"}, "descriptor_body_hash": {"$ref": "#/$defs/hash"}, "registration_id": {"$ref": "#/$defs/id"}, "registration": {"$ref": "#/$defs/registrationItem"}}},
+    "paymentDescriptorItem": {"allOf": [{"$ref": "#/$defs/descriptorItem"}, {"properties": {"descriptor": {"properties": {"context_id": {"const": "context:payment"}}, "required": ["context_id"]}}}]},
+    "uiDescriptorItem": {"allOf": [{"$ref": "#/$defs/descriptorItem"}, {"properties": {"descriptor": {"properties": {"context_id": {"const": "context:ui-event"}}, "required": ["context_id"]}}}]},
+    "cover": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "id", "run_id", "snapshot_id", "universe_id", "plan_id", "profile_descriptor_id", "selected_obligation_ids", "required_context_ids", "cover_domain_ids", "covered_domain_ids", "uncovered_domain_ids", "source_ids"],
+      "properties": {"schema": {"const": "reviewgraphen.context_cover.v4"}, "id": {"$ref": "#/$defs/id"}, "run_id": {"$ref": "#/$defs/id"}, "snapshot_id": {"$ref": "#/$defs/id"}, "universe_id": {"$ref": "#/$defs/id"}, "plan_id": {"$ref": "#/$defs/id"}, "profile_descriptor_id": {"const": "reviewgraphen.double_submit_gluing@1"}, "selected_obligation_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"minItems": 1, "maxItems": 2048}]}, "required_context_ids": {"$ref": "#/$defs/contextPair"}, "cover_domain_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 16384}]}, "covered_domain_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 16384}]}, "uncovered_domain_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 16384}]}, "source_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 16387}]}}
+    },
+    "section": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "id", "cover_id", "context_id", "snapshot_id", "property_id", "invariant_id", "obligation_id", "claim_id", "claim_assessment_id", "input_descriptor_id", "input_registration_id", "assignment_key", "assignment_value", "passed_current_verification", "source_ids", "qualification_source_ids", "binding_ids", "evidence_ids", "verification_ids", "decision_ids", "finding_ids"],
+      "properties": {"schema": {"const": "reviewgraphen.section.v4"}, "id": {"$ref": "#/$defs/id"}, "cover_id": {"$ref": "#/$defs/id"}, "context_id": {"enum": ["context:payment", "context:ui-event"]}, "snapshot_id": {"$ref": "#/$defs/id"}, "property_id": {"const": "payment.at_most_once"}, "invariant_id": {"$ref": "#/$defs/id"}, "obligation_id": {"$ref": "#/$defs/id"}, "claim_id": {"$ref": "#/$defs/id"}, "claim_assessment_id": {"$ref": "#/$defs/id"}, "input_descriptor_id": {"$ref": "#/$defs/id"}, "input_registration_id": {"$ref": "#/$defs/id"}, "assignment_key": {"const": "caller_duplicate_protection"}, "assignment_value": {"$ref": "#/$defs/assignmentValue"}, "passed_current_verification": {"type": "boolean"}, "source_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 455}]}, "qualification_source_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 32}]}, "binding_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 64}]}, "evidence_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 64}]}, "verification_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 64}]}, "decision_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 64}]}, "finding_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 64}]}}
+    },
+    "restriction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "id", "section_id", "context_pair", "overlap_member_ids", "assignment_key", "assignment_value", "source_ids", "qualification_source_ids", "claim_ids", "evidence_ids", "verification_ids", "decision_ids", "finding_ids"],
+      "properties": {"schema": {"const": "reviewgraphen.restriction.v4"}, "id": {"$ref": "#/$defs/id"}, "section_id": {"$ref": "#/$defs/id"}, "context_pair": {"$ref": "#/$defs/contextPair"}, "overlap_member_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 4096}]}, "assignment_key": {"const": "caller_duplicate_protection"}, "assignment_value": {"$ref": "#/$defs/assignmentValue"}, "source_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 4424}]}, "qualification_source_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 32}]}, "claim_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 1}]}, "evidence_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 64}]}, "verification_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 64}]}, "decision_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 64}]}, "finding_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 64}]}}
+    },
+    "attempt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "id", "cover_id", "snapshot_id", "property_id", "invariant_id", "input_descriptor_ids", "section_ids", "restriction_ids", "result", "global_candidate_id", "obstruction_id", "source_ids", "claim_ids", "evidence_ids", "verification_ids", "decision_ids", "finding_ids"],
+      "properties": {"schema": {"const": "reviewgraphen.gluing_attempt.v4"}, "id": {"$ref": "#/$defs/id"}, "cover_id": {"$ref": "#/$defs/id"}, "snapshot_id": {"$ref": "#/$defs/id"}, "property_id": {"const": "payment.at_most_once"}, "invariant_id": {"$ref": "#/$defs/id"}, "input_descriptor_ids": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}, "section_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 2}]}, "restriction_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 2}]}, "result": {"enum": ["unknown", "failed", "candidate", "glued_with_qualification", "glued"]}, "global_candidate_id": {"type": ["string", "null"], "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9_.:@/+-]*$"}, "obstruction_id": {"type": ["string", "null"], "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9_.:@/+-]*$"}, "source_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 4944}]}, "claim_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 2}]}, "evidence_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}, "verification_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}, "decision_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}, "finding_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}},
+      "allOf": [{"if": {"properties": {"result": {"enum": ["candidate", "glued_with_qualification", "glued"]}}, "required": ["result"]}, "then": {"properties": {"global_candidate_id": {"$ref": "#/$defs/id"}, "obstruction_id": {"type": "null"}}}, "else": {"properties": {"global_candidate_id": {"type": "null"}, "obstruction_id": {"$ref": "#/$defs/id"}}}}]
+    },
+    "candidate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "id", "cover_id", "invariant_id", "property_id", "required_section_ids", "restriction_ids", "qualification_source_ids", "source_ids", "claim_ids", "evidence_ids", "verification_ids", "decision_ids", "finding_ids"],
+      "properties": {"schema": {"const": "reviewgraphen.global_candidate.v4"}, "id": {"$ref": "#/$defs/id"}, "cover_id": {"$ref": "#/$defs/id"}, "invariant_id": {"$ref": "#/$defs/id"}, "property_id": {"const": "payment.at_most_once"}, "required_section_ids": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}, "restriction_ids": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}, "qualification_source_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 64}]}, "source_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 4944}]}, "claim_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 2}]}, "evidence_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}, "verification_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}, "decision_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}, "finding_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}}
+    },
+    "obstruction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "id", "attempt_id", "kind", "conflicting_context_ids", "section_ids", "overlap_member_ids", "assignment_key", "left_assignment_value", "right_assignment_value", "source_ids", "claim_ids", "evidence_ids", "verification_ids", "decision_ids", "finding_ids", "affected_invariant_id", "severity", "required_resolution", "human_decision_required", "blocks"],
+      "properties": {"schema": {"const": "reviewgraphen.gluing_obstruction.v4"}, "id": {"$ref": "#/$defs/id"}, "attempt_id": {"$ref": "#/$defs/id"}, "kind": {"enum": ["required_section_missing", "required_overlap_missing", "section_unknown", "assignment_conflict"]}, "conflicting_context_ids": {"type": "array", "maxItems": 2, "uniqueItems": true, "items": {"enum": ["context:payment", "context:ui-event"]}}, "section_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 2}]}, "overlap_member_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 4096}]}, "assignment_key": {"const": "caller_duplicate_protection"}, "left_assignment_value": {"anyOf": [{"$ref": "#/$defs/assignmentValue"}, {"type": "null"}]}, "right_assignment_value": {"anyOf": [{"$ref": "#/$defs/assignmentValue"}, {"type": "null"}]}, "source_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 4944}]}, "claim_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 2}]}, "evidence_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}, "verification_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}, "decision_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}, "finding_ids": {"allOf": [{"$ref": "#/$defs/m5IdSet"}, {"maxItems": 128}]}, "affected_invariant_id": {"$ref": "#/$defs/id"}, "severity": {"enum": ["high", "critical"]}, "required_resolution": {"enum": ["record_required_section", "resolve_context_overlap", "resolve_unknown_duplicate_protection_assignment", "resolve_duplicate_protection_responsibility"]}, "human_decision_required": {"type": "boolean"}, "blocks": {"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}}
+    },
+    "coverItem": {"type": "object", "additionalProperties": false, "required": ["event_sequence", "event_id", "cover", "body_hash"], "properties": {"event_sequence": {"type": "integer", "minimum": 1}, "event_id": {"$ref": "#/$defs/id"}, "cover": {"$ref": "#/$defs/cover"}, "body_hash": {"$ref": "#/$defs/hash"}}},
+    "sectionItem": {"type": "object", "additionalProperties": false, "required": ["event_sequence", "event_id", "section", "body_hash"], "properties": {"event_sequence": {"type": "integer", "minimum": 1}, "event_id": {"$ref": "#/$defs/id"}, "section": {"$ref": "#/$defs/section"}, "body_hash": {"$ref": "#/$defs/hash"}}},
+    "restrictionItem": {"type": "object", "additionalProperties": false, "required": ["event_sequence", "event_id", "restriction", "body_hash"], "properties": {"event_sequence": {"type": "integer", "minimum": 1}, "event_id": {"$ref": "#/$defs/id"}, "restriction": {"$ref": "#/$defs/restriction"}, "body_hash": {"$ref": "#/$defs/hash"}}},
+    "attemptItem": {"type": "object", "additionalProperties": false, "required": ["event_sequence", "event_id", "attempt", "body_hash"], "properties": {"event_sequence": {"type": "integer", "minimum": 1}, "event_id": {"$ref": "#/$defs/id"}, "attempt": {"$ref": "#/$defs/attempt"}, "body_hash": {"$ref": "#/$defs/hash"}}},
+    "candidateItem": {"type": "object", "additionalProperties": false, "required": ["event_sequence", "event_id", "candidate", "body_hash"], "properties": {"event_sequence": {"type": "integer", "minimum": 1}, "event_id": {"$ref": "#/$defs/id"}, "candidate": {"$ref": "#/$defs/candidate"}, "body_hash": {"$ref": "#/$defs/hash"}}},
+    "obstructionItem": {"type": "object", "additionalProperties": false, "required": ["event_sequence", "event_id", "obstruction", "body_hash"], "properties": {"event_sequence": {"type": "integer", "minimum": 1}, "event_id": {"$ref": "#/$defs/id"}, "obstruction": {"$ref": "#/$defs/obstruction"}, "body_hash": {"$ref": "#/$defs/hash"}}},
+    "orderedSections": {"oneOf": [{"type": "array", "maxItems": 0}, {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/sectionItem"}}, {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"allOf": [{"$ref": "#/$defs/sectionItem"}, {"properties": {"section": {"properties": {"context_id": {"const": "context:payment"}}, "required": ["context_id"]}}, "required": ["section"]}]}, {"allOf": [{"$ref": "#/$defs/sectionItem"}, {"properties": {"section": {"properties": {"context_id": {"const": "context:ui-event"}}, "required": ["context_id"]}}, "required": ["section"]}]}], "items": false}]},
+    "orderedRestrictions": {"oneOf": [{"type": "array", "maxItems": 0}, {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/restrictionItem"}}, {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"$ref": "#/$defs/restrictionItem"}, {"$ref": "#/$defs/restrictionItem"}], "items": false}]},
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "artifact_registrations", "executions", "claims", "evidence", "evidence_bindings", "verifications", "decisions", "findings", "claim_assessments", "obstructions", "gluing_input_descriptors", "context_covers", "sections", "gluing_attempts", "restrictions", "global_candidates", "gluing_obstructions"],
+      "properties": {
+        "status": {"enum": ["completed", "partial", "unsupported_input", "failed"]},
+        "artifact_registrations": {"type": "array", "maxItems": 8192, "uniqueItems": true, "items": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/registration"}},
+        "executions": {"type": "array", "maxItems": 8192, "uniqueItems": true, "items": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/execution"}},
+        "claims": {"type": "array", "maxItems": 131072, "uniqueItems": true, "items": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/claim"}},
+        "evidence": {"type": "array", "maxItems": 131072, "uniqueItems": true, "items": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/evidence"}},
+        "evidence_bindings": {"type": "array", "maxItems": 131072, "uniqueItems": true, "items": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/binding"}},
+        "verifications": {"type": "array", "maxItems": 131072, "uniqueItems": true, "items": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/verification"}},
+        "decisions": {"type": "array", "maxItems": 131072, "uniqueItems": true, "items": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/decision"}},
+        "findings": {"type": "array", "maxItems": 131072, "uniqueItems": true, "items": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/finding"}},
+        "claim_assessments": {"type": "array", "maxItems": 131072, "uniqueItems": true, "items": {"$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json#/$defs/assessment"}},
+        "obstructions": {"type": "array", "maxItems": 8192, "uniqueItems": true, "items": {"type": "object", "additionalProperties": false, "required": ["kind", "message", "source_ids", "blocks"], "properties": {"kind": {"$ref": "#/$defs/nonEmpty"}, "message": {"$ref": "#/$defs/nonEmpty"}, "source_ids": {"$ref": "#/$defs/idSet"}, "blocks": {"$ref": "#/$defs/idSet"}}}},
+        "gluing_input_descriptors": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"$ref": "#/$defs/paymentDescriptorItem"}, {"$ref": "#/$defs/uiDescriptorItem"}], "items": false},
+        "context_covers": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/coverItem"}},
+        "sections": {"$ref": "#/$defs/orderedSections"}, "gluing_attempts": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/attemptItem"}}, "restrictions": {"$ref": "#/$defs/orderedRestrictions"}, "global_candidates": {"type": "array", "maxItems": 1, "items": {"$ref": "#/$defs/candidateItem"}}, "gluing_obstructions": {"type": "array", "maxItems": 1, "items": {"$ref": "#/$defs/obstructionItem"}}
+      },
+      "allOf": [
+        {"if": {"properties": {"gluing_attempts": {"prefixItems": [{"properties": {"attempt": {"properties": {"result": {"enum": ["failed", "unknown"]}}, "required": ["result"]}}, "required": ["attempt"]}]}}}, "then": {"properties": {"global_candidates": {"maxItems": 0}, "gluing_obstructions": {"minItems": 1, "maxItems": 1}}}},
+        {"if": {"properties": {"gluing_attempts": {"prefixItems": [{"properties": {"attempt": {"properties": {"result": {"enum": ["candidate", "glued_with_qualification", "glued"]}}, "required": ["result"]}}, "required": ["attempt"]}]}}}, "then": {"properties": {"global_candidates": {"minItems": 1, "maxItems": 1}, "gluing_obstructions": {"maxItems": 0}}}}
+      ]
+    }
+  }
+}
