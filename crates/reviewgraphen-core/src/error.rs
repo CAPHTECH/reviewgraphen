@@ -158,4 +158,14 @@ pub enum DomainError {
     /// A human decision admission was changed or moved to another position.
     #[error("event-v3 decision admission does not match its sealed scope")]
     DecisionAdmissionMismatch,
+
+    /// A trusted M5 descriptor source, canonical bytes, root, or current
+    /// registration position differed from its one-shot admission.
+    #[error("event-v4 gluing-input admission does not match its sealed scope")]
+    GluingInputAdmissionMismatch,
+
+    /// An atomic M5 bundle differed from the exact current registered-input
+    /// and D2/M4 replay closure or was moved to another position.
+    #[error("event-v4 gluing bundle does not match its sealed current closure")]
+    GluingBundleMismatch,
 }

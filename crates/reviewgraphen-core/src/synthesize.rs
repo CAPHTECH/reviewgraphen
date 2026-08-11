@@ -532,9 +532,12 @@ impl MvpRulePack {
 
     /// Synthesizes the supported M1 slice with stable IDs and stable ordering.
     pub fn synthesize(program: &ProgramSpace) -> Result<ObligationBundle> {
-        if program.profile_key() != "code-review@1" {
+        if program.profile_key() != "code-review@1"
+            && program.profile_key() != crate::m5::DOUBLE_SUBMIT_PROFILE_ID
+        {
             return Err(DomainError::Validation(
-                "M1 manual adapter supports only the code-review@1 fixture profile".to_owned(),
+                "M1 manual adapter supports only the code-review@1 or fixed M5 fixture profile"
+                    .to_owned(),
             ));
         }
 

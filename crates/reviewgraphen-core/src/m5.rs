@@ -7,7 +7,7 @@
 #![allow(dead_code)] // Activated by the separately reviewed event-v4 integration unit.
 
 use crate::{
-    ClaimAssessmentV3, DomainError, EventLog, EvidenceRelationV3, ExecutionClaimV2, Obligation,
+    ClaimAssessmentV3, DomainError, EvidenceRelationV3, ExecutionClaimV2, Obligation,
     ReviewAggregate, StableId, VerificationOutcomeV3,
 };
 use serde::{Deserialize, Serialize};
@@ -1172,6 +1172,13 @@ pub(crate) fn derive_registration_closure_v4<'a>(
 ) -> M5Result<M5RegistrationClosureV4> {
     let program = aggregate.program();
     let universe = aggregate.universe();
+    if program.profile_key() != DOUBLE_SUBMIT_PROFILE_ID {
+        return Err(M5Error::BindingMismatch {
+            field: "M5 profile",
+            expected: DOUBLE_SUBMIT_PROFILE_ID.to_owned(),
+            actual: program.profile_key(),
+        });
+    }
     let plan = aggregate
         .review_plan(plan_id)
         .ok_or_else(|| M5Error::Validation("M5 plan is not current durable state".into()))?;
@@ -1417,7 +1424,7 @@ pub struct GluingInputDescriptorV4 {
 }
 
 impl GluingInputDescriptorV4 {
-    pub(crate) fn new(
+    pub fn new(
         run_id: StableId,
         snapshot_id: StableId,
         universe_id: StableId,
@@ -1621,11 +1628,12 @@ impl ValidatedM5SourceV4 {
         Ok(self.bundle.clone())
     }
 
-    pub(crate) fn mint(
-        view: &EventLog,
+    pub(crate) fn mint_from_v4_replay<'a>(
+        aggregate: &ReviewAggregate,
+        run_id: &StableId,
+        assessment_for: impl Fn(&StableId) -> Option<&'a ClaimAssessmentV3>,
         registered_inputs: [RegisteredGluingInputV4; 2],
     ) -> M5Result<Self> {
-        let aggregate = view.aggregate();
         let program = aggregate.program();
         let universe = aggregate.universe();
         let contexts = required_contexts();
@@ -1637,7 +1645,7 @@ impl ValidatedM5SourceV4 {
             )?;
             require_same(
                 "registered descriptor run",
-                view.run_id(),
+                run_id,
                 input.descriptor.run_id(),
             )?;
             require_same(
@@ -1657,10 +1665,7 @@ impl ValidatedM5SourceV4 {
             &plan_id,
             registered_inputs[1].descriptor.plan_id(),
         )?;
-        let closure =
-            derive_registration_closure_v4(aggregate, view.run_id(), &plan_id, |claim_id| {
-                view.claim_assessment_v3(claim_id)
-            })?;
+        let closure = derive_registration_closure_v4(aggregate, run_id, &plan_id, assessment_for)?;
         let M5RegistrationClosureV4 {
             cover,
             overlap_member_ids,
@@ -3305,6 +3310,15 @@ impl GluingBundleV4 {
         }
         Ok(expected)
     }
+
+    pub(crate) fn preflight_json_bytes(input: &[u8]) -> M5Result<()> {
+        preflight_wire_json(
+            input,
+            MAX_M5_BUNDLE_CANONICAL_BYTES,
+            "M5 bundle JSON",
+            WireShape::Bundle,
+        )
+    }
     pub fn cover(&self) -> &ContextCoverV4 {
         &self.cover
     }
@@ -3837,6 +3851,113 @@ mod tests {
         assert_eq!(b.attempt().result(), GluingResultV4::Candidate);
         assert!(b.global_candidate().is_some());
         assert!(b.obstruction().is_none());
+    }
+
+    #[test]
+    fn exact_result_matrix_covers_overlap_unknown_conflict_and_verified_compatible_rows() {
+        fn derive_case(
+            left: AssignmentValueV4,
+            right: AssignmentValueV4,
+            passed: bool,
+            qualified: bool,
+            anchor_present: bool,
+        ) -> GluingBundleV4 {
+            let (cover, _, regs, mut overlap) = base();
+            if !anchor_present {
+                overlap.remove(&id(DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID));
+            }
+            let qualification_source_ids = if qualified {
+                BTreeSet::from([id(DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID)])
+            } else {
+                BTreeSet::new()
+            };
+            let descriptors = [
+                GluingInputDescriptorV4::new(
+                    cover.run_id().clone(),
+                    cover.snapshot_id().clone(),
+                    cover.universe_id().clone(),
+                    cover.plan_id().clone(),
+                    id(DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID),
+                    left,
+                    qualification_source_ids,
+                )
+                .unwrap(),
+                GluingInputDescriptorV4::new(
+                    cover.run_id().clone(),
+                    cover.snapshot_id().clone(),
+                    cover.universe_id().clone(),
+                    cover.plan_id().clone(),
+                    id(DOUBLE_SUBMIT_UI_CONTEXT_ID),
+                    right,
+                    BTreeSet::new(),
+                )
+                .unwrap(),
+            ];
+            let mut sections = vec![
+                section(&cover, &descriptors[0], regs[0].clone()),
+                section(&cover, &descriptors[1], regs[1].clone()),
+            ];
+            for section in &mut sections {
+                section.passed_current_verification = passed;
+            }
+            GluingBundleV4::derive(cover, descriptors, regs, sections, overlap).unwrap()
+        }
+
+        let missing_overlap = derive_case(
+            AssignmentValueV4::Required,
+            AssignmentValueV4::Required,
+            true,
+            false,
+            false,
+        );
+        assert_eq!(missing_overlap.attempt().result(), GluingResultV4::Unknown);
+        assert_eq!(
+            missing_overlap.obstruction().unwrap().kind(),
+            GluingObstructionKindV4::RequiredOverlapMissing
+        );
+
+        for (left, right) in [
+            (AssignmentValueV4::Unknown, AssignmentValueV4::Satisfied),
+            (AssignmentValueV4::Unknown, AssignmentValueV4::Required),
+            (AssignmentValueV4::Unknown, AssignmentValueV4::Unknown),
+            (AssignmentValueV4::Satisfied, AssignmentValueV4::Unknown),
+            (AssignmentValueV4::Required, AssignmentValueV4::Unknown),
+        ] {
+            let bundle = derive_case(left, right, true, false, true);
+            assert_eq!(bundle.attempt().result(), GluingResultV4::Unknown);
+            assert_eq!(
+                bundle.obstruction().unwrap().kind(),
+                GluingObstructionKindV4::SectionUnknown
+            );
+        }
+
+        for (left, right) in [
+            (AssignmentValueV4::Satisfied, AssignmentValueV4::Required),
+            (AssignmentValueV4::Required, AssignmentValueV4::Satisfied),
+        ] {
+            let bundle = derive_case(left, right, true, false, true);
+            assert_eq!(bundle.attempt().result(), GluingResultV4::Failed);
+            assert_eq!(
+                bundle.obstruction().unwrap().kind(),
+                GluingObstructionKindV4::AssignmentConflict
+            );
+        }
+
+        for (qualified, expected) in [
+            (false, GluingResultV4::Glued),
+            (true, GluingResultV4::GluedWithQualification),
+        ] {
+            let bundle = derive_case(
+                AssignmentValueV4::Required,
+                AssignmentValueV4::Required,
+                true,
+                qualified,
+                true,
+            );
+            assert_eq!(bundle.attempt().result(), expected);
+            assert!(bundle.global_candidate().is_some());
+            assert!(bundle.obstruction().is_none());
+        }
     }
 
     #[test]

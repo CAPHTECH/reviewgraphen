@@ -1724,6 +1724,21 @@ impl ArtifactRegistrationV4 {
         Ok(registration)
     }
 
+    fn from_gluing_binding(binding: &GluingInputTrustBindingV4) -> Result<Self> {
+        let registration = Self {
+            schema: "reviewgraphen.artifact_registration.v4".to_owned(),
+            id: binding.registration_id.clone(),
+            run_id: binding.run_id.clone(),
+            cas_hash: binding.descriptor_hash.clone(),
+            media_type: binding.descriptor_media_type.clone(),
+            size: binding.descriptor_size,
+            sensitivity: binding.descriptor_sensitivity,
+            source: binding.source.clone(),
+        };
+        registration.validate()?;
+        Ok(registration)
+    }
+
     fn validate(&self) -> Result<()> {
         self.source.validate()?;
         let gluing_tuple_matches = match &self.source {
@@ -3376,6 +3391,8 @@ enum PersistedPayload {
     ArtifactRegisteredV3(ArtifactRegisteredV3),
     #[serde(rename = "artifact_registered_v4")]
     ArtifactRegisteredV4(ArtifactRegistrationV4),
+    #[serde(rename = "gluing_bundle_recorded_v4")]
+    GluingBundleRecordedV4(Box<RawValue>),
     #[serde(rename = "evidence_recorded_v3")]
     EvidenceRecordedV3(EvidenceV3),
     #[serde(rename = "evidence_bound_v3")]
@@ -3438,6 +3455,7 @@ impl PersistedPayload {
                             | Self::FindingRecordedV3(_)
                             | Self::RunGenesisManifestV4(_)
                             | Self::ArtifactRegisteredV4(_)
+                            | Self::GluingBundleRecordedV4(_)
                     )
             }
             EventContractVersion::V2 => !matches!(
@@ -3451,6 +3469,7 @@ impl PersistedPayload {
                     | Self::FindingRecordedV3(_)
                     | Self::RunGenesisManifestV4(_)
                     | Self::ArtifactRegisteredV4(_)
+                    | Self::GluingBundleRecordedV4(_)
             ),
             EventContractVersion::V3 => !matches!(
                 self,
@@ -3464,6 +3483,7 @@ impl PersistedPayload {
                     | Self::ArtifactRegistered(_)
                     | Self::RunGenesisManifestV4(_)
                     | Self::ArtifactRegisteredV4(_)
+                    | Self::GluingBundleRecordedV4(_)
             ),
             EventContractVersion::V4 => !matches!(
                 self,
@@ -3495,6 +3515,7 @@ impl PersistedPayload {
                 | Self::FindingRecordedV3(_)
                 | Self::RunGenesisManifestV4(_)
                 | Self::ArtifactRegisteredV4(_)
+                | Self::GluingBundleRecordedV4(_)
         )
     }
 
@@ -3528,6 +3549,7 @@ impl PersistedPayload {
             Self::DecisionRecordedV3(decision) => decision.actor(),
             Self::FindingRecordedV3(_) => "projection:reviewgraphen.finding_projection@1",
             Self::ArtifactRegisteredV4(_) => "engine:reviewgraphen.m5_gluing_input@1",
+            Self::GluingBundleRecordedV4(_) => "engine:reviewgraphen.m5_gluing@1",
             _ => SYSTEM_ACTOR,
         }
     }
@@ -3558,6 +3580,10 @@ impl PersistedPayload {
             Self::ArtifactRegistered(registration) => registration.validate(),
             Self::ArtifactRegisteredV3(registration) => registration.validate(),
             Self::ArtifactRegisteredV4(registration) => registration.validate(),
+            Self::GluingBundleRecordedV4(bundle) => {
+                crate::GluingBundleV4::preflight_json_bytes(bundle.get().as_bytes())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }
             Self::EvidenceRecordedV3(evidence) => evidence
                 .canonical_bytes()
                 .map(|_| ())
@@ -3626,6 +3652,7 @@ impl PersistedPayload {
                     "v4 artifact registration must bind the enclosing event run".to_owned(),
                 ))
             }
+            Self::GluingBundleRecordedV4(_) => Ok(()),
             Self::RunGenesisManifestV4(manifest)
                 if &manifest.run_id != run_id || manifest.genesis_artifact().run_id() != run_id =>
             {
@@ -5338,7 +5365,9 @@ fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
                 claims: value.claims,
             }
         }
-        PersistedPayload::RunGenesisManifestV4(_) | PersistedPayload::ArtifactRegisteredV4(_) => {
+        PersistedPayload::RunGenesisManifestV4(_)
+        | PersistedPayload::ArtifactRegisteredV4(_)
+        | PersistedPayload::GluingBundleRecordedV4(_) => {
             unreachable!("v4 payloads are not exposed through the legacy EventLog decoder")
         }
     }
@@ -5968,6 +5997,11 @@ fn decode_payload(version: EventContractVersion, input: &str) -> Result<Persiste
                     serde_json::from_str(raw.data.get())
                         .map_err(|error| DomainError::Json(error.to_string()))?,
                 )
+            }
+            "gluing_bundle_recorded_v4" if version == EventContractVersion::V4 => {
+                PersistedPayload::GluingBundleRecordedV4(raw_payload(
+                    raw.data.get().as_bytes().to_vec(),
+                )?)
             }
             "evidence_recorded_v3" => PersistedPayload::EvidenceRecordedV3(
                 EvidenceV3::from_json_bytes(raw.data.get().as_bytes()).map_err(m4_domain_error)?,
@@ -6850,9 +6884,17 @@ impl GluingInputTrustBindingV4 {
         descriptor_size: u64,
         descriptor_media_type: impl Into<String>,
         descriptor_sensitivity: ArtifactSensitivity,
-        registration_id: StableId,
         source: ArtifactSourceV4,
     ) -> Result<Self> {
+        let descriptor_media_type = descriptor_media_type.into();
+        let registration_id = ArtifactRegistrationV4::derived_id(
+            &run_id,
+            &descriptor_hash,
+            &descriptor_media_type,
+            descriptor_size,
+            descriptor_sensitivity,
+            &source,
+        )?;
         let value = Self {
             policy_revision_hash,
             repository_id,
@@ -6867,7 +6909,7 @@ impl GluingInputTrustBindingV4 {
             descriptor_id,
             descriptor_hash,
             descriptor_size,
-            descriptor_media_type: descriptor_media_type.into(),
+            descriptor_media_type,
             descriptor_sensitivity,
             registration_id,
             source,
@@ -6929,6 +6971,66 @@ impl GluingInputTrustBindingV4 {
             ));
         }
         Ok(())
+    }
+}
+
+/// Host-constructed one-shot source for one exact canonical M5 descriptor.
+/// Its accessors describe the immutable CAS object only; append authority is
+/// minted later by a current locked V4 replay session after roots validation.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::TrustedGluingInputSourceV4>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::TrustedGluingInputSourceV4>();
+/// ```
+#[derive(Debug)]
+pub struct TrustedGluingInputSourceV4 {
+    binding: GluingInputTrustBindingV4,
+}
+
+impl TrustedGluingInputSourceV4 {
+    pub fn from_trusted_host(binding: GluingInputTrustBindingV4) -> Result<Self> {
+        binding.validate()?;
+        Ok(Self { binding })
+    }
+
+    #[must_use]
+    pub fn descriptor_hash(&self) -> &ContentHash {
+        &self.binding.descriptor_hash
+    }
+
+    #[must_use]
+    pub const fn descriptor_size(&self) -> u64 {
+        self.binding.descriptor_size
+    }
+
+    #[must_use]
+    pub fn descriptor_media_type(&self) -> &str {
+        &self.binding.descriptor_media_type
+    }
+
+    #[must_use]
+    pub const fn descriptor_sensitivity(&self) -> ArtifactSensitivity {
+        self.binding.descriptor_sensitivity
+    }
+
+    #[must_use]
+    pub fn context_id(&self) -> &StableId {
+        &self.binding.context_id
+    }
+
+    #[must_use]
+    pub fn descriptor_id(&self) -> &StableId {
+        &self.binding.descriptor_id
+    }
+
+    #[must_use]
+    pub fn registration_id(&self) -> &StableId {
+        &self.binding.registration_id
     }
 }
 
@@ -7801,6 +7903,263 @@ impl AuthorityReplayBasisV4 {
             return Err(DomainError::AuthorityReplayBasisMismatch);
         }
         Ok(())
+    }
+}
+
+/// One-shot, position-bound admission for one exact trusted gluing-input
+/// registration. It is intentionally non-cloneable and non-serializable.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::TrustedGluingInputAdmissionV4>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::TrustedGluingInputAdmissionV4>();
+/// ```
+#[derive(Debug)]
+pub struct TrustedGluingInputAdmissionV4 {
+    session_identity: ContentHash,
+    basis_digest: ContentHash,
+    binding: GluingInputTrustBindingV4,
+    trust_binding_digest: ContentHash,
+    descriptor_id: StableId,
+    context_id: StableId,
+    registration: ArtifactRegistrationV4,
+    predecessor_event_hash: ContentHash,
+    event_sequence: u64,
+    start_gluing_entry_count: usize,
+    envelope: EventEnvelope,
+}
+
+/// Descriptive receipt for one replay-confirmed V4 gluing-input
+/// registration. It grants no authority for another append.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ArtifactRegistrationReceiptV4 {
+    registration_id: StableId,
+    descriptor_id: StableId,
+    context_id: StableId,
+    event_id: StableId,
+    confirmed_tail_hash: ContentHash,
+    expected_next_sequence: u64,
+    trust_binding_digest: ContentHash,
+}
+
+impl ArtifactRegistrationReceiptV4 {
+    #[must_use]
+    pub fn registration_id(&self) -> &StableId {
+        &self.registration_id
+    }
+    #[must_use]
+    pub fn descriptor_id(&self) -> &StableId {
+        &self.descriptor_id
+    }
+    #[must_use]
+    pub fn context_id(&self) -> &StableId {
+        &self.context_id
+    }
+    #[must_use]
+    pub fn event_id(&self) -> &StableId {
+        &self.event_id
+    }
+    #[must_use]
+    pub fn confirmed_tail_hash(&self) -> &ContentHash {
+        &self.confirmed_tail_hash
+    }
+    #[must_use]
+    pub const fn expected_next_sequence(&self) -> u64 {
+        self.expected_next_sequence
+    }
+    #[must_use]
+    pub fn trust_binding_digest(&self) -> &ContentHash {
+        &self.trust_binding_digest
+    }
+}
+
+impl TrustedGluingInputAdmissionV4 {
+    pub fn envelope<'a>(
+        &'a self,
+        log: &EventLogV4,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<&'a EventEnvelope> {
+        basis.validate_for_log_v4(log)?;
+        if !session_identity.matches(&self.session_identity)
+            || self.session_identity != log.session_identity
+            || self.session_identity != basis.session_identity
+            || self.basis_digest != basis.basis_digest
+            || self.predecessor_event_hash != log.tail_hash
+            || self.event_sequence != basis.next_sequence
+            || self.start_gluing_entry_count != basis.gluing_input_entries.len()
+            || self.binding.registration_id != *self.registration.id()
+            || self.trust_binding_digest
+                != ContentHash::sha256(&canonical_gluing_binding(&self.binding)?)
+        {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
+        Ok(&self.envelope)
+    }
+
+    pub fn confirm_replayed(
+        self,
+        log: &EventLogV4,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<ArtifactRegistrationReceiptV4> {
+        basis.validate_for_log_v4(log)?;
+        let last = log.envelopes.last().ok_or_else(|| {
+            DomainError::EventSequence("confirmed event-v4 prefix is empty".to_owned())
+        })?;
+        let expected_entries = self
+            .start_gluing_entry_count
+            .checked_add(1)
+            .ok_or(DomainError::GluingInputAdmissionMismatch)?;
+        if !session_identity.matches(&self.session_identity)
+            || self.session_identity != log.session_identity
+            || self.session_identity != basis.session_identity
+            || self.event_sequence != last.sequence()
+            || self.event_sequence != basis.confirmed_event_count
+            || self.predecessor_event_hash != *last.previous_event_hash()
+            || basis.confirmed_tail_hash != *self.envelope.event_hash()
+            || basis.next_sequence != self.event_sequence.saturating_add(1)
+            || basis.gluing_input_entries.len() != expected_entries
+            || log.m5_bundle.is_some()
+            || log.v4_registrations.get(self.registration.id()) != Some(&self.registration)
+            || log
+                .v4_gluing_descriptors
+                .get(&self.context_id)
+                .is_none_or(|descriptor| descriptor.id() != &self.descriptor_id)
+            || last.canonical_bytes()? != self.envelope.canonical_bytes()?
+            || self.trust_binding_digest
+                != ContentHash::sha256(&canonical_gluing_binding(&self.binding)?)
+        {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
+        Ok(ArtifactRegistrationReceiptV4 {
+            registration_id: self.registration.id().clone(),
+            descriptor_id: self.descriptor_id,
+            context_id: self.context_id,
+            event_id: self.envelope.id().clone(),
+            confirmed_tail_hash: self.envelope.event_hash().clone(),
+            expected_next_sequence: basis.next_sequence,
+            trust_binding_digest: self.trust_binding_digest,
+        })
+    }
+}
+
+/// One sealed, authority-free atomic M5 bundle event. The value can only be
+/// confirmed once and is never a constructor for its owned topology records.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<reviewgraphen_core::ValidatedGluingBundleV4>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_serialize<T: serde::Serialize>() {}
+/// require_serialize::<reviewgraphen_core::ValidatedGluingBundleV4>();
+/// ```
+#[derive(Debug)]
+pub struct ValidatedGluingBundleV4 {
+    session_identity: ContentHash,
+    basis_digest: ContentHash,
+    start_gluing_entry_count: usize,
+    bundle: crate::GluingBundleV4,
+    predecessor_event_hash: ContentHash,
+    event_sequence: u64,
+    envelope: EventEnvelope,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct GluingBundleReceiptV4 {
+    event_id: StableId,
+    cover_id: StableId,
+    attempt_id: StableId,
+    result: crate::GluingResultV4,
+    confirmed_tail_hash: ContentHash,
+    expected_next_sequence: u64,
+}
+
+impl GluingBundleReceiptV4 {
+    #[must_use]
+    pub fn event_id(&self) -> &StableId {
+        &self.event_id
+    }
+    #[must_use]
+    pub fn cover_id(&self) -> &StableId {
+        &self.cover_id
+    }
+    #[must_use]
+    pub fn attempt_id(&self) -> &StableId {
+        &self.attempt_id
+    }
+    #[must_use]
+    pub const fn result(&self) -> crate::GluingResultV4 {
+        self.result
+    }
+    #[must_use]
+    pub fn confirmed_tail_hash(&self) -> &ContentHash {
+        &self.confirmed_tail_hash
+    }
+    #[must_use]
+    pub const fn expected_next_sequence(&self) -> u64 {
+        self.expected_next_sequence
+    }
+}
+
+impl ValidatedGluingBundleV4 {
+    pub fn envelope<'a>(
+        &'a self,
+        log: &EventLogV4,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<&'a EventEnvelope> {
+        basis.validate_for_log_v4(log)?;
+        if !session_identity.matches(&self.session_identity)
+            || self.session_identity != log.session_identity
+            || self.session_identity != basis.session_identity
+            || self.basis_digest != basis.basis_digest
+            || self.predecessor_event_hash != log.tail_hash
+            || self.event_sequence != basis.next_sequence
+            || self.start_gluing_entry_count != basis.gluing_input_entries.len()
+            || log.m5_bundle.is_some()
+        {
+            return Err(DomainError::GluingBundleMismatch);
+        }
+        Ok(&self.envelope)
+    }
+
+    pub fn confirm_replayed(
+        self,
+        log: &EventLogV4,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<GluingBundleReceiptV4> {
+        basis.validate_for_log_v4(log)?;
+        let last = log.envelopes.last().ok_or_else(|| {
+            DomainError::EventSequence("confirmed event-v4 prefix is empty".to_owned())
+        })?;
+        if !session_identity.matches(&self.session_identity)
+            || self.session_identity != log.session_identity
+            || self.session_identity != basis.session_identity
+            || self.event_sequence != last.sequence()
+            || self.event_sequence != basis.confirmed_event_count
+            || basis.next_sequence != self.event_sequence.saturating_add(1)
+            || basis.gluing_input_entries.len() != self.start_gluing_entry_count
+            || last.canonical_bytes()? != self.envelope.canonical_bytes()?
+            || log.m5_bundle.as_ref() != Some(&self.bundle)
+        {
+            return Err(DomainError::GluingBundleMismatch);
+        }
+        Ok(GluingBundleReceiptV4 {
+            event_id: self.envelope.id().clone(),
+            cover_id: self.bundle.cover().id().clone(),
+            attempt_id: self.bundle.attempt().id().clone(),
+            result: self.bundle.attempt().result(),
+            confirmed_tail_hash: self.envelope.event_hash().clone(),
+            expected_next_sequence: basis.next_sequence,
+        })
     }
 }
 
@@ -9560,6 +9919,8 @@ pub struct EventLogV4 {
     aggregate: ReviewAggregate,
     v3_aggregate: V3RunAggregate,
     v4_registrations: BTreeMap<StableId, ArtifactRegistrationV4>,
+    v4_gluing_descriptors: BTreeMap<StableId, crate::GluingInputDescriptorV4>,
+    m5_bundle: Option<crate::GluingBundleV4>,
     manifest: RunGenesisManifestV4,
     envelopes: Vec<EventEnvelope>,
     tail_hash: ContentHash,
@@ -10078,6 +10439,8 @@ impl EventLogV4 {
             aggregate,
             v3_aggregate,
             v4_registrations: BTreeMap::new(),
+            v4_gluing_descriptors: BTreeMap::new(),
+            m5_bundle: None,
             manifest,
             envelopes: vec![envelope],
             tail_hash,
@@ -10092,6 +10455,254 @@ impl EventLogV4 {
             ));
         }
         Ok(())
+    }
+
+    fn m5_registered_inputs(&self) -> Result<[crate::m5::RegisteredGluingInputV4; 2]> {
+        if self.v4_registrations.len() != 2 || self.v4_gluing_descriptors.len() != 2 {
+            return Err(DomainError::GluingBundleMismatch);
+        }
+        let build = |context: &str| -> Result<crate::m5::RegisteredGluingInputV4> {
+            let context_id = StableId::parse(context)?;
+            let descriptor = self
+                .v4_gluing_descriptors
+                .get(&context_id)
+                .ok_or(DomainError::GluingBundleMismatch)?;
+            let registration = self
+                .v4_registrations
+                .values()
+                .find(|registration| {
+                    matches!(
+                        registration.source(),
+                        ArtifactSourceV4::GluingInput {
+                            context_id: source_context,
+                            descriptor_id,
+                            ..
+                        } if source_context == &context_id && descriptor_id == descriptor.id()
+                    )
+                })
+                .ok_or(DomainError::GluingBundleMismatch)?;
+            crate::m5::RegisteredGluingInputV4::seal(descriptor.clone(), registration.id().clone())
+                .map_err(|error| DomainError::Validation(error.to_string()))
+        };
+        Ok([
+            build(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID)?,
+            build(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID)?,
+        ])
+    }
+
+    fn validated_m5_source_v4(&self) -> Result<crate::m5::ValidatedM5SourceV4> {
+        crate::m5::ValidatedM5SourceV4::mint_from_v4_replay(
+            &self.aggregate,
+            &self.run_id,
+            |claim_id| self.v3_aggregate.assessments.get(claim_id),
+            self.m5_registered_inputs()?,
+        )
+        .map_err(|error| DomainError::Validation(error.to_string()))
+    }
+
+    /// Returns one assessment rebuilt from the confirmed V3 authority prefix.
+    /// This projection is descriptive only and grants no append authority.
+    #[must_use]
+    pub fn claim_assessment_v3(&self, claim_id: &StableId) -> Option<&crate::ClaimAssessmentV3> {
+        self.v3_aggregate.assessments.get(claim_id)
+    }
+
+    /// Returns one already replay-confirmed descriptor/registration pair for
+    /// idempotent Store reconstruction. The pair is descriptive only.
+    #[must_use]
+    pub fn registered_gluing_input_v4(
+        &self,
+        context_id: &StableId,
+    ) -> Option<(&ArtifactRegistrationV4, &crate::GluingInputDescriptorV4)> {
+        let descriptor = self.v4_gluing_descriptors.get(context_id)?;
+        let registration = self.v4_registrations.values().find(|registration| {
+            matches!(
+                registration.source(),
+                ArtifactSourceV4::GluingInput {
+                    context_id: source_context,
+                    descriptor_id,
+                    ..
+                } if source_context == context_id && descriptor_id == descriptor.id()
+            )
+        })?;
+        Some((registration, descriptor))
+    }
+
+    /// The atomically replayed M5 topology, if and only if its single bundle
+    /// event is already part of this confirmed prefix.
+    #[must_use]
+    pub fn gluing_bundle_v4(&self) -> Option<&crate::GluingBundleV4> {
+        self.m5_bundle.as_ref()
+    }
+
+    /// Admits exact canonical descriptor bytes at the sole legal 0/1
+    /// registration position and seals one V4 registration envelope.
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit_gluing_input_registration_v4(
+        &self,
+        trusted: TrustedGluingInputSourceV4,
+        descriptor_bytes: &[u8],
+        roots: &AuthorityTrustRootsV4,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<TrustedGluingInputAdmissionV4> {
+        basis.validate_for_log_v4(self)?;
+        let binding = trusted.binding;
+        binding.validate()?;
+        let expected_context = match self.v4_registrations.len() {
+            0 => crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            1 => crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+            _ => return Err(DomainError::AlreadyComplete),
+        };
+        if self.m5_bundle.is_some()
+            || !session_identity.matches(&self.session_identity)
+            || self.session_identity != basis.session_identity
+            || basis.gluing_input_entries.len() != self.v4_registrations.len()
+            || binding.context_id.as_str() != expected_context
+            || binding.policy_revision_hash != basis.policy_revision_hash
+            || binding.run_id != self.run_id
+            || binding.genesis_hash != self.genesis_hash
+            || binding.snapshot_id != *self.aggregate.program().snapshot_id()
+            || binding.universe_id != *self.aggregate.universe().id()
+            || binding.repository_id != *self.aggregate.program().repository_id()
+            || self
+                .aggregate
+                .program()
+                .repository_source()
+                .content_hash()
+                .is_none_or(|hash| hash != &binding.repository_source_hash)
+            || roots
+                .allowed_gluing_input_bindings
+                .iter()
+                .filter(|candidate| *candidate == &binding)
+                .count()
+                != 1
+        {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
+        let observed_size =
+            u64::try_from(descriptor_bytes.len()).map_err(|_| DomainError::Incomplete {
+                operation: "event-v4 gluing descriptor bytes",
+                limit: crate::MAX_M5_DESCRIPTOR_CANONICAL_BYTES,
+                observed: usize::MAX,
+            })?;
+        if descriptor_bytes.len() > crate::MAX_M5_DESCRIPTOR_CANONICAL_BYTES
+            || observed_size != binding.descriptor_size
+            || ContentHash::sha256(descriptor_bytes) != binding.descriptor_hash
+        {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
+        let descriptor = crate::GluingInputDescriptorV4::from_json_bytes(descriptor_bytes)
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        if descriptor.id() != &binding.descriptor_id
+            || descriptor.run_id() != &binding.run_id
+            || descriptor.snapshot_id() != &binding.snapshot_id
+            || descriptor.universe_id() != &binding.universe_id
+            || descriptor.plan_id() != &binding.plan_id
+            || descriptor.context_id() != &binding.context_id
+        {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
+        let closure = crate::m5::derive_registration_closure_v4(
+            &self.aggregate,
+            &self.run_id,
+            descriptor.plan_id(),
+            |claim_id| self.v3_aggregate.assessments.get(claim_id),
+        )
+        .map_err(|error| DomainError::Validation(error.to_string()))?;
+        if descriptor
+            .qualification_source_ids()
+            .iter()
+            .any(|id| !closure.allows_qualification(descriptor.context_id(), id))
+        {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
+        let registration = ArtifactRegistrationV4::from_gluing_binding(&binding)?;
+        if self.v4_registrations.contains_key(registration.id())
+            || self
+                .v4_gluing_descriptors
+                .contains_key(descriptor.context_id())
+        {
+            return Err(DomainError::IdCollision {
+                id: registration.id().clone(),
+            });
+        }
+        let payload = PersistedPayload::ArtifactRegisteredV4(registration.clone());
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V4,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            basis.next_sequence,
+            "engine:reviewgraphen.m5_gluing_input@1",
+            basis.next_sequence,
+            self.tail_hash.clone(),
+            payload,
+        )?;
+        let trust_binding_digest = ContentHash::sha256(&canonical_gluing_binding(&binding)?);
+        Ok(TrustedGluingInputAdmissionV4 {
+            session_identity: self.session_identity.clone(),
+            basis_digest: basis.basis_digest.clone(),
+            descriptor_id: descriptor.id().clone(),
+            context_id: descriptor.context_id().clone(),
+            registration,
+            predecessor_event_hash: self.tail_hash.clone(),
+            event_sequence: basis.next_sequence,
+            start_gluing_entry_count: basis.gluing_input_entries.len(),
+            envelope,
+            trust_binding_digest,
+            binding,
+        })
+    }
+
+    /// Derives every M5 record from the current aggregate and exact two
+    /// registered inputs, then seals them into one atomic V4 event.
+    pub fn mint_gluing_bundle_v4(
+        &self,
+        basis: &AuthorityReplayBasisV4,
+        session_identity: &OpaqueSessionIdentityV4,
+    ) -> Result<ValidatedGluingBundleV4> {
+        basis.validate_for_log_v4(self)?;
+        if self.m5_bundle.is_some() {
+            return Err(DomainError::AlreadyComplete);
+        }
+        if !session_identity.matches(&self.session_identity)
+            || self.session_identity != basis.session_identity
+            || self.v4_registrations.len() != 2
+            || self.v4_gluing_descriptors.len() != 2
+            || basis.gluing_input_entries.len() != 2
+        {
+            return Err(DomainError::GluingBundleMismatch);
+        }
+        let source = self.validated_m5_source_v4()?;
+        let bundle = crate::GluingBundleV4::from_validated(source);
+        let bundle_bytes = canonical_json(&bundle)?;
+        if bundle_bytes.len() > crate::MAX_M5_BUNDLE_CANONICAL_BYTES {
+            return Err(DomainError::Incomplete {
+                operation: "M5 canonical gluing bundle bytes",
+                limit: crate::MAX_M5_BUNDLE_CANONICAL_BYTES,
+                observed: bundle_bytes.len(),
+            });
+        }
+        let payload = PersistedPayload::GluingBundleRecordedV4(raw_payload(bundle_bytes)?);
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V4,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            basis.next_sequence,
+            "engine:reviewgraphen.m5_gluing@1",
+            basis.next_sequence,
+            self.tail_hash.clone(),
+            payload,
+        )?;
+        Ok(ValidatedGluingBundleV4 {
+            session_identity: self.session_identity.clone(),
+            basis_digest: basis.basis_digest.clone(),
+            start_gluing_entry_count: basis.gluing_input_entries.len(),
+            bundle,
+            predecessor_event_hash: self.tail_hash.clone(),
+            event_sequence: basis.next_sequence,
+            envelope,
+        })
     }
 
     fn registration_binding_v3_at_v4(
@@ -11662,6 +12273,9 @@ impl EventLogV4 {
                 &payload,
             )?;
             payload.validate_for_enclosing_run(&run_id)?;
+            if log.m5_bundle.is_some() {
+                return Err(DomainError::AlreadyComplete);
+            }
             if let PersistedPayload::ArtifactRegisteredV4(registration) = &payload {
                 registration.validate()?;
                 if log.v4_registrations.len() >= 2 {
@@ -11814,6 +12428,30 @@ impl EventLogV4 {
                 });
                 log.v4_registrations
                     .insert(registration.id().clone(), registration.clone());
+                if log
+                    .v4_gluing_descriptors
+                    .insert(context_id.clone(), descriptor)
+                    .is_some()
+                {
+                    return Err(DomainError::IdCollision {
+                        id: context_id.clone(),
+                    });
+                }
+            } else if let PersistedPayload::GluingBundleRecordedV4(raw_bundle) = &payload {
+                if log.v4_registrations.len() != 2
+                    || log.v4_gluing_descriptors.len() != 2
+                    || gluing_input_entries.len() != 2
+                {
+                    return Err(DomainError::GluingBundleMismatch);
+                }
+                let source = log.validated_m5_source_v4()?;
+                let bundle =
+                    crate::GluingBundleV4::from_json_bytes(raw_bundle.get().as_bytes(), &source)
+                        .map_err(|error| DomainError::AuthorityReplayRefused {
+                            event_sequence: envelope.sequence(),
+                            reason: error.to_string(),
+                        })?;
+                log.m5_bundle = Some(bundle);
             } else {
                 if !log.v4_registrations.is_empty() {
                     return Err(DomainError::Validation(
@@ -19722,6 +20360,7 @@ fn apply(
         | PersistedPayload::ArtifactRegisteredV3(_)
         | PersistedPayload::RunGenesisManifestV4(_)
         | PersistedPayload::ArtifactRegisteredV4(_)
+        | PersistedPayload::GluingBundleRecordedV4(_)
         | PersistedPayload::EvidenceRecordedV3(_)
         | PersistedPayload::EvidenceBoundV3(_)
         | PersistedPayload::VerificationRecordedV3(_)
@@ -20029,7 +20668,6 @@ mod tests {
             descriptor_size,
             GLUING_INPUT_MEDIA_TYPE_V4,
             ArtifactSensitivity::CanonicalState,
-            registration.id().clone(),
             source,
         )
         .expect("binding");
@@ -22222,6 +22860,10 @@ mod tests {
     #[test]
     fn v4_gluing_replay_accepts_only_the_zero_one_two_context_prefixes() {
         let (mut v3, initial, plan, obligation_id, context, sources) = d2_v3_m4_m5_log();
+        assert_eq!(
+            v3.aggregate().program().profile_key(),
+            crate::DOUBLE_SUBMIT_PROFILE_ID
+        );
         let (_, claim_id) = append_d2_attempt_v3_with_polarity(
             &mut v3,
             &plan,
@@ -22341,6 +22983,44 @@ mod tests {
             crate::AssignmentValueV4::Satisfied,
             BTreeSet::new(),
         );
+        let (_, payment_admission_binding, _) = v4_gluing_registration(
+            &bootstrap,
+            aggregate,
+            plan.id(),
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            crate::AssignmentValueV4::Required,
+            BTreeSet::from([
+                id(crate::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID),
+                selected_evidence_id.clone(),
+            ]),
+        );
+        let (_, ui_admission_binding, _) = v4_gluing_registration(
+            &bootstrap,
+            aggregate,
+            plan.id(),
+            crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+            crate::AssignmentValueV4::Satisfied,
+            BTreeSet::new(),
+        );
+        let (_, missing_root_binding, _) = v4_gluing_registration(
+            &bootstrap,
+            aggregate,
+            plan.id(),
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            crate::AssignmentValueV4::Required,
+            BTreeSet::from([
+                id(crate::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID),
+                selected_evidence_id.clone(),
+            ]),
+        );
+        let (_, ui_out_of_order_binding, _) = v4_gluing_registration(
+            &bootstrap,
+            aggregate,
+            plan.id(),
+            crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+            crate::AssignmentValueV4::Satisfied,
+            BTreeSet::new(),
+        );
         let (stale, stale_binding, stale_bytes) = v4_gluing_registration(
             &bootstrap,
             aggregate,
@@ -22410,6 +23090,312 @@ mod tests {
         )
         .expect("zero prefix");
         assert_eq!(zero.1.gluing_input_entry_count(), 0);
+
+        let sealed_session = OpaqueSessionIdentityV4::fresh();
+        let (sealed_zero_log, sealed_zero_basis) =
+            EventLogV4::replay_confirmed_v4_prefix_for_session(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &base_envelopes,
+                &resolver,
+                &roots,
+                limits,
+                &sealed_session,
+            )
+            .expect("sealed zero prefix");
+        let pre_registration_tail = sealed_zero_basis.confirmed_tail_hash().clone();
+        let missing_roots = empty_v4_roots(aggregate);
+        assert!(matches!(
+            sealed_zero_log.admit_gluing_input_registration_v4(
+                TrustedGluingInputSourceV4::from_trusted_host(missing_root_binding)
+                    .expect("missing-root source shape"),
+                &resolver.objects[payment.cas_hash()],
+                &missing_roots,
+                &sealed_zero_basis,
+                &sealed_session,
+            ),
+            Err(DomainError::GluingInputAdmissionMismatch)
+        ));
+        assert!(matches!(
+            sealed_zero_log.admit_gluing_input_registration_v4(
+                TrustedGluingInputSourceV4::from_trusted_host(ui_out_of_order_binding)
+                    .expect("out-of-order UI source shape"),
+                &resolver.objects[ui.cas_hash()],
+                &roots,
+                &sealed_zero_basis,
+                &sealed_session,
+            ),
+            Err(DomainError::GluingInputAdmissionMismatch)
+        ));
+        let payment_source =
+            TrustedGluingInputSourceV4::from_trusted_host(payment_admission_binding)
+                .expect("trusted payment source");
+        assert_eq!(payment_source.descriptor_hash(), payment.cas_hash());
+        assert_eq!(payment_source.registration_id(), payment.id());
+        let payment_admission = sealed_zero_log
+            .admit_gluing_input_registration_v4(
+                payment_source,
+                &resolver.objects[payment.cas_hash()],
+                &roots,
+                &sealed_zero_basis,
+                &sealed_session,
+            )
+            .expect("payment admission");
+        let sealed_payment_event = payment_admission
+            .envelope(&sealed_zero_log, &sealed_zero_basis, &sealed_session)
+            .expect("payment envelope")
+            .clone();
+        let other_session = OpaqueSessionIdentityV4::fresh();
+        let (other_log, other_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &base_envelopes,
+            &resolver,
+            &roots,
+            limits,
+            &other_session,
+        )
+        .expect("other zero prefix");
+        assert!(matches!(
+            payment_admission.envelope(&other_log, &other_basis, &other_session),
+            Err(DomainError::GluingInputAdmissionMismatch)
+        ));
+        assert_eq!(sealed_zero_basis.gluing_input_entry_count(), 0);
+        assert_eq!(
+            sealed_zero_basis.confirmed_tail_hash(),
+            &pre_registration_tail
+        );
+        let mut sealed_confirmed = base_envelopes.clone();
+        sealed_confirmed.push(sealed_payment_event);
+        let (sealed_one_log, sealed_one_basis) =
+            EventLogV4::replay_confirmed_v4_prefix_for_session(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &sealed_confirmed,
+                &resolver,
+                &roots,
+                limits,
+                &sealed_session,
+            )
+            .expect("sealed payment replay");
+        payment_admission
+            .confirm_replayed(&sealed_one_log, &sealed_one_basis, &sealed_session)
+            .expect("payment receipt");
+        assert_eq!(sealed_one_basis.gluing_input_entry_count(), 1);
+        assert!(
+            sealed_one_log
+                .registered_gluing_input_v4(&id(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID))
+                .is_some()
+        );
+
+        let ui_source = TrustedGluingInputSourceV4::from_trusted_host(ui_admission_binding)
+            .expect("trusted UI source");
+        let ui_admission = sealed_one_log
+            .admit_gluing_input_registration_v4(
+                ui_source,
+                &resolver.objects[ui.cas_hash()],
+                &roots,
+                &sealed_one_basis,
+                &sealed_session,
+            )
+            .expect("UI admission");
+        sealed_confirmed.push(
+            ui_admission
+                .envelope(&sealed_one_log, &sealed_one_basis, &sealed_session)
+                .expect("UI envelope")
+                .clone(),
+        );
+        let (sealed_two_log, sealed_two_basis) =
+            EventLogV4::replay_confirmed_v4_prefix_for_session(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &sealed_confirmed,
+                &resolver,
+                &roots,
+                limits,
+                &sealed_session,
+            )
+            .expect("sealed UI replay");
+        ui_admission
+            .confirm_replayed(&sealed_two_log, &sealed_two_basis, &sealed_session)
+            .expect("UI receipt");
+        assert_eq!(sealed_two_basis.gluing_input_entry_count(), 2);
+
+        let authority_entries_before_bundle = sealed_two_basis.inherited_m4_entry_count();
+        let gluing_entries_before_bundle = sealed_two_basis.gluing_input_entry_count();
+        let event_count_before_bundle = sealed_two_basis.confirmed_event_count();
+        let next_sequence_before_bundle = sealed_two_basis.next_sequence();
+        let tail_before_bundle = sealed_two_basis.confirmed_tail_hash().clone();
+        let basis_digest_before_bundle = sealed_two_basis.basis_digest().clone();
+        assert!(sealed_two_log.gluing_bundle_v4().is_none());
+        let bundle = sealed_two_log
+            .mint_gluing_bundle_v4(&sealed_two_basis, &sealed_session)
+            .expect("atomic gluing bundle");
+        let bundle_event = bundle
+            .envelope(&sealed_two_log, &sealed_two_basis, &sealed_session)
+            .expect("atomic bundle envelope")
+            .clone();
+        assert_eq!(sealed_two_basis.gluing_input_entry_count(), 2);
+        sealed_confirmed.push(bundle_event.clone());
+        let (complete_log, complete_basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &sealed_confirmed,
+            &resolver,
+            &roots,
+            limits,
+            &sealed_session,
+        )
+        .expect("atomic bundle replay");
+        let bundle_receipt = bundle
+            .confirm_replayed(&complete_log, &complete_basis, &sealed_session)
+            .expect("atomic bundle receipt");
+        assert!(complete_log.gluing_bundle_v4().is_some());
+        assert_eq!(bundle_receipt.result(), crate::GluingResultV4::Unknown);
+        assert_eq!(
+            complete_basis.inherited_m4_entry_count(),
+            authority_entries_before_bundle
+        );
+        assert_eq!(
+            complete_basis.gluing_input_entry_count(),
+            gluing_entries_before_bundle
+        );
+        assert_eq!(
+            complete_basis.confirmed_event_count(),
+            event_count_before_bundle + 1
+        );
+        assert_eq!(
+            complete_basis.next_sequence(),
+            next_sequence_before_bundle + 1
+        );
+        assert_ne!(complete_basis.confirmed_tail_hash(), &tail_before_bundle);
+        assert_eq!(
+            complete_basis.confirmed_tail_hash(),
+            bundle_receipt.confirmed_tail_hash()
+        );
+        assert_ne!(complete_basis.basis_digest(), &basis_digest_before_bundle);
+        assert!(matches!(
+            complete_log.mint_gluing_bundle_v4(&complete_basis, &sealed_session),
+            Err(DomainError::AlreadyComplete)
+        ));
+
+        let bundle_payload =
+            decode_canonical_payload(EventContractVersion::V4, bundle_event.payload.get())
+                .expect("sealed bundle payload");
+        let second_bundle = EventEnvelope::new(
+            EventContractVersion::V4,
+            bootstrap.run_id().clone(),
+            bootstrap.genesis_hash().clone(),
+            complete_basis.next_sequence(),
+            "engine:reviewgraphen.m5_gluing@1",
+            complete_basis.next_sequence(),
+            complete_basis.confirmed_tail_hash().clone(),
+            bundle_payload.clone(),
+        )
+        .expect("second bundle envelope shape");
+        let mut duplicate_bundle_prefix = sealed_confirmed.clone();
+        duplicate_bundle_prefix.push(second_bundle);
+        assert!(matches!(
+            EventLogV4::replay_confirmed_v4_prefix(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &duplicate_bundle_prefix,
+                &resolver,
+                &roots,
+                limits,
+            ),
+            Err(DomainError::AlreadyComplete)
+        ));
+
+        let early_bundle = EventEnvelope::new(
+            EventContractVersion::V4,
+            bootstrap.run_id().clone(),
+            bootstrap.genesis_hash().clone(),
+            sealed_one_basis.next_sequence(),
+            "engine:reviewgraphen.m5_gluing@1",
+            sealed_one_basis.next_sequence(),
+            sealed_one_basis.confirmed_tail_hash().clone(),
+            bundle_payload.clone(),
+        )
+        .expect("early bundle envelope shape");
+        let mut early_prefix = base_envelopes.clone();
+        early_prefix.push(sealed_confirmed[base_envelopes.len()].clone());
+        early_prefix.push(early_bundle);
+        assert!(matches!(
+            EventLogV4::replay_confirmed_v4_prefix(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &early_prefix,
+                &resolver,
+                &roots,
+                limits,
+            ),
+            Err(DomainError::GluingBundleMismatch)
+        ));
+
+        let PersistedPayload::GluingBundleRecordedV4(raw_bundle) = bundle_payload.clone() else {
+            panic!("gluing bundle payload")
+        };
+        let mut tampered_bundle: Value = serde_json::from_str(raw_bundle.get()).unwrap();
+        tampered_bundle["attempt"]["result"] = Value::String("glued".to_owned());
+        let tampered_payload = PersistedPayload::GluingBundleRecordedV4(
+            raw_payload(canonical_json(&tampered_bundle).unwrap()).unwrap(),
+        );
+        let tampered_event = EventEnvelope::new(
+            EventContractVersion::V4,
+            bootstrap.run_id().clone(),
+            bootstrap.genesis_hash().clone(),
+            sealed_two_basis.next_sequence(),
+            "engine:reviewgraphen.m5_gluing@1",
+            sealed_two_basis.next_sequence(),
+            sealed_two_basis.confirmed_tail_hash().clone(),
+            tampered_payload,
+        )
+        .expect("tampered bundle envelope");
+        let mut tampered_prefix = sealed_confirmed[..sealed_confirmed.len() - 1].to_vec();
+        tampered_prefix.push(tampered_event);
+        assert!(
+            EventLogV4::replay_confirmed_v4_prefix(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &tampered_prefix,
+                &resolver,
+                &roots,
+                limits,
+            )
+            .is_err()
+        );
+
+        let mut wrong_actor_bundle = bundle_event.clone();
+        wrong_actor_bundle.actor = "engine:substituted".to_owned();
+        let mut wrong_actor_prefix = sealed_confirmed[..sealed_confirmed.len() - 1].to_vec();
+        wrong_actor_prefix.push(wrong_actor_bundle);
+        assert!(
+            EventLogV4::replay_confirmed_v4_prefix(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &wrong_actor_prefix,
+                &resolver,
+                &roots,
+                limits,
+            )
+            .is_err()
+        );
+
+        assert!(
+            EventEnvelope::new(
+                EventContractVersion::V3,
+                bootstrap.run_id().clone(),
+                bootstrap.genesis_hash().clone(),
+                sealed_two_basis.next_sequence(),
+                "engine:reviewgraphen.m5_gluing@1",
+                sealed_two_basis.next_sequence(),
+                sealed_two_basis.confirmed_tail_hash().clone(),
+                bundle_payload,
+            )
+            .is_err(),
+            "the M5 bundle payload must remain frozen out of V1-V3"
+        );
 
         let payment_event = v4_registration_envelope(
             &bootstrap,
@@ -22519,6 +23505,85 @@ mod tests {
         );
 
         let canonical_payment = resolver.objects[payment.cas_hash()].clone();
+        let canonical_registration = serde_json::to_value(&payment).unwrap();
+        let source_hash = Value::String(ContentHash::sha256(b"substituted").to_string());
+        let registration_mutations = [
+            ("/run_id", Value::String("run:substituted".to_owned())),
+            ("/cas_hash", source_hash.clone()),
+            ("/media_type", Value::String("application/json".to_owned())),
+            ("/size", Value::from(payment.size() + 1)),
+            ("/sensitivity", Value::String("workspace_source".to_owned())),
+            (
+                "/source/context_id",
+                Value::String(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID.to_owned()),
+            ),
+            ("/source/descriptor_hash", source_hash.clone()),
+            (
+                "/source/descriptor_id",
+                Value::String("gluing-input-descriptor-v4:substituted".to_owned()),
+            ),
+            (
+                "/source/descriptor_media_type",
+                Value::String("application/json".to_owned()),
+            ),
+            (
+                "/source/descriptor_sensitivity",
+                Value::String("workspace_source".to_owned()),
+            ),
+            ("/source/descriptor_size", Value::from(payment.size() + 1)),
+            ("/source/genesis_hash", source_hash.clone()),
+            (
+                "/source/plan_id",
+                Value::String("plan:substituted".to_owned()),
+            ),
+            ("/source/policy_revision_hash", source_hash.clone()),
+            (
+                "/source/profile_descriptor_id",
+                Value::String("reviewgraphen.substituted@1".to_owned()),
+            ),
+            (
+                "/source/repository_id",
+                Value::String("repository:substituted".to_owned()),
+            ),
+            ("/source/repository_source_hash", source_hash.clone()),
+            (
+                "/source/run_id",
+                Value::String("run:substituted".to_owned()),
+            ),
+            (
+                "/source/snapshot_id",
+                Value::String("snapshot:substituted".to_owned()),
+            ),
+            (
+                "/source/universe_id",
+                Value::String("universe:substituted".to_owned()),
+            ),
+        ];
+        for (pointer, replacement) in registration_mutations {
+            let mut mutated = canonical_registration.clone();
+            *mutated.pointer_mut(pointer).expect("registration pointer") = replacement;
+            let bytes = canonical_json(&mutated).unwrap();
+            assert!(
+                ArtifactRegistrationV4::from_json_bytes(&bytes).is_err(),
+                "registration mutation unexpectedly accepted: {pointer}"
+            );
+        }
+
+        let mut wrong_registration_actor = payment_event.clone();
+        wrong_registration_actor.actor = "engine:substituted".to_owned();
+        let mut wrong_registration_actor_prefix = base_envelopes.clone();
+        wrong_registration_actor_prefix.push(wrong_registration_actor);
+        assert!(
+            EventLogV4::replay_confirmed_v4_prefix(
+                bootstrap.run_id().clone(),
+                bootstrap.canonical_genesis_bytes(),
+                &wrong_registration_actor_prefix,
+                &resolver,
+                &roots,
+                limits,
+            )
+            .is_err()
+        );
         let mut wrong_id_value: Value = serde_json::from_slice(&canonical_payment).unwrap();
         wrong_id_value["id"] = Value::String("gluing-input-descriptor-v4:tampered".to_owned());
         let wrong_id_bytes = canonical_json(&wrong_id_value).unwrap();
@@ -22637,6 +23702,24 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v4_gluing_admission_and_replay_closure_refuse_foreign_program_profile() {
+        let (log, _initial, plan, _obligation_id, _context, _sources) = d2_v3_m4_log();
+        assert_eq!(log.aggregate().program().profile_key(), "code-review@1");
+        assert!(matches!(
+            crate::m5::derive_registration_closure_v4(
+                log.aggregate(),
+                log.run_id(),
+                plan.id(),
+                |claim_id| log.claim_assessment_v3(claim_id),
+            ),
+            Err(crate::M5Error::BindingMismatch {
+                field: "M5 profile",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -23485,6 +24568,8 @@ mod tests {
         let mut input: Value = serde_json::from_slice(FIXTURE).unwrap();
         replace_json_string(&mut input, FIXTURE_TEST_ARTIFACT_ID, fixture_test_id);
         if add_m5_file_members {
+            input["profile"]["id"] = Value::String("double-submit-payment".to_owned());
+            input["profile"]["version"] = Value::String("1".to_owned());
             for context in input["contexts"].as_array_mut().unwrap().iter_mut() {
                 if context["id"] == crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID {
                     let members = context["member_ids"].as_array_mut().unwrap();
