@@ -138,13 +138,17 @@ pub use m5::{
 };
 pub use m6::{
     CandidateKeyKindV5, ChangeMorphismV5, IdBodyHashV5, IncrementalSourceClosureV5, M6Error,
-    M6MappingPhaseV5, M6Result, MAX_M6_CANONICAL_BYTES, MAX_M6_CLOSURE_DTO_BYTES,
-    MAX_M6_EVENT_LINE_BYTES, MAX_M6_MAPPING_DTO_BYTES, MAX_M6_MAPPING_LINK_IDS,
-    MAX_M6_MAPPING_SIDE_IDS, MAX_M6_MAPPING_WORKING_BYTES, MAX_M6_MAPPINGS,
-    MAX_M6_MORPHISM_DTO_BYTES, MAX_M6_PROGRAM_DOMAIN_IDS, MappingStatusCountsV5, MappingStatusV5,
-    PROGRAM_MAPPING_POLICY_V5, ProgramMappingV5, ProgramObjectKindV5, RUST_SYMBOL_ANCHOR_V1,
-    RustSymbolAnchorV1, RustSymbolKindV1, UntrustedIncrementalMappingProposalV5,
-    derive_untrusted_incremental_mapping_proposal_v5,
+    M6MappingPhaseV5, M6ObligationCorrespondencePhaseV5, M6Result, MAX_M6_CANONICAL_BYTES,
+    MAX_M6_CLOSURE_DTO_BYTES, MAX_M6_CORRESPONDENCE_DTO_BYTES, MAX_M6_CORRESPONDENCE_ENTRIES,
+    MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS, MAX_M6_CORRESPONDENCE_SIDE_IDS,
+    MAX_M6_CORRESPONDENCE_WORKING_BYTES, MAX_M6_EVENT_LINE_BYTES, MAX_M6_MAPPING_DTO_BYTES,
+    MAX_M6_MAPPING_LINK_IDS, MAX_M6_MAPPING_SIDE_IDS, MAX_M6_MAPPING_WORKING_BYTES,
+    MAX_M6_MAPPINGS, MAX_M6_MORPHISM_DTO_BYTES, MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+    MAX_M6_PROGRAM_DOMAIN_IDS, MappingStatusCountsV5, MappingStatusV5,
+    OBLIGATION_CORRESPONDENCE_POLICY_V5, ObligationCorrespondenceEntryV5,
+    ObligationCorrespondenceV5, PROGRAM_MAPPING_POLICY_V5, ProgramMappingV5, ProgramObjectKindV5,
+    RUST_SYMBOL_ANCHOR_V1, RustSymbolAnchorV1, RustSymbolKindV1,
+    UntrustedIncrementalMappingProposalV5, derive_untrusted_incremental_mapping_proposal_v5,
 };
 pub use planning::{
     DeferralReason, PlanBudget, PlannerPolicyV1, ReviewPlan, RiskDescriptor, ScheduleWave, plan,

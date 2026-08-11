@@ -8,7 +8,7 @@
 
 use crate::{
     AuthorityReplayBasisV4, ContentHash, DomainError, EventLogV4, EventLogV5,
-    M5CompletedGluingProfileV4, ProgramSpace, StableId,
+    M5CompletedGluingProfileV4, Obligation, ProgramSpace, ReviewAggregate, StableId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -17,6 +17,7 @@ use thiserror::Error;
 pub const PROGRAM_MAPPING_POLICY_V5: &str = "reviewgraphen.program_mapping@1";
 pub const RUST_SYMBOL_ANCHOR_V1: &str = "reviewgraphen.rust_symbol_anchor@1";
 pub const GIT_CHANGE_PROVENANCE_V1: &str = "reviewgraphen.ingest.git.changed_structure.v1";
+pub const OBLIGATION_CORRESPONDENCE_POLICY_V5: &str = "reviewgraphen.obligation_correspondence@1";
 pub const MAX_M6_PROGRAM_DOMAIN_IDS: usize = 4_096;
 pub const MAX_M6_MAPPINGS: usize = 8_192;
 pub const MAX_M6_MAPPING_SIDE_IDS: usize = 64;
@@ -27,6 +28,12 @@ pub const MAX_M6_CLOSURE_DTO_BYTES: usize = 1_048_576;
 pub const MAX_M6_MORPHISM_DTO_BYTES: usize = 1_048_576;
 pub const MAX_M6_EVENT_LINE_BYTES: usize = 1_048_576;
 pub const MAX_M6_MAPPING_WORKING_BYTES: usize = 536_870_912;
+pub const MAX_M6_OBLIGATIONS_PER_UNIVERSE: usize = 2_048;
+pub const MAX_M6_CORRESPONDENCE_ENTRIES: usize = 4_096;
+pub const MAX_M6_CORRESPONDENCE_SIDE_IDS: usize = 64;
+pub const MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS: usize = 64;
+pub const MAX_M6_CORRESPONDENCE_DTO_BYTES: usize = 1_048_576;
+pub const MAX_M6_CORRESPONDENCE_WORKING_BYTES: usize = 536_870_912;
 
 pub type M6Result<T> = std::result::Result<T, M6Error>;
 
@@ -40,6 +47,8 @@ pub enum M6Error {
     InvalidGitObjectId { field: &'static str, value: String },
     #[error("invalid M6 mapping component: {0}")]
     InvalidMapping(&'static str),
+    #[error("invalid M6 obligation universe: {0}")]
+    InvalidObligationUniverse(&'static str),
     #[error("missing accepted M6 {kind} fact for {object_id}")]
     MissingAcceptedMappingFact {
         kind: &'static str,
@@ -4666,6 +4675,2126 @@ impl ChangeMorphismV5 {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ObligationCorrespondenceEntryPartsV5 {
+    morphism_id: StableId,
+    from_obligation_ids: BTreeSet<StableId>,
+    to_obligation_ids: BTreeSet<StableId>,
+    status: MappingStatusV5,
+    source_mapping_ids: BTreeSet<StableId>,
+    predecessor_entry_ids: BTreeSet<StableId>,
+    source_body_hashes: Vec<IdBodyHashV5>,
+    target_body_hashes: Vec<IdBodyHashV5>,
+}
+
+#[derive(Serialize)]
+struct ObligationCorrespondenceEntryIdentityV5<'a> {
+    morphism_id: &'a StableId,
+    from_obligation_ids: &'a BTreeSet<StableId>,
+    to_obligation_ids: &'a BTreeSet<StableId>,
+    status: MappingStatusV5,
+    source_mapping_ids: &'a BTreeSet<StableId>,
+    predecessor_entry_ids: &'a BTreeSet<StableId>,
+    source_body_hashes: &'a Vec<IdBodyHashV5>,
+    target_body_hashes: &'a Vec<IdBodyHashV5>,
+}
+
+/// One deterministic, exclusive source/target obligation component.
+/// Callers cannot mint accepted-looking entries from inferred JSON fields:
+///
+/// ```compile_fail
+/// use reviewgraphen_core::ObligationCorrespondenceEntryV5;
+/// let _forged = ObligationCorrespondenceEntryV5 {};
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ObligationCorrespondenceEntryV5 {
+    schema: &'static str,
+    id: StableId,
+    morphism_id: StableId,
+    from_obligation_ids: BTreeSet<StableId>,
+    to_obligation_ids: BTreeSet<StableId>,
+    status: MappingStatusV5,
+    source_mapping_ids: BTreeSet<StableId>,
+    predecessor_entry_ids: BTreeSet<StableId>,
+    successor_obligation_ids: BTreeSet<StableId>,
+    source_body_hashes: Vec<IdBodyHashV5>,
+    target_body_hashes: Vec<IdBodyHashV5>,
+    source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObligationCorrespondenceEntryWireV5 {
+    schema: String,
+    id: StableId,
+    morphism_id: StableId,
+    from_obligation_ids: BTreeSet<StableId>,
+    to_obligation_ids: BTreeSet<StableId>,
+    status: MappingStatusV5,
+    source_mapping_ids: BTreeSet<StableId>,
+    predecessor_entry_ids: BTreeSet<StableId>,
+    successor_obligation_ids: BTreeSet<StableId>,
+    source_body_hashes: Vec<IdBodyHashV5>,
+    target_body_hashes: Vec<IdBodyHashV5>,
+    source_ids: BTreeSet<StableId>,
+}
+
+fn validate_obligation_component_shape(
+    from: usize,
+    to: usize,
+    status: MappingStatusV5,
+) -> M6Result<()> {
+    let valid = match (from, to, status) {
+        (0, 1, MappingStatusV5::Added) | (1, 0, MappingStatusV5::Removed) => true,
+        (
+            1,
+            1,
+            MappingStatusV5::Preserved | MappingStatusV5::Modified | MappingStatusV5::Unresolved,
+        ) => true,
+        (1, target, MappingStatusV5::Split) if target > 1 => true,
+        (source, 1, MappingStatusV5::Merged) if source > 1 => true,
+        (source, target, MappingStatusV5::Unresolved) if source > 1 && target > 1 => true,
+        _ => false,
+    };
+    if !valid {
+        return Err(M6Error::InvalidObligationUniverse(
+            "correspondence status does not match exclusive component cardinality",
+        ));
+    }
+    Ok(())
+}
+
+impl ObligationCorrespondenceEntryV5 {
+    fn from_parts(input: ObligationCorrespondenceEntryPartsV5) -> M6Result<Self> {
+        require_kind(&input.morphism_id, "change-morphism-v5", "morphism_id")?;
+        bounded(
+            input.from_obligation_ids.len(),
+            MAX_M6_CORRESPONDENCE_SIDE_IDS,
+            "M6 correspondence source obligations",
+        )?;
+        bounded(
+            input.to_obligation_ids.len(),
+            MAX_M6_CORRESPONDENCE_SIDE_IDS,
+            "M6 correspondence target obligations",
+        )?;
+        bounded(
+            input.source_mapping_ids.len(),
+            MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS,
+            "M6 correspondence source mappings",
+        )?;
+        bounded(
+            input.predecessor_entry_ids.len(),
+            MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS,
+            "M6 correspondence predecessor entries",
+        )?;
+        if input
+            .from_obligation_ids
+            .iter()
+            .chain(&input.to_obligation_ids)
+            .any(|id| id.kind() != "obligation")
+            || input
+                .source_mapping_ids
+                .iter()
+                .any(|id| id.kind() != "program-mapping-v5")
+            || input
+                .predecessor_entry_ids
+                .iter()
+                .any(|id| id.kind() != "obligation-correspondence-entry-v5")
+        {
+            return Err(M6Error::InvalidObligationUniverse(
+                "correspondence member/source IDs use the wrong namespace",
+            ));
+        }
+        validate_obligation_component_shape(
+            input.from_obligation_ids.len(),
+            input.to_obligation_ids.len(),
+            input.status,
+        )?;
+        validate_body_hash_records(
+            "source_body_hashes",
+            &input.from_obligation_ids,
+            &input.source_body_hashes,
+        )?;
+        validate_body_hash_records(
+            "target_body_hashes",
+            &input.to_obligation_ids,
+            &input.target_body_hashes,
+        )?;
+        let identity = ObligationCorrespondenceEntryIdentityV5 {
+            morphism_id: &input.morphism_id,
+            from_obligation_ids: &input.from_obligation_ids,
+            to_obligation_ids: &input.to_obligation_ids,
+            status: input.status,
+            source_mapping_ids: &input.source_mapping_ids,
+            predecessor_entry_ids: &input.predecessor_entry_ids,
+            source_body_hashes: &input.source_body_hashes,
+            target_body_hashes: &input.target_body_hashes,
+        };
+        let id = derive("obligation-correspondence-entry-v5", &identity)?;
+        let successor_obligation_ids = if input.from_obligation_ids.is_empty() {
+            BTreeSet::new()
+        } else {
+            input.to_obligation_ids.clone()
+        };
+        let source_ids = std::iter::once(input.morphism_id.clone())
+            .chain(input.source_mapping_ids.iter().cloned())
+            .chain(input.predecessor_entry_ids.iter().cloned())
+            .chain(input.from_obligation_ids.iter().cloned())
+            .chain(input.to_obligation_ids.iter().cloned())
+            .collect();
+        let value = Self {
+            schema: "reviewgraphen.obligation_correspondence_entry.v5",
+            id,
+            morphism_id: input.morphism_id,
+            from_obligation_ids: input.from_obligation_ids,
+            to_obligation_ids: input.to_obligation_ids,
+            status: input.status,
+            source_mapping_ids: input.source_mapping_ids,
+            predecessor_entry_ids: input.predecessor_entry_ids,
+            successor_obligation_ids,
+            source_body_hashes: input.source_body_hashes,
+            target_body_hashes: input.target_body_hashes,
+            source_ids,
+        };
+        bounded_event_dto(
+            &value,
+            MAX_M6_CORRESPONDENCE_DTO_BYTES,
+            "M6 correspondence entry DTO bytes",
+        )?;
+        Ok(value)
+    }
+
+    fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        preflight_event_line(input.len(), 1)?;
+        bounded(
+            input.len(),
+            MAX_M6_CORRESPONDENCE_DTO_BYTES,
+            "M6 correspondence entry JSON bytes",
+        )?;
+        let wire: ObligationCorrespondenceEntryWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if wire.schema != "reviewgraphen.obligation_correspondence_entry.v5" {
+            return Err(M6Error::InvalidWire(
+                "wrong obligation correspondence entry schema".to_owned(),
+            ));
+        }
+        let expected = Self::from_parts(ObligationCorrespondenceEntryPartsV5 {
+            morphism_id: wire.morphism_id,
+            from_obligation_ids: wire.from_obligation_ids,
+            to_obligation_ids: wire.to_obligation_ids,
+            status: wire.status,
+            source_mapping_ids: wire.source_mapping_ids,
+            predecessor_entry_ids: wire.predecessor_entry_ids,
+            source_body_hashes: wire.source_body_hashes,
+            target_body_hashes: wire.target_body_hashes,
+        })?;
+        if expected.id != wire.id
+            || expected.successor_obligation_ids != wire.successor_obligation_ids
+            || expected.source_ids != wire.source_ids
+            || crate::canonical_json(&expected)? != input
+        {
+            return Err(M6Error::InvalidWire(
+                "correspondence entry wire is not exact canonical derived content".to_owned(),
+            ));
+        }
+        Ok(expected)
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        let records = |values: &[IdBodyHashV5]| {
+            std::mem::size_of_val(values).saturating_add(
+                values
+                    .iter()
+                    .map(|record| {
+                        record
+                            .id
+                            .allocated_bytes()
+                            .saturating_add(record.body_hash.allocated_bytes())
+                    })
+                    .sum::<usize>(),
+            )
+        };
+        [
+            std::mem::size_of::<Self>(),
+            self.id.allocated_bytes(),
+            self.morphism_id.allocated_bytes(),
+            id_set_heap(&self.from_obligation_ids),
+            id_set_heap(&self.to_obligation_ids),
+            id_set_heap(&self.source_mapping_ids),
+            id_set_heap(&self.predecessor_entry_ids),
+            id_set_heap(&self.successor_obligation_ids),
+            records(&self.source_body_hashes),
+            records(&self.target_body_hashes),
+            id_set_heap(&self.source_ids),
+        ]
+        .into_iter()
+        .fold(0_usize, usize::saturating_add)
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn morphism_id(&self) -> &StableId {
+        &self.morphism_id
+    }
+    #[must_use]
+    pub fn from_obligation_ids(&self) -> &BTreeSet<StableId> {
+        &self.from_obligation_ids
+    }
+    #[must_use]
+    pub fn to_obligation_ids(&self) -> &BTreeSet<StableId> {
+        &self.to_obligation_ids
+    }
+    #[must_use]
+    pub fn status(&self) -> MappingStatusV5 {
+        self.status
+    }
+    #[must_use]
+    pub fn source_mapping_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_mapping_ids
+    }
+    #[must_use]
+    pub fn predecessor_entry_ids(&self) -> &BTreeSet<StableId> {
+        &self.predecessor_entry_ids
+    }
+    #[must_use]
+    pub fn successor_obligation_ids(&self) -> &BTreeSet<StableId> {
+        &self.successor_obligation_ids
+    }
+    #[must_use]
+    pub fn source_body_hashes(&self) -> &[IdBodyHashV5] {
+        &self.source_body_hashes
+    }
+    #[must_use]
+    pub fn target_body_hashes(&self) -> &[IdBodyHashV5] {
+        &self.target_body_hashes
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+}
+
+#[derive(Serialize)]
+struct ObligationCorrespondenceIdentityV5<'a> {
+    morphism_id: &'a StableId,
+    source_universe_id: &'a StableId,
+    target_universe_id: &'a StableId,
+    policy_descriptor_id: &'static str,
+    entry_count: u64,
+    entry_set_digest: &'a ContentHash,
+    source_domain_count: u64,
+    source_domain_digest: &'a ContentHash,
+    target_domain_count: u64,
+    target_domain_digest: &'a ContentHash,
+    status_counts: &'a MappingStatusCountsV5,
+    source_ids: &'a BTreeSet<StableId>,
+}
+
+/// Seal over the complete, exclusively owned obligation correspondence phase.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ObligationCorrespondenceV5 {
+    schema: &'static str,
+    id: StableId,
+    morphism_id: StableId,
+    source_universe_id: StableId,
+    target_universe_id: StableId,
+    policy_descriptor_id: &'static str,
+    entry_count: u64,
+    entry_set_digest: ContentHash,
+    source_domain_count: u64,
+    source_domain_digest: ContentHash,
+    target_domain_count: u64,
+    target_domain_digest: ContentHash,
+    status_counts: MappingStatusCountsV5,
+    source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObligationCorrespondenceWireV5 {
+    schema: String,
+    id: StableId,
+    morphism_id: StableId,
+    source_universe_id: StableId,
+    target_universe_id: StableId,
+    policy_descriptor_id: String,
+    entry_count: u64,
+    entry_set_digest: ContentHash,
+    source_domain_count: u64,
+    source_domain_digest: ContentHash,
+    target_domain_count: u64,
+    target_domain_digest: ContentHash,
+    status_counts: MappingStatusCountsV5,
+    source_ids: BTreeSet<StableId>,
+}
+
+impl ObligationCorrespondenceV5 {
+    fn seal_derived(
+        morphism: &ChangeMorphismV5,
+        source_universe_id: &StableId,
+        target_universe_id: &StableId,
+        entries: &[ObligationCorrespondenceEntryV5],
+        source_domain: &BTreeSet<StableId>,
+        target_domain: &BTreeSet<StableId>,
+    ) -> M6Result<Self> {
+        if source_universe_id.kind() != "universe" || target_universe_id.kind() != "universe" {
+            return Err(M6Error::InvalidObligationUniverse(
+                "correspondence seal universe IDs use the wrong namespace",
+            ));
+        }
+        bounded(
+            entries.len(),
+            MAX_M6_CORRESPONDENCE_ENTRIES,
+            "M6 correspondence entries",
+        )?;
+        bounded(
+            source_domain.len(),
+            MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+            "M6 source obligations",
+        )?;
+        bounded(
+            target_domain.len(),
+            MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+            "M6 target obligations",
+        )?;
+        if entries.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+            return Err(M6Error::InvalidObligationUniverse(
+                "correspondence seal entries must be strictly ID ordered",
+            ));
+        }
+        let mut owned_source = BTreeSet::new();
+        let mut owned_target = BTreeSet::new();
+        let mut status_counts = MappingStatusCountsV5::default();
+        for entry in entries {
+            if entry.morphism_id != *morphism.id()
+                || entry
+                    .from_obligation_ids
+                    .iter()
+                    .any(|id| !owned_source.insert(id.clone()))
+                || entry
+                    .to_obligation_ids
+                    .iter()
+                    .any(|id| !owned_target.insert(id.clone()))
+            {
+                return Err(M6Error::InvalidObligationUniverse(
+                    "correspondence entry morphism/ownership mismatch",
+                ));
+            }
+            status_counts.record(entry.status);
+        }
+        if owned_source != *source_domain || owned_target != *target_domain {
+            return Err(M6Error::InvalidObligationUniverse(
+                "correspondence entries must exactly cover both obligation domains",
+            ));
+        }
+        let entry_set_digest =
+            crate::canonical::compact_json_array_sha256_streaming(entries.iter().map(|entry| {
+                entry
+                    .body_hash()
+                    .and_then(|hash| IdBodyHashV5::new(entry.id.clone(), hash))
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }))?;
+        let source_domain_digest = digest_ids(source_domain)?;
+        let target_domain_digest = digest_ids(target_domain)?;
+        let source_ids = BTreeSet::from([
+            morphism.id().clone(),
+            source_universe_id.clone(),
+            target_universe_id.clone(),
+        ]);
+        let identity = ObligationCorrespondenceIdentityV5 {
+            morphism_id: morphism.id(),
+            source_universe_id,
+            target_universe_id,
+            policy_descriptor_id: OBLIGATION_CORRESPONDENCE_POLICY_V5,
+            entry_count: entries.len() as u64,
+            entry_set_digest: &entry_set_digest,
+            source_domain_count: source_domain.len() as u64,
+            source_domain_digest: &source_domain_digest,
+            target_domain_count: target_domain.len() as u64,
+            target_domain_digest: &target_domain_digest,
+            status_counts: &status_counts,
+            source_ids: &source_ids,
+        };
+        let id = derive("obligation-correspondence-v5", &identity)?;
+        let value = Self {
+            schema: "reviewgraphen.obligation_correspondence.v5",
+            id,
+            morphism_id: morphism.id().clone(),
+            source_universe_id: source_universe_id.clone(),
+            target_universe_id: target_universe_id.clone(),
+            policy_descriptor_id: OBLIGATION_CORRESPONDENCE_POLICY_V5,
+            entry_count: entries.len() as u64,
+            entry_set_digest,
+            source_domain_count: source_domain.len() as u64,
+            source_domain_digest,
+            target_domain_count: target_domain.len() as u64,
+            target_domain_digest,
+            status_counts,
+            source_ids,
+        };
+        bounded_event_dto(
+            &value,
+            MAX_M6_CORRESPONDENCE_DTO_BYTES,
+            "M6 correspondence seal DTO bytes",
+        )?;
+        Ok(value)
+    }
+
+    fn from_json_bytes(input: &[u8], expected: &Self) -> M6Result<Self> {
+        preflight_event_line(input.len(), 1)?;
+        bounded(
+            input.len(),
+            MAX_M6_CORRESPONDENCE_DTO_BYTES,
+            "M6 correspondence seal JSON bytes",
+        )?;
+        let wire: ObligationCorrespondenceWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if wire.schema != "reviewgraphen.obligation_correspondence.v5"
+            || wire.policy_descriptor_id != OBLIGATION_CORRESPONDENCE_POLICY_V5
+            || wire.id != expected.id
+            || wire.morphism_id != expected.morphism_id
+            || wire.source_universe_id != expected.source_universe_id
+            || wire.target_universe_id != expected.target_universe_id
+            || wire.entry_count != expected.entry_count
+            || wire.entry_set_digest != expected.entry_set_digest
+            || wire.source_domain_count != expected.source_domain_count
+            || wire.source_domain_digest != expected.source_domain_digest
+            || wire.target_domain_count != expected.target_domain_count
+            || wire.target_domain_digest != expected.target_domain_digest
+            || wire.status_counts != expected.status_counts
+            || wire.source_ids != expected.source_ids
+            || crate::canonical_json(expected)? != input
+        {
+            return Err(M6Error::InvalidWire(
+                "correspondence seal wire is not exact canonical replay content".to_owned(),
+            ));
+        }
+        Ok(expected.clone())
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        [
+            std::mem::size_of::<Self>(),
+            self.id.allocated_bytes(),
+            self.morphism_id.allocated_bytes(),
+            self.source_universe_id.allocated_bytes(),
+            self.target_universe_id.allocated_bytes(),
+            self.entry_set_digest.allocated_bytes(),
+            self.source_domain_digest.allocated_bytes(),
+            self.target_domain_digest.allocated_bytes(),
+            id_set_heap(&self.source_ids),
+        ]
+        .into_iter()
+        .fold(0_usize, usize::saturating_add)
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn morphism_id(&self) -> &StableId {
+        &self.morphism_id
+    }
+    #[must_use]
+    pub fn source_universe_id(&self) -> &StableId {
+        &self.source_universe_id
+    }
+    #[must_use]
+    pub fn target_universe_id(&self) -> &StableId {
+        &self.target_universe_id
+    }
+    #[must_use]
+    pub fn entry_count(&self) -> u64 {
+        self.entry_count
+    }
+    #[must_use]
+    pub fn entry_set_digest(&self) -> &ContentHash {
+        &self.entry_set_digest
+    }
+    #[must_use]
+    pub fn source_domain_count(&self) -> u64 {
+        self.source_domain_count
+    }
+    #[must_use]
+    pub fn source_domain_digest(&self) -> &ContentHash {
+        &self.source_domain_digest
+    }
+    #[must_use]
+    pub fn target_domain_count(&self) -> u64 {
+        self.target_domain_count
+    }
+    #[must_use]
+    pub fn target_domain_digest(&self) -> &ContentHash {
+        &self.target_domain_digest
+    }
+    #[must_use]
+    pub fn status_counts(&self) -> &MappingStatusCountsV5 {
+        &self.status_counts
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+}
+
+/// Complete in-memory correspondence phase. Event/Store persistence is owned
+/// by a later slice; this value grants no append or acceptance authority.
+#[derive(Clone, Debug)]
+pub struct M6ObligationCorrespondencePhaseV5 {
+    entries: Vec<ObligationCorrespondenceEntryV5>,
+    correspondence: ObligationCorrespondenceV5,
+    working_peak_upper_bound_bytes: usize,
+}
+
+impl M6ObligationCorrespondencePhaseV5 {
+    #[must_use]
+    pub fn entries(&self) -> &[ObligationCorrespondenceEntryV5] {
+        &self.entries
+    }
+    #[must_use]
+    pub fn correspondence(&self) -> &ObligationCorrespondenceV5 {
+        &self.correspondence
+    }
+    #[must_use]
+    pub fn working_peak_upper_bound_bytes(&self) -> usize {
+        self.working_peak_upper_bound_bytes
+    }
+
+    #[doc(hidden)]
+    pub fn validate_replayed_canonical(
+        &self,
+        entry_bytes: &[Vec<u8>],
+        correspondence_bytes: &[u8],
+    ) -> M6Result<()> {
+        if entry_bytes.len() != self.entries.len() {
+            return Err(M6Error::InvalidWire(
+                "replayed correspondence entry count differs from recomputed phase".to_owned(),
+            ));
+        }
+        for (bytes, expected) in entry_bytes.iter().zip(&self.entries) {
+            if ObligationCorrespondenceEntryV5::from_json_bytes(bytes)? != *expected {
+                return Err(M6Error::InvalidWire(
+                    "replayed correspondence entry differs from recomputed phase".to_owned(),
+                ));
+            }
+        }
+        if ObligationCorrespondenceV5::from_json_bytes(correspondence_bytes, &self.correspondence)?
+            != self.correspondence
+        {
+            return Err(M6Error::InvalidWire(
+                "replayed correspondence seal differs from recomputed phase".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ObligationCandidateKeyV5 {
+    rule_id: String,
+    property_id: String,
+    property_version: String,
+    target_kind: String,
+    semantic_key: String,
+    target_ids: BTreeSet<StableId>,
+    context_ids: BTreeSet<StableId>,
+    generator_program_ids: BTreeSet<StableId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ObligationSideV5 {
+    Source,
+    Target,
+}
+
+#[derive(Clone, Debug)]
+struct ObligationComponentSeedV5 {
+    from_ids: BTreeSet<StableId>,
+    to_ids: BTreeSet<StableId>,
+    stage: usize,
+}
+
+impl ObligationComponentSeedV5 {
+    fn allocated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(id_set_heap(&self.from_ids))
+            .saturating_add(id_set_heap(&self.to_ids))
+    }
+}
+
+fn id_obligation_ref_map_heap(values: &BTreeMap<StableId, &Obligation>) -> usize {
+    values
+        .len()
+        .saturating_mul(std::mem::size_of::<(StableId, &Obligation)>())
+        .saturating_add(values.keys().map(StableId::allocated_bytes).sum::<usize>())
+}
+
+fn id_mapping_ref_map_heap(values: &BTreeMap<StableId, &ProgramMappingV5>) -> usize {
+    values
+        .len()
+        .saturating_mul(std::mem::size_of::<(StableId, &ProgramMappingV5)>())
+        .saturating_add(values.keys().map(StableId::allocated_bytes).sum::<usize>())
+}
+
+fn id_id_map_heap(values: &BTreeMap<StableId, StableId>) -> usize {
+    values
+        .len()
+        .saturating_mul(std::mem::size_of::<(StableId, StableId)>())
+        .saturating_add(
+            values
+                .iter()
+                .map(|(left, right)| {
+                    left.allocated_bytes()
+                        .saturating_add(right.allocated_bytes())
+                })
+                .sum::<usize>(),
+        )
+}
+
+fn obligation_entry_owner_map_heap(
+    values: &BTreeMap<StableId, (usize, StableId, MappingStatusV5)>,
+) -> usize {
+    values
+        .len()
+        .saturating_mul(std::mem::size_of::<(
+            StableId,
+            (usize, StableId, MappingStatusV5),
+        )>())
+        .saturating_add(
+            values
+                .iter()
+                .map(|(id, (_, entry_id, _))| {
+                    id.allocated_bytes()
+                        .saturating_add(entry_id.allocated_bytes())
+                })
+                .sum::<usize>(),
+        )
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case", tag = "reference_kind", content = "id")]
+enum NormalizedObligationReferenceV5 {
+    TargetProgram(StableId),
+    UnmappedSourceProgram(StableId),
+    TargetObligation(StableId),
+    UnmappedSourceObligation(StableId),
+}
+
+#[derive(Serialize)]
+struct NormalizedObligationBodyV5<'a> {
+    target_kind: &'a str,
+    target_refs: BTreeSet<NormalizedObligationReferenceV5>,
+    semantic_key: String,
+    property_id: &'a str,
+    property_version: &'a str,
+    context_ids: BTreeSet<NormalizedObligationReferenceV5>,
+    required_capabilities: &'a BTreeSet<String>,
+    evidence_required: bool,
+    accepted_evidence_modes: &'a BTreeSet<String>,
+    applicability_status: &'a str,
+    applicability_reasons: &'a BTreeSet<String>,
+    qualification_ids: BTreeSet<NormalizedObligationReferenceV5>,
+    weight: f64,
+    version_profile: &'a str,
+    version_rule: &'a str,
+    version_extractor_set: &'a ContentHash,
+    version_snapshot: NormalizedObligationReferenceV5,
+    depends_on: Vec<NormalizedObligationReferenceV5>,
+    generator_ids: BTreeSet<NormalizedObligationReferenceV5>,
+    source_ids: BTreeSet<NormalizedObligationReferenceV5>,
+}
+
+/// Immutable authority body used only to prove that an accepted aggregate
+/// still contains the exact obligation definition independently synthesized
+/// from its accepted ProgramSpace.  Ordered fields deliberately remain
+/// ordered here: path target order is part of obligation identity and must not
+/// be laundered through a normalized set before cross-snapshot comparison.
+#[derive(Serialize)]
+struct AcceptedObligationDefinitionV5<'a> {
+    id: &'a StableId,
+    target_kind: &'a str,
+    target_refs: &'a [StableId],
+    normalized_target_refs: &'a BTreeSet<StableId>,
+    semantic_key: &'a str,
+    property_id: &'a str,
+    property_version: &'a str,
+    context_ids: &'a [StableId],
+    normalized_context_ids: &'a BTreeSet<StableId>,
+    required_capabilities: &'a BTreeSet<String>,
+    evidence_required: bool,
+    accepted_evidence_modes: &'a BTreeSet<String>,
+    applicability_status: &'a str,
+    applicability_reasons: &'a BTreeSet<String>,
+    qualification_ids: &'a BTreeSet<StableId>,
+    weight: f64,
+    version: &'a crate::VersionTuple,
+    depends_on: &'a [StableId],
+    normalized_depends_on: &'a BTreeSet<StableId>,
+    generator_ids: &'a BTreeSet<StableId>,
+    source_ids: &'a [StableId],
+    normalized_source_ids: &'a BTreeSet<StableId>,
+}
+
+fn accepted_obligation_definition(obligation: &Obligation) -> AcceptedObligationDefinitionV5<'_> {
+    AcceptedObligationDefinitionV5 {
+        id: obligation.id(),
+        target_kind: obligation.target_kind(),
+        target_refs: obligation.target_refs(),
+        normalized_target_refs: obligation.normalized_target_refs(),
+        semantic_key: obligation.semantic_key(),
+        property_id: obligation.property_id(),
+        property_version: obligation.property_version(),
+        context_ids: obligation.context_ids(),
+        normalized_context_ids: obligation.normalized_context_ids(),
+        required_capabilities: obligation.required_capabilities(),
+        evidence_required: obligation.evidence_required(),
+        accepted_evidence_modes: obligation.accepted_evidence_modes(),
+        applicability_status: obligation.applicability_status(),
+        applicability_reasons: obligation.applicability_reasons(),
+        qualification_ids: obligation.qualification_ids(),
+        weight: obligation.weight(),
+        version: obligation.version(),
+        depends_on: obligation.depends_on(),
+        normalized_depends_on: obligation.normalized_depends_on(),
+        generator_ids: obligation.generator_ids(),
+        source_ids: obligation.source_ids(),
+        normalized_source_ids: obligation.normalized_source_ids(),
+    }
+}
+
+fn obligation_program_ids(
+    obligation: &Obligation,
+    program_domain: &BTreeSet<StableId>,
+) -> BTreeSet<StableId> {
+    obligation
+        .normalized_target_refs()
+        .iter()
+        .chain(obligation.normalized_source_ids())
+        .chain(obligation.normalized_context_ids())
+        .chain(obligation.qualification_ids())
+        .chain(obligation.generator_ids())
+        .filter(|id| program_domain.contains(*id))
+        .cloned()
+        .chain(std::iter::once(obligation.version().snapshot().clone()))
+        .collect()
+}
+
+fn validate_obligation_dependency_dag(
+    obligations: &BTreeMap<StableId, &Obligation>,
+) -> M6Result<BTreeMap<StableId, usize>> {
+    let mut indegree = BTreeMap::new();
+    let mut dependents = BTreeMap::<StableId, BTreeSet<StableId>>::new();
+    let mut depths = obligations
+        .keys()
+        .cloned()
+        .map(|id| (id, 0_usize))
+        .collect::<BTreeMap<_, _>>();
+    for (id, obligation) in obligations {
+        for dependency in obligation.normalized_depends_on() {
+            if !obligations.contains_key(dependency) {
+                return Err(M6Error::InvalidObligationUniverse(
+                    "obligation dependency is outside its accepted universe",
+                ));
+            }
+            dependents
+                .entry(dependency.clone())
+                .or_default()
+                .insert(id.clone());
+        }
+        indegree.insert(id.clone(), obligation.normalized_depends_on().len());
+    }
+    let mut ready = indegree
+        .iter()
+        .filter(|(_, count)| **count == 0)
+        .map(|(id, _)| id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut visited = 0_usize;
+    while let Some(id) = ready.pop_first() {
+        visited = visited.checked_add(1).ok_or(M6Error::Incomplete {
+            operation: "M6 obligation topological count",
+            limit: MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+            observed: usize::MAX,
+        })?;
+        let next_depth = depths[&id].checked_add(1).ok_or(M6Error::Incomplete {
+            operation: "M6 obligation dependency depth",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })?;
+        for dependent in dependents.get(&id).into_iter().flatten() {
+            depths
+                .entry(dependent.clone())
+                .and_modify(|depth| *depth = (*depth).max(next_depth));
+            let count = indegree.get_mut(dependent).unwrap();
+            *count -= 1;
+            if *count == 0 {
+                ready.insert(dependent.clone());
+            }
+        }
+    }
+    if visited != obligations.len() {
+        return Err(M6Error::InvalidObligationUniverse(
+            "obligation dependency graph contains a cycle",
+        ));
+    }
+    Ok(depths)
+}
+
+fn mapped_candidate_program_set(
+    ids: impl IntoIterator<Item = StableId>,
+    side: ObligationSideV5,
+    successors: &BTreeMap<StableId, BTreeSet<StableId>>,
+) -> Option<BTreeSet<StableId>> {
+    let ids = ids.into_iter().collect::<BTreeSet<_>>();
+    match side {
+        ObligationSideV5::Target => Some(ids),
+        ObligationSideV5::Source => {
+            let mut mapped = BTreeSet::new();
+            for id in ids {
+                let targets = successors.get(&id)?;
+                if targets.is_empty() {
+                    return None;
+                }
+                mapped.extend(targets.iter().cloned());
+            }
+            Some(mapped)
+        }
+    }
+}
+
+fn obligation_candidate_key(
+    obligation: &Obligation,
+    side: ObligationSideV5,
+    program_domain: &BTreeSet<StableId>,
+    successors: &BTreeMap<StableId, BTreeSet<StableId>>,
+) -> Option<ObligationCandidateKeyV5> {
+    let generator_program_ids = obligation
+        .generator_ids()
+        .iter()
+        .filter(|id| program_domain.contains(*id))
+        .cloned();
+    Some(ObligationCandidateKeyV5 {
+        rule_id: obligation.version().rule().to_owned(),
+        property_id: obligation.property_id().to_owned(),
+        property_version: obligation.property_version().to_owned(),
+        target_kind: obligation.target_kind().to_owned(),
+        semantic_key: normalized_obligation_semantic_key(obligation, side, successors),
+        target_ids: mapped_candidate_program_set(
+            obligation.normalized_target_refs().iter().cloned(),
+            side,
+            successors,
+        )?,
+        context_ids: mapped_candidate_program_set(
+            obligation.normalized_context_ids().iter().cloned(),
+            side,
+            successors,
+        )?,
+        generator_program_ids: mapped_candidate_program_set(
+            generator_program_ids,
+            side,
+            successors,
+        )?,
+    })
+}
+
+fn normalized_obligation_semantic_key(
+    obligation: &Obligation,
+    side: ObligationSideV5,
+    successors: &BTreeMap<StableId, BTreeSet<StableId>>,
+) -> String {
+    let replacement = match side {
+        ObligationSideV5::Target => None,
+        ObligationSideV5::Source => successors
+            .get(obligation.version().snapshot())
+            .filter(|targets| targets.len() == 1)
+            .and_then(|targets| targets.iter().next()),
+    };
+    obligation
+        .semantic_key()
+        .split('|')
+        .map(|part| {
+            if part == obligation.version().snapshot().as_str() {
+                replacement.map_or(part, StableId::as_str)
+            } else {
+                part
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+fn collapse_and_stage_obligation_components(
+    seeds: Vec<ObligationComponentSeedV5>,
+    source: &BTreeMap<StableId, &Obligation>,
+    target: &BTreeMap<StableId, &Obligation>,
+) -> M6Result<Vec<ObligationComponentSeedV5>> {
+    let source_owner = seeds
+        .iter()
+        .enumerate()
+        .flat_map(|(index, seed)| seed.from_ids.iter().cloned().map(move |id| (id, index)))
+        .collect::<BTreeMap<_, _>>();
+    let target_owner = seeds
+        .iter()
+        .enumerate()
+        .flat_map(|(index, seed)| seed.to_ids.iter().cloned().map(move |id| (id, index)))
+        .collect::<BTreeMap<_, _>>();
+    let mut dependencies = vec![BTreeSet::new(); seeds.len()];
+    for (index, seed) in seeds.iter().enumerate() {
+        for (ids, obligations, owners) in [
+            (&seed.from_ids, source, &source_owner),
+            (&seed.to_ids, target, &target_owner),
+        ] {
+            for id in ids {
+                for dependency in obligations[id].normalized_depends_on() {
+                    let owner = owners[dependency];
+                    if owner != index {
+                        dependencies[index].insert(owner);
+                    }
+                }
+            }
+        }
+    }
+
+    struct Tarjan<'a> {
+        edges: &'a [BTreeSet<usize>],
+        next: usize,
+        indices: Vec<Option<usize>>,
+        lowlink: Vec<usize>,
+        stack: Vec<usize>,
+        on_stack: Vec<bool>,
+        components: Vec<Vec<usize>>,
+    }
+    impl Tarjan<'_> {
+        fn visit(&mut self, vertex: usize) {
+            let index = self.next;
+            self.next += 1;
+            self.indices[vertex] = Some(index);
+            self.lowlink[vertex] = index;
+            self.stack.push(vertex);
+            self.on_stack[vertex] = true;
+            for next in &self.edges[vertex] {
+                if self.indices[*next].is_none() {
+                    self.visit(*next);
+                    self.lowlink[vertex] = self.lowlink[vertex].min(self.lowlink[*next]);
+                } else if self.on_stack[*next] {
+                    self.lowlink[vertex] = self.lowlink[vertex].min(self.indices[*next].unwrap());
+                }
+            }
+            if self.lowlink[vertex] == self.indices[vertex].unwrap() {
+                let mut component = Vec::new();
+                loop {
+                    let member = self.stack.pop().unwrap();
+                    self.on_stack[member] = false;
+                    component.push(member);
+                    if member == vertex {
+                        break;
+                    }
+                }
+                component.sort_unstable();
+                self.components.push(component);
+            }
+        }
+    }
+    let mut tarjan = Tarjan {
+        edges: &dependencies,
+        next: 0,
+        indices: vec![None; seeds.len()],
+        lowlink: vec![0; seeds.len()],
+        stack: Vec::new(),
+        on_stack: vec![false; seeds.len()],
+        components: Vec::new(),
+    };
+    for index in 0..seeds.len() {
+        if tarjan.indices[index].is_none() {
+            tarjan.visit(index);
+        }
+    }
+    tarjan
+        .components
+        .sort_by_key(|component| component.first().copied());
+    let membership = tarjan
+        .components
+        .iter()
+        .enumerate()
+        .flat_map(|(component, members)| {
+            members
+                .iter()
+                .copied()
+                .map(move |member| (member, component))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut collapsed = Vec::with_capacity(tarjan.components.len());
+    for members in &tarjan.components {
+        let from_ids = members
+            .iter()
+            .flat_map(|index| seeds[*index].from_ids.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let to_ids = members
+            .iter()
+            .flat_map(|index| seeds[*index].to_ids.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        bounded(
+            from_ids.len(),
+            MAX_M6_CORRESPONDENCE_SIDE_IDS,
+            "M6 grouped correspondence source obligations",
+        )?;
+        bounded(
+            to_ids.len(),
+            MAX_M6_CORRESPONDENCE_SIDE_IDS,
+            "M6 grouped correspondence target obligations",
+        )?;
+        collapsed.push(ObligationComponentSeedV5 {
+            from_ids,
+            to_ids,
+            stage: 0,
+        });
+    }
+    let condensed = tarjan
+        .components
+        .iter()
+        .enumerate()
+        .map(|(component, members)| {
+            members
+                .iter()
+                .flat_map(|member| dependencies[*member].iter())
+                .map(|dependency| membership[dependency])
+                .filter(|dependency| *dependency != component)
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    fn depth(
+        index: usize,
+        dependencies: &[BTreeSet<usize>],
+        memo: &mut [Option<usize>],
+    ) -> M6Result<usize> {
+        if let Some(value) = memo[index] {
+            return Ok(value);
+        }
+        let mut value = 0_usize;
+        for dependency in &dependencies[index] {
+            value = value.max(
+                depth(*dependency, dependencies, memo)?
+                    .checked_add(1)
+                    .ok_or(M6Error::Incomplete {
+                        operation: "M6 correspondence dependency depth",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?,
+            );
+        }
+        memo[index] = Some(value);
+        Ok(value)
+    }
+    let mut memo = vec![None; collapsed.len()];
+    for (index, seed) in collapsed.iter_mut().enumerate() {
+        seed.stage = depth(index, &condensed, &mut memo)?;
+    }
+    collapsed.sort_by(|left, right| {
+        left.stage
+            .cmp(&right.stage)
+            .then_with(|| {
+                left.from_ids
+                    .iter()
+                    .next()
+                    .cmp(&right.from_ids.iter().next())
+            })
+            .then_with(|| left.to_ids.iter().next().cmp(&right.to_ids.iter().next()))
+    });
+    Ok(collapsed)
+}
+
+fn normalized_program_reference(
+    id: &StableId,
+    side: ObligationSideV5,
+    preserved_successors: &BTreeMap<StableId, StableId>,
+) -> NormalizedObligationReferenceV5 {
+    match side {
+        ObligationSideV5::Target => NormalizedObligationReferenceV5::TargetProgram(id.clone()),
+        ObligationSideV5::Source => preserved_successors.get(id).map_or_else(
+            || NormalizedObligationReferenceV5::UnmappedSourceProgram(id.clone()),
+            |target| NormalizedObligationReferenceV5::TargetProgram(target.clone()),
+        ),
+    }
+}
+
+fn normalized_obligation_reference(
+    id: &StableId,
+    side: ObligationSideV5,
+    preserved_successors: &BTreeMap<StableId, StableId>,
+) -> NormalizedObligationReferenceV5 {
+    match side {
+        ObligationSideV5::Target => NormalizedObligationReferenceV5::TargetObligation(id.clone()),
+        ObligationSideV5::Source => preserved_successors.get(id).map_or_else(
+            || NormalizedObligationReferenceV5::UnmappedSourceObligation(id.clone()),
+            |target| NormalizedObligationReferenceV5::TargetObligation(target.clone()),
+        ),
+    }
+}
+
+fn normalized_obligation_body_hash(
+    obligation: &Obligation,
+    side: ObligationSideV5,
+    program_domain: &BTreeSet<StableId>,
+    obligation_domain: &BTreeSet<StableId>,
+    preserved_program_successors: &BTreeMap<StableId, StableId>,
+    preserved_obligation_successors: &BTreeMap<StableId, StableId>,
+) -> M6Result<ContentHash> {
+    let normalize = |id: &StableId| {
+        if program_domain.contains(id) {
+            normalized_program_reference(id, side, preserved_program_successors)
+        } else if obligation_domain.contains(id) {
+            normalized_obligation_reference(id, side, preserved_obligation_successors)
+        } else {
+            NormalizedObligationReferenceV5::UnmappedSourceObligation(id.clone())
+        }
+    };
+    body_hash(&NormalizedObligationBodyV5 {
+        target_kind: obligation.target_kind(),
+        target_refs: obligation
+            .normalized_target_refs()
+            .iter()
+            .map(&normalize)
+            .collect(),
+        semantic_key: normalized_obligation_semantic_key(
+            obligation,
+            side,
+            &preserved_program_successors
+                .iter()
+                .map(|(source, target)| (source.clone(), BTreeSet::from([target.clone()])))
+                .collect(),
+        ),
+        property_id: obligation.property_id(),
+        property_version: obligation.property_version(),
+        context_ids: obligation
+            .normalized_context_ids()
+            .iter()
+            .map(&normalize)
+            .collect(),
+        required_capabilities: obligation.required_capabilities(),
+        evidence_required: obligation.evidence_required(),
+        accepted_evidence_modes: obligation.accepted_evidence_modes(),
+        applicability_status: obligation.applicability_status(),
+        applicability_reasons: obligation.applicability_reasons(),
+        qualification_ids: obligation
+            .qualification_ids()
+            .iter()
+            .map(&normalize)
+            .collect(),
+        weight: obligation.weight(),
+        version_profile: obligation.version().profile(),
+        version_rule: obligation.version().rule(),
+        version_extractor_set: obligation.version().extractor_set(),
+        version_snapshot: normalize(obligation.version().snapshot()),
+        depends_on: obligation.depends_on().iter().map(&normalize).collect(),
+        generator_ids: obligation.generator_ids().iter().map(&normalize).collect(),
+        source_ids: obligation
+            .normalized_source_ids()
+            .iter()
+            .map(&normalize)
+            .collect(),
+    })
+}
+
+fn validate_resynthesized_accepted_universe(aggregate: &ReviewAggregate) -> M6Result<()> {
+    let expected = crate::MvpRulePack::synthesize(aggregate.program()).map_err(|_| {
+        M6Error::InvalidObligationUniverse(
+            "accepted ProgramSpace cannot reproduce its obligation universe",
+        )
+    })?;
+    if expected.universe() != aggregate.universe() {
+        return Err(M6Error::InvalidObligationUniverse(
+            "accepted universe differs from deterministic rule-pack synthesis",
+        ));
+    }
+    let actual = aggregate
+        .obligations()
+        .map(|obligation| (obligation.id().clone(), obligation))
+        .collect::<BTreeMap<_, _>>();
+    let expected = expected
+        .obligations()
+        .iter()
+        .map(|obligation| (obligation.id().clone(), obligation))
+        .collect::<BTreeMap<_, _>>();
+    if actual.keys().ne(expected.keys()) {
+        return Err(M6Error::InvalidObligationUniverse(
+            "accepted obligation domain differs from deterministic rule-pack synthesis",
+        ));
+    }
+    for id in actual.keys() {
+        let actual_definition = accepted_obligation_definition(actual[id]);
+        let expected_definition = accepted_obligation_definition(expected[id]);
+        bounded_serialized(
+            &actual_definition,
+            MAX_M6_CANONICAL_BYTES,
+            "M6 accepted obligation definition bytes",
+        )?;
+        bounded_serialized(
+            &expected_definition,
+            MAX_M6_CANONICAL_BYTES,
+            "M6 synthesized obligation definition bytes",
+        )?;
+        if crate::canonical_json(&actual_definition)?
+            != crate::canonical_json(&expected_definition)?
+        {
+            return Err(M6Error::InvalidObligationUniverse(
+                "accepted obligation body differs from deterministic rule-pack synthesis",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn checked_correspondence_working_add(total: usize, addition: usize) -> M6Result<usize> {
+    let observed = total.checked_add(addition).ok_or(M6Error::Incomplete {
+        operation: "M6 correspondence retained working bytes",
+        limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+        observed: usize::MAX,
+    })?;
+    bounded(
+        observed,
+        MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+        "M6 correspondence retained working bytes",
+    )?;
+    Ok(observed)
+}
+
+fn one_to_one_obligation_status(
+    program_refs_are_unique: bool,
+    dependency_refs_are_unique: bool,
+    source_body_hash: &ContentHash,
+    target_body_hash: &ContentHash,
+) -> MappingStatusV5 {
+    if !program_refs_are_unique || !dependency_refs_are_unique {
+        MappingStatusV5::Unresolved
+    } else if source_body_hash == target_body_hash {
+        MappingStatusV5::Preserved
+    } else {
+        MappingStatusV5::Modified
+    }
+}
+
+fn checked_correspondence_working_mul(value: usize, multiplier: usize) -> M6Result<usize> {
+    let observed = value.checked_mul(multiplier).ok_or(M6Error::Incomplete {
+        operation: "M6 correspondence reservation arithmetic",
+        limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+        observed: usize::MAX,
+    })?;
+    bounded(
+        observed,
+        MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+        "M6 correspondence reservation arithmetic",
+    )?;
+    Ok(observed)
+}
+
+/// Deterministic allocation oracle evaluated before any correspondence-owned
+/// map, domain, candidate, component, entry, or seal is constructed.  Each
+/// field names a simultaneously chargeable ownership class rather than hiding
+/// allocations behind one post-hoc multiplier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CorrespondenceAllocationOracleV5 {
+    accepted_aggregate_bytes: usize,
+    aggregate_validation_scratch_bytes: usize,
+    mapping_phase_bytes: usize,
+    obligation_domain_bytes: usize,
+    owner_successor_bytes: usize,
+    normalized_key_body_bytes: usize,
+    dependency_component_bytes: usize,
+    entry_seal_bytes: usize,
+    serialization_scratch_bytes: usize,
+}
+
+impl CorrespondenceAllocationOracleV5 {
+    fn reservation_bytes(self) -> M6Result<usize> {
+        [
+            self.accepted_aggregate_bytes,
+            self.aggregate_validation_scratch_bytes,
+            self.mapping_phase_bytes,
+            self.obligation_domain_bytes,
+            self.owner_successor_bytes,
+            self.normalized_key_body_bytes,
+            self.dependency_component_bytes,
+            self.entry_seal_bytes,
+            self.serialization_scratch_bytes,
+        ]
+        .into_iter()
+        .try_fold(0_usize, checked_correspondence_working_add)
+    }
+}
+
+fn correspondence_allocation_oracle(
+    mapping_phase: &M6MappingPhaseV5,
+    source: &ReviewAggregate,
+    target: &ReviewAggregate,
+) -> M6Result<CorrespondenceAllocationOracleV5> {
+    let retained = |aggregate: &ReviewAggregate| {
+        usize::try_from(aggregate.retained_bytes_v3()?).map_err(|_| M6Error::Incomplete {
+            operation: "M6 correspondence accepted aggregate bytes",
+            limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+            observed: usize::MAX,
+        })
+    };
+    let accepted_aggregate_bytes =
+        checked_correspondence_working_add(retained(source)?, retained(target)?)?;
+    // ReviewAggregate::validate materializes obligation_ids, program_ids and
+    // all_ids, and can retain an additional evidence/decision/key projection
+    // while checking later records. Six full retained-aggregate ownership
+    // copies are a deterministic allocation-free upper bound over those ID
+    // clones and portable B-tree slots; it is charged separately because the
+    // validation happens before correspondence collections exist.
+    let aggregate_validation_scratch_bytes =
+        checked_correspondence_working_mul(accepted_aggregate_bytes, 6)?;
+
+    let mapping_records_bytes = mapping_phase.mappings().iter().try_fold(
+        mapping_phase
+            .mappings()
+            .len()
+            .checked_mul(std::mem::size_of::<ProgramMappingV5>())
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 correspondence mapping phase arithmetic",
+                limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                observed: usize::MAX,
+            })?,
+        |total, mapping| {
+            total
+                .checked_add(mapping.allocated_bytes())
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 correspondence mapping phase arithmetic",
+                    limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                    observed: usize::MAX,
+                })
+        },
+    )?;
+    let mapping_phase_bytes = checked_correspondence_working_add(
+        mapping_records_bytes,
+        mapping_phase.morphism().allocated_bytes(),
+    )?;
+
+    let obligations = source.obligations().chain(target.obligations());
+    let mut obligation_count = 0_usize;
+    let mut obligation_owned_bytes = 0_usize;
+    let mut obligation_id_bytes = 0_usize;
+    let mut dependency_edges = 0_usize;
+    let mut program_reference_slots = 0_usize;
+    let mut max_id_bytes = 0_usize;
+    for obligation in obligations {
+        obligation_count = obligation_count.checked_add(1).ok_or(M6Error::Incomplete {
+            operation: "M6 correspondence obligation count arithmetic",
+            limit: MAX_M6_CORRESPONDENCE_ENTRIES,
+            observed: usize::MAX,
+        })?;
+        obligation_owned_bytes = obligation_owned_bytes
+            .checked_add(obligation.allocated_bytes())
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 correspondence obligation ownership arithmetic",
+                limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                observed: usize::MAX,
+            })?;
+        let id_bytes = obligation.id().allocated_bytes();
+        obligation_id_bytes =
+            obligation_id_bytes
+                .checked_add(id_bytes)
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 correspondence obligation ID arithmetic",
+                    limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                    observed: usize::MAX,
+                })?;
+        max_id_bytes = max_id_bytes.max(id_bytes);
+        dependency_edges = dependency_edges
+            .checked_add(obligation.normalized_depends_on().len())
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 correspondence dependency arithmetic",
+                limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                observed: usize::MAX,
+            })?;
+        program_reference_slots = [
+            obligation.normalized_target_refs().len(),
+            obligation.normalized_source_ids().len(),
+            obligation.normalized_context_ids().len(),
+            obligation.qualification_ids().len(),
+            obligation.generator_ids().len(),
+            1,
+        ]
+        .into_iter()
+        .try_fold(program_reference_slots, usize::checked_add)
+        .ok_or(M6Error::Incomplete {
+            operation: "M6 correspondence Program reference arithmetic",
+            limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+            observed: usize::MAX,
+        })?;
+    }
+    bounded(
+        obligation_count,
+        MAX_M6_CORRESPONDENCE_ENTRIES,
+        "M6 correspondence total obligation count",
+    )?;
+
+    for mapping in mapping_phase.mappings() {
+        max_id_bytes = max_id_bytes.max(mapping.id().allocated_bytes());
+        for id in mapping.from_ids().iter().chain(mapping.to_ids()) {
+            max_id_bytes = max_id_bytes.max(id.allocated_bytes());
+        }
+    }
+    let id_slot_bytes = std::mem::size_of::<StableId>()
+        .checked_add(max_id_bytes)
+        .ok_or(M6Error::Incomplete {
+            operation: "M6 correspondence ID slot arithmetic",
+            limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+            observed: usize::MAX,
+        })?;
+    let program_domain_count = usize::try_from(
+        mapping_phase
+            .morphism()
+            .source_domain_count()
+            .checked_add(mapping_phase.morphism().target_domain_count())
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 correspondence Program domain arithmetic",
+                limit: MAX_M6_PROGRAM_DOMAIN_IDS * 2,
+                observed: usize::MAX,
+            })?,
+    )
+    .map_err(|_| M6Error::Incomplete {
+        operation: "M6 correspondence Program domain arithmetic",
+        limit: MAX_M6_PROGRAM_DOMAIN_IDS * 2,
+        observed: usize::MAX,
+    })?;
+
+    // Domain/index charge: two obligation reference maps, two obligation ID
+    // sets and both Program domain sets. Dynamic ID storage is charged for
+    // every clone in addition to the portable map/set slot contract.
+    let domain_slots = obligation_count
+        .checked_mul(
+            2 * std::mem::size_of::<(StableId, &Obligation)>()
+                + 2 * std::mem::size_of::<StableId>(),
+        )
+        .and_then(|bytes| {
+            program_domain_count
+                .checked_mul(std::mem::size_of::<StableId>())
+                .and_then(|program| bytes.checked_add(program))
+        })
+        .ok_or(M6Error::Incomplete {
+            operation: "M6 correspondence domain reservation arithmetic",
+            limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+            observed: usize::MAX,
+        })?;
+    let obligation_domain_bytes = [
+        domain_slots,
+        checked_correspondence_working_mul(obligation_id_bytes, 4)?,
+        checked_correspondence_working_mul(mapping_phase_bytes, 2)?,
+    ]
+    .into_iter()
+    .try_fold(0_usize, checked_correspondence_working_add)?;
+
+    // Successor/owner maps clone mapping-domain IDs and retain mapping refs.
+    // The factor also covers preserved-only projections and both source/target
+    // ownership indexes.
+    let owner_successor_bytes = [
+        checked_correspondence_working_mul(mapping_phase_bytes, 5)?,
+        checked_correspondence_working_mul(
+            program_domain_count,
+            id_slot_bytes.checked_mul(4).ok_or(M6Error::Incomplete {
+                operation: "M6 correspondence owner slot arithmetic",
+                limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                observed: usize::MAX,
+            })?,
+        )?,
+    ]
+    .into_iter()
+    .try_fold(0_usize, checked_correspondence_working_add)?;
+
+    // One candidate key per obligation owns all key strings and mapped
+    // target/context/generator sets. One normalized body and canonical buffer
+    // may coexist while an entry is materialized.
+    let normalized_key_body_bytes = [
+        checked_correspondence_working_mul(obligation_owned_bytes, 4)?,
+        checked_correspondence_working_mul(
+            program_reference_slots,
+            id_slot_bytes.checked_mul(2).ok_or(M6Error::Incomplete {
+                operation: "M6 correspondence normalized reference slot arithmetic",
+                limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                observed: usize::MAX,
+            })?,
+        )?,
+        MAX_M6_CANONICAL_BYTES,
+    ]
+    .into_iter()
+    .try_fold(0_usize, checked_correspondence_working_add)?;
+
+    // Raw DAG validation and quotient staging can coexist with owner maps,
+    // dependency sets, Tarjan frontiers/components, membership and collapsed
+    // seeds. Obligation bytes provide a checked upper bound for every cloned
+    // dependency ID/string; slot charges cover the index-only vectors/maps.
+    let dependency_component_bytes = [
+        checked_correspondence_working_mul(obligation_owned_bytes, 8)?,
+        checked_correspondence_working_mul(
+            dependency_edges,
+            id_slot_bytes
+                .checked_add(std::mem::size_of::<usize>())
+                .and_then(|bytes| bytes.checked_mul(6))
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 correspondence dependency slot arithmetic",
+                    limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                    observed: usize::MAX,
+                })?,
+        )?,
+        checked_correspondence_working_mul(
+            obligation_count,
+            std::mem::size_of::<usize>()
+                .checked_mul(24)
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 correspondence component slot arithmetic",
+                    limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                    observed: usize::MAX,
+                })?,
+        )?,
+    ]
+    .into_iter()
+    .try_fold(0_usize, checked_correspondence_working_add)?;
+
+    // Exclusive coverage means from/to and body-hash members total no more
+    // than the two obligation domains. Source-mapping/predecessor sets retain
+    // at most their declared 64 IDs for every possible component.
+    let link_slots = obligation_count
+        .checked_mul(
+            2_usize
+                .checked_mul(MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS)
+                .and_then(|count| count.checked_add(6))
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 correspondence entry link arithmetic",
+                    limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                    observed: usize::MAX,
+                })?,
+        )
+        .ok_or(M6Error::Incomplete {
+            operation: "M6 correspondence entry link arithmetic",
+            limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+            observed: usize::MAX,
+        })?;
+    let entry_seal_bytes = [
+        checked_correspondence_working_mul(
+            obligation_count,
+            std::mem::size_of::<ObligationCorrespondenceEntryV5>(),
+        )?,
+        checked_correspondence_working_mul(
+            link_slots,
+            id_slot_bytes
+                .checked_add(std::mem::size_of::<ContentHash>())
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 correspondence entry slot arithmetic",
+                    limit: MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+                    observed: usize::MAX,
+                })?,
+        )?,
+        checked_correspondence_working_mul(obligation_owned_bytes, 4)?,
+        checked_correspondence_working_mul(mapping_phase_bytes, 2)?,
+        std::mem::size_of::<ObligationCorrespondenceV5>(),
+    ]
+    .into_iter()
+    .try_fold(0_usize, checked_correspondence_working_add)?;
+
+    let serialization_scratch_bytes = checked_correspondence_working_add(
+        MAX_M6_CANONICAL_BYTES,
+        MAX_M6_CORRESPONDENCE_DTO_BYTES,
+    )?;
+    Ok(CorrespondenceAllocationOracleV5 {
+        accepted_aggregate_bytes,
+        aggregate_validation_scratch_bytes,
+        mapping_phase_bytes,
+        obligation_domain_bytes,
+        owner_successor_bytes,
+        normalized_key_body_bytes,
+        dependency_component_bytes,
+        entry_seal_bytes,
+        serialization_scratch_bytes,
+    })
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CORRESPONDENCE_AGGREGATE_VALIDATION_CALLS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+fn validate_correspondence_aggregate(aggregate: &ReviewAggregate) -> Result<(), DomainError> {
+    #[cfg(test)]
+    CORRESPONDENCE_AGGREGATE_VALIDATION_CALLS.with(|calls| calls.set(calls.get() + 1));
+    aggregate.validate()
+}
+
+impl ObligationCorrespondenceV5 {
+    /// Computes and admits the complete correspondence reservation before any
+    /// correspondence-owned retained collection is built.
+    #[doc(hidden)]
+    pub fn correspondence_reservation_bytes_from_accepted_universes(
+        mapping_phase: &M6MappingPhaseV5,
+        source: &ReviewAggregate,
+        target: &ReviewAggregate,
+    ) -> M6Result<usize> {
+        correspondence_allocation_oracle(mapping_phase, source, target)?.reservation_bytes()
+    }
+
+    /// Recomputes correspondence only from validated accepted aggregates, the
+    /// exact accepted closure, and its already sealed Program mapping phase.
+    #[doc(hidden)]
+    pub fn derive_from_accepted_universes(
+        closure: &IncrementalSourceClosureV5,
+        mapping_phase: &M6MappingPhaseV5,
+        source: &ReviewAggregate,
+        target: &ReviewAggregate,
+    ) -> M6Result<M6ObligationCorrespondencePhaseV5> {
+        Self::derive_with_working_limit(
+            closure,
+            mapping_phase,
+            source,
+            target,
+            MAX_M6_CORRESPONDENCE_WORKING_BYTES,
+        )
+    }
+
+    fn derive_with_working_limit(
+        closure: &IncrementalSourceClosureV5,
+        mapping_phase: &M6MappingPhaseV5,
+        source: &ReviewAggregate,
+        target: &ReviewAggregate,
+        working_limit: usize,
+    ) -> M6Result<M6ObligationCorrespondencePhaseV5> {
+        // The allocation-free oracle and its admission are the first
+        // operations. In particular ReviewAggregate::validate allocates
+        // obligation/program/all-ID scratch and may not run before this gate.
+        let allocation_oracle = correspondence_allocation_oracle(mapping_phase, source, target)?;
+        let working_peak_upper_bound_bytes = allocation_oracle.reservation_bytes()?;
+        bounded(
+            working_peak_upper_bound_bytes,
+            working_limit,
+            "M6 correspondence preflight working bytes",
+        )?;
+        validate_correspondence_aggregate(source).map_err(|_| {
+            M6Error::InvalidObligationUniverse("source aggregate/universe is not valid")
+        })?;
+        validate_correspondence_aggregate(target).map_err(|_| {
+            M6Error::InvalidObligationUniverse("target aggregate/universe is not valid")
+        })?;
+        validate_resynthesized_accepted_universe(source)?;
+        validate_resynthesized_accepted_universe(target)?;
+        let morphism = mapping_phase.morphism();
+        if morphism.source_closure_id() != closure.id()
+            || source.program().repository_id() != target.program().repository_id()
+            || source.program().snapshot_id() != morphism.source_snapshot_id()
+            || target.program().snapshot_id() != morphism.target_snapshot_id()
+            || source.universe().id() != &closure.input.source_universe_id
+            || target.universe().id() != &closure.input.target_universe_id
+        {
+            return Err(M6Error::InvalidObligationUniverse(
+                "accepted universes do not bind the closure and morphism snapshots",
+            ));
+        }
+        let source_obligations = source
+            .obligations()
+            .map(|obligation| (obligation.id().clone(), obligation))
+            .collect::<BTreeMap<_, _>>();
+        let target_obligations = target
+            .obligations()
+            .map(|obligation| (obligation.id().clone(), obligation))
+            .collect::<BTreeMap<_, _>>();
+        bounded(
+            source_obligations.len(),
+            MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+            "M6 source obligations",
+        )?;
+        bounded(
+            target_obligations.len(),
+            MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+            "M6 target obligations",
+        )?;
+        if source_obligations.keys().cloned().collect::<BTreeSet<_>>()
+            != *source.universe().obligation_ids()
+            || target_obligations.keys().cloned().collect::<BTreeSet<_>>()
+                != *target.universe().obligation_ids()
+        {
+            return Err(M6Error::InvalidObligationUniverse(
+                "accepted universe denominator does not equal its obligation records",
+            ));
+        }
+        validate_obligation_dependency_dag(&source_obligations)?;
+        validate_obligation_dependency_dag(&target_obligations)?;
+
+        let mut program_successors = BTreeMap::<StableId, BTreeSet<StableId>>::new();
+        let mut preserved_program_successors = BTreeMap::<StableId, StableId>::new();
+        let mut source_mapping_owner = BTreeMap::<StableId, &ProgramMappingV5>::new();
+        let mut target_mapping_owner = BTreeMap::<StableId, &ProgramMappingV5>::new();
+        for mapping in mapping_phase.mappings() {
+            for id in mapping.from_ids() {
+                program_successors.insert(id.clone(), mapping.to_ids().clone());
+                source_mapping_owner.insert(id.clone(), mapping);
+                if (mapping.status() == MappingStatusV5::Preserved
+                    || mapping.object_kind() == ProgramObjectKindV5::Snapshot)
+                    && mapping.to_ids().len() == 1
+                {
+                    preserved_program_successors
+                        .insert(id.clone(), mapping.to_ids().iter().next().unwrap().clone());
+                }
+            }
+            for id in mapping.to_ids() {
+                target_mapping_owner.insert(id.clone(), mapping);
+            }
+        }
+        let source_program_domain = source.program().known_ids();
+        let target_program_domain = target.program().known_ids();
+        if source_mapping_owner
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != source_program_domain
+            || target_mapping_owner
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                != target_program_domain
+            || morphism.source_domain_count() != source_program_domain.len() as u64
+            || morphism.target_domain_count() != target_program_domain.len() as u64
+            || morphism.source_domain_digest() != &digest_ids(&source_program_domain)?
+            || morphism.target_domain_digest() != &digest_ids(&target_program_domain)?
+        {
+            return Err(M6Error::InvalidObligationUniverse(
+                "accepted morphism does not exactly cover both aggregate Program domains",
+            ));
+        }
+        let source_obligation_domain = source_obligations.keys().cloned().collect::<BTreeSet<_>>();
+        let target_obligation_domain = target_obligations.keys().cloned().collect::<BTreeSet<_>>();
+
+        let mut source_by_key = BTreeMap::<ObligationCandidateKeyV5, BTreeSet<StableId>>::new();
+        let mut target_by_key = BTreeMap::<ObligationCandidateKeyV5, BTreeSet<StableId>>::new();
+        let mut unmatched_source = BTreeSet::new();
+        for obligation in source_obligations.values() {
+            if let Some(key) = obligation_candidate_key(
+                obligation,
+                ObligationSideV5::Source,
+                &source_program_domain,
+                &program_successors,
+            ) {
+                source_by_key
+                    .entry(key)
+                    .or_default()
+                    .insert(obligation.id().clone());
+            } else {
+                unmatched_source.insert(obligation.id().clone());
+            }
+        }
+        for obligation in target_obligations.values() {
+            let key = obligation_candidate_key(
+                obligation,
+                ObligationSideV5::Target,
+                &target_program_domain,
+                &program_successors,
+            )
+            .ok_or(M6Error::InvalidObligationUniverse(
+                "target obligation candidate key could not be constructed",
+            ))?;
+            target_by_key
+                .entry(key)
+                .or_default()
+                .insert(obligation.id().clone());
+        }
+        let keys = source_by_key
+            .keys()
+            .chain(target_by_key.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut seeds = Vec::new();
+        for key in keys {
+            let from_ids = source_by_key.remove(&key).unwrap_or_default();
+            let to_ids = target_by_key.remove(&key).unwrap_or_default();
+            if from_ids.is_empty() {
+                seeds.extend(to_ids.into_iter().map(|id| ObligationComponentSeedV5 {
+                    from_ids: BTreeSet::new(),
+                    to_ids: BTreeSet::from([id]),
+                    stage: 0,
+                }));
+            } else if to_ids.is_empty() {
+                seeds.extend(from_ids.into_iter().map(|id| ObligationComponentSeedV5 {
+                    from_ids: BTreeSet::from([id]),
+                    to_ids: BTreeSet::new(),
+                    stage: 0,
+                }));
+            } else {
+                seeds.push(ObligationComponentSeedV5 {
+                    from_ids,
+                    to_ids,
+                    stage: 0,
+                });
+            }
+        }
+        seeds.extend(
+            unmatched_source
+                .into_iter()
+                .map(|id| ObligationComponentSeedV5 {
+                    from_ids: BTreeSet::from([id]),
+                    to_ids: BTreeSet::new(),
+                    stage: 0,
+                }),
+        );
+        bounded(
+            seeds.len(),
+            MAX_M6_CORRESPONDENCE_ENTRIES,
+            "M6 correspondence entries",
+        )?;
+        let seeds = collapse_and_stage_obligation_components(
+            seeds,
+            &source_obligations,
+            &target_obligations,
+        )?;
+
+        let all_obligation_successors = seeds
+            .iter()
+            .flat_map(|seed| {
+                seed.from_ids
+                    .iter()
+                    .cloned()
+                    .map(move |id| (id, seed.to_ids.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut preserved_obligation_successors = BTreeMap::<StableId, StableId>::new();
+        let mut source_entry_owner =
+            BTreeMap::<StableId, (usize, StableId, MappingStatusV5)>::new();
+        let mut target_entry_owner =
+            BTreeMap::<StableId, (usize, StableId, MappingStatusV5)>::new();
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(seeds.len())
+            .map_err(|_| M6Error::Incomplete {
+                operation: "M6 correspondence entry allocation",
+                limit: MAX_M6_CORRESPONDENCE_ENTRIES,
+                observed: usize::MAX,
+            })?;
+        for seed in &seeds {
+            let mut predecessor_entry_ids = BTreeSet::new();
+            for (side, id) in seed
+                .from_ids
+                .iter()
+                .map(|id| (ObligationSideV5::Source, id))
+                .chain(seed.to_ids.iter().map(|id| (ObligationSideV5::Target, id)))
+            {
+                let obligation = match side {
+                    ObligationSideV5::Source => source_obligations[id],
+                    ObligationSideV5::Target => target_obligations[id],
+                };
+                let owners = match side {
+                    ObligationSideV5::Source => &source_entry_owner,
+                    ObligationSideV5::Target => &target_entry_owner,
+                };
+                for dependency in obligation.normalized_depends_on() {
+                    if let Some((stage, entry_id, _)) = owners.get(dependency)
+                        && *stage < seed.stage
+                    {
+                        predecessor_entry_ids.insert(entry_id.clone());
+                    }
+                }
+            }
+            bounded(
+                predecessor_entry_ids.len(),
+                MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS,
+                "M6 correspondence predecessor entries",
+            )?;
+
+            let mut source_mapping_ids = BTreeSet::new();
+            for id in &seed.from_ids {
+                for program_id in
+                    obligation_program_ids(source_obligations[id], &source_program_domain)
+                {
+                    source_mapping_ids.insert(source_mapping_owner[&program_id].id().clone());
+                }
+            }
+            for id in &seed.to_ids {
+                for program_id in
+                    obligation_program_ids(target_obligations[id], &target_program_domain)
+                {
+                    source_mapping_ids.insert(target_mapping_owner[&program_id].id().clone());
+                }
+            }
+            bounded(
+                source_mapping_ids.len(),
+                MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS,
+                "M6 correspondence source mappings",
+            )?;
+
+            let source_body_hashes = seed
+                .from_ids
+                .iter()
+                .map(|id| {
+                    IdBodyHashV5::new(
+                        id.clone(),
+                        normalized_obligation_body_hash(
+                            source_obligations[id],
+                            ObligationSideV5::Source,
+                            &source_program_domain,
+                            &source_obligation_domain,
+                            &preserved_program_successors,
+                            &preserved_obligation_successors,
+                        )?,
+                    )
+                })
+                .collect::<M6Result<Vec<_>>>()?;
+            let target_body_hashes = seed
+                .to_ids
+                .iter()
+                .map(|id| {
+                    IdBodyHashV5::new(
+                        id.clone(),
+                        normalized_obligation_body_hash(
+                            target_obligations[id],
+                            ObligationSideV5::Target,
+                            &target_program_domain,
+                            &target_obligation_domain,
+                            &preserved_program_successors,
+                            &preserved_obligation_successors,
+                        )?,
+                    )
+                })
+                .collect::<M6Result<Vec<_>>>()?;
+
+            let status = match (seed.from_ids.len(), seed.to_ids.len()) {
+                (0, 1) => MappingStatusV5::Added,
+                (1, 0) => MappingStatusV5::Removed,
+                (1, 1) => {
+                    let source_id = seed.from_ids.iter().next().unwrap();
+                    let source_obligation = source_obligations[source_id];
+                    let program_refs_are_unique =
+                        obligation_program_ids(source_obligation, &source_program_domain)
+                            .iter()
+                            .all(|id| {
+                                let mapping = source_mapping_owner[id];
+                                mapping.to_ids().len() == 1
+                                    && matches!(
+                                        mapping.status(),
+                                        MappingStatusV5::Preserved | MappingStatusV5::Modified
+                                    )
+                            });
+                    let dependency_refs_are_unique = source_obligation
+                        .normalized_depends_on()
+                        .iter()
+                        .all(|dependency| {
+                            all_obligation_successors
+                                .get(dependency)
+                                .is_some_and(|targets| targets.len() == 1)
+                                && source_entry_owner.get(dependency).is_some_and(
+                                    |(_, _, status)| {
+                                        matches!(
+                                            status,
+                                            MappingStatusV5::Preserved | MappingStatusV5::Modified
+                                        )
+                                    },
+                                )
+                        });
+                    one_to_one_obligation_status(
+                        program_refs_are_unique,
+                        dependency_refs_are_unique,
+                        &source_body_hashes[0].body_hash,
+                        &target_body_hashes[0].body_hash,
+                    )
+                }
+                (1, _) => MappingStatusV5::Split,
+                (_, 1) => MappingStatusV5::Merged,
+                _ => MappingStatusV5::Unresolved,
+            };
+            let entry = ObligationCorrespondenceEntryV5::from_parts(
+                ObligationCorrespondenceEntryPartsV5 {
+                    morphism_id: morphism.id().clone(),
+                    from_obligation_ids: seed.from_ids.clone(),
+                    to_obligation_ids: seed.to_ids.clone(),
+                    status,
+                    source_mapping_ids,
+                    predecessor_entry_ids,
+                    source_body_hashes,
+                    target_body_hashes,
+                },
+            )?;
+            if status == MappingStatusV5::Preserved
+                && seed.from_ids.len() == 1
+                && seed.to_ids.len() == 1
+            {
+                preserved_obligation_successors.insert(
+                    seed.from_ids.iter().next().unwrap().clone(),
+                    seed.to_ids.iter().next().unwrap().clone(),
+                );
+            }
+            for id in &seed.from_ids {
+                source_entry_owner.insert(id.clone(), (seed.stage, entry.id.clone(), status));
+            }
+            for id in &seed.to_ids {
+                target_entry_owner.insert(id.clone(), (seed.stage, entry.id.clone(), status));
+            }
+            entries.push(entry);
+        }
+        entries.sort_by(|left, right| left.id.cmp(&right.id));
+        let correspondence = Self::seal_derived(
+            morphism,
+            source.universe().id(),
+            target.universe().id(),
+            &entries,
+            &source_obligation_domain,
+            &target_obligation_domain,
+        )?;
+        // Allocation realization at the seal boundary.  Every still-live
+        // correspondence collection is charged recursively; transient DAG,
+        // candidate, normalized-body and component scratch were separately
+        // reserved by the preflight oracle above.  A reservation bug is a
+        // typed refusal rather than an unaccounted allocation.
+        let realized_bytes = [
+            allocation_oracle.accepted_aggregate_bytes,
+            allocation_oracle.mapping_phase_bytes,
+            id_obligation_ref_map_heap(&source_obligations),
+            id_obligation_ref_map_heap(&target_obligations),
+            successor_map_heap(&program_successors),
+            id_id_map_heap(&preserved_program_successors),
+            id_mapping_ref_map_heap(&source_mapping_owner),
+            id_mapping_ref_map_heap(&target_mapping_owner),
+            id_set_heap(&source_program_domain),
+            id_set_heap(&target_program_domain),
+            id_set_heap(&source_obligation_domain),
+            id_set_heap(&target_obligation_domain),
+            seeds
+                .iter()
+                .map(ObligationComponentSeedV5::allocated_bytes)
+                .sum(),
+            successor_map_heap(&all_obligation_successors),
+            id_id_map_heap(&preserved_obligation_successors),
+            obligation_entry_owner_map_heap(&source_entry_owner),
+            obligation_entry_owner_map_heap(&target_entry_owner),
+            entries
+                .iter()
+                .map(ObligationCorrespondenceEntryV5::allocated_bytes)
+                .sum(),
+            correspondence.allocated_bytes(),
+            MAX_M6_CANONICAL_BYTES,
+            MAX_M6_CORRESPONDENCE_DTO_BYTES,
+        ]
+        .into_iter()
+        .try_fold(0_usize, checked_correspondence_working_add)?;
+        if realized_bytes > working_peak_upper_bound_bytes {
+            return Err(M6Error::Incomplete {
+                operation: "M6 correspondence reservation underflow",
+                limit: working_peak_upper_bound_bytes,
+                observed: realized_bytes,
+            });
+        }
+        Ok(M6ObligationCorrespondencePhaseV5 {
+            entries,
+            correspondence,
+            working_peak_upper_bound_bytes,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4947,6 +7076,47 @@ mod tests {
         (closure, phase)
     }
 
+    fn accepted_aggregate(program: ProgramSpace) -> ReviewAggregate {
+        let (universe, obligations) = crate::MvpRulePack::synthesize(&program)
+            .unwrap()
+            .into_parts();
+        ReviewAggregate::new(program, universe, obligations).unwrap()
+    }
+
+    fn correspondence_phase() -> (
+        IncrementalSourceClosureV5,
+        M6MappingPhaseV5,
+        ReviewAggregate,
+        ReviewAggregate,
+        M6ObligationCorrespondencePhaseV5,
+    ) {
+        let (source_program, target_program) = spaces();
+        let source = accepted_aggregate(source_program);
+        let target = accepted_aggregate(target_program);
+        let mut input = closure_input(source.program(), target.program());
+        input.source_universe_id = source.universe().id().clone();
+        input.target_universe_id = target.universe().id().clone();
+        let proof = ValidatedIncrementalStructureV5::validate_store_projection(
+            source.program(),
+            target.program(),
+            input,
+        )
+        .unwrap();
+        let closure = IncrementalSourceClosureV5::from_validated_structure(proof).unwrap();
+        let mappings = ChangeMorphismV5::build_with_inputs(
+            &closure,
+            source.program(),
+            target.program(),
+            &inputs(source.program(), target.program()),
+        )
+        .unwrap();
+        let correspondence = ObligationCorrespondenceV5::derive_from_accepted_universes(
+            &closure, &mappings, &source, &target,
+        )
+        .unwrap();
+        (closure, mappings, source, target, correspondence)
+    }
+
     #[test]
     fn structural_projection_has_no_boolean_authority_and_fails_closed() {
         let (source, target) = spaces();
@@ -5020,6 +7190,750 @@ mod tests {
                 .status(),
             MappingStatusV5::Modified
         );
+    }
+
+    #[test]
+    fn correspondence_derives_complete_preserved_domains_and_exact_traces() {
+        let (_closure, mappings, source, target, phase) = correspondence_phase();
+        assert_eq!(
+            phase.correspondence().source_domain_count(),
+            source.universe().raw_denominator() as u64
+        );
+        assert_eq!(
+            phase.correspondence().target_domain_count(),
+            target.universe().raw_denominator() as u64
+        );
+        assert_eq!(
+            phase.correspondence().entry_count(),
+            phase.entries().len() as u64
+        );
+        assert_eq!(
+            phase.correspondence().status_counts().preserved,
+            source.universe().raw_denominator() as u64
+        );
+        assert_eq!(
+            phase.correspondence().source_ids(),
+            &BTreeSet::from([
+                mappings.morphism().id().clone(),
+                source.universe().id().clone(),
+                target.universe().id().clone(),
+            ])
+        );
+        let source_domain = phase
+            .entries()
+            .iter()
+            .flat_map(|entry| entry.from_obligation_ids().iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let target_domain = phase
+            .entries()
+            .iter()
+            .flat_map(|entry| entry.to_obligation_ids().iter().cloned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(source_domain, *source.universe().obligation_ids());
+        assert_eq!(target_domain, *target.universe().obligation_ids());
+        for entry in phase.entries() {
+            let expected_sources = std::iter::once(mappings.morphism().id().clone())
+                .chain(entry.source_mapping_ids().iter().cloned())
+                .chain(entry.predecessor_entry_ids().iter().cloned())
+                .chain(entry.from_obligation_ids().iter().cloned())
+                .chain(entry.to_obligation_ids().iter().cloned())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(entry.source_ids(), &expected_sources);
+            assert_eq!(entry.successor_obligation_ids(), entry.to_obligation_ids());
+        }
+        assert!(phase.working_peak_upper_bound_bytes() <= MAX_M6_CORRESPONDENCE_WORKING_BYTES);
+    }
+
+    #[test]
+    fn correspondence_wire_is_strict_canonical_and_recomputed_byte_for_byte() {
+        let (closure, mappings, source, target, phase) = correspondence_phase();
+        let entry_bytes = phase
+            .entries()
+            .iter()
+            .map(|entry| crate::canonical_json(entry).unwrap())
+            .collect::<Vec<_>>();
+        let seal_bytes = crate::canonical_json(phase.correspondence()).unwrap();
+        phase
+            .validate_replayed_canonical(&entry_bytes, &seal_bytes)
+            .unwrap();
+        let repeated = ObligationCorrespondenceV5::derive_from_accepted_universes(
+            &closure, &mappings, &source, &target,
+        )
+        .unwrap();
+        assert_eq!(repeated.entries(), phase.entries());
+        assert_eq!(repeated.correspondence(), phase.correspondence());
+
+        let mut tampered: Value = serde_json::from_slice(&entry_bytes[0]).unwrap();
+        tampered["successor_obligation_ids"] = serde_json::json!([]);
+        assert!(
+            ObligationCorrespondenceEntryV5::from_json_bytes(
+                &crate::canonical_json(&tampered).unwrap()
+            )
+            .is_err()
+        );
+        let mut unknown: Value = serde_json::from_slice(&entry_bytes[0]).unwrap();
+        unknown["caller_authority"] = Value::Bool(true);
+        assert!(
+            ObligationCorrespondenceEntryV5::from_json_bytes(
+                &crate::canonical_json(&unknown).unwrap()
+            )
+            .is_err()
+        );
+        let mut seal_tamper: Value = serde_json::from_slice(&seal_bytes).unwrap();
+        seal_tamper["entry_count"] = serde_json::json!(999);
+        assert!(
+            ObligationCorrespondenceV5::from_json_bytes(
+                &crate::canonical_json(&seal_tamper).unwrap(),
+                phase.correspondence(),
+            )
+            .is_err()
+        );
+        let original = &phase.entries()[0];
+        let mut trace_only_tamper = original.clone();
+        trace_only_tamper.successor_obligation_ids.clear();
+        assert_eq!(trace_only_tamper.id(), original.id());
+        assert_ne!(
+            trace_only_tamper.body_hash().unwrap(),
+            original.body_hash().unwrap(),
+            "successors are excluded from identity but protected by the complete body hash"
+        );
+        let mut identity_change = ObligationCorrespondenceEntryPartsV5 {
+            morphism_id: original.morphism_id.clone(),
+            from_obligation_ids: original.from_obligation_ids.clone(),
+            to_obligation_ids: original.to_obligation_ids.clone(),
+            status: MappingStatusV5::Modified,
+            source_mapping_ids: original.source_mapping_ids.clone(),
+            predecessor_entry_ids: original.predecessor_entry_ids.clone(),
+            source_body_hashes: original.source_body_hashes.clone(),
+            target_body_hashes: original.target_body_hashes.clone(),
+        };
+        if original.status() == MappingStatusV5::Modified {
+            identity_change.status = MappingStatusV5::Preserved;
+        }
+        let changed_identity =
+            ObligationCorrespondenceEntryV5::from_parts(identity_change).unwrap();
+        assert_ne!(changed_identity.id(), original.id());
+    }
+
+    #[test]
+    fn obligation_dependency_cycles_and_external_ids_are_typed_invalid_universe() {
+        let (_closure, _mappings, source, _target, _phase) = correspondence_phase();
+        let template = source.obligations().next().unwrap();
+        let make = |id_value: &str, dependencies: &[&str]| {
+            let mut value = serde_json::to_value(template).unwrap();
+            value["id"] = Value::String(id_value.to_owned());
+            value["depends_on"] = serde_json::json!(dependencies);
+            value["normalized_depends_on"] = serde_json::json!(dependencies);
+            serde_json::from_value::<Obligation>(value).unwrap()
+        };
+        let cyclic = [
+            make("obligation:cycle-a", &["obligation:cycle-b"]),
+            make("obligation:cycle-b", &["obligation:cycle-a"]),
+        ];
+        let cyclic_map = cyclic
+            .iter()
+            .map(|obligation| (obligation.id().clone(), obligation))
+            .collect::<BTreeMap<_, _>>();
+        assert!(matches!(
+            validate_obligation_dependency_dag(&cyclic_map),
+            Err(M6Error::InvalidObligationUniverse(
+                "obligation dependency graph contains a cycle"
+            ))
+        ));
+
+        let external = [make(
+            "obligation:external-owner",
+            &["obligation:outside-universe"],
+        )];
+        let external_map = external
+            .iter()
+            .map(|obligation| (obligation.id().clone(), obligation))
+            .collect::<BTreeMap<_, _>>();
+        assert!(matches!(
+            validate_obligation_dependency_dag(&external_map),
+            Err(M6Error::InvalidObligationUniverse(
+                "obligation dependency is outside its accepted universe"
+            ))
+        ));
+    }
+
+    #[test]
+    fn correspondence_rejects_constructor_valid_but_non_synthesized_obligation_bodies() {
+        let (closure, mappings, source, target, _phase) = correspondence_phase();
+        let mut obligations = target.obligations().cloned().collect::<Vec<_>>();
+        let mut value = serde_json::to_value(&obligations[0]).unwrap();
+        value["weight"] = serde_json::json!(99.0);
+        obligations[0] = serde_json::from_value(value).unwrap();
+        let forged = ReviewAggregate::new(
+            target.program().clone(),
+            target.universe().clone(),
+            obligations,
+        )
+        .unwrap();
+        assert!(matches!(
+            ObligationCorrespondenceV5::derive_from_accepted_universes(
+                &closure, &mappings, &source, &forged,
+            ),
+            Err(M6Error::InvalidObligationUniverse(
+                "accepted obligation body differs from deterministic rule-pack synthesis"
+            ))
+        ));
+    }
+
+    #[test]
+    fn correspondence_rejects_reordered_path_targets_before_cross_snapshot_normalization() {
+        let (closure, mappings, source, target, _phase) = correspondence_phase();
+        let mut obligations = target.obligations().cloned().collect::<Vec<_>>();
+        let path_index = obligations
+            .iter()
+            .position(|obligation| obligation.target_refs().len() > 1)
+            .expect("reference scenario must contain an ordered path obligation");
+        let original_id = obligations[path_index].id().clone();
+        let mut value = serde_json::to_value(&obligations[path_index]).unwrap();
+        value["target_refs"].as_array_mut().unwrap().reverse();
+        obligations[path_index] = serde_json::from_value(value).unwrap();
+        assert_eq!(obligations[path_index].id(), &original_id);
+        assert_eq!(
+            obligations[path_index].normalized_target_refs(),
+            target
+                .obligations()
+                .find(|obligation| obligation.id() == &original_id)
+                .unwrap()
+                .normalized_target_refs()
+        );
+        let forged = ReviewAggregate::new(
+            target.program().clone(),
+            target.universe().clone(),
+            obligations,
+        )
+        .unwrap();
+        assert!(matches!(
+            ObligationCorrespondenceV5::derive_from_accepted_universes(
+                &closure, &mappings, &source, &forged,
+            ),
+            Err(M6Error::InvalidObligationUniverse(
+                "accepted obligation body differs from deterministic rule-pack synthesis"
+            ))
+        ));
+    }
+
+    #[test]
+    fn deterministic_program_body_change_is_modified_and_policy_change_rebinds_seal() {
+        let (_baseline_closure, _baseline_mappings, _source, _target, baseline) =
+            correspondence_phase();
+        let (source_program, target_program) = spaces();
+        let mut target_value: Value = serde_json::from_slice(
+            &crate::canonical_json(&target_program.streaming_ref()).unwrap(),
+        )
+        .unwrap();
+        target_value["artifacts"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|artifact| artifact["id"] == "function:checkout-submit")
+            .unwrap()["attributes"]["body_revision"] = Value::String("2".to_owned());
+        target_value["profile"]["policy_version"] = Value::String("default@2".to_owned());
+        let target_program =
+            ProgramSpace::from_json_slice(&serde_json::to_vec(&target_value).unwrap()).unwrap();
+        let source = accepted_aggregate(source_program);
+        let target = accepted_aggregate(target_program);
+        let mut input = closure_input(source.program(), target.program());
+        input.source_universe_id = source.universe().id().clone();
+        input.target_universe_id = target.universe().id().clone();
+        let proof = ValidatedIncrementalStructureV5::validate_store_projection(
+            source.program(),
+            target.program(),
+            input,
+        )
+        .unwrap();
+        let closure = IncrementalSourceClosureV5::from_validated_structure(proof).unwrap();
+        let mappings = ChangeMorphismV5::build_with_inputs(
+            &closure,
+            source.program(),
+            target.program(),
+            &inputs(source.program(), target.program()),
+        )
+        .unwrap();
+        let changed = ObligationCorrespondenceV5::derive_from_accepted_universes(
+            &closure, &mappings, &source, &target,
+        )
+        .unwrap();
+        assert!(changed.correspondence().status_counts().modified > 0);
+        assert_ne!(
+            changed.correspondence().target_universe_id(),
+            baseline.correspondence().target_universe_id()
+        );
+        assert_ne!(
+            changed.correspondence().id(),
+            baseline.correspondence().id()
+        );
+    }
+
+    #[test]
+    fn correspondence_dependency_stages_cross_255_without_truncation() {
+        let (_closure, _mappings, source, _target, _phase) = correspondence_phase();
+        let template = source.obligations().next().unwrap();
+        let obligations = (0..300)
+            .map(|index| {
+                let mut value = serde_json::to_value(template).unwrap();
+                let obligation_id = format!("obligation:chain-{index:04}");
+                let dependencies = if index == 0 {
+                    Vec::<String>::new()
+                } else {
+                    vec![format!("obligation:chain-{:04}", index - 1)]
+                };
+                value["id"] = Value::String(obligation_id);
+                value["depends_on"] = serde_json::json!(dependencies);
+                value["normalized_depends_on"] = serde_json::json!(dependencies);
+                serde_json::from_value::<Obligation>(value).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let obligation_map = obligations
+            .iter()
+            .map(|obligation| (obligation.id().clone(), obligation))
+            .collect::<BTreeMap<_, _>>();
+        let depths = validate_obligation_dependency_dag(&obligation_map).unwrap();
+        assert_eq!(depths[&id("obligation:chain-0299")], 299);
+        let seeds = obligations
+            .iter()
+            .map(|obligation| ObligationComponentSeedV5 {
+                from_ids: BTreeSet::from([obligation.id().clone()]),
+                to_ids: BTreeSet::from([obligation.id().clone()]),
+                stage: 0,
+            })
+            .collect();
+        let staged =
+            collapse_and_stage_obligation_components(seeds, &obligation_map, &obligation_map)
+                .unwrap();
+        assert_eq!(staged.last().unwrap().stage, 299);
+    }
+
+    #[test]
+    fn correspondence_entries_close_split_merge_ambiguity_and_all_status_counts() {
+        let (_closure, mappings, source, target, _phase) = correspondence_phase();
+        let mut serial = 1_usize;
+        fn next_ids(side: &str, count: usize, serial: &mut usize) -> BTreeSet<StableId> {
+            (0..count)
+                .map(|_| {
+                    let value = id(&format!("obligation:{side}-{:02}", *serial));
+                    *serial += 1;
+                    value
+                })
+                .collect::<BTreeSet<_>>()
+        }
+        let shapes = [
+            (MappingStatusV5::Preserved, 1, 1),
+            (MappingStatusV5::Modified, 1, 1),
+            (MappingStatusV5::Added, 0, 1),
+            (MappingStatusV5::Removed, 1, 0),
+            (MappingStatusV5::Split, 1, 2),
+            (MappingStatusV5::Merged, 2, 1),
+            (MappingStatusV5::Unresolved, 2, 2),
+        ];
+        let mut entries = shapes
+            .into_iter()
+            .map(|(status, from_count, to_count)| {
+                let from_ids = next_ids("source", from_count, &mut serial);
+                let to_ids = next_ids("target", to_count, &mut serial);
+                let source_body_hashes = from_ids
+                    .iter()
+                    .map(|id| IdBodyHashV5::new(id.clone(), sha(serial)).unwrap())
+                    .collect();
+                serial += 1;
+                let target_body_hashes = to_ids
+                    .iter()
+                    .map(|id| IdBodyHashV5::new(id.clone(), sha(serial)).unwrap())
+                    .collect();
+                serial += 1;
+                ObligationCorrespondenceEntryV5::from_parts(ObligationCorrespondenceEntryPartsV5 {
+                    morphism_id: mappings.morphism().id().clone(),
+                    from_obligation_ids: from_ids,
+                    to_obligation_ids: to_ids,
+                    status,
+                    source_mapping_ids: BTreeSet::new(),
+                    predecessor_entry_ids: BTreeSet::new(),
+                    source_body_hashes,
+                    target_body_hashes,
+                })
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.id().cmp(right.id()));
+        let source_domain = entries
+            .iter()
+            .flat_map(|entry| entry.from_obligation_ids().iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let target_domain = entries
+            .iter()
+            .flat_map(|entry| entry.to_obligation_ids().iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let seal = ObligationCorrespondenceV5::seal_derived(
+            mappings.morphism(),
+            source.universe().id(),
+            target.universe().id(),
+            &entries,
+            &source_domain,
+            &target_domain,
+        )
+        .unwrap();
+        assert_eq!(
+            seal.status_counts(),
+            &MappingStatusCountsV5 {
+                preserved: 1,
+                modified: 1,
+                added: 1,
+                removed: 1,
+                split: 1,
+                merged: 1,
+                unresolved: 1,
+            }
+        );
+        let mut incomplete_source_domain = source_domain.clone();
+        incomplete_source_domain.pop_first();
+        assert!(matches!(
+            ObligationCorrespondenceV5::seal_derived(
+                mappings.morphism(),
+                source.universe().id(),
+                target.universe().id(),
+                &entries,
+                &incomplete_source_domain,
+                &target_domain,
+            ),
+            Err(M6Error::InvalidObligationUniverse(_))
+        ));
+    }
+
+    #[test]
+    fn obligation_candidate_key_is_sensitive_to_every_adr_field() {
+        let (_closure, mappings, _source, target, _phase) = correspondence_phase();
+        let obligation = target
+            .obligations()
+            .find(|obligation| !obligation.normalized_context_ids().is_empty())
+            .unwrap();
+        let successors = mappings
+            .mappings()
+            .iter()
+            .flat_map(|mapping| {
+                mapping
+                    .from_ids()
+                    .iter()
+                    .cloned()
+                    .map(move |id| (id, mapping.to_ids().clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let target_domain = target.program().known_ids();
+        let base = obligation_candidate_key(
+            obligation,
+            ObligationSideV5::Target,
+            &target_domain,
+            &successors,
+        )
+        .unwrap();
+        for mutation in [
+            "rule",
+            "property_id",
+            "property_version",
+            "target_kind",
+            "semantic_key",
+            "target_refs",
+            "context_ids",
+            "generator_ids",
+        ] {
+            let mut value = serde_json::to_value(obligation).unwrap();
+            match mutation {
+                "rule" => value["version"]["rule"] = Value::String("changed.rule@2".to_owned()),
+                "property_id" => {
+                    value["property_id"] = Value::String("changed.property".to_owned())
+                }
+                "property_version" => value["property_version"] = Value::String("2".to_owned()),
+                "target_kind" => value["target_kind"] = Value::String("changed_kind".to_owned()),
+                "semantic_key" => value["semantic_key"] = Value::String("changed|key".to_owned()),
+                "target_refs" => {
+                    value["target_refs"] = serde_json::json!(["file:checkout-controller"]);
+                    value["normalized_target_refs"] =
+                        serde_json::json!(["file:checkout-controller"]);
+                }
+                "context_ids" => {
+                    value["context_ids"] = serde_json::json!([]);
+                    value["normalized_context_ids"] = serde_json::json!([]);
+                }
+                "generator_ids" => {
+                    value["generator_ids"] = serde_json::json!(["file:checkout-controller"]);
+                }
+                _ => unreachable!(),
+            }
+            let changed: Obligation = serde_json::from_value(value).unwrap();
+            let key = obligation_candidate_key(
+                &changed,
+                ObligationSideV5::Target,
+                &target_domain,
+                &successors,
+            )
+            .unwrap();
+            assert_ne!(base, key, "candidate field {mutation} must be semantic");
+        }
+    }
+
+    #[test]
+    fn source_only_change_stays_one_candidate_and_is_modified_by_complete_body() {
+        let (_closure, mappings, _source, target, _phase) = correspondence_phase();
+        let obligation = target.obligations().next().unwrap();
+        let target_domain = target.program().known_ids();
+        let obligation_domain = target
+            .obligations()
+            .map(|obligation| obligation.id().clone())
+            .collect::<BTreeSet<_>>();
+        let successors = mappings
+            .mappings()
+            .iter()
+            .flat_map(|mapping| {
+                mapping
+                    .from_ids()
+                    .iter()
+                    .cloned()
+                    .map(move |id| (id, mapping.to_ids().clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let replacement = target_domain
+            .iter()
+            .find(|id| !obligation.normalized_source_ids().contains(*id))
+            .unwrap()
+            .clone();
+        let mut value = serde_json::to_value(obligation).unwrap();
+        value["source_ids"] = serde_json::json!([replacement]);
+        value["normalized_source_ids"] = value["source_ids"].clone();
+        let changed: Obligation = serde_json::from_value(value).unwrap();
+
+        let base_key = obligation_candidate_key(
+            obligation,
+            ObligationSideV5::Target,
+            &target_domain,
+            &successors,
+        )
+        .unwrap();
+        let changed_key = obligation_candidate_key(
+            &changed,
+            ObligationSideV5::Target,
+            &target_domain,
+            &successors,
+        )
+        .unwrap();
+        assert_eq!(
+            base_key, changed_key,
+            "source IDs are a complete-body equality field, not a quotient candidate key"
+        );
+        let base_hash = normalized_obligation_body_hash(
+            obligation,
+            ObligationSideV5::Target,
+            &target_domain,
+            &obligation_domain,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let changed_hash = normalized_obligation_body_hash(
+            &changed,
+            ObligationSideV5::Target,
+            &target_domain,
+            &obligation_domain,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_ne!(
+            base_hash, changed_hash,
+            "a one-to-one source-only change must classify Modified, never Preserved"
+        );
+        assert_eq!(
+            one_to_one_obligation_status(true, true, &base_hash, &changed_hash),
+            MappingStatusV5::Modified
+        );
+    }
+
+    #[test]
+    fn correspondence_count_byte_and_memory_bounds_are_exact_and_overflow_closed() {
+        assert!(
+            bounded(
+                MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+                MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+                "fixture obligation bound",
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            bounded(
+                MAX_M6_OBLIGATIONS_PER_UNIVERSE + 1,
+                MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+                "fixture obligation bound",
+            ),
+            Err(M6Error::Incomplete { .. })
+        ));
+        assert!(
+            bounded(
+                MAX_M6_CORRESPONDENCE_ENTRIES,
+                MAX_M6_CORRESPONDENCE_ENTRIES,
+                "fixture correspondence entry bound",
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            bounded(
+                MAX_M6_CORRESPONDENCE_ENTRIES + 1,
+                MAX_M6_CORRESPONDENCE_ENTRIES,
+                "fixture correspondence entry bound",
+            ),
+            Err(M6Error::Incomplete { .. })
+        ));
+        assert_eq!(
+            preflight_event_line(MAX_M6_CORRESPONDENCE_DTO_BYTES - 1, 1).unwrap(),
+            MAX_M6_CORRESPONDENCE_DTO_BYTES
+        );
+        assert!(matches!(
+            preflight_event_line(MAX_M6_CORRESPONDENCE_DTO_BYTES, 1),
+            Err(M6Error::Incomplete { .. })
+        ));
+        assert_eq!(
+            checked_correspondence_working_add(MAX_M6_CORRESPONDENCE_WORKING_BYTES - 1, 1).unwrap(),
+            MAX_M6_CORRESPONDENCE_WORKING_BYTES
+        );
+        assert!(matches!(
+            checked_correspondence_working_add(MAX_M6_CORRESPONDENCE_WORKING_BYTES, 1),
+            Err(M6Error::Incomplete { .. })
+        ));
+        assert!(matches!(
+            checked_correspondence_working_add(usize::MAX, 1),
+            Err(M6Error::Incomplete {
+                observed: usize::MAX,
+                ..
+            })
+        ));
+
+        let (closure, mappings, source, target, phase) = correspondence_phase();
+        let actual_oracle = correspondence_allocation_oracle(&mappings, &source, &target).unwrap();
+        let actual_reservation = actual_oracle.reservation_bytes().unwrap();
+        assert_eq!(
+            phase.working_peak_upper_bound_bytes(),
+            actual_reservation,
+            "the phase exposes the preflight oracle reservation, not a post-hoc subset"
+        );
+        CORRESPONDENCE_AGGREGATE_VALIDATION_CALLS.with(|calls| calls.set(0));
+        assert!(matches!(
+            ObligationCorrespondenceV5::derive_with_working_limit(
+                &closure,
+                &mappings,
+                &source,
+                &target,
+                actual_reservation - 1,
+            ),
+            Err(M6Error::Incomplete {
+                operation: "M6 correspondence preflight working bytes",
+                ..
+            })
+        ));
+        CORRESPONDENCE_AGGREGATE_VALIDATION_CALLS.with(|calls| assert_eq!(calls.get(), 0));
+
+        let exact_phase = ObligationCorrespondenceV5::derive_with_working_limit(
+            &closure,
+            &mappings,
+            &source,
+            &target,
+            actual_reservation,
+        )
+        .unwrap();
+        assert_eq!(
+            exact_phase.correspondence(),
+            phase.correspondence(),
+            "the actual production reservation is inclusive"
+        );
+        CORRESPONDENCE_AGGREGATE_VALIDATION_CALLS.with(|calls| assert_eq!(calls.get(), 2));
+
+        CORRESPONDENCE_AGGREGATE_VALIDATION_CALLS.with(|calls| calls.set(0));
+        ObligationCorrespondenceV5::derive_from_accepted_universes(
+            &closure, &mappings, &source, &target,
+        )
+        .unwrap();
+        CORRESPONDENCE_AGGREGATE_VALIDATION_CALLS.with(|calls| assert_eq!(calls.get(), 2));
+        let from_ids = (0..MAX_M6_CORRESPONDENCE_SIDE_IDS)
+            .map(|index| id(&format!("obligation:bound-source-{index:02}")))
+            .collect::<BTreeSet<_>>();
+        let to_ids = (0..MAX_M6_CORRESPONDENCE_SIDE_IDS)
+            .map(|index| id(&format!("obligation:bound-target-{index:02}")))
+            .collect::<BTreeSet<_>>();
+        let hashes = |ids: &BTreeSet<StableId>| {
+            ids.iter()
+                .enumerate()
+                .map(|(index, id)| IdBodyHashV5::new(id.clone(), sha(900 + index)).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let exact =
+            ObligationCorrespondenceEntryV5::from_parts(ObligationCorrespondenceEntryPartsV5 {
+                morphism_id: mappings.morphism().id().clone(),
+                from_obligation_ids: from_ids.clone(),
+                to_obligation_ids: to_ids.clone(),
+                status: MappingStatusV5::Unresolved,
+                source_mapping_ids: BTreeSet::new(),
+                predecessor_entry_ids: BTreeSet::new(),
+                source_body_hashes: hashes(&from_ids),
+                target_body_hashes: hashes(&to_ids),
+            })
+            .unwrap();
+        assert_eq!(
+            exact.from_obligation_ids().len(),
+            MAX_M6_CORRESPONDENCE_SIDE_IDS
+        );
+        let mut over_from = from_ids;
+        over_from.insert(id("obligation:bound-source-over"));
+        assert!(matches!(
+            ObligationCorrespondenceEntryV5::from_parts(ObligationCorrespondenceEntryPartsV5 {
+                morphism_id: mappings.morphism().id().clone(),
+                from_obligation_ids: over_from.clone(),
+                to_obligation_ids: to_ids,
+                status: MappingStatusV5::Unresolved,
+                source_mapping_ids: BTreeSet::new(),
+                predecessor_entry_ids: BTreeSet::new(),
+                source_body_hashes: hashes(&over_from),
+                target_body_hashes: Vec::new(),
+            },),
+            Err(M6Error::Incomplete { .. })
+        ));
+
+        let predecessor_ids = (0..MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS)
+            .map(|index| {
+                id(&format!(
+                    "obligation-correspondence-entry-v5:predecessor-{index:02}"
+                ))
+            })
+            .collect::<BTreeSet<_>>();
+        let one_source = BTreeSet::from([id("obligation:predecessor-bound-source")]);
+        let one_target = BTreeSet::from([id("obligation:predecessor-bound-target")]);
+        assert!(
+            ObligationCorrespondenceEntryV5::from_parts(ObligationCorrespondenceEntryPartsV5 {
+                morphism_id: mappings.morphism().id().clone(),
+                from_obligation_ids: one_source.clone(),
+                to_obligation_ids: one_target.clone(),
+                status: MappingStatusV5::Modified,
+                source_mapping_ids: BTreeSet::new(),
+                predecessor_entry_ids: predecessor_ids.clone(),
+                source_body_hashes: hashes(&one_source),
+                target_body_hashes: hashes(&one_target),
+            },)
+            .is_ok()
+        );
+        let mut over_predecessors = predecessor_ids;
+        over_predecessors.insert(id("obligation-correspondence-entry-v5:predecessor-over"));
+        assert!(matches!(
+            ObligationCorrespondenceEntryV5::from_parts(ObligationCorrespondenceEntryPartsV5 {
+                morphism_id: mappings.morphism().id().clone(),
+                from_obligation_ids: one_source.clone(),
+                to_obligation_ids: one_target.clone(),
+                status: MappingStatusV5::Modified,
+                source_mapping_ids: BTreeSet::new(),
+                predecessor_entry_ids: over_predecessors,
+                source_body_hashes: hashes(&one_source),
+                target_body_hashes: hashes(&one_target),
+            },),
+            Err(M6Error::Incomplete { .. })
+        ));
     }
 
     #[test]
