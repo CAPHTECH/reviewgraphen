@@ -26,6 +26,10 @@ const LEGACY_OBLIGATION_EXAMPLE: &[u8] =
     include_bytes!("../../../schemas/reviewgraphen.obligation.v1.example.json");
 const LEGACY_INPUT_EXAMPLE: &[u8] =
     include_bytes!("../../../schemas/reviewgraphen.input.v1.example.json");
+const INPUT_V3_SCHEMA: &[u8] =
+    include_bytes!("../../../schemas/reviewgraphen.input.v3.schema.json");
+const INPUT_V3_EXAMPLE: &[u8] =
+    include_bytes!("../../../schemas/reviewgraphen.input.v3.example.json");
 const MIGRATION_SCHEMA: &[u8] =
     include_bytes!("../../../schemas/reviewgraphen.migration.schema.json");
 const MIGRATION_EXAMPLE: &[u8] =
@@ -1900,11 +1904,11 @@ fn v1_program_space_requires_explicit_migration() {
 #[test]
 fn unsupported_program_space_schema_is_typed() {
     let mut unknown_schema: Value = serde_json::from_slice(FIXTURE).unwrap();
-    unknown_schema["schema"] = json!("reviewgraphen.program_space.input.v3");
+    unknown_schema["schema"] = json!("reviewgraphen.program_space.input.v4");
     assert_eq!(
         ProgramSpace::from_json_slice(&serde_json::to_vec(&unknown_schema).unwrap()).unwrap_err(),
         DomainError::UnsupportedSchema {
-            detected: Some("reviewgraphen.program_space.input.v3".to_owned())
+            detected: Some("reviewgraphen.program_space.input.v4".to_owned())
         }
     );
 
@@ -1921,6 +1925,165 @@ fn unsupported_program_space_schema_is_typed() {
         ProgramSpace::from_json_slice(&serde_json::to_vec(&non_string_schema).unwrap())
             .unwrap_err(),
         DomainError::UnsupportedSchema { detected: None }
+    );
+}
+
+#[test]
+fn v3_program_space_requires_complete_incremental_facts() {
+    let mut incomplete: Value = serde_json::from_slice(FIXTURE).unwrap();
+    incomplete["schema"] = json!("reviewgraphen.program_space.input.v3");
+    let error = ProgramSpace::from_json_slice(&serde_json::to_vec(&incomplete).unwrap())
+        .expect_err("v2 bytes relabeled as v3 must fail closed");
+    assert!(
+        matches!(error, DomainError::Validation(message) if message.contains(
+            "v3 requires incremental_facts and ordered_target_ids on every relation"
+        ))
+    );
+}
+
+fn complete_v3_program_space_value() -> Value {
+    let mut value: Value = serde_json::from_slice(FIXTURE).unwrap();
+    value["schema"] = json!("reviewgraphen.program_space.input.v3");
+    value["source"] = json!({
+        "kind": "git",
+        "locator": "https://example.invalid/reviewgraphen.git",
+        "revision": "2222222222222222222222222222222222222222",
+        "content_hash": "git:4444444444444444444444444444444444444444",
+        "source_local_id": "tree"
+    });
+    value["snapshot"]["base_revision"] = json!("1111111111111111111111111111111111111111");
+    value["snapshot"]["target_revision"] = json!("2222222222222222222222222222222222222222");
+    value["snapshot"]["tree_hash"] = json!("git:4444444444444444444444444444444444444444");
+    value["snapshot"]["dirty"] = json!(false);
+
+    for relation in value["relations"].as_array_mut().unwrap() {
+        relation["ordered_target_ids"] = relation["target_ids"].clone();
+    }
+    let mut anchors = serde_json::Map::new();
+    for artifact in value["artifacts"].as_array_mut().unwrap() {
+        let is_anchor = artifact["language"] == json!("rust")
+            && matches!(
+                artifact["kind"].as_str(),
+                Some("function" | "method" | "type")
+            );
+        if is_anchor {
+            artifact["provenance"]["extraction_method"] = json!("reviewgraphen.ingest.rust_syn.v1");
+            anchors.insert(
+                artifact["id"].as_str().unwrap().to_owned(),
+                json!({
+                    "descriptor": "reviewgraphen.rust_symbol_anchor@1",
+                    "language": "rust",
+                    "symbol_kind": artifact["kind"],
+                    "signature_shape_hash": format!("sha256:{}", "5".repeat(64)),
+                    "normalized_body_hash": format!("sha256:{}", "6".repeat(64))
+                }),
+            );
+        }
+    }
+    value["incremental_facts"] = json!({
+        "git_revision_closure": {
+            "base_commit_oid": "1111111111111111111111111111111111111111",
+            "base_tree_hash": "git:3333333333333333333333333333333333333333",
+            "target_commit_oid": "2222222222222222222222222222222222222222",
+            "target_tree_hash": "git:4444444444444444444444444444444444444444"
+        },
+        "rust_anchor_extractor_id": "reviewgraphen.ingest.rust_syn.anchor.v1",
+        "rust_anchor_syn_version": "2.0.119",
+        "rust_symbol_anchors": anchors
+    });
+    value
+}
+
+#[test]
+fn v3_program_space_roundtrips_strict_incremental_facts() {
+    let value = complete_v3_program_space_value();
+    let schema: Value = serde_json::from_slice(INPUT_V3_SCHEMA).unwrap();
+    jsonschema::validator_for(&schema)
+        .unwrap()
+        .validate(&value)
+        .expect("complete v3 fixture satisfies the additive schema");
+    let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let closure = program
+        .accepted_git_revision_closure()
+        .expect("v3 has accepted Git closure");
+    assert_eq!(
+        closure.base_tree_hash().as_str(),
+        "git:3333333333333333333333333333333333333333"
+    );
+    assert!(program.accepted_rust_symbol_anchors().is_some());
+    let bytes = serde_json::to_vec(&program).unwrap();
+    assert_eq!(
+        ProgramSpace::from_json_slice(&bytes).unwrap(),
+        program,
+        "strict v3 bytes must roundtrip through the public decoder"
+    );
+
+    let checked_in: Value = serde_json::from_slice(INPUT_V3_EXAMPLE).unwrap();
+    jsonschema::validator_for(&schema)
+        .unwrap()
+        .validate(&checked_in)
+        .expect("checked-in v3 example satisfies its schema");
+    ProgramSpace::from_json_slice(INPUT_V3_EXAMPLE)
+        .expect("checked-in v3 example passes the strict runtime boundary");
+}
+
+#[test]
+fn v3_anchor_trust_metadata_and_complete_domain_are_not_mutable() {
+    for mutate in [
+        |value: &mut Value| {
+            value["incremental_facts"]["rust_anchor_extractor_id"] = json!("other.extractor@1");
+        },
+        |value: &mut Value| {
+            value["incremental_facts"]["rust_anchor_syn_version"] = json!("2.0.120");
+        },
+        |value: &mut Value| {
+            let anchors = value["incremental_facts"]["rust_symbol_anchors"]
+                .as_object_mut()
+                .unwrap();
+            let first = anchors.values_mut().next().unwrap();
+            first["descriptor"] = json!("reviewgraphen.rust_symbol_anchor@2");
+        },
+        |value: &mut Value| {
+            let anchors = value["incremental_facts"]["rust_symbol_anchors"]
+                .as_object_mut()
+                .unwrap();
+            let first = anchors.keys().next().cloned().unwrap();
+            anchors.remove(&first);
+        },
+        |value: &mut Value| {
+            let anchors = value["incremental_facts"]["rust_symbol_anchors"]
+                .as_object_mut()
+                .unwrap();
+            let first = anchors.values_mut().next().unwrap();
+            first["symbol_kind"] = match first["symbol_kind"].as_str() {
+                Some("function") => json!("method"),
+                _ => json!("function"),
+            };
+        },
+    ] {
+        let mut value = complete_v3_program_space_value();
+        mutate(&mut value);
+        assert!(
+            ProgramSpace::from_json_slice(&serde_json::to_vec(&value).unwrap()).is_err(),
+            "mutated v3 anchor trust input must fail closed"
+        );
+    }
+
+    let mut uppercase_tree = complete_v3_program_space_value();
+    uppercase_tree["incremental_facts"]["git_revision_closure"]["base_tree_hash"] =
+        json!(format!("git:{}", "A".repeat(40)));
+    assert!(ProgramSpace::from_json_slice(&serde_json::to_vec(&uppercase_tree).unwrap()).is_err());
+
+    let mut uppercase_anchor = complete_v3_program_space_value();
+    let anchor = uppercase_anchor["incremental_facts"]["rust_symbol_anchors"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    anchor["signature_shape_hash"] = json!(format!("sha256:{}", "A".repeat(64)));
+    assert!(
+        ProgramSpace::from_json_slice(&serde_json::to_vec(&uppercase_anchor).unwrap()).is_err()
     );
 }
 

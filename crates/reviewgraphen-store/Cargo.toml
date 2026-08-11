@@ -25,6 +25,7 @@ tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+reviewgraphen-ingest = { path = "../reviewgraphen-ingest" }
 
 [lints]
 workspace = true

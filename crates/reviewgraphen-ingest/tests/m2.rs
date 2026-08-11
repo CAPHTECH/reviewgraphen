@@ -233,6 +233,59 @@ fn ingests_a_bounded_git_snapshot_with_rust_facts_and_changed_structure() {
     let repository = fixture_repository();
     let result = ingest(&repository.request_with_trusted_cargo()).expect("M2 ingest succeeds");
 
+    let serialized = serde_json::to_value(&result.program_space).unwrap();
+    assert_eq!(
+        serialized["schema"],
+        serde_json::json!("reviewgraphen.program_space.input.v3")
+    );
+    let closure = result
+        .program_space
+        .accepted_git_revision_closure()
+        .expect("native ingestion emits accepted v3 revision closure");
+    let base_tree_spec = format!("{}^{{tree}}", repository.base);
+    let target_tree_spec = format!("{}^{{tree}}", repository.target);
+    assert_eq!(closure.base_commit_oid(), repository.base);
+    assert_eq!(closure.target_commit_oid(), repository.target);
+    assert_eq!(
+        closure.base_tree_hash().as_str(),
+        format!(
+            "git:{}",
+            git_stdout(&repository.repository, ["rev-parse", &base_tree_spec])
+        )
+    );
+    assert_eq!(
+        closure.target_tree_hash().as_str(),
+        format!(
+            "git:{}",
+            git_stdout(&repository.repository, ["rev-parse", &target_tree_spec])
+        )
+    );
+    let anchors = result
+        .program_space
+        .accepted_rust_symbol_anchors()
+        .expect("native ingestion emits accepted v3 Rust anchors");
+    assert_eq!(
+        anchors.len(),
+        result
+            .program_space
+            .artifacts()
+            .iter()
+            .filter(|artifact| {
+                artifact.language.as_deref() == Some("rust")
+                    && matches!(artifact.kind.as_str(), "function" | "method" | "type")
+            })
+            .count()
+    );
+    let relation_orders = result
+        .program_space
+        .accepted_relation_target_order()
+        .expect("native ingestion emits accepted v3 relation order");
+    assert!(result.program_space.relations().iter().all(|relation| {
+        relation_orders.get(&relation.id).is_some_and(|ordered| {
+            ordered.iter().cloned().collect::<BTreeSet<_>>() == relation.target_ids
+        })
+    }));
+
     let artifact_kinds = result
         .program_space
         .artifacts()

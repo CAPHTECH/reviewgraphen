@@ -9,6 +9,8 @@
 | --- | --- |
 | `reviewgraphen.input.schema.json` | `reviewgraphen.program_space.input.v2` — current language-neutral ProgramSpace ingestion input; this stable generic path is used by the validation script。 |
 | `reviewgraphen.input.v1.schema.json` | Preserved `reviewgraphen.program_space.input.v1` legacy contract。 |
+| `reviewgraphen.input.v3.schema.json` | Additive M6 ProgramSpace carrier requiring a resolved Git commit/tree closure, complete version-pinned Rust symbol anchors, and ordered relation endpoints; v1/v2 remain frozen。 |
+| `reviewgraphen.input.v3.example.json` | Strict v3 double-submit ProgramSpace fixture validated by both JSON Schema and the Core runtime boundary。 |
 | `reviewgraphen.obligation.schema.json` | `reviewgraphen.review_obligations.v2` — current versioned obligation universe and obligations; this stable generic path is used by the validation script。 |
 | `reviewgraphen.obligation.v1.schema.json` | Preserved `reviewgraphen.review_obligations.v1` legacy contract。 |
 | `reviewgraphen.report.schema.json` | `reviewgraphen.review.report.v1` — end-to-end review report。 |
@@ -87,6 +89,7 @@ from jsonschema import Draft202012Validator
 root = Path("schemas")
 pairs = [
     ("reviewgraphen.input.schema.json", "reviewgraphen.input.example.json"),
+    ("reviewgraphen.input.v3.schema.json", "reviewgraphen.input.v3.example.json"),
     ("reviewgraphen.obligation.schema.json", "reviewgraphen.obligation.example.json"),
     ("reviewgraphen.report.schema.json", "reviewgraphen.report.example.json"),
     ("reviewgraphen.report.v2.schema.json", "reviewgraphen.report.v2.example.json"),
@@ -133,7 +136,18 @@ completeness, and limitation inputs that qualify that denominator. Reordering
 those set-like inputs does not change the ID; changing the explicit denominator
 or a qualifying capability/completeness input does.
 
-ProgramSpace input is currently `reviewgraphen.program_space.input.v2`. Each
+The stable generic manual input remains `reviewgraphen.program_space.input.v2`.
+M6-capable deterministic Git/Rust ingestion emits the additive
+`reviewgraphen.program_space.input.v3` contract instead. V3 requires an exact
+lowercase resolved base/target Git commit and tree closure, the fixed
+`reviewgraphen.ingest.rust_syn.anchor.v1` / syn `2.0.119` producer binding, a
+complete anchor for every accepted Rust function/method/type, and a unique
+ordered endpoint sequence for every relation. Core verifies those values
+against the accepted source/snapshot/provenance records and relation set; JSON
+Schema shape success alone cannot establish the cross-record equalities. The
+v1/v2 schemas and canonical bytes are unchanged.
+
+In v2, each
 `extraction.capabilities` value is a `CapabilityDeclaration` object
 (`state` plus non-empty, unique `source_ids`) instead of a bare completeness
 state string, and `extraction.limitations[].source_ids` is now required and

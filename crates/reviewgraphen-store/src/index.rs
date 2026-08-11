@@ -39,6 +39,10 @@ pub use v4::*;
 mod v5;
 pub use v5::*;
 
+#[path = "index_v6.rs"]
+pub(crate) mod v6;
+pub use v6::*;
+
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(test)]
@@ -6113,7 +6117,8 @@ mod tests {
             reviewgraphen_core::EventStreamGenesis::V1(_) => unreachable!(),
             reviewgraphen_core::EventStreamGenesis::V2Verified(_) => unreachable!(),
             reviewgraphen_core::EventStreamGenesis::V3(_) => unreachable!(),
-            reviewgraphen_core::EventStreamGenesis::V4(_) => unreachable!(),
+            reviewgraphen_core::EventStreamGenesis::V4(_)
+            | reviewgraphen_core::EventStreamGenesis::V5(_) => unreachable!(),
         };
         reader.with_locked_snapshot(|events, _, _| {
             let view = EventEnvelope::validated_view(

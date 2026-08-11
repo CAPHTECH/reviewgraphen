@@ -15,6 +15,8 @@ mod harness_source_v1;
 mod id;
 mod m4;
 mod m5;
+#[allow(dead_code)] // M6's crate-only proof seam is consumed by the subsequent Event/Store slice.
+pub mod m6;
 mod planning;
 mod program;
 mod projection;
@@ -134,16 +136,27 @@ pub use m5::{
     MAX_M5_SELECTED_OBLIGATIONS, MAX_M5_STABLE_ID_BYTES, MAX_M5_TRACE_IDS, RestrictionV4,
     SectionV4,
 };
+pub use m6::{
+    CandidateKeyKindV5, ChangeMorphismV5, IdBodyHashV5, IncrementalSourceClosureV5, M6Error,
+    M6MappingPhaseV5, M6Result, MAX_M6_CANONICAL_BYTES, MAX_M6_CLOSURE_DTO_BYTES,
+    MAX_M6_EVENT_LINE_BYTES, MAX_M6_MAPPING_DTO_BYTES, MAX_M6_MAPPING_LINK_IDS,
+    MAX_M6_MAPPING_SIDE_IDS, MAX_M6_MAPPING_WORKING_BYTES, MAX_M6_MAPPINGS,
+    MAX_M6_MORPHISM_DTO_BYTES, MAX_M6_PROGRAM_DOMAIN_IDS, MappingStatusCountsV5, MappingStatusV5,
+    PROGRAM_MAPPING_POLICY_V5, ProgramMappingV5, ProgramObjectKindV5, RUST_SYMBOL_ANCHOR_V1,
+    RustSymbolAnchorV1, RustSymbolKindV1, UntrustedIncrementalMappingProposalV5,
+    derive_untrusted_incremental_mapping_proposal_v5,
+};
 pub use planning::{
     DeferralReason, PlanBudget, PlannerPolicyV1, ReviewPlan, RiskDescriptor, ScheduleWave, plan,
 };
 pub use program::{
     AdapterDescriptor, AdapterStatus, Artifact, CapabilityDeclaration, CapabilityState, Evidence,
-    EvidenceAdmission, EvidenceDetails, EvidenceSnapshotAdmission, Extraction, InformationLoss,
-    Invariant, Limitation, LimitationKind, Location, MigrationLoss, MigrationRecord,
-    ProfileDescriptor, ProgramSpace, ProgramSpaceBuilder, Provenance, Relation,
-    RepositoryDescriptor, ReviewContext, Severity, SnapshotDescriptor, SourceRef,
-    migrate_program_space_v1_to_v2,
+    EvidenceAdmission, EvidenceDetails, EvidenceSnapshotAdmission, Extraction,
+    GitRevisionClosureV1, IncrementalFactsV1, InformationLoss, Invariant, Limitation,
+    LimitationKind, Location, MigrationLoss, MigrationRecord, ProfileDescriptor, ProgramSpace,
+    ProgramSpaceBuilder, Provenance, RUST_SYMBOL_ANCHOR_EXTRACTOR_V1,
+    RUST_SYMBOL_ANCHOR_SYN_VERSION_V1, Relation, RepositoryDescriptor, ReviewContext, Severity,
+    SnapshotDescriptor, SourceRef, migrate_program_space_v1_to_v2,
 };
 pub use projection::{AuditProjection, HumanProjection, Projection, ProjectionKind, ReviewReport};
 pub use review::{

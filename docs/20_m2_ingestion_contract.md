@@ -2,7 +2,7 @@
 
 > Status: Implemented for M2
 > Updated: 2026-08-09
-> Schema/API version: `reviewgraphen.program_space.input.v2` (ADR 0011) + `reviewgraphen.extraction_report.v1`
+> Schema/API version: frozen `reviewgraphen.program_space.input.v2` (ADR 0011), additive M6 `reviewgraphen.program_space.input.v3` (ADR 0023), and `reviewgraphen.extraction_report.v1`
 
 ## Scope
 
@@ -728,13 +728,29 @@ unresolved call, import, or write.
 
 ## Versioning and migration
 
-M2 is a native producer of `reviewgraphen.program_space.input.v2` (ADR 0011)
-and `reviewgraphen.extraction_report.v1`. `ExtractionReport` and the
+M2 originally produced the frozen `reviewgraphen.program_space.input.v2`
+(ADR 0011). The M6-capable adapter now produces the additive
+`reviewgraphen.program_space.input.v3` carrier defined by ADR 0023 together
+with the unchanged `reviewgraphen.extraction_report.v1`. `ExtractionReport` and the
 `ProgramSpace` it accompanies are both built directly from the same typed
 adapter intermediate (`ArtifactDraft`/`RelationDraft`/`IssueDraft`); there is
 no intermediate v1 JSON document and no implicit or hidden migration step.
 `reviewgraphen-core`'s explicit `migrate_program_space_v1_to_v2` API exists
 only for pre-existing v1 producers/fixtures, not for M2 itself.
+
+V3 adds only accepted deterministic mapping inputs. The bounded Git adapter
+records the resolved 40-character lowercase base and target commit OIDs and
+both exact `git:<40 lowercase hex>` tree hashes. The Rust adapter emits one
+`reviewgraphen.rust_symbol_anchor@1` for every accepted Rust
+function/method/type by hashing parsed token forms that remove only spans,
+comments, and formatting. Its producer is fixed to
+`reviewgraphen.ingest.rust_syn.anchor.v1` and syn `2.0.119`; changing that
+normalization requires a new contract version. Relation drafts retain their
+extractor-declared endpoint sequence, and relation identity commits that
+sequence separately from the set-valued reference domain. Core rejects a
+missing anchor, mutated producer/version, non-permutation endpoint order, or
+Git closure inconsistent with the accepted clean snapshot. V1/v2 decoding and
+canonical historical bytes remain unchanged.
 
 A future incompatible change to either output requires a new schema/API
 version and an explicit migration or major-version decision; it must not

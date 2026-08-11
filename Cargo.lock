@@ -847,6 +847,7 @@ dependencies = [
  "jsonschema",
  "proc-macro2",
  "proptest",
+ "quote",
  "reviewgraphen-core",
  "serde",
  "serde_json",
@@ -900,6 +901,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "reviewgraphen-core",
+ "reviewgraphen-ingest",
  "rusqlite",
  "rustix",
  "serde",

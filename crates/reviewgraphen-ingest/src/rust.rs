@@ -4,7 +4,8 @@ use crate::{
     IssueDraft, LocationDraft, ObstructionSeverity, RelationDraft,
 };
 use proc_macro2::Span;
-use reviewgraphen_core::{ContentHash, StableId};
+use quote::ToTokens;
+use reviewgraphen_core::{ContentHash, RustSymbolAnchorV1, RustSymbolKindV1, StableId};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use syn::spanned::Spanned;
@@ -56,6 +57,10 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
             &mut resolver,
         );
     }
+    let symbol_anchors = parsed
+        .iter()
+        .flat_map(file_symbol_anchors)
+        .collect::<BTreeMap<_, _>>();
     for candidates in resolver.values_mut() {
         candidates.sort();
         candidates.dedup();
@@ -88,7 +93,7 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
             relations.push(RelationDraft {
                 kind: "writes",
                 source_key: write.source_key,
-                target_keys: BTreeSet::from([state_key]),
+                target_keys: vec![state_key],
                 attributes: Map::from_iter([(
                     "line".to_owned(),
                     Value::Number(write.location.start_line.into()),
@@ -168,6 +173,7 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
     RustExtraction {
         artifacts,
         relations,
+        symbol_anchors,
         issues,
         capabilities,
         capability_sources,
@@ -189,6 +195,7 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
 pub(crate) struct RustExtraction {
     pub(crate) artifacts: Vec<ArtifactDraft>,
     pub(crate) relations: Vec<RelationDraft>,
+    pub(crate) symbol_anchors: BTreeMap<String, RustSymbolAnchorV1>,
     pub(crate) issues: Vec<IssueDraft>,
     pub(crate) capabilities: BTreeMap<String, CapabilityState>,
     pub(crate) capability_sources: BTreeMap<String, BTreeSet<String>>,
@@ -259,7 +266,7 @@ fn collect_file_declarations(
     relations.push(RelationDraft {
         kind: "contains",
         source_key: format!("file:{}", file.path),
-        target_keys: BTreeSet::from([file.root_module_key.clone()]),
+        target_keys: vec![file.root_module_key.clone()],
         attributes: Map::new(),
         source_path: Some(file.path.clone()),
         extraction_method: "reviewgraphen.ingest.rust_syn.v1",
@@ -280,6 +287,192 @@ struct DeclarationContext {
     module_key: String,
     module_label: String,
     test_scope: bool,
+}
+
+/// Builds the complete v1 symbol-anchor set from the same parsed AST and the
+/// same artifact-key derivation used by declaration extraction. `ToTokens`
+/// drops source spans, comments, and formatting while retaining identifiers,
+/// paths, visibility, qualifiers, ABI, generics, types, and parsed bodies.
+fn file_symbol_anchors(file: &ParsedFile) -> BTreeMap<String, RustSymbolAnchorV1> {
+    let mut anchors = BTreeMap::new();
+    collect_item_anchors(&file.ast.items, file, &file.root_module_label, &mut anchors);
+    anchors
+}
+
+fn collect_item_anchors(
+    items: &[Item],
+    file: &ParsedFile,
+    module_label: &str,
+    anchors: &mut BTreeMap<String, RustSymbolAnchorV1>,
+) {
+    for item in items {
+        match item {
+            Item::Fn(function) => {
+                let logical_name = format!("{module_label}::{}", function.sig.ident);
+                let location = location(&file.path, function.span());
+                let key = symbol_key(&file.path, "function", &logical_name, &location);
+                insert_anchor(
+                    anchors,
+                    key,
+                    RustSymbolKindV1::Function,
+                    format!(
+                        "{} {} {}",
+                        attribute_tokens(&function.attrs),
+                        function.vis.to_token_stream(),
+                        function.sig.to_token_stream()
+                    ),
+                    function.block.to_token_stream().to_string(),
+                );
+            }
+            Item::Impl(implementation) => {
+                let owner = impl_owner(&implementation.self_ty);
+                let trait_path = implementation
+                    .trait_
+                    .as_ref()
+                    .map(|(bang, path, _)| {
+                        format!("{} {}", bang.to_token_stream(), path.to_token_stream())
+                    })
+                    .unwrap_or_default();
+                for implementation_item in &implementation.items {
+                    let ImplItem::Fn(method) = implementation_item else {
+                        continue;
+                    };
+                    let logical_name = format!("{module_label}::{}::{owner}", method.sig.ident);
+                    let location = location(&file.path, method.span());
+                    let key = symbol_key(&file.path, "method", &logical_name, &location);
+                    insert_anchor(
+                        anchors,
+                        key,
+                        RustSymbolKindV1::Method,
+                        format!(
+                            "{} {} {} {} {} {} {} {} {}",
+                            attribute_tokens(&implementation.attrs),
+                            implementation.defaultness.to_token_stream(),
+                            implementation.unsafety.to_token_stream(),
+                            implementation.generics.to_token_stream(),
+                            trait_path,
+                            implementation.self_ty.to_token_stream(),
+                            attribute_tokens(&method.attrs),
+                            method.vis.to_token_stream(),
+                            method.sig.to_token_stream(),
+                        ),
+                        method.block.to_token_stream().to_string(),
+                    );
+                }
+            }
+            Item::Struct(value) => insert_type_anchor(
+                anchors,
+                file,
+                module_label,
+                "struct",
+                &value.ident.to_string(),
+                value.span(),
+                value,
+                &value.vis,
+                &value.generics,
+            ),
+            Item::Enum(value) => insert_type_anchor(
+                anchors,
+                file,
+                module_label,
+                "enum",
+                &value.ident.to_string(),
+                value.span(),
+                value,
+                &value.vis,
+                &value.generics,
+            ),
+            Item::Trait(value) => insert_type_anchor(
+                anchors,
+                file,
+                module_label,
+                "trait",
+                &value.ident.to_string(),
+                value.span(),
+                value,
+                &value.vis,
+                &value.generics,
+            ),
+            Item::Type(value) => insert_type_anchor(
+                anchors,
+                file,
+                module_label,
+                "type",
+                &value.ident.to_string(),
+                value.span(),
+                value,
+                &value.vis,
+                &value.generics,
+            ),
+            Item::Mod(module) => {
+                if let Some((_, nested)) = &module.content {
+                    collect_item_anchors(
+                        nested,
+                        file,
+                        &format!("{module_label}::{}", module.ident),
+                        anchors,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn attribute_tokens(attributes: &[Attribute]) -> String {
+    attributes
+        .iter()
+        .map(|attribute| attribute.to_token_stream().to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_type_anchor(
+    anchors: &mut BTreeMap<String, RustSymbolAnchorV1>,
+    file: &ParsedFile,
+    module_label: &str,
+    kind: &str,
+    name: &str,
+    span: Span,
+    body: &impl ToTokens,
+    visibility: &Visibility,
+    generics: &syn::Generics,
+) {
+    let logical_name = format!("{module_label}::{name}");
+    let location = location(&file.path, span);
+    let key = symbol_key(&file.path, "type", &logical_name, &location);
+    insert_anchor(
+        anchors,
+        key,
+        RustSymbolKindV1::Type,
+        format!(
+            "{kind} {} {name} {}",
+            visibility.to_token_stream(),
+            generics.to_token_stream()
+        ),
+        body.to_token_stream().to_string(),
+    );
+}
+
+fn insert_anchor(
+    anchors: &mut BTreeMap<String, RustSymbolAnchorV1>,
+    key: String,
+    kind: RustSymbolKindV1,
+    signature: String,
+    body: String,
+) {
+    let anchor = RustSymbolAnchorV1::new(
+        kind,
+        ContentHash::sha256(signature.as_bytes()),
+        ContentHash::sha256(body.as_bytes()),
+    )
+    .expect("SHA-256 Rust anchor hashes always satisfy the core contract");
+    let previous = anchors.insert(key, anchor);
+    assert!(
+        previous.is_none(),
+        "Rust artifact keys are unique within one AST"
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -377,7 +570,7 @@ fn collect_module(
     relations.push(RelationDraft {
         kind: "contains",
         source_key: context.module_key.clone(),
-        target_keys: BTreeSet::from([module_key.clone()]),
+        target_keys: vec![module_key.clone()],
         attributes: Map::new(),
         source_path: Some(file.path.clone()),
         extraction_method: "reviewgraphen.ingest.rust_syn.v1",
@@ -595,7 +788,7 @@ fn collect_import(
         relations.push(RelationDraft {
             kind: "imports",
             source_key: context.module_key.clone(),
-            target_keys: BTreeSet::from([key]),
+            target_keys: vec![key],
             attributes: Map::from_iter([(
                 "resolution".to_owned(),
                 Value::String("syntactic_only".to_owned()),
@@ -662,7 +855,7 @@ fn containment(source_key: &str, target_key: &str, path: &str) -> RelationDraft 
     RelationDraft {
         kind: "contains",
         source_key: source_key.to_owned(),
-        target_keys: BTreeSet::from([target_key.to_owned()]),
+        target_keys: vec![target_key.to_owned()],
         attributes: Map::new(),
         source_path: Some(path.to_owned()),
         extraction_method: "reviewgraphen.ingest.rust_syn.v1",
@@ -1297,7 +1490,7 @@ impl<'a> FunctionBodyVisitor<'a> {
         self.relations.push(RelationDraft {
             kind: "calls",
             source_key: source_key.clone(),
-            target_keys: BTreeSet::from([target.clone()]),
+            target_keys: vec![target.clone()],
             attributes: Map::from_iter([
                 (
                     "resolution".to_owned(),
@@ -1319,7 +1512,7 @@ impl<'a> FunctionBodyVisitor<'a> {
             self.relations.push(RelationDraft {
                 kind: "covers",
                 source_key,
-                target_keys: BTreeSet::from([target]),
+                target_keys: vec![target],
                 attributes: Map::from_iter([
                     (
                         "mapping".to_owned(),
@@ -1590,5 +1783,43 @@ fn expression_label(expression: &Expr) -> Option<String> {
         }),
         Expr::Index(index) => expression_label(&index.expr).map(|base| format!("{base}[..]")),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::*;
+
+    fn anchors(source: &str) -> Vec<RustSymbolAnchorV1> {
+        let file = ParsedFile::new(
+            &crate::git::SnapshotFile {
+                path: "src/lib.rs".to_owned(),
+                content: source.as_bytes().to_vec(),
+                content_hash: ContentHash::sha256(source.as_bytes()),
+                changed_lines: BTreeSet::new(),
+            },
+            syn::parse_file(source).expect("test source parses"),
+        );
+        file_symbol_anchors(&file).into_values().collect()
+    }
+
+    #[test]
+    fn rust_anchor_v1_ignores_only_comments_formatting_and_spans() {
+        let compact = anchors("pub fn charge(value: u64) -> u64 { value + 1 }");
+        let formatted = anchors(
+            "// leading comment\n\npub fn charge( value : u64 ) -> u64 {\n    value + 1 // tail\n}\n",
+        );
+        assert_eq!(compact, formatted);
+    }
+
+    #[test]
+    fn rust_anchor_v1_changes_for_identifier_signature_or_body_mutation() {
+        let baseline = anchors("pub fn charge(value: u64) -> u64 { value + 1 }");
+        let renamed = anchors("pub fn debit(value: u64) -> u64 { value + 1 }");
+        let signature = anchors("pub fn charge(value: u32) -> u64 { u64::from(value) + 1 }");
+        let body = anchors("pub fn charge(value: u64) -> u64 { value + 2 }");
+        assert_ne!(baseline, renamed);
+        assert_ne!(baseline, signature);
+        assert_ne!(baseline, body);
     }
 }

@@ -1,4 +1,4 @@
-//! Binds the `syn` and `proc-macro2` versions this crate actually built
+//! Binds the `syn`, `proc-macro2`, and `quote` versions this crate actually built
 //! against into compile-time constants, read from the workspace
 //! `Cargo.lock` -- the authoritative record of what Cargo really resolved
 //! -- rather than a string copied by hand from `Cargo.toml`, which could
@@ -34,6 +34,7 @@ fn main() {
     for (dependency_name, env_var) in [
         ("syn", "REVIEWGRAPHEN_INGEST_SYN_VERSION"),
         ("proc-macro2", "REVIEWGRAPHEN_INGEST_PROC_MACRO2_VERSION"),
+        ("quote", "REVIEWGRAPHEN_INGEST_QUOTE_VERSION"),
     ] {
         let version = resolve_locked_dependency_version(&lock, &crate_name, dependency_name)
             .unwrap_or_else(|| {

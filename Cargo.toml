@@ -26,6 +26,7 @@ sha2 = "=0.10.9"
 thiserror = "=2.0.12"
 jsonschema = { version = "=0.30.0", default-features = false }
 proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
+quote = "=1.0.47"
 syn = { version = "=2.0.119", features = ["full", "visit"] }
 tempfile = "=3.27.0"
 toml = { version = "=0.8.23", default-features = false, features = ["parse"] }

@@ -98,6 +98,36 @@ pub(crate) fn compact_json_sha256_streaming<T: Serialize>(value: &T) -> Result<C
     ContentHash::parse(format!("sha256:{:x}", writer.0.finalize()))
 }
 
+/// Hashes a compact JSON array from a fallible iterator without retaining the
+/// array or its members. Each member serializer must already emit object keys
+/// in canonical lexical order.
+pub(crate) fn compact_json_array_sha256_streaming<T, I>(values: I) -> Result<ContentHash>
+where
+    T: Serialize,
+    I: IntoIterator<Item = Result<T>>,
+{
+    let mut writer = Sha256Writer(Sha256::new());
+    writer
+        .write_all(b"[")
+        .map_err(|error| DomainError::CanonicalJson(error.to_string()))?;
+    let mut first = true;
+    for value in values {
+        let value = value?;
+        if !first {
+            writer
+                .write_all(b",")
+                .map_err(|error| DomainError::CanonicalJson(error.to_string()))?;
+        }
+        first = false;
+        serde_json::to_writer(&mut writer, &value)
+            .map_err(|error| DomainError::CanonicalJson(error.to_string()))?;
+    }
+    writer
+        .write_all(b"]")
+        .map_err(|error| DomainError::CanonicalJson(error.to_string()))?;
+    ContentHash::parse(format!("sha256:{:x}", writer.0.finalize()))
+}
+
 /// Canonicalizes a JSON value. Set-like collections must be sorted by their
 /// owning domain constructors; arrays deliberately preserve sequence meaning.
 #[must_use]

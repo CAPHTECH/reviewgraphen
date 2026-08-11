@@ -546,6 +546,19 @@ impl RunGenesisSnapshot {
         Self::from_canonical_bytes(input)
     }
 
+    /// Store-only inert decode of the V3/V4 genesis wire inherited by V5.
+    #[doc(hidden)]
+    pub fn from_canonical_v4_bytes_for_store(input: &[u8]) -> Result<Self> {
+        Self::from_canonical_bytes_v3(input)
+    }
+
+    /// Accepted ProgramSpace rebuilt from this strictly decoded genesis.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn program_space_for_store(&self) -> &ProgramSpace {
+        &self.program_space
+    }
+
     /// Reconstructs exactly the pristine aggregate represented by this DTO.
     pub fn rebuild_aggregate(&self) -> Result<ReviewAggregate> {
         if self.schema != RUN_GENESIS_SCHEMA {
@@ -5299,6 +5312,17 @@ impl EventEnvelope {
     ) -> Result<()> {
         Self::validate_v5_stream_with_accounting(run_id, canonical_genesis_bytes, events)
             .map(|_| ())
+    }
+
+    /// Borrow-only structural validator used by Store before durable V5
+    /// publication. It validates no authority and exposes no append cursor.
+    #[doc(hidden)]
+    pub fn validate_v5_stream_for_store(
+        run_id: &StableId,
+        canonical_genesis_bytes: &[u8],
+        events: &[EventEnvelope],
+    ) -> Result<()> {
+        Self::validate_v5_stream(run_id, canonical_genesis_bytes, events)
     }
 
     fn validate_v5_stream_with_accounting(
@@ -14324,6 +14348,27 @@ fn envelope_vectors_equal_v4(left: &[EventEnvelope], right: &[EventEnvelope]) ->
 }
 
 impl EventLogV4 {
+    /// Exact heap ownership of the retained V4 envelope vector and envelope
+    /// payloads. Store adds this to its live event-line buffer when enforcing
+    /// the ADR 0023 dual-session peak.
+    #[doc(hidden)]
+    pub fn retained_envelope_bytes_for_store(&self) -> Result<u64> {
+        retained_envelope_vector_bytes_for_store(&self.envelopes)
+    }
+
+    /// Exact validated canonical V4 JSONL prefix length, including LF.
+    #[doc(hidden)]
+    pub fn canonical_prefix_bytes_for_store(&self) -> Result<u64> {
+        self.envelopes.iter().try_fold(0_u64, |total, envelope| {
+            let line = borrowed_v4_event_metadata(envelope)?.canonical_line_bytes();
+            total.checked_add(line).ok_or(DomainError::Incomplete {
+                operation: "V4 canonical prefix bytes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+        })
+    }
+
     /// Constructs the only fresh v4 state: one internally derived genesis
     /// envelope. No caller-provided IDs, registrations, manifests, or hashes
     /// participate in construction.
@@ -17241,6 +17286,55 @@ pub struct EventLogV5 {
     limits: EventReplayLimitsV5,
 }
 
+/// Borrow-only accepted target predecessor reconstructed from the complete
+/// closed V5 planning prefix.  It contains no append authority.
+#[doc(hidden)]
+pub struct V5PreIncrementalProjection<'a> {
+    program_space: &'a ProgramSpace,
+    universe: &'a UniverseDescriptor,
+    plan: &'a ReviewPlan,
+    registrations: &'a [ArtifactRegisteredV3],
+}
+
+impl<'a> V5PreIncrementalProjection<'a> {
+    pub fn program_space(&self) -> &'a ProgramSpace {
+        self.program_space
+    }
+
+    pub fn universe(&self) -> &'a UniverseDescriptor {
+        self.universe
+    }
+
+    pub fn plan(&self) -> &'a ReviewPlan {
+        self.plan
+    }
+
+    pub fn registrations(&self) -> &'a [ArtifactRegisteredV3] {
+        self.registrations
+    }
+}
+
+/// Owned backing for one fully replayed target predecessor.  Store retains
+/// this value behind its locked target projection; callers only receive the
+/// borrow-only view above.
+#[doc(hidden)]
+pub struct ReplayedV5PreIncrementalState {
+    aggregate: ReviewAggregate,
+    plan: ReviewPlan,
+    registrations: Vec<ArtifactRegisteredV3>,
+}
+
+impl ReplayedV5PreIncrementalState {
+    pub fn projection(&self) -> V5PreIncrementalProjection<'_> {
+        V5PreIncrementalProjection {
+            program_space: self.aggregate.program(),
+            universe: self.aggregate.universe(),
+            plan: &self.plan,
+            registrations: &self.registrations,
+        }
+    }
+}
+
 /// Crate-private V5 admission limits. The Store milestone will replace this
 /// single-prefix seam with the ADR 0023 dual-session peak contract; keeping it
 /// non-public prevents a partial prefix budget from becoming protocol API.
@@ -17444,6 +17538,37 @@ fn preflight_v5_replay_accounting(
 }
 
 impl EventLogV5 {
+    /// Exact heap ownership of the retained V5 envelope vector and payloads.
+    #[doc(hidden)]
+    pub fn retained_envelope_bytes_for_store(&self) -> Result<u64> {
+        retained_envelope_vector_bytes_for_store(&self.envelopes)
+    }
+
+    /// Exact validated canonical V5 JSONL prefix length, including LF.
+    #[doc(hidden)]
+    pub const fn canonical_prefix_bytes_for_store(&self) -> u64 {
+        self.canonical_prefix_bytes
+    }
+
+    /// Largest already-validated canonical event line retained by this V5
+    /// prefix, including its mandatory LF. Store uses the exact observation
+    /// for ADR 0023 dual-session admission; no configured maximum is returned.
+    #[doc(hidden)]
+    pub fn maximum_canonical_event_line_bytes_for_store(&self) -> Result<u64> {
+        self.envelopes
+            .iter()
+            .map(|envelope| {
+                envelope.canonical_line_bytes_v5.ok_or_else(|| {
+                    DomainError::EventSequence(
+                        "V5 replay envelope is missing canonical line accounting".to_owned(),
+                    )
+                })
+            })
+            .try_fold(0_u64, |maximum, observed| {
+                observed.map(|value| maximum.max(value))
+            })
+    }
+
     fn retained_bytes_v5(&self) -> Result<u64> {
         let envelope_slots = self
             .envelopes
@@ -17521,6 +17646,136 @@ impl EventLogV5 {
             canonical_prefix_bytes,
             limits: EventReplayLimitsV5::protocol_maximum(),
         })
+    }
+
+    /// Constructs the sole complete pre-incremental V5 target prefix from
+    /// typed accepted inputs.  No raw envelope or caller-selected chain
+    /// metadata enters this seam.  Registrations are required in StableId
+    /// order and the exact source set and plan are replay-validated against
+    /// the genesis ProgramSpace before the log is returned.
+    pub fn from_planned_bootstrap_request(
+        request: RunGenesisBootstrapRequestV4,
+        registrations: Vec<ArtifactRegisteredV3>,
+        sources: SnapshotSourcesRecorded,
+        plan: ReviewPlan,
+    ) -> Result<Self> {
+        let mut log = Self::from_bootstrap_request(request)?;
+        if registrations
+            .windows(2)
+            .any(|pair| pair[0].registration_id() >= pair[1].registration_id())
+        {
+            return Err(DomainError::Validation(
+                "V5 target registrations must be strictly StableId ordered".to_owned(),
+            ));
+        }
+        let genesis = RunGenesisSnapshot::from_canonical_bytes_v3(&log.canonical_genesis_bytes)?;
+        let mut aggregate = genesis.rebuild_aggregate()?;
+        for registration in &registrations {
+            aggregate.register_artifact_v3(&log.run_id, registration.clone())?;
+        }
+        aggregate.record_snapshot_sources(sources.clone())?;
+        aggregate.record_review_plan(plan.clone())?;
+
+        for payload in registrations
+            .into_iter()
+            .map(PersistedPayload::ArtifactRegisteredV3)
+            .chain(std::iter::once(PersistedPayload::SnapshotSourcesRecorded(
+                sources,
+            )))
+            .chain(std::iter::once(PersistedPayload::ReviewPlanRecorded(plan)))
+        {
+            let sequence = u64::try_from(log.envelopes.len())
+                .map_err(|_| DomainError::EventSequence("V5 sequence overflow".to_owned()))?
+                .checked_add(1)
+                .ok_or_else(|| DomainError::EventSequence("V5 sequence overflow".to_owned()))?;
+            let actor = payload.actor().to_owned();
+            let envelope = EventEnvelope::new(
+                EventContractVersion::V5,
+                log.run_id.clone(),
+                log.genesis_hash.clone(),
+                sequence,
+                actor,
+                sequence,
+                log.tail_hash().clone(),
+                payload,
+            )?;
+            log.append_sealed_envelope_v5(envelope)?;
+        }
+        // Re-run the same closed replay used by Store, so a constructor can
+        // never emit a prefix that the durable authority seam would reject.
+        let _ = log.replay_pre_incremental_state_for_store()?;
+        Ok(log)
+    }
+
+    /// Reconstructs exactly `genesis, artifact_registered_v3*,
+    /// snapshot_sources_recorded, review_plan_recorded` and refuses missing,
+    /// duplicate, reordered, or later vocabulary.
+    #[doc(hidden)]
+    pub fn replay_pre_incremental_state_for_store(&self) -> Result<ReplayedV5PreIncrementalState> {
+        if self.envelopes.len() < 3 {
+            return Err(DomainError::Validation(
+                "V5 target predecessor is missing snapshot sources or review plan".to_owned(),
+            ));
+        }
+        let genesis = RunGenesisSnapshot::from_canonical_bytes_v3(&self.canonical_genesis_bytes)?;
+        let mut aggregate = genesis.rebuild_aggregate()?;
+        let mut registrations = Vec::new();
+        registrations
+            .try_reserve_exact(self.envelopes.len().saturating_sub(3))
+            .map_err(|_| DomainError::Incomplete {
+                operation: "V5 target registration replay",
+                limit: self.envelopes.len(),
+                observed: self.envelopes.len(),
+            })?;
+        let last = self.envelopes.len() - 1;
+        for (index, envelope) in self.envelopes.iter().enumerate().skip(1) {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            if index < last.saturating_sub(1) {
+                let PersistedPayload::ArtifactRegisteredV3(registration) = payload else {
+                    return Err(DomainError::Validation(
+                        "V5 target predecessor requires registrations before source/plan records"
+                            .to_owned(),
+                    ));
+                };
+                if registrations
+                    .last()
+                    .is_some_and(|previous: &ArtifactRegisteredV3| {
+                        previous.registration_id() >= registration.registration_id()
+                    })
+                {
+                    return Err(DomainError::Validation(
+                        "V5 target registrations must be strictly StableId ordered".to_owned(),
+                    ));
+                }
+                aggregate.register_artifact_v3(&self.run_id, registration.clone())?;
+                registrations.push(registration);
+            } else if index == last.saturating_sub(1) {
+                let PersistedPayload::SnapshotSourcesRecorded(sources) = payload else {
+                    return Err(DomainError::Validation(
+                        "V5 target predecessor requires snapshot sources immediately before plan"
+                            .to_owned(),
+                    ));
+                };
+                aggregate.record_snapshot_sources(sources)?;
+            } else {
+                let PersistedPayload::ReviewPlanRecorded(plan) = payload else {
+                    return Err(DomainError::Validation(
+                        "V5 target predecessor must end at its deterministic review plan"
+                            .to_owned(),
+                    ));
+                };
+                aggregate.record_review_plan(plan.clone())?;
+                return Ok(ReplayedV5PreIncrementalState {
+                    aggregate,
+                    plan,
+                    registrations,
+                });
+            }
+        }
+        Err(DomainError::Validation(
+            "V5 target predecessor has no terminal review plan".to_owned(),
+        ))
     }
 
     /// Reopens only a confirmed homogeneous V5 prefix.  This structural
@@ -17604,6 +17859,24 @@ impl EventLogV5 {
                 working_bytes,
             },
         ))
+    }
+
+    /// Store integration seam for moving one already-decoded confirmed V5
+    /// prefix into Core's closed structural log. It uses only the fixed ADR
+    /// protocol maxima and returns no append or authority capability.
+    #[doc(hidden)]
+    pub fn replay_confirmed_prefix_for_store(
+        run_id: StableId,
+        canonical_genesis_bytes: Vec<u8>,
+        envelopes: Vec<EventEnvelope>,
+    ) -> Result<Self> {
+        Self::replay_confirmed_v5_prefix(
+            run_id,
+            canonical_genesis_bytes,
+            envelopes,
+            EventReplayLimitsV5::protocol_maximum(),
+        )
+        .map(|(log, _)| log)
     }
 
     /// Appends one internally sealed V5 envelope after the authority/session
@@ -17727,6 +18000,27 @@ impl EventLogV5 {
     pub fn canonical_genesis_bytes(&self) -> &[u8] {
         &self.canonical_genesis_bytes
     }
+}
+
+fn retained_envelope_vector_bytes_for_store(envelopes: &Vec<EventEnvelope>) -> Result<u64> {
+    let slots = envelopes
+        .capacity()
+        .checked_mul(size_of::<EventEnvelope>())
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or(DomainError::Incomplete {
+            operation: "retained event envelope slots",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })?;
+    envelopes.iter().try_fold(slots, |total, envelope| {
+        total
+            .checked_add(u64::try_from(envelope.allocated_bytes()).unwrap_or(u64::MAX))
+            .ok_or(DomainError::Incomplete {
+                operation: "retained event envelope bytes",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+    })
 }
 
 /// Append-only, in-memory event log that deterministically replays a prefix
@@ -25596,6 +25890,143 @@ mod tests {
     fn v5_replay_limits(max_events: u64, max_canonical_bytes: u64) -> EventReplayLimitsV5 {
         EventReplayLimitsV5::new(max_events, max_canonical_bytes, 536_870_912, 536_870_912)
             .expect("test V5 limits")
+    }
+
+    fn complete_planned_v5() -> EventLogV5 {
+        let run_id = id("run:v4-test");
+        let mut input: Value = serde_json::from_slice(FIXTURE).unwrap();
+        for artifact in input["artifacts"].as_array_mut().unwrap() {
+            if artifact["kind"] == "file" {
+                let path = artifact["location"]["path"].as_str().unwrap();
+                artifact["content_hash"] =
+                    Value::String(ContentHash::sha256(path.as_bytes()).to_string());
+            }
+        }
+        let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&input).unwrap()).unwrap();
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let mut aggregate = ReviewAggregate::new(program, universe, obligations).unwrap();
+        let genesis_bytes = RunGenesisSnapshot::from_aggregate_v3(&aggregate)
+            .unwrap()
+            .canonical_bytes_v3()
+            .unwrap();
+        let request = RunGenesisBootstrapRequestV4::new(
+            run_id.clone(),
+            genesis_bytes,
+            aggregate.program().repository_identity(),
+            aggregate.program().snapshot_id().clone(),
+            aggregate.program().profile_id(),
+            aggregate.program().profile_version(),
+        )
+        .unwrap();
+        let snapshot_id = aggregate.program().snapshot_id().clone();
+        let mut registrations = Vec::new();
+        let mut entries = Vec::new();
+        for artifact in aggregate
+            .program()
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+        {
+            let location = artifact.location.as_ref().expect("file location");
+            let hash = artifact.content_hash.clone().expect("file content hash");
+            let registration = ArtifactRegisteredV3::new(
+                run_id.clone(),
+                hash.clone(),
+                "text/plain",
+                1,
+                ArtifactSensitivity::WorkspaceSource,
+                ArtifactSourceV3::SnapshotIngest {
+                    adapter_id: "fixture-adapter".to_owned(),
+                    run_id: run_id.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                },
+            )
+            .expect("target registration");
+            entries.push(
+                SnapshotSourceRecordEntry::new(
+                    artifact.id.clone(),
+                    location.path.clone(),
+                    hash.clone(),
+                    registration.registration_id().clone(),
+                    hash,
+                    1,
+                )
+                .expect("target source entry"),
+            );
+            registrations.push(registration);
+        }
+        registrations.sort_by(|left, right| left.registration_id().cmp(right.registration_id()));
+        entries.sort_by(|left, right| left.path().cmp(right.path()));
+        for registration in &registrations {
+            aggregate
+                .register_artifact_v3(&run_id, registration.clone())
+                .expect("registration replay");
+        }
+        let sources = SnapshotSourcesRecorded::new(snapshot_id, entries).expect("target sources");
+        aggregate
+            .record_snapshot_sources(sources.clone())
+            .expect("source replay");
+        let plan =
+            crate::plan(&aggregate, crate::PlanBudget::new(16, 16).unwrap()).expect("target plan");
+        EventLogV5::from_planned_bootstrap_request(request, registrations, sources, plan)
+            .expect("complete target")
+    }
+
+    #[test]
+    fn v5_pre_incremental_projection_requires_exact_complete_plan_prefix() {
+        let mut complete = complete_planned_v5();
+        let state = complete
+            .replay_pre_incremental_state_for_store()
+            .expect("complete target replay");
+        let projection = state.projection();
+        assert_eq!(
+            projection.program_space().snapshot_id(),
+            projection.plan().snapshot_id()
+        );
+        assert_eq!(projection.universe().id(), projection.plan().universe_id());
+        assert_eq!(
+            projection.registrations().len(),
+            projection
+                .program_space()
+                .artifacts()
+                .iter()
+                .filter(|artifact| artifact.kind == "file")
+                .count()
+        );
+
+        assert!(
+            EventLogV5::from_bootstrap_request(v4_bootstrap_request())
+                .unwrap()
+                .replay_pre_incremental_state_for_store()
+                .is_err()
+        );
+
+        let obligation_id = projection
+            .universe()
+            .obligation_ids()
+            .iter()
+            .next()
+            .expect("fixture obligation")
+            .clone();
+        drop(state);
+        let sequence = u64::try_from(complete.envelopes.len()).unwrap() + 1;
+        let payload = PersistedPayload::ObligationTransition {
+            obligation_id,
+            next: ObligationLifecycle::Planned,
+        };
+        let late = EventEnvelope::new(
+            EventContractVersion::V5,
+            complete.run_id.clone(),
+            complete.genesis_hash.clone(),
+            sequence,
+            SYSTEM_ACTOR,
+            sequence,
+            complete.tail_hash().clone(),
+            payload,
+        )
+        .unwrap();
+        complete.append_sealed_envelope_v5(late).unwrap();
+        assert!(complete.replay_pre_incremental_state_for_store().is_err());
     }
 
     #[test]

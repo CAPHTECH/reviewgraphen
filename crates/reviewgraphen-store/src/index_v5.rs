@@ -861,6 +861,7 @@ pub struct DerivedIndexV5<'a> {
 /// snapshot. It is intentionally neither `Clone` nor serializable: report
 /// passes borrow the same typed image through this capability.
 pub struct ValidatedIndexSnapshotV5<'index, 'root, 'roots> {
+    _lock: super::IndexLock<'index>,
     index: &'index DerivedIndexV5<'root>,
     roots: &'roots AuthorityTrustRootsV4,
     snapshot: IndexSnapshotV5,
@@ -875,6 +876,14 @@ impl ValidatedIndexSnapshotV5<'_, '_, '_> {
         &self.snapshot
     }
 
+    pub(crate) fn canonical_snapshot_bytes(&self) -> Result<Vec<u8>, IndexError> {
+        canonical_json(&self.snapshot).map_err(|_| IndexError::ProjectionContractViolation)
+    }
+
+    pub(crate) fn recursive_owned_bytes(&self) -> Result<u64, IndexError> {
+        recursive_ownership_charge(&self.snapshot)
+    }
+
     fn into_snapshot(self) -> IndexSnapshotV5 {
         self.snapshot
     }
@@ -885,6 +894,10 @@ impl<'a> DerivedIndexV5<'a> {
         Ok(Self {
             inner: super::DerivedIndex::open(root)?,
         })
+    }
+
+    pub(crate) fn matches_store_root(&self, root: &StoreRoot) -> bool {
+        self.inner.root.identity() == root.identity()
     }
 
     #[must_use]
@@ -1032,6 +1045,7 @@ impl<'a> DerivedIndexV5<'a> {
         lock.verify_unchanged()?;
         let marker_fingerprint = v5_marker_fingerprint(&expected.marker)?;
         Ok(ValidatedIndexSnapshotV5 {
+            _lock: lock,
             index: self,
             roots,
             snapshot: expected,
@@ -3371,7 +3385,9 @@ impl ProjectionChargeV5 {
     }
 }
 
-fn recursive_ownership_charge<T: ?Sized + Serialize>(value: &T) -> Result<u64, IndexError> {
+pub(crate) fn recursive_ownership_charge<T: ?Sized + Serialize>(
+    value: &T,
+) -> Result<u64, IndexError> {
     value
         .serialize(OwnershipSerializer)
         .map_err(|_| IndexError::IntegerOutOfRange)
@@ -5732,6 +5748,14 @@ pub(crate) struct ReplayProjectionChargeV5 {
 }
 
 impl ReplayProjectionChargeV5 {
+    pub(crate) const fn max_cas_bytes(&self) -> u64 {
+        self.charge.max_cas_bytes
+    }
+
+    pub(crate) const fn max_event_line_bytes(&self) -> u64 {
+        self.charge.max_event_line_bytes
+    }
+
     pub(crate) fn observe(
         &mut self,
         metadata: BorrowedV4EventMetadata<'_>,
@@ -9198,7 +9222,6 @@ fn validate_m5_snapshot_closure(snapshot: &IndexSnapshotV5) -> Result<(), IndexE
         return Ok(());
     }
     if snapshot.context_covers.len() != 1
-        || snapshot.sections.is_empty()
         || snapshot.sections.len() > 2
         || snapshot.gluing_attempts.len() != 1
         || snapshot.global_candidates.len() + snapshot.gluing_obstructions.len() != 1

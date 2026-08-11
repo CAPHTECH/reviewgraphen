@@ -12,23 +12,25 @@ use reviewgraphen_core::{
     ArtifactRegisteredV3, ArtifactRegistrationReceiptV4, ArtifactRegistrationV3AtV4Admission,
     ArtifactRegistrationV3AtV4Receipt, ArtifactSensitivity, AuthorityArtifactResolverV3,
     AuthorityArtifactResolverV4, AuthorityReplayBasisV3, AuthorityReplayBasisV4,
-    AuthorityTrustRootsV3, AuthorityTrustRootsV4, BuiltContextProjection, ContentHash,
-    DecisionInputV3, EventAdmissions, EventCommand, EventContractVersion, EventEnvelope, EventLog,
-    EventLogV4, EventReplayLimits, EventStreamGenesis, ExpectedVerificationAttemptV3,
-    ExternalWitnessAdmissionV3, FixtureExecutionReceiptV1, FixtureRegistrationResumeAuthorityV3,
-    GLUING_INPUT_MEDIA_TYPE_V4, GluingBundleReceiptV4, GluingInputDescriptorV4,
-    InheritedD2EventReceiptV4, M5CompletedGluingProfileV4, M5DoubleSubmitAssignmentsV4,
-    M5GluingProfileInputV4, MAX_M5_DESCRIPTOR_CANONICAL_BYTES, ObligationLifecycle,
+    AuthorityTrustRootsV3, AuthorityTrustRootsV4, BuiltContextProjection, ChangeMorphismV5,
+    ContentHash, DecisionInputV3, EventAdmissions, EventCommand, EventContractVersion,
+    EventEnvelope, EventLog, EventLogV4, EventLogV5, EventReplayLimits, EventStreamGenesis,
+    ExpectedVerificationAttemptV3, ExternalWitnessAdmissionV3, FixtureExecutionReceiptV1,
+    FixtureRegistrationResumeAuthorityV3, GLUING_INPUT_MEDIA_TYPE_V4, GluingBundleReceiptV4,
+    GluingInputDescriptorV4, IncrementalSourceClosureV5, InheritedD2EventReceiptV4,
+    M5CompletedGluingProfileV4, M5DoubleSubmitAssignmentsV4, M5GluingProfileInputV4, M6Error,
+    M6MappingPhaseV5, MAX_M5_DESCRIPTOR_CANONICAL_BYTES, ObligationLifecycle,
     OpaqueSessionIdentityV4, PreparedInheritedD2EventV4,
     RecoveredM4BundleV4Session as CoreRecoveredM4BundleV4Session, ReviewPlan, RunGenesisSnapshot,
     SnapshotSourceBundle, SnapshotSourcesRecorded, StableId, StaticFactEvaluationV1,
     StaticVerificationAttemptInspectionV3, TrustedGluingInputAdmissionV4,
-    TrustedGluingInputSourceV4, ValidatedArtifactRegistrationV3, ValidatedDecisionV3,
-    ValidatedExecutionBundle, ValidatedFindingV3, ValidatedGluingBundleV4,
-    ValidatedVerificationBundleV3, ValidatedVerificationBundleV4, VerificationAttemptStageV3,
-    VerificationBundleReceiptV3, VerificationBundleReceiptV4, VerificationBundleRecoveryV4,
-    VerificationBundleRequestV4, VerificationBundleResumeAuthorityV3,
-    VerificationBundleResumeAuthorityV4, VerifierArtifactRoleV3, canonical_json,
+    TrustedGluingInputSourceV4, UntrustedIncrementalMappingProposalV5,
+    ValidatedArtifactRegistrationV3, ValidatedDecisionV3, ValidatedExecutionBundle,
+    ValidatedFindingV3, ValidatedGluingBundleV4, ValidatedVerificationBundleV3,
+    ValidatedVerificationBundleV4, VerificationAttemptStageV3, VerificationBundleReceiptV3,
+    VerificationBundleReceiptV4, VerificationBundleRecoveryV4, VerificationBundleRequestV4,
+    VerificationBundleResumeAuthorityV3, VerificationBundleResumeAuthorityV4,
+    VerifierArtifactRoleV3, canonical_json, derive_untrusted_incremental_mapping_proposal_v5,
 };
 use rustix::{
     fd::OwnedFd,
@@ -66,6 +68,18 @@ const BUNDLE_PENDING_STAGE: &str = "verification-bundle.pending.stage";
 const BUNDLE_MARKER_SCHEMA: &str = "reviewgraphen.verification_bundle_append.v1";
 const RECOVERY_RECEIPT_SCHEMA_V4: &str = "reviewgraphen.recovery_receipt.v4";
 const EVENT_CONTRACT_SCHEMA_V4: &str = "reviewgraphen.review_event.v4";
+const MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES: u64 = 67_108_864;
+const MAX_INCREMENTAL_SESSION_WORKING_BYTES: u64 = 536_870_912;
+
+fn admit_incremental_source_journal_bytes(observed: u64) -> Result<u64, JournalError> {
+    if observed > MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES {
+        return Err(JournalError::Incomplete {
+            limit: MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES,
+            observed,
+        });
+    }
+    Ok(observed)
+}
 
 /// Immutable material which determines the event-chain genesis sentinel.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +103,10 @@ pub enum JournalGenesis {
     /// Shared, immutable exact V4 genesis backing retained by a verified
     /// journal identity.
     V4Shared(Arc<[u8]>),
+    /// Input form for an exact canonical V5 target genesis snapshot.
+    V5(Vec<u8>),
+    /// Shared immutable V5 genesis backing retained by the journal identity.
+    V5Shared(Arc<[u8]>),
 }
 
 impl JournalGenesis {
@@ -98,6 +116,7 @@ impl JournalGenesis {
             Self::V2(_) | Self::V2Shared(_) => EventContractVersion::V2,
             Self::V3(_) | Self::V3Shared(_) => EventContractVersion::V3,
             Self::V4(_) | Self::V4Shared(_) => EventContractVersion::V4,
+            Self::V5(_) | Self::V5Shared(_) => EventContractVersion::V5,
         }
     }
     fn hash(&self) -> ContentHash {
@@ -109,6 +128,8 @@ impl JournalGenesis {
             Self::V3Shared(bytes) => ContentHash::sha256(bytes),
             Self::V4(bytes) => ContentHash::sha256(bytes),
             Self::V4Shared(bytes) => ContentHash::sha256(bytes),
+            Self::V5(bytes) => ContentHash::sha256(bytes),
+            Self::V5Shared(bytes) => ContentHash::sha256(bytes),
         }
     }
     fn core_genesis(&self) -> EventStreamGenesis<'_> {
@@ -120,6 +141,8 @@ impl JournalGenesis {
             Self::V3Shared(bytes) => EventStreamGenesis::V3(bytes),
             Self::V4(bytes) => EventStreamGenesis::V4(bytes),
             Self::V4Shared(bytes) => EventStreamGenesis::V4(bytes),
+            Self::V5(bytes) => EventStreamGenesis::V5(bytes),
+            Self::V5Shared(bytes) => EventStreamGenesis::V5(bytes),
         }
     }
 }
@@ -132,6 +155,7 @@ pub struct JournalIdentity {
     verified_v2: Option<Arc<reviewgraphen_core::VerifiedV2Genesis>>,
     verified_v3: Option<Arc<VerifiedV3GenesisIdentity>>,
     verified_v4: Option<Arc<VerifiedV4GenesisIdentity>>,
+    verified_v5: Option<Arc<VerifiedV5GenesisIdentity>>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -142,6 +166,12 @@ struct VerifiedV3GenesisIdentity {
 
 #[derive(Debug, Eq, PartialEq)]
 struct VerifiedV4GenesisIdentity {
+    run_id: StableId,
+    genesis_hash: ContentHash,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct VerifiedV5GenesisIdentity {
     run_id: StableId,
     genesis_hash: ContentHash,
 }
@@ -157,6 +187,7 @@ impl JournalIdentity {
             JournalGenesis::V2(bytes) => JournalGenesis::V2Shared(Arc::from(bytes)),
             JournalGenesis::V3(bytes) => JournalGenesis::V3Shared(Arc::from(bytes)),
             JournalGenesis::V4(bytes) => JournalGenesis::V4Shared(Arc::from(bytes)),
+            JournalGenesis::V5(bytes) => JournalGenesis::V5Shared(Arc::from(bytes)),
             other => other,
         };
         let verified_v2 = if let JournalGenesis::V2Shared(bytes) = &genesis {
@@ -199,12 +230,26 @@ impl JournalIdentity {
         } else {
             None
         };
+        let verified_v5 = if let JournalGenesis::V5Shared(bytes) = &genesis {
+            let snapshot = RunGenesisSnapshot::from_canonical_v4_bytes_for_store(bytes)
+                .map_err(map_bounded_domain_error)?;
+            let _ = snapshot
+                .rebuild_aggregate()
+                .map_err(map_bounded_domain_error)?;
+            Some(Arc::new(VerifiedV5GenesisIdentity {
+                run_id: run_id.clone(),
+                genesis_hash: ContentHash::sha256(bytes),
+            }))
+        } else {
+            None
+        };
         Ok(Self {
             run_id,
             genesis,
             verified_v2,
             verified_v3,
             verified_v4,
+            verified_v5,
         })
     }
     #[must_use]
@@ -226,25 +271,32 @@ impl JournalIdentity {
             &self.verified_v2,
             &self.verified_v3,
             &self.verified_v4,
+            &self.verified_v5,
         ) {
-            (JournalGenesis::V1(hash), None, None, None) => Ok(EventStreamGenesis::V1(hash)),
-            (JournalGenesis::V2Shared(bytes), Some(verified), None, None)
+            (JournalGenesis::V1(hash), None, None, None, None) => Ok(EventStreamGenesis::V1(hash)),
+            (JournalGenesis::V2Shared(bytes), Some(verified), None, None, None)
                 if verified.run_id() == &self.run_id
                     && verified.genesis_hash() == &ContentHash::sha256(bytes) =>
             {
                 Ok(EventStreamGenesis::V2Verified(verified.as_ref()))
             }
-            (JournalGenesis::V3Shared(bytes), None, Some(verified), None)
+            (JournalGenesis::V3Shared(bytes), None, Some(verified), None, None)
                 if verified.run_id == self.run_id
                     && verified.genesis_hash == ContentHash::sha256(bytes) =>
             {
                 Ok(EventStreamGenesis::V3(bytes))
             }
-            (JournalGenesis::V4Shared(bytes), None, None, Some(verified))
+            (JournalGenesis::V4Shared(bytes), None, None, Some(verified), None)
                 if verified.run_id == self.run_id
                     && verified.genesis_hash == ContentHash::sha256(bytes) =>
             {
                 Ok(EventStreamGenesis::V4(bytes))
+            }
+            (JournalGenesis::V5Shared(bytes), None, None, None, Some(verified))
+                if verified.run_id == self.run_id
+                    && verified.genesis_hash == ContentHash::sha256(bytes) =>
+            {
+                Ok(EventStreamGenesis::V5(bytes))
             }
             _ => Err(JournalError::Identity(
                 "journal identity no longer matches its verified genesis",
@@ -264,7 +316,9 @@ impl JournalIdentity {
             | JournalGenesis::V3(_)
             | JournalGenesis::V3Shared(_)
             | JournalGenesis::V4(_)
-            | JournalGenesis::V4Shared(_) => None,
+            | JournalGenesis::V4Shared(_)
+            | JournalGenesis::V5(_)
+            | JournalGenesis::V5Shared(_) => None,
         }
     }
 
@@ -277,7 +331,9 @@ impl JournalIdentity {
                 | JournalGenesis::V3(_)
                 | JournalGenesis::V3Shared(_)
                 | JournalGenesis::V4(_)
-                | JournalGenesis::V4Shared(_) => 0,
+                | JournalGenesis::V4Shared(_)
+                | JournalGenesis::V5(_)
+                | JournalGenesis::V5Shared(_) => 0,
             }
     }
 
@@ -295,6 +351,13 @@ impl JournalIdentity {
                 .saturating_add(std::mem::size_of::<usize>() * 2)
         }))
         .saturating_add(self.verified_v4.as_ref().map_or(0, |verified| {
+            verified
+                .run_id
+                .allocated_bytes()
+                .saturating_add(verified.genesis_hash.allocated_bytes())
+                .saturating_add(std::mem::size_of::<usize>() * 2)
+        }))
+        .saturating_add(self.verified_v5.as_ref().map_or(0, |verified| {
             verified
                 .run_id
                 .allocated_bytes()
@@ -357,6 +420,12 @@ pub enum JournalError {
     V3ReplaySessionRequired,
     #[error("V4 journals are writable only through a roots-bound replay session")]
     V4ReplaySessionRequired,
+    #[error("V5 journals are writable only through a dual-run M6 replay session")]
+    V5ReplaySessionRequired,
+    #[error("V5 genesis was not committed; stopped at {stage}")]
+    GenesisNotCommittedV5 { stage: &'static str },
+    #[error("V5 genesis durability is uncertain and requires recovery")]
+    GenesisSessionUncertainV5,
     #[error("verification bundle append stopped after {durable_stage:?}")]
     BundleAppendInterrupted {
         durable_stage: VerificationBundleDurableStageV3,
@@ -650,6 +719,17 @@ pub struct GenesisCommitReceiptV4 {
     pub confirmed_offset: u64,
 }
 
+/// Confirmation of the sole V5 bootstrap event after CAS and journal bytes
+/// are both durable. This is descriptive durability, not M6 session authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenesisCommitReceiptV5 {
+    pub run_id: StableId,
+    pub genesis_hash: ContentHash,
+    pub event_id: StableId,
+    pub event_hash: ContentHash,
+    pub confirmed_offset: u64,
+}
+
 pub enum GenesisRecoveryV4<'a> {
     NotCommitted {
         receipt: RecoveryReceiptV4,
@@ -923,6 +1003,15 @@ pub struct ReplayedV4RunSession<'root, 'roots> {
     index_projection: Option<crate::index::ReplayProjectionChargeV5>,
 }
 
+/// Lock-held structural V5 target prefix. It contains no M6 append authority;
+/// only the dual-run admission module may consume it into a session proof.
+pub(crate) struct ReplayedV5RunSession {
+    _run_lock: OwnedFd,
+    writer: JournalWriter,
+    log: EventLogV5,
+    store_root_identity: StoreRootIdentity,
+}
+
 /// Narrow callback surface for one lock-contiguous M5 profile operation.
 /// Core-issued input capabilities remain private and cannot escape through
 /// the callback result; callers can only consume them in canonical order.
@@ -938,11 +1027,425 @@ pub struct M5GluingProfileSessionV4<'session, 'root, 'roots> {
 /// schema-v5 snapshot.
 pub struct CompletedM5ReportAuthorityV4 {
     roots: AuthorityTrustRootsV4,
+    completed: M5CompletedGluingProfileV4,
 }
 
 pub enum M5ReportAuthorityInspectionV4 {
-    Complete(CompletedM5ReportAuthorityV4),
+    Complete(Box<CompletedM5ReportAuthorityV4>),
     Incomplete { registered_inputs: u64 },
+}
+
+#[derive(Debug, Error)]
+pub enum IncrementalSessionError {
+    #[error(transparent)]
+    Journal(#[from] JournalError),
+    #[error(transparent)]
+    Index(#[from] crate::IndexError),
+    #[error(transparent)]
+    Core(#[from] M6Error),
+    #[error("incremental session authority refused: {0}")]
+    Authority(&'static str),
+    #[error("incremental session working set exceeds {limit} bytes: observed {observed}")]
+    Incomplete { limit: u64, observed: u64 },
+}
+
+/// Store-owned acceptance of one M6 mapping while both journal prefixes,
+/// both index projections, and their CAS bindings remain locked and live.
+/// The Core DTOs exposed by the accessors are borrowed deterministic views;
+/// they carry no authority without this non-cloneable, non-serializable owner.
+///
+/// External callers cannot construct the accepted owner:
+///
+/// ```compile_fail
+/// use reviewgraphen_store::AcceptedIncrementalMappingV5;
+/// let _ = AcceptedIncrementalMappingV5 {};
+/// ```
+///
+/// It cannot be cloned, serialized, or split into appendable raw parts:
+///
+/// ```compile_fail
+/// use reviewgraphen_store::AcceptedIncrementalMappingV5;
+/// fn requires_clone<T: Clone>(_: &T) {}
+/// fn rejected(value: &AcceptedIncrementalMappingV5<'_, '_, '_>) {
+///     requires_clone(value);
+///     let _ = serde_json::to_vec(value);
+///     let _ = value.into_parts();
+/// }
+/// ```
+pub struct AcceptedIncrementalMappingV5<'root, 'roots, 'index> {
+    proof: IncrementalSessionProofV5<'root, 'roots, 'index>,
+    proposal: UntrustedIncrementalMappingProposalV5,
+    accounting: DualSessionAccountingV5,
+}
+
+impl AcceptedIncrementalMappingV5<'_, '_, '_> {
+    #[must_use]
+    pub const fn closure(&self) -> &IncrementalSourceClosureV5 {
+        let _ = &self.proof;
+        self.proposal.closure()
+    }
+
+    #[must_use]
+    pub const fn mapping_phase(&self) -> &M6MappingPhaseV5 {
+        self.proposal.mapping_phase()
+    }
+
+    #[must_use]
+    pub fn morphism(&self) -> &reviewgraphen_core::ChangeMorphismV5 {
+        self.proposal.morphism()
+    }
+
+    #[must_use]
+    pub const fn working_peak_bytes(&self) -> u64 {
+        self.accounting.peak_bytes
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DualSessionAccountingV5 {
+    source_journal_bytes: u64,
+    target_journal_bytes: u64,
+    source_index_bytes: u64,
+    target_index_bytes: u64,
+    source_index_owned_bytes: u64,
+    target_index_owned_bytes: u64,
+    source_cas_buffer_bytes: u64,
+    target_cas_buffer_bytes: u64,
+    source_event_line_bytes: u64,
+    target_event_line_bytes: u64,
+    mapping_reservation_bytes: u64,
+    peak_bytes: u64,
+}
+
+impl DualSessionAccountingV5 {
+    fn checked(parts: [u64; 11]) -> Result<Self, IncrementalSessionError> {
+        let mut peak_bytes = 0_u64;
+        for part in parts {
+            peak_bytes =
+                peak_bytes
+                    .checked_add(part)
+                    .ok_or(IncrementalSessionError::Incomplete {
+                        limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                        observed: u64::MAX,
+                    })?;
+            if peak_bytes > MAX_INCREMENTAL_SESSION_WORKING_BYTES {
+                return Err(IncrementalSessionError::Incomplete {
+                    limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                    observed: peak_bytes,
+                });
+            }
+        }
+        let value = Self {
+            source_journal_bytes: parts[0],
+            target_journal_bytes: parts[1],
+            source_index_bytes: parts[2],
+            target_index_bytes: parts[3],
+            source_index_owned_bytes: parts[4],
+            target_index_owned_bytes: parts[5],
+            source_cas_buffer_bytes: parts[6],
+            target_cas_buffer_bytes: parts[7],
+            source_event_line_bytes: parts[8],
+            target_event_line_bytes: parts[9],
+            mapping_reservation_bytes: parts[10],
+            peak_bytes,
+        };
+        debug_assert_eq!(value.recomputed_peak(), peak_bytes);
+        Ok(value)
+    }
+
+    fn recomputed_peak(&self) -> u64 {
+        [
+            self.source_journal_bytes,
+            self.target_journal_bytes,
+            self.source_index_bytes,
+            self.target_index_bytes,
+            self.source_index_owned_bytes,
+            self.target_index_owned_bytes,
+            self.source_cas_buffer_bytes,
+            self.target_cas_buffer_bytes,
+            self.source_event_line_bytes,
+            self.target_event_line_bytes,
+            self.mapping_reservation_bytes,
+        ]
+        .into_iter()
+        .sum()
+    }
+}
+
+struct DualSessionLiveBuffersV5 {
+    source_cas: Vec<u8>,
+    source_event_line: Vec<u8>,
+    target_event_line: Vec<u8>,
+}
+
+impl DualSessionLiveBuffersV5 {
+    fn observed_lengths(&self, target_cas: &[u8]) -> [u64; 4] {
+        [
+            u64::try_from(self.source_cas.len()).unwrap_or(u64::MAX),
+            u64::try_from(target_cas.len()).unwrap_or(u64::MAX),
+            u64::try_from(self.source_event_line.len()).unwrap_or(u64::MAX),
+            u64::try_from(self.target_event_line.len()).unwrap_or(u64::MAX),
+        ]
+    }
+}
+
+fn checked_incremental_component_add(
+    left: u64,
+    right: u64,
+) -> Result<u64, IncrementalSessionError> {
+    left.checked_add(right)
+        .ok_or(IncrementalSessionError::Incomplete {
+            limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+            observed: u64::MAX,
+        })
+}
+
+fn retain_largest_canonical_event_line(
+    prefix: &[u8],
+    expected: u64,
+) -> Result<Vec<u8>, IncrementalSessionError> {
+    let largest = prefix
+        .split_inclusive(|byte| *byte == b'\n')
+        .max_by_key(|line| line.len())
+        .unwrap_or_default();
+    if !largest.ends_with(b"\n") || u64::try_from(largest.len()).ok() != Some(expected) {
+        return Err(IncrementalSessionError::Authority(
+            "retained canonical event-line bytes differ from replay accounting",
+        ));
+    }
+    let mut retained = Vec::new();
+    retained
+        .try_reserve_exact(largest.len())
+        .map_err(|_| IncrementalSessionError::Incomplete {
+            limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+            observed: expected,
+        })?;
+    retained.extend_from_slice(largest);
+    Ok(retained)
+}
+
+/// Store-owned dual-prefix authority.  It is intentionally private, neither
+/// cloneable nor serializable, and can only be consumed into deterministic M6
+/// values while its source and target journal locks remain held.
+struct IncrementalSessionProofV5<'source_root, 'roots, 'index> {
+    root: &'source_root StoreRoot,
+    _source_index: crate::ValidatedIndexSnapshotV5<'index, 'source_root, 'roots>,
+    _source_session: ReplayedV4RunSession<'source_root, 'roots>,
+    source_basis: AuthorityReplayBasisV4,
+    completed: M5CompletedGluingProfileV4,
+    target_index: crate::ValidatedIndexSnapshotV6,
+    source_index_canonical_bytes: Vec<u8>,
+    source_journal_bytes: Vec<u8>,
+    target_journal_bytes: Vec<u8>,
+    _live_buffers: Option<DualSessionLiveBuffersV5>,
+}
+
+impl<'root, 'roots, 'index> IncrementalSessionProofV5<'root, 'roots, 'index> {
+    fn retain_largest_source_cas(&self, expected: u64) -> Result<Vec<u8>, IncrementalSessionError> {
+        if expected == 0 {
+            return Ok(Vec::new());
+        }
+        let snapshot = self._source_index.snapshot();
+        let candidate = snapshot
+            .artifact_registrations
+            .iter()
+            .filter(|row| row.size == expected)
+            .map(|row| (&row.cas_hash, row.size))
+            .chain(
+                snapshot
+                    .artifact_registrations_v4
+                    .iter()
+                    .filter(|row| row.size == expected)
+                    .map(|row| (&row.cas_hash, row.size)),
+            )
+            .next();
+        let (hash, size) = if let Some(candidate) = candidate {
+            candidate
+        } else {
+            let genesis = self._source_session.index_v5_genesis()?;
+            if u64::try_from(
+                genesis
+                    .canonical_bytes()
+                    .map_err(JournalError::Domain)?
+                    .len(),
+            )
+            .ok()
+                != Some(expected)
+            {
+                return Err(IncrementalSessionError::Authority(
+                    "largest source CAS observation has no retained registration",
+                ));
+            }
+            let hash = self._source_session.log.genesis_hash();
+            let cas_hash = CasHash::parse(hash.to_string()).map_err(JournalError::Store)?;
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(usize::try_from(expected).map_err(|_| {
+                    IncrementalSessionError::Incomplete {
+                        limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                        observed: expected,
+                    }
+                })?)
+                .map_err(|_| IncrementalSessionError::Incomplete {
+                    limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                    observed: expected,
+                })?;
+            CasReader::open_existing(self.root)
+                .map_err(JournalError::Store)?
+                .read_into(&cas_hash, Some(expected), &mut bytes)
+                .map_err(JournalError::Store)?;
+            return Ok(bytes);
+        };
+        let cas_hash = CasHash::parse(hash.to_string()).map_err(JournalError::Store)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(usize::try_from(size).map_err(|_| {
+                IncrementalSessionError::Incomplete {
+                    limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                    observed: size,
+                }
+            })?)
+            .map_err(|_| IncrementalSessionError::Incomplete {
+                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                observed: size,
+            })?;
+        CasReader::open_existing(self.root)
+            .map_err(JournalError::Store)?
+            .read_into(&cas_hash, Some(size), &mut bytes)
+            .map_err(JournalError::Store)?;
+        Ok(bytes)
+    }
+
+    fn accept_mapping(
+        mut self,
+    ) -> Result<AcceptedIncrementalMappingV5<'root, 'roots, 'index>, IncrementalSessionError> {
+        self.target_index.revalidate_cas(self.root)?;
+        let (
+            mapping_reservation_bytes,
+            source_cas_bytes,
+            target_cas_bytes,
+            source_line_bytes,
+            target_line_bytes,
+            source_event_bytes,
+            target_event_bytes,
+        ) = {
+            let source_program = self
+                ._source_session
+                .index_v5_genesis()?
+                .program_space_for_store();
+            let target_program = &self.target_index.snapshot().program_space;
+            let mapping_reservation_bytes = u64::try_from(
+                ChangeMorphismV5::mapping_reservation_bytes_from_accepted_program_facts(
+                    source_program,
+                    target_program,
+                )?,
+            )
+            .map_err(|_| IncrementalSessionError::Incomplete {
+                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                observed: u64::MAX,
+            })?;
+            let source_projection = self._source_session.index_v5_replay_projection()?;
+            let source_line_bytes = source_projection.max_event_line_bytes();
+            let target_line_bytes = self.target_index.max_event_line_bytes();
+            (
+                mapping_reservation_bytes,
+                source_projection.max_cas_bytes(),
+                self.target_index.max_cas_bytes(),
+                source_line_bytes,
+                target_line_bytes,
+                checked_incremental_component_add(
+                    self._source_session.retained_event_bytes()?,
+                    source_line_bytes,
+                )?,
+                checked_incremental_component_add(
+                    self.target_index.retained_event_bytes()?,
+                    target_line_bytes,
+                )?,
+            )
+        };
+        let accounting = DualSessionAccountingV5::checked([
+            self._source_session.writer.state.confirmed_offset,
+            self.target_index.confirmed_journal_bytes(),
+            u64::try_from(self.source_index_canonical_bytes.len()).map_err(|_| {
+                IncrementalSessionError::Incomplete {
+                    limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                    observed: u64::MAX,
+                }
+            })?,
+            u64::try_from(self.target_index.canonical_snapshot_bytes().len()).map_err(|_| {
+                IncrementalSessionError::Incomplete {
+                    limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                    observed: u64::MAX,
+                }
+            })?,
+            self._source_index.recursive_owned_bytes()?,
+            self.target_index.decoded_owned_bytes(),
+            source_cas_bytes,
+            target_cas_bytes,
+            source_event_bytes,
+            target_event_bytes,
+            mapping_reservation_bytes,
+        ])?;
+
+        // Real confirmed prefix/CAS/event-line bytes are retained only after
+        // every simultaneous term, including Core's exact mapping
+        // reservation, has been admitted.
+        self.source_journal_bytes = self._source_session.retain_confirmed_prefix_bytes()?;
+        self.target_journal_bytes = self.target_index.retain_confirmed_journal_prefix()?;
+        if u64::try_from(self.source_journal_bytes.len()).ok()
+            != Some(accounting.source_journal_bytes)
+            || u64::try_from(self.target_journal_bytes.len()).ok()
+                != Some(accounting.target_journal_bytes)
+        {
+            return Err(IncrementalSessionError::Authority(
+                "retained journal prefix length changed after dual-session admission",
+            ));
+        }
+        let live_buffers = DualSessionLiveBuffersV5 {
+            source_cas: self.retain_largest_source_cas(source_cas_bytes)?,
+            source_event_line: retain_largest_canonical_event_line(
+                &self.source_journal_bytes,
+                source_line_bytes,
+            )?,
+            target_event_line: retain_largest_canonical_event_line(
+                &self.target_journal_bytes,
+                target_line_bytes,
+            )?,
+        };
+        if live_buffers.observed_lengths(self.target_index.largest_verified_cas_bytes())
+            != [
+                source_cas_bytes,
+                target_cas_bytes,
+                source_line_bytes,
+                target_line_bytes,
+            ]
+        {
+            return Err(IncrementalSessionError::Authority(
+                "retained CAS/event buffers differ from admitted observations",
+            ));
+        }
+        self._live_buffers = Some(live_buffers);
+        let proposal = derive_untrusted_incremental_mapping_proposal_v5(
+            &self._source_session.log,
+            &self.source_basis,
+            &self.completed,
+            &ContentHash::sha256(&self.source_index_canonical_bytes),
+            self.target_index.event_log(),
+            self.target_index.snapshot_hash(),
+        )?;
+        if u64::try_from(proposal.mapping_phase().working_peak_upper_bound_bytes()).ok()
+            != Some(accounting.mapping_reservation_bytes)
+        {
+            return Err(IncrementalSessionError::Authority(
+                "Core mapping realization differs from its admitted reservation",
+            ));
+        }
+        Ok(AcceptedIncrementalMappingV5 {
+            proof: self,
+            proposal,
+            accounting,
+        })
+    }
 }
 
 impl CompletedM5ReportAuthorityV4 {
@@ -960,6 +1463,139 @@ impl CompletedM5ReportAuthorityV4 {
         journal: &EventJournal<'_>,
     ) -> Result<crate::ValidatedIndexSnapshotV5<'index, 'root, '_>, crate::IndexError> {
         index.validated_snapshot_current_v5(journal, &self.roots)
+    }
+
+    /// Replays and binds the exact completed M5 source, current source index,
+    /// complete V5 target predecessor, and its CAS-backed V6 projection.  No
+    /// caller-provided OID, tree, prefix, index hash, or completion flag is
+    /// accepted by this seam.
+    pub fn derive_incremental_mapping_v5<'authority, 'root, 'index>(
+        &'authority self,
+        source_journal: &EventJournal<'root>,
+        source_index: &'index crate::DerivedIndexV5<'root>,
+        target_journal: &EventJournal<'root>,
+        target_index: &crate::DerivedIndexV6<'root>,
+    ) -> Result<AcceptedIncrementalMappingV5<'root, 'authority, 'index>, IncrementalSessionError>
+    {
+        self.mint_incremental_session_v5(
+            source_journal,
+            source_index,
+            target_journal,
+            target_index,
+        )?
+        .accept_mapping()
+    }
+
+    fn mint_incremental_session_v5<'root, 'index>(
+        &self,
+        source_journal: &EventJournal<'root>,
+        source_index: &'index crate::DerivedIndexV5<'root>,
+        target_journal: &EventJournal<'root>,
+        target_index: &crate::DerivedIndexV6<'root>,
+    ) -> Result<IncrementalSessionProofV5<'root, '_, 'index>, IncrementalSessionError> {
+        if source_journal.root.identity() != target_journal.root.identity()
+            || !source_index.matches_store_root(source_journal.root)
+            || !target_index.matches_store_root(source_journal.root)
+        {
+            return Err(IncrementalSessionError::Authority(
+                "source journal/index and target journal/index must share one admitted StoreRoot",
+            ));
+        }
+
+        // Rebuild the complete source projection first.  The following source
+        // replay lock then freezes that exact prefix before the target lock is
+        // acquired, preserving source -> target lock order.
+        let source_view = self.validated_snapshot_v5(source_index, source_journal)?;
+        let source_snapshot = source_view.snapshot();
+        let source_index_canonical_bytes = source_view.canonical_snapshot_bytes()?;
+
+        if source_snapshot.marker.tail_hash != *self.completed.confirmed_tail_hash()
+            || source_snapshot.marker.event_count != self.completed.confirmed_event_count()
+            || source_snapshot.gluing_attempts.len() != 1
+            || source_snapshot.gluing_attempts[0].event_id != *self.completed.event_id()
+            || source_snapshot.gluing_input_descriptors.len() != 2
+            || source_snapshot.artifact_registrations_v4.len() != 2
+        {
+            return Err(IncrementalSessionError::Authority(
+                "source index is not the exact completed M5 gluing prefix",
+            ));
+        }
+        let result_event_matches = source_snapshot
+            .global_candidates
+            .iter()
+            .any(|row| row.event_id == *self.completed.event_id())
+            || source_snapshot
+                .gluing_obstructions
+                .iter()
+                .any(|row| row.event_id == *self.completed.event_id());
+        if !result_event_matches {
+            return Err(IncrementalSessionError::Authority(
+                "source gluing result is not bound to the completed bundle event",
+            ));
+        }
+
+        let (source_session, source_basis, target_session) =
+            source_journal.replayed_incremental_pair_v5(target_journal, &self.roots)?;
+        if source_basis.confirmed_tail_hash() != &source_snapshot.marker.tail_hash
+            || source_basis.confirmed_event_count() != source_snapshot.marker.event_count
+            || source_basis.policy_revision_hash() != &source_snapshot.marker.policy_revision_hash
+            || source_basis.basis_digest() != &source_snapshot.marker.authority_replay_basis_digest
+        {
+            return Err(IncrementalSessionError::Authority(
+                "source replay and source index prefix bindings differ",
+            ));
+        }
+        let source_genesis = source_session.index_v5_genesis()?;
+        let source_program = source_genesis.program_space_for_store();
+
+        let target_view = target_index.validated_snapshot_from_session_v6(target_session)?;
+        if target_view.store_root_identity() != source_journal.root.identity() {
+            return Err(IncrementalSessionError::Authority(
+                "target projection changed StoreRoot identity",
+            ));
+        }
+        target_view.revalidate_cas(source_journal.root)?;
+        let target = target_view.snapshot();
+        let source_repository_identity_hash =
+            crate::index::repository_identity_hash_v6(source_program)?;
+        if source_program.repository_id() != &target.repository_id
+            || source_repository_identity_hash != target.repository_identity_hash
+        {
+            return Err(IncrementalSessionError::Authority(
+                "source and target repository identities differ",
+            ));
+        }
+
+        let source_git = source_program.accepted_git_revision_closure().ok_or(
+            IncrementalSessionError::Authority(
+                "source ProgramSpace lacks accepted Git revision closure",
+            ),
+        )?;
+        let target_git = target.program_space.accepted_git_revision_closure().ok_or(
+            IncrementalSessionError::Authority(
+                "target ProgramSpace lacks accepted Git revision closure",
+            ),
+        )?;
+        if source_git.target_commit_oid() != target_git.base_commit_oid()
+            || source_git.target_tree_hash() != target_git.base_tree_hash()
+        {
+            return Err(IncrementalSessionError::Authority(
+                "accepted source target and target base Git revisions differ",
+            ));
+        }
+
+        Ok(IncrementalSessionProofV5 {
+            root: source_journal.root,
+            _source_index: source_view,
+            _source_session: source_session,
+            source_basis,
+            completed: self.completed.clone(),
+            target_index: target_view,
+            source_index_canonical_bytes,
+            source_journal_bytes: Vec::new(),
+            target_journal_bytes: Vec::new(),
+            _live_buffers: None,
+        })
     }
 }
 
@@ -2198,6 +2834,65 @@ impl ReplayedV3RunSession<'_, '_> {
     }
 }
 
+impl ReplayedV5RunSession {
+    pub(crate) fn log(&self) -> &EventLogV5 {
+        &self.log
+    }
+
+    pub(crate) fn confirmed_offset(&self) -> u64 {
+        self.writer.state.confirmed_offset
+    }
+
+    pub(crate) fn store_root_identity(&self) -> &StoreRootIdentity {
+        &self.store_root_identity
+    }
+
+    pub(crate) fn retain_confirmed_prefix_bytes(&mut self) -> Result<Vec<u8>, JournalError> {
+        read_prefix(&mut self.writer.file, self.writer.state.confirmed_offset)
+    }
+
+    pub(crate) fn retained_event_bytes(&self) -> Result<u64, JournalError> {
+        self.writer
+            .state
+            .retained_envelope_bytes()?
+            .checked_add(
+                self.log
+                    .retained_envelope_bytes_for_store()
+                    .map_err(JournalError::Domain)?,
+            )
+            .ok_or(JournalError::Incomplete {
+                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                observed: u64::MAX,
+            })
+    }
+}
+
+fn replay_v5_locked(
+    root: &StoreRoot,
+    run_lock: OwnedFd,
+    mut writer: JournalWriter,
+) -> Result<ReplayedV5RunSession, JournalError> {
+    let JournalGenesis::V5Shared(genesis) = &writer.identity.genesis else {
+        return Err(JournalError::Identity(
+            "V5 replay requires verified genesis bytes",
+        ));
+    };
+    let genesis_cas = CasHash::parse(writer.identity.genesis_hash().to_string())?;
+    CasStore::open(root)?.verify_exact_bytes_streaming(&genesis_cas, genesis)?;
+    let envelopes = std::mem::take(&mut writer.state.events);
+    let log = EventLogV5::replay_confirmed_prefix_for_store(
+        writer.identity.run_id.clone(),
+        genesis.to_vec(),
+        envelopes,
+    )?;
+    Ok(ReplayedV5RunSession {
+        _run_lock: run_lock,
+        writer,
+        log,
+        store_root_identity: root.identity().clone(),
+    })
+}
+
 impl<'root, 'roots> RecoveredVerificationBundleV3Session<'root, 'roots> {
     #[must_use]
     pub fn durable_stage(&self) -> VerificationBundleDurableStageV3 {
@@ -2722,6 +3417,27 @@ impl<'root, 'roots> ReplayedV4RunSession<'root, 'roots> {
         Ok(&self.index_genesis)
     }
 
+    fn retain_confirmed_prefix_bytes(&mut self) -> Result<Vec<u8>, JournalError> {
+        self.require_healthy()?;
+        read_prefix(&mut self.writer.file, self.writer.state.confirmed_offset)
+    }
+
+    fn retained_event_bytes(&self) -> Result<u64, JournalError> {
+        self.require_healthy()?;
+        self.writer
+            .state
+            .retained_envelope_bytes()?
+            .checked_add(
+                self.log
+                    .retained_envelope_bytes_for_store()
+                    .map_err(JournalError::Domain)?,
+            )
+            .ok_or(JournalError::Incomplete {
+                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                observed: u64::MAX,
+            })
+    }
+
     pub(crate) fn index_v5_replay_projection(
         &self,
     ) -> Result<&crate::index::ReplayProjectionChargeV5, JournalError> {
@@ -3076,6 +3792,28 @@ struct ScanState {
     tail_hash: ContentHash,
     torn: Option<TornTail>,
 }
+
+impl ScanState {
+    fn retained_envelope_bytes(&self) -> Result<u64, JournalError> {
+        let slots = self
+            .events
+            .capacity()
+            .checked_mul(std::mem::size_of::<EventEnvelope>())
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or(JournalError::Incomplete {
+                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                observed: u64::MAX,
+            })?;
+        self.events.iter().try_fold(slots, |total, event| {
+            total
+                .checked_add(u64::try_from(event.allocated_bytes()).unwrap_or(u64::MAX))
+                .ok_or(JournalError::Incomplete {
+                    limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                    observed: u64::MAX,
+                })
+        })
+    }
+}
 #[derive(Clone, Debug)]
 struct TornTail {
     good_offset: u64,
@@ -3219,6 +3957,129 @@ impl<'a> EventJournal<'a> {
                 genesis_hash: log.genesis_hash().clone(),
                 event_id: envelope.id().clone(),
                 event_hash: envelope.event_hash().clone(),
+                confirmed_offset: line_len,
+            },
+        ))
+    }
+
+    /// Durably publishes a complete homogeneous V5 target predecessor. The
+    /// prefix must end at its deterministic review plan; genesis-only and
+    /// partially planned targets are refused.
+    pub fn publish_new_v5(
+        root: &'a StoreRoot,
+        log: EventLogV5,
+    ) -> Result<(Self, GenesisCommitReceiptV5), JournalError> {
+        let limits = JournalLimits::from_store(root.limits());
+        validate_limits(limits)?;
+        let target_state = log.replay_pre_incremental_state_for_store()?;
+        let target_projection = target_state.projection();
+        let identity = JournalIdentity::new(
+            log.run_id().clone(),
+            JournalGenesis::V5(log.canonical_genesis_bytes().to_vec()),
+        )?;
+        validate_prefix(&identity, log.envelopes())?;
+        let mut lines = Vec::new();
+        for envelope in log.envelopes() {
+            lines.extend_from_slice(&envelope.canonical_bytes()?);
+            lines.push(b'\n');
+        }
+        let line_len = u64::try_from(lines.len()).map_err(|_| JournalError::Incomplete {
+            limit: limits.max_event_line_bytes,
+            observed: u64::MAX,
+        })?;
+        for envelope in log.envelopes() {
+            let envelope_len = u64::try_from(envelope.canonical_bytes()?.len())
+                .unwrap_or(u64::MAX)
+                .saturating_add(1);
+            limit(envelope_len, limits.max_event_line_bytes)?;
+        }
+        limit(
+            u64::try_from(log.envelopes().len()).unwrap_or(u64::MAX),
+            limits.max_events,
+        )?;
+        limit(line_len, limits.max_replay_bytes)?;
+
+        let root_lock =
+            acquire_v4_root_lock(root).map_err(|_| JournalError::GenesisNotCommittedV5 {
+                stage: "root lock acquisition",
+            })?;
+        let cas_hash = CasHash::parse(log.genesis_hash().to_string())?;
+        let genesis_size = u64::try_from(log.canonical_genesis_bytes().len()).map_err(|_| {
+            JournalError::Incomplete {
+                limit: root.limits().max_object_bytes,
+                observed: u64::MAX,
+            }
+        })?;
+        CasStore::open(root)
+            .and_then(|cas| {
+                cas.put(
+                    &cas_hash,
+                    Some(genesis_size),
+                    std::io::Cursor::new(log.canonical_genesis_bytes()),
+                )
+            })
+            .map_err(|_| JournalError::GenesisNotCommittedV5 {
+                stage: "genesis CAS publication",
+            })?;
+        let reader =
+            CasReader::open_existing(root).map_err(|_| JournalError::GenesisNotCommittedV5 {
+                stage: "target source CAS admission",
+            })?;
+        for registration in target_projection.registrations() {
+            let hash = CasHash::parse(registration.cas_hash().to_string()).map_err(|_| {
+                JournalError::GenesisNotCommittedV5 {
+                    stage: "target source CAS identity",
+                }
+            })?;
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(usize::try_from(registration.size()).map_err(|_| {
+                    JournalError::GenesisNotCommittedV5 {
+                        stage: "target source CAS size admission",
+                    }
+                })?)
+                .map_err(|_| JournalError::GenesisNotCommittedV5 {
+                    stage: "target source CAS buffer admission",
+                })?;
+            reader
+                .read_into(&hash, Some(registration.size()), &mut bytes)
+                .map_err(|_| JournalError::GenesisNotCommittedV5 {
+                    stage: "target source CAS verification",
+                })?;
+        }
+        let runs = open_or_create_dir(root.fd(), RUNS_DIR, "runs directory").map_err(|_| {
+            JournalError::GenesisNotCommittedV5 {
+                stage: "runs directory setup",
+            }
+        })?;
+        let run = open_or_create_dir(&runs, &run_dir_name(&identity.run_id), "run directory")
+            .map_err(|_| JournalError::GenesisNotCommittedV5 {
+                stage: "run directory setup",
+            })?;
+        let run_lock =
+            acquire_v4_run_lock(&run).map_err(|_| JournalError::GenesisNotCommittedV5 {
+                stage: "run lock acquisition",
+            })?;
+        let recovery =
+            open_or_create_dir(&run, RECOVERY_DIR, "run recovery directory").map_err(|_| {
+                JournalError::GenesisNotCommittedV5 {
+                    stage: "recovery directory setup",
+                }
+            })?;
+        let _ = open_or_create_dir(&recovery, INTENTS_DIR, "recovery intent directory")?;
+        let _ = open_or_create_dir(&recovery, COMPLETIONS_DIR, "recovery completion directory")?;
+        publish_initial_log_v5(&run, &lines)?;
+        drop(run_lock);
+        drop(root_lock);
+        let journal = Self::open_with_limits(root, identity, limits)
+            .map_err(|_| JournalError::GenesisSessionUncertainV5)?;
+        Ok((
+            journal,
+            GenesisCommitReceiptV5 {
+                run_id: log.run_id().clone(),
+                genesis_hash: log.genesis_hash().clone(),
+                event_id: log.envelopes()[0].id().clone(),
+                event_hash: log.envelopes()[0].event_hash().clone(),
                 confirmed_offset: line_len,
             },
         ))
@@ -4111,6 +4972,120 @@ impl<'a> EventJournal<'a> {
         ))
     }
 
+    /// Acquires the target journal lock and structurally replays the complete
+    /// homogeneous V5 prefix. The result is crate-private and carries no M6
+    /// append authority until paired with the locked source/index closure.
+    pub(crate) fn replayed_v5_target_session(&self) -> Result<ReplayedV5RunSession, JournalError> {
+        if self.identity.version() != EventContractVersion::V5 {
+            return Err(JournalError::Identity("V5 replay requires a V5 journal"));
+        }
+        let run_lock = acquire_v4_run_lock(&self.run)?;
+        let writer = self.writer_v5()?;
+        replay_v5_locked(self.root, run_lock, writer)
+    }
+
+    fn replayed_incremental_pair_v5<'roots>(
+        &self,
+        target: &EventJournal<'a>,
+        roots: &'roots AuthorityTrustRootsV4,
+    ) -> Result<
+        (
+            ReplayedV4RunSession<'a, 'roots>,
+            AuthorityReplayBasisV4,
+            ReplayedV5RunSession,
+        ),
+        JournalError,
+    > {
+        if self.identity.version() != EventContractVersion::V4
+            || target.identity.version() != EventContractVersion::V5
+            || self.root.identity() != target.root.identity()
+            || self.identity.run_id == target.identity.run_id
+        {
+            return Err(JournalError::Identity(
+                "incremental pair requires distinct V4 source and V5 target in one StoreRoot",
+            ));
+        }
+        let root_lock = acquire_v4_root_lock(self.root)?;
+        let (source_run_lock, source_writer, target_run_lock, target_writer) =
+            if self.identity.run_id < target.identity.run_id {
+                let source_run_lock = acquire_v4_run_lock(&self.run)?;
+                let source_writer = self.writer_v4()?;
+                let target_run_lock = acquire_v4_run_lock(&target.run)?;
+                let target_writer = target.writer_v5()?;
+                (
+                    source_run_lock,
+                    source_writer,
+                    target_run_lock,
+                    target_writer,
+                )
+            } else {
+                let target_run_lock = acquire_v4_run_lock(&target.run)?;
+                let target_writer = target.writer_v5()?;
+                let source_run_lock = acquire_v4_run_lock(&self.run)?;
+                let source_writer = self.writer_v4()?;
+                (
+                    source_run_lock,
+                    source_writer,
+                    target_run_lock,
+                    target_writer,
+                )
+            };
+
+        let JournalGenesis::V4Shared(source_genesis) = &source_writer.identity.genesis else {
+            return Err(JournalError::Identity(
+                "incremental source requires verified V4 genesis bytes",
+            ));
+        };
+        admit_incremental_source_journal_bytes(source_writer.state.confirmed_offset)?;
+        let resolver = JournalAuthorityResolverV4 {
+            reader: CasReader::open_existing(self.root)?,
+        };
+        let session_identity = OpaqueSessionIdentityV4::fresh();
+        let mut index_projection = crate::index::ReplayProjectionChargeV5::default();
+        let mut projection_error = None;
+        let (source_log, source_basis) =
+            EventLogV4::replay_confirmed_v4_prefix_for_session_with_projection_visitor(
+                source_writer.identity.run_id.clone(),
+                source_genesis,
+                &source_writer.state.events,
+                &resolver,
+                roots,
+                EventReplayLimits::new(
+                    source_writer.limits.max_events,
+                    source_writer.limits.max_replay_bytes,
+                ),
+                &session_identity,
+                |metadata, payload| {
+                    if projection_error.is_none()
+                        && let Err(error) = index_projection.observe(metadata, payload)
+                    {
+                        projection_error = Some(error);
+                    }
+                },
+            )?;
+        if projection_error.is_some() {
+            return Err(JournalError::Incomplete {
+                limit: source_writer.limits.max_replay_bytes,
+                observed: u64::MAX,
+            });
+        }
+        let index_genesis = decode_index_v5_genesis(source_genesis)?;
+        let source_session = ReplayedV4RunSession {
+            _root_lock: root_lock,
+            _run_lock: source_run_lock,
+            writer: source_writer,
+            log: source_log,
+            index_genesis,
+            resolver,
+            roots,
+            session_identity,
+            state: ReplayedV4RunSessionState::Healthy,
+            index_projection: Some(index_projection),
+        };
+        let target_session = replay_v5_locked(self.root, target_run_lock, target_writer)?;
+        Ok((source_session, source_basis, target_session))
+    }
+
     /// Runs Core's inspection-only M5 profile derivation and the augmented
     /// full replay under one root -> run -> journal exclusive lock interval.
     /// The callback receives no raw roots or trusted-source values; those
@@ -4213,9 +5188,14 @@ impl<'a> EventJournal<'a> {
                 ))
             },
         )? {
-            LockedM5ProfileSessionResult::AlreadyComplete { roots, .. } => Ok(
-                M5ReportAuthorityInspectionV4::Complete(CompletedM5ReportAuthorityV4 { roots }),
-            ),
+            LockedM5ProfileSessionResult::AlreadyComplete {
+                completed, roots, ..
+            } => Ok(M5ReportAuthorityInspectionV4::Complete(Box::new(
+                CompletedM5ReportAuthorityV4 {
+                    roots,
+                    completed: *completed,
+                },
+            ))),
             LockedM5ProfileSessionResult::Continued(registered_inputs) => {
                 Ok(M5ReportAuthorityInspectionV4::Incomplete { registered_inputs })
             }
@@ -4937,6 +5917,7 @@ impl<'a> EventJournal<'a> {
             EventContractVersion::V1 => return Err(JournalError::V1ReadOnly),
             EventContractVersion::V3 => return Err(JournalError::V3ReplaySessionRequired),
             EventContractVersion::V4 => return Err(JournalError::V4ReplaySessionRequired),
+            EventContractVersion::V5 => return Err(JournalError::V5ReplaySessionRequired),
             EventContractVersion::V2 => {}
         }
         self.writer_locked()
@@ -4952,6 +5933,13 @@ impl<'a> EventJournal<'a> {
     fn writer_v4(&self) -> Result<JournalWriter, JournalError> {
         if self.identity.version() != EventContractVersion::V4 {
             return Err(JournalError::Identity("V4 writer requires a V4 journal"));
+        }
+        self.writer_locked()
+    }
+
+    fn writer_v5(&self) -> Result<JournalWriter, JournalError> {
+        if self.identity.version() != EventContractVersion::V5 {
+            return Err(JournalError::Identity("V5 writer requires a V5 journal"));
         }
         self.writer_locked()
     }
@@ -5079,6 +6067,7 @@ impl<'a> EventJournal<'a> {
         match self.identity.version() {
             EventContractVersion::V1 => return Err(JournalError::V1ReadOnly),
             EventContractVersion::V4 => return Err(JournalError::V4ReplaySessionRequired),
+            EventContractVersion::V5 => return Err(JournalError::V5ReplaySessionRequired),
             EventContractVersion::V2 | EventContractVersion::V3 => {}
         }
         let actor = actor.into();
@@ -7769,6 +8758,15 @@ fn validate_prefix(
         EventEnvelope::validate_v4_stream(&identity.run_id, bytes, events)?;
         return Ok(());
     }
+    if identity.version() == EventContractVersion::V5 {
+        let JournalGenesis::V5Shared(bytes) = &identity.genesis else {
+            return Err(JournalError::Identity(
+                "V5 journal identity requires verified canonical genesis bytes",
+            ));
+        };
+        EventEnvelope::validate_v5_stream_for_store(&identity.run_id, bytes, events)?;
+        return Ok(());
+    }
     let _ = EventEnvelope::validated_view(
         identity.version(),
         &identity.run_id,
@@ -8095,6 +9093,48 @@ fn publish_initial_log_v4(run: &OwnedFd, line: &[u8]) -> Result<(), JournalError
         return Err(JournalError::GenesisSessionUncertainV4);
     }
     Ok(())
+}
+
+fn publish_initial_log_v5(run: &OwnedFd, line: &[u8]) -> Result<(), JournalError> {
+    let fd = fs::openat(
+        run,
+        ".",
+        OFlags::TMPFILE | OFlags::RDWR | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    )
+    .map_err(|_| JournalError::GenesisNotCommittedV5 {
+        stage: "temporary create",
+    })?;
+    verify_fd_kind_mode(
+        &fd,
+        "event-v5 genesis temporary",
+        FileType::RegularFile,
+        0o600,
+    )
+    .map_err(|_| JournalError::GenesisNotCommittedV5 {
+        stage: "temporary validation",
+    })?;
+    let mut file = File::from(fd);
+    file.write_all(line)
+        .map_err(|_| JournalError::GenesisNotCommittedV5 {
+            stage: "line write",
+        })?;
+    file.sync_all()
+        .map_err(|_| JournalError::GenesisNotCommittedV5 { stage: "file sync" })?;
+    match fs::linkat(&file, "", run, JOURNAL_FILE, AtFlags::EMPTY_PATH) {
+        Ok(()) => {}
+        Err(Errno::EXIST) => {
+            return Err(JournalError::ReceiptCorruption {
+                name: JOURNAL_FILE.to_owned(),
+            });
+        }
+        Err(_) => {
+            return Err(JournalError::GenesisNotCommittedV5 {
+                stage: "create-only link",
+            });
+        }
+    }
+    fs::fsync(run).map_err(|_| JournalError::GenesisSessionUncertainV5)
 }
 
 /// Open one already-existing, independently verified component.  This is
@@ -9070,12 +10110,14 @@ mod tests {
         SnapshotSourcesRecorded, ValidatedExecutionBundle, VerificationAttemptStageV3,
         VerificationBundleRequestV4, evaluate_static_fact_v1, plan, prepare_context,
     };
+    use reviewgraphen_ingest::{IngestRequest, ingest_with_sources};
     use serde_json::Value;
     use std::{
         collections::{BTreeMap, BTreeSet},
         io::Cursor,
         os::unix::fs::PermissionsExt,
-        path::PathBuf,
+        path::{Path, PathBuf},
+        process::Command,
         sync::{Arc, Barrier, mpsc},
     };
 
@@ -9204,6 +10246,158 @@ mod tests {
             .unwrap();
     }
 
+    struct IngestPlannedPrefix {
+        bootstrap: EventLogV4,
+        target_bootstrap: RunGenesisBootstrapRequestV4,
+        v3_envelopes: Vec<EventEnvelope>,
+        registrations: Vec<ArtifactRegisteredV3>,
+        sources: SnapshotSourcesRecorded,
+        plan: reviewgraphen_core::ReviewPlan,
+    }
+
+    fn ingest_planned_prefix(
+        root: &StoreRoot,
+        run: &str,
+        program: ProgramSpace,
+        source_bundle: &SnapshotSourceBundle,
+    ) -> IngestPlannedPrefix {
+        assert_eq!(program.snapshot_id(), source_bundle.snapshot_id());
+        let (universe, obligations) = MvpRulePack::synthesize(&program).unwrap().into_parts();
+        let aggregate = ReviewAggregate::new(program, universe, obligations).unwrap();
+        let run_id = StableId::parse(run).unwrap();
+        let snapshot_id = aggregate.program().snapshot_id().clone();
+        let mut v3 = EventLog::new_v3(run_id.clone(), aggregate).unwrap();
+        let genesis = v3
+            .run_genesis_snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap();
+        put_test_cas(root, &genesis);
+
+        let mut registrations = Vec::new();
+        let mut entries = Vec::new();
+        for source in source_bundle.entries() {
+            put_test_cas(root, source.bytes());
+            let hash = source.content_hash().clone();
+            let registration = ArtifactRegisteredV3::new(
+                run_id.clone(),
+                hash.clone(),
+                "text/plain",
+                u64::try_from(source.bytes().len()).unwrap(),
+                ArtifactSensitivity::WorkspaceSource,
+                ArtifactSourceV3::SnapshotIngest {
+                    adapter_id: "reviewgraphen-ingest-e2e".to_owned(),
+                    run_id: run_id.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                },
+            )
+            .unwrap();
+            entries.push(
+                SnapshotSourceRecordEntry::new(
+                    source.artifact_id().clone(),
+                    source.path(),
+                    hash.clone(),
+                    registration.registration_id().clone(),
+                    hash,
+                    u64::try_from(
+                        source
+                            .bytes()
+                            .iter()
+                            .filter(|byte| **byte == b'\n')
+                            .count()
+                            .saturating_add(usize::from(!source.bytes().ends_with(b"\n"))),
+                    )
+                    .unwrap()
+                    .max(1),
+                )
+                .unwrap(),
+            );
+            v3.append(EventCommand::artifact_registered_v3(registration.clone()))
+                .unwrap();
+            registrations.push(registration);
+        }
+        registrations.sort_by(|left, right| left.registration_id().cmp(right.registration_id()));
+        entries.sort_by(|left, right| left.path().cmp(right.path()));
+        let sources = SnapshotSourcesRecorded::new(snapshot_id, entries).unwrap();
+        v3.append(EventCommand::snapshot_sources_recorded(sources.clone()))
+            .unwrap();
+        let plan = plan(v3.aggregate(), PlanBudget::new(16, 16).unwrap()).unwrap();
+        v3.append(EventCommand::review_plan_recorded(plan.clone()))
+            .unwrap();
+        let source_bootstrap = RunGenesisBootstrapRequestV4::new(
+            run_id.clone(),
+            genesis.clone(),
+            v3.aggregate().program().repository_identity(),
+            v3.aggregate().program().snapshot_id().clone(),
+            v3.aggregate().program().profile_id(),
+            v3.aggregate().program().profile_version(),
+        )
+        .unwrap();
+        let target_bootstrap = RunGenesisBootstrapRequestV4::new(
+            run_id,
+            genesis,
+            v3.aggregate().program().repository_identity(),
+            v3.aggregate().program().snapshot_id().clone(),
+            v3.aggregate().program().profile_id(),
+            v3.aggregate().program().profile_version(),
+        )
+        .unwrap();
+        IngestPlannedPrefix {
+            bootstrap: EventLogV4::from_bootstrap_request(source_bootstrap).unwrap(),
+            target_bootstrap,
+            v3_envelopes: v3.envelopes().cloned().collect(),
+            registrations,
+            sources,
+            plan,
+        }
+    }
+
+    fn publish_ingest_source_v4<'a>(
+        root: &'a StoreRoot,
+        run: &str,
+        program: ProgramSpace,
+        source_bundle: &SnapshotSourceBundle,
+    ) -> (EventJournal<'a>, AuthorityTrustRootsV4) {
+        let repository_id = program.repository_id().clone();
+        let repository_source_hash = program
+            .accepted_git_revision_closure()
+            .unwrap()
+            .target_tree_hash()
+            .clone();
+        let planned = ingest_planned_prefix(root, run, program, source_bundle);
+        let prefix = rewrap_v3_fixture_prefix_as_v4(&planned.v3_envelopes, &planned.bootstrap);
+        let (journal, _) = EventJournal::publish_new_v4(root, planned.bootstrap).unwrap();
+        let mut writer = journal.writer_v4().unwrap();
+        writer.append_batch(&prefix[1..]).unwrap();
+        drop(writer);
+        let roots = AuthorityTrustRootsV4::new(
+            ContentHash::sha256(b"ingest-store-mapping-e2e-policy"),
+            repository_id,
+            repository_source_hash,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        (journal, roots)
+    }
+
+    fn planned_ingest_target_v5(
+        root: &StoreRoot,
+        run: &str,
+        program: ProgramSpace,
+        source_bundle: &SnapshotSourceBundle,
+    ) -> EventLogV5 {
+        let planned = ingest_planned_prefix(root, run, program, source_bundle);
+        EventLogV5::from_planned_bootstrap_request(
+            planned.target_bootstrap,
+            planned.registrations,
+            planned.sources,
+            planned.plan,
+        )
+        .unwrap()
+    }
+
     fn test_cas_inventory(root: &StoreRoot) -> Vec<(PathBuf, u64)> {
         let base = root.path().join("artifacts").join("sha256");
         let mut result = Vec::new();
@@ -9282,6 +10476,26 @@ mod tests {
         ArtifactRegisteredV3,
         ValidatedExecutionBundle,
     ) {
+        public_v3_fixture_journal_for_profile_and_program_v3(root, run, exact_m5_profile, false)
+    }
+
+    fn public_v3_fixture_journal_for_profile_and_program_v3<'a>(
+        root: &'a StoreRoot,
+        run: &str,
+        exact_m5_profile: bool,
+        incremental_program_v3: bool,
+    ) -> (
+        EventJournal<'a>,
+        AuthorityTrustRootsV3,
+        StableId,
+        HarnessTrustRootInputV3,
+        EventLogV4,
+        Vec<EventEnvelope>,
+        StaticFactEvaluationV1,
+        BuiltContextProjection,
+        ArtifactRegisteredV3,
+        ValidatedExecutionBundle,
+    ) {
         let mut input: Value = serde_json::from_slice(include_bytes!(
             "../../../examples/double-submit-payment/program-space.json"
         ))
@@ -9317,6 +10531,60 @@ mod tests {
         contains["target_ids"] = serde_json::json!(["function:payment-charge"]);
         contains["directed"] = Value::Bool(true);
         input["relations"].as_array_mut().unwrap().push(contains);
+        if incremental_program_v3 {
+            input["schema"] = Value::String("reviewgraphen.program_space.input.v3".to_owned());
+            input["source"]["kind"] = Value::String("git".to_owned());
+            input["source"]["revision"] =
+                Value::String("1111111111111111111111111111111111111111".to_owned());
+            input["source"]["content_hash"] =
+                Value::String("git:3333333333333333333333333333333333333333".to_owned());
+            input["snapshot"]["base_revision"] =
+                Value::String("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned());
+            input["snapshot"]["target_revision"] =
+                Value::String("1111111111111111111111111111111111111111".to_owned());
+            input["snapshot"]["tree_hash"] =
+                Value::String("git:3333333333333333333333333333333333333333".to_owned());
+            input["snapshot"]["dirty"] = Value::Bool(false);
+            for relation in input["relations"].as_array_mut().unwrap() {
+                relation["ordered_target_ids"] = relation["target_ids"].clone();
+            }
+            let mut anchors = serde_json::Map::new();
+            for artifact in input["artifacts"].as_array_mut().unwrap() {
+                let kind = artifact["kind"].as_str().unwrap().to_owned();
+                if artifact["language"] == "rust"
+                    && matches!(kind.as_str(), "function" | "method" | "type")
+                {
+                    let id = artifact["id"].as_str().unwrap().to_owned();
+                    artifact["provenance"]["extraction_method"] =
+                        Value::String("reviewgraphen.ingest.rust_syn.v1".to_owned());
+                    anchors.insert(
+                        id.clone(),
+                        serde_json::json!({
+                            "descriptor": "reviewgraphen.rust_symbol_anchor@1",
+                            "language": "rust",
+                            "symbol_kind": kind,
+                            "signature_shape_hash": ContentHash::sha256(
+                                format!("signature:{id}").as_bytes()
+                            ),
+                            "normalized_body_hash": ContentHash::sha256(
+                                format!("body:{id}").as_bytes()
+                            )
+                        }),
+                    );
+                }
+            }
+            input["incremental_facts"] = serde_json::json!({
+                "git_revision_closure": {
+                    "base_commit_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "base_tree_hash": "git:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "target_commit_oid": "1111111111111111111111111111111111111111",
+                    "target_tree_hash": "git:3333333333333333333333333333333333333333"
+                },
+                "rust_anchor_extractor_id": "reviewgraphen.ingest.rust_syn.anchor.v1",
+                "rust_anchor_syn_version": "2.0.119",
+                "rust_symbol_anchors": anchors
+            });
+        }
         let test = input["artifacts"]
             .as_array_mut()
             .unwrap()
@@ -9798,7 +11066,7 @@ mod tests {
         run: &str,
     ) -> (EventJournal<'a>, AuthorityTrustRootsV4, Vec<EventEnvelope>) {
         let (journal, roots, planned, _, _) =
-            public_v4_static_bundle_journal_with_append(root, run, false, false);
+            public_v4_static_bundle_journal_with_append(root, run, false, false, false);
         (journal, roots, planned)
     }
 
@@ -9811,7 +11079,25 @@ mod tests {
         [PublicV4GluingInput; 2],
     ) {
         let (journal, roots, _, receipt, inputs) =
-            public_v4_static_bundle_journal_with_append(root, run, true, true);
+            public_v4_static_bundle_journal_with_append(root, run, true, true, false);
+        assert!(receipt.is_some());
+        (
+            journal,
+            roots,
+            inputs.expect("exact M5 profile gluing inputs"),
+        )
+    }
+
+    fn public_v4_gluing_journal_incremental_v3<'a>(
+        root: &'a StoreRoot,
+        run: &str,
+    ) -> (
+        EventJournal<'a>,
+        AuthorityTrustRootsV4,
+        [PublicV4GluingInput; 2],
+    ) {
+        let (journal, roots, _, receipt, inputs) =
+            public_v4_static_bundle_journal_with_append(root, run, true, true, true);
         assert!(receipt.is_some());
         (
             journal,
@@ -9832,11 +11118,24 @@ mod tests {
         .unwrap()
     }
 
+    fn incremental_v3_profile_base_roots() -> AuthorityTrustRootsV4 {
+        AuthorityTrustRootsV4::new(
+            ContentHash::sha256(b"store-public-v3-fixture-policy"),
+            StableId::parse("repository:double-submit-payment").unwrap(),
+            ContentHash::parse("git:3333333333333333333333333333333333333333").unwrap(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
     fn public_v4_static_bundle_journal_with_append<'a>(
         root: &'a StoreRoot,
         run: &str,
         append_bundle: bool,
         exact_m5_profile: bool,
+        incremental_program_v3: bool,
     ) -> (
         EventJournal<'a>,
         AuthorityTrustRootsV4,
@@ -9859,7 +11158,12 @@ mod tests {
             v4_built,
             raw_registration,
             v4_execution,
-        ) = public_v3_fixture_journal_for_profile(&source_root, run, exact_m5_profile);
+        ) = public_v3_fixture_journal_for_profile_and_program_v3(
+            &source_root,
+            run,
+            exact_m5_profile,
+            incremental_program_v3,
+        );
         for (path, _) in test_cas_inventory(&source_root) {
             put_test_cas(root, &std::fs::read(path).unwrap());
         }
@@ -14947,6 +16251,7 @@ mod tests {
             "run:journal-v4-fresh-m4-store-surface",
             true,
             false,
+            false,
         );
         let receipt = receipt.expect("fresh M4 append receipt");
         assert_eq!(receipt.journal().len(), planned.len());
@@ -15334,6 +16639,626 @@ mod tests {
             reviewgraphen_core::GluingResultV4::Unknown
         );
         assert!(try_acquire_v4_root_lock(&root).unwrap().is_some());
+    }
+
+    #[test]
+    fn incremental_pair_locks_both_run_orders_and_retains_both_journals() {
+        for source_run in ["run:a-source-before-target", "run:z-source-after-target"] {
+            let (_workspace, root) = root();
+            let (source, roots, _) = public_v4_gluing_journal(&root, source_run);
+            let target_log = crate::index::v6::tests::planned_target(&root);
+            let (target, _) = EventJournal::publish_new_v5(&root, target_log).unwrap();
+            let (source_session, _, target_session) = source
+                .replayed_incremental_pair_v5(&target, &roots)
+                .unwrap();
+            let source_competing = source.open_file(false).unwrap();
+            let target_competing = target.open_file(false).unwrap();
+            assert_eq!(
+                fs::flock(&source_competing, FlockOperation::NonBlockingLockExclusive),
+                Err(rustix::io::Errno::WOULDBLOCK)
+            );
+            assert_eq!(
+                fs::flock(&target_competing, FlockOperation::NonBlockingLockExclusive),
+                Err(rustix::io::Errno::WOULDBLOCK)
+            );
+            drop(target_session);
+            drop(source_session);
+            fs::flock(&source_competing, FlockOperation::NonBlockingLockExclusive).unwrap();
+            fs::flock(&target_competing, FlockOperation::NonBlockingLockExclusive).unwrap();
+        }
+    }
+
+    #[test]
+    fn incremental_dual_session_peak_and_source_prefix_limits_are_exact() {
+        let exact = DualSessionAccountingV5::checked([
+            MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ])
+        .unwrap();
+        assert_eq!(exact.peak_bytes, MAX_INCREMENTAL_SESSION_WORKING_BYTES);
+        assert!(matches!(
+            DualSessionAccountingV5::checked([
+                MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ]),
+            Err(IncrementalSessionError::Incomplete { observed, .. })
+                if observed == MAX_INCREMENTAL_SESSION_WORKING_BYTES + 1
+        ));
+        assert!(matches!(
+            DualSessionAccountingV5::checked([u64::MAX, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            Err(IncrementalSessionError::Incomplete {
+                observed: u64::MAX,
+                ..
+            })
+        ));
+        assert_eq!(
+            admit_incremental_source_journal_bytes(MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES).unwrap(),
+            MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES
+        );
+        assert!(matches!(
+            admit_incremental_source_journal_bytes(MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES + 1),
+            Err(JournalError::Incomplete { observed, .. })
+                if observed == MAX_INCREMENTAL_JOURNAL_PREFIX_BYTES + 1
+        ));
+    }
+
+    fn git(repo: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(repo)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    fn commit_ingest_e2e_tree(repo: &Path, source: &str, message: &str) -> String {
+        std::fs::write(repo.join("src/lib.rs"), source).unwrap();
+        git(repo, &["add", "src/lib.rs"]);
+        git(repo, &["commit", "--quiet", "--message", message]);
+        git(repo, &["rev-parse", "HEAD"])
+    }
+
+    fn with_ingest_e2e_m5_profile(program: &ProgramSpace) -> ProgramSpace {
+        let mut value = serde_json::to_value(program).unwrap();
+        value["profile"]["id"] = Value::String("double-submit-payment".to_owned());
+        value["profile"]["version"] = Value::String("1".to_owned());
+        let provenance = value["artifacts"][0]["provenance"].clone();
+        let rust_functions = value["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|artifact| artifact["kind"] == "function")
+            .map(|artifact| artifact["id"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(rust_functions.len(), 2);
+        value["artifacts"].as_array_mut().unwrap().extend([
+            serde_json::json!({
+                "id": reviewgraphen_core::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID,
+                "kind": "requirement",
+                "label": "M5 fixed overlap anchor for the ingest mapping E2E",
+                "attributes": {"test_profile_scaffold": true},
+                "provenance": provenance,
+            }),
+            serde_json::json!({
+                "id": "event:ingest-e2e-submit",
+                "kind": "event",
+                "label": "M5 ingest E2E submit event",
+                "attributes": {"test_profile_scaffold": true},
+                "provenance": provenance,
+            }),
+            serde_json::json!({
+                "id": "function:ingest-e2e-payment",
+                "kind": "requirement",
+                "label": "M5 ingest E2E payment step",
+                "attributes": {"test_profile_scaffold": true},
+                "provenance": provenance,
+            }),
+            serde_json::json!({
+                "id": "external-service:ingest-e2e-provider",
+                "kind": "external_service",
+                "label": "M5 ingest E2E payment provider",
+                "attributes": {
+                    "external_side_effect": true,
+                    "test_profile_scaffold": true
+                },
+                "provenance": provenance,
+            }),
+        ]);
+        let scaffold_relations = [
+            serde_json::json!({
+                "id": "relation:ingest-e2e-submit-handler",
+                "kind": "handled_by",
+                "source_id": "event:ingest-e2e-submit",
+                "target_ids": [reviewgraphen_core::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID],
+                "directed": true,
+                "attributes": {
+                    "concurrency": "unbounded_reentry",
+                    "test_profile_scaffold": true
+                },
+                "provenance": provenance,
+            }),
+            serde_json::json!({
+                "id": "relation:ingest-e2e-submit-payment",
+                "kind": "calls",
+                "source_id": reviewgraphen_core::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID,
+                "target_ids": ["function:ingest-e2e-payment"],
+                "directed": true,
+                "attributes": {"test_profile_scaffold": true},
+                "provenance": provenance,
+            }),
+            serde_json::json!({
+                "id": "relation:ingest-e2e-payment-provider",
+                "kind": "calls",
+                "source_id": "function:ingest-e2e-payment",
+                "target_ids": ["external-service:ingest-e2e-provider"],
+                "directed": true,
+                "attributes": {
+                    "idempotency_key_forwarded": false,
+                    "test_profile_scaffold": true
+                },
+                "provenance": provenance,
+            }),
+        ];
+        for mut relation in scaffold_relations {
+            relation["ordered_target_ids"] = relation["target_ids"].clone();
+            value["relations"].as_array_mut().unwrap().push(relation);
+        }
+        let mut members = vec![Value::String(
+            reviewgraphen_core::DOUBLE_SUBMIT_REQUIRED_OVERLAP_ID.to_owned(),
+        )];
+        members.extend(rust_functions);
+        members.extend([
+            Value::String("relation:ingest-e2e-submit-handler".to_owned()),
+            Value::String("relation:ingest-e2e-submit-payment".to_owned()),
+            Value::String("relation:ingest-e2e-payment-provider".to_owned()),
+        ]);
+        members.sort_by(|left, right| left.as_str().unwrap().cmp(right.as_str().unwrap()));
+        value["contexts"] = serde_json::json!([
+            {
+                "id": reviewgraphen_core::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+                "kind": "review_context",
+                "label": "Payment context for the ingest mapping E2E",
+                "member_ids": members,
+                "attributes": {"test_profile_scaffold": true},
+                "provenance": provenance,
+            },
+            {
+                "id": reviewgraphen_core::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+                "kind": "review_context",
+                "label": "UI context for the ingest mapping E2E",
+                "member_ids": members,
+                "attributes": {"test_profile_scaffold": true},
+                "provenance": provenance,
+            }
+        ]);
+        value["invariants"] = serde_json::json!([{
+            "id": reviewgraphen_core::DOUBLE_SUBMIT_INVARIANT_ID,
+            "property_id": reviewgraphen_core::DOUBLE_SUBMIT_PROPERTY_ID,
+            "description": "Fixed M5 invariant used only to complete the source review seam.",
+            "scope_ids": [
+                reviewgraphen_core::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+                reviewgraphen_core::DOUBLE_SUBMIT_UI_CONTEXT_ID
+            ],
+            "severity": "critical",
+            "verification_mode": "mapping_e2e_profile_scaffold",
+            "provenance": provenance,
+        }]);
+        ProgramSpace::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap()
+    }
+
+    fn ingest_e2e_profile_roots(program: &ProgramSpace) -> AuthorityTrustRootsV4 {
+        AuthorityTrustRootsV4::new(
+            ContentHash::sha256(b"ingest-store-mapping-e2e-policy"),
+            program.repository_id().clone(),
+            program
+                .accepted_git_revision_closure()
+                .unwrap()
+                .target_tree_hash()
+                .clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn real_git_ingest_pair_maps_unchanged_and_formatting_only_rust_facts_as_preserved() {
+        let repository_workspace = tempfile::tempdir().unwrap();
+        let repository = repository_workspace.path().join("repository");
+        std::fs::create_dir_all(repository.join("src")).unwrap();
+        git(&repository, &["init", "--quiet"]);
+        git(&repository, &["config", "user.name", "ReviewGraphen Test"]);
+        git(
+            &repository,
+            &["config", "user.email", "reviewgraphen@example.invalid"],
+        );
+        std::fs::write(
+            repository.join("Cargo.toml"),
+            "[package]\nname = \"ingest-store-e2e\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repository.join("src/lib.rs"),
+            "pub fn seed() -> u64 { 0 }\n",
+        )
+        .unwrap();
+        git(&repository, &["add", "Cargo.toml", "src/lib.rs"]);
+        git(&repository, &["commit", "--quiet", "--message", "base"]);
+        let base = git(&repository, &["rev-parse", "HEAD"]);
+        let source_commit = commit_ingest_e2e_tree(
+            &repository,
+            "pub fn unchanged() -> u64 { 7 }\n\npub fn formatted(value: u64) -> u64 {\n    value + 1\n}\n",
+            "source snapshot",
+        );
+        let target_commit = commit_ingest_e2e_tree(
+            &repository,
+            "pub fn unchanged() -> u64 { 7 }\n\npub fn formatted(value: u64) -> u64 {\n    value  +  1\n}\n",
+            "formatting only",
+        );
+        let source_ingest = ingest_with_sources(
+            &IngestRequest::new(
+                repository_workspace.path(),
+                &repository,
+                "reviewgraphen://ingest-store-mapping-e2e",
+                &base,
+                &source_commit,
+            ),
+            1_048_576,
+        )
+        .unwrap();
+        let target_ingest = ingest_with_sources(
+            &IngestRequest::new(
+                repository_workspace.path(),
+                &repository,
+                "reviewgraphen://ingest-store-mapping-e2e",
+                &source_commit,
+                &target_commit,
+            ),
+            1_048_576,
+        )
+        .unwrap();
+        assert_eq!(
+            source_ingest
+                .program_space
+                .accepted_git_revision_closure()
+                .unwrap()
+                .target_commit_oid(),
+            target_ingest
+                .program_space
+                .accepted_git_revision_closure()
+                .unwrap()
+                .base_commit_oid()
+        );
+
+        let source_program = with_ingest_e2e_m5_profile(&source_ingest.program_space);
+        let target_program = with_ingest_e2e_m5_profile(&target_ingest.program_space);
+        let function_id = |program: &ProgramSpace, suffix: &str| {
+            program
+                .artifacts()
+                .iter()
+                .find(|artifact| artifact.kind == "function" && artifact.label.ends_with(suffix))
+                .unwrap()
+                .id
+                .clone()
+        };
+        let unchanged_id = function_id(&source_program, "::unchanged");
+        let formatted_id = function_id(&source_program, "::formatted");
+        let target_formatted_id = function_id(&target_program, "::formatted");
+        assert_eq!(
+            &source_program.accepted_rust_symbol_anchors().unwrap()[&formatted_id],
+            &target_program.accepted_rust_symbol_anchors().unwrap()[&target_formatted_id],
+            "Ingest's accepted Rust anchor must normalize formatting-only edits",
+        );
+
+        let (_workspace, root) = root();
+        let (source, roots) = publish_ingest_source_v4(
+            &root,
+            "run:ingest-store-source",
+            source_program.clone(),
+            &source_ingest.source_bundle,
+        );
+        let assignments = M5DoubleSubmitAssignmentsV4::new(
+            AssignmentValueV4::Unknown,
+            AssignmentValueV4::Unknown,
+        );
+        source
+            .with_m5_gluing_profile_session(roots, assignments, |profile| {
+                assert!(profile.publish_next_gluing_input()?.is_some());
+                assert!(profile.publish_next_gluing_input()?.is_some());
+                profile.append_gluing_bundle().map(|_| ())
+            })
+            .unwrap();
+        let authority = match source
+            .inspect_m5_report_authority_v4(ingest_e2e_profile_roots(&source_program), assignments)
+            .unwrap()
+        {
+            M5ReportAuthorityInspectionV4::Complete(authority) => authority,
+            M5ReportAuthorityInspectionV4::Incomplete { .. } => panic!("M5 must be complete"),
+        };
+        let source_index = crate::DerivedIndexV5::open(&root).unwrap();
+        authority.rebuild_v5(&source_index, &source).unwrap();
+
+        let target_log = planned_ingest_target_v5(
+            &root,
+            "run:ingest-store-target",
+            target_program,
+            &target_ingest.source_bundle,
+        );
+        let (target, _) = EventJournal::publish_new_v5(&root, target_log).unwrap();
+        let target_index = crate::DerivedIndexV6::open(&root).unwrap();
+        target_index.rebuild_pre_incremental_v6(&target).unwrap();
+        let accepted = authority
+            .derive_incremental_mapping_v5(&source, &source_index, &target, &target_index)
+            .unwrap();
+
+        let mapping_for = |source_id: &StableId| {
+            accepted
+                .mapping_phase()
+                .mappings()
+                .iter()
+                .find(|mapping| mapping.from_ids().contains(source_id))
+                .unwrap()
+        };
+        assert_eq!(
+            mapping_for(&unchanged_id).status(),
+            reviewgraphen_core::MappingStatusV5::Preserved
+        );
+        let formatted = mapping_for(&formatted_id);
+        assert_eq!(
+            formatted.status(),
+            reviewgraphen_core::MappingStatusV5::Preserved
+        );
+        assert_eq!(
+            formatted.candidate_key_kind(),
+            reviewgraphen_core::CandidateKeyKindV5::SamePath
+        );
+    }
+
+    #[test]
+    fn incremental_authority_refuses_incomplete_m5_and_cross_root_target() {
+        let (_workspace, root) = root();
+        let (source, _roots, [payment, ui]) =
+            public_v4_gluing_journal(&root, "run:incremental-authority-source");
+        let assignments = M5DoubleSubmitAssignmentsV4::new(
+            payment.descriptor.assignment_value(),
+            ui.descriptor.assignment_value(),
+        );
+        for expected in 0..=2_u64 {
+            assert!(matches!(
+                source
+                    .inspect_m5_report_authority_v4(
+                        public_v4_profile_base_roots(),
+                        assignments,
+                    )
+                    .unwrap(),
+                M5ReportAuthorityInspectionV4::Incomplete { registered_inputs }
+                    if registered_inputs == expected
+            ));
+            if expected < 2 {
+                source
+                    .with_m5_gluing_profile_session(
+                        public_v4_profile_base_roots(),
+                        assignments,
+                        |profile| {
+                            assert!(profile.publish_next_gluing_input()?.is_some());
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        source
+            .with_m5_gluing_profile_session(
+                public_v4_profile_base_roots(),
+                assignments,
+                |profile| {
+                    assert_eq!(profile.remaining_input_count(), 0);
+                    profile.append_gluing_bundle().map(|_| ())
+                },
+            )
+            .unwrap();
+        let authority = match source
+            .inspect_m5_report_authority_v4(public_v4_profile_base_roots(), assignments)
+            .unwrap()
+        {
+            M5ReportAuthorityInspectionV4::Complete(authority) => authority,
+            M5ReportAuthorityInspectionV4::Incomplete { .. } => panic!("M5 must be complete"),
+        };
+        let source_index = crate::DerivedIndexV5::open(&root).unwrap();
+        authority.rebuild_v5(&source_index, &source).unwrap();
+
+        let same_root_target_log = crate::index::v6::tests::planned_target(&root);
+        let (same_root_target, _) =
+            EventJournal::publish_new_v5(&root, same_root_target_log).unwrap();
+        let same_root_target_index = crate::DerivedIndexV6::open(&root).unwrap();
+        same_root_target_index
+            .rebuild_pre_incremental_v6(&same_root_target)
+            .unwrap();
+        assert!(matches!(
+            authority.derive_incremental_mapping_v5(
+                &source,
+                &source_index,
+                &same_root_target,
+                &same_root_target_index,
+            ),
+            Err(IncrementalSessionError::Authority(
+                "source ProgramSpace lacks accepted Git revision closure"
+            ))
+        ));
+
+        let foreign_workspace = tempfile::tempdir().unwrap();
+        let foreign_root =
+            StoreRoot::open(foreign_workspace.path(), crate::StoreLimits::default()).unwrap();
+        let target_log = crate::index::v6::tests::planned_target(&foreign_root);
+        let (target, _) = EventJournal::publish_new_v5(&foreign_root, target_log).unwrap();
+        let target_index = crate::DerivedIndexV6::open(&foreign_root).unwrap();
+        target_index.rebuild_pre_incremental_v6(&target).unwrap();
+        assert!(matches!(
+            authority
+                .derive_incremental_mapping_v5(&source, &source_index, &target, &target_index,),
+            Err(IncrementalSessionError::Authority(_))
+        ));
+    }
+
+    #[test]
+    fn completed_m5_and_complete_v3_target_derive_locked_incremental_mapping() {
+        let (_workspace, root) = root();
+        let (source, _roots, [payment, ui]) =
+            public_v4_gluing_journal_incremental_v3(&root, "run:incremental-v3-source");
+        let assignments = M5DoubleSubmitAssignmentsV4::new(
+            payment.descriptor.assignment_value(),
+            ui.descriptor.assignment_value(),
+        );
+        source
+            .with_m5_gluing_profile_session(
+                incremental_v3_profile_base_roots(),
+                assignments,
+                |profile| {
+                    assert!(profile.publish_next_gluing_input()?.is_some());
+                    assert!(profile.publish_next_gluing_input()?.is_some());
+                    profile.append_gluing_bundle().map(|_| ())
+                },
+            )
+            .unwrap();
+        let authority = match source
+            .inspect_m5_report_authority_v4(incremental_v3_profile_base_roots(), assignments)
+            .unwrap()
+        {
+            M5ReportAuthorityInspectionV4::Complete(authority) => authority,
+            M5ReportAuthorityInspectionV4::Incomplete { .. } => panic!("M5 must be complete"),
+        };
+        let source_index = crate::DerivedIndexV5::open(&root).unwrap();
+        authority.rebuild_v5(&source_index, &source).unwrap();
+
+        let target_log = crate::index::v6::tests::planned_target(&root);
+        let (target, _) = EventJournal::publish_new_v5(&root, target_log).unwrap();
+        let target_index = crate::DerivedIndexV6::open(&root).unwrap();
+        target_index.rebuild_pre_incremental_v6(&target).unwrap();
+
+        let accepted = authority
+            .derive_incremental_mapping_v5(&source, &source_index, &target, &target_index)
+            .unwrap();
+        assert_eq!(
+            accepted.morphism().source_closure_id(),
+            accepted.closure().id()
+        );
+        assert!(!accepted.mapping_phase().mappings().is_empty());
+        let proof = &accepted.proof;
+        let buffers = proof._live_buffers.as_ref().unwrap();
+        let source_line = u64::try_from(buffers.source_event_line.len()).unwrap();
+        let target_line = u64::try_from(buffers.target_event_line.len()).unwrap();
+        let oracle = [
+            u64::try_from(proof.source_journal_bytes.len()).unwrap(),
+            u64::try_from(proof.target_journal_bytes.len()).unwrap(),
+            u64::try_from(proof.source_index_canonical_bytes.len()).unwrap(),
+            u64::try_from(proof.target_index.canonical_snapshot_bytes().len()).unwrap(),
+            proof._source_index.recursive_owned_bytes().unwrap(),
+            proof.target_index.decoded_owned_bytes(),
+            u64::try_from(buffers.source_cas.len()).unwrap(),
+            u64::try_from(proof.target_index.largest_verified_cas_bytes().len()).unwrap(),
+            proof._source_session.retained_event_bytes().unwrap() + source_line,
+            proof.target_index.retained_event_bytes().unwrap() + target_line,
+            u64::try_from(accepted.mapping_phase().working_peak_upper_bound_bytes()).unwrap(),
+        ];
+        assert_eq!(
+            accepted.working_peak_bytes(),
+            oracle.into_iter().sum::<u64>()
+        );
+        assert_eq!(
+            buffers.source_event_line,
+            retain_largest_canonical_event_line(&proof.source_journal_bytes, source_line,).unwrap()
+        );
+        assert_eq!(
+            buffers.target_event_line,
+            retain_largest_canonical_event_line(&proof.target_journal_bytes, target_line,).unwrap()
+        );
+    }
+
+    #[test]
+    fn incremental_session_refuses_accepted_git_oid_and_tree_discontinuity() {
+        fn run_case(target_base_oid: &str, target_base_tree: &str) {
+            let (_workspace, root) = root();
+            let (source, _roots, [payment, ui]) = public_v4_gluing_journal_incremental_v3(
+                &root,
+                "run:incremental-v3-discontinuous-source",
+            );
+            let assignments = M5DoubleSubmitAssignmentsV4::new(
+                payment.descriptor.assignment_value(),
+                ui.descriptor.assignment_value(),
+            );
+            source
+                .with_m5_gluing_profile_session(
+                    incremental_v3_profile_base_roots(),
+                    assignments,
+                    |profile| {
+                        assert!(profile.publish_next_gluing_input()?.is_some());
+                        assert!(profile.publish_next_gluing_input()?.is_some());
+                        profile.append_gluing_bundle().map(|_| ())
+                    },
+                )
+                .unwrap();
+            let authority = match source
+                .inspect_m5_report_authority_v4(incremental_v3_profile_base_roots(), assignments)
+                .unwrap()
+            {
+                M5ReportAuthorityInspectionV4::Complete(authority) => authority,
+                M5ReportAuthorityInspectionV4::Incomplete { .. } => panic!("M5 must be complete"),
+            };
+            let source_index = crate::DerivedIndexV5::open(&root).unwrap();
+            authority.rebuild_v5(&source_index, &source).unwrap();
+            let target_log = crate::index::v6::tests::planned_target_with_base(
+                &root,
+                target_base_oid,
+                target_base_tree,
+            );
+            let (target, _) = EventJournal::publish_new_v5(&root, target_log).unwrap();
+            let target_index = crate::DerivedIndexV6::open(&root).unwrap();
+            target_index.rebuild_pre_incremental_v6(&target).unwrap();
+            assert!(matches!(
+                authority.derive_incremental_mapping_v5(
+                    &source,
+                    &source_index,
+                    &target,
+                    &target_index,
+                ),
+                Err(IncrementalSessionError::Authority(
+                    "accepted source target and target base Git revisions differ"
+                ))
+            ));
+        }
+
+        run_case(
+            "9999999999999999999999999999999999999999",
+            "git:3333333333333333333333333333333333333333",
+        );
+        run_case(
+            "1111111111111111111111111111111111111111",
+            "git:9999999999999999999999999999999999999999",
+        );
     }
 
     #[test]

@@ -295,6 +295,7 @@ pub(crate) struct GitSnapshot {
     pub(crate) repository_identity: String,
     pub(crate) repository_name: String,
     pub(crate) base_revision: String,
+    pub(crate) base_tree_hash: ContentHash,
     pub(crate) target_revision: String,
     pub(crate) tree_hash: ContentHash,
     pub(crate) config: crate::IngestConfig,
@@ -412,13 +413,8 @@ pub(crate) fn load_snapshot(
 
     let target_revision = resolve_commit(&git_root, &request.target_revision)?;
     let base_revision = resolve_commit(&git_root, &request.base_revision)?;
-    let tree_hash_output = run_git(&git_root, GitCommand::TreeHash(&target_revision))?;
-    let tree_hash = ContentHash::parse(format!(
-        "git:{}",
-        std::str::from_utf8(&tree_hash_output)
-            .map_err(|_| IngestError::AdapterOutput("Git tree hash is not UTF-8".to_owned()))?
-            .trim()
-    ))?;
+    let base_tree_hash = resolved_tree_hash(&git_root, &base_revision)?;
+    let tree_hash = resolved_tree_hash(&git_root, &target_revision)?;
 
     let tree_entries = parse_tree(&run_git(&git_root, GitCommand::ListTree(&target_revision))?)?;
     let discovered = u64::try_from(tree_entries.len()).expect("usize fits u64");
@@ -663,6 +659,7 @@ pub(crate) fn load_snapshot(
         repository_identity: request.repository_identity.clone(),
         repository_name,
         base_revision,
+        base_tree_hash,
         target_revision,
         tree_hash,
         config: request.config.clone(),
@@ -691,6 +688,17 @@ pub(crate) fn load_snapshot(
         cargo_executable,
         staged_snapshot,
     })
+}
+
+fn resolved_tree_hash(root: &Path, revision: &str) -> Result<ContentHash, IngestError> {
+    let output = run_git(root, GitCommand::TreeHash(revision))?;
+    ContentHash::parse(format!(
+        "git:{}",
+        std::str::from_utf8(&output)
+            .map_err(|_| IngestError::AdapterOutput("Git tree hash is not UTF-8".to_owned()))?
+            .trim()
+    ))
+    .map_err(Into::into)
 }
 
 /// Builds one `IssueDraft` for a Git tree entry the M2 adapter boundary
@@ -948,7 +956,7 @@ pub(crate) fn extract_cargo_metadata(
                     relations.push(RelationDraft {
                         kind: "depends_on",
                         source_key: source_key.clone(),
-                        target_keys: BTreeSet::from([dependency_key]),
+                        target_keys: vec![dependency_key],
                         attributes: Map::from_iter([(
                             "requirement".to_owned(),
                             Value::String(requirement.to_owned()),
@@ -961,7 +969,7 @@ pub(crate) fn extract_cargo_metadata(
                     relations.push(RelationDraft {
                         kind: "depends_on",
                         source_key: source_key.clone(),
-                        target_keys: BTreeSet::from([target_key]),
+                        target_keys: vec![target_key],
                         attributes: Map::from_iter([(
                             "requirement".to_owned(),
                             Value::String(requirement.to_owned()),
@@ -2722,6 +2730,8 @@ mod cargo_version_precondition_tests {
             repository_identity: "reviewgraphen.test/cargo-version-precondition".to_owned(),
             repository_name: "repo".to_owned(),
             base_revision: "0".repeat(40),
+            base_tree_hash: ContentHash::parse(format!("git:{}", "3".repeat(40)))
+                .expect("valid test base tree hash"),
             target_revision: "1".repeat(40),
             tree_hash: ContentHash::parse(format!("git:{}", "2".repeat(40)))
                 .expect("valid test tree hash"),

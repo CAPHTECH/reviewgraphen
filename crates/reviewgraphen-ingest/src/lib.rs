@@ -34,6 +34,10 @@ const SYN_VERSION: &str = env!("REVIEWGRAPHEN_INGEST_SYN_VERSION");
 /// span/location computation, not just an unrelated transitive dependency.
 const PROC_MACRO2_VERSION: &str = env!("REVIEWGRAPHEN_INGEST_PROC_MACRO2_VERSION");
 
+/// Exact locked `quote` version. Rust semantic anchors use `ToTokens`, so a
+/// quote upgrade is an extractor-identity change even when syn is unchanged.
+const QUOTE_VERSION: &str = env!("REVIEWGRAPHEN_INGEST_QUOTE_VERSION");
+
 /// Bounded resource limits for one local ingestion request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IngestLimits {
@@ -504,6 +508,7 @@ fn ingest_pipeline(
         &request.config,
         SYN_VERSION,
         PROC_MACRO2_VERSION,
+        QUOTE_VERSION,
         &git::git_command_policy_fingerprint(),
         &git::cargo_resolver_policy_fingerprint(),
     )?;
@@ -525,6 +530,7 @@ fn ingest_pipeline(
     issues.extend(rust.issues);
     drafts.extend(rust.artifacts);
     let mut relation_drafts = rust.relations;
+    let rust_anchor_drafts = rust.symbol_anchors;
 
     let cargo = git::extract_cargo_metadata(&snapshot, &identities.snapshot_id);
     adapter_reports.push(cargo.adapter_report);
@@ -589,7 +595,7 @@ fn ingest_pipeline(
             relation_drafts.push(RelationDraft {
                 kind: "changed_by",
                 source_key: format!("file:{}", change.target_path),
-                target_keys: BTreeSet::from([key.clone()]),
+                target_keys: vec![key.clone()],
                 attributes: Map::new(),
                 source_path: Some(change.target_path.clone()),
                 extraction_method: "reviewgraphen.ingest.git.changed_structure.v1",
@@ -613,7 +619,7 @@ fn ingest_pipeline(
                 relation_drafts.push(RelationDraft {
                     kind: "changed_by",
                     source_key: draft.key.clone(),
-                    target_keys: BTreeSet::from([key.clone()]),
+                    target_keys: vec![key.clone()],
                     attributes: Map::new(),
                     source_path: Some(change.target_path.clone()),
                     extraction_method: "reviewgraphen.ingest.git.changed_structure.v1",
@@ -628,6 +634,7 @@ fn ingest_pipeline(
         LiftInputs {
             drafts,
             relation_drafts,
+            rust_anchor_drafts,
             issues,
             adapter_reports,
             capabilities,
@@ -719,8 +726,8 @@ struct SnapshotIdentities {
 }
 
 impl SnapshotIdentities {
-    /// `syn_version`/`proc_macro2_version` are parameters (always
-    /// `SYN_VERSION`/`PROC_MACRO2_VERSION` at the one real call site in
+    /// `syn_version`/`proc_macro2_version`/`quote_version` are parameters
+    /// (always the corresponding locked constants at the real call site in
     /// `ingest()`) rather than read directly from those constants here, so
     /// `adapter_set_hash`'s sensitivity to a different compiled-in tool
     /// version is directly testable against this typed intermediate,
@@ -731,6 +738,7 @@ impl SnapshotIdentities {
         config: &IngestConfig,
         syn_version: &str,
         proc_macro2_version: &str,
+        quote_version: &str,
         git_command_policy: &Value,
         cargo_resolver_policy: &Value,
     ) -> Result<Self, IngestError> {
@@ -820,6 +828,7 @@ impl SnapshotIdentities {
                 "cargo": cargo_tool_version,
                 "syn": syn_version,
                 "proc_macro2": proc_macro2_version,
+                "quote": quote_version,
             },
             "git_command_policy": git_command_policy,
             "cargo_resolver_policy": cargo_resolver_policy,
@@ -850,7 +859,9 @@ pub(crate) struct ArtifactDraft {
 pub(crate) struct RelationDraft {
     pub(crate) kind: &'static str,
     pub(crate) source_key: String,
-    pub(crate) target_keys: BTreeSet<String>,
+    /// Extractor-declared endpoint sequence. Lift validates uniqueness while
+    /// retaining this order separately from the relation's set domain.
+    pub(crate) target_keys: Vec<String>,
     pub(crate) attributes: Map<String, Value>,
     pub(crate) source_path: Option<String>,
     pub(crate) extraction_method: &'static str,
@@ -927,13 +938,14 @@ fn language_for_path(path: &str) -> Option<&'static str> {
 struct LiftInputs {
     drafts: Vec<ArtifactDraft>,
     relation_drafts: Vec<RelationDraft>,
+    rust_anchor_drafts: BTreeMap<String, rg_core::RustSymbolAnchorV1>,
     issues: Vec<IssueDraft>,
     adapter_reports: Vec<AdapterReport>,
     capabilities: BTreeMap<String, CapabilityState>,
     capability_sources: BTreeMap<String, BTreeSet<String>>,
 }
 
-/// Native `reviewgraphen.program_space.input.v2` producer: every accepted
+/// Native `reviewgraphen.program_space.input.v3` producer: every accepted
 /// artifact, relation, capability, and limitation is built once, directly as
 /// a validated core type, from the same [`ArtifactDraft`]/[`RelationDraft`]/
 /// [`IssueDraft`] typed intermediate the [`ExtractionReport`] is also built
@@ -946,6 +958,7 @@ fn lift(
     let LiftInputs {
         drafts,
         relation_drafts,
+        rust_anchor_drafts,
         issues,
         mut adapter_reports,
         mut capabilities,
@@ -997,6 +1010,7 @@ fn lift(
     }
 
     let mut relation_by_id = BTreeMap::<StableId, rg_core::Relation>::new();
+    let mut relation_target_order = BTreeMap::<StableId, Vec<StableId>>::new();
     for draft in relation_drafts {
         let Some(source_id) = id_by_key.get(&draft.source_key) else {
             return Err(IngestError::AdapterOutput(format!(
@@ -1005,6 +1019,7 @@ fn lift(
             )));
         };
         let mut target_ids = BTreeSet::new();
+        let mut ordered_target_ids = Vec::new();
         for target_key in &draft.target_keys {
             let Some(target_id) = id_by_key.get(target_key) else {
                 return Err(IngestError::AdapterOutput(format!(
@@ -1012,7 +1027,13 @@ fn lift(
                     draft.kind
                 )));
             };
-            target_ids.insert(target_id.clone());
+            if !target_ids.insert(target_id.clone()) {
+                return Err(IngestError::AdapterOutput(format!(
+                    "relation `{}` repeats target key `{target_key}`",
+                    draft.kind
+                )));
+            }
+            ordered_target_ids.push(target_id.clone());
         }
         let relation_id = derived_id(
             "relation",
@@ -1026,7 +1047,7 @@ fn lift(
                 (
                     "targets",
                     Value::Array(
-                        target_ids
+                        ordered_target_ids
                             .iter()
                             .map(|id| Value::String(id.to_string()))
                             .collect(),
@@ -1058,6 +1079,7 @@ fn lift(
             }
             Some(_) => {}
             None => {
+                relation_target_order.insert(relation_id.clone(), ordered_target_ids);
                 relation_by_id.insert(relation_id, relation);
             }
         }
@@ -1215,6 +1237,30 @@ fn lift(
     )?
     .with_artifacts(artifacts)
     .with_relations(relation_by_id.into_values())
+    .with_incremental_facts(rg_core::IncrementalFactsV1::new_with_relation_target_order(
+        rg_core::GitRevisionClosureV1::new(
+            snapshot.base_revision.clone(),
+            snapshot.base_tree_hash.clone(),
+            snapshot.target_revision.clone(),
+            snapshot.tree_hash.clone(),
+        )?,
+        SYN_VERSION,
+        rust_anchor_drafts
+            .into_iter()
+            .map(|(key, anchor)| {
+                id_by_key
+                    .get(&key)
+                    .cloned()
+                    .map(|id| (id, anchor))
+                    .ok_or_else(|| {
+                        IngestError::AdapterOutput(format!(
+                            "Rust anchor has unknown artifact key `{key}`"
+                        ))
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?,
+        relation_target_order,
+    )?)
     .build()?;
 
     let mut obstructions = obstruction_by_id.into_values().collect::<Vec<_>>();
@@ -1341,6 +1387,8 @@ mod source_key_resolution_tests {
             repository_identity: "reviewgraphen.test/source-key-resolution".to_owned(),
             repository_name: "repo".to_owned(),
             base_revision: "0".repeat(40),
+            base_tree_hash: ContentHash::parse(format!("git:{}", "3".repeat(40)))
+                .expect("valid test base tree hash"),
             target_revision: "1".repeat(40),
             tree_hash: ContentHash::parse(format!("git:{}", "2".repeat(40)))
                 .expect("valid test tree hash"),
@@ -1364,6 +1412,7 @@ mod source_key_resolution_tests {
             &snapshot.config,
             "syn 0.0.0-test",
             "proc-macro2 0.0.0-test",
+            "quote 0.0.0-test",
             &git::git_command_policy_fingerprint(),
             &git::cargo_resolver_policy_fingerprint(),
         )
@@ -1389,6 +1438,7 @@ mod source_key_resolution_tests {
         LiftInputs {
             drafts: vec![known_artifact_draft("file:known.rs")],
             relation_drafts: Vec::new(),
+            rust_anchor_drafts: BTreeMap::new(),
             issues: Vec::new(),
             adapter_reports: vec![AdapterReport {
                 id: "reviewgraphen.ingest.test".to_owned(),
@@ -1580,6 +1630,50 @@ mod source_key_resolution_tests {
             "a real source key must resolve to its own ID, not the whole-snapshot fallback"
         );
     }
+
+    #[test]
+    fn relation_endpoint_order_changes_accepted_identity_and_body() {
+        let snapshot = snapshot();
+        let identities = identities_for(&snapshot);
+        let lift_with_order = |target_keys: Vec<String>| {
+            let mut inputs = base_inputs();
+            inputs.drafts.extend([
+                known_artifact_draft("file:a.rs"),
+                known_artifact_draft("file:b.rs"),
+            ]);
+            inputs.relation_drafts.push(RelationDraft {
+                kind: "ordered_test",
+                source_key: "file:known.rs".to_owned(),
+                target_keys,
+                attributes: Map::new(),
+                source_path: None,
+                extraction_method: "reviewgraphen.ingest.test.v1",
+            });
+            lift(&snapshot, &identities, inputs).expect("ordered relation lifts")
+        };
+
+        let forward = lift_with_order(vec!["file:a.rs".to_owned(), "file:b.rs".to_owned()]);
+        let repeated = lift_with_order(vec!["file:a.rs".to_owned(), "file:b.rs".to_owned()]);
+        let reversed = lift_with_order(vec!["file:b.rs".to_owned(), "file:a.rs".to_owned()]);
+        let forward_relation = &forward.program_space.relations()[0];
+        let reversed_relation = &reversed.program_space.relations()[0];
+
+        assert_eq!(
+            canonical_json(&forward.program_space).unwrap(),
+            canonical_json(&repeated.program_space).unwrap(),
+            "the same declared endpoint order is deterministic"
+        );
+        assert_ne!(forward_relation.id, reversed_relation.id);
+        assert_ne!(
+            canonical_json(forward_relation).unwrap(),
+            canonical_json(reversed_relation).unwrap(),
+            "swapping a hyperedge sequence must change the accepted relation body"
+        );
+        assert_eq!(
+            forward_relation.target_ids, reversed_relation.target_ids,
+            "the unordered membership domain remains separate from endpoint order"
+        );
+    }
 }
 
 /// Exercises `SnapshotIdentities::new`'s `adapter_set_hash` derivation
@@ -1601,6 +1695,7 @@ mod adapter_set_hash_tests {
 
     const DEFAULT_SYN_VERSION: &str = "syn 0.0.0-test";
     const DEFAULT_PROC_MACRO2_VERSION: &str = "proc-macro2 0.0.0-test";
+    const DEFAULT_QUOTE_VERSION: &str = "quote 0.0.0-test";
 
     fn snapshot(
         config: IngestConfig,
@@ -1612,6 +1707,8 @@ mod adapter_set_hash_tests {
             repository_identity: "reviewgraphen.test/adapter-set-hash".to_owned(),
             repository_name: "repo".to_owned(),
             base_revision: "0".repeat(40),
+            base_tree_hash: ContentHash::parse(format!("git:{}", "3".repeat(40)))
+                .expect("valid test base tree hash"),
             target_revision: "1".repeat(40),
             tree_hash: ContentHash::parse(format!("git:{}", "2".repeat(40)))
                 .expect("valid test tree hash"),
@@ -1643,18 +1740,25 @@ mod adapter_set_hash_tests {
     }
 
     fn hash_for(snapshot: &git::GitSnapshot) -> ContentHash {
-        hash_for_tool_versions(snapshot, DEFAULT_SYN_VERSION, DEFAULT_PROC_MACRO2_VERSION)
+        hash_for_tool_versions(
+            snapshot,
+            DEFAULT_SYN_VERSION,
+            DEFAULT_PROC_MACRO2_VERSION,
+            DEFAULT_QUOTE_VERSION,
+        )
     }
 
     fn hash_for_tool_versions(
         snapshot: &git::GitSnapshot,
         syn_version: &str,
         proc_macro2_version: &str,
+        quote_version: &str,
     ) -> ContentHash {
         hash_for_all(
             snapshot,
             syn_version,
             proc_macro2_version,
+            quote_version,
             &git::git_command_policy_fingerprint(),
             &git::cargo_resolver_policy_fingerprint(),
         )
@@ -1664,6 +1768,7 @@ mod adapter_set_hash_tests {
         snapshot: &git::GitSnapshot,
         syn_version: &str,
         proc_macro2_version: &str,
+        quote_version: &str,
         git_command_policy: &Value,
         cargo_resolver_policy: &Value,
     ) -> ContentHash {
@@ -1672,6 +1777,7 @@ mod adapter_set_hash_tests {
             &snapshot.config,
             syn_version,
             proc_macro2_version,
+            quote_version,
             git_command_policy,
             cargo_resolver_policy,
         )
@@ -1776,8 +1882,18 @@ mod adapter_set_hash_tests {
     fn a_different_syn_version_changes_the_adapter_set_hash() {
         let snapshot = default_snapshot();
         assert_ne!(
-            hash_for_tool_versions(&snapshot, DEFAULT_SYN_VERSION, DEFAULT_PROC_MACRO2_VERSION),
-            hash_for_tool_versions(&snapshot, "syn 9.9.9-test", DEFAULT_PROC_MACRO2_VERSION)
+            hash_for_tool_versions(
+                &snapshot,
+                DEFAULT_SYN_VERSION,
+                DEFAULT_PROC_MACRO2_VERSION,
+                DEFAULT_QUOTE_VERSION,
+            ),
+            hash_for_tool_versions(
+                &snapshot,
+                "syn 9.9.9-test",
+                DEFAULT_PROC_MACRO2_VERSION,
+                DEFAULT_QUOTE_VERSION,
+            )
         );
     }
 
@@ -1785,8 +1901,37 @@ mod adapter_set_hash_tests {
     fn a_different_proc_macro2_version_changes_the_adapter_set_hash() {
         let snapshot = default_snapshot();
         assert_ne!(
-            hash_for_tool_versions(&snapshot, DEFAULT_SYN_VERSION, DEFAULT_PROC_MACRO2_VERSION),
-            hash_for_tool_versions(&snapshot, DEFAULT_SYN_VERSION, "proc-macro2 9.9.9-test")
+            hash_for_tool_versions(
+                &snapshot,
+                DEFAULT_SYN_VERSION,
+                DEFAULT_PROC_MACRO2_VERSION,
+                DEFAULT_QUOTE_VERSION,
+            ),
+            hash_for_tool_versions(
+                &snapshot,
+                DEFAULT_SYN_VERSION,
+                "proc-macro2 9.9.9-test",
+                DEFAULT_QUOTE_VERSION,
+            )
+        );
+    }
+
+    #[test]
+    fn a_different_quote_version_changes_the_adapter_set_hash() {
+        let snapshot = default_snapshot();
+        assert_ne!(
+            hash_for_tool_versions(
+                &snapshot,
+                DEFAULT_SYN_VERSION,
+                DEFAULT_PROC_MACRO2_VERSION,
+                DEFAULT_QUOTE_VERSION,
+            ),
+            hash_for_tool_versions(
+                &snapshot,
+                DEFAULT_SYN_VERSION,
+                DEFAULT_PROC_MACRO2_VERSION,
+                "quote 9.9.9-test",
+            )
         );
     }
 
@@ -1798,6 +1943,7 @@ mod adapter_set_hash_tests {
                 &snapshot,
                 DEFAULT_SYN_VERSION,
                 DEFAULT_PROC_MACRO2_VERSION,
+                DEFAULT_QUOTE_VERSION,
                 &git::git_command_policy_fingerprint(),
                 &git::cargo_resolver_policy_fingerprint(),
             ),
@@ -1805,6 +1951,7 @@ mod adapter_set_hash_tests {
                 &snapshot,
                 DEFAULT_SYN_VERSION,
                 DEFAULT_PROC_MACRO2_VERSION,
+                DEFAULT_QUOTE_VERSION,
                 &json!({ "version": "9.9.9-test" }),
                 &git::cargo_resolver_policy_fingerprint(),
             ),
@@ -1821,6 +1968,7 @@ mod adapter_set_hash_tests {
                 &snapshot,
                 DEFAULT_SYN_VERSION,
                 DEFAULT_PROC_MACRO2_VERSION,
+                DEFAULT_QUOTE_VERSION,
                 &git::git_command_policy_fingerprint(),
                 &git::cargo_resolver_policy_fingerprint(),
             ),
@@ -1828,6 +1976,7 @@ mod adapter_set_hash_tests {
                 &snapshot,
                 DEFAULT_SYN_VERSION,
                 DEFAULT_PROC_MACRO2_VERSION,
+                DEFAULT_QUOTE_VERSION,
                 &git::git_command_policy_fingerprint(),
                 &json!({ "version": "9.9.9-test" }),
             ),
@@ -1866,6 +2015,11 @@ mod adapter_set_hash_tests {
         // resolution moves.
         assert_eq!(PROC_MACRO2_VERSION, "1.0.107");
     }
+
+    #[test]
+    fn the_quote_version_constant_is_the_real_workspace_pin_not_a_placeholder() {
+        assert_eq!(QUOTE_VERSION, "1.0.47");
+    }
 }
 
 /// Exercises the full `extract_cargo_metadata` -> `lift` pipeline `ingest()`
@@ -1902,6 +2056,8 @@ mod cargo_failure_identity_tests {
             repository_identity: "reviewgraphen.test/cargo-failure-identity".to_owned(),
             repository_name: "repo".to_owned(),
             base_revision: "0".repeat(40),
+            base_tree_hash: ContentHash::parse(format!("git:{}", "3".repeat(40)))
+                .expect("valid test base tree hash"),
             target_revision: "1".repeat(40),
             tree_hash: ContentHash::parse(format!("git:{}", "2".repeat(40)))
                 .expect("valid test tree hash"),
@@ -1932,6 +2088,7 @@ mod cargo_failure_identity_tests {
             &snapshot.config,
             "syn 0.0.0-test",
             "proc-macro2 0.0.0-test",
+            "quote 0.0.0-test",
             &git::git_command_policy_fingerprint(),
             &git::cargo_resolver_policy_fingerprint(),
         )
@@ -1952,6 +2109,7 @@ mod cargo_failure_identity_tests {
             LiftInputs {
                 drafts,
                 relation_drafts: Vec::new(),
+                rust_anchor_drafts: BTreeMap::new(),
                 issues: cargo.issues,
                 adapter_reports: vec![cargo.adapter_report],
                 capabilities: cargo.capabilities,
@@ -2191,6 +2349,8 @@ mod cargo_executable_path_independence_tests {
             repository_identity: "reviewgraphen.test/cargo-executable-path-independence".to_owned(),
             repository_name: "repo".to_owned(),
             base_revision: "0".repeat(40),
+            base_tree_hash: ContentHash::parse(format!("git:{}", "3".repeat(40)))
+                .expect("valid test base tree hash"),
             target_revision: "1".repeat(40),
             tree_hash: ContentHash::parse(format!("git:{}", "2".repeat(40)))
                 .expect("valid test tree hash"),
@@ -2211,6 +2371,7 @@ mod cargo_executable_path_independence_tests {
             &snapshot.config,
             "syn 0.0.0-test",
             "proc-macro2 0.0.0-test",
+            "quote 0.0.0-test",
             &git::git_command_policy_fingerprint(),
             &git::cargo_resolver_policy_fingerprint(),
         )
@@ -2223,6 +2384,7 @@ mod cargo_executable_path_independence_tests {
             LiftInputs {
                 drafts,
                 relation_drafts: Vec::new(),
+                rust_anchor_drafts: BTreeMap::new(),
                 issues: cargo.issues,
                 adapter_reports: vec![cargo.adapter_report],
                 capabilities: cargo.capabilities,

@@ -1,4 +1,6 @@
-use crate::{ContentHash, DomainError, Result, ReviewStatus, StableId};
+use crate::{
+    ContentHash, DomainError, Result, ReviewStatus, RustSymbolAnchorV1, RustSymbolKindV1, StableId,
+};
 use serde::de::{MapAccess, Visitor};
 use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -96,6 +98,12 @@ impl SourceRef {
         self.content_hash.as_ref()
     }
 
+    /// Optional resolved source revision recorded by the deterministic adapter.
+    #[must_use]
+    pub fn revision(&self) -> Option<&str> {
+        self.revision.as_deref()
+    }
+
     /// Optional origin-local identity, such as a repo-relative path.
     #[must_use]
     pub fn source_local_id(&self) -> Option<&str> {
@@ -178,6 +186,14 @@ impl Provenance {
     #[must_use]
     pub fn extraction_method(&self) -> &str {
         &self.extraction_method
+    }
+
+    pub(crate) fn tool_version_for_mapping(&self) -> Option<&str> {
+        self.tool_version.as_deref()
+    }
+
+    pub(crate) const fn confidence_for_mapping(&self) -> Option<f64> {
+        self.confidence
     }
 
     /// Review status, fixed to accepted for canonical facts.
@@ -1706,6 +1722,7 @@ pub struct ProgramSpaceBuilder {
     contexts: Vec<ReviewContext>,
     invariants: Vec<Invariant>,
     evidence: Vec<Evidence>,
+    incremental_facts: Option<IncrementalFactsV1>,
 }
 
 impl ProgramSpaceBuilder {
@@ -1737,6 +1754,7 @@ impl ProgramSpaceBuilder {
             contexts: Vec::new(),
             invariants: Vec::new(),
             evidence: Vec::new(),
+            incremental_facts: None,
         })
     }
 
@@ -1809,6 +1827,11 @@ impl ProgramSpaceBuilder {
         self.evidence.extend(evidence);
         self
     }
+    #[must_use]
+    pub fn with_incremental_facts(mut self, facts: IncrementalFactsV1) -> Self {
+        self.incremental_facts = Some(facts);
+        self
+    }
 
     /// Validates and assembles the final `ProgramSpace`.
     pub fn build(self) -> Result<ProgramSpace> {
@@ -1823,6 +1846,7 @@ impl ProgramSpaceBuilder {
             mut contexts,
             mut invariants,
             mut evidence,
+            incremental_facts,
         } = self;
 
         if artifacts.is_empty() {
@@ -1961,8 +1985,15 @@ impl ProgramSpaceBuilder {
         validate_source_identity_consistency(&artifacts, &relations, &contexts, &invariants)?;
         let _ = invariant_ids;
 
+        if let Some(facts) = &incremental_facts {
+            facts.validate(&source, &snapshot, &artifacts, &relations)?;
+        }
         Ok(ProgramSpace {
-            schema: PROGRAM_SPACE_SCHEMA_V2.to_owned(),
+            schema: if incremental_facts.is_some() {
+                PROGRAM_SPACE_SCHEMA_V3.to_owned()
+            } else {
+                PROGRAM_SPACE_SCHEMA_V2.to_owned()
+            },
             source,
             repository_id: repository.id,
             repository_name: repository.name,
@@ -1984,6 +2015,7 @@ impl ProgramSpaceBuilder {
             invariants,
             evidence,
             extraction,
+            incremental_facts,
         })
     }
 }
@@ -2172,6 +2204,296 @@ pub struct ProgramSpace {
     invariants: Vec<Invariant>,
     evidence: Vec<Evidence>,
     extraction: Extraction,
+    incremental_facts: Option<IncrementalFactsV1>,
+}
+
+/// Resolved Git object closure accepted from the bounded Git adapter.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GitRevisionClosureV1 {
+    base_commit_oid: String,
+    base_tree_hash: ContentHash,
+    target_commit_oid: String,
+    target_tree_hash: ContentHash,
+}
+
+impl GitRevisionClosureV1 {
+    /// Constructs a closed pair of resolved Git commits and trees.
+    pub fn new(
+        base_commit_oid: impl Into<String>,
+        base_tree_hash: ContentHash,
+        target_commit_oid: impl Into<String>,
+        target_tree_hash: ContentHash,
+    ) -> Result<Self> {
+        let value = Self {
+            base_commit_oid: base_commit_oid.into(),
+            base_tree_hash,
+            target_commit_oid: target_commit_oid.into(),
+            target_tree_hash,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<()> {
+        for (field, oid) in [
+            (
+                "git_revision_closure.base_commit_oid",
+                &self.base_commit_oid,
+            ),
+            (
+                "git_revision_closure.target_commit_oid",
+                &self.target_commit_oid,
+            ),
+        ] {
+            if oid.len() != 40
+                || !oid.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || oid.bytes().any(|byte| byte.is_ascii_uppercase())
+            {
+                return Err(DomainError::Validation(format!(
+                    "{field} must be a full 40-character lowercase hexadecimal Git object ID"
+                )));
+            }
+        }
+        for (field, hash) in [
+            ("git_revision_closure.base_tree_hash", &self.base_tree_hash),
+            (
+                "git_revision_closure.target_tree_hash",
+                &self.target_tree_hash,
+            ),
+        ] {
+            let Some(hex) = hash.as_str().strip_prefix("git:") else {
+                return Err(DomainError::Validation(format!(
+                    "{field} must use the git hash namespace"
+                )));
+            };
+            if hex.len() != 40
+                || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || hex.bytes().any(|byte| byte.is_ascii_uppercase())
+            {
+                return Err(DomainError::Validation(format!(
+                    "{field} must be an exact git:<40 lowercase hex> tree hash"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn base_commit_oid(&self) -> &str {
+        &self.base_commit_oid
+    }
+
+    #[must_use]
+    pub fn base_tree_hash(&self) -> &ContentHash {
+        &self.base_tree_hash
+    }
+
+    #[must_use]
+    pub fn target_commit_oid(&self) -> &str {
+        &self.target_commit_oid
+    }
+
+    #[must_use]
+    pub fn target_tree_hash(&self) -> &ContentHash {
+        &self.target_tree_hash
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        self.base_commit_oid
+            .capacity()
+            .saturating_add(self.base_tree_hash.allocated_bytes())
+            .saturating_add(self.target_commit_oid.capacity())
+            .saturating_add(self.target_tree_hash.allocated_bytes())
+    }
+}
+
+/// Accepted deterministic facts required by the ProgramSpace v3 mapping contract.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IncrementalFactsV1 {
+    git_revision_closure: GitRevisionClosureV1,
+    rust_anchor_extractor_id: &'static str,
+    rust_anchor_syn_version: String,
+    rust_symbol_anchors: BTreeMap<StableId, RustSymbolAnchorV1>,
+    #[serde(skip)]
+    relation_target_order: BTreeMap<StableId, Vec<StableId>>,
+}
+
+/// Sole deterministic producer contract for v1 Rust semantic anchors.
+pub const RUST_SYMBOL_ANCHOR_EXTRACTOR_V1: &str = "reviewgraphen.ingest.rust_syn.anchor.v1";
+/// Exact parser version frozen into the v1 Rust anchor contract.
+pub const RUST_SYMBOL_ANCHOR_SYN_VERSION_V1: &str = "2.0.119";
+
+impl IncrementalFactsV1 {
+    pub fn new(
+        git_revision_closure: GitRevisionClosureV1,
+        rust_anchor_syn_version: impl Into<String>,
+        rust_symbol_anchors: BTreeMap<StableId, RustSymbolAnchorV1>,
+    ) -> Result<Self> {
+        let rust_anchor_syn_version = rust_anchor_syn_version.into();
+        if rust_anchor_syn_version != RUST_SYMBOL_ANCHOR_SYN_VERSION_V1 {
+            return Err(DomainError::Validation(format!(
+                "incremental_facts.rust_anchor_syn_version must equal {RUST_SYMBOL_ANCHOR_SYN_VERSION_V1}"
+            )));
+        }
+        Ok(Self {
+            git_revision_closure,
+            rust_anchor_extractor_id: RUST_SYMBOL_ANCHOR_EXTRACTOR_V1,
+            rust_anchor_syn_version,
+            rust_symbol_anchors,
+            relation_target_order: BTreeMap::new(),
+        })
+    }
+
+    pub fn new_with_relation_target_order(
+        git_revision_closure: GitRevisionClosureV1,
+        rust_anchor_syn_version: impl Into<String>,
+        rust_symbol_anchors: BTreeMap<StableId, RustSymbolAnchorV1>,
+        relation_target_order: BTreeMap<StableId, Vec<StableId>>,
+    ) -> Result<Self> {
+        let mut value = Self::new(
+            git_revision_closure,
+            rust_anchor_syn_version,
+            rust_symbol_anchors,
+        )?;
+        value.relation_target_order = relation_target_order;
+        Ok(value)
+    }
+
+    fn validate(
+        &self,
+        source: &SourceRef,
+        snapshot: &SnapshotDescriptor,
+        artifacts: &[Artifact],
+        relations: &[Relation],
+    ) -> Result<()> {
+        self.git_revision_closure.validate()?;
+        if source.kind() != "git"
+            || source.revision() != Some(self.git_revision_closure.target_commit_oid())
+            || source.content_hash() != Some(self.git_revision_closure.target_tree_hash())
+            || snapshot.base_revision != self.git_revision_closure.base_commit_oid
+            || snapshot.target_revision != self.git_revision_closure.target_commit_oid
+            || snapshot.tree_hash != self.git_revision_closure.target_tree_hash
+            || snapshot.dirty
+        {
+            return Err(DomainError::Validation(
+                "v3 Git revision closure must exactly match a clean accepted Git snapshot"
+                    .to_owned(),
+            ));
+        }
+        let expected = artifacts
+            .iter()
+            .filter(|a| {
+                a.language.as_deref() == Some("rust")
+                    && matches!(a.kind.as_str(), "function" | "method" | "type")
+            })
+            .map(|a| a.id.clone())
+            .collect::<BTreeSet<_>>();
+        if self
+            .rust_symbol_anchors
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != expected
+            || self.relation_target_order.len() != relations.len()
+        {
+            return Err(DomainError::Validation(
+                "v3 incremental facts require every Rust symbol anchor and relation endpoint order"
+                    .to_owned(),
+            ));
+        }
+        if self.rust_anchor_extractor_id != RUST_SYMBOL_ANCHOR_EXTRACTOR_V1
+            || self.rust_anchor_syn_version != RUST_SYMBOL_ANCHOR_SYN_VERSION_V1
+        {
+            return Err(DomainError::Validation(
+                "v3 Rust anchors require the fixed extractor ID and a pinned syn version"
+                    .to_owned(),
+            ));
+        }
+        for artifact in artifacts
+            .iter()
+            .filter(|artifact| self.rust_symbol_anchors.contains_key(&artifact.id))
+        {
+            let expected_kind = match artifact.kind.as_str() {
+                "function" => RustSymbolKindV1::Function,
+                "method" => RustSymbolKindV1::Method,
+                "type" => RustSymbolKindV1::Type,
+                _ => unreachable!("anchor domain was checked above"),
+            };
+            if self.rust_symbol_anchors[&artifact.id].symbol_kind() != expected_kind {
+                return Err(DomainError::Validation(
+                    "v3 Rust anchor symbol_kind must exactly match its artifact kind".to_owned(),
+                ));
+            }
+            if artifact.provenance.extraction_method() != "reviewgraphen.ingest.rust_syn.v1" {
+                return Err(DomainError::Validation(
+                    "v3 Rust anchors must cover facts emitted by the accepted Rust syn extractor"
+                        .to_owned(),
+                ));
+            }
+        }
+        for relation in relations {
+            let Some(ordered) = self.relation_target_order.get(&relation.id) else {
+                return Err(DomainError::Validation(
+                    "v3 incremental facts are missing a relation endpoint order".to_owned(),
+                ));
+            };
+            if ordered.is_empty()
+                || ordered.len() != relation.target_ids.len()
+                || ordered.iter().cloned().collect::<BTreeSet<_>>() != relation.target_ids
+            {
+                return Err(DomainError::Validation(
+                    "relation endpoint order must be a duplicate-free permutation of target_ids"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn git_revision_closure(&self) -> &GitRevisionClosureV1 {
+        &self.git_revision_closure
+    }
+
+    #[must_use]
+    pub fn rust_symbol_anchors(&self) -> &BTreeMap<StableId, RustSymbolAnchorV1> {
+        &self.rust_symbol_anchors
+    }
+
+    #[must_use]
+    pub fn rust_anchor_syn_version(&self) -> &str {
+        &self.rust_anchor_syn_version
+    }
+
+    fn relation_target_order(&self) -> &BTreeMap<StableId, Vec<StableId>> {
+        &self.relation_target_order
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        self.git_revision_closure
+            .allocated_bytes()
+            .saturating_add(self.rust_anchor_syn_version.capacity())
+            .saturating_add(
+                self.rust_symbol_anchors
+                    .iter()
+                    .map(|(id, anchor)| {
+                        id.allocated_bytes()
+                            .saturating_add(anchor.signature_shape_hash().allocated_bytes())
+                            .saturating_add(anchor.normalized_body_hash().allocated_bytes())
+                    })
+                    .sum(),
+            )
+            .saturating_add(
+                self.relation_target_order
+                    .iter()
+                    .map(|(id, targets)| {
+                        id.allocated_bytes().saturating_add(
+                            targets.iter().map(StableId::allocated_bytes).sum::<usize>(),
+                        )
+                    })
+                    .sum(),
+            )
+    }
 }
 
 pub(crate) struct ProgramSpaceStreamingRef<'a>(&'a ProgramSpace);
@@ -2292,8 +2614,11 @@ impl Serialize for ArtifactSequence<'_> {
     }
 }
 
-struct RelationStreamingRef<'a>(&'a Relation);
-struct RelationSequence<'a>(&'a [Relation]);
+struct RelationStreamingRef<'a>(&'a Relation, Option<&'a Vec<StableId>>);
+struct RelationSequence<'a>(
+    &'a [Relation],
+    Option<&'a BTreeMap<StableId, Vec<StableId>>>,
+);
 impl Serialize for RelationStreamingRef<'_> {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -2307,6 +2632,9 @@ impl Serialize for RelationStreamingRef<'_> {
         state.serialize_field("kind", &value.kind)?;
         state.serialize_field("provenance", &ProvenanceStreamingRef(&value.provenance))?;
         state.serialize_field("source_id", &value.source_id)?;
+        if let Some(ordered) = self.1 {
+            state.serialize_field("ordered_target_ids", ordered)?;
+        }
         state.serialize_field("target_ids", &value.target_ids)?;
         state.end()
     }
@@ -2318,7 +2646,8 @@ impl Serialize for RelationSequence<'_> {
     {
         let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
         for value in self.0 {
-            sequence.serialize_element(&RelationStreamingRef(value))?;
+            let order = self.1.and_then(|orders| orders.get(&value.id));
+            sequence.serialize_element(&RelationStreamingRef(value, order))?;
         }
         sequence.end()
     }
@@ -2605,9 +2934,21 @@ impl Serialize for ProgramSpaceStreamingRef<'_> {
         state.serialize_field("contexts", &ContextSequence(&value.contexts))?;
         state.serialize_field("evidence", &ProgramEvidenceSequence(&value.evidence))?;
         state.serialize_field("extraction", &ExtractionStreamingRef(&value.extraction))?;
+        if let Some(incremental_facts) = &value.incremental_facts {
+            state.serialize_field("incremental_facts", incremental_facts)?;
+        }
         state.serialize_field("invariants", &InvariantSequence(&value.invariants))?;
         state.serialize_field("profile", &ProgramProfileStreamingRef(value))?;
-        state.serialize_field("relations", &RelationSequence(&value.relations))?;
+        state.serialize_field(
+            "relations",
+            &RelationSequence(
+                &value.relations,
+                value
+                    .incremental_facts
+                    .as_ref()
+                    .map(IncrementalFactsV1::relation_target_order),
+            ),
+        )?;
         state.serialize_field("repository", &ProgramRepositoryStreamingRef(value))?;
         state.serialize_field("schema", &value.schema)?;
         state.serialize_field("snapshot", &ProgramSnapshotStreamingRef(value))?;
@@ -2671,6 +3012,19 @@ impl Serialize for ProgramSpace {
             "evidence": evidence,
             "extraction": self.extraction,
         });
+        if let Some(facts) = &self.incremental_facts {
+            document["incremental_facts"] =
+                serde_json::to_value(facts).map_err(serde::ser::Error::custom)?;
+            for (relation, value) in self.relations.iter().zip(
+                document["relations"]
+                    .as_array_mut()
+                    .expect("relations serialize as an array"),
+            ) {
+                value["ordered_target_ids"] =
+                    serde_json::to_value(&facts.relation_target_order[&relation.id])
+                        .map_err(serde::ser::Error::custom)?;
+            }
+        }
         omit_program_structural_nulls(&mut document);
         document.serialize(serializer)
     }
@@ -2765,6 +3119,7 @@ fn omit_null_fields(object: &mut serde_json::Map<String, Value>, fields: &[&str]
 
 /// Current `ProgramSpace` manual JSON adapter input schema discriminator.
 const PROGRAM_SPACE_SCHEMA_V2: &str = "reviewgraphen.program_space.input.v2";
+const PROGRAM_SPACE_SCHEMA_V3: &str = "reviewgraphen.program_space.input.v3";
 
 /// Superseded `ProgramSpace` manual JSON adapter input schema discriminator;
 /// recognized only to return a typed [`DomainError::MigrationRequired`].
@@ -2773,9 +3128,103 @@ const PROGRAM_SPACE_SCHEMA_V1: &str = "reviewgraphen.program_space.input.v1";
 /// Fixed [`MigrationRecord`] schema discriminator.
 const MIGRATION_RECORD_SCHEMA: &str = "reviewgraphen.program_space.migration.v1";
 
+impl Artifact {
+    pub(crate) fn m6_body_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(
+            &ArtifactStreamingRef(self),
+        )?))
+    }
+}
+
+impl Relation {
+    pub(crate) fn m6_body_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(
+            &RelationStreamingRef(self, None),
+        )?))
+    }
+}
+
+impl ReviewContext {
+    pub(crate) fn m6_body_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(
+            &ContextStreamingRef(self),
+        )?))
+    }
+}
+
+impl Invariant {
+    pub(crate) fn m6_body_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(
+            &InvariantStreamingRef(self),
+        )?))
+    }
+}
+
+impl Limitation {
+    pub(crate) fn m6_body_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(
+            &LimitationStreamingRef(self),
+        )?))
+    }
+}
+
 impl ProgramSpace {
+    #[must_use]
+    pub fn accepted_rust_symbol_anchors(&self) -> Option<&BTreeMap<StableId, RustSymbolAnchorV1>> {
+        self.incremental_facts
+            .as_ref()
+            .map(IncrementalFactsV1::rust_symbol_anchors)
+    }
+
+    /// Accepted resolved Git commit/tree closure for incremental review.
+    #[must_use]
+    pub fn accepted_git_revision_closure(&self) -> Option<&GitRevisionClosureV1> {
+        self.incremental_facts
+            .as_ref()
+            .map(IncrementalFactsV1::git_revision_closure)
+    }
+    #[must_use]
+    pub fn accepted_relation_target_order(&self) -> Option<BTreeMap<StableId, Vec<StableId>>> {
+        self.incremental_facts
+            .as_ref()
+            .map(|facts| facts.relation_target_order.clone())
+    }
     pub(crate) fn streaming_ref(&self) -> ProgramSpaceStreamingRef<'_> {
         ProgramSpaceStreamingRef(self)
+    }
+
+    #[allow(dead_code)] // Used by the crate-only M6 session-proof seam before Event wiring.
+    pub(crate) fn m6_tree_hash(&self) -> &ContentHash {
+        &self.tree_hash
+    }
+
+    /// Inert accepted snapshot tree hash used by Store when projecting its
+    /// opaque locked M6 session proof into Core validation input.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn incremental_tree_hash_for_store(&self) -> &ContentHash {
+        &self.tree_hash
+    }
+
+    #[allow(dead_code)] // Used by the crate-only M6 session-proof seam before Event wiring.
+    pub(crate) fn m6_is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Hashes the exact canonical repository record emitted by the
+    /// ProgramSpace streaming contract for M6 mapping audit records.
+    pub(crate) fn m6_repository_body_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(
+            &ProgramRepositoryStreamingRef(self),
+        )?))
+    }
+
+    /// Hashes the exact canonical snapshot record emitted by the ProgramSpace
+    /// streaming contract for M6 mapping audit records.
+    pub(crate) fn m6_snapshot_body_hash(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&crate::canonical_json(
+            &ProgramSnapshotStreamingRef(self),
+        )?))
     }
 
     pub(crate) fn allocated_bytes(&self) -> usize {
@@ -2932,9 +3381,13 @@ impl ProgramSpace {
             + invariants
             + evidence
             + extraction
+            + self
+                .incremental_facts
+                .as_ref()
+                .map_or(0, IncrementalFactsV1::allocated_bytes)
     }
 
-    /// Parses the supported v2 manual JSON adapter input and validates
+    /// Parses the supported v2/v3 manual JSON adapter input and validates
     /// references. The top-level `schema` discriminator is probed first, so
     /// a v1 document reports a typed migration requirement and an unknown
     /// or malformed discriminator reports a typed unsupported-schema error,
@@ -2943,7 +3396,7 @@ impl ProgramSpace {
         let value: Value =
             serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))?;
         match value.get("schema").and_then(Value::as_str) {
-            Some(PROGRAM_SPACE_SCHEMA_V2) => {
+            Some(PROGRAM_SPACE_SCHEMA_V2 | PROGRAM_SPACE_SCHEMA_V3) => {
                 let raw: RawProgramSpace = serde_json::from_slice(input)
                     .map_err(|error| DomainError::Json(error.to_string()))?;
                 Self::try_from(raw)
@@ -3159,10 +3612,61 @@ impl TryFrom<RawProgramSpace> for ProgramSpace {
     type Error = DomainError;
 
     fn try_from(raw: RawProgramSpace) -> Result<Self> {
-        if raw.schema != PROGRAM_SPACE_SCHEMA_V2 {
+        let is_v3 = raw.schema == PROGRAM_SPACE_SCHEMA_V3;
+        if raw.schema != PROGRAM_SPACE_SCHEMA_V2 && !is_v3 {
             return Err(DomainError::UnsupportedSchema {
                 detected: Some(raw.schema),
             });
+        }
+        if !is_v3
+            && (raw.incremental_facts.is_some()
+                || raw
+                    .relations
+                    .iter()
+                    .any(|relation| relation.ordered_target_ids.is_some()))
+        {
+            return Err(DomainError::Validation(
+                "incremental_facts and ordered_target_ids require reviewgraphen.program_space.input.v3"
+                    .to_owned(),
+            ));
+        }
+        if is_v3
+            && (raw.incremental_facts.is_none()
+                || raw
+                    .relations
+                    .iter()
+                    .any(|relation| relation.ordered_target_ids.is_none()))
+        {
+            return Err(DomainError::Validation(
+                "v3 requires incremental_facts and ordered_target_ids on every relation".to_owned(),
+            ));
+        }
+        let relation_target_order = if is_v3 {
+            Some(
+                raw.relations
+                    .iter()
+                    .map(|relation| {
+                        Ok((
+                            StableId::parse(relation.id.clone())?,
+                            relation
+                                .ordered_target_ids
+                                .as_ref()
+                                .expect("v3 relation order checked above")
+                                .iter()
+                                .cloned()
+                                .map(StableId::parse)
+                                .collect::<Result<Vec<_>>>()?,
+                        ))
+                    })
+                    .collect::<Result<BTreeMap<_, _>>>()?,
+            )
+        } else {
+            None
+        };
+        let mut incremental_facts: Option<IncrementalFactsV1> =
+            raw.incremental_facts.map(TryInto::try_into).transpose()?;
+        if let (Some(facts), Some(orders)) = (&mut incremental_facts, relation_target_order) {
+            facts.relation_target_order = orders;
         }
         let source: SourceRef = raw.source.try_into()?;
         let repository = RepositoryDescriptor {
@@ -3214,13 +3718,16 @@ impl TryFrom<RawProgramSpace> for ProgramSpace {
             .map(|item| Evidence::from_input(item, snapshot_id.clone()))
             .collect::<Result<Vec<Evidence>>>()?;
 
-        ProgramSpaceBuilder::new(source, repository, snapshot, profile, extraction)?
+        let builder = ProgramSpaceBuilder::new(source, repository, snapshot, profile, extraction)?
             .with_artifacts(artifacts)
             .with_relations(relations)
             .with_contexts(contexts)
             .with_invariants(invariants)
-            .with_evidence(evidence)
-            .build()
+            .with_evidence(evidence);
+        match incremental_facts {
+            Some(facts) => builder.with_incremental_facts(facts).build(),
+            None => builder.build(),
+        }
     }
 }
 
@@ -3304,6 +3811,117 @@ struct RawProgramSpace {
     invariants: Vec<RawInvariant>,
     evidence: Vec<RawEvidence>,
     extraction: RawExtraction,
+    #[serde(default)]
+    incremental_facts: Option<RawIncrementalFactsV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawIncrementalFactsV1 {
+    git_revision_closure: RawGitRevisionClosureV1,
+    rust_anchor_extractor_id: String,
+    rust_anchor_syn_version: String,
+    rust_symbol_anchors: BTreeMap<String, RawRustSymbolAnchorV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGitRevisionClosureV1 {
+    base_commit_oid: String,
+    base_tree_hash: String,
+    target_commit_oid: String,
+    target_tree_hash: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRustSymbolAnchorV1 {
+    descriptor: String,
+    language: String,
+    symbol_kind: RustSymbolKindV1,
+    signature_shape_hash: String,
+    normalized_body_hash: String,
+}
+
+impl TryFrom<RawIncrementalFactsV1> for IncrementalFactsV1 {
+    type Error = DomainError;
+
+    fn try_from(raw: RawIncrementalFactsV1) -> Result<Self> {
+        if raw.rust_anchor_extractor_id != RUST_SYMBOL_ANCHOR_EXTRACTOR_V1 {
+            return Err(DomainError::Validation(
+                "v3 Rust anchor extractor ID is unsupported".to_owned(),
+            ));
+        }
+        let revisions = GitRevisionClosureV1::new(
+            raw.git_revision_closure.base_commit_oid,
+            parse_exact_v3_hash(
+                raw.git_revision_closure.base_tree_hash,
+                "git",
+                40,
+                "incremental_facts.git_revision_closure.base_tree_hash",
+            )?,
+            raw.git_revision_closure.target_commit_oid,
+            parse_exact_v3_hash(
+                raw.git_revision_closure.target_tree_hash,
+                "git",
+                40,
+                "incremental_facts.git_revision_closure.target_tree_hash",
+            )?,
+        )?;
+        let mut anchors = BTreeMap::new();
+        for (id, raw_anchor) in raw.rust_symbol_anchors {
+            let id = StableId::parse(id)?;
+            if raw_anchor.descriptor != crate::RUST_SYMBOL_ANCHOR_V1
+                || raw_anchor.language != "rust"
+            {
+                return Err(DomainError::Validation(
+                    "v3 Rust symbol anchor has an unsupported descriptor or language".to_owned(),
+                ));
+            }
+            let anchor = RustSymbolAnchorV1::new(
+                raw_anchor.symbol_kind,
+                parse_exact_v3_hash(
+                    raw_anchor.signature_shape_hash,
+                    "sha256",
+                    64,
+                    "incremental_facts.rust_symbol_anchors.signature_shape_hash",
+                )?,
+                parse_exact_v3_hash(
+                    raw_anchor.normalized_body_hash,
+                    "sha256",
+                    64,
+                    "incremental_facts.rust_symbol_anchors.normalized_body_hash",
+                )?,
+            )
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+            if anchors.insert(id.clone(), anchor).is_some() {
+                return Err(DomainError::IdCollision { id });
+            }
+        }
+        Self::new(revisions, raw.rust_anchor_syn_version, anchors)
+    }
+}
+
+fn parse_exact_v3_hash(
+    value: String,
+    algorithm: &str,
+    hex_len: usize,
+    field: &str,
+) -> Result<ContentHash> {
+    let Some(hex) = value.strip_prefix(&format!("{algorithm}:")) else {
+        return Err(DomainError::Validation(format!(
+            "{field} has the wrong hash algorithm"
+        )));
+    };
+    if hex.len() != hex_len
+        || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || hex.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(DomainError::Validation(format!(
+            "{field} must contain exactly {hex_len} lowercase hexadecimal digits"
+        )));
+    }
+    ContentHash::parse(value)
 }
 
 #[derive(Deserialize)]
@@ -3433,6 +4051,8 @@ struct RawRelation {
     kind: String,
     source_id: String,
     target_ids: Vec<String>,
+    #[serde(default)]
+    ordered_target_ids: Option<Vec<String>>,
     directed: bool,
     #[serde(default)]
     attributes: BTreeMap<String, Value>,
