@@ -9,6 +9,7 @@
 use crate::event::{
     HistoricalPrefixAdmissionV4, HistoricalPrefixProjectionV4, HistoricalSourceRecordKindV4,
     HistoricalSourceRecordProjectionV4, HistoricalSourceRecordValueV4,
+    TargetActualRecordInventoryV5, TargetActualRecordProjectionV5, TargetActualRecordV5,
     V5PreIncrementalStructuralPrefixProjection,
 };
 use crate::{
@@ -41,6 +42,7 @@ pub const MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS: usize = 64;
 pub const MAX_M6_CORRESPONDENCE_DTO_BYTES: usize = 1_048_576;
 pub const MAX_M6_CORRESPONDENCE_WORKING_BYTES: usize = 536_870_912;
 pub const MAX_M6_STALENESS_WORKING_BYTES: usize = 536_870_912;
+pub const MAX_M6_RECORD_METADATA_IDS: usize = 512;
 
 pub type M6Result<T> = std::result::Result<T, M6Error>;
 
@@ -5327,6 +5329,7 @@ struct HistoricalSourceInventoryV5 {
     record_keys: BTreeSet<OwnedHistoricalRecordKeyV5>,
     plans_for_obligation: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
     claims_for_evidence: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
+    reproducing_claims_for_evidence: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
     bindings_for_evidence: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
     v4_registrations_for_descriptor: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
     section_traces_for_descriptor: BTreeMap<StableId, BTreeSet<OwnedHistoricalRecordKeyV5>>,
@@ -5377,6 +5380,114 @@ trait HistoricalInventoryViewV5 {
     );
 }
 
+fn target_metadata_inventory_reservation_v5(
+    target: &TargetActualRecordInventoryV5<'_>,
+    target_program: &ProgramSpace,
+) -> M6Result<usize> {
+    let mut occurrences = 0_usize;
+    let mut id_bytes = 0_usize;
+    let mut add_id = |id: &StableId| -> M6Result<()> {
+        occurrences = occurrences.checked_add(1).ok_or(M6Error::Incomplete {
+            operation: "M6 target metadata inventory occurrences",
+            limit: MAX_M6_STALENESS_WORKING_BYTES,
+            observed: usize::MAX,
+        })?;
+        id_bytes = id_bytes
+            .checked_add(id.allocated_bytes())
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 target metadata inventory ID bytes",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?;
+        Ok(())
+    };
+    let mut error = None;
+    target_program.visit_known_ids(|id| {
+        if error.is_none() {
+            error = add_id(id).err();
+        }
+    });
+    if let Some(error) = error.take() {
+        return Err(error);
+    }
+    target.try_visit_records(|record| {
+        let mut visit = |id: &StableId| {
+            if error.is_none() {
+                error = add_id(id).err();
+            }
+        };
+        visit(record.id()); // one canonical record key
+        match record.value().historical_value() {
+            HistoricalSourceRecordValueV4::ReviewPlan(plan) => {
+                for wave in plan.waves() {
+                    for id in wave.obligation_ids() {
+                        visit(id);
+                    }
+                }
+            }
+            HistoricalSourceRecordValueV4::Claim(claim) if claim.obligation_ids().len() == 1 => {
+                visit(claim.id()); // claim-to-obligation owner
+                visit(claim.id()); // possible coverage contributor
+            }
+            HistoricalSourceRecordValueV4::ClaimAssessment(value) => visit(value.claim_id()),
+            HistoricalSourceRecordValueV4::Evidence(value) => visit(value.id()),
+            HistoricalSourceRecordValueV4::EvidenceBinding(binding) => {
+                // all-relation claim/evidence reverse indexes plus the
+                // reproduces-only coverage reverse index upper image.
+                for id in [
+                    binding.evidence_id(),
+                    binding.claim_id(),
+                    binding.evidence_id(),
+                    binding.id(),
+                    binding.evidence_id(),
+                    binding.claim_id(),
+                ] {
+                    visit(id);
+                }
+            }
+            HistoricalSourceRecordValueV4::Verification(value) => visit(value.claim_id()),
+            HistoricalSourceRecordValueV4::Decision(value) => visit(value.claim_id()),
+            HistoricalSourceRecordValueV4::Finding(value) => visit(value.claim_id()),
+            HistoricalSourceRecordValueV4::ArtifactRegistrationV4(registration) => {
+                if let ArtifactSourceV4::GluingInput { descriptor_id, .. } = registration.source() {
+                    visit(descriptor_id);
+                    visit(registration.id());
+                }
+            }
+            HistoricalSourceRecordValueV4::Section(section) => {
+                visit(section.projection_input_descriptor_id());
+                visit(section.projection_claim_assessment_id());
+                for ids in [
+                    section.projection_binding_ids(),
+                    section.projection_evidence_ids(),
+                    section.projection_verification_ids(),
+                    section.projection_decision_ids(),
+                    section.projection_finding_ids(),
+                ] {
+                    for id in ids {
+                        visit(id);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    })?;
+    if let Some(error) = error {
+        return Err(error);
+    }
+    occurrences
+        .checked_mul(1_024)
+        .and_then(|bytes| bytes.checked_add(id_bytes.saturating_mul(4)))
+        // Only one record's unique-union scratch is live at once.
+        .and_then(|bytes| bytes.checked_add(MAX_M6_RECORD_METADATA_IDS * 1_024))
+        .ok_or(M6Error::Incomplete {
+            operation: "M6 target metadata inventory bytes",
+            limit: MAX_M6_STALENESS_WORKING_BYTES,
+            observed: usize::MAX,
+        })
+}
+
 impl HistoricalSourceInventoryV5 {
     fn new(
         source: &HistoricalPrefixProjectionV4<'_>,
@@ -5387,6 +5498,7 @@ impl HistoricalSourceInventoryV5 {
             record_keys: BTreeSet::new(),
             plans_for_obligation: BTreeMap::new(),
             claims_for_evidence: BTreeMap::new(),
+            reproducing_claims_for_evidence: BTreeMap::new(),
             bindings_for_evidence: BTreeMap::new(),
             v4_registrations_for_descriptor: BTreeMap::new(),
             section_traces_for_descriptor: BTreeMap::new(),
@@ -5473,9 +5585,6 @@ impl HistoricalSourceInventoryV5 {
                                 .contains(id)
                         })
                         && binding.relation() == crate::EvidenceRelationV3::Reproduces;
-                    if !contributes {
-                        return Ok::<(), M6Error>(());
-                    }
                     value
                         .claims_for_evidence
                         .entry(binding.evidence_id().clone())
@@ -5489,9 +5598,18 @@ impl HistoricalSourceInventoryV5 {
                         .entry(binding.evidence_id().clone())
                         .or_default()
                         .insert(key.clone());
-                    if let Some(obligation_id) =
-                        value.coverage_obligation_for_claim.get(binding.claim_id())
+                    if contributes
+                        && let Some(obligation_id) =
+                            value.coverage_obligation_for_claim.get(binding.claim_id())
                     {
+                        value
+                            .reproducing_claims_for_evidence
+                            .entry(binding.evidence_id().clone())
+                            .or_default()
+                            .insert(OwnedHistoricalRecordKeyV5 {
+                                kind: HistoricalSourceRecordKindV4::Claim,
+                                id: binding.claim_id().clone(),
+                            });
                         value
                             .coverage_contributors
                             .entry(obligation_id.clone())
@@ -5613,7 +5731,7 @@ impl HistoricalSourceInventoryV5 {
         source.try_visit_records(|record| {
             let descriptor = HistoricalRecordDescriptorV5::from_projection(record);
             if let HistoricalSourceRecordValueV4::Evidence(evidence) = descriptor.typed_body()
-                && let Some(claims) = value.claims_for_evidence.get(evidence.id())
+                && let Some(claims) = value.reproducing_claims_for_evidence.get(evidence.id())
             {
                 for claim_key in claims {
                     if let Some(obligation_id) =
@@ -5633,6 +5751,331 @@ impl HistoricalSourceInventoryV5 {
             Ok::<(), M6Error>(())
         })?;
         Ok(value)
+    }
+
+    fn new_target(
+        target: &TargetActualRecordInventoryV5<'_>,
+        target_program: &ProgramSpace,
+    ) -> M6Result<Self> {
+        let metadata_reservation =
+            target_metadata_inventory_reservation_v5(target, target_program)?;
+        let combined_reservation = usize::try_from(target.working_reservation_bytes())
+            .unwrap_or(usize::MAX)
+            .checked_add(metadata_reservation)
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 target metadata combined working bytes",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?;
+        if combined_reservation > MAX_M6_STALENESS_WORKING_BYTES {
+            return Err(M6Error::Incomplete {
+                operation: "M6 target metadata combined working bytes",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: combined_reservation,
+            });
+        }
+        let mut value = Self {
+            program_ids: target_program.known_ids(),
+            record_keys: BTreeSet::new(),
+            plans_for_obligation: BTreeMap::new(),
+            claims_for_evidence: BTreeMap::new(),
+            reproducing_claims_for_evidence: BTreeMap::new(),
+            bindings_for_evidence: BTreeMap::new(),
+            v4_registrations_for_descriptor: BTreeMap::new(),
+            section_traces_for_descriptor: BTreeMap::new(),
+            coverage_contributors: BTreeMap::new(),
+            coverage_obligation_for_claim: BTreeMap::new(),
+        };
+        target.try_visit_records(|record| {
+            let descriptor = HistoricalRecordDescriptorV5::from_target(&record);
+            let key = OwnedHistoricalRecordKeyV5 {
+                kind: descriptor.key().kind,
+                id: descriptor.key().id.clone(),
+            };
+            if !value.record_keys.insert(key.clone()) {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "duplicate target actual (kind,id) inventory key",
+                ));
+            }
+            match descriptor.typed_body() {
+                HistoricalSourceRecordValueV4::ReviewPlan(plan) => {
+                    for wave in plan.waves() {
+                        for id in wave.obligation_ids() {
+                            value
+                                .plans_for_obligation
+                                .entry(id.clone())
+                                .or_default()
+                                .insert(key.clone());
+                        }
+                    }
+                }
+                HistoricalSourceRecordValueV4::Claim(claim)
+                    if claim.obligation_ids().len() == 1 =>
+                {
+                    value.coverage_obligation_for_claim.insert(
+                        claim.id().clone(),
+                        claim
+                            .obligation_ids()
+                            .iter()
+                            .next()
+                            .expect("one obligation checked")
+                            .clone(),
+                    );
+                }
+                HistoricalSourceRecordValueV4::ArtifactRegistrationV4(registration) => {
+                    if let ArtifactSourceV4::GluingInput { descriptor_id, .. } =
+                        registration.source()
+                    {
+                        value
+                            .v4_registrations_for_descriptor
+                            .entry(descriptor_id.clone())
+                            .or_default()
+                            .insert(key);
+                    }
+                }
+                HistoricalSourceRecordValueV4::Section(section) => {
+                    let traces = value
+                        .section_traces_for_descriptor
+                        .entry(section.projection_input_descriptor_id().clone())
+                        .or_default();
+                    traces.insert(OwnedHistoricalRecordKeyV5 {
+                        kind: HistoricalSourceRecordKindV4::ClaimAssessment,
+                        id: section.projection_claim_assessment_id().clone(),
+                    });
+                    for (kind, ids) in [
+                        (
+                            HistoricalSourceRecordKindV4::EvidenceBinding,
+                            section.projection_binding_ids(),
+                        ),
+                        (
+                            HistoricalSourceRecordKindV4::Evidence,
+                            section.projection_evidence_ids(),
+                        ),
+                        (
+                            HistoricalSourceRecordKindV4::Verification,
+                            section.projection_verification_ids(),
+                        ),
+                        (
+                            HistoricalSourceRecordKindV4::Decision,
+                            section.projection_decision_ids(),
+                        ),
+                        (
+                            HistoricalSourceRecordKindV4::Finding,
+                            section.projection_finding_ids(),
+                        ),
+                    ] {
+                        for id in ids {
+                            traces.insert(OwnedHistoricalRecordKeyV5 {
+                                kind,
+                                id: id.clone(),
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        })?;
+        let coverage = target.coverage();
+        target.try_visit_records(|record| {
+            let descriptor = HistoricalRecordDescriptorV5::from_target(&record);
+            let key = OwnedHistoricalRecordKeyV5 {
+                kind: descriptor.key().kind,
+                id: descriptor.key().id.clone(),
+            };
+            match descriptor.typed_body() {
+                HistoricalSourceRecordValueV4::Claim(claim)
+                    if claim.obligation_ids().len() == 1 =>
+                {
+                    let obligation_id = value
+                        .coverage_obligation_for_claim
+                        .get(claim.id())
+                        .expect("one-obligation claim indexed in first pass");
+                    if coverage
+                        .evidence_supported_obligation_ids()
+                        .contains(obligation_id)
+                        || coverage.verified_obligation_ids().contains(obligation_id)
+                        || coverage.fresh_obligation_ids().contains(obligation_id)
+                        || coverage
+                            .human_accepted_obligation_ids()
+                            .contains(obligation_id)
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key);
+                    }
+                }
+                HistoricalSourceRecordValueV4::ClaimAssessment(assessment) => {
+                    if let Some(obligation_id) = value
+                        .coverage_obligation_for_claim
+                        .get(assessment.claim_id())
+                        .filter(|id| coverage.human_accepted_obligation_ids().contains(*id))
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key);
+                    }
+                }
+                HistoricalSourceRecordValueV4::EvidenceBinding(binding) => {
+                    value
+                        .claims_for_evidence
+                        .entry(binding.evidence_id().clone())
+                        .or_default()
+                        .insert(OwnedHistoricalRecordKeyV5 {
+                            kind: HistoricalSourceRecordKindV4::Claim,
+                            id: binding.claim_id().clone(),
+                        });
+                    value
+                        .bindings_for_evidence
+                        .entry(binding.evidence_id().clone())
+                        .or_default()
+                        .insert(key.clone());
+                    if binding.relation() == crate::EvidenceRelationV3::Reproduces
+                        && let Some(obligation_id) = value
+                            .coverage_obligation_for_claim
+                            .get(binding.claim_id())
+                            .filter(|id| coverage.evidence_supported_obligation_ids().contains(*id))
+                    {
+                        value
+                            .reproducing_claims_for_evidence
+                            .entry(binding.evidence_id().clone())
+                            .or_default()
+                            .insert(OwnedHistoricalRecordKeyV5 {
+                                kind: HistoricalSourceRecordKindV4::Claim,
+                                id: binding.claim_id().clone(),
+                            });
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key);
+                    }
+                }
+                HistoricalSourceRecordValueV4::Verification(verification) => {
+                    if let Some(obligation_id) = value
+                        .coverage_obligation_for_claim
+                        .get(verification.claim_id())
+                        .filter(|id| coverage.verified_obligation_ids().contains(*id))
+                        .filter(|_| verification.outcome() == VerificationOutcomeV3::Passed)
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key);
+                    }
+                }
+                HistoricalSourceRecordValueV4::Decision(decision) => {
+                    if let Some(obligation_id) = value
+                        .coverage_obligation_for_claim
+                        .get(decision.claim_id())
+                        .filter(|id| coverage.human_accepted_obligation_ids().contains(*id))
+                        .filter(|_| decision.outcome() == DecisionOutcomeV3::Accept)
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key);
+                    }
+                }
+                HistoricalSourceRecordValueV4::Finding(finding) => {
+                    if let Some(obligation_id) = value
+                        .coverage_obligation_for_claim
+                        .get(finding.claim_id())
+                        .filter(|id| coverage.human_accepted_obligation_ids().contains(*id))
+                        .filter(|_| finding.status() == FindingStatusV3::Accepted)
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(key);
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        })?;
+        target.try_visit_records(|record| {
+            let descriptor = HistoricalRecordDescriptorV5::from_target(&record);
+            if let HistoricalSourceRecordValueV4::Evidence(evidence) = descriptor.typed_body()
+                && let Some(claims) = value.reproducing_claims_for_evidence.get(evidence.id())
+            {
+                for claim_key in claims {
+                    if let Some(obligation_id) =
+                        value.coverage_obligation_for_claim.get(&claim_key.id)
+                        && coverage
+                            .evidence_supported_obligation_ids()
+                            .contains(obligation_id)
+                    {
+                        value
+                            .coverage_contributors
+                            .entry(obligation_id.clone())
+                            .or_default()
+                            .insert(OwnedHistoricalRecordKeyV5 {
+                                kind: descriptor.key().kind,
+                                id: descriptor.key().id.clone(),
+                            });
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        let realized = value.target_retained_bytes();
+        if realized > metadata_reservation {
+            return Err(M6Error::Incomplete {
+                operation: "M6 target metadata realized retained bytes",
+                limit: metadata_reservation,
+                observed: realized,
+            });
+        }
+        Ok(value)
+    }
+
+    fn target_retained_bytes(&self) -> usize {
+        fn id_bytes(id: &StableId) -> usize {
+            std::mem::size_of::<StableId>().saturating_add(id.allocated_bytes())
+        }
+        fn key_bytes(key: &OwnedHistoricalRecordKeyV5) -> usize {
+            std::mem::size_of::<OwnedHistoricalRecordKeyV5>()
+                .saturating_add(key.id.allocated_bytes())
+                .saturating_add(128)
+        }
+        let mut total = std::mem::size_of::<Self>();
+        for id in &self.program_ids {
+            total = total.saturating_add(id_bytes(id)).saturating_add(128);
+        }
+        for key in &self.record_keys {
+            total = total.saturating_add(key_bytes(key));
+        }
+        for map in [
+            &self.plans_for_obligation,
+            &self.claims_for_evidence,
+            &self.reproducing_claims_for_evidence,
+            &self.bindings_for_evidence,
+            &self.v4_registrations_for_descriptor,
+            &self.section_traces_for_descriptor,
+            &self.coverage_contributors,
+        ] {
+            for (id, keys) in map {
+                total = total.saturating_add(id_bytes(id)).saturating_add(128);
+                for key in keys {
+                    total = total.saturating_add(key_bytes(key));
+                }
+            }
+        }
+        for (claim, obligation) in &self.coverage_obligation_for_claim {
+            total = total
+                .saturating_add(id_bytes(claim))
+                .saturating_add(id_bytes(obligation))
+                .saturating_add(128);
+        }
+        total
     }
 
     fn is_program_id(&self, id: &StableId) -> bool {
@@ -5972,6 +6415,20 @@ impl HistoricalInventoryViewV5 for HistoricalAdmissionInventoryV5<'_> {
 }
 
 impl<'a> HistoricalRecordDescriptorV5<'a> {
+    fn from_target(value: &'a TargetActualRecordV5<'_>) -> Self {
+        Self {
+            key: HistoricalRecordKeyV5 {
+                kind: value.kind(),
+                id: value.id(),
+            },
+            body_hash: Some(value.body_hash()),
+            pinned_active_or_current: false,
+            // Reuse the exact source-history typed descriptor vocabulary. A
+            // target actual record therefore cannot acquire dependencies via
+            // a second, drifting target-only match statement.
+            value: value.value().historical_value(),
+        }
+    }
     fn from_admission(value: crate::event::HistoricalSourceRecordAdmissionV4<'a>) -> Self {
         Self {
             key: HistoricalRecordKeyV5 {
@@ -6499,6 +6956,126 @@ impl<'a> HistoricalRecordDescriptorV5<'a> {
                 }
             }
         }
+    }
+}
+
+/// M6-facing target descriptor stream. The descriptor and its body hash are
+/// callback-scoped because coverage is freshly reduced by Core and is never
+/// retained as a second target topology.
+impl TargetActualRecordProjectionV5<'_, '_> {
+    pub(crate) fn try_visit_historical_descriptors(
+        &self,
+        mut visitor: impl for<'record> FnMut(HistoricalRecordDescriptorV5<'record>) -> M6Result<()>,
+    ) -> M6Result<()> {
+        let target = self.materialize_inventory_v5()?;
+        let mut callback_error = None;
+        let result = target.try_visit_records(|record| {
+            if let Err(error) = visitor(HistoricalRecordDescriptorV5::from_target(&record)) {
+                callback_error = Some(error);
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "M6 target descriptor visitor aborted",
+                ));
+            }
+            Ok(())
+        });
+        callback_error.map_or_else(|| result.map_err(M6Error::from), Err)
+    }
+
+    /// Visits each target body and the exact Program/predecessor metadata
+    /// defined by the source-history descriptor. Reverse edges are resolved
+    /// only by scanning actual target DTO fields; mappings and
+    /// correspondences never participate in this inventory.
+    pub(crate) fn try_visit_historical_metadata(
+        &self,
+        mut visit_record: impl for<'record> FnMut(
+            &HistoricalRecordDescriptorV5<'record>,
+        ) -> M6Result<()>,
+        mut visit_program_dependency: impl FnMut(HistoricalRecordKeyV5<'_>, &StableId) -> M6Result<()>,
+        mut visit_required_record: impl FnMut(
+            HistoricalRecordKeyV5<'_>,
+            HistoricalSourceRecordKindV4,
+            &StableId,
+        ) -> M6Result<()>,
+    ) -> M6Result<()> {
+        let target = self.materialize_inventory_v5()?;
+        let inventory = HistoricalSourceInventoryV5::new_target(&target, self.program_space())?;
+        let mut callback_error = None;
+        let result = target.try_visit_records(|record| {
+            let descriptor = HistoricalRecordDescriptorV5::from_target(&record);
+            if let Err(error) = visit_record(&descriptor) {
+                callback_error = Some(error);
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "M6 target metadata visitor aborted",
+                ));
+            }
+            let key = descriptor.key();
+            // Check membership and the exact +1 boundary before cloning each
+            // new StableId. Thus an over-limit input never allocates storage
+            // for its 513th unique dependency, while duplicates remain free.
+            let mut dependency_ids = BTreeSet::new();
+            let mut program_ids = BTreeSet::new();
+            let mut required_keys = BTreeSet::new();
+            let mut error = None;
+            descriptor.visit_direct_program_ids(&inventory, |id| {
+                if error.is_some() {
+                    return;
+                }
+                if !dependency_ids.contains(id) {
+                    if dependency_ids.len() == MAX_M6_RECORD_METADATA_IDS {
+                        error = Some(M6Error::Incomplete {
+                            operation: "M6 target record metadata IDs",
+                            limit: MAX_M6_RECORD_METADATA_IDS,
+                            observed: MAX_M6_RECORD_METADATA_IDS + 1,
+                        });
+                        return;
+                    }
+                    dependency_ids.insert(id.clone());
+                }
+                program_ids.insert(id.clone());
+            });
+            descriptor.visit_required_records(&inventory, |kind, id| {
+                if error.is_some() {
+                    return;
+                }
+                if !dependency_ids.contains(id) {
+                    if dependency_ids.len() == MAX_M6_RECORD_METADATA_IDS {
+                        error = Some(M6Error::Incomplete {
+                            operation: "M6 target record metadata IDs",
+                            limit: MAX_M6_RECORD_METADATA_IDS,
+                            observed: MAX_M6_RECORD_METADATA_IDS + 1,
+                        });
+                        return;
+                    }
+                    dependency_ids.insert(id.clone());
+                }
+                required_keys.insert((kind, id.clone()));
+            });
+            for id in &program_ids {
+                if error.is_none()
+                    && let Err(value) = visit_program_dependency(key, id)
+                {
+                    error = Some(value);
+                }
+            }
+            for (kind, id) in &required_keys {
+                if error.is_none()
+                    && let Err(value) = visit_required_record(key, *kind, id)
+                {
+                    error = Some(value);
+                }
+            }
+            if let Some(value) = error {
+                callback_error = Some(value);
+            }
+            if callback_error.is_some() {
+                Err(DomainError::HistoricalPrefixMismatch(
+                    "M6 target metadata visitor aborted",
+                ))
+            } else {
+                Ok(())
+            }
+        });
+        callback_error.map_or_else(|| result.map_err(M6Error::from), Err)
     }
 }
 

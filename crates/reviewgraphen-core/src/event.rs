@@ -11093,7 +11093,7 @@ impl AuthorityArtifactResolverV3 for V5ResolverAsV3<'_> {
 }
 
 #[allow(dead_code)] // Basis entries stay private until complete authority replay exists.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 struct AuthorityReplayEntryV3AtV5 {
     event_id: StableId,
     event_sequence: u64,
@@ -11109,7 +11109,7 @@ struct AuthorityReplayEntryV3AtV5 {
 /// checkpoint has no such entries, but its canonical basis deliberately
 /// commits the empty collection rather than replacing it with a count.
 #[allow(dead_code)]
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 struct GluingInputReplayEntryV5 {
     event_id: StableId,
     event_sequence: u64,
@@ -14618,6 +14618,8 @@ impl HistoricalPrefixProjectionV4<'_> {
     pub(crate) const fn working_reservation_bytes(&self) -> usize {
         self.working_reservation_bytes
     }
+    #[cfg(test)]
+    #[cfg(test)]
     pub(crate) fn record_count(&self) -> usize {
         self.records.len() + 1
     }
@@ -19955,6 +19957,952 @@ struct ReplayedV5M5AuthorityState<'a> {
     phase: V5StructuralPostPlanPhase,
 }
 
+/// Exact provenance class for one actual target record. Derived records still
+/// cite the accepted event which closed their source state; they never pretend
+/// to be journal payloads themselves.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TargetActualRecordWitnessOriginV5 {
+    GenesisDerived,
+    EventOwned,
+    M5BundleDerived,
+    CoverageDerived,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TargetActualRecordEventWitnessV5<'a> {
+    origin: TargetActualRecordWitnessOriginV5,
+    event_sequence: u64,
+    event_id: &'a StableId,
+    predecessor_event_hash: &'a ContentHash,
+    payload_hash: &'a ContentHash,
+    event_hash: &'a ContentHash,
+    payload_kind: &'static str,
+}
+
+#[allow(dead_code)]
+impl<'a> TargetActualRecordEventWitnessV5<'a> {
+    pub(crate) const fn origin(&self) -> TargetActualRecordWitnessOriginV5 {
+        self.origin
+    }
+    pub(crate) const fn event_sequence(&self) -> u64 {
+        self.event_sequence
+    }
+    pub(crate) const fn event_id(&self) -> &'a StableId {
+        self.event_id
+    }
+    pub(crate) const fn predecessor_event_hash(&self) -> &'a ContentHash {
+        self.predecessor_event_hash
+    }
+    pub(crate) const fn payload_hash(&self) -> &'a ContentHash {
+        self.payload_hash
+    }
+    pub(crate) const fn event_hash(&self) -> &'a ContentHash {
+        self.event_hash
+    }
+    pub(crate) const fn payload_kind(&self) -> &'static str {
+        self.payload_kind
+    }
+}
+
+/// Typed target value. Program facts, reviewer claims, evidence, authority
+/// records and M5 topology remain distinct variants; there is no generic JSON
+/// or confidence-bearing successor value.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub(crate) enum TargetActualRecordValueV5<'a> {
+    Obligation(&'a crate::Obligation),
+    ReviewPlan(&'a ReviewPlan),
+    ContextEnvelope(&'a ReviewContextEnvelope),
+    Execution(&'a ExecutionRecord),
+    Claim(&'a ExecutionClaimV2),
+    ClaimAssessment(&'a crate::ClaimAssessmentV3),
+    ArtifactRegistrationV3(&'a ArtifactRegisteredV3),
+    ArtifactRegistrationV4(&'a ArtifactRegistrationV4),
+    Evidence(&'a EvidenceV3),
+    EvidenceBinding(&'a EvidenceBindingV3),
+    Verification(&'a VerificationV3),
+    Decision(&'a DecisionV3),
+    Finding(&'a FindingV3),
+    GluingInputDescriptor(&'a crate::GluingInputDescriptorV4),
+    ContextCover(&'a crate::ContextCoverV4),
+    Section(&'a crate::SectionV4),
+    Restriction(&'a crate::RestrictionV4),
+    GluingAttempt(&'a crate::GluingAttemptV4),
+    GlobalCandidate(&'a crate::GlobalCandidateV4),
+    GluingObstruction(&'a crate::GluingObstructionV4),
+    Coverage(&'a crate::coverage::HistoricalCoverageSnapshotV4),
+}
+
+#[allow(dead_code)]
+impl<'a> TargetActualRecordValueV5<'a> {
+    pub(crate) const fn historical_value(self) -> HistoricalSourceRecordValueV4<'a> {
+        match self {
+            Self::Obligation(value) => HistoricalSourceRecordValueV4::Obligation(value),
+            Self::ReviewPlan(value) => HistoricalSourceRecordValueV4::ReviewPlan(value),
+            Self::ContextEnvelope(value) => HistoricalSourceRecordValueV4::ContextEnvelope(value),
+            Self::Execution(value) => HistoricalSourceRecordValueV4::Execution(value),
+            Self::Claim(value) => HistoricalSourceRecordValueV4::Claim(value),
+            Self::ClaimAssessment(value) => HistoricalSourceRecordValueV4::ClaimAssessment(value),
+            Self::ArtifactRegistrationV3(value) => {
+                HistoricalSourceRecordValueV4::ArtifactRegistrationV3(value)
+            }
+            Self::ArtifactRegistrationV4(value) => {
+                HistoricalSourceRecordValueV4::ArtifactRegistrationV4(value)
+            }
+            Self::Evidence(value) => HistoricalSourceRecordValueV4::Evidence(value),
+            Self::EvidenceBinding(value) => HistoricalSourceRecordValueV4::EvidenceBinding(value),
+            Self::Verification(value) => HistoricalSourceRecordValueV4::Verification(value),
+            Self::Decision(value) => HistoricalSourceRecordValueV4::Decision(value),
+            Self::Finding(value) => HistoricalSourceRecordValueV4::Finding(value),
+            Self::GluingInputDescriptor(value) => {
+                HistoricalSourceRecordValueV4::GluingInputDescriptor(value)
+            }
+            Self::ContextCover(value) => HistoricalSourceRecordValueV4::ContextCover(value),
+            Self::Section(value) => HistoricalSourceRecordValueV4::Section(value),
+            Self::Restriction(value) => HistoricalSourceRecordValueV4::Restriction(value),
+            Self::GluingAttempt(value) => HistoricalSourceRecordValueV4::GluingAttempt(value),
+            Self::GlobalCandidate(value) => HistoricalSourceRecordValueV4::GlobalCandidate(value),
+            Self::GluingObstruction(value) => {
+                HistoricalSourceRecordValueV4::GluingObstruction(value)
+            }
+            Self::Coverage(value) => HistoricalSourceRecordValueV4::Coverage(value),
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) struct TargetActualRecordV5<'a> {
+    kind: HistoricalSourceRecordKindV4,
+    id: &'a StableId,
+    body_hash: &'a ContentHash,
+    event_witness: TargetActualRecordEventWitnessV5<'a>,
+    value: TargetActualRecordValueV5<'a>,
+}
+
+#[allow(dead_code)]
+impl<'a> TargetActualRecordV5<'a> {
+    pub(crate) const fn kind(&self) -> HistoricalSourceRecordKindV4 {
+        self.kind
+    }
+    pub(crate) const fn id(&self) -> &'a StableId {
+        self.id
+    }
+    pub(crate) const fn body_hash(&self) -> &ContentHash {
+        self.body_hash
+    }
+    pub(crate) const fn event_witness(&self) -> &TargetActualRecordEventWitnessV5<'a> {
+        &self.event_witness
+    }
+    pub(crate) const fn value(&self) -> TargetActualRecordValueV5<'a> {
+        self.value
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TargetActualProjectionInformationLossV5 {
+    None,
+}
+
+/// Borrow-only actual-target topology. Only the terminal, roots-validated M5
+/// state can mint it, and the exact pre-incremental basis digest remains
+/// borrowed for the projection's whole lifetime.
+#[allow(dead_code)]
+pub(crate) struct TargetActualRecordProjectionV5<'a, 'state> {
+    terminal: &'a ReplayedV5M5AuthorityState<'state>,
+    basis: &'a PreIncrementalAuthorityReplayBasisV5,
+}
+
+#[derive(Clone, Copy)]
+enum StoredTargetActualRecordValueV5<'a> {
+    Value(TargetActualRecordValueV5<'a>),
+    Coverage,
+}
+
+struct StoredTargetActualRecordV5<'a> {
+    kind: HistoricalSourceRecordKindV4,
+    id: Option<&'a StableId>,
+    body_hash: ContentHash,
+    event_witness: Option<TargetActualRecordEventWitnessV5<'a>>,
+    value: StoredTargetActualRecordValueV5<'a>,
+}
+
+/// Ephemeral bounded reducer input. It owns only derived hashes, coverage and
+/// its sorted slot vector; all canonical target DTOs and event witnesses stay
+/// borrowed from the terminal authority replay.
+pub(crate) struct TargetActualRecordInventoryV5<'a> {
+    coverage: crate::coverage::HistoricalCoverageSnapshotV4,
+    records: Vec<StoredTargetActualRecordV5<'a>>,
+    working_reservation_bytes: u64,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TARGET_ACTUAL_INVENTORY_MATERIALIZATIONS_V5: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TARGET_ACTUAL_WITNESS_EVENT_SCANS_V5: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_target_actual_inventory_counters_v5() {
+    TARGET_ACTUAL_INVENTORY_MATERIALIZATIONS_V5.with(|value| value.set(0));
+    TARGET_ACTUAL_WITNESS_EVENT_SCANS_V5.with(|value| value.set(0));
+}
+
+#[cfg(test)]
+fn target_actual_inventory_counters_v5() -> (usize, usize) {
+    (
+        TARGET_ACTUAL_INVENTORY_MATERIALIZATIONS_V5.with(std::cell::Cell::get),
+        TARGET_ACTUAL_WITNESS_EVENT_SCANS_V5.with(std::cell::Cell::get),
+    )
+}
+
+impl<'a> TargetActualRecordInventoryV5<'a> {
+    fn record_id<'b>(&'b self, record: &'b StoredTargetActualRecordV5<'a>) -> &'b StableId {
+        record.id.unwrap_or_else(|| self.coverage.id())
+    }
+
+    fn find_index(&self, kind: HistoricalSourceRecordKindV4, id: &StableId) -> Option<usize> {
+        self.records
+            .binary_search_by(|record| (record.kind, self.record_id(record)).cmp(&(kind, id)))
+            .ok()
+    }
+
+    fn lend_record<'b>(
+        &'b self,
+        record: &'b StoredTargetActualRecordV5<'a>,
+    ) -> Result<TargetActualRecordV5<'b>> {
+        let value = match record.value {
+            StoredTargetActualRecordValueV5::Value(value) => value,
+            StoredTargetActualRecordValueV5::Coverage => {
+                TargetActualRecordValueV5::Coverage(&self.coverage)
+            }
+        };
+        Ok(TargetActualRecordV5 {
+            kind: record.kind,
+            id: self.record_id(record),
+            body_hash: &record.body_hash,
+            event_witness: record
+                .event_witness
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "target actual inventory record has no event witness",
+                ))?,
+            value,
+        })
+    }
+
+    pub(crate) fn try_visit_records(
+        &self,
+        mut visitor: impl for<'record> FnMut(TargetActualRecordV5<'record>) -> Result<()>,
+    ) -> Result<()> {
+        for record in &self.records {
+            visitor(self.lend_record(record)?)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn try_visit_exact_record(
+        &self,
+        kind: HistoricalSourceRecordKindV4,
+        id: &StableId,
+        mut visitor: impl for<'record> FnMut(TargetActualRecordV5<'record>) -> Result<()>,
+    ) -> Result<bool> {
+        let Some(index) = self.find_index(kind, id) else {
+            return Ok(false);
+        };
+        visitor(self.lend_record(&self.records[index])?)?;
+        Ok(true)
+    }
+
+    pub(crate) fn working_reservation_bytes(&self) -> u64 {
+        self.working_reservation_bytes
+    }
+
+    pub(crate) fn coverage(&self) -> &crate::coverage::HistoricalCoverageSnapshotV4 {
+        &self.coverage
+    }
+
+    pub(crate) fn retained_bytes(&self) -> u64 {
+        let mut total = self
+            .coverage
+            .retained_bytes_for_target_projection()
+            .saturating_add(
+                u64::try_from(
+                    self.records
+                        .capacity()
+                        .saturating_mul(size_of::<StoredTargetActualRecordV5<'static>>()),
+                )
+                .unwrap_or(u64::MAX),
+            );
+        for record in &self.records {
+            total = total.saturating_add(
+                u64::try_from(record.body_hash.allocated_bytes()).unwrap_or(u64::MAX),
+            );
+        }
+        total
+    }
+}
+
+#[allow(dead_code)]
+impl<'state> ReplayedV5M5AuthorityState<'state> {
+    fn target_actual_record_projection_v5<'a>(
+        &'a self,
+        basis: &'a PreIncrementalAuthorityReplayBasisV5,
+    ) -> Result<TargetActualRecordProjectionV5<'a, 'state>> {
+        basis.validate_for_terminal_m5(self)?;
+        Ok(TargetActualRecordProjectionV5 {
+            terminal: self,
+            basis,
+        })
+    }
+}
+
+#[allow(dead_code)]
+impl<'a, 'state> TargetActualRecordProjectionV5<'a, 'state> {
+    pub(crate) const fn information_loss(&self) -> TargetActualProjectionInformationLossV5 {
+        TargetActualProjectionInformationLossV5::None
+    }
+
+    pub(crate) const fn basis_digest(&self) -> &ContentHash {
+        &self.basis.basis_digest
+    }
+
+    pub(crate) const fn tail_hash(&self) -> &ContentHash {
+        &self.basis.target_confirmed_tail_hash
+    }
+
+    pub(crate) const fn event_count(&self) -> u64 {
+        self.basis.target_confirmed_event_count
+    }
+
+    pub(crate) fn program_space(&self) -> &ProgramSpace {
+        self.terminal.aggregate.program()
+    }
+
+    pub(crate) fn record_count(&self) -> Result<usize> {
+        let aggregate = &self.terminal.aggregate;
+        let v3 = &self.terminal.v3_aggregate;
+        let bundle = &self.terminal.m5_bundle;
+        let counts = [
+            aggregate.obligations().count(),
+            aggregate.review_plans().count(),
+            aggregate.context_envelopes().count(),
+            aggregate.executions().count(),
+            aggregate.execution_claims().count(),
+            v3.assessments.len(),
+            v3.registrations.len(),
+            self.terminal.v4_registrations.len(),
+            v3.evidence.len(),
+            v3.bindings.len(),
+            v3.verifications.len(),
+            v3.decisions.len(),
+            v3.findings.len(),
+            self.terminal.v4_gluing_descriptors.len(),
+            1,
+            bundle.sections().len(),
+            bundle.restrictions().len(),
+            1,
+            usize::from(bundle.global_candidate().is_some()),
+            usize::from(bundle.obstruction().is_some()),
+            1,
+        ];
+        let count = counts.into_iter().try_fold(0_usize, |total, value| {
+            total.checked_add(value).ok_or(DomainError::Incomplete {
+                operation: "event-v5 target actual record count",
+                limit: MAX_V4_HISTORICAL_SOURCE_RECORDS,
+                observed: usize::MAX,
+            })
+        })?;
+        if count > MAX_V4_HISTORICAL_SOURCE_RECORDS {
+            return Err(DomainError::Incomplete {
+                operation: "event-v5 target actual record count",
+                limit: MAX_V4_HISTORICAL_SOURCE_RECORDS,
+                observed: count,
+            });
+        }
+        Ok(count)
+    }
+
+    /// Streams the complete actual target in ADR 0023 semantic kind/ID order.
+    /// No structural or mapping candidate can enter this iterator: every
+    /// value comes from the terminal semantic replay, plus coverage freshly
+    /// reduced from that same terminal state.
+    pub(crate) fn try_visit_records(
+        &self,
+        mut visitor: impl for<'record> FnMut(TargetActualRecordV5<'record>) -> Result<()>,
+    ) -> Result<()> {
+        self.materialize_inventory_v5()?
+            .try_visit_records(&mut visitor)
+    }
+
+    #[allow(dead_code)] // fixed-limit production entry; tests pin the preflight seam
+    pub(crate) fn try_visit_records_with_limit(
+        &self,
+        working_limit: u64,
+        mut visitor: impl for<'record> FnMut(TargetActualRecordV5<'record>) -> Result<()>,
+    ) -> Result<()> {
+        self.materialize_inventory_v5_with_limit(working_limit)?
+            .try_visit_records(&mut visitor)
+    }
+
+    pub(crate) fn materialize_inventory_v5(&self) -> Result<TargetActualRecordInventoryV5<'a>> {
+        self.materialize_inventory_v5_with_limit(MAX_V5_REPLAY_WORKING_BYTES)
+    }
+
+    fn materialize_inventory_v5_with_limit(
+        &self,
+        working_limit: u64,
+    ) -> Result<TargetActualRecordInventoryV5<'a>> {
+        let expected = self.record_count()?;
+        let observed = self.working_bytes_upper_bound(expected)?;
+        if observed > working_limit {
+            return Err(DomainError::Incomplete {
+                operation: "event-v5 target actual projection working bytes",
+                limit: usize::try_from(working_limit).unwrap_or(usize::MAX),
+                observed: usize::try_from(observed).unwrap_or(usize::MAX),
+            });
+        }
+        #[cfg(test)]
+        TARGET_ACTUAL_INVENTORY_MATERIALIZATIONS_V5.with(|value| value.set(value.get() + 1));
+        validate_historical_dependency_graph_v4(
+            self.terminal.aggregate.universe().obligation_ids(),
+            self.terminal
+                .aggregate
+                .obligations()
+                .map(|value| (value.id(), value.normalized_depends_on())),
+        )?;
+        let coverage = crate::coverage::HistoricalCoverageSnapshotV4::derive_from_parts(
+            &self.terminal.aggregate,
+            &self.terminal.v3_aggregate,
+            self.terminal.m5_bundle.cover(),
+        )?;
+        crate::canonical::canonical_json_count_bounded(
+            &coverage,
+            MAX_D1_EVENT_LINE_BYTES,
+            "event-v5 target coverage canonical bytes",
+        )?;
+        let mut records = Vec::new();
+        records
+            .try_reserve_exact(expected)
+            .map_err(|_| DomainError::Incomplete {
+                operation: "event-v5 target actual record inventory",
+                limit: MAX_V4_HISTORICAL_SOURCE_RECORDS,
+                observed: expected,
+            })?;
+        let mut previous: Option<(HistoricalSourceRecordKindV4, &StableId)> = None;
+        macro_rules! store {
+            ($kind:ident, $id:expr, $value:expr) => {{
+                let id = $id;
+                let kind = HistoricalSourceRecordKindV4::$kind;
+                if previous.is_some_and(|(old_kind, old_id)| {
+                    old_kind > kind || old_kind == kind && old_id >= id
+                }) {
+                    return Err(DomainError::HistoricalPrefixMismatch(
+                        "target actual records are not strict kind/ID ordered",
+                    ));
+                }
+                let value = TargetActualRecordValueV5::$kind($value);
+                let body_hash = target_actual_record_body_hash_v5(value)?;
+                records.push(StoredTargetActualRecordV5 {
+                    kind,
+                    id: Some(id),
+                    body_hash,
+                    event_witness: None,
+                    value: StoredTargetActualRecordValueV5::Value(value),
+                });
+                previous = Some((kind, id));
+            }};
+        }
+        for value in self.terminal.aggregate.obligations() {
+            store!(Obligation, value.id(), value);
+        }
+        for value in self.terminal.aggregate.review_plans() {
+            store!(ReviewPlan, value.id(), value);
+        }
+        for value in self.terminal.aggregate.context_envelopes() {
+            store!(ContextEnvelope, value.id(), value);
+        }
+        for value in self.terminal.aggregate.executions() {
+            store!(Execution, value.id(), value);
+        }
+        for value in self.terminal.aggregate.execution_claims() {
+            store!(Claim, value.id(), value);
+        }
+        for value in self.terminal.v3_aggregate.assessments.values() {
+            store!(ClaimAssessment, value.claim_id(), value);
+        }
+        for value in self.terminal.v3_aggregate.registrations.values() {
+            store!(ArtifactRegistrationV3, value.registration_id(), value);
+        }
+        for value in self.terminal.v4_registrations.values() {
+            store!(ArtifactRegistrationV4, value.id(), value);
+        }
+        for value in self.terminal.v3_aggregate.evidence.values() {
+            store!(Evidence, value.id(), value);
+        }
+        for value in self.terminal.v3_aggregate.bindings.values() {
+            store!(EvidenceBinding, value.id(), value);
+        }
+        for value in self.terminal.v3_aggregate.verifications.values() {
+            store!(Verification, value.id(), value);
+        }
+        for value in self.terminal.v3_aggregate.decisions.values() {
+            store!(Decision, value.id(), value);
+        }
+        for value in self.terminal.v3_aggregate.findings.values() {
+            store!(Finding, value.id(), value);
+        }
+        for value in self.terminal.v4_gluing_descriptors.values() {
+            store!(GluingInputDescriptor, value.id(), value);
+        }
+        let value = self.terminal.m5_bundle.cover();
+        store!(ContextCover, value.id(), value);
+        for value in self.terminal.m5_bundle.sections() {
+            store!(Section, value.id(), value);
+        }
+        for value in self.terminal.m5_bundle.restrictions() {
+            store!(Restriction, value.id(), value);
+        }
+        let value = self.terminal.m5_bundle.attempt();
+        store!(GluingAttempt, value.id(), value);
+        if let Some(value) = self.terminal.m5_bundle.global_candidate() {
+            store!(GlobalCandidate, value.projection_id(), value);
+        }
+        if let Some(value) = self.terminal.m5_bundle.obstruction() {
+            store!(GluingObstruction, value.id(), value);
+        }
+        let coverage_hash = coverage.body_hash()?;
+        if previous.is_some_and(|(kind, id)| {
+            kind > HistoricalSourceRecordKindV4::Coverage
+                || kind == HistoricalSourceRecordKindV4::Coverage && id >= coverage.id()
+        }) {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "target actual coverage is not strict kind/ID ordered",
+            ));
+        }
+        records.push(StoredTargetActualRecordV5 {
+            kind: HistoricalSourceRecordKindV4::Coverage,
+            id: None,
+            body_hash: coverage_hash,
+            event_witness: None,
+            value: StoredTargetActualRecordValueV5::Coverage,
+        });
+        if records.len() != expected {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "target actual record preflight count changed during projection",
+            ));
+        }
+        assign_target_actual_event_witnesses_v5(
+            &mut records,
+            &coverage,
+            self.terminal,
+            self.basis,
+        )?;
+        let inventory = TargetActualRecordInventoryV5 {
+            coverage,
+            records,
+            working_reservation_bytes: observed,
+        };
+        let realized = v5_terminal_m5_and_basis_retained_bytes(self.terminal, self.basis)?
+            .checked_add(inventory.retained_bytes())
+            .ok_or(DomainError::Incomplete {
+                operation: "event-v5 target actual realized retained bytes",
+                limit: usize::try_from(working_limit).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if realized > working_limit || realized > observed {
+            return Err(DomainError::Incomplete {
+                operation: "event-v5 target actual realized retained bytes",
+                limit: usize::try_from(working_limit.min(observed)).unwrap_or(usize::MAX),
+                observed: usize::try_from(realized).unwrap_or(usize::MAX),
+            });
+        }
+        Ok(inventory)
+    }
+
+    /// Allocation-free upper image of the live terminal replay, the freshly
+    /// derived coverage sets/reduction indexes, one decoded witness payload,
+    /// and one canonical body-hash buffer. The target projection itself owns
+    /// no record vector or cloned ID index.
+    fn working_bytes_upper_bound(&self, record_count: usize) -> Result<u64> {
+        let operation = "event-v5 target actual projection working bytes";
+        let add = |left: u64, right: u64| {
+            left.checked_add(right).ok_or(DomainError::Incomplete {
+                operation,
+                limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })
+        };
+        let multiply = |left: u64, right: u64| {
+            left.checked_mul(right).ok_or(DomainError::Incomplete {
+                operation,
+                limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })
+        };
+        let retained = v5_terminal_m5_and_basis_retained_bytes(self.terminal, self.basis)?;
+        let denominator = self.terminal.aggregate.universe().obligation_ids();
+        let denominator_id_bytes = denominator.iter().try_fold(0_u64, |total, id| {
+            add(
+                total,
+                u64::try_from(id.allocated_bytes()).unwrap_or(u64::MAX),
+            )
+        })?;
+        // Coverage owns denominator plus five numerators. A conservative
+        // per-node allowance covers ordered-set links/allocator metadata in
+        // addition to the inline StableId and its separately charged text.
+        let coverage_sets = multiply(
+            6,
+            add(
+                multiply(
+                    u64::try_from(denominator.len()).unwrap_or(u64::MAX),
+                    u64::try_from(size_of::<StableId>() + 128).unwrap_or(u64::MAX),
+                )?,
+                denominator_id_bytes,
+            )?,
+        )?;
+        // The reducer's transient execution/claim/evidence indexes are all
+        // bounded by the closed 8192-record inventory. 4KiB per record is a
+        // deliberately conservative upper image of their cloned IDs/nodes.
+        let coverage_reduction = multiply(u64::try_from(record_count).unwrap_or(u64::MAX), 4_096)?;
+        let canonical_line = self
+            .terminal
+            .plan_checkpoint
+            .structural
+            .event_log
+            .maximum_canonical_event_line_bytes_for_store()?;
+        let sequential_scratch = multiply(
+            3,
+            canonical_line.max(u64::try_from(MAX_D1_EVENT_LINE_BYTES).unwrap_or(u64::MAX)),
+        )?;
+        add(
+            retained,
+            add(coverage_sets, add(coverage_reduction, sequential_scratch)?)?,
+        )
+    }
+
+    /// Exact absence/presence seam used by the streaming historical merge.
+    /// The callback cannot retain a derived coverage borrow past this call.
+    pub(crate) fn try_visit_exact_record(
+        &self,
+        kind: HistoricalSourceRecordKindV4,
+        id: &StableId,
+        mut visitor: impl for<'record> FnMut(TargetActualRecordV5<'record>) -> Result<()>,
+    ) -> Result<bool> {
+        self.materialize_inventory_v5()?
+            .try_visit_exact_record(kind, id, &mut visitor)
+    }
+}
+
+fn target_actual_record_body_hash_v5(value: TargetActualRecordValueV5<'_>) -> Result<ContentHash> {
+    Ok(match value {
+        TargetActualRecordValueV5::Obligation(value) => value.complete_body_hash()?,
+        TargetActualRecordValueV5::ReviewPlan(value) => {
+            ContentHash::sha256(&value.canonical_bytes()?)
+        }
+        TargetActualRecordValueV5::ContextEnvelope(value) => {
+            ContentHash::sha256(&value.canonical_bytes().map_err(context_domain_error)?)
+        }
+        TargetActualRecordValueV5::Execution(value) => value.body_hash()?,
+        TargetActualRecordValueV5::Claim(value) => value.body_hash()?,
+        TargetActualRecordValueV5::ClaimAssessment(value) => {
+            value.body_hash().map_err(m4_domain_error)?
+        }
+        TargetActualRecordValueV5::ArtifactRegistrationV3(value) => {
+            ContentHash::sha256(&canonical_json(value)?)
+        }
+        TargetActualRecordValueV5::ArtifactRegistrationV4(value) => {
+            ContentHash::sha256(&canonical_json(value)?)
+        }
+        TargetActualRecordValueV5::Evidence(value) => value.body_hash().map_err(m4_domain_error)?,
+        TargetActualRecordValueV5::EvidenceBinding(value) => {
+            value.body_hash().map_err(m4_domain_error)?
+        }
+        TargetActualRecordValueV5::Verification(value) => {
+            value.body_hash().map_err(m4_domain_error)?
+        }
+        TargetActualRecordValueV5::Decision(value) => value.body_hash().map_err(m4_domain_error)?,
+        TargetActualRecordValueV5::Finding(value) => value.body_hash().map_err(m4_domain_error)?,
+        TargetActualRecordValueV5::GluingInputDescriptor(value) => value.complete_body_hash()?,
+        TargetActualRecordValueV5::ContextCover(value) => value.complete_body_hash()?,
+        TargetActualRecordValueV5::Section(value) => value.complete_body_hash()?,
+        TargetActualRecordValueV5::Restriction(value) => value.complete_body_hash()?,
+        TargetActualRecordValueV5::GluingAttempt(value) => value.complete_body_hash()?,
+        TargetActualRecordValueV5::GlobalCandidate(value) => value.complete_body_hash()?,
+        TargetActualRecordValueV5::GluingObstruction(value) => value.complete_body_hash()?,
+        TargetActualRecordValueV5::Coverage(value) => value.body_hash()?,
+    })
+}
+
+fn assign_target_actual_event_witnesses_v5<'a>(
+    records: &mut [StoredTargetActualRecordV5<'a>],
+    coverage: &crate::coverage::HistoricalCoverageSnapshotV4,
+    terminal: &'a ReplayedV5M5AuthorityState<'_>,
+    basis: &PreIncrementalAuthorityReplayBasisV5,
+) -> Result<()> {
+    use HistoricalSourceRecordKindV4 as Kind;
+    use TargetActualRecordWitnessOriginV5 as Origin;
+    let count = usize::try_from(basis.target_confirmed_event_count).map_err(|_| {
+        DomainError::HistoricalPrefixMismatch("target event count does not fit memory")
+    })?;
+    let envelopes = terminal
+        .plan_checkpoint
+        .structural
+        .event_log
+        .envelopes
+        .get(..count)
+        .ok_or(DomainError::HistoricalPrefixMismatch(
+            "target witness prefix is shorter than the replay basis",
+        ))?;
+    fn witness<'a>(
+        envelope: &'a EventEnvelope,
+        origin: TargetActualRecordWitnessOriginV5,
+        payload_kind: &'static str,
+    ) -> TargetActualRecordEventWitnessV5<'a> {
+        TargetActualRecordEventWitnessV5 {
+            origin,
+            event_sequence: envelope.sequence(),
+            event_id: envelope.id(),
+            predecessor_event_hash: envelope.previous_event_hash(),
+            payload_hash: envelope.payload_hash(),
+            event_hash: envelope.event_hash(),
+            payload_kind,
+        }
+    }
+    fn id_for<'a>(
+        record: &'a StoredTargetActualRecordV5<'_>,
+        coverage: &'a crate::coverage::HistoricalCoverageSnapshotV4,
+    ) -> &'a StableId {
+        record.id.unwrap_or_else(|| coverage.id())
+    }
+    fn assign<'a>(
+        records: &mut [StoredTargetActualRecordV5<'a>],
+        coverage: &crate::coverage::HistoricalCoverageSnapshotV4,
+        kind: Kind,
+        id: &StableId,
+        value: TargetActualRecordEventWitnessV5<'a>,
+        may_replace: bool,
+    ) -> Result<()> {
+        let index = records
+            .binary_search_by(|record| (record.kind, id_for(record, coverage)).cmp(&(kind, id)))
+            .map_err(|_| {
+                DomainError::HistoricalPrefixMismatch(
+                    "accepted target event references a missing actual record",
+                )
+            })?;
+        if records[index].event_witness.is_some() && !may_replace {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "actual target record has duplicate owning event witnesses",
+            ));
+        }
+        records[index].event_witness = Some(value);
+        Ok(())
+    }
+    for envelope in envelopes {
+        #[cfg(test)]
+        TARGET_ACTUAL_WITNESS_EVENT_SCANS_V5.with(|value| value.set(value.get() + 1));
+        let payload = decode_payload(EventContractVersion::V5, envelope.payload.get())?;
+        match &payload {
+            PersistedPayload::RunGenesisManifestV4(_) => {
+                let value = witness(envelope, Origin::GenesisDerived, "run_genesis_manifest");
+                for record in records
+                    .iter_mut()
+                    .take_while(|record| record.kind == Kind::Obligation)
+                {
+                    if record.event_witness.is_some() {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "target obligations have duplicate genesis witnesses",
+                        ));
+                    }
+                    record.event_witness = Some(value);
+                }
+            }
+            PersistedPayload::ObligationTransition { obligation_id, .. } => assign(
+                records,
+                coverage,
+                Kind::Obligation,
+                obligation_id,
+                witness(envelope, Origin::EventOwned, "obligation_transition"),
+                true,
+            )?,
+            PersistedPayload::ReviewPlanRecorded(value) => assign(
+                records,
+                coverage,
+                Kind::ReviewPlan,
+                value.id(),
+                witness(envelope, Origin::EventOwned, "review_plan_recorded"),
+                false,
+            )?,
+            PersistedPayload::ContextEnvelopeProjected(value) => assign(
+                records,
+                coverage,
+                Kind::ContextEnvelope,
+                value.id(),
+                witness(envelope, Origin::EventOwned, "context_envelope_projected"),
+                false,
+            )?,
+            PersistedPayload::ReviewExecutionRecorded(value) => {
+                let owned = witness(envelope, Origin::EventOwned, "review_execution_recorded");
+                assign(
+                    records,
+                    coverage,
+                    Kind::Execution,
+                    value.execution.id(),
+                    owned,
+                    false,
+                )?;
+                for claim in &value.claims {
+                    assign(records, coverage, Kind::Claim, claim.id(), owned, false)?;
+                    assign(
+                        records,
+                        coverage,
+                        Kind::ClaimAssessment,
+                        claim.id(),
+                        owned,
+                        true,
+                    )?;
+                }
+            }
+            PersistedPayload::ArtifactRegisteredV3(value) => assign(
+                records,
+                coverage,
+                Kind::ArtifactRegistrationV3,
+                value.registration_id(),
+                witness(envelope, Origin::EventOwned, "artifact_registered"),
+                false,
+            )?,
+            PersistedPayload::ArtifactRegisteredV4(value) => {
+                let owned = witness(envelope, Origin::EventOwned, "artifact_registered_v4");
+                assign(
+                    records,
+                    coverage,
+                    Kind::ArtifactRegistrationV4,
+                    value.id(),
+                    owned,
+                    false,
+                )?;
+                if let ArtifactSourceV4::GluingInput { descriptor_id, .. } = value.source() {
+                    assign(
+                        records,
+                        coverage,
+                        Kind::GluingInputDescriptor,
+                        descriptor_id,
+                        owned,
+                        false,
+                    )?;
+                }
+            }
+            PersistedPayload::EvidenceRecordedV3(value) => assign(
+                records,
+                coverage,
+                Kind::Evidence,
+                value.id(),
+                witness(envelope, Origin::EventOwned, "evidence_recorded_v3"),
+                false,
+            )?,
+            PersistedPayload::EvidenceBoundV3(value) => {
+                let owned = witness(envelope, Origin::EventOwned, "evidence_bound_v3");
+                assign(
+                    records,
+                    coverage,
+                    Kind::EvidenceBinding,
+                    value.id(),
+                    owned,
+                    false,
+                )?;
+                assign(
+                    records,
+                    coverage,
+                    Kind::ClaimAssessment,
+                    value.claim_id(),
+                    owned,
+                    true,
+                )?;
+            }
+            PersistedPayload::VerificationRecordedV3(value) => {
+                let owned = witness(envelope, Origin::EventOwned, "verification_recorded_v3");
+                assign(
+                    records,
+                    coverage,
+                    Kind::Verification,
+                    value.id(),
+                    owned,
+                    false,
+                )?;
+                assign(
+                    records,
+                    coverage,
+                    Kind::ClaimAssessment,
+                    value.claim_id(),
+                    owned,
+                    true,
+                )?;
+            }
+            PersistedPayload::DecisionRecordedV3(value) => {
+                let owned = witness(envelope, Origin::EventOwned, "decision_recorded_v3");
+                assign(records, coverage, Kind::Decision, value.id(), owned, false)?;
+                assign(
+                    records,
+                    coverage,
+                    Kind::ClaimAssessment,
+                    value.claim_id(),
+                    owned,
+                    true,
+                )?;
+            }
+            PersistedPayload::FindingRecordedV3(value) => {
+                let owned = witness(envelope, Origin::EventOwned, "finding_recorded_v3");
+                assign(records, coverage, Kind::Finding, value.id(), owned, false)?;
+                assign(
+                    records,
+                    coverage,
+                    Kind::ClaimAssessment,
+                    value.claim_id(),
+                    owned,
+                    true,
+                )?;
+            }
+            PersistedPayload::GluingBundleRecordedV4(_) => {
+                for record in records.iter_mut().filter(|record| {
+                    matches!(
+                        record.kind,
+                        Kind::ContextCover
+                            | Kind::Section
+                            | Kind::Restriction
+                            | Kind::GluingAttempt
+                            | Kind::GlobalCandidate
+                            | Kind::GluingObstruction
+                            | Kind::Coverage
+                    )
+                }) {
+                    if record.event_witness.is_some() {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "target M5 record has duplicate bundle witnesses",
+                        ));
+                    }
+                    record.event_witness = Some(witness(
+                        envelope,
+                        if record.kind == Kind::Coverage {
+                            Origin::CoverageDerived
+                        } else {
+                            Origin::M5BundleDerived
+                        },
+                        "gluing_bundle_recorded_v4",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    if records.iter().any(|record| record.event_witness.is_none()) {
+        return Err(DomainError::HistoricalPrefixMismatch(
+            "target actual inventory contains an unwitnessed record",
+        ));
+    }
+    Ok(())
+}
+
 /// Private handoff for the integrated M4/M5 reducer. `replay_from_event` is
 /// the plan boundary because `applied_d2_trace` is the byte-for-byte proof of
 /// which following events were already applied. A successor validates that
@@ -21325,6 +22273,58 @@ impl PreIncrementalAuthorityReplayBasisV5 {
             gluing_input_entries: state.gluing_input_entries.clone(),
             basis_digest,
         })
+    }
+
+    fn validate_for_terminal_m5(&self, state: &ReplayedV5M5AuthorityState<'_>) -> Result<()> {
+        let structural = state.plan_checkpoint.structural;
+        let expected_next = state.confirmed_event_count.checked_add(1).ok_or_else(|| {
+            DomainError::EventSequence("V5 target projection next sequence overflow".to_owned())
+        })?;
+        if self.schema != "reviewgraphen.pre_incremental_authority_replay_basis.v5"
+            || state.phase != V5StructuralPostPlanPhase::M5BundleRecorded
+            || self.target_run_id != structural.pre_incremental.run_id
+            || self.target_genesis_hash != structural.genesis_hash
+            || self.target_confirmed_tail_hash != state.confirmed_tail_hash
+            || self.target_confirmed_event_count != state.confirmed_event_count
+            || self.target_next_sequence != expected_next
+            || self.policy_revision_hash
+                != target_policy_revision_hash_v5(state.aggregate.program())?
+            || self.inherited_m4_entries != state.inherited_m4_entries
+            || self.gluing_input_entries != state.gluing_input_entries
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "target actual projection basis does not bind the terminal M5 replay",
+            ));
+        }
+        #[derive(Serialize)]
+        struct Body<'a> {
+            gluing_input_entries: &'a [GluingInputReplayEntryV5],
+            inherited_m4_entries: &'a [AuthorityReplayEntryV3AtV5],
+            policy_revision_hash: &'a ContentHash,
+            schema: &'a str,
+            target_confirmed_event_count: u64,
+            target_confirmed_tail_hash: &'a ContentHash,
+            target_genesis_hash: &'a ContentHash,
+            target_next_sequence: u64,
+            target_run_id: &'a StableId,
+        }
+        let digest = crate::canonical::compact_json_sha256_streaming(&Body {
+            gluing_input_entries: &self.gluing_input_entries,
+            inherited_m4_entries: &self.inherited_m4_entries,
+            policy_revision_hash: &self.policy_revision_hash,
+            schema: self.schema,
+            target_confirmed_event_count: self.target_confirmed_event_count,
+            target_confirmed_tail_hash: &self.target_confirmed_tail_hash,
+            target_genesis_hash: &self.target_genesis_hash,
+            target_next_sequence: self.target_next_sequence,
+            target_run_id: &self.target_run_id,
+        })?;
+        if digest != self.basis_digest {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "target actual projection basis digest mismatch",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -39527,7 +40527,7 @@ mod tests {
             full_tail_m5_continuation.consumed_tail_hash, continuation_tail,
             "a failed terminal gate must not mutate its continuation"
         );
-        let (terminal_m5, full_basis) = EventLogV5::replay_terminal_m5_authority_v5(
+        let (terminal_m5, mut full_basis) = EventLogV5::replay_terminal_m5_authority_v5(
             &full_tail_m5_continuation,
             &FullTailV5Resolver(&resolver.objects),
             &full_tail_v5_roots,
@@ -39587,6 +40587,141 @@ mod tests {
                 .unwrap(),
             )
         );
+        let target = terminal_m5
+            .target_actual_record_projection_v5(&full_basis)
+            .expect("terminal target actual projection");
+        reset_target_actual_inventory_counters_v5();
+        let target_inventory = target
+            .materialize_inventory_v5()
+            .expect("bounded target actual inventory");
+        assert_eq!(
+            target_actual_inventory_counters_v5(),
+            (
+                1,
+                usize::try_from(target.event_count()).expect("target event count fits usize")
+            ),
+            "one inventory construction scans every target event exactly once"
+        );
+        assert_eq!(
+            target.information_loss(),
+            TargetActualProjectionInformationLossV5::None
+        );
+        assert_eq!(target.basis_digest(), &full_basis.basis_digest);
+        assert_eq!(target.tail_hash(), full_tail_v5.tail_hash());
+        assert_eq!(
+            target.event_count(),
+            u64::try_from(full_tail_v5.envelopes.len()).unwrap()
+        );
+        let mut target_keys = BTreeSet::new();
+        let mut target_kinds = BTreeSet::new();
+        let mut saw_genesis = false;
+        let mut saw_m5 = false;
+        let mut saw_coverage = false;
+        target_inventory
+            .try_visit_records(|record| {
+                assert!(target_keys.insert((record.kind(), record.id().clone())));
+                target_kinds.insert(record.kind());
+                assert!(record.event_witness().event_sequence() <= target.event_count());
+                assert!(!record.event_witness().event_id().as_str().is_empty());
+                assert!(
+                    !record
+                        .event_witness()
+                        .predecessor_event_hash()
+                        .as_str()
+                        .is_empty()
+                );
+                assert!(!record.event_witness().payload_hash().as_str().is_empty());
+                assert!(!record.event_witness().event_hash().as_str().is_empty());
+                assert_ne!(record.event_witness().payload_kind(), "unrelated");
+                saw_genesis |= record.event_witness().origin()
+                    == TargetActualRecordWitnessOriginV5::GenesisDerived;
+                saw_m5 |= record.event_witness().origin()
+                    == TargetActualRecordWitnessOriginV5::M5BundleDerived;
+                saw_coverage |= record.event_witness().origin()
+                    == TargetActualRecordWitnessOriginV5::CoverageDerived;
+                Ok(())
+            })
+            .expect("visit target actual records");
+        assert_eq!(target_keys.len(), target_inventory.records.len());
+        assert!(saw_genesis && saw_m5 && saw_coverage);
+        assert!(target_kinds.contains(&HistoricalSourceRecordKindV4::Obligation));
+        assert!(target_kinds.contains(&HistoricalSourceRecordKindV4::ClaimAssessment));
+        assert!(target_kinds.contains(&HistoricalSourceRecordKindV4::GluingInputDescriptor));
+        assert!(target_kinds.contains(&HistoricalSourceRecordKindV4::Coverage));
+        let first_key = target_keys.first().unwrap().clone();
+        let mut exact_visits = 0;
+        assert!(
+            target_inventory
+                .try_visit_exact_record(first_key.0, &first_key.1, |_| {
+                    exact_visits += 1;
+                    Ok(())
+                })
+                .unwrap()
+        );
+        assert_eq!(exact_visits, 1);
+        assert!(
+            !target_inventory
+                .try_visit_exact_record(
+                    HistoricalSourceRecordKindV4::Claim,
+                    &id("claim:not-an-actual-target-record"),
+                    |_| panic!("an absent target record must not be synthesized"),
+                )
+                .unwrap()
+        );
+        let mut descriptor_count = 0;
+        target
+            .try_visit_historical_descriptors(|descriptor| {
+                assert!(!descriptor.body_hash().as_str().is_empty());
+                descriptor_count += 1;
+                Ok(())
+            })
+            .expect("visit target M6 descriptors");
+        assert_eq!(descriptor_count, target.record_count().unwrap());
+        let mut metadata_records = 0_usize;
+        let mut program_dependencies = BTreeSet::new();
+        let mut required_records = BTreeSet::new();
+        target
+            .try_visit_historical_metadata(
+                |_| {
+                    metadata_records += 1;
+                    Ok(())
+                },
+                |owner, id| {
+                    program_dependencies.insert((owner.kind, owner.id.clone(), id.clone()));
+                    Ok(())
+                },
+                |owner, kind, id| {
+                    required_records.insert((owner.kind, owner.id.clone(), kind, id.clone()));
+                    Ok(())
+                },
+            )
+            .expect("visit target M6 dependency metadata");
+        assert_eq!(metadata_records, target.record_count().unwrap());
+        assert!(!program_dependencies.is_empty());
+        assert!(!required_records.is_empty());
+        for (_, _, kind, id) in &required_records {
+            assert!(
+                target_inventory
+                    .try_visit_exact_record(*kind, id, |_| Ok(()))
+                    .expect("lookup required target record"),
+                "required metadata must close over an actual target record: {kind:?} {id}"
+            );
+        }
+        let target_working = target
+            .working_bytes_upper_bound(target.record_count().unwrap())
+            .unwrap();
+        let mut preflight_visits = 0;
+        assert!(matches!(
+            target.try_visit_records_with_limit(target_working - 1, |_| {
+                preflight_visits += 1;
+                Ok(())
+            }),
+            Err(DomainError::Incomplete {
+                operation: "event-v5 target actual projection working bytes",
+                ..
+            })
+        ));
+        assert_eq!(preflight_visits, 0);
         let exact_returned_retained =
             v5_terminal_m5_and_basis_retained_bytes(&terminal_m5, &full_basis).unwrap();
         assert!(
@@ -39602,6 +40737,13 @@ mod tests {
         )
         .expect("exact realized M5 retained limit");
         assert_eq!(exact_limit_basis.basis_digest, full_basis.basis_digest);
+        full_basis.basis_digest = ContentHash::sha256(b"tampered target basis");
+        assert!(matches!(
+            terminal_m5.target_actual_record_projection_v5(&full_basis),
+            Err(DomainError::HistoricalPrefixMismatch(
+                "target actual projection basis digest mismatch"
+            ))
+        ));
         struct CountingM5Resolver<'a> {
             delegate: &'a BTreeMap<ContentHash, Vec<u8>>,
             reads: std::cell::Cell<u64>,

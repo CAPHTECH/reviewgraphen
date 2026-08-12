@@ -1,7 +1,6 @@
 use crate::{
     ContentHash, DecisionOutcomeV3, DomainError, EvidenceRelationV3, FindingStatusV3,
-    ObligationLifecycle, ReviewAggregate, StableId, VerificationOutcomeV3,
-    event::{EventLogV4, HistoricalCoverageSourceV4},
+    ObligationLifecycle, ReviewAggregate, StableId, VerificationOutcomeV3, event::EventLogV4,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,15 +64,53 @@ pub(crate) struct HistoricalCoverageSnapshotV4 {
 
 #[allow(dead_code)] // consumed by the following M6 reducer slice
 impl HistoricalCoverageSnapshotV4 {
-    pub(crate) fn derive(log: &EventLogV4) -> crate::Result<Self> {
-        let source = log.historical_coverage_source_v4()?;
-        Self::derive_from_pinned_v4(source)
+    pub(crate) fn retained_bytes_for_target_projection(&self) -> u64 {
+        let mut total = u64::try_from(std::mem::size_of::<Self>()).unwrap_or(u64::MAX);
+        for bytes in [
+            self.id.allocated_bytes(),
+            self.universe_id.allocated_bytes(),
+            self.snapshot_id.allocated_bytes(),
+            self.profile_id.capacity(),
+            self.policy_version.capacity(),
+            self.rule_set_hash.allocated_bytes(),
+            self.extractor_set_hash.allocated_bytes(),
+            self.rule_pack_version.capacity(),
+        ] {
+            total = total.saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        }
+        for ids in [
+            &self.denominator_obligation_ids,
+            &self.completed_obligation_ids,
+            &self.evidence_supported_obligation_ids,
+            &self.verified_obligation_ids,
+            &self.fresh_obligation_ids,
+            &self.human_accepted_obligation_ids,
+        ] {
+            total = total.saturating_add(
+                u64::try_from(
+                    ids.len()
+                        .saturating_mul(std::mem::size_of::<StableId>() + 128),
+                )
+                .unwrap_or(u64::MAX),
+            );
+            for id in ids {
+                total =
+                    total.saturating_add(u64::try_from(id.allocated_bytes()).unwrap_or(u64::MAX));
+            }
+        }
+        total
     }
 
-    fn derive_from_pinned_v4(source: HistoricalCoverageSourceV4<'_>) -> crate::Result<Self> {
-        let aggregate = source.aggregate();
-        let v3 = source.v3();
-        let cover = source.cover();
+    pub(crate) fn derive(log: &EventLogV4) -> crate::Result<Self> {
+        let source = log.historical_coverage_source_v4()?;
+        Self::derive_from_parts(source.aggregate(), source.v3(), source.cover())
+    }
+
+    pub(crate) fn derive_from_parts(
+        aggregate: &ReviewAggregate,
+        v3: &crate::event::V3RunAggregate,
+        cover: &crate::ContextCoverV4,
+    ) -> crate::Result<Self> {
         let denominator_obligation_ids = aggregate.universe().obligation_ids().clone();
 
         let mut execution_ids = BTreeSet::new();
