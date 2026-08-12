@@ -614,7 +614,10 @@ pub struct ExecutionRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-enum NoToolCall {}
+enum NoToolCall {
+    #[cfg(test)]
+    Tampered,
+}
 
 #[derive(Clone, Debug)]
 pub struct ExecutionRecordInput {
@@ -715,6 +718,38 @@ impl<'a> ExecutionIdentity<'a> {
 }
 
 impl ExecutionRecord {
+    #[cfg(test)]
+    pub(crate) fn corrupt_fake_descriptor_for_test(&mut self, field: &str) {
+        match field {
+            "provider" => self.provider = Some("provider:real".to_owned()),
+            "model" => self.model = Some("model:real".to_owned()),
+            "model_revision" => self.model_revision = Some("revision:real".to_owned()),
+            "reviewer_kind" => self.reviewer_kind = "real".to_owned(),
+            "reviewer_id" => self.reviewer_id = "reviewer:real".to_owned(),
+            "system_prompt" => self.system_prompt_version = "system@tampered".to_owned(),
+            "prompt" => self.prompt_template_version = "fixture@tampered".to_owned(),
+            "inference" => {
+                self.inference_settings
+                    .insert("temperature".to_owned(), "1".to_owned());
+            }
+            "tool_policy" => {
+                self.tool_policy_version = "reviewgraphen.tool_policy.tampered@1".to_owned();
+            }
+            "tool_count" => self.tool_calls.push(NoToolCall::Tampered),
+            "outcome" => {
+                self.outcome = ExecutionOutcome::ProviderFailure {
+                    retryable: false,
+                    diagnostic: "tampered".to_owned(),
+                };
+            }
+            "raw_registration" => {
+                self.raw_artifact_registration_id =
+                    StableId::parse("registration:tampered").expect("test registration ID");
+            }
+            _ => panic!("unknown fake descriptor mutation"),
+        }
+    }
+
     pub(crate) fn allocated_bytes(&self) -> usize {
         let outcome = match &self.outcome {
             ExecutionOutcome::Structured => 0,

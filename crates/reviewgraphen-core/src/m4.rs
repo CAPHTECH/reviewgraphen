@@ -5929,6 +5929,19 @@ impl ClaimAssessmentV3 {
     pub fn current_finding_id(&self) -> Option<&StableId> {
         self.current_finding_id.as_ref()
     }
+    #[cfg(test)]
+    pub(crate) fn configure_active_human_pointers_for_test(
+        &mut self,
+        active_decision: bool,
+        current_finding: bool,
+    ) {
+        self.active_decision_id = active_decision
+            .then(|| self.decision_ids.last().cloned())
+            .flatten();
+        self.current_finding_id = current_finding
+            .then(|| self.finding_ids.last().cloned())
+            .flatten();
+    }
     pub const fn decision_conflict(&self) -> bool {
         self.decision_conflict
     }

@@ -3558,6 +3558,13 @@ enum PersistedPayload {
     GluingFreshnessRecordedV5(Box<RawValue>),
     #[serde(rename = "staleness_assessment_sealed_v5")]
     StalenessAssessmentSealedV5(Box<RawValue>),
+    #[serde(rename = "artifact_registered_v5")]
+    ArtifactRegisteredV5(crate::ArtifactRegistrationV5),
+    #[serde(rename = "preservation_verified_v5")]
+    PreservationVerifiedV5 {
+        evidence: crate::PreservationEvidenceV5,
+        verification: crate::PreservationVerificationV5,
+    },
     #[serde(rename = "evidence_recorded_v3")]
     EvidenceRecordedV3(EvidenceV3),
     #[serde(rename = "evidence_bound_v3")]
@@ -3618,6 +3625,13 @@ impl PersistedPayload {
             | Self::HistoricalRecordAssessedV5(value)
             | Self::GluingFreshnessRecordedV5(value)
             | Self::StalenessAssessmentSealedV5(value) => value.get().len(),
+            Self::ArtifactRegisteredV5(value) => canonical_json(value)?.len(),
+            Self::PreservationVerifiedV5 {
+                evidence,
+                verification,
+            } => canonical_json(evidence)?
+                .len()
+                .saturating_add(canonical_json(verification)?.len()),
             Self::EvidenceRecordedV3(value) => {
                 usize::try_from(value.allocated_bytes().map_err(m4_domain_error)?)
                     .unwrap_or(usize::MAX)
@@ -3705,6 +3719,8 @@ impl PersistedPayload {
                 | Self::HistoricalRecordAssessedV5(_)
                 | Self::GluingFreshnessRecordedV5(_)
                 | Self::StalenessAssessmentSealedV5(_)
+                | Self::ArtifactRegisteredV5(_)
+                | Self::PreservationVerifiedV5 { .. }
         )
     }
 
@@ -3814,6 +3830,8 @@ impl PersistedPayload {
                 | Self::HistoricalRecordAssessedV5(_)
                 | Self::GluingFreshnessRecordedV5(_)
                 | Self::StalenessAssessmentSealedV5(_)
+                | Self::ArtifactRegisteredV5(_)
+                | Self::PreservationVerifiedV5 { .. }
         )
     }
 
@@ -3848,6 +3866,9 @@ impl PersistedPayload {
             Self::FindingRecordedV3(_) => "projection:reviewgraphen.finding_projection@1",
             Self::ArtifactRegisteredV4(_) => "engine:reviewgraphen.m5_gluing_input@1",
             Self::GluingBundleRecordedV4(_) => "engine:reviewgraphen.m5_gluing@1",
+            Self::ArtifactRegisteredV5(_) | Self::PreservationVerifiedV5 { .. } => {
+                "verifier:reviewgraphen.structural_preservation@1"
+            }
             _ => SYSTEM_ACTOR,
         }
     }
@@ -3958,6 +3979,29 @@ impl PersistedPayload {
                 crate::StalenessAssessmentV5::validate_event_wire(value.get().as_bytes())
                     .map_err(|error| DomainError::Validation(error.to_string()))
             }),
+            Self::ArtifactRegisteredV5(value) => {
+                crate::ArtifactRegistrationV5::from_json_bytes(&canonical_json(value)?)
+                    .map(|_| ())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }
+            Self::PreservationVerifiedV5 {
+                evidence,
+                verification,
+            } => {
+                crate::PreservationEvidenceV5::from_json_bytes(&canonical_json(evidence)?)
+                    .map_err(|error| DomainError::Validation(error.to_string()))?;
+                crate::PreservationVerificationV5::from_json_bytes(&canonical_json(verification)?)
+                    .map_err(|error| DomainError::Validation(error.to_string()))?;
+                if verification.evidence_id() != evidence.id()
+                    || evidence.target_obligation_id() != verification.target_obligation_id()
+                    || evidence.source_verification_id() != verification.source_verification_id()
+                {
+                    return Err(DomainError::Validation(
+                        "atomic preservation evidence and verification closure differs".to_owned(),
+                    ));
+                }
+                Ok(())
+            }
             Self::EvidenceRecordedV3(evidence) => evidence
                 .canonical_bytes()
                 .map(|_| ())
@@ -4024,6 +4068,11 @@ impl PersistedPayload {
             Self::ArtifactRegisteredV4(registration) if registration.run_id() != run_id => {
                 Err(DomainError::Validation(
                     "v4 artifact registration must bind the enclosing event run".to_owned(),
+                ))
+            }
+            Self::ArtifactRegisteredV5(registration) if registration.run_id() != run_id => {
+                Err(DomainError::Validation(
+                    "V5 preservation registration must bind the enclosing run".to_owned(),
                 ))
             }
             Self::GluingBundleRecordedV4(_) => Ok(()),
@@ -8718,7 +8767,9 @@ fn borrowed_projection_payload_ref_v4<'a>(
         | PersistedPayload::ObligationCorrespondenceSealedV5(_)
         | PersistedPayload::HistoricalRecordAssessedV5(_)
         | PersistedPayload::GluingFreshnessRecordedV5(_)
-        | PersistedPayload::StalenessAssessmentSealedV5(_) => {
+        | PersistedPayload::StalenessAssessmentSealedV5(_)
+        | PersistedPayload::ArtifactRegisteredV5(_)
+        | PersistedPayload::PreservationVerifiedV5 { .. } => {
             return Err(DomainError::EventSequence(
                 "event-v4 projection encountered a payload outside its closed contract".to_owned(),
             ));
@@ -8781,7 +8832,9 @@ fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
         | PersistedPayload::ObligationCorrespondenceSealedV5(_)
         | PersistedPayload::HistoricalRecordAssessedV5(_)
         | PersistedPayload::GluingFreshnessRecordedV5(_)
-        | PersistedPayload::StalenessAssessmentSealedV5(_) => {
+        | PersistedPayload::StalenessAssessmentSealedV5(_)
+        | PersistedPayload::ArtifactRegisteredV5(_)
+        | PersistedPayload::PreservationVerifiedV5 { .. } => {
             unreachable!("v4 payloads are not exposed through the legacy EventLog decoder")
         }
     }
@@ -9467,6 +9520,26 @@ fn decode_payload(version: EventContractVersion, input: &str) -> Result<Persiste
                 PersistedPayload::StalenessAssessmentSealedV5(raw_payload(
                     raw.data.get().as_bytes().to_vec(),
                 )?)
+            }
+            "artifact_registered_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::ArtifactRegisteredV5(
+                    crate::ArtifactRegistrationV5::from_json_bytes(raw.data.get().as_bytes())
+                        .map_err(|error| DomainError::Validation(error.to_string()))?,
+                )
+            }
+            "preservation_verified_v5" if version == EventContractVersion::V5 => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Wire {
+                    evidence: crate::PreservationEvidenceV5,
+                    verification: crate::PreservationVerificationV5,
+                }
+                let value: Wire = serde_json::from_str(raw.data.get())
+                    .map_err(|error| DomainError::Json(error.to_string()))?;
+                PersistedPayload::PreservationVerifiedV5 {
+                    evidence: value.evidence,
+                    verification: value.verification,
+                }
             }
             "evidence_recorded_v3" => PersistedPayload::EvidenceRecordedV3(
                 EvidenceV3::from_json_bytes(raw.data.get().as_bytes()).map_err(m4_domain_error)?,
@@ -11070,6 +11143,142 @@ pub(crate) struct GluingInputTrustBindingV4AtV5 {
     event_sequence: u64,
 }
 
+/// Host-authorized exact three-event structural-preservation tuple.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub(crate) struct PreservationTrustBindingV5 {
+    policy_revision_hash: ContentHash,
+    source_closure_id: StableId,
+    source_run_id: StableId,
+    source_verification_id: StableId,
+    target_run_id: StableId,
+    target_genesis_hash: ContentHash,
+    target_snapshot_id: StableId,
+    target_obligation_id: StableId,
+    descriptor_id: String,
+    procedure_version: String,
+    input_hash: ContentHash,
+    input_size: u64,
+    input_media_type: String,
+    output_hash: ContentHash,
+    output_size: u64,
+    output_media_type: String,
+    input_registration_id: StableId,
+    output_registration_id: StableId,
+    predecessor_event_hash: ContentHash,
+    first_event_sequence: u64,
+}
+
+#[allow(dead_code)] // Consumed by the private preservation authority path staged in this slice.
+impl PreservationTrustBindingV5 {
+    fn matches_artifact_source(
+        &self,
+        source: &crate::PreservationArtifactV5,
+        role: crate::PreservationArtifactRoleV5,
+    ) -> bool {
+        source.run_id() == &self.target_run_id
+            && source.target_snapshot_id() == &self.target_snapshot_id
+            && source.target_obligation_id() == &self.target_obligation_id
+            && source.source_run_id() == &self.source_run_id
+            && source.source_verification_id() == &self.source_verification_id
+            && source.descriptor_id() == self.descriptor_id
+            && source.procedure_version() == self.procedure_version
+            && source.role() == role
+    }
+
+    fn matches_registration(
+        &self,
+        registration: &crate::ArtifactRegistrationV5,
+        role: crate::PreservationArtifactRoleV5,
+    ) -> bool {
+        let (id, hash, size, media_type) = match role {
+            crate::PreservationArtifactRoleV5::Input => (
+                &self.input_registration_id,
+                &self.input_hash,
+                self.input_size,
+                self.input_media_type.as_str(),
+            ),
+            crate::PreservationArtifactRoleV5::Output => (
+                &self.output_registration_id,
+                &self.output_hash,
+                self.output_size,
+                self.output_media_type.as_str(),
+            ),
+        };
+        registration.id() == id
+            && registration.run_id() == &self.target_run_id
+            && registration.cas_hash() == hash
+            && registration.size() == size
+            && registration.media_type() == media_type
+            && self.matches_artifact_source(registration.source(), role)
+    }
+
+    pub(crate) fn from_bundle(
+        policy_revision_hash: ContentHash,
+        source_closure_id: StableId,
+        source_run_id: StableId,
+        target_genesis_hash: ContentHash,
+        predecessor_event_hash: ContentHash,
+        first_event_sequence: u64,
+        bundle: &crate::PreservationBundleV5,
+    ) -> Result<Self> {
+        let input = bundle.input_registration();
+        let output = bundle.output_registration();
+        let value = Self {
+            policy_revision_hash,
+            source_closure_id,
+            source_run_id,
+            source_verification_id: bundle.evidence().source_verification_id().clone(),
+            target_run_id: input.run_id().clone(),
+            target_genesis_hash,
+            target_snapshot_id: input.source().target_snapshot_id().clone(),
+            target_obligation_id: input.source().target_obligation_id().clone(),
+            descriptor_id: input.source().descriptor_id().to_owned(),
+            procedure_version: input.source().procedure_version().to_owned(),
+            input_hash: input.cas_hash().clone(),
+            input_size: input.size(),
+            input_media_type: input.media_type().to_owned(),
+            output_hash: output.cas_hash().clone(),
+            output_size: output.size(),
+            output_media_type: output.media_type().to_owned(),
+            input_registration_id: input.id().clone(),
+            output_registration_id: output.id().clone(),
+            predecessor_event_hash,
+            first_event_sequence,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.source_closure_id.kind() != "incremental-source-closure-v5"
+            || self.source_run_id.kind() != "run"
+            || self.source_verification_id.kind() != "verification"
+            || self.target_run_id.kind() != "run"
+            || self.target_snapshot_id.kind() != "snapshot"
+            || self.target_obligation_id.kind() != "obligation"
+            || self.input_registration_id.kind() != "registration-v5"
+            || self.output_registration_id.kind() != "registration-v5"
+            || self.source_run_id == self.target_run_id
+            || self.descriptor_id != crate::m6::STRUCTURAL_PRESERVATION_DESCRIPTOR_V5
+            || self.procedure_version != crate::m6::PAYMENT_PRESERVATION_PROCEDURE_V1
+            || self.input_media_type != crate::m6::PRESERVATION_INPUT_MEDIA_TYPE_V1
+            || self.output_media_type != crate::m6::PRESERVATION_RESULT_MEDIA_TYPE_V1
+            || self.input_size > crate::m6::MAX_M6_PRESERVATION_CAS_BYTES as u64
+            || self.output_size > crate::m6::MAX_M6_PRESERVATION_CAS_BYTES as u64
+            || self.first_event_sequence == 0
+        {
+            return Err(DomainError::Validation(
+                "invalid exact preservation trust binding".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn digest(&self) -> Result<ContentHash> {
+        Ok(ContentHash::sha256(&canonical_json(self)?))
+    }
+}
+
 impl GluingInputTrustBindingV4AtV5 {
     fn validate(&self) -> Result<()> {
         let source_matches = matches!(
@@ -11215,6 +11424,7 @@ pub(crate) struct AuthorityTrustRootsV5 {
     harnesses: Vec<AuthorityHarnessBindingV3Tuple>,
     human_grants: Vec<AuthorityHumanGrantV3Tuple>,
     allowed_gluing_input_bindings: Vec<GluingInputTrustBindingV4AtV5>,
+    allowed_preservation_bindings: BTreeSet<PreservationTrustBindingV5>,
 }
 
 /// Private, workspace-scoped CAS seam reserved for V5 authority replay. It
@@ -11312,7 +11522,30 @@ impl AuthorityTrustRootsV5 {
             harnesses,
             human_grants,
             allowed_gluing_input_bindings,
+            allowed_preservation_bindings: BTreeSet::new(),
         })
+    }
+
+    #[allow(dead_code)] // Consumed by the private preservation authority path staged in this slice.
+    pub(crate) fn with_preservation_bindings(
+        mut self,
+        bindings: BTreeSet<PreservationTrustBindingV5>,
+    ) -> Result<Self> {
+        if bindings.len() > crate::m6::MAX_M6_PRESERVATION_RECORDS {
+            return Err(DomainError::Incomplete {
+                operation: "event-v5 preservation trust roots",
+                limit: crate::m6::MAX_M6_PRESERVATION_RECORDS,
+                observed: bindings.len(),
+            });
+        }
+        for binding in &bindings {
+            binding.validate()?;
+            if binding.policy_revision_hash != self.policy_revision_hash {
+                return Err(DomainError::AuthorityPolicyMismatch);
+            }
+        }
+        self.allowed_preservation_bindings = bindings;
+        Ok(self)
     }
 }
 
@@ -22995,12 +23228,50 @@ impl PreIncrementalAuthorityReplayBasisV5 {
 // freezes the ADR 0023 digest shape without exposing a premature authority
 // constructor.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[allow(dead_code)] // Reserved by ADR 0023 for the preservation slice after staleness.
-enum PendingPreservationRegistrationReplayEntryV5 {}
+struct PreservationRegistrationReplayEntryV5 {
+    event_sequence: u64,
+    event_id: StableId,
+    registration_id: StableId,
+    registration_body_hash: ContentHash,
+    role: crate::PreservationArtifactRoleV5,
+    target_obligation_id: StableId,
+    source_verification_id: StableId,
+    cas_hash: ContentHash,
+    size: u64,
+    media_type: String,
+    source: crate::PreservationArtifactV5,
+    predecessor_event_hash: ContentHash,
+    trust_binding_digest: ContentHash,
+    v5_position_digest: ContentHash,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[allow(dead_code)] // Reserved by ADR 0023 for the preservation slice after staleness.
-enum PendingPreservationReplayEntryV5 {}
+struct PreservationReplayEntryV5 {
+    source_closure_id: StableId,
+    source_verification_id: StableId,
+    target_obligation_id: StableId,
+    input_registration_id: StableId,
+    output_registration_id: StableId,
+    evidence_id: StableId,
+    verification_id: StableId,
+    descriptor_id: String,
+    procedure_version: String,
+    input_hash: ContentHash,
+    input_size: u64,
+    input_media_type: String,
+    output_hash: ContentHash,
+    output_size: u64,
+    output_media_type: String,
+    input_event_sequence: u64,
+    input_event_id: StableId,
+    output_event_sequence: u64,
+    output_event_id: StableId,
+    verification_event_sequence: u64,
+    verification_event_id: StableId,
+    predecessor_event_hash: ContentHash,
+    trust_binding_digest: ContentHash,
+    v5_position_digest: ContentHash,
+}
 
 /// Normal source-bound V5 authority cursor.  It is non-serializable and can
 /// only be created from a roots-replayed pre-basis plus the durable closure.
@@ -23011,6 +23282,7 @@ pub(crate) struct AuthorityReplayBasisV5 {
     source_closure_id: StableId,
     pre_incremental_basis_digest: ContentHash,
     source_basis_digest: ContentHash,
+    source_run_id: StableId,
     target_run_id: StableId,
     target_genesis_hash: ContentHash,
     target_confirmed_tail_hash: ContentHash,
@@ -23019,8 +23291,8 @@ pub(crate) struct AuthorityReplayBasisV5 {
     policy_revision_hash: ContentHash,
     inherited_m4_entries: Vec<AuthorityReplayEntryV3AtV5>,
     gluing_input_entries: Vec<GluingInputReplayEntryV5>,
-    preservation_registration_entries: Vec<PendingPreservationRegistrationReplayEntryV5>,
-    preservation_verification_entries: Vec<PendingPreservationReplayEntryV5>,
+    preservation_registration_entries: Vec<PreservationRegistrationReplayEntryV5>,
+    preservation_verification_entries: Vec<PreservationReplayEntryV5>,
     basis_digest: ContentHash,
 }
 
@@ -23031,10 +23303,11 @@ struct AuthorityReplayBasisDigestV5<'a> {
     inherited_m4_entries: &'a [AuthorityReplayEntryV3AtV5],
     policy_revision_hash: &'a ContentHash,
     pre_incremental_basis_digest: &'a ContentHash,
-    preservation_registration_entries: &'a [PendingPreservationRegistrationReplayEntryV5],
-    preservation_verification_entries: &'a [PendingPreservationReplayEntryV5],
+    preservation_registration_entries: &'a [PreservationRegistrationReplayEntryV5],
+    preservation_verification_entries: &'a [PreservationReplayEntryV5],
     schema: &'a str,
     source_basis_digest: &'a ContentHash,
+    source_run_id: &'a StableId,
     source_closure_id: &'a StableId,
     target_confirmed_event_count: u64,
     target_confirmed_tail_hash: &'a ContentHash,
@@ -23055,6 +23328,7 @@ impl AuthorityReplayBasisV5 {
             preservation_verification_entries: &self.preservation_verification_entries,
             schema: self.schema,
             source_basis_digest: &self.source_basis_digest,
+            source_run_id: &self.source_run_id,
             source_closure_id: &self.source_closure_id,
             target_confirmed_event_count: self.target_confirmed_event_count,
             target_confirmed_tail_hash: &self.target_confirmed_tail_hash,
@@ -23075,6 +23349,7 @@ impl AuthorityReplayBasisV5 {
             source_closure_id: closure.id().clone(),
             pre_incremental_basis_digest: pre.basis_digest.clone(),
             source_basis_digest: closure.source_authority_replay_basis_digest().clone(),
+            source_run_id: closure.source_run_id().clone(),
             target_run_id: pre.target_run_id.clone(),
             target_genesis_hash: pre.target_genesis_hash.clone(),
             target_confirmed_tail_hash: event.event_hash().clone(),
@@ -23126,6 +23401,10 @@ impl AuthorityReplayBasisV5 {
         &self.source_closure_id
     }
 
+    pub(crate) fn source_run_id(&self) -> &StableId {
+        &self.source_run_id
+    }
+
     pub(crate) fn target_confirmed_tail_hash(&self) -> &ContentHash {
         &self.target_confirmed_tail_hash
     }
@@ -23137,6 +23416,118 @@ impl AuthorityReplayBasisV5 {
     pub(crate) fn basis_digest(&self) -> &ContentHash {
         &self.basis_digest
     }
+}
+
+#[allow(dead_code)] // Consumed by the private preservation authority path staged in this slice.
+#[derive(Debug)]
+pub(crate) struct OpaquePreservationSessionIdentityV5(ContentHash);
+
+#[allow(dead_code)] // Consumed by the private preservation authority path staged in this slice.
+impl OpaquePreservationSessionIdentityV5 {
+    fn for_basis(basis: &AuthorityReplayBasisV5) -> Result<Self> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            source_closure_id: &'a StableId,
+            target_run_id: &'a StableId,
+            target_genesis_hash: &'a ContentHash,
+            policy_revision_hash: &'a ContentHash,
+        }
+        Ok(Self(crate::canonical::compact_json_sha256_streaming(
+            &Body {
+                source_closure_id: &basis.source_closure_id,
+                target_run_id: &basis.target_run_id,
+                target_genesis_hash: &basis.target_genesis_hash,
+                policy_revision_hash: &basis.policy_revision_hash,
+            },
+        )?))
+    }
+}
+
+#[allow(dead_code)] // Consumed by the private preservation authority path staged in this slice.
+pub(crate) enum PreservationAdmissionRequestV5 {
+    InputRegistration(Box<crate::ArtifactRegistrationV5>),
+    OutputRegistration(Box<crate::ArtifactRegistrationV5>),
+    Verification(
+        Box<(
+            crate::PreservationEvidenceV5,
+            crate::PreservationVerificationV5,
+        )>,
+    ),
+}
+
+/// One-shot roots-minted append authority. Deliberately has no serde or Clone.
+#[allow(dead_code)] // Consumed by the private preservation authority path staged in this slice.
+pub(crate) enum TrustedPreservationAdmissionV5 {
+    InputRegistration {
+        session_identity: OpaquePreservationSessionIdentityV5,
+        source_closure_id: StableId,
+        policy_revision_hash: ContentHash,
+        binding: Box<PreservationTrustBindingV5>,
+        registration: Box<crate::ArtifactRegistrationV5>,
+        predecessor_event_hash: ContentHash,
+        event_sequence: u64,
+    },
+    OutputRegistration {
+        session_identity: OpaquePreservationSessionIdentityV5,
+        source_closure_id: StableId,
+        policy_revision_hash: ContentHash,
+        binding: Box<PreservationTrustBindingV5>,
+        input_registration_id: StableId,
+        registration: Box<crate::ArtifactRegistrationV5>,
+        predecessor_event_hash: ContentHash,
+        event_sequence: u64,
+    },
+    Verification {
+        session_identity: OpaquePreservationSessionIdentityV5,
+        source_closure_id: StableId,
+        policy_revision_hash: ContentHash,
+        binding: Box<PreservationTrustBindingV5>,
+        input_registration_id: StableId,
+        output_registration_id: StableId,
+        evidence: Box<crate::PreservationEvidenceV5>,
+        verification: Box<crate::PreservationVerificationV5>,
+        predecessor_event_hash: ContentHash,
+        event_sequence: u64,
+    },
+}
+
+#[allow(dead_code)] // Consumed by the private preservation authority path staged in this slice.
+fn preservation_position_digest(
+    run_id: &StableId,
+    genesis_hash: &ContentHash,
+    event_id: &StableId,
+    event_sequence: u64,
+    predecessor_event_hash: &ContentHash,
+    trust_binding_digest: &ContentHash,
+) -> Result<ContentHash> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        run_id: &'a StableId,
+        genesis_hash: &'a ContentHash,
+        event_id: &'a StableId,
+        event_sequence: u64,
+        predecessor_event_hash: &'a ContentHash,
+        trust_binding_digest: &'a ContentHash,
+    }
+    crate::canonical::compact_json_sha256_streaming(&Body {
+        run_id,
+        genesis_hash,
+        event_id,
+        event_sequence,
+        predecessor_event_hash,
+        trust_binding_digest,
+    })
+}
+
+#[allow(dead_code)] // Consumed by private preservation recovery staged in this slice.
+pub(crate) struct PreservationRecoveryInputV5<'a> {
+    closure: &'a crate::IncrementalSourceClosureV5,
+    mapping: &'a crate::M6MappingPhaseV5,
+    correspondence: &'a crate::M6ObligationCorrespondencePhaseV5,
+    staleness: &'a crate::M6StalenessPhaseV5,
+    bundles: &'a [crate::PreservationBundleV5],
+    resolver: &'a dyn AuthorityArtifactResolverV5,
+    roots: &'a AuthorityTrustRootsV5,
 }
 
 impl PreIncrementalAuthorityReplayBasisV5 {
@@ -23201,6 +23592,10 @@ pub(crate) enum M6PersistenceRecoveryStageV5 {
     HistoricalMembers { next_index: usize },
     GluingFreshnessMembers { next_index: usize },
     StalenessSealed,
+    PreservationInputRegistration { target_index: usize },
+    PreservationOutputRegistration { target_index: usize },
+    PreservationVerification { target_index: usize },
+    PreservationComplete,
 }
 
 #[derive(Debug)]
@@ -23801,6 +24196,445 @@ fn preflight_v5_replay_accounting(
 }
 
 impl EventLogV5 {
+    #[allow(dead_code)] // Private until the enclosing V5 session API lands.
+    pub(crate) fn mint_trusted_preservation_admission_v5(
+        &self,
+        target_obligation_id: &StableId,
+        request: PreservationAdmissionRequestV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+        basis: &AuthorityReplayBasisV5,
+    ) -> Result<TrustedPreservationAdmissionV5> {
+        basis.validate_current_log(self)?;
+        if roots.policy_revision_hash != basis.policy_revision_hash {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        let binding = roots
+            .allowed_preservation_bindings
+            .iter()
+            .find(|value| {
+                value.source_closure_id == basis.source_closure_id
+                    && value.source_run_id == *basis.source_run_id()
+                    && value.target_run_id == self.run_id
+                    && value.target_genesis_hash == self.genesis_hash
+                    && &value.target_obligation_id == target_obligation_id
+                    && value.policy_revision_hash == basis.policy_revision_hash
+            })
+            .ok_or(DomainError::AuthorityReplayBasisMismatch)?
+            .clone();
+        binding.validate()?;
+        let sequence = u64::try_from(self.envelopes.len())
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| {
+                DomainError::EventSequence("preservation sequence overflow".to_owned())
+            })?;
+        let session_identity = OpaquePreservationSessionIdentityV5::for_basis(basis)?;
+        let read = |hash: &ContentHash, size: u64| {
+            rebuild_exact_cas_bytes(
+                hash,
+                size,
+                crate::m6::MAX_M6_PRESERVATION_CAS_BYTES as u64,
+                "event-v5 preservation CAS object",
+                |cas_hash, destination| resolver.read_exact(cas_hash, destination),
+            )
+        };
+        match request {
+            PreservationAdmissionRequestV5::InputRegistration(registration) => {
+                let prior_registrations = basis.preservation_registration_entries.len();
+                let prior_verifications = basis.preservation_verification_entries.len();
+                let last_payload = self
+                    .envelopes
+                    .last()
+                    .map(|event| {
+                        decode_canonical_payload(EventContractVersion::V5, event.payload.get())
+                    })
+                    .transpose()?;
+                let phase_is_exact = if prior_registrations == 0 && prior_verifications == 0 {
+                    matches!(
+                        last_payload,
+                        Some(PersistedPayload::StalenessAssessmentSealedV5(_))
+                    )
+                } else {
+                    prior_registrations == prior_verifications.saturating_mul(2)
+                        && matches!(
+                            last_payload,
+                            Some(PersistedPayload::PreservationVerifiedV5 { .. })
+                        )
+                        && basis
+                            .preservation_verification_entries
+                            .last()
+                            .is_some_and(|entry| entry.target_obligation_id < *target_obligation_id)
+                };
+                let bytes = read(registration.cas_hash(), registration.size())?;
+                let input = crate::PreservationInputV1::from_json_bytes(&bytes)
+                    .map_err(|error| DomainError::Validation(error.to_string()))?;
+                if !phase_is_exact
+                    || sequence != binding.first_event_sequence
+                    || self.tail_hash() != &binding.predecessor_event_hash
+                    || !binding.matches_registration(
+                        &registration,
+                        crate::PreservationArtifactRoleV5::Input,
+                    )
+                    || input.source_closure_id() != &binding.source_closure_id
+                    || input.source_verification_id() != &binding.source_verification_id
+                    || input.target_snapshot_id() != &binding.target_snapshot_id
+                    || input.target_obligation_id() != target_obligation_id
+                    || input.policy_revision_hash() != &binding.policy_revision_hash
+                {
+                    return Err(DomainError::AuthorityReplayBasisMismatch);
+                }
+                Ok(TrustedPreservationAdmissionV5::InputRegistration {
+                    session_identity,
+                    source_closure_id: basis.source_closure_id.clone(),
+                    policy_revision_hash: basis.policy_revision_hash.clone(),
+                    binding: Box::new(binding),
+                    registration,
+                    predecessor_event_hash: self.tail_hash().clone(),
+                    event_sequence: sequence,
+                })
+            }
+            PreservationAdmissionRequestV5::OutputRegistration(registration) => {
+                let input = basis
+                    .preservation_registration_entries
+                    .last()
+                    .ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+                let bytes = read(registration.cas_hash(), registration.size())?;
+                let result = crate::PreservationResultV1::from_json_bytes(&bytes)
+                    .map_err(|error| DomainError::Validation(error.to_string()))?;
+                if basis.preservation_registration_entries.len()
+                    != basis
+                        .preservation_verification_entries
+                        .len()
+                        .saturating_mul(2)
+                        .saturating_add(1)
+                    || sequence != binding.first_event_sequence.saturating_add(1)
+                    || input.role != crate::PreservationArtifactRoleV5::Input
+                    || input.registration_id != binding.input_registration_id
+                    || !binding.matches_registration(
+                        &registration,
+                        crate::PreservationArtifactRoleV5::Output,
+                    )
+                    || result.input_hash() != &binding.input_hash
+                    || result.target_snapshot_id() != &binding.target_snapshot_id
+                    || result.target_obligation_id() != target_obligation_id
+                    || result.source_verification_id() != &binding.source_verification_id
+                {
+                    return Err(DomainError::AuthorityReplayBasisMismatch);
+                }
+                Ok(TrustedPreservationAdmissionV5::OutputRegistration {
+                    session_identity,
+                    source_closure_id: basis.source_closure_id.clone(),
+                    policy_revision_hash: basis.policy_revision_hash.clone(),
+                    binding: Box::new(binding.clone()),
+                    input_registration_id: binding.input_registration_id.clone(),
+                    registration,
+                    predecessor_event_hash: self.tail_hash().clone(),
+                    event_sequence: sequence,
+                })
+            }
+            PreservationAdmissionRequestV5::Verification(pair) => {
+                let (evidence, verification) = *pair;
+                let entries = basis.preservation_registration_entries.as_slice();
+                let pair = entries
+                    .get(entries.len().saturating_sub(2)..)
+                    .ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+                if pair.len() != 2
+                    || basis.preservation_registration_entries.len()
+                        != basis
+                            .preservation_verification_entries
+                            .len()
+                            .saturating_mul(2)
+                            .saturating_add(2)
+                    || sequence != binding.first_event_sequence.saturating_add(2)
+                    || pair[0].registration_id != binding.input_registration_id
+                    || pair[1].registration_id != binding.output_registration_id
+                    || !binding.matches_artifact_source(
+                        &pair[0].source,
+                        crate::PreservationArtifactRoleV5::Input,
+                    )
+                    || !binding.matches_artifact_source(
+                        &pair[1].source,
+                        crate::PreservationArtifactRoleV5::Output,
+                    )
+                    || evidence.target_obligation_id() != target_obligation_id
+                    || evidence.source_verification_id() != &binding.source_verification_id
+                    || evidence.input_registration_id() != &binding.input_registration_id
+                    || evidence.output_registration_id() != &binding.output_registration_id
+                    || verification.evidence_id() != evidence.id()
+                    || verification.target_obligation_id() != target_obligation_id
+                    || verification.source_verification_id() != &binding.source_verification_id
+                {
+                    return Err(DomainError::AuthorityReplayBasisMismatch);
+                }
+                Ok(TrustedPreservationAdmissionV5::Verification {
+                    session_identity,
+                    source_closure_id: basis.source_closure_id.clone(),
+                    policy_revision_hash: basis.policy_revision_hash.clone(),
+                    binding: Box::new(binding.clone()),
+                    input_registration_id: binding.input_registration_id.clone(),
+                    output_registration_id: binding.output_registration_id.clone(),
+                    evidence: Box::new(evidence),
+                    verification: Box::new(verification),
+                    predecessor_event_hash: self.tail_hash().clone(),
+                    event_sequence: sequence,
+                })
+            }
+        }
+    }
+
+    #[allow(dead_code)] // Private until the enclosing V5 session API lands.
+    pub(crate) fn append_artifact_registration_v5(
+        &mut self,
+        admission: TrustedPreservationAdmissionV5,
+        basis: &mut AuthorityReplayBasisV5,
+    ) -> Result<()> {
+        basis.validate_current_log(self)?;
+        let (
+            session_identity,
+            source_closure_id,
+            policy_revision_hash,
+            binding,
+            registration,
+            predecessor_event_hash,
+            event_sequence,
+        ) = match admission {
+            TrustedPreservationAdmissionV5::InputRegistration {
+                session_identity,
+                source_closure_id,
+                policy_revision_hash,
+                binding,
+                registration,
+                predecessor_event_hash,
+                event_sequence,
+            } => (
+                session_identity,
+                source_closure_id,
+                policy_revision_hash,
+                binding,
+                registration,
+                predecessor_event_hash,
+                event_sequence,
+            ),
+            TrustedPreservationAdmissionV5::OutputRegistration {
+                session_identity,
+                source_closure_id,
+                policy_revision_hash,
+                binding,
+                input_registration_id,
+                registration,
+                predecessor_event_hash,
+                event_sequence,
+            } => {
+                if input_registration_id != binding.input_registration_id {
+                    return Err(DomainError::AuthorityReplayBasisMismatch);
+                }
+                (
+                    session_identity,
+                    source_closure_id,
+                    policy_revision_hash,
+                    binding,
+                    registration,
+                    predecessor_event_hash,
+                    event_sequence,
+                )
+            }
+            TrustedPreservationAdmissionV5::Verification { .. } => {
+                return Err(DomainError::AuthorityReplayBasisMismatch);
+            }
+        };
+        if session_identity.0 != OpaquePreservationSessionIdentityV5::for_basis(basis)?.0
+            || source_closure_id != basis.source_closure_id
+            || policy_revision_hash != basis.policy_revision_hash
+            || predecessor_event_hash != *self.tail_hash()
+            || event_sequence != basis.target_next_sequence
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let trust_binding_digest = binding.digest()?;
+        let payload = PersistedPayload::ArtifactRegisteredV5((*registration).clone());
+        let (candidate, _) = self.m6_candidate_with_payloads(
+            std::slice::from_ref(&payload),
+            self.limits.max_working_bytes,
+        )?;
+        let event = candidate.envelopes.last().ok_or_else(|| {
+            DomainError::EventSequence("preservation registration event missing".to_owned())
+        })?;
+        let entry = PreservationRegistrationReplayEntryV5 {
+            event_sequence: event.sequence(),
+            event_id: event.id().clone(),
+            registration_id: registration.id().clone(),
+            registration_body_hash: registration
+                .body_hash()
+                .map_err(|error| DomainError::Validation(error.to_string()))?,
+            role: registration.source().role(),
+            target_obligation_id: registration.source().target_obligation_id().clone(),
+            source_verification_id: registration.source().source_verification_id().clone(),
+            cas_hash: registration.cas_hash().clone(),
+            size: registration.size(),
+            media_type: registration.media_type().to_owned(),
+            source: registration.source().clone(),
+            predecessor_event_hash: event.previous_event_hash().clone(),
+            trust_binding_digest: trust_binding_digest.clone(),
+            v5_position_digest: preservation_position_digest(
+                &self.run_id,
+                &self.genesis_hash,
+                event.id(),
+                event.sequence(),
+                event.previous_event_hash(),
+                &trust_binding_digest,
+            )?,
+        };
+        *self = candidate;
+        basis.preservation_registration_entries.push(entry);
+        basis.advance_authority_free(self)
+    }
+
+    #[allow(dead_code)] // Private until the enclosing V5 session API lands.
+    pub(crate) fn append_preservation_verification_v5(
+        &mut self,
+        admission: TrustedPreservationAdmissionV5,
+        basis: &mut AuthorityReplayBasisV5,
+    ) -> Result<()> {
+        basis.validate_current_log(self)?;
+        let TrustedPreservationAdmissionV5::Verification {
+            session_identity,
+            source_closure_id,
+            policy_revision_hash,
+            binding,
+            input_registration_id,
+            output_registration_id,
+            evidence,
+            verification,
+            predecessor_event_hash,
+            event_sequence,
+        } = admission
+        else {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        };
+        if session_identity.0 != OpaquePreservationSessionIdentityV5::for_basis(basis)?.0
+            || source_closure_id != basis.source_closure_id
+            || policy_revision_hash != basis.policy_revision_hash
+            || predecessor_event_hash != *self.tail_hash()
+            || event_sequence != basis.target_next_sequence
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let registrations = basis.preservation_registration_entries.as_slice();
+        let pair = registrations
+            .get(registrations.len().saturating_sub(2)..)
+            .ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+        if pair.len() != 2
+            || pair[0].registration_id != input_registration_id
+            || pair[1].registration_id != output_registration_id
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let payload = PersistedPayload::PreservationVerifiedV5 {
+            evidence: (*evidence).clone(),
+            verification: (*verification).clone(),
+        };
+        let (candidate, _) = self.m6_candidate_with_payloads(
+            std::slice::from_ref(&payload),
+            self.limits.max_working_bytes,
+        )?;
+        let event = candidate.envelopes.last().ok_or_else(|| {
+            DomainError::EventSequence("preservation verification event missing".to_owned())
+        })?;
+        let trust_binding_digest = binding.digest()?;
+        let entry = PreservationReplayEntryV5 {
+            source_closure_id,
+            source_verification_id: binding.source_verification_id.clone(),
+            target_obligation_id: binding.target_obligation_id.clone(),
+            input_registration_id,
+            output_registration_id,
+            evidence_id: evidence.id().clone(),
+            verification_id: verification.id().clone(),
+            descriptor_id: binding.descriptor_id.clone(),
+            procedure_version: binding.procedure_version.clone(),
+            input_hash: binding.input_hash.clone(),
+            input_size: binding.input_size,
+            input_media_type: binding.input_media_type.clone(),
+            output_hash: binding.output_hash.clone(),
+            output_size: binding.output_size,
+            output_media_type: binding.output_media_type.clone(),
+            input_event_sequence: pair[0].event_sequence,
+            input_event_id: pair[0].event_id.clone(),
+            output_event_sequence: pair[1].event_sequence,
+            output_event_id: pair[1].event_id.clone(),
+            verification_event_sequence: event.sequence(),
+            verification_event_id: event.id().clone(),
+            predecessor_event_hash: binding.predecessor_event_hash.clone(),
+            trust_binding_digest: trust_binding_digest.clone(),
+            v5_position_digest: preservation_position_digest(
+                &self.run_id,
+                &self.genesis_hash,
+                event.id(),
+                event.sequence(),
+                event.previous_event_hash(),
+                &trust_binding_digest,
+            )?,
+        };
+        *self = candidate;
+        basis.preservation_verification_entries.push(entry);
+        basis.advance_authority_free(self)
+    }
+
+    #[allow(dead_code)] // Private until the enclosing V5 session API lands.
+    pub(crate) fn append_preservation_phase_v5(
+        &mut self,
+        bundles: &[crate::PreservationBundleV5],
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+        basis: &mut AuthorityReplayBasisV5,
+    ) -> Result<()> {
+        if bundles.len() > crate::m6::MAX_M6_PRESERVATION_RECORDS
+            || bundles.windows(2).any(|pair| {
+                pair[0].evidence().target_obligation_id()
+                    >= pair[1].evidence().target_obligation_id()
+            })
+        {
+            return Err(DomainError::EventSequence(
+                "preservation bundles must be bounded and target-ID ordered".to_owned(),
+            ));
+        }
+        for bundle in bundles {
+            let target = bundle.evidence().target_obligation_id();
+            let admission = self.mint_trusted_preservation_admission_v5(
+                target,
+                PreservationAdmissionRequestV5::InputRegistration(Box::new(
+                    bundle.input_registration().clone(),
+                )),
+                resolver,
+                roots,
+                basis,
+            )?;
+            self.append_artifact_registration_v5(admission, basis)?;
+            let admission = self.mint_trusted_preservation_admission_v5(
+                target,
+                PreservationAdmissionRequestV5::OutputRegistration(Box::new(
+                    bundle.output_registration().clone(),
+                )),
+                resolver,
+                roots,
+                basis,
+            )?;
+            self.append_artifact_registration_v5(admission, basis)?;
+            let admission = self.mint_trusted_preservation_admission_v5(
+                target,
+                PreservationAdmissionRequestV5::Verification(Box::new((
+                    bundle.evidence().clone(),
+                    bundle.verification().clone(),
+                ))),
+                resolver,
+                roots,
+                basis,
+            )?;
+            self.append_preservation_verification_v5(admission, basis)?;
+        }
+        Ok(())
+    }
+
     /// Exact heap ownership of the retained V5 envelope vector and payloads.
     #[doc(hidden)]
     pub fn retained_envelope_bytes_for_store(&self) -> Result<u64> {
@@ -24056,6 +24890,28 @@ impl EventLogV5 {
         Err(DomainError::Validation(
             "V5 target predecessor has no terminal review plan".to_owned(),
         ))
+    }
+
+    pub(crate) fn replay_initial_state_for_incremental_proposal(
+        &self,
+    ) -> Result<ReplayedV5PreIncrementalState> {
+        let plan_index = self
+            .envelopes
+            .iter()
+            .position(|event| {
+                matches!(
+                    decode_canonical_payload(EventContractVersion::V5, event.payload.get()),
+                    Ok(PersistedPayload::ReviewPlanRecorded(_))
+                )
+            })
+            .ok_or_else(|| DomainError::Validation("V5 target has no review plan".to_owned()))?;
+        let (prefix, _) = Self::replay_confirmed_v5_prefix(
+            self.run_id.clone(),
+            self.canonical_genesis_bytes.clone(),
+            self.envelopes[..=plan_index].to_vec(),
+            self.limits,
+        )?;
+        prefix.replay_pre_incremental_state_for_store()
     }
 
     /// Replays only the source-bound target predecessor as a structural
@@ -26347,6 +27203,147 @@ impl EventLogV5 {
         basis.advance_authority_free(self)?;
         Ok(RecoveredM6PersistenceV5::Incremental {
             stage: expected.stage(persisted),
+            basis: Box::new(basis),
+        })
+    }
+
+    /// Reconstructs preservation authority from the sealed staleness prefix by
+    /// re-running the same roots/CAS admissions at every possible crash seam.
+    #[allow(dead_code)] // Private until the enclosing V5 session API lands.
+    pub(crate) fn recover_preservation_phase_v5(
+        &self,
+        pre_basis: &PreIncrementalAuthorityReplayBasisV5,
+        input: PreservationRecoveryInputV5<'_>,
+    ) -> Result<RecoveredM6PersistenceV5> {
+        let PreservationRecoveryInputV5 {
+            closure,
+            mapping,
+            correspondence,
+            staleness,
+            bundles,
+            resolver,
+            roots,
+        } = input;
+        let expected = ExpectedM6PersistenceV5::new(closure, mapping, correspondence, staleness)?;
+        let predecessor_count = usize::try_from(closure.target_predecessor_event_count())
+            .map_err(|_| DomainError::EventSequence("M6 predecessor count overflow".to_owned()))?;
+        let staleness_end = predecessor_count.saturating_add(expected.payloads.len());
+        if self.envelopes.len() < staleness_end {
+            return Err(DomainError::EventSequence(
+                "preservation recovery requires the complete staleness seal".to_owned(),
+            ));
+        }
+        if bundles.len() > crate::m6::MAX_M6_PRESERVATION_RECORDS
+            || bundles.windows(2).any(|pair| {
+                pair[0].evidence().target_obligation_id()
+                    >= pair[1].evidence().target_obligation_id()
+            })
+        {
+            return Err(DomainError::EventSequence(
+                "preservation recovery bundles are not canonical".to_owned(),
+            ));
+        }
+        let preservation_events = self.envelopes.len().saturating_sub(staleness_end);
+        let maximum = bundles
+            .len()
+            .checked_mul(3)
+            .ok_or(DomainError::Incomplete {
+                operation: "M6 preservation recovery event count",
+                limit: crate::m6::MAX_M6_PRESERVATION_REGISTRATIONS,
+                observed: usize::MAX,
+            })?;
+        if preservation_events > maximum {
+            return Err(DomainError::EventSequence(
+                "payload follows the eligible preservation phase".to_owned(),
+            ));
+        }
+        let (mut simulated, _) = Self::replay_confirmed_v5_prefix(
+            self.run_id.clone(),
+            self.canonical_genesis_bytes.clone(),
+            self.envelopes[..staleness_end].to_vec(),
+            self.limits,
+        )?;
+        let recovered = simulated.recover_m6_persistence_v5(
+            pre_basis,
+            closure,
+            mapping,
+            correspondence,
+            staleness,
+        )?;
+        let RecoveredM6PersistenceV5::Incremental { basis, .. } = recovered else {
+            return Err(DomainError::EventSequence(
+                "staleness recovery lost its closure".to_owned(),
+            ));
+        };
+        let mut basis = *basis;
+        for event_index in 0..preservation_events {
+            let bundle = &bundles[event_index / 3];
+            let target = bundle.evidence().target_obligation_id();
+            match event_index % 3 {
+                0 => {
+                    let admission = simulated.mint_trusted_preservation_admission_v5(
+                        target,
+                        PreservationAdmissionRequestV5::InputRegistration(Box::new(
+                            bundle.input_registration().clone(),
+                        )),
+                        resolver,
+                        roots,
+                        &basis,
+                    )?;
+                    simulated.append_artifact_registration_v5(admission, &mut basis)?;
+                }
+                1 => {
+                    let admission = simulated.mint_trusted_preservation_admission_v5(
+                        target,
+                        PreservationAdmissionRequestV5::OutputRegistration(Box::new(
+                            bundle.output_registration().clone(),
+                        )),
+                        resolver,
+                        roots,
+                        &basis,
+                    )?;
+                    simulated.append_artifact_registration_v5(admission, &mut basis)?;
+                }
+                _ => {
+                    let admission = simulated.mint_trusted_preservation_admission_v5(
+                        target,
+                        PreservationAdmissionRequestV5::Verification(Box::new((
+                            bundle.evidence().clone(),
+                            bundle.verification().clone(),
+                        ))),
+                        resolver,
+                        roots,
+                        &basis,
+                    )?;
+                    simulated.append_preservation_verification_v5(admission, &mut basis)?;
+                }
+            }
+        }
+        if simulated.envelopes.len() != self.envelopes.len()
+            || simulated
+                .envelopes
+                .iter()
+                .zip(&self.envelopes)
+                .any(|(expected, actual)| {
+                    expected.canonical_bytes().ok() != actual.canonical_bytes().ok()
+                })
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "preservation recovery prefix differs from roots/CAS replay",
+            ));
+        }
+        let stage = if preservation_events == maximum {
+            M6PersistenceRecoveryStageV5::PreservationComplete
+        } else {
+            let target_index = preservation_events / 3;
+            match preservation_events % 3 {
+                0 => M6PersistenceRecoveryStageV5::PreservationInputRegistration { target_index },
+                1 => M6PersistenceRecoveryStageV5::PreservationOutputRegistration { target_index },
+                _ => M6PersistenceRecoveryStageV5::PreservationVerification { target_index },
+            }
+        };
+        Ok(RecoveredM6PersistenceV5::Incremental {
+            stage,
             basis: Box::new(basis),
         })
     }
@@ -34480,7 +35477,9 @@ fn apply(
         | PersistedPayload::ObligationCorrespondenceSealedV5(_)
         | PersistedPayload::HistoricalRecordAssessedV5(_)
         | PersistedPayload::GluingFreshnessRecordedV5(_)
-        | PersistedPayload::StalenessAssessmentSealedV5(_) => Err(DomainError::Validation(
+        | PersistedPayload::StalenessAssessmentSealedV5(_)
+        | PersistedPayload::ArtifactRegisteredV5(_)
+        | PersistedPayload::PreservationVerifiedV5 { .. } => Err(DomainError::Validation(
             "event-v3 state requires the versioned aggregate foundation".to_owned(),
         )),
     }
@@ -34585,6 +35584,9 @@ pub(crate) struct CompleteM5V4Fixture {
     log: EventLogV4,
     basis: AuthorityReplayBasisV4,
     completed: M5CompletedGluingProfileV4,
+    authority_objects: BTreeMap<ContentHash, Vec<u8>>,
+    harnesses: Vec<AuthorityHarnessBindingV3Tuple>,
+    human_grants: Vec<AuthorityHumanGrantV3Tuple>,
 }
 
 #[cfg(test)]
@@ -34608,8 +35610,138 @@ impl CompleteM5V4Fixture {
         tests::successful_m5_v4_fixture_from_program_and_sources(program, sources, run_id)
     }
 
+    pub(crate) fn preservation_source_from_program_and_sources(
+        program: ProgramSpace,
+        sources: BTreeMap<StableId, Vec<u8>>,
+        run_id: StableId,
+    ) -> Result<Self> {
+        tests::preservation_source_m5_v4_fixture_from_program_and_sources(program, sources, run_id)
+    }
+
     pub(crate) fn log(&self) -> &EventLogV4 {
         &self.log
+    }
+
+    pub(crate) fn passed_fixture_verification(&self) -> Option<&VerificationV3> {
+        self.log
+            .v3_aggregate
+            .verifications
+            .values()
+            .find(|verification| {
+                verification.outcome() == crate::VerificationOutcomeV3::Passed
+                    && verification.descriptor() == crate::VerifierDescriptorV3::FixedFixtureV1
+            })
+    }
+
+    pub(crate) fn passed_fixture_obligation_id(&self) -> Option<&StableId> {
+        let verification = self.passed_fixture_verification()?;
+        let claim = self
+            .log
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == verification.claim_id())?;
+        (claim.obligation_ids().len() == 1)
+            .then(|| claim.obligation_ids().first())
+            .flatten()
+    }
+
+    pub(crate) fn corrupt_fixture_reviewer_for_test(&mut self, field: &str) -> ExecutionRecord {
+        let execution_id = self
+            .passed_fixture_verification()
+            .and_then(|verification| {
+                self.log
+                    .aggregate
+                    .execution_claims()
+                    .find(|claim| claim.id() == verification.claim_id())
+            })
+            .expect("fixture claim")
+            .execution_id()
+            .clone();
+        self.log
+            .aggregate
+            .corrupt_execution_descriptor_for_test(&execution_id, field)
+    }
+
+    pub(crate) fn restore_fixture_reviewer_for_test(&mut self, execution: ExecutionRecord) {
+        self.log.aggregate.restore_execution_for_test(execution);
+    }
+
+    pub(crate) fn corrupt_fixture_harness_for_test(
+        &mut self,
+        field: &str,
+    ) -> AuthorityHarnessBindingV3Tuple {
+        let root = self.harnesses.first_mut().expect("fixture harness root");
+        let original = root.clone();
+        match field {
+            "harness" => root.harness_id = "harness:tampered".to_owned(),
+            "harness_revision" => root.harness_revision = "revision:tampered".to_owned(),
+            "harness_source_hash" => {
+                root.harness_source_hash = ContentHash::sha256(b"tampered harness source");
+            }
+            "test" => root.test_artifact_id = StableId::parse("test:tampered").unwrap(),
+            "repository" => root.repository_id = StableId::parse("repository:tampered").unwrap(),
+            "repository_source_hash" => {
+                root.repository_source_hash = ContentHash::sha256(b"tampered repository source");
+            }
+            "descriptor" => root.descriptor_id = "descriptor:tampered".to_owned(),
+            "procedure" => root.procedure_version = "procedure:tampered".to_owned(),
+            "witness_hash" => root.result_hash = ContentHash::sha256(b"tampered witness"),
+            "witness_media" => root.result_media_type = "application/tampered".to_owned(),
+            "witness_size" => root.result_size = root.result_size.saturating_add(1),
+            "witness_sensitivity" => {
+                root.result_sensitivity = ArtifactSensitivity::WorkspaceSource;
+            }
+            "policy" => root.policy_revision_hash = ContentHash::sha256(b"tampered policy"),
+            "run" => root.run_id = StableId::parse("run:tampered").unwrap(),
+            "genesis" => root.genesis_hash = ContentHash::sha256(b"tampered genesis"),
+            "snapshot" => root.snapshot_id = StableId::parse("snapshot:tampered").unwrap(),
+            "universe" => root.universe_id = StableId::parse("universe:tampered").unwrap(),
+            "property" => root.property_id = "property:tampered".to_owned(),
+            "claim" => root.claim_id = StableId::parse("claim:tampered").unwrap(),
+            "claim_body" => root.claim_body_hash = ContentHash::sha256(b"tampered claim body"),
+            "cas" => {
+                self.authority_objects
+                    .insert(root.result_hash.clone(), b"tampered CAS bytes".to_vec());
+            }
+            _ => panic!("unknown fixture harness mutation"),
+        }
+        original
+    }
+
+    pub(crate) fn restore_fixture_harness_for_test(
+        &mut self,
+        root: AuthorityHarnessBindingV3Tuple,
+    ) {
+        self.harnesses[0] = root;
+    }
+
+    pub(crate) fn clear_active_fixture_human_pointers_for_test(&mut self) {
+        self.configure_active_fixture_human_pointers_for_test(false, false);
+    }
+
+    pub(crate) fn configure_active_fixture_human_pointers_for_test(
+        &mut self,
+        active_decision: bool,
+        current_finding: bool,
+    ) {
+        let claim_id = self
+            .passed_fixture_verification()
+            .expect("fixture verification")
+            .claim_id()
+            .clone();
+        self.log
+            .v3_aggregate
+            .assessments
+            .get_mut(&claim_id)
+            .expect("fixture assessment")
+            .configure_active_human_pointers_for_test(active_decision, current_finding);
+    }
+
+    pub(crate) fn fixture_human_history_counts_for_test(&self) -> (usize, usize) {
+        (
+            self.log.v3_aggregate.decisions.len(),
+            self.log.v3_aggregate.findings.len(),
+        )
     }
 
     pub(crate) fn basis(&self) -> &AuthorityReplayBasisV4 {
@@ -34642,6 +35774,392 @@ impl CompleteM5V4Fixture {
     pub(crate) fn m5_event_count(&self) -> usize {
         usize::from(self.log.m5_bundle.is_some())
     }
+
+    pub(crate) fn preservation_bundle_v5(
+        &self,
+        target_run_id: StableId,
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+        correspondence: &crate::M6ObligationCorrespondencePhaseV5,
+        staleness: &crate::M6StalenessPhaseV5,
+        policy_revision_hash: ContentHash,
+    ) -> crate::M6Result<crate::PreservationBundleV5> {
+        if closure.source_run_id() != self.log.run_id() || closure.target_run_id() != &target_run_id
+        {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "preservation run coordinates differ from the exact source closure",
+            ));
+        }
+        let mut passed = self
+            .log
+            .v3_aggregate
+            .verifications
+            .values()
+            .filter(|verification| {
+                verification.outcome() == crate::VerificationOutcomeV3::Passed
+                    && verification.descriptor() == crate::VerifierDescriptorV3::FixedFixtureV1
+                    && verification.procedure() == crate::VerifierProcedureV3::DuplicateSubmitV1
+            });
+        let verification = passed
+            .next()
+            .ok_or(crate::M6Error::PreservationUnsupported(
+                "source has no passed fixture verification",
+            ))?;
+        if passed.next().is_some() {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source fixture verification is not unique",
+            ));
+        }
+        let claim = self
+            .log
+            .aggregate
+            .execution_claims()
+            .find(|claim| {
+                claim.id() == verification.claim_id()
+                    && claim.property_id() == crate::M4_PROPERTY_ID
+                    && claim.polarity() == crate::ClaimPolarity::IssuePresent
+            })
+            .ok_or(crate::M6Error::PreservationUnsupported(
+                "passed source verification is not the issue_present payment fixture",
+            ))?;
+        let assessment = self.log.claim_assessment_v3(claim.id()).ok_or(
+            crate::M6Error::PreservationUnsupported("source fixture claim assessment is absent"),
+        )?;
+        if assessment.active_decision_id().is_some() || assessment.current_finding_id().is_some() {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "an active source human decision or current finding requires native target review",
+            ));
+        }
+        let source_obligation_id =
+            claim
+                .obligation_ids()
+                .first()
+                .ok_or(crate::M6Error::PreservationUnsupported(
+                    "fixture claim lacks its sole obligation",
+                ))?;
+        if claim.obligation_ids().len() != 1 {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "fixture claim does not have exactly one obligation",
+            ));
+        }
+        let execution = self
+            .log
+            .aggregate
+            .executions()
+            .find(|execution| execution.id() == claim.execution_id())
+            .ok_or(crate::M6Error::PreservationUnsupported(
+                "fixture claim lacks its reviewer execution",
+            ))?;
+        if execution.validate_shape().is_err()
+            || execution.reviewer_kind() != crate::execution::FAKE_REVIEWER_KIND
+            || execution.reviewer_id() != crate::execution::FAKE_REVIEWER_ID
+            || execution.provider().is_some()
+            || execution.model().is_some()
+            || execution.model_revision().is_some()
+            || execution.system_prompt_version() != crate::execution::NO_TOOLS_SYSTEM_PROMPT_VERSION
+            || execution.prompt_template_version()
+                != crate::execution::FIXTURE_PROMPT_TEMPLATE_VERSION
+            || !execution.inference_settings().is_empty()
+            || execution.tool_policy_version() != crate::execution::NO_TOOLS_POLICY_VERSION
+            || execution.tool_call_count() != 0
+            || !execution.outcome().is_structured()
+            || execution.obligation_ids() != claim.obligation_ids()
+            || execution.parsed_claim_ids() != &BTreeSet::from([claim.id().clone()])
+        {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source reviewer is not the exact deterministic fake/no-tools tuple",
+            ));
+        }
+        let entry = correspondence
+            .entries()
+            .iter()
+            .find(|entry| {
+                entry.status() == crate::MappingStatusV5::Preserved
+                    && entry.from_obligation_ids()
+                        == &BTreeSet::from([source_obligation_id.clone()])
+                    && entry.to_obligation_ids().len() == 1
+            })
+            .ok_or(crate::M6Error::PreservationUnsupported(
+                "fixture obligation is not one-to-one preserved",
+            ))?;
+        let target_obligation_id = entry
+            .to_obligation_ids()
+            .first()
+            .expect("one target")
+            .clone();
+        let evidence_ids = verification
+            .evidence_ids()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let binding_ids = self
+            .log
+            .v3_aggregate
+            .bindings
+            .values()
+            .filter(|binding| {
+                binding.claim_id() == claim.id() && evidence_ids.contains(binding.evidence_id())
+            })
+            .map(|binding| binding.id().clone())
+            .collect::<BTreeSet<_>>();
+        if evidence_ids.len() != 1 || binding_ids.len() != 1 {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source evidence binding closure is not the exact singleton fixture",
+            ));
+        }
+        let evidence_records = self
+            .log
+            .v3_aggregate
+            .evidence
+            .values()
+            .filter(|evidence| evidence_ids.contains(evidence.id()))
+            .collect::<Vec<_>>();
+        if evidence_records.len() != evidence_ids.len()
+            || evidence_records.iter().any(|evidence| {
+                evidence.descriptor() != crate::VerifierDescriptorV3::FixedFixtureV1
+                    || evidence.procedure() != crate::VerifierProcedureV3::DuplicateSubmitV1
+                    || evidence.input_registration_id() != verification.input_registration_id()
+                    || evidence.output_registration_id() != verification.output_registration_id()
+            })
+        {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source fixture evidence closure differs from its passed verification",
+            ));
+        }
+        let registrations = self.log.v3_aggregate.registrations.values();
+        let input_registration = registrations
+            .clone()
+            .find(|registration| {
+                registration.registration_id() == verification.input_registration_id()
+            })
+            .ok_or(crate::M6Error::PreservationUnsupported(
+                "source fixture input registration is absent",
+            ))?;
+        let output_registration = registrations
+            .clone()
+            .find(|registration| {
+                registration.registration_id() == verification.output_registration_id()
+            })
+            .ok_or(crate::M6Error::PreservationUnsupported(
+                "source fixture output registration is absent",
+            ))?;
+        let reviewer_registration = registrations
+            .clone()
+            .find(|registration| {
+                registration.registration_id() == execution.raw_artifact_registration_id()
+            })
+            .ok_or(crate::M6Error::PreservationUnsupported(
+                "source reviewer raw registration is absent",
+            ))?;
+        let ArtifactSourceV3::ReviewerExecution {
+            execution_id,
+            reviewer_id,
+            run_id: reviewer_run_id,
+        } = reviewer_registration.source()
+        else {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source reviewer raw registration has a wrong role",
+            ));
+        };
+        if execution_id != execution.id()
+            || reviewer_id != crate::execution::FAKE_REVIEWER_ID
+            || reviewer_run_id != self.log.run_id()
+            || reviewer_registration.cas_hash() != execution.raw_artifact_hash()
+        {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source reviewer raw registration differs from its execution tuple",
+            ));
+        }
+        let ArtifactSourceV3::ExternalHarnessWitness {
+            claim_body_hash,
+            claim_id,
+            descriptor_id,
+            genesis_hash,
+            harness_id,
+            harness_revision,
+            harness_source_hash,
+            policy_revision_hash: harness_policy_revision_hash,
+            procedure_version,
+            property_id,
+            repository_id,
+            repository_source_hash,
+            run_id,
+            snapshot_id,
+            test_artifact_id,
+            universe_id,
+        } = input_registration.source()
+        else {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source fixture input is not the external harness witness",
+            ));
+        };
+        let [harness_root] = self.harnesses.as_slice() else {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source fixture does not have exactly one harness root",
+            ));
+        };
+        let exact_claim_body_hash = claim.body_hash()?;
+        if descriptor_id != FIXTURE_DESCRIPTOR_ID
+            || procedure_version != FIXTURE_PROCEDURE_ID
+            || harness_id != FIXTURE_HARNESS_ID
+            || harness_revision != FIXTURE_HARNESS_REVISION
+            || harness_source_hash.as_str() != FIXTURE_HARNESS_SOURCE_HASH
+            || test_artifact_id.as_str() != FIXTURE_TEST_ARTIFACT_ID
+            || property_id != crate::M4_PROPERTY_ID
+            || claim_id != claim.id()
+            || claim_body_hash != &exact_claim_body_hash
+            || run_id != self.log.run_id()
+            || genesis_hash != self.log.genesis_hash()
+            || snapshot_id != self.snapshot_id()
+            || universe_id != self.log.aggregate.universe().id()
+            || repository_id != self.program().repository_id()
+            || repository_source_hash
+                != self.program().repository_source().content_hash().ok_or(
+                    crate::M6Error::PreservationUnsupported(
+                        "source fixture repository has no accepted content hash",
+                    ),
+                )?
+            || input_registration.cas_hash().as_str() != FIXTURE_WITNESS_HASH
+            || input_registration.size() != FIXTURE_WITNESS_SIZE
+            || input_registration.media_type() != FIXTURE_MEDIA_TYPE
+            || input_registration.sensitivity() != ArtifactSensitivity::CanonicalState
+            || harness_root.policy_revision_hash != *harness_policy_revision_hash
+            || harness_root.repository_id != *repository_id
+            || harness_root.repository_source_hash != *repository_source_hash
+            || harness_root.harness_id != *harness_id
+            || harness_root.harness_revision != *harness_revision
+            || harness_root.harness_source_hash != *harness_source_hash
+            || harness_root.test_artifact_id != *test_artifact_id
+            || harness_root.descriptor_id != *descriptor_id
+            || harness_root.procedure_version != *procedure_version
+            || harness_root.result_hash != *input_registration.cas_hash()
+            || harness_root.result_size != input_registration.size()
+            || harness_root.result_media_type != input_registration.media_type()
+            || harness_root.result_sensitivity != input_registration.sensitivity()
+            || harness_root.run_id != *run_id
+            || harness_root.genesis_hash != *genesis_hash
+            || harness_root.snapshot_id != *snapshot_id
+            || harness_root.universe_id != *universe_id
+            || harness_root.property_id != *property_id
+            || harness_root.claim_id != *claim_id
+            || harness_root.claim_body_hash != *claim_body_hash
+        {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source fixture harness/repository/test tuple is not exact",
+            ));
+        }
+        let ArtifactSourceV3::VerifierArtifact {
+            claim_id: output_claim_id,
+            descriptor_id: output_descriptor,
+            procedure_version: output_procedure,
+            role: VerifierArtifactRoleV3::Output,
+            run_id: output_run_id,
+        } = output_registration.source()
+        else {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source fixture output registration has a wrong role",
+            ));
+        };
+        if output_claim_id != claim.id()
+            || output_descriptor != FIXTURE_DESCRIPTOR_ID
+            || output_procedure != FIXTURE_PROCEDURE_ID
+            || output_run_id != self.log.run_id()
+            || [
+                reviewer_registration,
+                input_registration,
+                output_registration,
+            ]
+            .iter()
+            .any(|registration| {
+                self.authority_objects
+                    .get(registration.cas_hash())
+                    .is_none_or(|bytes| {
+                        ContentHash::sha256(bytes) != *registration.cas_hash()
+                            || u64::try_from(bytes.len()).ok() != Some(registration.size())
+                    })
+            })
+            || self
+                .authority_objects
+                .get(input_registration.cas_hash())
+                .is_none_or(|bytes| bytes.as_slice() != FIXTURE_WITNESS_BYTES)
+        {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source fixture registration roles or CAS bytes are not exact",
+            ));
+        }
+        let obligation_assessment = staleness
+            .records()
+            .iter()
+            .find(|record| {
+                record.source_record_kind() == crate::HistoricalRecordKindV5::Obligation
+                    && record.source_record_id() == source_obligation_id
+            })
+            .ok_or(crate::M6Error::PreservationUnsupported(
+                "source fixture obligation lacks its historical assessment",
+            ))?;
+        if obligation_assessment.status()
+            != crate::HistoricalAssessmentStatusV5::StructurallyPreserved
+            || !obligation_assessment.reasons().is_empty()
+            || obligation_assessment.successor_record_ids()
+                != &BTreeSet::from([target_obligation_id.clone()])
+            || !staleness.is_sealed_preservation_candidate(&target_obligation_id)?
+        {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "source fixture obligation is not the exact sealed preservation candidate",
+            ));
+        }
+        let coordinate_snapshot_pair = |mapping_id: &StableId| {
+            mapping
+                .mappings()
+                .iter()
+                .find(|value| value.id() == mapping_id)
+                .is_some_and(|value| {
+                    value.object_kind() == crate::ProgramObjectKindV5::Snapshot
+                        && value.from_ids()
+                            == &BTreeSet::from([closure.source_snapshot_id().clone()])
+                        && value.to_ids() == &BTreeSet::from([closure.target_snapshot_id().clone()])
+                })
+        };
+        let dependency_mapping_ids = obligation_assessment
+            .mapping_ids()
+            .iter()
+            .filter(|mapping_id| !coordinate_snapshot_pair(mapping_id))
+            .cloned()
+            .chain(
+                entry
+                    .source_mapping_ids()
+                    .iter()
+                    .filter(|mapping_id| !coordinate_snapshot_pair(mapping_id))
+                    .cloned(),
+            )
+            .collect::<BTreeSet<_>>();
+        if dependency_mapping_ids.is_empty()
+            || dependency_mapping_ids.iter().any(|mapping_id| {
+                mapping
+                    .mappings()
+                    .iter()
+                    .find(|mapping| mapping.id() == mapping_id)
+                    .is_none_or(|mapping| mapping.status() != crate::MappingStatusV5::Preserved)
+            })
+        {
+            return Err(crate::M6Error::PreservationUnsupported(
+                "a direct or indirect fixture dependency mapping is not preserved",
+            ));
+        }
+        let input = crate::PreservationInputV1::new(crate::PreservationInputParamsV1 {
+            source_closure_id: closure.id().clone(),
+            morphism_id: correspondence.correspondence().morphism_id().clone(),
+            correspondence_entry_id: entry.id().clone(),
+            source_claim_id: claim.id().clone(),
+            source_evidence_ids: evidence_ids,
+            source_verification_id: verification.id().clone(),
+            target_snapshot_id: closure.target_snapshot_id().clone(),
+            target_obligation_id,
+            dependency_mapping_ids,
+            policy_revision_hash,
+        })?;
+        crate::PreservationBundleV5::build(target_run_id, self.log.run_id.clone(), input)
+    }
 }
 
 /// Test-only terminal V5 predecessor.  Construction is restricted to typed
@@ -34657,6 +36175,169 @@ pub(crate) struct NoM5V5Fixture {
 
 #[cfg(test)]
 impl NoM5V5Fixture {
+    pub(crate) fn from_native_m4_fixture(
+        source: CompleteM5V4Fixture,
+        program: ProgramSpace,
+    ) -> Result<Self> {
+        let target_payment_obligation_id = source
+            .log
+            .aggregate
+            .obligations()
+            .find(|obligation| obligation.property_id() == crate::M4_PROPERTY_ID)
+            .ok_or_else(|| {
+                DomainError::Validation("native target payment obligation is absent".to_owned())
+            })?
+            .id()
+            .clone();
+        let mut program_sources = BTreeMap::new();
+        for artifact in program
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+        {
+            let hash = artifact.content_hash.as_ref().ok_or_else(|| {
+                DomainError::Validation("native target file has no content hash".to_owned())
+            })?;
+            let bytes = source.authority_objects.get(hash).ok_or_else(|| {
+                DomainError::Validation("native target file CAS object is absent".to_owned())
+            })?;
+            program_sources.insert(artifact.id.clone(), bytes.clone());
+        }
+        let run_id = source.log.run_id().clone();
+        let request = RunGenesisBootstrapRequestV4::new(
+            run_id,
+            source.log.canonical_genesis_bytes().to_vec(),
+            program.repository_identity(),
+            program.snapshot_id().clone(),
+            program.profile_id(),
+            program.profile_version(),
+        )?;
+        let initial_registrations = source
+            .log
+            .envelopes()
+            .iter()
+            .skip(1)
+            .filter_map(|event| {
+                match decode_canonical_payload(EventContractVersion::V4, event.payload.get())
+                    .ok()?
+                {
+                    PersistedPayload::ArtifactRegisteredV3(value)
+                        if matches!(value.source(), ArtifactSourceV3::SnapshotIngest { .. }) =>
+                    {
+                        Some(value)
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        let recorded_sources = source
+            .log
+            .envelopes()
+            .iter()
+            .find_map(|event| {
+                match decode_canonical_payload(EventContractVersion::V4, event.payload.get())
+                    .ok()?
+                {
+                    PersistedPayload::SnapshotSourcesRecorded(value) => Some(value),
+                    _ => None,
+                }
+            })
+            .ok_or_else(|| {
+                DomainError::Validation("native target sources are absent".to_owned())
+            })?;
+        let target_plan = source
+            .log
+            .aggregate
+            .review_plans()
+            .next()
+            .ok_or_else(|| DomainError::Validation("native target plan is absent".to_owned()))?
+            .clone();
+        let target_log = EventLogV5::from_planned_bootstrap_request(
+            request,
+            initial_registrations,
+            recorded_sources,
+            target_plan,
+        )?;
+        let roots = AuthorityTrustRootsV5::new(
+            target_policy_revision_hash_v5(&program)?,
+            program.repository_id().clone(),
+            program
+                .repository_source()
+                .content_hash()
+                .ok_or(DomainError::AuthorityPolicyMismatch)?
+                .clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )?;
+        let mut target = Self {
+            log: target_log,
+            roots,
+            sources: program_sources,
+            program: program.clone(),
+        };
+        let mut semantic_start = 1;
+        for (index, legacy) in source.log.envelopes().iter().enumerate().skip(1) {
+            let payload = decode_canonical_payload(EventContractVersion::V4, legacy.payload.get())?;
+            if let PersistedPayload::ReviewPlanRecorded(_) = payload {
+                semantic_start = index + 1;
+                break;
+            }
+        }
+        for legacy in source.log.envelopes().iter().skip(semantic_start) {
+            let payload = decode_canonical_payload(EventContractVersion::V4, legacy.payload.get())?;
+            let completes_payment = matches!(
+                &payload,
+                PersistedPayload::ObligationTransition {
+                    obligation_id,
+                    next: ObligationLifecycle::Completed,
+                } if obligation_id == &target_payment_obligation_id
+            );
+            let sequence = u64::try_from(target.log.envelopes.len())
+                .ok()
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| {
+                    DomainError::EventSequence("native target sequence overflow".to_owned())
+                })?;
+            let envelope = EventEnvelope::new(
+                EventContractVersion::V5,
+                target.log.run_id.clone(),
+                target.log.genesis_hash.clone(),
+                sequence,
+                payload.actor().to_owned(),
+                sequence,
+                target.log.tail_hash().clone(),
+                payload,
+            )?;
+            target.log.append_sealed_envelope_v5(envelope)?;
+            // The S1 predecessor deliberately retains the complete native D2
+            // reviewer/claim closure and Completed lifecycle, but no native M4
+            // evidence, binding, verification, decision, finding, or M5 state.
+            if completes_payment {
+                break;
+            }
+        }
+        target.roots = AuthorityTrustRootsV5::new(
+            target_policy_revision_hash_v5(&program)?,
+            program.repository_id().clone(),
+            program
+                .repository_source()
+                .content_hash()
+                .ok_or(DomainError::AuthorityPolicyMismatch)?
+                .clone(),
+            source.harnesses,
+            source.human_grants,
+            Vec::new(),
+        )?;
+        for (index, bytes) in source.authority_objects.into_values().enumerate() {
+            target.sources.insert(
+                StableId::parse(format!("artifact:native-cas-{index}"))?,
+                bytes,
+            );
+        }
+        Ok(target)
+    }
+
     pub(crate) fn from_program_and_sources(
         program: ProgramSpace,
         sources: BTreeMap<StableId, Vec<u8>>,
@@ -41259,6 +42940,23 @@ mod tests {
                 crate::AssignmentValueV4::Satisfied,
             ),
             false,
+            true,
+        )
+    }
+
+    pub(crate) fn preservation_source_m5_v4_fixture_from_program_and_sources(
+        program: ProgramSpace,
+        sources: BTreeMap<StableId, Vec<u8>>,
+        run_id: StableId,
+    ) -> Result<CompleteM5V4Fixture> {
+        complete_m5_v4_fixture_from_d2_with_assignments(
+            d2_v3_m4_m5_log_from_program(program, sources, run_id)?,
+            M5DoubleSubmitAssignmentsV4::new(
+                crate::AssignmentValueV4::Required,
+                crate::AssignmentValueV4::Satisfied,
+            ),
+            true,
+            false,
         )
     }
 
@@ -41280,6 +42978,7 @@ mod tests {
                 crate::AssignmentValueV4::Satisfied,
             ),
             true,
+            true,
         )
     }
 
@@ -41295,6 +42994,7 @@ mod tests {
         ),
         assignments: M5DoubleSubmitAssignmentsV4,
         require_cross_context_rejection: bool,
+        include_human_state: bool,
     ) -> Result<CompleteM5V4Fixture> {
         let (mut v3, initial, plan, obligation_id, context, sources) = d2;
         assert_eq!(
@@ -41531,28 +43231,30 @@ mod tests {
             .expect("mint fixture verification bundle");
         v3.append_verification_bundle_v3(fixture_bundle, &mut v3_basis)
             .expect("append fixture verification bundle");
-        let decision = v3
-            .mint_decision_v3(
-                &claim_id,
-                DecisionInputV3::new(
-                    crate::DecisionOutcomeV3::Accept,
-                    "human:reviewer",
-                    "review-board",
-                    "fixture verification passed",
-                    "2026-08-10T00:00:00Z",
-                    None,
-                ),
-                &v3_roots,
-                &v3_basis,
-            )
-            .expect("mint accept decision");
-        v3.append_decision_v3(decision, &mut v3_basis)
-            .expect("append accept decision");
-        let finding = v3
-            .mint_finding_v3(&claim_id, crate::FINDING_PROJECTION_ID, &v3_basis)
-            .expect("mint accepted finding");
-        v3.append_finding_v3(finding, &mut v3_basis)
-            .expect("append accepted finding");
+        if include_human_state {
+            let decision = v3
+                .mint_decision_v3(
+                    &claim_id,
+                    DecisionInputV3::new(
+                        crate::DecisionOutcomeV3::Accept,
+                        "human:reviewer",
+                        "review-board",
+                        "fixture verification passed",
+                        "2026-08-10T00:00:00Z",
+                        None,
+                    ),
+                    &v3_roots,
+                    &v3_basis,
+                )
+                .expect("mint accept decision");
+            v3.append_decision_v3(decision, &mut v3_basis)
+                .expect("append accept decision");
+            let finding = v3
+                .mint_finding_v3(&claim_id, crate::FINDING_PROJECTION_ID, &v3_basis)
+                .expect("mint accepted finding");
+            v3.append_finding_v3(finding, &mut v3_basis)
+                .expect("append accepted finding");
+        }
         let payment_assessment = v3
             .claim_assessment_v3(&claim_id)
             .expect("payment claim assessment");
@@ -43297,7 +44999,14 @@ mod tests {
         assert_eq!(coverage_sets.1, expected_m4_coverage);
         assert_eq!(coverage_sets.2, expected_m4_coverage);
         assert_eq!(coverage_sets.3, expected_m4_coverage);
-        assert_eq!(coverage_sets.4, expected_m4_coverage);
+        assert_eq!(
+            coverage_sets.4,
+            if include_human_state {
+                expected_m4_coverage
+            } else {
+                BTreeSet::new()
+            }
+        );
         let repeated = complete_log
             .historical_prefix_projection_v4()
             .expect("deterministic historical projection");
@@ -43994,6 +45703,9 @@ mod tests {
             log,
             basis,
             completed: completed.ok_or(DomainError::IncompleteSourceM5Baseline)?,
+            authority_objects: resolver.objects.clone(),
+            harnesses: roots.harnesses.clone(),
+            human_grants: roots.human_grants.clone(),
         })
     }
 
@@ -52197,6 +53909,396 @@ mod tests {
             },
         )
         .expect("complete M6 V5 persistence and every recovery prefix");
+    }
+
+    #[test]
+    fn v5_preservation_requires_exact_roots_and_cas_then_appends_three_ordered_events() {
+        crate::m6_test_support::with_preservation_s0_s1_persistence_fixture(
+            |source, target, phases, staleness| {
+                target.with_terminal_persistence(|mut log, pre_basis| {
+                    let mut basis =
+                        log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                    log.append_program_mapping_phase_v5(
+                        phases.closure(),
+                        phases.mapping().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_obligation_correspondence_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_staleness_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness.clone(),
+                        &mut basis,
+                    )?;
+                    let policy = basis.policy_revision_hash.clone();
+                    let bundle = source.preservation_bundle_v5(
+                        target.run_id().clone(),
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness,
+                        policy.clone(),
+                    )?;
+                    let binding = PreservationTrustBindingV5::from_bundle(
+                        policy.clone(),
+                        phases.closure().id().clone(),
+                        source.run_id().clone(),
+                        log.genesis_hash().clone(),
+                        log.tail_hash().clone(),
+                        basis.target_next_sequence,
+                        &bundle,
+                    )?;
+                    let mut wrong_descriptor = binding.clone();
+                    wrong_descriptor.descriptor_id = "reviewgraphen.other@1".to_owned();
+                    assert!(wrong_descriptor.validate().is_err());
+                    let mut wrong_procedure = binding.clone();
+                    wrong_procedure.procedure_version = "reviewgraphen.other.v1".to_owned();
+                    assert!(wrong_procedure.validate().is_err());
+                    let mut wrong_policy = binding.clone();
+                    wrong_policy.policy_revision_hash = ContentHash::sha256(b"wrong-policy");
+                    let wrong_policy_roots = AuthorityTrustRootsV5::new(
+                        policy.clone(),
+                        target.program().repository_id().clone(),
+                        target
+                            .program()
+                            .repository_source()
+                            .content_hash()
+                            .ok_or(DomainError::AuthorityPolicyMismatch)?
+                            .clone(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    )?;
+                    assert!(
+                        wrong_policy_roots
+                            .with_preservation_bindings(BTreeSet::from([wrong_policy]))
+                            .is_err()
+                    );
+                    let roots = AuthorityTrustRootsV5::new(
+                        policy.clone(),
+                        target.program().repository_id().clone(),
+                        target
+                            .program()
+                            .repository_source()
+                            .content_hash()
+                            .ok_or(DomainError::AuthorityPolicyMismatch)?
+                            .clone(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    )?
+                    .with_preservation_bindings(BTreeSet::from([binding.clone()]))?;
+                    struct Resolver(BTreeMap<ContentHash, Vec<u8>>);
+                    impl AuthorityArtifactResolverV5 for Resolver {
+                        fn read_exact(
+                            &self,
+                            hash: &ContentHash,
+                            destination: &mut [u8],
+                        ) -> Result<()> {
+                            let bytes = self
+                                .0
+                                .get(hash)
+                                .ok_or_else(|| DomainError::Validation("CAS miss".to_owned()))?;
+                            if bytes.len() != destination.len() {
+                                return Err(DomainError::Validation("CAS size".to_owned()));
+                            }
+                            destination.copy_from_slice(bytes);
+                            Ok(())
+                        }
+                    }
+                    let resolver = Resolver(BTreeMap::from([
+                        (
+                            bundle.input_registration().cas_hash().clone(),
+                            bundle.input_bytes().to_vec(),
+                        ),
+                        (
+                            bundle.output_registration().cas_hash().clone(),
+                            bundle.output_bytes().to_vec(),
+                        ),
+                    ]));
+                    for field in [
+                        "target_run_id",
+                        "target_snapshot_id",
+                        "target_obligation_id",
+                        "source_run_id",
+                        "source_verification_id",
+                    ] {
+                        let mut changed = binding.clone();
+                        match field {
+                            "target_run_id" => {
+                                changed.target_run_id =
+                                    StableId::parse("run:wrong-target").expect("test ID")
+                            }
+                            "target_snapshot_id" => {
+                                changed.target_snapshot_id =
+                                    StableId::parse("snapshot:wrong-target").expect("test ID")
+                            }
+                            "target_obligation_id" => {
+                                changed.target_obligation_id =
+                                    StableId::parse("obligation:wrong-target").expect("test ID")
+                            }
+                            "source_run_id" => {
+                                changed.source_run_id =
+                                    StableId::parse("run:wrong-source").expect("test ID")
+                            }
+                            "source_verification_id" => {
+                                changed.source_verification_id =
+                                    StableId::parse("verification:wrong").expect("test ID")
+                            }
+                            _ => unreachable!(),
+                        }
+                        let changed_roots = AuthorityTrustRootsV5::new(
+                            policy.clone(),
+                            target.program().repository_id().clone(),
+                            target
+                                .program()
+                                .repository_source()
+                                .content_hash()
+                                .ok_or(DomainError::AuthorityPolicyMismatch)?
+                                .clone(),
+                            Vec::new(),
+                            Vec::new(),
+                            Vec::new(),
+                        )?
+                        .with_preservation_bindings(BTreeSet::from([changed]))?;
+                        assert!(
+                            log.mint_trusted_preservation_admission_v5(
+                                bundle.evidence().target_obligation_id(),
+                                PreservationAdmissionRequestV5::InputRegistration(Box::new(
+                                    bundle.input_registration().clone()
+                                )),
+                                &resolver,
+                                &changed_roots,
+                                &basis,
+                            )
+                            .is_err(),
+                            "binding/nested source mismatch must refuse: {field}"
+                        );
+                    }
+                    let before = log.envelopes.len();
+                    let bad = Resolver(BTreeMap::from([
+                        (
+                            bundle.input_registration().cas_hash().clone(),
+                            vec![b'x'; bundle.input_bytes().len()],
+                        ),
+                        (
+                            bundle.output_registration().cas_hash().clone(),
+                            bundle.output_bytes().to_vec(),
+                        ),
+                    ]));
+                    assert!(
+                        log.mint_trusted_preservation_admission_v5(
+                            bundle.evidence().target_obligation_id(),
+                            PreservationAdmissionRequestV5::InputRegistration(Box::new(
+                                bundle.input_registration().clone()
+                            )),
+                            &bad,
+                            &roots,
+                            &basis,
+                        )
+                        .is_err()
+                    );
+                    assert_eq!(log.envelopes.len(), before);
+                    let input_payload =
+                        PersistedPayload::ArtifactRegisteredV5(bundle.input_registration().clone());
+                    let (_, exact_accounting) = log.m6_candidate_with_payloads(
+                        std::slice::from_ref(&input_payload),
+                        log.limits.max_working_bytes,
+                    )?;
+                    let original_working_limit = log.limits.max_working_bytes;
+                    let before_tail = log.tail_hash().clone();
+                    let before_basis = basis.basis_digest().clone();
+                    log.limits.max_working_bytes = exact_accounting.working_bytes - 1;
+                    let admission = log.mint_trusted_preservation_admission_v5(
+                        bundle.evidence().target_obligation_id(),
+                        PreservationAdmissionRequestV5::InputRegistration(Box::new(
+                            bundle.input_registration().clone(),
+                        )),
+                        &resolver,
+                        &roots,
+                        &basis,
+                    )?;
+                    assert!(
+                        log.append_artifact_registration_v5(admission, &mut basis)
+                            .is_err()
+                    );
+                    assert_eq!(log.envelopes.len(), before);
+                    assert_eq!(log.tail_hash(), &before_tail);
+                    assert_eq!(basis.basis_digest(), &before_basis);
+                    log.limits.max_working_bytes = exact_accounting.working_bytes;
+                    let admission = log.mint_trusted_preservation_admission_v5(
+                        bundle.evidence().target_obligation_id(),
+                        PreservationAdmissionRequestV5::InputRegistration(Box::new(
+                            bundle.input_registration().clone(),
+                        )),
+                        &resolver,
+                        &roots,
+                        &basis,
+                    )?;
+                    log.append_artifact_registration_v5(admission, &mut basis)?;
+                    let output_payload = PersistedPayload::ArtifactRegisteredV5(
+                        bundle.output_registration().clone(),
+                    );
+                    log.limits.max_working_bytes = original_working_limit;
+                    let (_, output_accounting) = log.m6_candidate_with_payloads(
+                        std::slice::from_ref(&output_payload),
+                        original_working_limit,
+                    )?;
+                    let output_before = log.envelopes.len();
+                    let output_tail = log.tail_hash().clone();
+                    let output_basis = basis.basis_digest().clone();
+                    log.limits.max_working_bytes = output_accounting.working_bytes - 1;
+                    let admission = log.mint_trusted_preservation_admission_v5(
+                        bundle.evidence().target_obligation_id(),
+                        PreservationAdmissionRequestV5::OutputRegistration(Box::new(
+                            bundle.output_registration().clone(),
+                        )),
+                        &resolver,
+                        &roots,
+                        &basis,
+                    )?;
+                    assert!(
+                        log.append_artifact_registration_v5(admission, &mut basis)
+                            .is_err()
+                    );
+                    assert_eq!(log.envelopes.len(), output_before);
+                    assert_eq!(log.tail_hash(), &output_tail);
+                    assert_eq!(basis.basis_digest(), &output_basis);
+                    log.limits.max_working_bytes = output_accounting.working_bytes;
+                    let admission = log.mint_trusted_preservation_admission_v5(
+                        bundle.evidence().target_obligation_id(),
+                        PreservationAdmissionRequestV5::OutputRegistration(Box::new(
+                            bundle.output_registration().clone(),
+                        )),
+                        &resolver,
+                        &roots,
+                        &basis,
+                    )?;
+                    log.append_artifact_registration_v5(admission, &mut basis)?;
+                    let verification_payload = PersistedPayload::PreservationVerifiedV5 {
+                        evidence: bundle.evidence().clone(),
+                        verification: bundle.verification().clone(),
+                    };
+                    log.limits.max_working_bytes = original_working_limit;
+                    let (_, verification_accounting) = log.m6_candidate_with_payloads(
+                        std::slice::from_ref(&verification_payload),
+                        original_working_limit,
+                    )?;
+                    let verification_before = log.envelopes.len();
+                    let verification_tail = log.tail_hash().clone();
+                    let verification_basis = basis.basis_digest().clone();
+                    log.limits.max_working_bytes = verification_accounting.working_bytes - 1;
+                    let admission = log.mint_trusted_preservation_admission_v5(
+                        bundle.evidence().target_obligation_id(),
+                        PreservationAdmissionRequestV5::Verification(Box::new((
+                            bundle.evidence().clone(),
+                            bundle.verification().clone(),
+                        ))),
+                        &resolver,
+                        &roots,
+                        &basis,
+                    )?;
+                    assert!(
+                        log.append_preservation_verification_v5(admission, &mut basis)
+                            .is_err()
+                    );
+                    assert_eq!(log.envelopes.len(), verification_before);
+                    assert_eq!(log.tail_hash(), &verification_tail);
+                    assert_eq!(basis.basis_digest(), &verification_basis);
+                    log.limits.max_working_bytes = verification_accounting.working_bytes;
+                    let admission = log.mint_trusted_preservation_admission_v5(
+                        bundle.evidence().target_obligation_id(),
+                        PreservationAdmissionRequestV5::Verification(Box::new((
+                            bundle.evidence().clone(),
+                            bundle.verification().clone(),
+                        ))),
+                        &resolver,
+                        &roots,
+                        &basis,
+                    )?;
+                    log.append_preservation_verification_v5(admission, &mut basis)?;
+                    log.limits.max_working_bytes = original_working_limit;
+                    assert_eq!(log.envelopes.len(), before + 3);
+                    let kinds = log.envelopes[before..]
+                        .iter()
+                        .map(|event| {
+                            decode_canonical_payload(EventContractVersion::V5, event.payload.get())
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    assert!(matches!(
+                        kinds[0],
+                        PersistedPayload::ArtifactRegisteredV5(_)
+                    ));
+                    assert!(matches!(
+                        kinds[1],
+                        PersistedPayload::ArtifactRegisteredV5(_)
+                    ));
+                    assert!(matches!(
+                        kinds[2],
+                        PersistedPayload::PreservationVerifiedV5 { .. }
+                    ));
+                    assert_eq!(basis.preservation_registration_entries.len(), 2);
+                    assert_eq!(basis.preservation_verification_entries.len(), 1);
+                    assert_eq!(basis.target_confirmed_tail_hash(), log.tail_hash());
+                    let full = log.envelopes.clone();
+                    target.with_terminal_persistence(|_, recovery_pre_basis| {
+                        for persisted in 0..=3 {
+                            let (prefix, _) = EventLogV5::replay_confirmed_v5_prefix(
+                                target.run_id().clone(),
+                                target.log.canonical_genesis_bytes.clone(),
+                                full[..before + persisted].to_vec(),
+                                target.log.limits,
+                            )?;
+                            let recovered = prefix.recover_preservation_phase_v5(
+                                &recovery_pre_basis,
+                                PreservationRecoveryInputV5 {
+                                    closure: phases.closure(),
+                                    mapping: phases.mapping(),
+                                    correspondence: phases.correspondence(),
+                                    staleness,
+                                    bundles: std::slice::from_ref(&bundle),
+                                    resolver: &resolver,
+                                    roots: &roots,
+                                },
+                            )?;
+                            let RecoveredM6PersistenceV5::Incremental { stage, basis } = recovered
+                            else {
+                                panic!("sealed preservation recovery must retain normal basis")
+                            };
+                            assert_eq!(basis.target_confirmed_tail_hash(), prefix.tail_hash());
+                            assert!(matches!(
+                                (persisted, stage),
+                                (
+                                    0,
+                                    M6PersistenceRecoveryStageV5::PreservationInputRegistration {
+                                        target_index: 0
+                                    }
+                                ) | (
+                                    1,
+                                    M6PersistenceRecoveryStageV5::PreservationOutputRegistration {
+                                        target_index: 0
+                                    }
+                                ) | (
+                                    2,
+                                    M6PersistenceRecoveryStageV5::PreservationVerification {
+                                        target_index: 0
+                                    }
+                                ) | (3, M6PersistenceRecoveryStageV5::PreservationComplete)
+                            ));
+                        }
+                        Ok(())
+                    })?;
+                    Ok(())
+                })
+            },
+        )
+        .expect("roots/CAS-bound preservation phase");
     }
 
     #[test]

@@ -1016,8 +1016,16 @@ registration/verification closure, equal fixture descriptor/procedure/witness/
 harness/repository/test anchor/rule/profile/extractor/CAS tuple, and equal
 deterministic fake reviewer model/prompt/tool/inference tuple. Real-provider
 output, any active source human decision/finding, split/merge/unresolved
-mapping, or any stale reason is
+mapping, or any stale reason in the candidate obligation's §7 Program and
+predecessor-obligation dependency cone is
 `PreservationUnsupported` and schedules the native table actions.
+
+The source claim/evidence/binding/registration/verification closure above is
+validated directly as the preservation witness; those downstream records need
+not have structurally-preserved successors at the S1 predecessor. In
+particular, S1 may retain the exact substituted D2 Completed reviewer/claim
+closure while native M4 evidence, binding, verification, decision, and finding
+records are still absent and scheduled under §11.
 
 The reachable positive fixture is the existing `payment.at_most_once`
 `issue_present` claim. A passed preservation verification means only that its

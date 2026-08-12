@@ -3518,6 +3518,23 @@ impl ReviewAggregate {
         self.executions.get(id)
     }
 
+    #[cfg(test)]
+    pub(crate) fn corrupt_execution_descriptor_for_test(
+        &mut self,
+        id: &StableId,
+        field: &str,
+    ) -> ExecutionRecord {
+        let execution = self.executions.get_mut(id).expect("test execution");
+        let original = execution.clone();
+        execution.corrupt_fake_descriptor_for_test(field);
+        original
+    }
+
+    #[cfg(test)]
+    pub(crate) fn restore_execution_for_test(&mut self, execution: ExecutionRecord) {
+        self.executions.insert(execution.id().clone(), execution);
+    }
+
     pub(crate) const fn execution_claim_map(&self) -> &BTreeMap<StableId, ExecutionClaimV2> {
         &self.execution_claims
     }

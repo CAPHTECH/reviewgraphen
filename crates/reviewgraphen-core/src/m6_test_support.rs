@@ -10,7 +10,8 @@ use crate::{
     event::{CompleteM5V4Fixture, NoM5V5Fixture},
     m6::{
         IncrementalStalenessInputV5, M6FixturePhases, m6_distinct_s0_s1_program_fixture,
-        m6_fixture_phases_from_exact_prefixes, successful_m5_distinct_s0_s1_program_fixture,
+        m6_fixture_phases_from_exact_prefixes, preservation_distinct_s0_s1_program_fixture,
+        successful_m5_distinct_s0_s1_program_fixture,
     },
 };
 
@@ -175,6 +176,87 @@ pub(crate) struct SuccessfulM5DistinctS0S1StalenessFixture {
     source: CompleteM5V4Fixture,
     target: NoM5V5Fixture,
     phases: M6FixturePhases,
+}
+
+pub(crate) struct PreservationDistinctS0S1StalenessFixture {
+    source: CompleteM5V4Fixture,
+    target: NoM5V5Fixture,
+    phases: M6FixturePhases,
+}
+
+impl PreservationDistinctS0S1StalenessFixture {
+    pub(crate) fn new() -> M6Result<Self> {
+        Self::new_with_human_source(false)
+    }
+
+    #[cfg(test)]
+    fn new_with_human_source(include_human_state: bool) -> M6Result<Self> {
+        let (source_program, target_program, source_bytes, target_bytes) =
+            preservation_distinct_s0_s1_program_fixture()?;
+        let source_run_id = crate::StableId::parse("run:m6-preservation-s0-fixture")?;
+        let source = if include_human_state {
+            CompleteM5V4Fixture::from_program_and_sources(
+                source_program,
+                source_bytes,
+                source_run_id,
+            )?
+        } else {
+            CompleteM5V4Fixture::preservation_source_from_program_and_sources(
+                source_program,
+                source_bytes,
+                source_run_id,
+            )?
+        };
+        let target_program_copy = target_program.clone();
+        let target_native = CompleteM5V4Fixture::preservation_source_from_program_and_sources(
+            target_program,
+            target_bytes,
+            crate::StableId::parse("run:m6-preservation-s1-fixture")?,
+        )?;
+        let target = NoM5V5Fixture::from_native_m4_fixture(target_native, target_program_copy)
+            .map_err(|error| crate::M6Error::Canonical(format!("native target: {error}")))?;
+        let phases = target
+            .with_terminal(|_, target_actual| {
+                m6_fixture_phases_from_exact_prefixes(&source, &target, target_actual)
+            })
+            .map_err(|error| crate::M6Error::Canonical(format!("native target phases: {error}")))?;
+        Ok(Self {
+            source,
+            target,
+            phases,
+        })
+    }
+
+    pub(crate) fn reduce(&self) -> M6Result<M6StalenessPhaseV5> {
+        self.target.with_terminal(|target, target_actual| {
+            IncrementalStalenessInputV5::new(
+                self.source.log(),
+                self.phases.closure(),
+                self.phases.mapping(),
+                self.phases.correspondence(),
+                target,
+            )?
+            .reduce_v5(target_actual, DISTINCT_S0_S1_ASSESSMENT_TIME)
+        })
+    }
+}
+
+pub(crate) fn with_preservation_s0_s1_persistence_fixture<R>(
+    callback: impl FnOnce(
+        &CompleteM5V4Fixture,
+        &NoM5V5Fixture,
+        &M6FixturePhases,
+        &M6StalenessPhaseV5,
+    ) -> M6Result<R>,
+) -> M6Result<R> {
+    let fixture = PreservationDistinctS0S1StalenessFixture::new()?;
+    let staleness = fixture.reduce()?;
+    callback(
+        &fixture.source,
+        &fixture.target,
+        &fixture.phases,
+        &staleness,
+    )
 }
 
 impl SuccessfulM5DistinctS0S1StalenessFixture {
@@ -452,5 +534,293 @@ mod tests {
             first.assessment().stale_source_digest(),
             second.assessment().stale_source_digest()
         );
+    }
+
+    #[test]
+    fn preservation_eligibility_refuses_a_target_run_coordinate_mutation_typed() {
+        let fixture = DistinctS0S1StalenessFixture::new().expect("admitted E2E fixture");
+        let staleness = fixture.reduce().expect("sealed staleness");
+        let result = fixture.source.preservation_bundle_v5(
+            crate::StableId::parse("run:wrong-preservation-target").expect("test run ID"),
+            fixture.phases.closure(),
+            fixture.phases.mapping(),
+            fixture.phases.correspondence(),
+            &staleness,
+            ContentHash::sha256(b"policy"),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::M6Error::PreservationUnsupported(_))
+        ));
+    }
+
+    #[test]
+    fn preservation_eligibility_uses_real_passed_fixture_closure() {
+        let fixture =
+            PreservationDistinctS0S1StalenessFixture::new().expect("admitted preservation fixture");
+        let staleness = fixture.reduce().expect("sealed preservation staleness");
+        let source_obligation_id = fixture
+            .source
+            .passed_fixture_obligation_id()
+            .expect("fixture obligation");
+        let obligation_assessment = staleness
+            .records()
+            .iter()
+            .find(|record| {
+                record.source_record_kind() == crate::HistoricalRecordKindV5::Obligation
+                    && record.source_record_id() == source_obligation_id
+            })
+            .expect("actual payment obligation assessment");
+        assert_eq!(
+            obligation_assessment.status(),
+            crate::HistoricalAssessmentStatusV5::StructurallyPreserved
+        );
+        assert!(obligation_assessment.reasons().is_empty());
+        assert_eq!(obligation_assessment.successor_record_ids().len(), 1);
+        let target_obligation_id = obligation_assessment
+            .successor_record_ids()
+            .first()
+            .expect("sole target obligation");
+        assert!(
+            staleness
+                .preservation_candidate_obligation_ids()
+                .contains(target_obligation_id)
+        );
+        assert!(
+            staleness
+                .is_sealed_preservation_candidate(target_obligation_id)
+                .expect("candidate digest recheck")
+        );
+        let bundle = fixture
+            .source
+            .preservation_bundle_v5(
+                fixture.target.run_id().clone(),
+                fixture.phases.closure(),
+                fixture.phases.mapping(),
+                fixture.phases.correspondence(),
+                &staleness,
+                ContentHash::sha256(b"policy"),
+            )
+            .expect("reachable exact preservation eligibility");
+        let source_verification = fixture
+            .source
+            .passed_fixture_verification()
+            .expect("real passed source verification");
+        assert_eq!(
+            bundle.evidence().source_verification_id(),
+            source_verification.id()
+        );
+        assert_eq!(
+            bundle.evidence().source_claim_id(),
+            source_verification.claim_id()
+        );
+        assert_eq!(
+            bundle.evidence().source_evidence_ids(),
+            &source_verification
+                .evidence_ids()
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        );
+        let input = crate::PreservationInputV1::from_json_bytes(bundle.input_bytes())
+            .expect("strict preservation input");
+        assert_eq!(input.source_verification_id(), source_verification.id());
+    }
+
+    #[test]
+    fn preservation_eligibility_rejects_human_and_every_fake_reviewer_tuple_mutation() {
+        let mut human = PreservationDistinctS0S1StalenessFixture::new_with_human_source(true)
+            .expect("human source fixture");
+        let human_staleness = human.reduce().expect("human source staleness");
+        assert!(matches!(
+            human.source.preservation_bundle_v5(
+                human.target.run_id().clone(),
+                human.phases.closure(),
+                human.phases.mapping(),
+                human.phases.correspondence(),
+                &human_staleness,
+                ContentHash::sha256(b"policy"),
+            ),
+            Err(crate::M6Error::PreservationUnsupported(_))
+        ));
+        let historical_counts = human.source.fixture_human_history_counts_for_test();
+        assert!(historical_counts.0 > 0 && historical_counts.1 > 0);
+        for (active_decision, current_finding) in [(true, false), (false, true)] {
+            human
+                .source
+                .configure_active_fixture_human_pointers_for_test(active_decision, current_finding);
+            assert!(matches!(
+                human.source.preservation_bundle_v5(
+                    human.target.run_id().clone(),
+                    human.phases.closure(),
+                    human.phases.mapping(),
+                    human.phases.correspondence(),
+                    &human_staleness,
+                    ContentHash::sha256(b"policy"),
+                ),
+                Err(crate::M6Error::PreservationUnsupported(_))
+            ));
+        }
+        human.source.clear_active_fixture_human_pointers_for_test();
+        human
+            .source
+            .preservation_bundle_v5(
+                human.target.run_id().clone(),
+                human.phases.closure(),
+                human.phases.mapping(),
+                human.phases.correspondence(),
+                &human_staleness,
+                ContentHash::sha256(b"policy"),
+            )
+            .expect("inactive historical human records do not block preservation");
+
+        let mut reviewer =
+            PreservationDistinctS0S1StalenessFixture::new().expect("reviewer mutation fixture");
+        let reviewer_staleness = reviewer.reduce().expect("reviewer mutation staleness");
+        for field in [
+            "provider",
+            "model",
+            "model_revision",
+            "reviewer_kind",
+            "reviewer_id",
+            "system_prompt",
+            "prompt",
+            "inference",
+            "tool_policy",
+            "tool_count",
+            "outcome",
+            "raw_registration",
+        ] {
+            let original = reviewer.source.corrupt_fixture_reviewer_for_test(field);
+            assert!(matches!(
+                reviewer.source.preservation_bundle_v5(
+                    reviewer.target.run_id().clone(),
+                    reviewer.phases.closure(),
+                    reviewer.phases.mapping(),
+                    reviewer.phases.correspondence(),
+                    &reviewer_staleness,
+                    ContentHash::sha256(b"policy"),
+                ),
+                Err(crate::M6Error::PreservationUnsupported(_))
+            ));
+            reviewer.source.restore_fixture_reviewer_for_test(original);
+        }
+    }
+
+    #[test]
+    fn preservation_eligibility_rejects_harness_anchor_and_dependency_mutations() {
+        let mut harness =
+            PreservationDistinctS0S1StalenessFixture::new().expect("harness mutation fixture");
+        let harness_staleness = harness.reduce().expect("harness mutation staleness");
+        for field in [
+            "harness",
+            "harness_revision",
+            "harness_source_hash",
+            "test",
+            "repository",
+            "repository_source_hash",
+            "descriptor",
+            "procedure",
+            "witness_hash",
+            "witness_media",
+            "witness_size",
+            "witness_sensitivity",
+            "policy",
+            "run",
+            "genesis",
+            "snapshot",
+            "universe",
+            "property",
+            "claim",
+            "claim_body",
+            "cas",
+        ] {
+            let original = harness.source.corrupt_fixture_harness_for_test(field);
+            assert!(matches!(
+                harness.source.preservation_bundle_v5(
+                    harness.target.run_id().clone(),
+                    harness.phases.closure(),
+                    harness.phases.mapping(),
+                    harness.phases.correspondence(),
+                    &harness_staleness,
+                    ContentHash::sha256(b"policy"),
+                ),
+                Err(crate::M6Error::PreservationUnsupported(_))
+            ));
+            harness.source.restore_fixture_harness_for_test(original);
+        }
+
+        let mut fixture =
+            PreservationDistinctS0S1StalenessFixture::new().expect("dependency mutation fixture");
+        let staleness = fixture.reduce().expect("dependency mutation staleness");
+        let source_obligation_id = fixture
+            .source
+            .passed_fixture_obligation_id()
+            .expect("fixture obligation");
+        let dependency_mapping_id = staleness
+            .records()
+            .iter()
+            .find(|record| {
+                record.source_record_kind() == crate::HistoricalRecordKindV5::Obligation
+                    && record.source_record_id() == source_obligation_id
+            })
+            .expect("payment assessment")
+            .mapping_ids()
+            .iter()
+            .find(|mapping_id| {
+                fixture
+                    .phases
+                    .mapping()
+                    .mappings()
+                    .iter()
+                    .find(|mapping| mapping.id() == *mapping_id)
+                    .is_some_and(|mapping| {
+                        mapping.object_kind() != crate::ProgramObjectKindV5::Snapshot
+                    })
+            })
+            .expect("non-coordinate dependency mapping")
+            .clone();
+        for status in [
+            crate::MappingStatusV5::Modified,
+            crate::MappingStatusV5::Split,
+            crate::MappingStatusV5::Merged,
+            crate::MappingStatusV5::Unresolved,
+        ] {
+            fixture
+                .phases
+                .corrupt_mapping_status_for_test(&dependency_mapping_id, status);
+            assert!(matches!(
+                fixture.source.preservation_bundle_v5(
+                    fixture.target.run_id().clone(),
+                    fixture.phases.closure(),
+                    fixture.phases.mapping(),
+                    fixture.phases.correspondence(),
+                    &staleness,
+                    ContentHash::sha256(b"policy"),
+                ),
+                Err(crate::M6Error::PreservationUnsupported(_))
+            ));
+        }
+
+        let stale_fixture = PreservationDistinctS0S1StalenessFixture::new()
+            .expect("stale assessment mutation fixture");
+        let mut stale_assessment = stale_fixture.reduce().expect("candidate staleness");
+        let stale_source_obligation_id = stale_fixture
+            .source
+            .passed_fixture_obligation_id()
+            .expect("fixture obligation")
+            .clone();
+        stale_assessment.corrupt_obligation_assessment_stale_for_test(&stale_source_obligation_id);
+        assert!(matches!(
+            stale_fixture.source.preservation_bundle_v5(
+                stale_fixture.target.run_id().clone(),
+                stale_fixture.phases.closure(),
+                stale_fixture.phases.mapping(),
+                stale_fixture.phases.correspondence(),
+                &stale_assessment,
+                ContentHash::sha256(b"policy"),
+            ),
+            Err(crate::M6Error::PreservationUnsupported(_))
+        ));
     }
 }

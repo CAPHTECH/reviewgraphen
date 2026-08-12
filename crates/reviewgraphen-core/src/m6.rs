@@ -13,9 +13,10 @@ use crate::event::{
     V5PreIncrementalStructuralPrefixProjection,
 };
 use crate::{
-    ArtifactSourceV3, ArtifactSourceV4, AuthorityReplayBasisV4, ContentHash, DecisionOutcomeV3,
-    DomainError, EventLogV4, EventLogV5, FindingStatusV3, M5CompletedGluingProfileV4, Obligation,
-    ProgramSpace, ReviewAggregate, StableId, VerificationOutcomeV3,
+    ArtifactSensitivity, ArtifactSourceV3, ArtifactSourceV4, AuthorityReplayBasisV4, ContentHash,
+    DecisionOutcomeV3, DomainError, EventLogV4, EventLogV5, FindingStatusV3,
+    M5CompletedGluingProfileV4, Obligation, ProgramSpace, ReviewAggregate, StableId,
+    VerificationOutcomeV3,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -48,6 +49,17 @@ pub const MAX_M6_HISTORICAL_ASSESSMENTS: usize = 8_192;
 pub const MAX_M6_GLUE_FRESHNESS_RECORDS: usize = 1;
 pub const MAX_M6_RELATION_VISITS: usize = 65_536;
 pub const MVP_PROPERTY_IMPACT_POLICY_V5: &str = "reviewgraphen.mvp_property_impact@1";
+pub const STRUCTURAL_PRESERVATION_DESCRIPTOR_V5: &str = "reviewgraphen.structural_preservation@1";
+pub const PAYMENT_PRESERVATION_PROCEDURE_V1: &str =
+    "reviewgraphen.structural_preservation.payment_v1";
+pub const PRESERVATION_INPUT_MEDIA_TYPE_V1: &str =
+    "application/vnd.reviewgraphen.preservation-input+json;version=1";
+pub const PRESERVATION_RESULT_MEDIA_TYPE_V1: &str =
+    "application/vnd.reviewgraphen.preservation-result+json;version=1";
+pub const MAX_M6_PRESERVATION_DEPENDENCY_MAPPINGS: usize = 512;
+pub const MAX_M6_PRESERVATION_RECORDS: usize = 2_048;
+pub const MAX_M6_PRESERVATION_REGISTRATIONS: usize = 4_096;
+pub const MAX_M6_PRESERVATION_CAS_BYTES: usize = 1_048_576;
 
 pub type M6Result<T> = std::result::Result<T, M6Error>;
 
@@ -67,6 +79,8 @@ pub enum M6Error {
     InvalidHistoricalTopology(&'static str),
     #[error("invalid M6 staleness assessment: {0}")]
     InvalidStalenessAssessment(&'static str),
+    #[error("target preservation is unsupported: {0}")]
+    PreservationUnsupported(&'static str),
     #[error("missing accepted M6 {kind} fact for {object_id}")]
     MissingAcceptedMappingFact {
         kind: &'static str,
@@ -82,6 +96,279 @@ pub enum M6Error {
     Canonical(String),
     #[error("invalid M6 wire value: {0}")]
     InvalidWire(String),
+}
+
+#[cfg(test)]
+mod preservation_contract_tests {
+    use super::*;
+
+    fn sid(kind: &str, value: &str) -> StableId {
+        StableId::parse(format!("{kind}:{value}")).expect("test ID")
+    }
+
+    fn bundle() -> PreservationBundleV5 {
+        let input = PreservationInputV1::new(PreservationInputParamsV1 {
+            source_closure_id: sid("incremental-source-closure-v5", "source"),
+            morphism_id: sid("change-morphism-v5", "morphism"),
+            correspondence_entry_id: sid("obligation-correspondence-entry-v5", "entry"),
+            source_claim_id: sid("claim", "source"),
+            source_evidence_ids: BTreeSet::from([sid("evidence", "source")]),
+            source_verification_id: sid("verification", "source"),
+            target_snapshot_id: sid("snapshot", "target"),
+            target_obligation_id: sid("obligation", "target"),
+            dependency_mapping_ids: BTreeSet::from([sid("program-mapping-v5", "dependency")]),
+            policy_revision_hash: ContentHash::sha256(b"policy"),
+        })
+        .expect("preservation input");
+        PreservationBundleV5::build(sid("run", "target"), sid("run", "source"), input)
+            .expect("preservation bundle")
+    }
+
+    #[test]
+    fn preservation_bytes_are_deterministic_role_separated_and_strict() {
+        let first = bundle();
+        let second = bundle();
+        assert_eq!(first.input_bytes(), second.input_bytes());
+        assert_eq!(first.output_bytes(), second.output_bytes());
+        assert_ne!(
+            first.input_registration().cas_hash(),
+            first.output_registration().cas_hash()
+        );
+        assert_ne!(
+            first.input_registration().id(),
+            first.output_registration().id()
+        );
+        assert_eq!(
+            ContentHash::sha256(first.input_bytes()),
+            *first.input_registration().cas_hash()
+        );
+        assert_eq!(
+            ContentHash::sha256(first.output_bytes()),
+            *first.output_registration().cas_hash()
+        );
+        assert_eq!(
+            first.verification().source_ids,
+            BTreeSet::from([
+                first.evidence().id().clone(),
+                first.evidence().source_verification_id().clone(),
+            ])
+        );
+        let input = PreservationInputV1::from_json_bytes(first.input_bytes()).expect("input DTO");
+        let result =
+            PreservationResultV1::from_json_bytes(first.output_bytes()).expect("result DTO");
+        for (mut value, key) in [
+            (serde_json::to_value(&input).unwrap(), "input_unknown"),
+            (serde_json::to_value(&result).unwrap(), "result_unknown"),
+        ] {
+            value
+                .as_object_mut()
+                .expect("DTO object")
+                .insert(key.to_owned(), Value::Bool(true));
+            let bytes = crate::canonical_json(&value).unwrap();
+            assert!(
+                PreservationInputV1::from_json_bytes(&bytes).is_err()
+                    && PreservationResultV1::from_json_bytes(&bytes).is_err()
+            );
+        }
+        let exact_bytes = vec![0_u8; MAX_M6_PRESERVATION_CAS_BYTES];
+        assert!(
+            ArtifactRegistrationV5::new(
+                sid("run", "target"),
+                &exact_bytes,
+                PRESERVATION_INPUT_MEDIA_TYPE_V1,
+                first.input_registration().source().clone(),
+            )
+            .is_ok()
+        );
+        assert!(
+            ArtifactRegistrationV5::new(
+                sid("run", "target"),
+                &vec![0_u8; MAX_M6_PRESERVATION_CAS_BYTES + 1],
+                PRESERVATION_INPUT_MEDIA_TYPE_V1,
+                first.input_registration().source().clone(),
+            )
+            .is_err()
+        );
+
+        let mut registration =
+            serde_json::to_value(first.input_registration()).expect("registration value");
+        registration
+            .as_object_mut()
+            .expect("object")
+            .insert("unknown".to_owned(), Value::Bool(true));
+        assert!(
+            ArtifactRegistrationV5::from_json_bytes(&crate::canonical_json(&registration).unwrap())
+                .is_err()
+        );
+        let mut evidence = serde_json::to_value(first.evidence()).expect("evidence value");
+        evidence
+            .as_object_mut()
+            .expect("object")
+            .insert("unknown".to_owned(), Value::Bool(true));
+        assert!(
+            PreservationEvidenceV5::from_json_bytes(&crate::canonical_json(&evidence).unwrap())
+                .is_err()
+        );
+        let mut verification =
+            serde_json::to_value(first.verification()).expect("verification value");
+        verification
+            .as_object_mut()
+            .expect("object")
+            .insert("unknown".to_owned(), Value::Bool(true));
+        assert!(
+            PreservationVerificationV5::from_json_bytes(
+                &crate::canonical_json(&verification).unwrap()
+            )
+            .is_err()
+        );
+
+        let mutate = |value: &serde_json::Value, key: &str, replacement: Value| {
+            let mut changed = value.clone();
+            changed
+                .as_object_mut()
+                .expect("preservation DTO object")
+                .insert(key.to_owned(), replacement);
+            crate::canonical_json(&changed).expect("mutated canonical JSON")
+        };
+        let input_value = serde_json::to_value(&input).expect("input value");
+        assert!(
+            PreservationInputV1::from_json_bytes(&mutate(
+                &input_value,
+                "schema",
+                Value::String("reviewgraphen.preservation_input.v2".to_owned()),
+            ))
+            .is_err()
+        );
+        let result_value = serde_json::to_value(&result).expect("result value");
+        assert!(
+            PreservationResultV1::from_json_bytes(&mutate(
+                &result_value,
+                "schema",
+                Value::String("reviewgraphen.preservation_result.v2".to_owned()),
+            ))
+            .is_err()
+        );
+        let registration =
+            serde_json::to_value(first.input_registration()).expect("registration value");
+        for (key, replacement) in [
+            (
+                "schema",
+                Value::String("reviewgraphen.artifact_registration.v6".to_owned()),
+            ),
+            ("id", Value::String("registration-v5:wrong".to_owned())),
+            (
+                "cas_hash",
+                Value::String(ContentHash::sha256(b"wrong").to_string()),
+            ),
+        ] {
+            assert!(
+                ArtifactRegistrationV5::from_json_bytes(&mutate(&registration, key, replacement,))
+                    .is_err()
+            );
+        }
+        let mut wrong_role = registration.clone();
+        wrong_role["source"]["role"] = Value::String("output".to_owned());
+        assert!(
+            ArtifactRegistrationV5::from_json_bytes(&crate::canonical_json(&wrong_role).unwrap())
+                .is_err()
+        );
+        for (field, replacement) in [
+            ("kind", serde_json::json!("other_artifact")),
+            ("run_id", serde_json::json!("run:wrong-target")),
+            (
+                "target_snapshot_id",
+                serde_json::json!("snapshot:wrong-target"),
+            ),
+            (
+                "target_obligation_id",
+                serde_json::json!("obligation:wrong-target"),
+            ),
+            ("source_run_id", serde_json::json!("run:wrong-source")),
+            (
+                "source_verification_id",
+                serde_json::json!("verification:wrong"),
+            ),
+            ("descriptor_id", serde_json::json!("reviewgraphen.other@1")),
+            (
+                "procedure_version",
+                serde_json::json!("reviewgraphen.other.v1"),
+            ),
+            ("role", serde_json::json!("output")),
+        ] {
+            let mut changed = registration.clone();
+            changed["source"][field] = replacement;
+            assert!(
+                ArtifactRegistrationV5::from_json_bytes(&crate::canonical_json(&changed).unwrap())
+                    .is_err(),
+                "nested preservation source substitution must refuse: {field}"
+            );
+        }
+
+        let evidence = serde_json::to_value(first.evidence()).expect("evidence value");
+        for (key, replacement) in [
+            (
+                "schema",
+                Value::String("reviewgraphen.preservation_evidence.v6".to_owned()),
+            ),
+            (
+                "id",
+                Value::String("preservation-evidence-v5:wrong".to_owned()),
+            ),
+            (
+                "source_verification_id",
+                Value::String("verification:wrong".to_owned()),
+            ),
+            (
+                "descriptor_id",
+                Value::String("reviewgraphen.other@1".to_owned()),
+            ),
+            (
+                "procedure_version",
+                Value::String("reviewgraphen.other.v1".to_owned()),
+            ),
+            (
+                "dependency_mapping_ids",
+                serde_json::json!(["program-mapping-v5:wrong"]),
+            ),
+        ] {
+            assert!(
+                PreservationEvidenceV5::from_json_bytes(&mutate(&evidence, key, replacement,))
+                    .is_err()
+            );
+        }
+        let verification = serde_json::to_value(first.verification()).expect("verification value");
+        for (key, replacement) in [
+            (
+                "schema",
+                Value::String("reviewgraphen.preservation_verification.v6".to_owned()),
+            ),
+            (
+                "id",
+                Value::String("preservation-verification-v5:wrong".to_owned()),
+            ),
+            (
+                "source_verification_id",
+                Value::String("verification:wrong".to_owned()),
+            ),
+            (
+                "descriptor_id",
+                Value::String("reviewgraphen.other@1".to_owned()),
+            ),
+            (
+                "procedure_version",
+                Value::String("reviewgraphen.other.v1".to_owned()),
+            ),
+        ] {
+            assert!(
+                PreservationVerificationV5::from_json_bytes(&mutate(
+                    &verification,
+                    key,
+                    replacement,
+                ))
+                .is_err()
+            );
+        }
+    }
 }
 
 impl From<DomainError> for M6Error {
@@ -218,6 +505,919 @@ fn require_kind(id: &StableId, kind: &'static str, field: &'static str) -> M6Res
 
 fn digest_ids(ids: &BTreeSet<StableId>) -> M6Result<ContentHash> {
     body_hash(&ids.iter().collect::<Vec<_>>())
+}
+
+/// Closed role of one structural-preservation CAS object.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreservationArtifactRoleV5 {
+    Input,
+    Output,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreservationArtifactV5 {
+    kind: String,
+    run_id: StableId,
+    target_snapshot_id: StableId,
+    target_obligation_id: StableId,
+    source_run_id: StableId,
+    source_verification_id: StableId,
+    descriptor_id: String,
+    procedure_version: String,
+    role: PreservationArtifactRoleV5,
+}
+
+impl PreservationArtifactV5 {
+    fn validate(&self) -> M6Result<()> {
+        for (id, kind, field) in [
+            (&self.run_id, "run", "run_id"),
+            (&self.target_snapshot_id, "snapshot", "target_snapshot_id"),
+            (
+                &self.target_obligation_id,
+                "obligation",
+                "target_obligation_id",
+            ),
+            (&self.source_run_id, "run", "source_run_id"),
+            (
+                &self.source_verification_id,
+                "verification",
+                "source_verification_id",
+            ),
+        ] {
+            require_kind(id, kind, field)?;
+        }
+        if self.kind != "preservation_artifact"
+            || self.run_id == self.source_run_id
+            || self.descriptor_id != STRUCTURAL_PRESERVATION_DESCRIPTOR_V5
+            || self.procedure_version != PAYMENT_PRESERVATION_PROCEDURE_V1
+        {
+            return Err(M6Error::PreservationUnsupported(
+                "artifact provenance is outside the sole preservation procedure",
+            ));
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn role(&self) -> PreservationArtifactRoleV5 {
+        self.role
+    }
+    #[must_use]
+    pub fn target_obligation_id(&self) -> &StableId {
+        &self.target_obligation_id
+    }
+    #[must_use]
+    pub fn source_verification_id(&self) -> &StableId {
+        &self.source_verification_id
+    }
+    #[must_use]
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+    #[must_use]
+    pub fn target_snapshot_id(&self) -> &StableId {
+        &self.target_snapshot_id
+    }
+    #[must_use]
+    pub fn source_run_id(&self) -> &StableId {
+        &self.source_run_id
+    }
+    #[must_use]
+    pub fn descriptor_id(&self) -> &str {
+        &self.descriptor_id
+    }
+    #[must_use]
+    pub fn procedure_version(&self) -> &str {
+        &self.procedure_version
+    }
+}
+
+#[derive(Serialize)]
+struct ArtifactRegistrationIdentityV5<'a> {
+    cas_hash: &'a ContentHash,
+    media_type: &'a str,
+    run_id: &'a StableId,
+    sensitivity: ArtifactSensitivity,
+    size: u64,
+    source: &'a PreservationArtifactV5,
+}
+
+/// Separate V5 registration contract used only for preservation artifacts.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ArtifactRegistrationV5 {
+    schema: String,
+    id: StableId,
+    run_id: StableId,
+    cas_hash: ContentHash,
+    media_type: String,
+    size: u64,
+    sensitivity: ArtifactSensitivity,
+    source: PreservationArtifactV5,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArtifactRegistrationWireV5 {
+    schema: String,
+    id: StableId,
+    run_id: StableId,
+    cas_hash: ContentHash,
+    media_type: String,
+    size: u64,
+    sensitivity: ArtifactSensitivity,
+    source: PreservationArtifactV5,
+}
+
+impl ArtifactRegistrationV5 {
+    pub fn new(
+        run_id: StableId,
+        bytes: &[u8],
+        media_type: impl Into<String>,
+        source: PreservationArtifactV5,
+    ) -> M6Result<Self> {
+        bounded(
+            bytes.len(),
+            MAX_M6_PRESERVATION_CAS_BYTES,
+            "M6 preservation CAS object",
+        )?;
+        source.validate()?;
+        let media_type = media_type.into();
+        let cas_hash = ContentHash::sha256(bytes);
+        let size = u64::try_from(bytes.len()).map_err(|_| M6Error::Incomplete {
+            operation: "M6 preservation CAS object",
+            limit: MAX_M6_PRESERVATION_CAS_BYTES,
+            observed: usize::MAX,
+        })?;
+        let sensitivity = ArtifactSensitivity::CanonicalState;
+        let identity = ArtifactRegistrationIdentityV5 {
+            cas_hash: &cas_hash,
+            media_type: &media_type,
+            run_id: &run_id,
+            sensitivity,
+            size,
+            source: &source,
+        };
+        let value = Self {
+            schema: "reviewgraphen.artifact_registration.v5".to_owned(),
+            id: derive("registration-v5", &identity)?,
+            run_id,
+            cas_hash,
+            media_type,
+            size,
+            sensitivity,
+            source,
+        };
+        value.validate()?;
+        bounded_event_dto(&value, MAX_M6_CANONICAL_BYTES, "M6 registration DTO bytes")?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> M6Result<()> {
+        self.source.validate()?;
+        full_sha256("cas_hash", &self.cas_hash)?;
+        let expected_media_type = match self.source.role {
+            PreservationArtifactRoleV5::Input => PRESERVATION_INPUT_MEDIA_TYPE_V1,
+            PreservationArtifactRoleV5::Output => PRESERVATION_RESULT_MEDIA_TYPE_V1,
+        };
+        let identity = ArtifactRegistrationIdentityV5 {
+            cas_hash: &self.cas_hash,
+            media_type: &self.media_type,
+            run_id: &self.run_id,
+            sensitivity: self.sensitivity,
+            size: self.size,
+            source: &self.source,
+        };
+        if self.schema != "reviewgraphen.artifact_registration.v5"
+            || self.id != derive("registration-v5", &identity)?
+            || self.run_id != self.source.run_id
+            || self.sensitivity != ArtifactSensitivity::CanonicalState
+            || self.media_type != expected_media_type
+            || self.size > MAX_M6_PRESERVATION_CAS_BYTES as u64
+        {
+            return Err(M6Error::InvalidWire(
+                "registration is not the exact role-bound V5 CAS tuple".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        preflight_event_line(input.len(), 1)?;
+        let wire: ArtifactRegistrationWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        let value = Self {
+            schema: wire.schema,
+            id: wire.id,
+            run_id: wire.run_id,
+            cas_hash: wire.cas_hash,
+            media_type: wire.media_type,
+            size: wire.size,
+            sensitivity: wire.sensitivity,
+            source: wire.source,
+        };
+        value.validate()?;
+        if crate::canonical_json(&value)? != input {
+            return Err(M6Error::InvalidWire(
+                "registration JSON is not canonical".to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+    #[must_use]
+    pub fn cas_hash(&self) -> &ContentHash {
+        &self.cas_hash
+    }
+    #[must_use]
+    pub fn media_type(&self) -> &str {
+        &self.media_type
+    }
+    #[must_use]
+    pub const fn size(&self) -> u64 {
+        self.size
+    }
+    #[must_use]
+    pub fn source(&self) -> &PreservationArtifactV5 {
+        &self.source
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ArtifactRegistrationV5 {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = ArtifactRegistrationWireV5::deserialize(deserializer)?;
+        let value = Self {
+            schema: wire.schema,
+            id: wire.id,
+            run_id: wire.run_id,
+            cas_hash: wire.cas_hash,
+            media_type: wire.media_type,
+            size: wire.size,
+            sensitivity: wire.sensitivity,
+            source: wire.source,
+        };
+        value.validate().map_err(serde::de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreservationInputV1 {
+    schema: String,
+    source_closure_id: StableId,
+    morphism_id: StableId,
+    correspondence_entry_id: StableId,
+    source_claim_id: StableId,
+    source_evidence_ids: BTreeSet<StableId>,
+    source_verification_id: StableId,
+    target_snapshot_id: StableId,
+    target_obligation_id: StableId,
+    dependency_mapping_ids: BTreeSet<StableId>,
+    policy_revision_hash: ContentHash,
+}
+
+/// Complete construction tuple for the closed preservation input contract.
+pub struct PreservationInputParamsV1 {
+    pub source_closure_id: StableId,
+    pub morphism_id: StableId,
+    pub correspondence_entry_id: StableId,
+    pub source_claim_id: StableId,
+    pub source_evidence_ids: BTreeSet<StableId>,
+    pub source_verification_id: StableId,
+    pub target_snapshot_id: StableId,
+    pub target_obligation_id: StableId,
+    pub dependency_mapping_ids: BTreeSet<StableId>,
+    pub policy_revision_hash: ContentHash,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreservationResultV1 {
+    schema: String,
+    descriptor_id: String,
+    procedure_version: String,
+    input_hash: ContentHash,
+    target_snapshot_id: StableId,
+    target_obligation_id: StableId,
+    outcome: String,
+    source_verification_id: StableId,
+    dependency_mapping_ids: BTreeSet<StableId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreservationEvidenceV5 {
+    schema: String,
+    id: StableId,
+    target_snapshot_id: StableId,
+    target_obligation_id: StableId,
+    source_closure_id: StableId,
+    morphism_id: StableId,
+    correspondence_entry_id: StableId,
+    source_claim_id: StableId,
+    source_evidence_ids: BTreeSet<StableId>,
+    source_verification_id: StableId,
+    dependency_mapping_ids: BTreeSet<StableId>,
+    input_registration_id: StableId,
+    output_registration_id: StableId,
+    descriptor_id: String,
+    procedure_version: String,
+    observation: String,
+    source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreservationVerificationV5 {
+    schema: String,
+    id: StableId,
+    target_snapshot_id: StableId,
+    target_obligation_id: StableId,
+    evidence_id: StableId,
+    source_verification_id: StableId,
+    descriptor_id: String,
+    procedure_version: String,
+    outcome: String,
+    source_ids: BTreeSet<StableId>,
+}
+
+fn exact_preservation_source_ids(
+    input: &PreservationInputV1,
+    input_registration_id: &StableId,
+    output_registration_id: &StableId,
+) -> BTreeSet<StableId> {
+    let mut ids = BTreeSet::from([
+        input.source_closure_id.clone(),
+        input.morphism_id.clone(),
+        input.correspondence_entry_id.clone(),
+        input.source_claim_id.clone(),
+        input.source_verification_id.clone(),
+        input_registration_id.clone(),
+        output_registration_id.clone(),
+    ]);
+    ids.extend(input.source_evidence_ids.iter().cloned());
+    ids.extend(input.dependency_mapping_ids.iter().cloned());
+    ids
+}
+
+impl PreservationInputV1 {
+    pub fn new(params: PreservationInputParamsV1) -> M6Result<Self> {
+        let value = Self {
+            schema: "reviewgraphen.preservation_input.v1".to_owned(),
+            source_closure_id: params.source_closure_id,
+            morphism_id: params.morphism_id,
+            correspondence_entry_id: params.correspondence_entry_id,
+            source_claim_id: params.source_claim_id,
+            source_evidence_ids: params.source_evidence_ids,
+            source_verification_id: params.source_verification_id,
+            target_snapshot_id: params.target_snapshot_id,
+            target_obligation_id: params.target_obligation_id,
+            dependency_mapping_ids: params.dependency_mapping_ids,
+            policy_revision_hash: params.policy_revision_hash,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+    fn validate(&self) -> M6Result<()> {
+        bounded(
+            self.dependency_mapping_ids.len(),
+            MAX_M6_PRESERVATION_DEPENDENCY_MAPPINGS,
+            "M6 preservation dependency mappings",
+        )?;
+        if self.schema != "reviewgraphen.preservation_input.v1"
+            || self.source_closure_id.kind() != "incremental-source-closure-v5"
+            || self.morphism_id.kind() != "change-morphism-v5"
+            || self.correspondence_entry_id.kind() != "obligation-correspondence-entry-v5"
+            || self.source_claim_id.kind() != "claim"
+            || self.source_evidence_ids.is_empty()
+            || self
+                .source_evidence_ids
+                .iter()
+                .any(|id| id.kind() != "evidence")
+            || self.source_verification_id.kind() != "verification"
+            || self.target_snapshot_id.kind() != "snapshot"
+            || self.target_obligation_id.kind() != "obligation"
+            || self
+                .dependency_mapping_ids
+                .iter()
+                .any(|id| id.kind() != "program-mapping-v5")
+        {
+            return Err(M6Error::PreservationUnsupported(
+                "preservation input closure is incomplete",
+            ));
+        }
+        full_sha256("policy_revision_hash", &self.policy_revision_hash)
+    }
+    pub fn canonical_bytes(&self) -> M6Result<Vec<u8>> {
+        self.validate()?;
+        Ok(crate::canonical_json(self)?)
+    }
+    pub fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        preflight_event_line(input.len(), 1)?;
+        let value: Self = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        value.validate()?;
+        if crate::canonical_json(&value)? != input {
+            return Err(M6Error::InvalidWire(
+                "input JSON is not canonical".to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+    #[must_use]
+    pub fn target_obligation_id(&self) -> &StableId {
+        &self.target_obligation_id
+    }
+    #[must_use]
+    pub fn source_closure_id(&self) -> &StableId {
+        &self.source_closure_id
+    }
+    #[must_use]
+    pub fn source_verification_id(&self) -> &StableId {
+        &self.source_verification_id
+    }
+    #[must_use]
+    pub fn target_snapshot_id(&self) -> &StableId {
+        &self.target_snapshot_id
+    }
+    #[must_use]
+    pub fn policy_revision_hash(&self) -> &ContentHash {
+        &self.policy_revision_hash
+    }
+}
+
+impl PreservationResultV1 {
+    fn from_input(input: &PreservationInputV1, input_hash: ContentHash) -> M6Result<Self> {
+        let value = Self {
+            schema: "reviewgraphen.preservation_result.v1".to_owned(),
+            descriptor_id: STRUCTURAL_PRESERVATION_DESCRIPTOR_V5.to_owned(),
+            procedure_version: PAYMENT_PRESERVATION_PROCEDURE_V1.to_owned(),
+            input_hash,
+            target_snapshot_id: input.target_snapshot_id.clone(),
+            target_obligation_id: input.target_obligation_id.clone(),
+            outcome: "passed".to_owned(),
+            source_verification_id: input.source_verification_id.clone(),
+            dependency_mapping_ids: input.dependency_mapping_ids.clone(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+    fn validate(&self) -> M6Result<()> {
+        full_sha256("input_hash", &self.input_hash)?;
+        if self.schema != "reviewgraphen.preservation_result.v1"
+            || self.descriptor_id != STRUCTURAL_PRESERVATION_DESCRIPTOR_V5
+            || self.procedure_version != PAYMENT_PRESERVATION_PROCEDURE_V1
+            || self.outcome != "passed"
+        {
+            return Err(M6Error::InvalidWire(
+                "invalid preservation result".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn canonical_bytes(&self) -> M6Result<Vec<u8>> {
+        self.validate()?;
+        Ok(crate::canonical_json(self)?)
+    }
+    pub fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        preflight_event_line(input.len(), 1)?;
+        let value: Self = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        value.validate()?;
+        if crate::canonical_json(&value)? != input {
+            return Err(M6Error::InvalidWire(
+                "result JSON is not canonical".to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+    #[must_use]
+    pub fn input_hash(&self) -> &ContentHash {
+        &self.input_hash
+    }
+    #[must_use]
+    pub fn target_obligation_id(&self) -> &StableId {
+        &self.target_obligation_id
+    }
+    #[must_use]
+    pub fn target_snapshot_id(&self) -> &StableId {
+        &self.target_snapshot_id
+    }
+    #[must_use]
+    pub fn source_verification_id(&self) -> &StableId {
+        &self.source_verification_id
+    }
+}
+
+impl PreservationEvidenceV5 {
+    fn new(
+        input: &PreservationInputV1,
+        input_registration_id: StableId,
+        output_registration_id: StableId,
+    ) -> M6Result<Self> {
+        let mut value = Self {
+            schema: "reviewgraphen.preservation_evidence.v5".to_owned(),
+            id: StableId::parse("preservation-evidence-v5:pending")?,
+            target_snapshot_id: input.target_snapshot_id.clone(),
+            target_obligation_id: input.target_obligation_id.clone(),
+            source_closure_id: input.source_closure_id.clone(),
+            morphism_id: input.morphism_id.clone(),
+            correspondence_entry_id: input.correspondence_entry_id.clone(),
+            source_claim_id: input.source_claim_id.clone(),
+            source_evidence_ids: input.source_evidence_ids.clone(),
+            source_verification_id: input.source_verification_id.clone(),
+            dependency_mapping_ids: input.dependency_mapping_ids.clone(),
+            input_registration_id,
+            output_registration_id,
+            descriptor_id: STRUCTURAL_PRESERVATION_DESCRIPTOR_V5.to_owned(),
+            procedure_version: PAYMENT_PRESERVATION_PROCEDURE_V1.to_owned(),
+            observation: "structure_preserved".to_owned(),
+            source_ids: BTreeSet::new(),
+        };
+        value.source_ids = exact_preservation_source_ids(
+            input,
+            &value.input_registration_id,
+            &value.output_registration_id,
+        );
+        #[derive(Serialize)]
+        struct Identity<'a> {
+            target_snapshot_id: &'a StableId,
+            target_obligation_id: &'a StableId,
+            source_closure_id: &'a StableId,
+            morphism_id: &'a StableId,
+            correspondence_entry_id: &'a StableId,
+            source_claim_id: &'a StableId,
+            source_evidence_ids: &'a BTreeSet<StableId>,
+            source_verification_id: &'a StableId,
+            dependency_mapping_ids: &'a BTreeSet<StableId>,
+            input_registration_id: &'a StableId,
+            output_registration_id: &'a StableId,
+            descriptor_id: &'a str,
+            procedure_version: &'a str,
+            observation: &'a str,
+            source_ids: &'a BTreeSet<StableId>,
+        }
+        value.id = derive(
+            "preservation-evidence-v5",
+            &Identity {
+                target_snapshot_id: &value.target_snapshot_id,
+                target_obligation_id: &value.target_obligation_id,
+                source_closure_id: &value.source_closure_id,
+                morphism_id: &value.morphism_id,
+                correspondence_entry_id: &value.correspondence_entry_id,
+                source_claim_id: &value.source_claim_id,
+                source_evidence_ids: &value.source_evidence_ids,
+                source_verification_id: &value.source_verification_id,
+                dependency_mapping_ids: &value.dependency_mapping_ids,
+                input_registration_id: &value.input_registration_id,
+                output_registration_id: &value.output_registration_id,
+                descriptor_id: &value.descriptor_id,
+                procedure_version: &value.procedure_version,
+                observation: &value.observation,
+                source_ids: &value.source_ids,
+            },
+        )?;
+        value.validate()?;
+        Ok(value)
+    }
+    fn validate(&self) -> M6Result<()> {
+        let input = PreservationInputV1 {
+            schema: "reviewgraphen.preservation_input.v1".to_owned(),
+            source_closure_id: self.source_closure_id.clone(),
+            morphism_id: self.morphism_id.clone(),
+            correspondence_entry_id: self.correspondence_entry_id.clone(),
+            source_claim_id: self.source_claim_id.clone(),
+            source_evidence_ids: self.source_evidence_ids.clone(),
+            source_verification_id: self.source_verification_id.clone(),
+            target_snapshot_id: self.target_snapshot_id.clone(),
+            target_obligation_id: self.target_obligation_id.clone(),
+            dependency_mapping_ids: self.dependency_mapping_ids.clone(),
+            policy_revision_hash: ContentHash::sha256(b"validation-only"),
+        };
+        let exact_sources = exact_preservation_source_ids(
+            &input,
+            &self.input_registration_id,
+            &self.output_registration_id,
+        );
+        #[derive(Serialize)]
+        struct Identity<'a> {
+            target_snapshot_id: &'a StableId,
+            target_obligation_id: &'a StableId,
+            source_closure_id: &'a StableId,
+            morphism_id: &'a StableId,
+            correspondence_entry_id: &'a StableId,
+            source_claim_id: &'a StableId,
+            source_evidence_ids: &'a BTreeSet<StableId>,
+            source_verification_id: &'a StableId,
+            dependency_mapping_ids: &'a BTreeSet<StableId>,
+            input_registration_id: &'a StableId,
+            output_registration_id: &'a StableId,
+            descriptor_id: &'a str,
+            procedure_version: &'a str,
+            observation: &'a str,
+            source_ids: &'a BTreeSet<StableId>,
+        }
+        let expected = derive(
+            "preservation-evidence-v5",
+            &Identity {
+                target_snapshot_id: &self.target_snapshot_id,
+                target_obligation_id: &self.target_obligation_id,
+                source_closure_id: &self.source_closure_id,
+                morphism_id: &self.morphism_id,
+                correspondence_entry_id: &self.correspondence_entry_id,
+                source_claim_id: &self.source_claim_id,
+                source_evidence_ids: &self.source_evidence_ids,
+                source_verification_id: &self.source_verification_id,
+                dependency_mapping_ids: &self.dependency_mapping_ids,
+                input_registration_id: &self.input_registration_id,
+                output_registration_id: &self.output_registration_id,
+                descriptor_id: &self.descriptor_id,
+                procedure_version: &self.procedure_version,
+                observation: &self.observation,
+                source_ids: &self.source_ids,
+            },
+        )?;
+        if self.schema != "reviewgraphen.preservation_evidence.v5"
+            || self.id != expected
+            || self.descriptor_id != STRUCTURAL_PRESERVATION_DESCRIPTOR_V5
+            || self.procedure_version != PAYMENT_PRESERVATION_PROCEDURE_V1
+            || self.observation != "structure_preserved"
+            || self.source_ids != exact_sources
+        {
+            return Err(M6Error::InvalidWire(
+                "invalid preservation evidence closure".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        preflight_event_line(input.len(), 1)?;
+        let value: Self = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        value.validate()?;
+        if crate::canonical_json(&value)? != input {
+            return Err(M6Error::InvalidWire(
+                "evidence JSON is not canonical".to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn target_obligation_id(&self) -> &StableId {
+        &self.target_obligation_id
+    }
+    #[must_use]
+    pub fn source_verification_id(&self) -> &StableId {
+        &self.source_verification_id
+    }
+    #[must_use]
+    pub fn source_claim_id(&self) -> &StableId {
+        &self.source_claim_id
+    }
+    #[must_use]
+    pub fn source_evidence_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_evidence_ids
+    }
+    #[must_use]
+    pub fn input_registration_id(&self) -> &StableId {
+        &self.input_registration_id
+    }
+    #[must_use]
+    pub fn output_registration_id(&self) -> &StableId {
+        &self.output_registration_id
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+}
+
+impl PreservationVerificationV5 {
+    fn new(input: &PreservationInputV1, evidence: &PreservationEvidenceV5) -> M6Result<Self> {
+        let source_ids =
+            BTreeSet::from([evidence.id.clone(), input.source_verification_id.clone()]);
+        #[derive(Serialize)]
+        struct Identity<'a> {
+            target_snapshot_id: &'a StableId,
+            target_obligation_id: &'a StableId,
+            evidence_id: &'a StableId,
+            source_verification_id: &'a StableId,
+            descriptor_id: &'a str,
+            procedure_version: &'a str,
+            outcome: &'a str,
+            source_ids: &'a BTreeSet<StableId>,
+        }
+        let descriptor_id = STRUCTURAL_PRESERVATION_DESCRIPTOR_V5.to_owned();
+        let procedure_version = PAYMENT_PRESERVATION_PROCEDURE_V1.to_owned();
+        let outcome = "passed".to_owned();
+        let id = derive(
+            "preservation-verification-v5",
+            &Identity {
+                target_snapshot_id: &input.target_snapshot_id,
+                target_obligation_id: &input.target_obligation_id,
+                evidence_id: &evidence.id,
+                source_verification_id: &input.source_verification_id,
+                descriptor_id: &descriptor_id,
+                procedure_version: &procedure_version,
+                outcome: &outcome,
+                source_ids: &source_ids,
+            },
+        )?;
+        let value = Self {
+            schema: "reviewgraphen.preservation_verification.v5".to_owned(),
+            id,
+            target_snapshot_id: input.target_snapshot_id.clone(),
+            target_obligation_id: input.target_obligation_id.clone(),
+            evidence_id: evidence.id.clone(),
+            source_verification_id: input.source_verification_id.clone(),
+            descriptor_id,
+            procedure_version,
+            outcome,
+            source_ids,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+    fn validate(&self) -> M6Result<()> {
+        #[derive(Serialize)]
+        struct Identity<'a> {
+            target_snapshot_id: &'a StableId,
+            target_obligation_id: &'a StableId,
+            evidence_id: &'a StableId,
+            source_verification_id: &'a StableId,
+            descriptor_id: &'a str,
+            procedure_version: &'a str,
+            outcome: &'a str,
+            source_ids: &'a BTreeSet<StableId>,
+        }
+        let expected_sources = BTreeSet::from([
+            self.evidence_id.clone(),
+            self.source_verification_id.clone(),
+        ]);
+        let expected = derive(
+            "preservation-verification-v5",
+            &Identity {
+                target_snapshot_id: &self.target_snapshot_id,
+                target_obligation_id: &self.target_obligation_id,
+                evidence_id: &self.evidence_id,
+                source_verification_id: &self.source_verification_id,
+                descriptor_id: &self.descriptor_id,
+                procedure_version: &self.procedure_version,
+                outcome: &self.outcome,
+                source_ids: &self.source_ids,
+            },
+        )?;
+        if self.schema != "reviewgraphen.preservation_verification.v5"
+            || self.id != expected
+            || self.evidence_id.kind() != "preservation-evidence-v5"
+            || self.source_verification_id.kind() != "verification"
+            || self.descriptor_id != STRUCTURAL_PRESERVATION_DESCRIPTOR_V5
+            || self.procedure_version != PAYMENT_PRESERVATION_PROCEDURE_V1
+            || self.outcome != "passed"
+            || self.source_ids != expected_sources
+        {
+            return Err(M6Error::InvalidWire(
+                "invalid preservation verification closure".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        preflight_event_line(input.len(), 1)?;
+        let value: Self = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        value.validate()?;
+        if crate::canonical_json(&value)? != input {
+            return Err(M6Error::InvalidWire(
+                "verification JSON is not canonical".to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn evidence_id(&self) -> &StableId {
+        &self.evidence_id
+    }
+    #[must_use]
+    pub fn target_obligation_id(&self) -> &StableId {
+        &self.target_obligation_id
+    }
+    #[must_use]
+    pub fn source_verification_id(&self) -> &StableId {
+        &self.source_verification_id
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+}
+
+/// Fully deterministic, process/network/workspace-write-free preservation output.
+#[derive(Clone, Debug)]
+pub struct PreservationBundleV5 {
+    input_bytes: Vec<u8>,
+    output_bytes: Vec<u8>,
+    input_registration: ArtifactRegistrationV5,
+    output_registration: ArtifactRegistrationV5,
+    evidence: PreservationEvidenceV5,
+    verification: PreservationVerificationV5,
+}
+
+impl PreservationBundleV5 {
+    pub(crate) fn build(
+        target_run_id: StableId,
+        source_run_id: StableId,
+        input: PreservationInputV1,
+    ) -> M6Result<Self> {
+        input.validate()?;
+        let input_bytes = input.canonical_bytes()?;
+        let input_hash = ContentHash::sha256(&input_bytes);
+        let result = PreservationResultV1::from_input(&input, input_hash)?;
+        let output_bytes = result.canonical_bytes()?;
+        let source = |role| PreservationArtifactV5 {
+            kind: "preservation_artifact".to_owned(),
+            run_id: target_run_id.clone(),
+            target_snapshot_id: input.target_snapshot_id.clone(),
+            target_obligation_id: input.target_obligation_id.clone(),
+            source_run_id: source_run_id.clone(),
+            source_verification_id: input.source_verification_id.clone(),
+            descriptor_id: STRUCTURAL_PRESERVATION_DESCRIPTOR_V5.to_owned(),
+            procedure_version: PAYMENT_PRESERVATION_PROCEDURE_V1.to_owned(),
+            role,
+        };
+        let input_registration = ArtifactRegistrationV5::new(
+            target_run_id.clone(),
+            &input_bytes,
+            PRESERVATION_INPUT_MEDIA_TYPE_V1,
+            source(PreservationArtifactRoleV5::Input),
+        )?;
+        let output_registration = ArtifactRegistrationV5::new(
+            target_run_id.clone(),
+            &output_bytes,
+            PRESERVATION_RESULT_MEDIA_TYPE_V1,
+            source(PreservationArtifactRoleV5::Output),
+        )?;
+        let evidence = PreservationEvidenceV5::new(
+            &input,
+            input_registration.id.clone(),
+            output_registration.id.clone(),
+        )?;
+        let verification = PreservationVerificationV5::new(&input, &evidence)?;
+        Ok(Self {
+            input_bytes,
+            output_bytes,
+            input_registration,
+            output_registration,
+            evidence,
+            verification,
+        })
+    }
+    #[must_use]
+    pub fn input_bytes(&self) -> &[u8] {
+        &self.input_bytes
+    }
+    #[must_use]
+    pub fn output_bytes(&self) -> &[u8] {
+        &self.output_bytes
+    }
+    #[must_use]
+    pub fn input_registration(&self) -> &ArtifactRegistrationV5 {
+        &self.input_registration
+    }
+    #[must_use]
+    pub fn output_registration(&self) -> &ArtifactRegistrationV5 {
+        &self.output_registration
+    }
+    #[must_use]
+    pub fn evidence(&self) -> &PreservationEvidenceV5 {
+        &self.evidence
+    }
+    #[must_use]
+    pub fn verification(&self) -> &PreservationVerificationV5 {
+        &self.verification
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -550,6 +1750,10 @@ impl IncrementalSourceClosureV5 {
         &self.input.target_run_id
     }
 
+    pub(crate) fn source_run_id(&self) -> &StableId {
+        &self.input.source_run_id
+    }
+
     pub(crate) fn target_genesis_hash(&self) -> &ContentHash {
         &self.input.target_genesis_hash
     }
@@ -699,7 +1903,7 @@ pub fn derive_untrusted_incremental_mapping_proposal_v5(
         source_log.canonical_genesis_bytes(),
     )?;
     let source_program = source_genesis.program_space_for_store();
-    let target_state = target_log.replay_pre_incremental_state_for_store()?;
+    let target_state = target_log.replay_initial_state_for_incremental_proposal()?;
     let target_projection = target_state.projection();
     let target_program = target_projection.program_space();
     let source_git =
@@ -6996,13 +8200,14 @@ fn row_successors_v5(
             &node.required_records,
             successor_map,
         );
-        if exact_substituted_successor_v5(
+        let exact = exact_substituted_successor_v5(
             key.kind,
             &node.body,
             &candidate.body,
             &local_replacements,
             &removals,
-        ) {
+        );
+        if exact {
             if result.len() == MAX_M6_RECORD_METADATA_IDS {
                 return Err(M6Error::Incomplete {
                     operation: "M6 row successor record IDs",
@@ -7063,6 +8268,7 @@ fn exact_substituted_successor_v5(
     // extension is not an ADR 0023 structural reference.
     let normalized = match kind {
         HistoricalSourceRecordKindV4::Obligation => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7081,6 +8287,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::ReviewPlan => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7094,6 +8301,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::ContextEnvelope => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7109,6 +8317,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::Execution => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7126,6 +8335,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::Claim => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7138,6 +8348,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::ClaimAssessment => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7155,6 +8366,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::ArtifactRegistrationV3 => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7177,6 +8389,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::ArtifactRegistrationV4 => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7199,6 +8412,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::Evidence => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7215,12 +8429,14 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::EvidenceBinding => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
             &["id", "run_id", "claim_id", "evidence_id", "source_ids"],
         ),
         HistoricalSourceRecordKindV4::Verification => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7236,6 +8452,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::Decision => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7251,6 +8468,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::Finding => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7266,6 +8484,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::GluingInputDescriptor => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7280,6 +8499,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::ContextCover => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7298,6 +8518,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::Section => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7322,6 +8543,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::Restriction => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7340,6 +8562,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::GluingAttempt => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7362,6 +8585,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::GlobalCandidate => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7382,6 +8606,7 @@ fn exact_substituted_successor_v5(
             ],
         ),
         HistoricalSourceRecordKindV4::GluingObstruction => normalize_successor_root_fields_v5(
+            kind,
             &mut substituted,
             replacements,
             removals,
@@ -7407,6 +8632,9 @@ fn exact_substituted_successor_v5(
         return false;
     }
     if !normalize_successor_nested_paths_v5(kind, &mut substituted, replacements, removals) {
+        return false;
+    }
+    if !normalize_successor_object_array_containers_v5(kind, &mut substituted) {
         return false;
     }
     match kind {
@@ -7439,7 +8667,113 @@ fn exact_substituted_successor_v5(
 /// enum of twenty concrete borrowed types; the enum dispatch above fixes the
 /// DTO and each root path before this helper runs. It intentionally never
 /// descends into an object or array element.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SuccessorReferenceArraySemanticsV5 {
+    Set,
+    Ordered,
+}
+
+fn successor_root_array_semantics_v5(
+    kind: HistoricalSourceRecordKindV4,
+    field: &str,
+) -> Option<SuccessorReferenceArraySemanticsV5> {
+    use HistoricalSourceRecordKindV4 as Kind;
+    use SuccessorReferenceArraySemanticsV5::{Ordered, Set};
+    match (kind, field) {
+        (Kind::Obligation, "target_refs" | "context_ids" | "depends_on" | "source_ids") => {
+            Some(Ordered)
+        }
+        (
+            Kind::Obligation,
+            "normalized_target_refs"
+            | "normalized_context_ids"
+            | "normalized_depends_on"
+            | "normalized_source_ids"
+            | "generator_ids"
+            | "qualification_ids",
+        ) => Some(Set),
+        (Kind::ReviewPlan, "obligation_ids" | "source_ids")
+        | (
+            Kind::ContextEnvelope,
+            "obligation_ids"
+            | "candidate_source_ids"
+            | "normalized_included_source_ids"
+            | "source_ids",
+        )
+        | (Kind::Execution, "obligation_ids" | "parsed_claim_ids" | "source_ids")
+        | (Kind::Claim, "obligation_ids" | "target_refs" | "source_ids")
+        | (
+            Kind::ClaimAssessment,
+            "binding_ids" | "evidence_ids" | "verification_ids" | "decision_ids" | "finding_ids"
+            | "source_ids",
+        )
+        | (Kind::ArtifactRegistrationV3 | Kind::ArtifactRegistrationV4, "source_ids")
+        | (Kind::Evidence, "source_ids" | "subject_ids")
+        | (Kind::EvidenceBinding, "source_ids")
+        | (Kind::Verification, "evidence_ids" | "source_ids")
+        | (Kind::Decision, "evidence_ids" | "verification_ids" | "source_ids")
+        | (Kind::Finding, "evidence_ids" | "verification_ids" | "source_ids")
+        | (Kind::GluingInputDescriptor, "qualification_source_ids")
+        | (
+            Kind::ContextCover,
+            "selected_obligation_ids"
+            | "cover_domain_ids"
+            | "covered_domain_ids"
+            | "uncovered_domain_ids"
+            | "source_ids",
+        )
+        | (
+            Kind::Section,
+            "binding_ids"
+            | "evidence_ids"
+            | "verification_ids"
+            | "decision_ids"
+            | "finding_ids"
+            | "qualification_source_ids"
+            | "source_ids",
+        )
+        | (
+            Kind::Restriction,
+            "overlap_member_ids"
+            | "claim_ids"
+            | "qualification_source_ids"
+            | "evidence_ids"
+            | "verification_ids"
+            | "decision_ids"
+            | "finding_ids"
+            | "source_ids",
+        )
+        | (
+            Kind::GluingAttempt,
+            "claim_ids" | "evidence_ids" | "verification_ids" | "decision_ids" | "finding_ids"
+            | "source_ids",
+        )
+        | (
+            Kind::GlobalCandidate,
+            "claim_ids"
+            | "qualification_source_ids"
+            | "evidence_ids"
+            | "verification_ids"
+            | "decision_ids"
+            | "finding_ids"
+            | "source_ids",
+        )
+        | (
+            Kind::GluingObstruction,
+            "overlap_member_ids" | "claim_ids" | "evidence_ids" | "verification_ids"
+            | "decision_ids" | "finding_ids" | "blocks" | "source_ids",
+        ) => Some(Set),
+        (Kind::ContextCover, "required_context_ids")
+        | (Kind::Restriction, "context_pair")
+        | (Kind::GluingAttempt, "input_descriptor_ids" | "section_ids" | "restriction_ids")
+        | (Kind::GlobalCandidate, "required_section_ids" | "restriction_ids")
+        | (Kind::GluingObstruction, "conflicting_context_ids" | "section_ids") => Some(Ordered),
+        _ => None,
+    }
+}
+
 fn normalize_successor_root_fields_v5(
+    kind: HistoricalSourceRecordKindV4,
     value: &mut Value,
     replacements: &BTreeMap<String, String>,
     removals: &BTreeSet<String>,
@@ -7465,13 +8799,23 @@ fn normalize_successor_root_fields_v5(
                     return false;
                 }
                 ids.retain(|id| !id.as_str().is_some_and(|id| removals.contains(id)));
-                for id in ids {
+                for id in ids.iter_mut() {
                     let Value::String(id) = id else {
                         return false;
                     };
                     if let Some(replacement) = replacements.get(id) {
                         *id = replacement.clone();
                     }
+                }
+                let Some(semantics) = successor_root_array_semantics_v5(kind, field) else {
+                    return false;
+                };
+                if semantics == SuccessorReferenceArraySemanticsV5::Set {
+                    ids.sort_by(|left, right| {
+                        left.as_str()
+                            .expect("string array checked above")
+                            .cmp(right.as_str().expect("string array checked above"))
+                    });
                 }
                 true
             }
@@ -7490,38 +8834,49 @@ fn normalize_successor_nested_paths_v5(
     replacements: &BTreeMap<String, String>,
     removals: &BTreeSet<String>,
 ) -> bool {
-    const NONE: &[&[&str]] = &[];
-    const REVIEW_PLAN: &[&[&str]] = &[
-        &["waves", "*", "obligation_ids"],
-        &["risk_breakdown", "*", "id"],
-        &["deferred", "*", "id"],
+    use SuccessorReferenceArraySemanticsV5::Set;
+    type NestedPath = (
+        &'static [&'static str],
+        Option<SuccessorReferenceArraySemanticsV5>,
+    );
+    const NONE: &[NestedPath] = &[];
+    const REVIEW_PLAN: &[NestedPath] = &[
+        (&["waves", "*", "obligation_ids"], Some(Set)),
+        (&["risk_breakdown", "*", "id"], None),
+        (&["deferred", "*", "id"], None),
     ];
-    const CONTEXT_ENVELOPE: &[&[&str]] = &[
-        &["included_sources", "*", "registration_id"],
-        &["included_sources", "*", "artifact_id"],
-        &["excluded_sources", "*", "artifact_id"],
-        &["unknowns", "*", "source_ids"],
-        &["losses", "*", "source_ids"],
+    const CONTEXT_ENVELOPE: &[NestedPath] = &[
+        (&["included_sources", "*", "registration_id"], None),
+        (&["included_sources", "*", "artifact_id"], None),
+        (&["excluded_sources", "*", "artifact_id"], None),
+        (&["unknowns", "*", "source_ids"], Some(Set)),
+        (&["losses", "*", "source_ids"], Some(Set)),
     ];
-    const REGISTRATION: &[&[&str]] = &[
-        &["source", "run_id"],
-        &["source", "snapshot_id"],
-        &["source", "execution_id"],
-        &["source", "claim_id"],
-        &["source", "repository_id"],
-        &["source", "test_artifact_id"],
-        &["source", "universe_id"],
-        &["source", "context_id"],
-        &["source", "descriptor_id"],
-        &["source", "plan_id"],
+    const OBLIGATION: &[NestedPath] = &[
+        // `ObligationVersion::snapshot` is a semantic snapshot reference, but
+        // it is nested beneath the closed version object rather than stored at
+        // the obligation root.
+        (&["version", "snapshot"], None),
+    ];
+    const REGISTRATION: &[NestedPath] = &[
+        (&["source", "run_id"], None),
+        (&["source", "snapshot_id"], None),
+        (&["source", "execution_id"], None),
+        (&["source", "claim_id"], None),
+        (&["source", "repository_id"], None),
+        (&["source", "test_artifact_id"], None),
+        (&["source", "universe_id"], None),
+        (&["source", "context_id"], None),
+        (&["source", "descriptor_id"], None),
+        (&["source", "plan_id"], None),
     ];
     let paths = match kind {
         HistoricalSourceRecordKindV4::ReviewPlan => REVIEW_PLAN,
         HistoricalSourceRecordKindV4::ContextEnvelope => CONTEXT_ENVELOPE,
         HistoricalSourceRecordKindV4::ArtifactRegistrationV3
         | HistoricalSourceRecordKindV4::ArtifactRegistrationV4 => REGISTRATION,
-        HistoricalSourceRecordKindV4::Obligation
-        | HistoricalSourceRecordKindV4::Execution
+        HistoricalSourceRecordKindV4::Obligation => OBLIGATION,
+        HistoricalSourceRecordKindV4::Execution
         | HistoricalSourceRecordKindV4::Claim
         | HistoricalSourceRecordKindV4::ClaimAssessment
         | HistoricalSourceRecordKindV4::Evidence
@@ -7538,30 +8893,99 @@ fn normalize_successor_nested_paths_v5(
         | HistoricalSourceRecordKindV4::GluingObstruction
         | HistoricalSourceRecordKindV4::Coverage => NONE,
     };
-    paths
-        .iter()
-        .all(|path| normalize_successor_path_v5(value, path, replacements, removals))
+    paths.iter().all(|(path, semantics)| {
+        normalize_successor_path_v5(value, path, *semantics, replacements, removals)
+    })
+}
+
+/// Re-establishes canonical ordering only for closed object arrays whose
+/// container order is defined by a substituted ID key. Other object arrays
+/// (`waves`, `unknowns`, `losses`, and any future extension) retain their
+/// semantic order byte-for-byte.
+fn normalize_successor_object_array_containers_v5(
+    kind: HistoricalSourceRecordKindV4,
+    value: &mut Value,
+) -> bool {
+    use HistoricalSourceRecordKindV4 as Kind;
+    let specifications: &[(&str, &str)] = match kind {
+        Kind::ReviewPlan => &[("risk_breakdown", "id"), ("deferred", "id")],
+        Kind::ContextEnvelope => &[
+            ("included_sources", "artifact_id"),
+            ("excluded_sources", "artifact_id"),
+        ],
+        Kind::Obligation
+        | Kind::Execution
+        | Kind::Claim
+        | Kind::ClaimAssessment
+        | Kind::ArtifactRegistrationV3
+        | Kind::ArtifactRegistrationV4
+        | Kind::Evidence
+        | Kind::EvidenceBinding
+        | Kind::Verification
+        | Kind::Decision
+        | Kind::Finding
+        | Kind::GluingInputDescriptor
+        | Kind::ContextCover
+        | Kind::Section
+        | Kind::Restriction
+        | Kind::GluingAttempt
+        | Kind::GlobalCandidate
+        | Kind::GluingObstruction
+        | Kind::Coverage => &[],
+    };
+    let Some(object) = value.as_object_mut() else {
+        return false;
+    };
+    specifications.iter().all(|(field, key)| {
+        let Some(container) = object.get_mut(*field) else {
+            return true;
+        };
+        let Some(values) = container.as_array_mut() else {
+            return false;
+        };
+        if values.iter().any(|member| {
+            member
+                .as_object()
+                .and_then(|member| member.get(*key))
+                .and_then(Value::as_str)
+                .is_none()
+        }) {
+            return false;
+        }
+        values.sort_by(|left, right| {
+            left[*key]
+                .as_str()
+                .expect("object-array sort key checked above")
+                .cmp(
+                    right[*key]
+                        .as_str()
+                        .expect("object-array sort key checked above"),
+                )
+        });
+        true
+    })
 }
 
 fn normalize_successor_path_v5(
     value: &mut Value,
     path: &[&str],
+    semantics: Option<SuccessorReferenceArraySemanticsV5>,
     replacements: &BTreeMap<String, String>,
     removals: &BTreeSet<String>,
 ) -> bool {
     let Some((segment, rest)) = path.split_first() else {
-        return normalize_successor_reference_leaf_v5(value, replacements, removals);
+        return normalize_successor_reference_leaf_v5(value, semantics, replacements, removals);
     };
     match *segment {
         "*" => match value {
-            Value::Array(values) => values
-                .iter_mut()
-                .all(|value| normalize_successor_path_v5(value, rest, replacements, removals)),
+            Value::Array(values) => values.iter_mut().all(|value| {
+                normalize_successor_path_v5(value, rest, semantics, replacements, removals)
+            }),
             _ => false,
         },
         field => match value {
             Value::Object(values) => values.get_mut(field).is_none_or(|value| {
-                normalize_successor_path_v5(value, rest, replacements, removals)
+                normalize_successor_path_v5(value, rest, semantics, replacements, removals)
             }),
             _ => false,
         },
@@ -7570,6 +8994,7 @@ fn normalize_successor_path_v5(
 
 fn normalize_successor_reference_leaf_v5(
     value: &mut Value,
+    semantics: Option<SuccessorReferenceArraySemanticsV5>,
     replacements: &BTreeMap<String, String>,
     removals: &BTreeSet<String>,
 ) -> bool {
@@ -7582,17 +9007,27 @@ fn normalize_successor_reference_leaf_v5(
             true
         }
         Value::Array(ids) => {
+            let Some(semantics) = semantics else {
+                return false;
+            };
             if ids.iter().any(|id| !id.is_string()) {
                 return false;
             }
             ids.retain(|id| !id.as_str().is_some_and(|id| removals.contains(id)));
-            for id in ids {
+            for id in ids.iter_mut() {
                 let Value::String(id) = id else {
                     return false;
                 };
                 if let Some(replacement) = replacements.get(id) {
                     *id = replacement.clone();
                 }
+            }
+            if semantics == SuccessorReferenceArraySemanticsV5::Set {
+                ids.sort_by(|left, right| {
+                    left.as_str()
+                        .expect("string array checked above")
+                        .cmp(right.as_str().expect("string array checked above"))
+                });
             }
             true
         }
@@ -7891,6 +9326,7 @@ pub struct M6StalenessPhaseV5 {
     records: Vec<HistoricalRecordAssessmentV5>,
     gluing_freshness: Vec<GluingFreshnessV5>,
     assessment: StalenessAssessmentV5,
+    preservation_candidate_obligation_ids: BTreeSet<StableId>,
     target_gluing_required: bool,
     m5_dependent_successor_obligation_ids: BTreeSet<StableId>,
     working_bytes: usize,
@@ -7908,6 +9344,40 @@ impl M6StalenessPhaseV5 {
     #[must_use]
     pub fn assessment(&self) -> &StalenessAssessmentV5 {
         &self.assessment
+    }
+    #[must_use]
+    pub fn preservation_candidate_obligation_ids(&self) -> &BTreeSet<StableId> {
+        &self.preservation_candidate_obligation_ids
+    }
+
+    pub(crate) fn is_sealed_preservation_candidate(
+        &self,
+        target_obligation_id: &StableId,
+    ) -> M6Result<bool> {
+        Ok(self.assessment.preservation_candidate_count()
+            == self.preservation_candidate_obligation_ids.len() as u64
+            && self.assessment.preservation_candidate_digest()
+                == &digest_ids(&self.preservation_candidate_obligation_ids)?
+            && self
+                .preservation_candidate_obligation_ids
+                .contains(target_obligation_id))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_obligation_assessment_stale_for_test(
+        &mut self,
+        source_obligation_id: &StableId,
+    ) {
+        let record = self
+            .records
+            .iter_mut()
+            .find(|record| {
+                record.source_record_kind == HistoricalRecordKindV5::Obligation
+                    && &record.source_record_id == source_obligation_id
+            })
+            .expect("test obligation assessment");
+        record.status = HistoricalAssessmentStatusV5::Stale;
+        record.reasons.insert(StaleReasonV5::TargetChanged);
     }
     #[must_use]
     pub const fn target_gluing_required(&self) -> bool {
@@ -7980,6 +9450,7 @@ impl M6StalenessPhaseV5 {
                     .allocated_bytes(),
             )
             .saturating_add(id_set_heap(&self.assessment.source_ids))
+            .saturating_add(id_set_heap(&self.preservation_candidate_obligation_ids))
             .saturating_add(id_set_heap(&self.m5_dependent_successor_obligation_ids))
     }
 }
@@ -8849,6 +10320,7 @@ impl IncrementalStalenessInputV5<'_> {
             records: seal_parts.records,
             gluing_freshness: seal_parts.gluing,
             assessment,
+            preservation_candidate_obligation_ids: seal_parts.preservation_candidates,
             target_gluing_required,
             m5_dependent_successor_obligation_ids: m5_dependent_successors,
             working_bytes: preflight_peak,
@@ -13052,6 +14524,56 @@ pub(crate) fn successful_m5_distinct_s0_s1_program_fixture() -> M6Result<(
 }
 
 #[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn preservation_distinct_s0_s1_program_fixture() -> M6Result<(
+    ProgramSpace,
+    ProgramSpace,
+    BTreeMap<StableId, Vec<u8>>,
+    BTreeMap<StableId, Vec<u8>>,
+)> {
+    let source = complete_m5_s0_program_fixture()?;
+    let (source_program, source_bytes) = source.into_parts();
+    let mut target = serde_json::to_value(source_program.streaming_ref())
+        .map_err(|error| M6Error::Canonical(error.to_string()))?;
+    fn replace(value: &mut Value, from: &str, to: &str) {
+        match value {
+            Value::String(text) if text == from => *text = to.to_owned(),
+            Value::Array(values) => values.iter_mut().for_each(|value| replace(value, from, to)),
+            Value::Object(values) => values
+                .values_mut()
+                .for_each(|value| replace(value, from, to)),
+            _ => {}
+        }
+    }
+    replace(
+        &mut target,
+        source_program.snapshot_id().as_str(),
+        "snapshot:double-submit-preservation-v2",
+    );
+    let target_commit_oid = format!("{:040x}", 14);
+    let target_tree_hash = format!("git:{:040x}", 15);
+    target["snapshot"]["base_revision"] =
+        Value::String(source_program.target_revision().to_owned());
+    target["snapshot"]["target_revision"] = Value::String(target_commit_oid.clone());
+    target["snapshot"]["tree_hash"] = Value::String(target_tree_hash.clone());
+    target["source"]["revision"] = Value::String(target_commit_oid.clone());
+    target["source"]["content_hash"] = Value::String(target_tree_hash.clone());
+    let source_git = source_program.accepted_git_revision_closure().ok_or(
+        M6Error::InvalidHistoricalTopology("preservation fixture lacks revision closure"),
+    )?;
+    let revisions = &mut target["incremental_facts"]["git_revision_closure"];
+    revisions["base_commit_oid"] = Value::String(source_git.target_commit_oid().to_owned());
+    revisions["base_tree_hash"] = Value::String(source_git.target_tree_hash().to_string());
+    revisions["target_commit_oid"] = Value::String(target_commit_oid);
+    revisions["target_tree_hash"] = Value::String(target_tree_hash);
+    let target_program = ProgramSpace::from_json_slice(
+        &serde_json::to_vec(&target).map_err(|error| M6Error::Canonical(error.to_string()))?,
+    )?;
+    let target_bytes = source_bytes.clone();
+    Ok((source_program, target_program, source_bytes, target_bytes))
+}
+
+#[cfg(test)]
 pub(crate) fn distinct_s1_program_from(source: &ProgramSpace) -> M6Result<ProgramSpace> {
     fn replace(value: &mut Value, from: &str, to: &str) {
         match value {
@@ -13112,6 +14634,19 @@ impl M6FixturePhases {
 
     pub(crate) fn correspondence(&self) -> &M6ObligationCorrespondencePhaseV5 {
         &self.correspondence
+    }
+
+    pub(crate) fn corrupt_mapping_status_for_test(
+        &mut self,
+        mapping_id: &StableId,
+        status: MappingStatusV5,
+    ) {
+        self.mapping
+            .mappings
+            .iter_mut()
+            .find(|mapping| mapping.id() == mapping_id)
+            .expect("test dependency mapping")
+            .status = status;
     }
 }
 
@@ -13933,6 +15468,7 @@ mod tests {
             records: vec![record],
             gluing_freshness: vec![gluing],
             assessment,
+            preservation_candidate_obligation_ids: BTreeSet::from([id("obligation:target")]),
             target_gluing_required: true,
             m5_dependent_successor_obligation_ids: BTreeSet::from([id("obligation:target")]),
             working_bytes: 123,
@@ -16223,6 +17759,181 @@ mod tests {
     }
 
     #[test]
+    fn successor_substitution_resorts_set_paths_but_preserves_ordered_vectors() {
+        let replacements = BTreeMap::from([
+            ("obligation:a".to_owned(), "obligation:y".to_owned()),
+            ("obligation:z".to_owned(), "obligation:b".to_owned()),
+            ("artifact:a".to_owned(), "artifact:y".to_owned()),
+            ("artifact:z".to_owned(), "artifact:b".to_owned()),
+            ("context:a".to_owned(), "context:y".to_owned()),
+            ("context:z".to_owned(), "context:b".to_owned()),
+        ]);
+        let empty = BTreeSet::new();
+        let canonical = |value: Value| {
+            serde_json::from_slice::<Value>(&crate::canonical_json(&value).unwrap()).unwrap()
+        };
+
+        let root_source = canonical(serde_json::json!({
+            "obligation_ids": ["obligation:a", "obligation:z"]
+        }));
+        let root_target = canonical(serde_json::json!({
+            "obligation_ids": ["obligation:b", "obligation:y"]
+        }));
+        assert!(exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::Claim,
+            &root_source,
+            &root_target,
+            &replacements,
+            &empty,
+        ));
+
+        let wave_source = canonical(serde_json::json!({
+            "waves": [{"obligation_ids": ["obligation:a", "obligation:z"]}]
+        }));
+        let wave_target = canonical(serde_json::json!({
+            "waves": [{"obligation_ids": ["obligation:b", "obligation:y"]}]
+        }));
+        assert!(exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::ReviewPlan,
+            &wave_source,
+            &wave_target,
+            &replacements,
+            &empty,
+        ));
+
+        for field in ["unknowns", "losses"] {
+            let nested_source = canonical(serde_json::json!({
+                (field): [{"source_ids": ["artifact:a", "artifact:z"]}]
+            }));
+            let nested_target = canonical(serde_json::json!({
+                (field): [{"source_ids": ["artifact:b", "artifact:y"]}]
+            }));
+            assert!(exact_substituted_successor_v5(
+                HistoricalSourceRecordKindV4::ContextEnvelope,
+                &nested_source,
+                &nested_target,
+                &replacements,
+                &empty,
+            ));
+        }
+
+        let ordered_source = canonical(serde_json::json!({
+            "context_pair": ["context:a", "context:z"]
+        }));
+        let ordered_target = canonical(serde_json::json!({
+            "context_pair": ["context:y", "context:b"]
+        }));
+        let incorrectly_sorted_target = canonical(serde_json::json!({
+            "context_pair": ["context:b", "context:y"]
+        }));
+        assert!(exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::Restriction,
+            &ordered_source,
+            &ordered_target,
+            &replacements,
+            &empty,
+        ));
+        assert!(!exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::Restriction,
+            &ordered_source,
+            &incorrectly_sorted_target,
+            &replacements,
+            &empty,
+        ));
+    }
+
+    #[test]
+    fn successor_substitution_resorts_only_closed_object_array_containers() {
+        let replacements = BTreeMap::from([
+            ("obligation:a".to_owned(), "obligation:y".to_owned()),
+            ("obligation:z".to_owned(), "obligation:b".to_owned()),
+            ("artifact:a".to_owned(), "artifact:y".to_owned()),
+            ("artifact:z".to_owned(), "artifact:b".to_owned()),
+        ]);
+        let empty = BTreeSet::new();
+        let canonical = |value: Value| {
+            serde_json::from_slice::<Value>(&crate::canonical_json(&value).unwrap()).unwrap()
+        };
+
+        for field in ["risk_breakdown", "deferred"] {
+            let source = canonical(serde_json::json!({
+                (field): [
+                    {"id": "obligation:a", "detail": "first"},
+                    {"id": "obligation:z", "detail": "second"}
+                ]
+            }));
+            let target = canonical(serde_json::json!({
+                (field): [
+                    {"id": "obligation:b", "detail": "second"},
+                    {"id": "obligation:y", "detail": "first"}
+                ]
+            }));
+            assert!(exact_substituted_successor_v5(
+                HistoricalSourceRecordKindV4::ReviewPlan,
+                &source,
+                &target,
+                &replacements,
+                &empty,
+            ));
+        }
+
+        for field in ["included_sources", "excluded_sources"] {
+            let source = canonical(serde_json::json!({
+                (field): [
+                    {"artifact_id": "artifact:a", "detail": "first"},
+                    {"artifact_id": "artifact:z", "detail": "second"}
+                ]
+            }));
+            let target = canonical(serde_json::json!({
+                (field): [
+                    {"artifact_id": "artifact:b", "detail": "second"},
+                    {"artifact_id": "artifact:y", "detail": "first"}
+                ]
+            }));
+            assert!(exact_substituted_successor_v5(
+                HistoricalSourceRecordKindV4::ContextEnvelope,
+                &source,
+                &target,
+                &replacements,
+                &empty,
+            ));
+        }
+
+        let ordered_source = canonical(serde_json::json!({
+            "waves": [
+                {"obligation_ids": ["obligation:a"], "wave_index": 0},
+                {"obligation_ids": ["obligation:z"], "wave_index": 1}
+            ]
+        }));
+        let ordered_target = canonical(serde_json::json!({
+            "waves": [
+                {"obligation_ids": ["obligation:y"], "wave_index": 0},
+                {"obligation_ids": ["obligation:b"], "wave_index": 1}
+            ]
+        }));
+        let incorrectly_resorted_target = canonical(serde_json::json!({
+            "waves": [
+                {"obligation_ids": ["obligation:b"], "wave_index": 1},
+                {"obligation_ids": ["obligation:y"], "wave_index": 0}
+            ]
+        }));
+        assert!(exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::ReviewPlan,
+            &ordered_source,
+            &ordered_target,
+            &replacements,
+            &empty,
+        ));
+        assert!(!exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::ReviewPlan,
+            &ordered_source,
+            &incorrectly_resorted_target,
+            &replacements,
+            &empty,
+        ));
+    }
+
+    #[test]
     fn successor_normalization_covers_closed_nested_canonical_paths_only() {
         // This is the actual canonical ReviewPlan emitted by the roots-bound
         // target fixture, not a hand-written schema approximation.
@@ -16246,6 +17957,10 @@ mod tests {
                     changed = true;
                 }
             }
+            wave["obligation_ids"]
+                .as_array_mut()
+                .unwrap()
+                .sort_by(|left, right| left.as_str().unwrap().cmp(right.as_str().unwrap()));
         }
         for field in ["risk_breakdown", "deferred"] {
             for member in target_plan[field].as_array_mut().unwrap() {
@@ -16254,6 +17969,15 @@ mod tests {
                     changed = true;
                 }
             }
+            target_plan[field]
+                .as_array_mut()
+                .unwrap()
+                .sort_by(|left, right| {
+                    left["id"]
+                        .as_str()
+                        .unwrap()
+                        .cmp(right["id"].as_str().unwrap())
+                });
         }
         assert!(
             changed,
