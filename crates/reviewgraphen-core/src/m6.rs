@@ -2911,6 +2911,80 @@ struct GluingRerunActionWireV5 {
 }
 
 impl GluingRerunActionV5 {
+    /// Exact recursive ownership used by the event-layer post-D2 append
+    /// oracle.  Keeping this beside the DTO prevents the opaque phase from
+    /// estimating its retained action bodies via serialization.
+    pub(crate) fn retained_bytes(&self) -> M6Result<usize> {
+        let prerequisite_bytes = self
+            .prerequisites
+            .iter()
+            .try_fold(0_usize, |total, value| {
+                let owned = match value {
+                    ActionPrerequisiteV5::ScheduledAction { action_id } => {
+                        action_id.allocated_bytes()
+                    }
+                    ActionPrerequisiteV5::ExistingTargetRecord {
+                        record_id,
+                        body_hash,
+                        event_id,
+                    } => record_id
+                        .allocated_bytes()
+                        .checked_add(body_hash.allocated_bytes())
+                        .and_then(|value| value.checked_add(event_id.allocated_bytes()))
+                        .ok_or(M6Error::Incomplete {
+                            operation: "M6 gluing action prerequisite ownership",
+                            limit: MAX_M6_CANONICAL_BYTES,
+                            observed: usize::MAX,
+                        })?,
+                };
+                total.checked_add(owned).ok_or(M6Error::Incomplete {
+                    operation: "M6 gluing action prerequisite ownership",
+                    limit: MAX_M6_CANONICAL_BYTES,
+                    observed: usize::MAX,
+                })
+            })?;
+        [
+            std::mem::size_of::<Self>(),
+            self.id.allocated_bytes(),
+            self.planning_scope_id.allocated_bytes(),
+            conservative_id_set_heap(&self.subject_ids)?,
+            self.prerequisites
+                .capacity()
+                .checked_mul(std::mem::size_of::<ActionPrerequisiteV5>())
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 gluing action prerequisite slots",
+                    limit: MAX_M6_CANONICAL_BYTES,
+                    observed: usize::MAX,
+                })?,
+            prerequisite_bytes,
+            conservative_btree_node_bytes(self.reasons.len())?
+                .checked_add(
+                    self.reasons
+                        .len()
+                        .checked_mul(std::mem::size_of::<GluingRerunReasonV5>())
+                        .ok_or(M6Error::Incomplete {
+                            operation: "M6 gluing action reason ownership",
+                            limit: MAX_M6_CANONICAL_BYTES,
+                            observed: usize::MAX,
+                        })?,
+                )
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 gluing action reason ownership",
+                    limit: MAX_M6_CANONICAL_BYTES,
+                    observed: usize::MAX,
+                })?,
+            conservative_id_set_heap(&self.source_ids)?,
+        ]
+        .into_iter()
+        .try_fold(0_usize, |total, value| {
+            total.checked_add(value).ok_or(M6Error::Incomplete {
+                operation: "M6 gluing action retained bytes",
+                limit: MAX_M6_CANONICAL_BYTES,
+                observed: usize::MAX,
+            })
+        })
+    }
+
     pub(crate) fn derive(
         planning_scope_id: StableId,
         subject_kind: GluingRerunSubjectKindV5,
@@ -3431,6 +3505,85 @@ struct GluingRerunPlanSealWireV5 {
 }
 
 impl GluingRerunPlanSealV5 {
+    /// Exact recursive ownership used by the opaque event append phase.
+    pub(crate) fn retained_bytes(&self) -> M6Result<usize> {
+        let binding_bytes = self
+            .claim_bindings
+            .iter()
+            .try_fold(0_usize, |total, binding| {
+                let dynamic = binding
+                    .context_id
+                    .allocated_bytes()
+                    .checked_add(
+                        binding
+                            .claim_id
+                            .as_ref()
+                            .map_or(0, StableId::allocated_bytes),
+                    )
+                    .and_then(|value| {
+                        value.checked_add(
+                            binding
+                                .claim_body_hash
+                                .as_ref()
+                                .map_or(0, ContentHash::allocated_bytes),
+                        )
+                    })
+                    .and_then(|value| {
+                        value.checked_add(
+                            binding
+                                .obligation_id
+                                .as_ref()
+                                .map_or(0, StableId::allocated_bytes),
+                        )
+                    })
+                    .ok_or(M6Error::Incomplete {
+                        operation: "M6 gluing seal binding ownership",
+                        limit: MAX_M6_CANONICAL_BYTES,
+                        observed: usize::MAX,
+                    })?;
+                total.checked_add(dynamic).ok_or(M6Error::Incomplete {
+                    operation: "M6 gluing seal binding ownership",
+                    limit: MAX_M6_CANONICAL_BYTES,
+                    observed: usize::MAX,
+                })
+            })?;
+        let witness_bytes =
+            self.existing_target_bundle_witness
+                .as_ref()
+                .map_or(Ok(0), |value| {
+                    value
+                        .record_id
+                        .allocated_bytes()
+                        .checked_add(value.body_hash.allocated_bytes())
+                        .and_then(|bytes| bytes.checked_add(value.event_id.allocated_bytes()))
+                        .ok_or(M6Error::Incomplete {
+                            operation: "M6 gluing seal witness ownership",
+                            limit: MAX_M6_CANONICAL_BYTES,
+                            observed: usize::MAX,
+                        })
+                })?;
+        [
+            std::mem::size_of::<Self>(),
+            self.id.allocated_bytes(),
+            self.planning_scope_id.allocated_bytes(),
+            self.source_closure_id.allocated_bytes(),
+            self.partial_rerun_plan_id.allocated_bytes(),
+            self.target_plan_id.allocated_bytes(),
+            self.action_set_digest.allocated_bytes(),
+            binding_bytes,
+            witness_bytes,
+            conservative_id_set_heap(&self.source_ids)?,
+        ]
+        .into_iter()
+        .try_fold(0_usize, |total, value| {
+            total.checked_add(value).ok_or(M6Error::Incomplete {
+                operation: "M6 gluing seal retained bytes",
+                limit: MAX_M6_CANONICAL_BYTES,
+                observed: usize::MAX,
+            })
+        })
+    }
+
     pub(crate) fn derive(
         source_closure_id: StableId,
         partial_rerun_plan_id: StableId,
@@ -3641,6 +3794,11 @@ impl GluingRerunPlanSealV5 {
     #[must_use]
     pub fn claim_bindings(&self) -> &[GluingClaimBindingV5; 2] {
         &self.claim_bindings
+    }
+
+    #[must_use]
+    pub fn existing_target_bundle_witness(&self) -> Option<&ExistingTargetRecordV5> {
+        self.existing_target_bundle_witness.as_ref()
     }
     #[must_use]
     pub const fn action_count(&self) -> u64 {
@@ -11778,6 +11936,17 @@ impl M6StalenessPhaseV5 {
         &self.preservation_candidate_obligation_ids
     }
 
+    /// Exact target prefix pinned by this reduction.  The V5 persistence
+    /// session must replay this prefix from its caller-supplied journal,
+    /// never substitute a fixture's retained terminal log.
+    pub(crate) const fn target_predecessor_event_count(&self) -> u64 {
+        self.target_event_count
+    }
+
+    pub(crate) fn target_predecessor_tail_hash(&self) -> &ContentHash {
+        &self.target_tail_hash
+    }
+
     /// Deterministically reduces the sealed staleness/preservation facts into
     /// the initial no-suppression partial-rerun DAG.  It performs no journal,
     /// CAS, lifecycle, verifier, human, or gluing mutation.
@@ -17411,12 +17580,177 @@ pub(crate) fn scheduled_reviewer_distinct_s0_s1_program_fixture() -> M6Result<(
         capability["state"] = Value::String("complete".to_owned());
     }
     source["extraction"]["limitations"] = Value::Array(Vec::new());
+    // Keep the invariant as the sole at-most-once obligation source.  The
+    // base example also tags the integration-test cover relation with the
+    // same property, which deliberately produces a second, indistinguishable
+    // obligation and therefore exercises the ambiguity path instead.
+    if let Some(relation) = source["relations"].as_array_mut().and_then(|relations| {
+        relations
+            .iter_mut()
+            .find(|relation| relation["id"] == "relation:test-covers-path")
+    }) && let Some(attrs) = relation["attributes"].as_object_mut()
+    {
+        attrs.remove("property_id");
+    }
     let source_program = ProgramSpace::from_json_slice(
         &serde_json::to_vec(&source).map_err(|error| M6Error::Canonical(error.to_string()))?,
     )?;
     let target_program = distinct_s1_program_from(&source_program)?;
     let target_bytes = source_bytes.clone();
     Ok((source_program, target_program, source_bytes, target_bytes))
+}
+
+/// Positive post-D2 gluing topology.  Unlike the successful-M5 source
+/// fixture, the UI context keeps its original member set so the frozen M5
+/// selector observes one claim per fixed context after reviewer replay.  All
+/// extraction capabilities are complete to avoid source-less capability-gap
+/// obligations in the scheduled suffix.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn gluing_positive_distinct_s0_s1_program_fixture() -> M6Result<(
+    ProgramSpace,
+    ProgramSpace,
+    BTreeMap<StableId, Vec<u8>>,
+    BTreeMap<StableId, Vec<u8>>,
+)> {
+    let source = complete_m5_s0_program_fixture()?;
+    let (source_program, mut source_bytes) = source.into_parts();
+    let mut source = serde_json::to_value(source_program.streaming_ref())
+        .map_err(|error| M6Error::Canonical(error.to_string()))?;
+    let capabilities = source["extraction"]["capabilities"].as_object_mut().ok_or(
+        M6Error::InvalidHistoricalTopology("gluing positive fixture capabilities are absent"),
+    )?;
+    for capability in capabilities.values_mut() {
+        capability["state"] = Value::String("complete".to_owned());
+    }
+    source["extraction"]["limitations"] = Value::Array(Vec::new());
+    // Both fixed contexts reach checkout-submit.  This file is reachable by
+    // the context builder through `contains`, but is intentionally not a
+    // direct context member.  It therefore yields source-grounded reviewer
+    // claims whose sources are disjoint from M(c), exercising Missing/Missing
+    // rather than weakening the frozen selector.
+    let gluing_source_id = StableId::parse("file:gluing-review-source")?;
+    let gluing_bytes = b"gluing-review-source\n".repeat(40);
+    let gluing_hash = ContentHash::sha256(&gluing_bytes);
+    source_bytes.insert(gluing_source_id.clone(), gluing_bytes);
+    let artifact = source["artifacts"]
+        .as_array()
+        .and_then(|artifacts| {
+            artifacts
+                .iter()
+                .find(|artifact| artifact["id"] == "file:checkout-controller")
+        })
+        .cloned()
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "gluing positive fixture checkout file is absent",
+        ))?;
+    let mut artifact = artifact;
+    artifact["id"] = Value::String(gluing_source_id.to_string());
+    artifact["content_hash"] = Value::String(gluing_hash.to_string());
+    artifact["location"]["path"] = Value::String("src/gluing_review.rs".to_owned());
+    source["artifacts"]
+        .as_array_mut()
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "gluing positive fixture artifacts are absent",
+        ))?
+        .push(artifact);
+    let relation = source["relations"]
+        .as_array()
+        .and_then(|relations| relations.first())
+        .cloned()
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "gluing positive fixture relation template is absent",
+        ))?;
+    let mut relation = relation;
+    relation["id"] = Value::String("relation:gluing-review-contains-checkout".to_owned());
+    relation["kind"] = Value::String("contains".to_owned());
+    relation["source_id"] = Value::String(gluing_source_id.to_string());
+    relation["target_ids"] = serde_json::json!(["function:checkout-submit"]);
+    relation["ordered_target_ids"] = serde_json::json!(["function:checkout-submit"]);
+    relation["directed"] = Value::Bool(true);
+    relation["attributes"] = serde_json::json!({});
+    source["relations"]
+        .as_array_mut()
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "gluing positive fixture relations are absent",
+        ))?
+        .push(relation);
+    let source_program = ProgramSpace::from_json_slice(
+        &serde_json::to_vec(&source).map_err(|error| M6Error::Canonical(error.to_string()))?,
+    )?;
+    let target_program = distinct_s1_program_from(&source_program)?;
+    let target_bytes = source_bytes.clone();
+    Ok((source_program, target_program, source_bytes, target_bytes))
+}
+
+/// Selected/Selected post-D2 gluing topology. Each fixed context owns one
+/// exclusive direct source, so the frozen selector has exactly one eligible
+/// fresh claim in each context.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn gluing_selected_distinct_s0_s1_program_fixture() -> M6Result<(
+    ProgramSpace,
+    ProgramSpace,
+    BTreeMap<StableId, Vec<u8>>,
+    BTreeMap<StableId, Vec<u8>>,
+)> {
+    let (program, _, mut bytes, _) = gluing_positive_distinct_s0_s1_program_fixture()?;
+    let mut value = serde_json::to_value(program.streaming_ref())
+        .map_err(|error| M6Error::Canonical(error.to_string()))?;
+    let template = value["artifacts"]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item["id"] == "file:checkout-controller")
+        })
+        .cloned()
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "UI source template is absent",
+        ))?;
+    let sources = [
+        (
+            "file:payment-review-source",
+            "src/payment_review.rs",
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+        ),
+        (
+            "file:ui-review-source",
+            "src/ui_review.rs",
+            crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+        ),
+    ];
+    for (source_id, path, context_id) in sources {
+        let id = StableId::parse(source_id)?;
+        let content = format!("{source_id}\n").repeat(32).into_bytes();
+        let hash = ContentHash::sha256(&content);
+        bytes.insert(id.clone(), content);
+        let mut artifact = template.clone();
+        artifact["id"] = Value::String(id.to_string());
+        artifact["content_hash"] = Value::String(hash.to_string());
+        artifact["location"]["path"] = Value::String(path.to_owned());
+        value["artifacts"]
+            .as_array_mut()
+            .ok_or(M6Error::InvalidHistoricalTopology(
+                "selected source artifacts are absent",
+            ))?
+            .push(artifact);
+        let members = value["contexts"]
+            .as_array_mut()
+            .and_then(|items| items.iter_mut().find(|item| item["id"] == context_id))
+            .and_then(|item| item["member_ids"].as_array_mut())
+            .ok_or(M6Error::InvalidHistoricalTopology(
+                "selected source context is absent",
+            ))?;
+        members.push(Value::String(id.to_string()));
+        members.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+        members.dedup();
+    }
+    let source = ProgramSpace::from_json_slice(
+        &serde_json::to_vec(&value).map_err(|error| M6Error::Canonical(error.to_string()))?,
+    )?;
+    let target = distinct_s1_program_from(&source)?;
+    Ok((source, target, bytes.clone(), bytes))
 }
 
 #[cfg(test)]
