@@ -65,6 +65,10 @@ pub const PARTIAL_RERUN_PLANNER_DESCRIPTOR_V5: &str = "reviewgraphen.partial_rer
 pub const MAX_M6_PARTIAL_RERUN_ACTIONS: usize = 4_096;
 pub const MAX_M6_ACTION_METADATA_IDS: usize = 512;
 pub const MAX_M6_PARTIAL_RERUN_WORKING_BYTES: usize = 536_870_912;
+pub const M5_CLAIM_SELECTION_DESCRIPTOR_V5: &str = "reviewgraphen.m5_claim_selection@1";
+pub const GLUING_RERUN_REASON_V5: &str = "fresh_target_gluing_required";
+pub const MAX_M6_GLUING_RERUN_ACTIONS: usize = 5;
+pub const MAX_M6_GLUING_PREREQUISITES: usize = 8;
 
 pub type M6Result<T> = std::result::Result<T, M6Error>;
 
@@ -93,6 +97,10 @@ pub enum M6Error {
     },
     #[error("completed target obligation {obligation_id} lacks its exact reviewer closure")]
     CompletedReviewerClosureMismatch { obligation_id: StableId },
+    #[error("target D2 claim selection is ambiguous for {context_id}")]
+    AmbiguousGluingClaimSelection { context_id: StableId },
+    #[error("an existing target M5 bundle differs from the derived target plan")]
+    ExistingTargetM5Mismatch,
     #[error("missing accepted M6 {kind} fact for {object_id}")]
     MissingAcceptedMappingFact {
         kind: &'static str,
@@ -411,7 +419,7 @@ fn bounded(observed: usize, limit: usize, operation: &'static str) -> M6Result<(
     Ok(())
 }
 
-fn derive(kind: &str, identity: &impl Serialize) -> M6Result<StableId> {
+pub(crate) fn derive(kind: &str, identity: &impl Serialize) -> M6Result<StableId> {
     bounded_serialized(identity, MAX_M6_CANONICAL_BYTES, "M6 identity bytes")?;
     let hash = ContentHash::sha256(&crate::canonical_json(identity)?);
     StableId::parse(format!("{kind}:{hash}")).map_err(Into::into)
@@ -1791,16 +1799,20 @@ pub enum ActionPrerequisiteV5 {
 }
 
 impl ActionPrerequisiteV5 {
-    fn scheduled(action_id: StableId) -> M6Result<Self> {
-        require_kind(&action_id, "partial-rerun-action-v5", "action_id")?;
+    pub(crate) fn scheduled(action_id: StableId) -> M6Result<Self> {
+        if action_id.kind() != "partial-rerun-action-v5"
+            && action_id.kind() != "gluing-rerun-action-v5"
+        {
+            return Err(M6Error::Canonical(format!(
+                "action_id must have a closed M6 action kind, got {action_id}"
+            )));
+        }
         Ok(Self::ScheduledAction { action_id })
     }
 
     fn validate(&self) -> M6Result<()> {
         match self {
-            Self::ScheduledAction { action_id } => {
-                require_kind(action_id, "partial-rerun-action-v5", "action_id")
-            }
+            Self::ScheduledAction { action_id } => Self::scheduled(action_id.clone()).map(|_| ()),
             Self::ExistingTargetRecord {
                 record_id,
                 body_hash,
@@ -1827,6 +1839,54 @@ impl ActionPrerequisiteV5 {
             ));
         }
         Ok(value)
+    }
+}
+
+fn validate_partial_action_prerequisite_v5(value: &ActionPrerequisiteV5) -> M6Result<()> {
+    match value {
+        ActionPrerequisiteV5::ScheduledAction { action_id } => require_kind(
+            action_id,
+            "partial-rerun-action-v5",
+            "partial action prerequisite",
+        ),
+        ActionPrerequisiteV5::ExistingTargetRecord {
+            record_id,
+            body_hash,
+            event_id,
+        } => ExistingTargetRecordV5::new(record_id.clone(), body_hash.clone(), event_id.clone())
+            .map(|_| ()),
+    }
+}
+
+fn validate_gluing_action_prerequisite_v5(
+    action: GluingRerunActionKindV5,
+    value: &ActionPrerequisiteV5,
+) -> M6Result<()> {
+    match value {
+        ActionPrerequisiteV5::ScheduledAction { action_id } => match action {
+            GluingRerunActionKindV5::RegisterGluingInput => Err(M6Error::Canonical(
+                "gluing registration has no prerequisites".to_owned(),
+            )),
+            GluingRerunActionKindV5::RebuildSection => {
+                if action_id.kind() != "gluing-rerun-action-v5"
+                    && action_id.kind() != "partial-rerun-action-v5"
+                {
+                    return Err(M6Error::Canonical(
+                        "gluing rebuild prerequisite has an unclosed action namespace".to_owned(),
+                    ));
+                }
+                Ok(())
+            }
+            GluingRerunActionKindV5::Reglue => {
+                require_kind(action_id, "gluing-rerun-action-v5", "reglue prerequisite")
+            }
+        },
+        ActionPrerequisiteV5::ExistingTargetRecord {
+            record_id,
+            body_hash,
+            event_id,
+        } => ExistingTargetRecordV5::new(record_id.clone(), body_hash.clone(), event_id.clone())
+            .map(|_| ()),
     }
 }
 
@@ -2029,7 +2089,7 @@ impl PartialRerunActionV5 {
             ));
         }
         for prerequisite in &prerequisites {
-            prerequisite.validate()?;
+            validate_partial_action_prerequisite_v5(prerequisite)?;
         }
         validate_action_prerequisite_shape_v5(action, &prerequisites)?;
         let subject_ids = BTreeSet::from([target_obligation_id]);
@@ -2678,6 +2738,913 @@ impl PartialRerunPlanV5 {
     #[must_use]
     pub fn source_ids(&self) -> &BTreeSet<StableId> {
         &self.source_ids
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+}
+
+/// The only two M5 contexts, in the fixed order used by the post-D2 seal.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GluingClaimBindingStatusV5 {
+    Selected,
+    Missing,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GluingClaimBindingV5 {
+    context_id: StableId,
+    status: GluingClaimBindingStatusV5,
+    claim_id: Option<StableId>,
+    claim_body_hash: Option<ContentHash>,
+    obligation_id: Option<StableId>,
+}
+
+impl<'de> Deserialize<'de> for GluingClaimBindingV5 {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            context_id: StableId,
+            status: GluingClaimBindingStatusV5,
+            claim_id: Option<StableId>,
+            claim_body_hash: Option<ContentHash>,
+            obligation_id: Option<StableId>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let selected = match (wire.claim_id, wire.claim_body_hash, wire.obligation_id) {
+            (None, None, None) => None,
+            (Some(claim_id), Some(claim_body_hash), Some(obligation_id)) => {
+                Some(((claim_id, claim_body_hash), obligation_id))
+            }
+            _ => {
+                return Err(serde::de::Error::custom(
+                    "gluing claim binding option fields must be all present or all absent",
+                ));
+            }
+        };
+        Self::new(wire.context_id, wire.status, selected).map_err(serde::de::Error::custom)
+    }
+}
+
+impl GluingClaimBindingV5 {
+    pub(crate) fn new(
+        context_id: StableId,
+        status: GluingClaimBindingStatusV5,
+        selected: Option<((StableId, ContentHash), StableId)>,
+    ) -> M6Result<Self> {
+        if context_id.as_str() != crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID
+            && context_id.as_str() != crate::DOUBLE_SUBMIT_UI_CONTEXT_ID
+        {
+            return Err(M6Error::Canonical(
+                "gluing claim binding context is outside the fixed M5 cover".to_owned(),
+            ));
+        }
+        let (claim_id, claim_body_hash, obligation_id) = match (status, selected) {
+            (GluingClaimBindingStatusV5::Missing, None) => (None, None, None),
+            (
+                GluingClaimBindingStatusV5::Selected,
+                Some(((claim_id, body_hash), obligation_id)),
+            ) => {
+                require_kind(&claim_id, "claim", "claim_id")?;
+                require_kind(&obligation_id, "obligation", "obligation_id")?;
+                full_sha256("claim_body_hash", &body_hash)?;
+                (Some(claim_id), Some(body_hash), Some(obligation_id))
+            }
+            _ => {
+                return Err(M6Error::Canonical(
+                    "gluing claim binding status and optional selection differ".to_owned(),
+                ));
+            }
+        };
+        Ok(Self {
+            context_id,
+            status,
+            claim_id,
+            claim_body_hash,
+            obligation_id,
+        })
+    }
+
+    #[must_use]
+    pub fn context_id(&self) -> &StableId {
+        &self.context_id
+    }
+    #[must_use]
+    pub const fn status(&self) -> GluingClaimBindingStatusV5 {
+        self.status
+    }
+    #[must_use]
+    pub fn claim_id(&self) -> Option<&StableId> {
+        self.claim_id.as_ref()
+    }
+    #[must_use]
+    pub fn claim_body_hash(&self) -> Option<&ContentHash> {
+        self.claim_body_hash.as_ref()
+    }
+    #[must_use]
+    pub fn obligation_id(&self) -> Option<&StableId> {
+        self.obligation_id.as_ref()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GluingRerunSubjectKindV5 {
+    GluingContext,
+    GluingAttempt,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GluingRerunActionKindV5 {
+    RegisterGluingInput,
+    RebuildSection,
+    Reglue,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GluingRerunReasonV5 {
+    FreshTargetGluingRequired,
+}
+
+#[derive(Serialize)]
+struct GluingRerunActionIdentityV5<'a> {
+    planning_scope_id: &'a StableId,
+    subject_kind: GluingRerunSubjectKindV5,
+    subject_ids: &'a BTreeSet<StableId>,
+    action: GluingRerunActionKindV5,
+    prerequisites: &'a [ActionPrerequisiteV5],
+    reasons: &'a BTreeSet<GluingRerunReasonV5>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GluingRerunActionV5 {
+    schema: &'static str,
+    id: StableId,
+    planning_scope_id: StableId,
+    subject_kind: GluingRerunSubjectKindV5,
+    subject_ids: BTreeSet<StableId>,
+    action: GluingRerunActionKindV5,
+    prerequisites: Vec<ActionPrerequisiteV5>,
+    reasons: BTreeSet<GluingRerunReasonV5>,
+    source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GluingRerunActionWireV5 {
+    schema: String,
+    id: StableId,
+    planning_scope_id: StableId,
+    subject_kind: GluingRerunSubjectKindV5,
+    subject_ids: BTreeSet<StableId>,
+    action: GluingRerunActionKindV5,
+    prerequisites: Vec<ActionPrerequisiteV5>,
+    reasons: BTreeSet<GluingRerunReasonV5>,
+    source_ids: BTreeSet<StableId>,
+}
+
+impl GluingRerunActionV5 {
+    pub(crate) fn derive(
+        planning_scope_id: StableId,
+        subject_kind: GluingRerunSubjectKindV5,
+        subject_id: StableId,
+        action: GluingRerunActionKindV5,
+        prerequisites: Vec<ActionPrerequisiteV5>,
+    ) -> M6Result<Self> {
+        require_kind(
+            &planning_scope_id,
+            "gluing-rerun-scope-v5",
+            "planning_scope_id",
+        )?;
+        if prerequisites.len() > MAX_M6_GLUING_PREREQUISITES
+            || prerequisites.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(M6Error::Canonical(
+                "gluing action prerequisites are not a bounded strict set".to_owned(),
+            ));
+        }
+        for prerequisite in &prerequisites {
+            validate_gluing_action_prerequisite_v5(action, prerequisite)?;
+        }
+        let expected = match action {
+            GluingRerunActionKindV5::RegisterGluingInput => {
+                subject_kind == GluingRerunSubjectKindV5::GluingContext
+                    && prerequisites.is_empty()
+                    && (subject_id.as_str() == crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID
+                        || subject_id.as_str() == crate::DOUBLE_SUBMIT_UI_CONTEXT_ID)
+            }
+            GluingRerunActionKindV5::RebuildSection => {
+                subject_kind == GluingRerunSubjectKindV5::GluingContext
+                    && (subject_id.as_str() == crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID
+                        || subject_id.as_str() == crate::DOUBLE_SUBMIT_UI_CONTEXT_ID)
+                    && (2..=3).contains(&prerequisites.len())
+            }
+            GluingRerunActionKindV5::Reglue => {
+                subject_kind == GluingRerunSubjectKindV5::GluingAttempt
+                    && subject_id.as_str() == crate::DOUBLE_SUBMIT_INVARIANT_ID
+                    && (2..=MAX_M6_GLUING_PREREQUISITES).contains(&prerequisites.len())
+            }
+        };
+        if !expected {
+            return Err(M6Error::Canonical(
+                "gluing action/subject/prerequisite shape is outside the closed DAG".to_owned(),
+            ));
+        }
+        let subject_ids = BTreeSet::from([subject_id]);
+        let reasons = BTreeSet::from([GluingRerunReasonV5::FreshTargetGluingRequired]);
+        let identity = GluingRerunActionIdentityV5 {
+            planning_scope_id: &planning_scope_id,
+            subject_kind,
+            subject_ids: &subject_ids,
+            action,
+            prerequisites: &prerequisites,
+            reasons: &reasons,
+        };
+        let id = derive("gluing-rerun-action-v5", &identity)?;
+        let source_ids = std::iter::once(planning_scope_id.clone())
+            .chain(subject_ids.iter().cloned())
+            .chain(prerequisites.iter().flat_map(|value| match value {
+                ActionPrerequisiteV5::ScheduledAction { action_id } => vec![action_id.clone()],
+                ActionPrerequisiteV5::ExistingTargetRecord {
+                    record_id,
+                    event_id,
+                    ..
+                } => {
+                    vec![record_id.clone(), event_id.clone()]
+                }
+            }))
+            .collect::<BTreeSet<_>>();
+        let value = Self {
+            schema: "reviewgraphen.gluing_rerun_action.v5",
+            id,
+            planning_scope_id,
+            subject_kind,
+            subject_ids,
+            action,
+            prerequisites,
+            reasons,
+            source_ids,
+        };
+        bounded_event_dto(
+            &value,
+            MAX_M6_CANONICAL_BYTES,
+            "M6 gluing rerun action DTO bytes",
+        )?;
+        Ok(value)
+    }
+
+    pub(crate) fn from_event_json_bytes(input: &[u8]) -> M6Result<Self> {
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 gluing rerun action JSON bytes",
+        )?;
+        preflight_event_line(input.len(), 1)?;
+        let wire: GluingRerunActionWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if wire.schema != "reviewgraphen.gluing_rerun_action.v5" || wire.subject_ids.len() != 1 {
+            return Err(M6Error::InvalidWire(
+                "invalid gluing rerun action shape".to_owned(),
+            ));
+        }
+        let value = Self::derive(
+            wire.planning_scope_id,
+            wire.subject_kind,
+            wire.subject_ids
+                .iter()
+                .next()
+                .expect("checked singleton")
+                .clone(),
+            wire.action,
+            wire.prerequisites,
+        )?;
+        if value.id != wire.id
+            || value.reasons != wire.reasons
+            || value.source_ids != wire.source_ids
+            || crate::canonical_json(&value)? != input
+        {
+            return Err(M6Error::InvalidWire(
+                "gluing rerun action is not exact derived content".to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn planning_scope_id(&self) -> &StableId {
+        &self.planning_scope_id
+    }
+    #[must_use]
+    pub const fn action(&self) -> GluingRerunActionKindV5 {
+        self.action
+    }
+    #[must_use]
+    pub fn subject_ids(&self) -> &BTreeSet<StableId> {
+        &self.subject_ids
+    }
+    #[must_use]
+    pub fn prerequisites(&self) -> &[ActionPrerequisiteV5] {
+        &self.prerequisites
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+}
+
+/// Validates the entire second-plan DAG before its seal is derived.  Local
+/// DTO validation intentionally cannot prove that a scheduled prerequisite is
+/// in this plan, or that it is an immediate legal predecessor.
+fn validate_gluing_action_dag_v5(
+    planning_scope_id: &StableId,
+    bindings: &[GluingClaimBindingV5; 2],
+    actions: &[GluingRerunActionV5],
+) -> M6Result<()> {
+    let by_id = actions
+        .iter()
+        .map(|action| (action.id(), action))
+        .collect::<BTreeMap<_, _>>();
+    if by_id.len() != actions.len() || actions.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+        return Err(M6Error::Canonical(
+            "gluing action IDs must be a strict whole-plan order".to_owned(),
+        ));
+    }
+    if actions.is_empty() {
+        return Ok(());
+    }
+    let mut remaining = BTreeMap::<StableId, usize>::new();
+    let mut reverse = BTreeMap::<StableId, Vec<StableId>>::new();
+    for action in actions {
+        if action.planning_scope_id != *planning_scope_id {
+            return Err(M6Error::Canonical(
+                "gluing action escapes the sealed planning scope".to_owned(),
+            ));
+        }
+        let mut scheduled = BTreeSet::new();
+        for prerequisite in &action.prerequisites {
+            if let ActionPrerequisiteV5::ScheduledAction { action_id } = prerequisite
+                && action_id.kind() == "gluing-rerun-action-v5"
+            {
+                if !by_id.contains_key(action_id) || !scheduled.insert(action_id.clone()) {
+                    return Err(M6Error::Canonical(
+                        "gluing action has a dangling or duplicate scheduled prerequisite"
+                            .to_owned(),
+                    ));
+                }
+                reverse
+                    .entry(action_id.clone())
+                    .or_default()
+                    .push(action.id.clone());
+            }
+        }
+        remaining.insert(action.id.clone(), scheduled.len());
+    }
+
+    let registration_for = |context_id: &StableId| {
+        actions.iter().find(|action| {
+            action.action == GluingRerunActionKindV5::RegisterGluingInput
+                && action.subject_ids.contains(context_id)
+        })
+    };
+    let rebuild_for = |context_id: &StableId| {
+        actions.iter().find(|action| {
+            action.action == GluingRerunActionKindV5::RebuildSection
+                && action.subject_ids.contains(context_id)
+        })
+    };
+    let existing_of_kind = |action: &GluingRerunActionV5, kind: &str| {
+        action
+            .prerequisites
+            .iter()
+            .filter(|value| {
+                matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }
+                    if record_id.kind() == kind)
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    };
+    let scheduled_of_kind = |action: &GluingRerunActionV5, kind: &str| {
+        action
+            .prerequisites
+            .iter()
+            .filter_map(|value| match value {
+                ActionPrerequisiteV5::ScheduledAction { action_id } if action_id.kind() == kind => {
+                    Some(action_id.clone())
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>()
+    };
+
+    let reglue = actions
+        .iter()
+        .filter(|action| action.action == GluingRerunActionKindV5::Reglue)
+        .collect::<Vec<_>>();
+    if reglue.len() != 1 {
+        return Err(M6Error::Canonical(
+            "a nonempty gluing DAG requires exactly one reglue action".to_owned(),
+        ));
+    }
+    let reglue = reglue[0];
+    let mut expected_reglue = BTreeSet::new();
+    let mut unassigned_existing = reglue
+        .prerequisites
+        .iter()
+        .filter(|value| matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { .. }))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut missing_existing_registration_pairs = 0_usize;
+
+    for binding in bindings {
+        let registration = registration_for(binding.context_id());
+        let rebuild = rebuild_for(binding.context_id());
+        if (binding.status == GluingClaimBindingStatusV5::Selected) != rebuild.is_some() {
+            return Err(M6Error::Canonical(
+                "gluing binding does not have its exact context rebuild".to_owned(),
+            ));
+        }
+        let context_registration = if let Some(registration) = registration {
+            let prerequisite = ActionPrerequisiteV5::scheduled(registration.id.clone())?;
+            expected_reglue.insert(prerequisite.clone());
+            BTreeSet::from([prerequisite])
+        } else if let Some(rebuild) = rebuild {
+            let pair = rebuild
+                .prerequisites
+                .iter()
+                .filter(|value| {
+                    matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }
+                        if matches!(record_id.kind(), "gluing-input-descriptor-v4" | "registration-v4"))
+                })
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if pair.len() != 2
+                || pair
+                    .iter()
+                    .filter(|value| matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. } if record_id.kind() == "gluing-input-descriptor-v4"))
+                    .count()
+                    != 1
+                || pair
+                    .iter()
+                    .filter(|value| matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. } if record_id.kind() == "registration-v4"))
+                    .count()
+                    != 1
+            {
+                return Err(M6Error::Canonical(
+                    "gluing rebuild lacks its exact existing descriptor/registration pair"
+                        .to_owned(),
+                ));
+            }
+            expected_reglue.extend(pair.iter().cloned());
+            for prerequisite in &pair {
+                unassigned_existing.remove(prerequisite);
+            }
+            pair
+        } else {
+            // A Missing context has no rebuild to carry the pair. Its exact
+            // descriptor/registration pair is the remaining pair on reglue.
+            missing_existing_registration_pairs = missing_existing_registration_pairs
+                .checked_add(1)
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 missing gluing registration pairs",
+                    limit: 2,
+                    observed: usize::MAX,
+                })?;
+            BTreeSet::new()
+        };
+
+        if let Some(rebuild) = rebuild {
+            let scheduled_registrations = scheduled_of_kind(rebuild, "gluing-rerun-action-v5")
+                .into_iter()
+                .map(|action_id| ActionPrerequisiteV5::ScheduledAction { action_id })
+                .collect::<BTreeSet<_>>();
+            let existing_registration = existing_of_kind(rebuild, "registration-v4")
+                .into_iter()
+                .chain(existing_of_kind(rebuild, "gluing-input-descriptor-v4"))
+                .collect::<BTreeSet<_>>();
+            if (registration.is_some() && scheduled_registrations != context_registration)
+                || (registration.is_none() && existing_registration != context_registration)
+            {
+                return Err(M6Error::Canonical(
+                    "gluing rebuild registration closure crosses contexts".to_owned(),
+                ));
+            }
+            let scheduled_verifier = scheduled_of_kind(rebuild, "partial-rerun-action-v5");
+            let existing_verifier = existing_of_kind(rebuild, "verification");
+            if scheduled_verifier.len() + existing_verifier.len() != 1
+                || rebuild.prerequisites.len() != context_registration.len() + 1
+            {
+                return Err(M6Error::Canonical(
+                    "gluing rebuild must have one exact verifier for its bound obligation"
+                        .to_owned(),
+                ));
+            }
+            // This inert DTO contract has no first-plan action set or native
+            // verification metadata. It closes the one verifier-shaped slot;
+            // the event/authority integration must prove that slot addresses
+            // this binding's exact obligation before accepting the seal.
+            expected_reglue.insert(ActionPrerequisiteV5::scheduled(rebuild.id.clone())?);
+        }
+    }
+
+    if !unassigned_existing.is_empty() || missing_existing_registration_pairs != 0 {
+        let descriptors = unassigned_existing
+            .iter()
+            .filter(|value| matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. } if record_id.kind() == "gluing-input-descriptor-v4"))
+            .count();
+        let registrations = unassigned_existing
+            .iter()
+            .filter(|value| matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. } if record_id.kind() == "registration-v4"))
+            .count();
+        if descriptors != missing_existing_registration_pairs
+            || registrations != missing_existing_registration_pairs
+            || unassigned_existing.len() != missing_existing_registration_pairs * 2
+        {
+            return Err(M6Error::Canonical(
+                "reglue has an unbound existing registration closure".to_owned(),
+            ));
+        }
+        expected_reglue.extend(unassigned_existing);
+    }
+    if reglue
+        .prerequisites
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        != expected_reglue
+        || reglue.prerequisites.len() != expected_reglue.len()
+    {
+        return Err(M6Error::Canonical(
+            "reglue prerequisites are not the exact two-context closure".to_owned(),
+        ));
+    }
+    let mut ready = remaining
+        .iter()
+        .filter_map(|(id, count)| (*count == 0).then_some((*id).clone()))
+        .collect::<BTreeSet<_>>();
+    let mut visited = 0_usize;
+    while let Some(id) = ready.pop_first() {
+        visited = visited.checked_add(1).ok_or(M6Error::Incomplete {
+            operation: "gluing action DAG visit",
+            limit: MAX_M6_GLUING_RERUN_ACTIONS,
+            observed: usize::MAX,
+        })?;
+        for child in reverse.get(&id).into_iter().flatten() {
+            let count = remaining
+                .get_mut(child)
+                .expect("reverse edge member exists");
+            *count = count
+                .checked_sub(1)
+                .ok_or_else(|| M6Error::Canonical("gluing action DAG underflow".to_owned()))?;
+            if *count == 0 {
+                ready.insert(child.clone());
+            }
+        }
+    }
+    if visited != actions.len() {
+        return Err(M6Error::Canonical(
+            "gluing action prerequisites contain a cycle".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Enforces the part of §11.1 that depends on the complete fixed binding
+/// vector rather than on a single action's local shape.  This runs before a
+/// seal is derived, so a caller cannot omit a required rebuild or manufacture
+/// an empty second plan without the one exact existing-M5 witness.
+fn validate_gluing_plan_shape_v5(
+    bindings: &[GluingClaimBindingV5; 2],
+    actions: &[GluingRerunActionV5],
+    existing_target_bundle_witness: &Option<ExistingTargetRecordV5>,
+) -> M6Result<()> {
+    if actions.is_empty() {
+        return existing_target_bundle_witness.as_ref().map_or_else(
+            || {
+                Err(M6Error::Canonical(
+                    "a zero-action gluing plan requires its exact existing target M5 witness"
+                        .to_owned(),
+                ))
+            },
+            |witness| {
+                require_kind(
+                    witness.record_id(),
+                    "gluing-attempt-v4",
+                    "existing_target_bundle_witness.record_id",
+                )
+            },
+        );
+    }
+    if existing_target_bundle_witness.is_some() {
+        return Err(M6Error::Canonical(
+            "an existing target M5 witness suppresses every gluing action".to_owned(),
+        ));
+    }
+    let reglue = actions
+        .iter()
+        .filter(|action| action.action == GluingRerunActionKindV5::Reglue)
+        .collect::<Vec<_>>();
+    if reglue.len() != 1 {
+        return Err(M6Error::Canonical(
+            "a nonempty gluing plan requires exactly one reglue action".to_owned(),
+        ));
+    }
+    for binding in bindings {
+        let registrations = actions
+            .iter()
+            .filter(|action| {
+                action.action == GluingRerunActionKindV5::RegisterGluingInput
+                    && action.subject_ids.contains(&binding.context_id)
+            })
+            .count();
+        let rebuilds = actions
+            .iter()
+            .filter(|action| {
+                action.action == GluingRerunActionKindV5::RebuildSection
+                    && action.subject_ids.contains(&binding.context_id)
+            })
+            .count();
+        if registrations > 1
+            || rebuilds != usize::from(binding.status == GluingClaimBindingStatusV5::Selected)
+        {
+            return Err(M6Error::Canonical(
+                "gluing binding does not have its exact registration/rebuild action shape"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct GluingRerunPlanSealIdentityV5<'a> {
+    planning_scope_id: &'a StableId,
+    source_closure_id: &'a StableId,
+    partial_rerun_plan_id: &'a StableId,
+    target_plan_id: &'a StableId,
+    selection_descriptor_id: &'static str,
+    claim_bindings: &'a [GluingClaimBindingV5; 2],
+    action_count: u64,
+    action_set_digest: &'a ContentHash,
+    existing_target_bundle_witness: &'a Option<ExistingTargetRecordV5>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GluingRerunPlanSealV5 {
+    schema: &'static str,
+    id: StableId,
+    planning_scope_id: StableId,
+    source_closure_id: StableId,
+    partial_rerun_plan_id: StableId,
+    target_plan_id: StableId,
+    selection_descriptor_id: &'static str,
+    claim_bindings: [GluingClaimBindingV5; 2],
+    action_count: u64,
+    action_set_digest: ContentHash,
+    existing_target_bundle_witness: Option<ExistingTargetRecordV5>,
+    source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GluingRerunPlanSealWireV5 {
+    schema: String,
+    id: StableId,
+    planning_scope_id: StableId,
+    source_closure_id: StableId,
+    partial_rerun_plan_id: StableId,
+    target_plan_id: StableId,
+    selection_descriptor_id: String,
+    claim_bindings: [GluingClaimBindingV5; 2],
+    action_count: u64,
+    action_set_digest: ContentHash,
+    existing_target_bundle_witness: Option<ExistingTargetRecordV5>,
+    source_ids: BTreeSet<StableId>,
+}
+
+impl GluingRerunPlanSealV5 {
+    pub(crate) fn derive(
+        source_closure_id: StableId,
+        partial_rerun_plan_id: StableId,
+        target_plan_id: StableId,
+        claim_bindings: [GluingClaimBindingV5; 2],
+        actions: &[GluingRerunActionV5],
+        existing_target_bundle_witness: Option<ExistingTargetRecordV5>,
+    ) -> M6Result<Self> {
+        require_kind(
+            &source_closure_id,
+            "incremental-source-closure-v5",
+            "source_closure_id",
+        )?;
+        require_kind(
+            &partial_rerun_plan_id,
+            "partial-rerun-plan-v5",
+            "partial_rerun_plan_id",
+        )?;
+        require_kind(&target_plan_id, "plan", "target_plan_id")?;
+        if claim_bindings[0].context_id.as_str() != crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID
+            || claim_bindings[1].context_id.as_str() != crate::DOUBLE_SUBMIT_UI_CONTEXT_ID
+            || actions.len() > MAX_M6_GLUING_RERUN_ACTIONS
+            || actions.windows(2).any(|pair| pair[0].id >= pair[1].id)
+        {
+            return Err(M6Error::Canonical(
+                "gluing plan members are not in their fixed canonical order".to_owned(),
+            ));
+        }
+        let planning_scope_id = derive(
+            "gluing-rerun-scope-v5",
+            &(
+                &source_closure_id,
+                &partial_rerun_plan_id,
+                &target_plan_id,
+                &claim_bindings,
+            ),
+        )?;
+        validate_gluing_action_dag_v5(&planning_scope_id, &claim_bindings, actions)?;
+        validate_gluing_plan_shape_v5(&claim_bindings, actions, &existing_target_bundle_witness)?;
+        let records = actions
+            .iter()
+            .map(|action| IdBodyHashV5::new(action.id.clone(), action.body_hash()?))
+            .collect::<M6Result<Vec<_>>>()?;
+        let action_set_digest = digest_records(&records)?;
+        let mut source_ids = BTreeSet::from([
+            source_closure_id.clone(),
+            partial_rerun_plan_id.clone(),
+            target_plan_id.clone(),
+            planning_scope_id.clone(),
+        ]);
+        for binding in &claim_bindings {
+            if let Some(id) = binding.claim_id() {
+                source_ids.insert(id.clone());
+            }
+        }
+        for action in actions {
+            source_ids.insert(action.id.clone());
+        }
+        if let Some(witness) = &existing_target_bundle_witness {
+            source_ids.insert(witness.record_id.clone());
+            source_ids.insert(witness.event_id.clone());
+        }
+        let mut value = Self {
+            schema: "reviewgraphen.gluing_rerun_plan.v5",
+            id: StableId::parse("gluing-rerun-plan-v5:pending")?,
+            planning_scope_id,
+            source_closure_id,
+            partial_rerun_plan_id,
+            target_plan_id,
+            selection_descriptor_id: M5_CLAIM_SELECTION_DESCRIPTOR_V5,
+            claim_bindings,
+            action_count: u64::try_from(actions.len()).map_err(|_| M6Error::Incomplete {
+                operation: "M6 gluing action count",
+                limit: MAX_M6_GLUING_RERUN_ACTIONS,
+                observed: usize::MAX,
+            })?,
+            action_set_digest,
+            existing_target_bundle_witness,
+            source_ids,
+        };
+        value.id = derive(
+            "gluing-rerun-plan-v5",
+            &GluingRerunPlanSealIdentityV5 {
+                planning_scope_id: &value.planning_scope_id,
+                source_closure_id: &value.source_closure_id,
+                partial_rerun_plan_id: &value.partial_rerun_plan_id,
+                target_plan_id: &value.target_plan_id,
+                selection_descriptor_id: value.selection_descriptor_id,
+                claim_bindings: &value.claim_bindings,
+                action_count: value.action_count,
+                action_set_digest: &value.action_set_digest,
+                existing_target_bundle_witness: &value.existing_target_bundle_witness,
+            },
+        )?;
+        bounded_event_dto(
+            &value,
+            MAX_M6_CANONICAL_BYTES,
+            "M6 gluing rerun plan seal DTO bytes",
+        )?;
+        Ok(value)
+    }
+    pub(crate) fn from_event_json_bytes(input: &[u8]) -> M6Result<Self> {
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 gluing rerun plan JSON bytes",
+        )?;
+        preflight_event_line(input.len(), 1)?;
+        let wire: GluingRerunPlanSealWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        full_sha256("action_set_digest", &wire.action_set_digest)?;
+        let scope = derive(
+            "gluing-rerun-scope-v5",
+            &(
+                &wire.source_closure_id,
+                &wire.partial_rerun_plan_id,
+                &wire.target_plan_id,
+                &wire.claim_bindings,
+            ),
+        )?;
+        let value = Self {
+            schema: "reviewgraphen.gluing_rerun_plan.v5",
+            id: wire.id,
+            planning_scope_id: wire.planning_scope_id,
+            source_closure_id: wire.source_closure_id,
+            partial_rerun_plan_id: wire.partial_rerun_plan_id,
+            target_plan_id: wire.target_plan_id,
+            selection_descriptor_id: M5_CLAIM_SELECTION_DESCRIPTOR_V5,
+            claim_bindings: wire.claim_bindings,
+            action_count: wire.action_count,
+            action_set_digest: wire.action_set_digest,
+            existing_target_bundle_witness: wire.existing_target_bundle_witness,
+            source_ids: wire.source_ids,
+        };
+        let existing_witness_shape = match (
+            value.action_count,
+            value.existing_target_bundle_witness.as_ref(),
+        ) {
+            (0, Some(witness)) => witness.record_id().kind() == "gluing-attempt-v4",
+            (0, None) => false,
+            (_, None) => true,
+            (_, Some(_)) => false,
+        };
+        let mut expected_sources = BTreeSet::from([
+            value.source_closure_id.clone(),
+            value.partial_rerun_plan_id.clone(),
+            value.target_plan_id.clone(),
+            scope.clone(),
+        ]);
+        for binding in &value.claim_bindings {
+            if let Some(id) = binding.claim_id() {
+                expected_sources.insert(id.clone());
+            }
+        }
+        if let Some(witness) = &value.existing_target_bundle_witness {
+            expected_sources.insert(witness.record_id.clone());
+            expected_sources.insert(witness.event_id.clone());
+        }
+        let action_ids = value
+            .source_ids
+            .iter()
+            .filter(|id| id.kind() == "gluing-rerun-action-v5")
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if action_ids.len() != usize::try_from(value.action_count).unwrap_or(usize::MAX) {
+            return Err(M6Error::InvalidWire(
+                "gluing plan action source IDs do not match action_count".to_owned(),
+            ));
+        }
+        expected_sources.extend(action_ids);
+        let identity = GluingRerunPlanSealIdentityV5 {
+            planning_scope_id: &scope,
+            source_closure_id: &value.source_closure_id,
+            partial_rerun_plan_id: &value.partial_rerun_plan_id,
+            target_plan_id: &value.target_plan_id,
+            selection_descriptor_id: value.selection_descriptor_id,
+            claim_bindings: &value.claim_bindings,
+            action_count: value.action_count,
+            action_set_digest: &value.action_set_digest,
+            existing_target_bundle_witness: &value.existing_target_bundle_witness,
+        };
+        if value.schema != wire.schema
+            || value.selection_descriptor_id != wire.selection_descriptor_id
+            || value.claim_bindings[0].context_id.as_str()
+                != crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID
+            || value.claim_bindings[1].context_id.as_str() != crate::DOUBLE_SUBMIT_UI_CONTEXT_ID
+            || !existing_witness_shape
+            || value.planning_scope_id != scope
+            || value.source_ids != expected_sources
+            || value.action_count > MAX_M6_GLUING_RERUN_ACTIONS as u64
+            || value.id != derive("gluing-rerun-plan-v5", &identity)?
+            || crate::canonical_json(&value)? != input
+        {
+            return Err(M6Error::InvalidWire(
+                "gluing rerun plan seal is not exact derived content".to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn planning_scope_id(&self) -> &StableId {
+        &self.planning_scope_id
+    }
+    #[must_use]
+    pub fn claim_bindings(&self) -> &[GluingClaimBindingV5; 2] {
+        &self.claim_bindings
+    }
+    #[must_use]
+    pub const fn action_count(&self) -> u64 {
+        self.action_count
     }
     pub fn body_hash(&self) -> M6Result<ContentHash> {
         body_hash(self)
@@ -16636,6 +17603,562 @@ pub(crate) fn m6_fixture_phases_from_exact_prefixes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_d2_gluing_dtos_are_strict_and_whole_set_dag_is_closed() {
+        let closure = StableId::parse("incremental-source-closure-v5:c").unwrap();
+        let partial = StableId::parse("partial-rerun-plan-v5:p").unwrap();
+        let plan = StableId::parse("plan:target").unwrap();
+        let payment = StableId::parse(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID).unwrap();
+        let ui = StableId::parse(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID).unwrap();
+        let bindings = [
+            GluingClaimBindingV5::new(payment.clone(), GluingClaimBindingStatusV5::Missing, None)
+                .unwrap(),
+            GluingClaimBindingV5::new(ui.clone(), GluingClaimBindingStatusV5::Missing, None)
+                .unwrap(),
+        ];
+        let scope = derive(
+            "gluing-rerun-scope-v5",
+            &(&closure, &partial, &plan, &bindings),
+        )
+        .unwrap();
+        let payment_registration = GluingRerunActionV5::derive(
+            scope.clone(),
+            GluingRerunSubjectKindV5::GluingContext,
+            payment,
+            GluingRerunActionKindV5::RegisterGluingInput,
+            vec![],
+        )
+        .unwrap();
+        let ui_registration = GluingRerunActionV5::derive(
+            scope.clone(),
+            GluingRerunSubjectKindV5::GluingContext,
+            ui,
+            GluingRerunActionKindV5::RegisterGluingInput,
+            vec![],
+        )
+        .unwrap();
+        let invariant = StableId::parse(crate::DOUBLE_SUBMIT_INVARIANT_ID).unwrap();
+        let mut reglue_prereqs = vec![
+            ActionPrerequisiteV5::scheduled(payment_registration.id.clone()).unwrap(),
+            ActionPrerequisiteV5::scheduled(ui_registration.id.clone()).unwrap(),
+        ];
+        reglue_prereqs.sort();
+        let reglue = GluingRerunActionV5::derive(
+            scope,
+            GluingRerunSubjectKindV5::GluingAttempt,
+            invariant,
+            GluingRerunActionKindV5::Reglue,
+            reglue_prereqs,
+        )
+        .unwrap();
+        let mut actions = vec![payment_registration, ui_registration, reglue];
+        actions.sort_by(|left, right| left.id.cmp(&right.id));
+        let seal = GluingRerunPlanSealV5::derive(closure, partial, plan, bindings, &actions, None)
+            .unwrap();
+        let bytes = crate::canonical_json(&seal).unwrap();
+        assert_eq!(
+            GluingRerunPlanSealV5::from_event_json_bytes(&bytes).unwrap(),
+            seal
+        );
+
+        let mut unknown: Value = serde_json::from_slice(&bytes).unwrap();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("unknown".to_owned(), Value::Bool(true));
+        assert!(
+            GluingRerunPlanSealV5::from_event_json_bytes(&crate::canonical_json(&unknown).unwrap())
+                .is_err()
+        );
+
+        assert!(
+            GluingRerunPlanSealV5::derive(
+                StableId::parse("incremental-source-closure-v5:c").unwrap(),
+                StableId::parse("partial-rerun-plan-v5:p").unwrap(),
+                StableId::parse("plan:target").unwrap(),
+                [
+                    GluingClaimBindingV5::new(
+                        StableId::parse(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID).unwrap(),
+                        GluingClaimBindingStatusV5::Missing,
+                        None,
+                    )
+                    .unwrap(),
+                    GluingClaimBindingV5::new(
+                        StableId::parse(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID).unwrap(),
+                        GluingClaimBindingStatusV5::Missing,
+                        None,
+                    )
+                    .unwrap(),
+                ],
+                &[],
+                None,
+            )
+            .is_err()
+        );
+        let existing = ExistingTargetRecordV5::new(
+            StableId::parse("gluing-attempt-v4:existing").unwrap(),
+            ContentHash::sha256(b"existing M5 bundle"),
+            StableId::parse("event:existing-m5").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            GluingRerunPlanSealV5::derive(
+                StableId::parse("incremental-source-closure-v5:c").unwrap(),
+                StableId::parse("partial-rerun-plan-v5:p").unwrap(),
+                StableId::parse("plan:target").unwrap(),
+                [
+                    GluingClaimBindingV5::new(
+                        StableId::parse(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID).unwrap(),
+                        GluingClaimBindingStatusV5::Missing,
+                        None,
+                    )
+                    .unwrap(),
+                    GluingClaimBindingV5::new(
+                        StableId::parse(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID).unwrap(),
+                        GluingClaimBindingStatusV5::Missing,
+                        None,
+                    )
+                    .unwrap(),
+                ],
+                &[],
+                Some(existing),
+            )
+            .is_ok()
+        );
+        let wrong_existing = ExistingTargetRecordV5::new(
+            StableId::parse("gluing-attempt:existing").unwrap(),
+            ContentHash::sha256(b"existing M5 bundle"),
+            StableId::parse("event:existing-m5").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            GluingRerunPlanSealV5::derive(
+                StableId::parse("incremental-source-closure-v5:c").unwrap(),
+                StableId::parse("partial-rerun-plan-v5:p").unwrap(),
+                StableId::parse("plan:target").unwrap(),
+                [
+                    GluingClaimBindingV5::new(
+                        StableId::parse(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID).unwrap(),
+                        GluingClaimBindingStatusV5::Missing,
+                        None,
+                    )
+                    .unwrap(),
+                    GluingClaimBindingV5::new(
+                        StableId::parse(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID).unwrap(),
+                        GluingClaimBindingStatusV5::Missing,
+                        None,
+                    )
+                    .unwrap(),
+                ],
+                &[],
+                Some(wrong_existing),
+            )
+            .is_err(),
+            "only the frozen M5 attempt namespace can suppress the whole DAG"
+        );
+
+        let selected = [
+            GluingClaimBindingV5::new(
+                StableId::parse(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID).unwrap(),
+                GluingClaimBindingStatusV5::Selected,
+                Some((
+                    (
+                        StableId::parse("claim:payment").unwrap(),
+                        ContentHash::sha256(b"payment claim"),
+                    ),
+                    StableId::parse("obligation:payment").unwrap(),
+                )),
+            )
+            .unwrap(),
+            GluingClaimBindingV5::new(
+                StableId::parse(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID).unwrap(),
+                GluingClaimBindingStatusV5::Missing,
+                None,
+            )
+            .unwrap(),
+        ];
+        assert!(
+            GluingRerunPlanSealV5::derive(
+                StableId::parse("incremental-source-closure-v5:c").unwrap(),
+                StableId::parse("partial-rerun-plan-v5:p").unwrap(),
+                StableId::parse("plan:target").unwrap(),
+                selected,
+                &actions,
+                None,
+            )
+            .is_err(),
+            "a Selected binding cannot omit its rebuild action"
+        );
+
+        let selected_bindings = [
+            GluingClaimBindingV5::new(
+                StableId::parse(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID).unwrap(),
+                GluingClaimBindingStatusV5::Selected,
+                Some((
+                    (
+                        StableId::parse("claim:payment-matrix").unwrap(),
+                        ContentHash::sha256(b"payment matrix claim"),
+                    ),
+                    StableId::parse("obligation:payment-matrix").unwrap(),
+                )),
+            )
+            .unwrap(),
+            GluingClaimBindingV5::new(
+                StableId::parse(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID).unwrap(),
+                GluingClaimBindingStatusV5::Selected,
+                Some((
+                    (
+                        StableId::parse("claim:ui-matrix").unwrap(),
+                        ContentHash::sha256(b"ui matrix claim"),
+                    ),
+                    StableId::parse("obligation:ui-matrix").unwrap(),
+                )),
+            )
+            .unwrap(),
+        ];
+        let matrix_closure = StableId::parse("incremental-source-closure-v5:matrix").unwrap();
+        let matrix_partial = StableId::parse("partial-rerun-plan-v5:matrix").unwrap();
+        let matrix_plan = StableId::parse("plan:matrix").unwrap();
+        let matrix_scope = derive(
+            "gluing-rerun-scope-v5",
+            &(
+                &matrix_closure,
+                &matrix_partial,
+                &matrix_plan,
+                &selected_bindings,
+            ),
+        )
+        .unwrap();
+        let payment_registration = GluingRerunActionV5::derive(
+            matrix_scope.clone(),
+            GluingRerunSubjectKindV5::GluingContext,
+            StableId::parse(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID).unwrap(),
+            GluingRerunActionKindV5::RegisterGluingInput,
+            vec![],
+        )
+        .unwrap();
+        let ui_registration = GluingRerunActionV5::derive(
+            matrix_scope.clone(),
+            GluingRerunSubjectKindV5::GluingContext,
+            StableId::parse(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID).unwrap(),
+            GluingRerunActionKindV5::RegisterGluingInput,
+            vec![],
+        )
+        .unwrap();
+        let payment_verifier = ActionPrerequisiteV5::scheduled(
+            StableId::parse("partial-rerun-action-v5:payment-verifier").unwrap(),
+        )
+        .unwrap();
+        let ui_verifier = ActionPrerequisiteV5::ExistingTargetRecord {
+            record_id: StableId::parse("verification:ui-native").unwrap(),
+            body_hash: ContentHash::sha256(b"ui native verification"),
+            event_id: StableId::parse("event:ui-native-verification").unwrap(),
+        };
+        let rebuild =
+            |context: &str, registration: &GluingRerunActionV5, verifier: ActionPrerequisiteV5| {
+                let mut prerequisites = vec![
+                    ActionPrerequisiteV5::scheduled(registration.id.clone()).unwrap(),
+                    verifier,
+                ];
+                prerequisites.sort();
+                GluingRerunActionV5::derive(
+                    matrix_scope.clone(),
+                    GluingRerunSubjectKindV5::GluingContext,
+                    StableId::parse(context).unwrap(),
+                    GluingRerunActionKindV5::RebuildSection,
+                    prerequisites,
+                )
+                .unwrap()
+            };
+        let payment_rebuild = rebuild(
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            &payment_registration,
+            payment_verifier.clone(),
+        );
+        let ui_rebuild = rebuild(
+            crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+            &ui_registration,
+            ui_verifier,
+        );
+        let derive_reglue = |mut prerequisites: Vec<ActionPrerequisiteV5>| {
+            prerequisites.sort();
+            GluingRerunActionV5::derive(
+                matrix_scope.clone(),
+                GluingRerunSubjectKindV5::GluingAttempt,
+                StableId::parse(crate::DOUBLE_SUBMIT_INVARIANT_ID).unwrap(),
+                GluingRerunActionKindV5::Reglue,
+                prerequisites,
+            )
+            .unwrap()
+        };
+        let exact_reglue_prerequisites = vec![
+            ActionPrerequisiteV5::scheduled(payment_registration.id.clone()).unwrap(),
+            ActionPrerequisiteV5::scheduled(ui_registration.id.clone()).unwrap(),
+            ActionPrerequisiteV5::scheduled(payment_rebuild.id.clone()).unwrap(),
+            ActionPrerequisiteV5::scheduled(ui_rebuild.id.clone()).unwrap(),
+        ];
+        let exact_reglue = derive_reglue(exact_reglue_prerequisites.clone());
+        let mut exact_actions = vec![
+            payment_registration.clone(),
+            ui_registration.clone(),
+            payment_rebuild.clone(),
+            ui_rebuild.clone(),
+            exact_reglue,
+        ];
+        exact_actions.sort_by(|left, right| left.id.cmp(&right.id));
+        GluingRerunPlanSealV5::derive(
+            matrix_closure.clone(),
+            matrix_partial.clone(),
+            matrix_plan.clone(),
+            selected_bindings.clone(),
+            &exact_actions,
+            None,
+        )
+        .expect("scheduled and native verifier-shaped slots form one closed structural DAG");
+
+        let cross_context_rebuild = rebuild(
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            &ui_registration,
+            payment_verifier.clone(),
+        );
+        let cross_context_reglue = derive_reglue(vec![
+            ActionPrerequisiteV5::scheduled(payment_registration.id.clone()).unwrap(),
+            ActionPrerequisiteV5::scheduled(ui_registration.id.clone()).unwrap(),
+            ActionPrerequisiteV5::scheduled(cross_context_rebuild.id.clone()).unwrap(),
+            ActionPrerequisiteV5::scheduled(ui_rebuild.id.clone()).unwrap(),
+        ]);
+        let mut cross_context_actions = vec![
+            payment_registration.clone(),
+            ui_registration.clone(),
+            cross_context_rebuild,
+            ui_rebuild.clone(),
+            cross_context_reglue,
+        ];
+        cross_context_actions.sort_by(|left, right| left.id.cmp(&right.id));
+        assert!(
+            GluingRerunPlanSealV5::derive(
+                matrix_closure.clone(),
+                matrix_partial.clone(),
+                matrix_plan.clone(),
+                selected_bindings.clone(),
+                &cross_context_actions,
+                None,
+            )
+            .is_err(),
+            "a payment rebuild cannot depend on the UI registration"
+        );
+
+        let omitted_reglue = derive_reglue(
+            exact_reglue_prerequisites
+                .iter()
+                .filter(|value| {
+                    **value
+                        != ActionPrerequisiteV5::ScheduledAction {
+                            action_id: ui_registration.id.clone(),
+                        }
+                })
+                .cloned()
+                .collect(),
+        );
+        let mut omitted_actions = vec![
+            payment_registration.clone(),
+            ui_registration.clone(),
+            payment_rebuild.clone(),
+            ui_rebuild.clone(),
+            omitted_reglue,
+        ];
+        omitted_actions.sort_by(|left, right| left.id.cmp(&right.id));
+        assert!(
+            GluingRerunPlanSealV5::derive(
+                matrix_closure.clone(),
+                matrix_partial.clone(),
+                matrix_plan.clone(),
+                selected_bindings.clone(),
+                &omitted_actions,
+                None,
+            )
+            .is_err(),
+            "reglue cannot omit either context registration"
+        );
+
+        let mut extra_reglue_prerequisites = exact_reglue_prerequisites.clone();
+        extra_reglue_prerequisites.push(ActionPrerequisiteV5::ExistingTargetRecord {
+            record_id: StableId::parse("evidence:extra").unwrap(),
+            body_hash: ContentHash::sha256(b"extra"),
+            event_id: StableId::parse("event:extra").unwrap(),
+        });
+        let extra_reglue = derive_reglue(extra_reglue_prerequisites);
+        let mut extra_actions = vec![
+            payment_registration.clone(),
+            ui_registration.clone(),
+            payment_rebuild.clone(),
+            ui_rebuild.clone(),
+            extra_reglue,
+        ];
+        extra_actions.sort_by(|left, right| left.id.cmp(&right.id));
+        assert!(
+            GluingRerunPlanSealV5::derive(
+                matrix_closure.clone(),
+                matrix_partial.clone(),
+                matrix_plan.clone(),
+                selected_bindings.clone(),
+                &extra_actions,
+                None,
+            )
+            .is_err(),
+            "reglue cannot carry an extra predecessor"
+        );
+
+        let wrong_verifier_rebuild = rebuild(
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            &payment_registration,
+            ActionPrerequisiteV5::ExistingTargetRecord {
+                record_id: StableId::parse("evidence:not-verification").unwrap(),
+                body_hash: ContentHash::sha256(b"not verification"),
+                event_id: StableId::parse("event:not-verification").unwrap(),
+            },
+        );
+        let wrong_verifier_reglue = derive_reglue(vec![
+            ActionPrerequisiteV5::scheduled(payment_registration.id.clone()).unwrap(),
+            ActionPrerequisiteV5::scheduled(ui_registration.id.clone()).unwrap(),
+            ActionPrerequisiteV5::scheduled(wrong_verifier_rebuild.id.clone()).unwrap(),
+            ActionPrerequisiteV5::scheduled(ui_rebuild.id.clone()).unwrap(),
+        ]);
+        let mut wrong_verifier_actions = vec![
+            payment_registration,
+            ui_registration,
+            wrong_verifier_rebuild,
+            ui_rebuild,
+            wrong_verifier_reglue,
+        ];
+        wrong_verifier_actions.sort_by(|left, right| left.id.cmp(&right.id));
+        assert!(
+            GluingRerunPlanSealV5::derive(
+                matrix_closure,
+                matrix_partial,
+                matrix_plan,
+                selected_bindings,
+                &wrong_verifier_actions,
+                None,
+            )
+            .is_err(),
+            "a non-verification record cannot occupy the verifier-shaped slot"
+        );
+
+        let partial_action =
+            ActionPrerequisiteV5::scheduled(StableId::parse("gluing-rerun-action-v5:x").unwrap())
+                .unwrap();
+        assert!(validate_partial_action_prerequisite_v5(&partial_action).is_err());
+
+        for status in [
+            GluingClaimBindingStatusV5::Selected,
+            GluingClaimBindingStatusV5::Missing,
+        ] {
+            for mask in 0_u8..8 {
+                let mut binding = serde_json::json!({
+                    "context_id": crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+                    "status": status,
+                    "claim_id": null,
+                    "claim_body_hash": null,
+                    "obligation_id": null
+                });
+                if mask & 1 != 0 {
+                    binding["claim_id"] = serde_json::json!("claim:bound");
+                }
+                if mask & 2 != 0 {
+                    binding["claim_body_hash"] =
+                        serde_json::json!(ContentHash::sha256(b"bound claim"));
+                }
+                if mask & 4 != 0 {
+                    binding["obligation_id"] = serde_json::json!("obligation:bound");
+                }
+                let accepted = serde_json::from_value::<GluingClaimBindingV5>(binding).is_ok();
+                assert_eq!(
+                    accepted,
+                    (status == GluingClaimBindingStatusV5::Selected && mask == 7)
+                        || (status == GluingClaimBindingStatusV5::Missing && mask == 0),
+                    "status={status:?}, mask={mask:03b}"
+                );
+            }
+        }
+        let unknown_context = serde_json::json!({
+            "context_id": "context:other",
+            "status": "missing",
+            "claim_id": null,
+            "claim_body_hash": null,
+            "obligation_id": null
+        });
+        assert!(serde_json::from_value::<GluingClaimBindingV5>(unknown_context).is_err());
+        let unknown_field = serde_json::json!({
+            "context_id": crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            "status": "missing",
+            "claim_id": null,
+            "claim_body_hash": null,
+            "obligation_id": null,
+            "unknown": true
+        });
+        assert!(serde_json::from_value::<GluingClaimBindingV5>(unknown_field).is_err());
+        assert!(
+            GluingRerunPlanSealV5::derive(
+                StableId::parse("incremental-source-closure-v5:order").unwrap(),
+                StableId::parse("partial-rerun-plan-v5:order").unwrap(),
+                StableId::parse("plan:order").unwrap(),
+                [
+                    GluingClaimBindingV5::new(
+                        StableId::parse(crate::DOUBLE_SUBMIT_UI_CONTEXT_ID).unwrap(),
+                        GluingClaimBindingStatusV5::Missing,
+                        None,
+                    )
+                    .unwrap(),
+                    GluingClaimBindingV5::new(
+                        StableId::parse(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID).unwrap(),
+                        GluingClaimBindingStatusV5::Missing,
+                        None,
+                    )
+                    .unwrap(),
+                ],
+                &[],
+                Some(
+                    ExistingTargetRecordV5::new(
+                        StableId::parse("gluing-attempt-v4:order").unwrap(),
+                        ContentHash::sha256(b"order"),
+                        StableId::parse("event:order").unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .is_err(),
+            "bindings are fixed payment then UI"
+        );
+
+        let exact_hostile = vec![b' '; MAX_M6_EVENT_LINE_BYTES - 1];
+        assert!(matches!(
+            GluingRerunActionV5::from_event_json_bytes(&exact_hostile),
+            Err(M6Error::InvalidWire(_))
+        ));
+        assert!(matches!(
+            GluingRerunPlanSealV5::from_event_json_bytes(&exact_hostile),
+            Err(M6Error::InvalidWire(_))
+        ));
+        let plus_one_hostile = vec![b' '; MAX_M6_EVENT_LINE_BYTES];
+        assert!(matches!(
+            GluingRerunActionV5::from_event_json_bytes(&plus_one_hostile),
+            Err(M6Error::Incomplete {
+                operation,
+                observed,
+                ..
+            }) if operation == "M6 event-line bytes" && observed == MAX_M6_EVENT_LINE_BYTES + 1
+        ));
+        assert!(matches!(
+            GluingRerunPlanSealV5::from_event_json_bytes(&plus_one_hostile),
+            Err(M6Error::Incomplete {
+                operation,
+                observed,
+                ..
+            }) if operation == "M6 event-line bytes" && observed == MAX_M6_EVENT_LINE_BYTES + 1
+        ));
+    }
     use serde_json::Value;
 
     fn id(value: &str) -> StableId {
