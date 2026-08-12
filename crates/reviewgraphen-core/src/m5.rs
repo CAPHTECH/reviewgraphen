@@ -1595,6 +1595,24 @@ pub struct GluingInputDescriptorV4 {
 }
 
 impl GluingInputDescriptorV4 {
+    pub(crate) fn retained_bytes_for_v5(&self) -> u64 {
+        let mut total = u64::try_from(std::mem::size_of::<Self>()).unwrap_or(u64::MAX);
+        for bytes in [
+            self.schema.capacity(),
+            self.id.allocated_bytes(),
+            self.run_id.allocated_bytes(),
+            self.snapshot_id.allocated_bytes(),
+            self.universe_id.allocated_bytes(),
+            self.plan_id.allocated_bytes(),
+            self.profile_descriptor_id.capacity(),
+            self.context_id.allocated_bytes(),
+            self.assignment_key.capacity(),
+            retained_id_set_bytes(&self.qualification_source_ids),
+        ] {
+            total = total.saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        }
+        total
+    }
     pub(crate) fn complete_body_hash(&self) -> crate::Result<ContentHash> {
         Ok(ContentHash::sha256(&crate::canonical_json(self)?))
     }
@@ -3161,6 +3179,253 @@ pub struct GluingBundleV4 {
     obstruction: Option<GluingObstructionV4>,
 }
 
+fn retained_id_set_bytes(values: &BTreeSet<StableId>) -> usize {
+    values.iter().fold(
+        values.len().saturating_mul(std::mem::size_of::<StableId>()),
+        |total, value| total.saturating_add(value.allocated_bytes()),
+    )
+}
+
+fn retained_id_vec_bytes(values: &Vec<StableId>) -> usize {
+    values.iter().fold(
+        values
+            .capacity()
+            .saturating_mul(std::mem::size_of::<StableId>()),
+        |total, value| total.saturating_add(value.allocated_bytes()),
+    )
+}
+
+/// Allocation-free upper bound used before V5 reads either descriptor CAS
+/// object. Canonical bytes cover every dynamic string/ID byte; the additional
+/// slots cover typed ownership which is absent from the wire representation.
+pub(crate) fn v5_terminal_m5_typed_retained_upper_bound(
+    descriptor_canonical_bytes: u64,
+    bundle_payload_bytes: u64,
+) -> crate::Result<u64> {
+    let id_slot = u64::try_from(std::mem::size_of::<StableId>()).unwrap_or(u64::MAX);
+    let descriptor_slots = u64::try_from(std::mem::size_of::<GluingInputDescriptorV4>())
+        .unwrap_or(u64::MAX)
+        .checked_mul(2)
+        .and_then(|value| {
+            value.checked_add(
+                u64::try_from(MAX_M5_DESCRIPTOR_QUALIFICATION_IDS)
+                    .unwrap_or(u64::MAX)
+                    .checked_mul(id_slot)?
+                    .checked_mul(2)?,
+            )
+        })
+        .ok_or(crate::DomainError::Incomplete {
+            operation: "V5 M5 descriptor typed retained upper bound",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })?;
+    // Every retained ID requires at least one JSON byte. Charging one complete
+    // StableId slot per bundle byte is deliberately conservative and closes
+    // every nested set/vector without trusting wire size as object size.
+    let bundle_slots = bundle_payload_bytes
+        .checked_mul(id_slot)
+        .and_then(|value| {
+            value.checked_add(
+                u64::try_from(
+                    std::mem::size_of::<GluingBundleV4>()
+                        + 2 * std::mem::size_of::<SectionV4>()
+                        + 2 * std::mem::size_of::<RestrictionV4>(),
+                )
+                .unwrap_or(u64::MAX),
+            )
+        })
+        .ok_or(crate::DomainError::Incomplete {
+            operation: "V5 M5 bundle typed retained upper bound",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })?;
+    descriptor_canonical_bytes
+        .checked_add(bundle_payload_bytes)
+        .and_then(|value| value.checked_add(descriptor_slots))
+        .and_then(|value| value.checked_add(bundle_slots))
+        .ok_or(crate::DomainError::Incomplete {
+            operation: "V5 M5 typed retained upper bound",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })
+}
+
+fn retained_strings_and_ids(strings: &[&String], ids: &[&StableId]) -> u64 {
+    strings
+        .iter()
+        .map(|value| value.capacity())
+        .chain(ids.iter().map(|value| value.allocated_bytes()))
+        .fold(0_u64, |total, bytes| {
+            total.saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+        })
+}
+
+fn retained_cover_bytes(value: &ContextCoverV4) -> u64 {
+    retained_strings_and_ids(
+        &[&value.schema, &value.profile_descriptor_id],
+        &[
+            &value.id,
+            &value.run_id,
+            &value.snapshot_id,
+            &value.universe_id,
+            &value.plan_id,
+        ],
+    )
+    .saturating_add(
+        u64::try_from(retained_id_set_bytes(&value.selected_obligation_ids)).unwrap_or(u64::MAX),
+    )
+    .saturating_add(
+        u64::try_from(retained_id_vec_bytes(&value.required_context_ids)).unwrap_or(u64::MAX),
+    )
+    .saturating_add(
+        u64::try_from(retained_id_set_bytes(&value.cover_domain_ids)).unwrap_or(u64::MAX),
+    )
+    .saturating_add(
+        u64::try_from(retained_id_set_bytes(&value.covered_domain_ids)).unwrap_or(u64::MAX),
+    )
+    .saturating_add(
+        u64::try_from(retained_id_set_bytes(&value.uncovered_domain_ids)).unwrap_or(u64::MAX),
+    )
+    .saturating_add(u64::try_from(retained_id_set_bytes(&value.source_ids)).unwrap_or(u64::MAX))
+}
+
+fn retained_section_bytes(value: &SectionV4) -> u64 {
+    let mut total = retained_strings_and_ids(
+        &[&value.schema, &value.property_id, &value.assignment_key],
+        &[
+            &value.id,
+            &value.cover_id,
+            &value.context_id,
+            &value.snapshot_id,
+            &value.invariant_id,
+            &value.obligation_id,
+            &value.claim_id,
+            &value.claim_assessment_id,
+            &value.input_descriptor_id,
+            &value.input_registration_id,
+        ],
+    );
+    for set in [
+        &value.source_ids,
+        &value.qualification_source_ids,
+        &value.binding_ids,
+        &value.evidence_ids,
+        &value.verification_ids,
+        &value.decision_ids,
+        &value.finding_ids,
+    ] {
+        total = total.saturating_add(u64::try_from(retained_id_set_bytes(set)).unwrap_or(u64::MAX));
+    }
+    total
+}
+
+fn retained_restriction_bytes(value: &RestrictionV4) -> u64 {
+    let mut total = retained_strings_and_ids(
+        &[&value.schema, &value.assignment_key],
+        &[&value.id, &value.section_id],
+    )
+    .saturating_add(u64::try_from(retained_id_vec_bytes(&value.context_pair)).unwrap_or(u64::MAX));
+    for set in [
+        &value.overlap_member_ids,
+        &value.source_ids,
+        &value.qualification_source_ids,
+        &value.claim_ids,
+        &value.evidence_ids,
+        &value.verification_ids,
+        &value.decision_ids,
+        &value.finding_ids,
+    ] {
+        total = total.saturating_add(u64::try_from(retained_id_set_bytes(set)).unwrap_or(u64::MAX));
+    }
+    total
+}
+
+fn retained_candidate_bytes(value: &GlobalCandidateV4) -> u64 {
+    let mut total = retained_strings_and_ids(
+        &[&value.schema, &value.property_id],
+        &[&value.id, &value.cover_id, &value.invariant_id],
+    )
+    .saturating_add(
+        u64::try_from(retained_id_vec_bytes(&value.required_section_ids)).unwrap_or(u64::MAX),
+    )
+    .saturating_add(
+        u64::try_from(retained_id_vec_bytes(&value.restriction_ids)).unwrap_or(u64::MAX),
+    );
+    for set in [
+        &value.qualification_source_ids,
+        &value.source_ids,
+        &value.claim_ids,
+        &value.evidence_ids,
+        &value.verification_ids,
+        &value.decision_ids,
+        &value.finding_ids,
+    ] {
+        total = total.saturating_add(u64::try_from(retained_id_set_bytes(set)).unwrap_or(u64::MAX));
+    }
+    total
+}
+
+fn retained_attempt_bytes(value: &GluingAttemptV4) -> u64 {
+    let mut total = retained_strings_and_ids(
+        &[&value.schema, &value.property_id],
+        &[
+            &value.id,
+            &value.cover_id,
+            &value.snapshot_id,
+            &value.invariant_id,
+        ],
+    );
+    for values in [
+        &value.input_descriptor_ids,
+        &value.section_ids,
+        &value.restriction_ids,
+    ] {
+        total =
+            total.saturating_add(u64::try_from(retained_id_vec_bytes(values)).unwrap_or(u64::MAX));
+    }
+    for id in [&value.global_candidate_id, &value.obstruction_id]
+        .into_iter()
+        .flatten()
+    {
+        total = total.saturating_add(u64::try_from(id.allocated_bytes()).unwrap_or(u64::MAX));
+    }
+    for set in [
+        &value.source_ids,
+        &value.claim_ids,
+        &value.evidence_ids,
+        &value.verification_ids,
+        &value.decision_ids,
+        &value.finding_ids,
+    ] {
+        total = total.saturating_add(u64::try_from(retained_id_set_bytes(set)).unwrap_or(u64::MAX));
+    }
+    total
+}
+
+fn retained_obstruction_bytes(value: &GluingObstructionV4) -> u64 {
+    let mut total = retained_strings_and_ids(
+        &[&value.schema, &value.assignment_key],
+        &[&value.id, &value.attempt_id, &value.affected_invariant_id],
+    );
+    for values in [&value.conflicting_context_ids, &value.section_ids] {
+        total =
+            total.saturating_add(u64::try_from(retained_id_vec_bytes(values)).unwrap_or(u64::MAX));
+    }
+    for set in [
+        &value.overlap_member_ids,
+        &value.source_ids,
+        &value.claim_ids,
+        &value.evidence_ids,
+        &value.verification_ids,
+        &value.decision_ids,
+        &value.finding_ids,
+        &value.blocks,
+    ] {
+        total = total.saturating_add(u64::try_from(retained_id_set_bytes(set)).unwrap_or(u64::MAX));
+    }
+    total
+}
+
 #[derive(Default)]
 struct TraceUnions {
     claims: BTreeSet<StableId>,
@@ -3208,6 +3473,47 @@ fn collect_traces(sections: &[SectionV4]) -> M5Result<TraceUnions> {
 }
 
 impl GluingBundleV4 {
+    pub(crate) fn retained_bytes_for_v5(&self) -> u64 {
+        let mut total = u64::try_from(std::mem::size_of::<Self>())
+            .unwrap_or(u64::MAX)
+            .saturating_add(u64::try_from(self.schema.capacity()).unwrap_or(u64::MAX))
+            .saturating_add(retained_cover_bytes(&self.cover))
+            .saturating_add(
+                u64::try_from(retained_id_vec_bytes(&self.input_descriptor_ids))
+                    .unwrap_or(u64::MAX),
+            )
+            .saturating_add(retained_attempt_bytes(&self.attempt));
+        total = total.saturating_add(
+            u64::try_from(
+                self.sections
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<SectionV4>()),
+            )
+            .unwrap_or(u64::MAX),
+        );
+        for section in &self.sections {
+            total = total.saturating_add(retained_section_bytes(section));
+        }
+        total = total.saturating_add(
+            u64::try_from(
+                self.restrictions
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<RestrictionV4>()),
+            )
+            .unwrap_or(u64::MAX),
+        );
+        for restriction in &self.restrictions {
+            total = total.saturating_add(retained_restriction_bytes(restriction));
+        }
+        if let Some(candidate) = &self.global_candidate {
+            total = total.saturating_add(retained_candidate_bytes(candidate));
+        }
+        if let Some(obstruction) = &self.obstruction {
+            total = total.saturating_add(retained_obstruction_bytes(obstruction));
+        }
+        total
+    }
+
     pub(crate) fn from_validated(source: ValidatedM5SourceV4) -> Self {
         source.bundle
     }
@@ -5354,5 +5660,18 @@ mod tests {
                 restriction.source_ids.len() == MAX_M5_RESTRICTION_SOURCE_IDS
             })
         );
+    }
+
+    #[test]
+    fn v5_terminal_typed_upper_bound_is_monotone_and_overflow_closed() {
+        let small = v5_terminal_m5_typed_retained_upper_bound(256, 1_024).unwrap();
+        let large = v5_terminal_m5_typed_retained_upper_bound(
+            u64::try_from(2 * MAX_M5_DESCRIPTOR_CANONICAL_BYTES).unwrap(),
+            u64::try_from(MAX_M5_BUNDLE_CANONICAL_BYTES).unwrap(),
+        )
+        .unwrap();
+        assert!(large > small);
+        assert!(v5_terminal_m5_typed_retained_upper_bound(u64::MAX, 1).is_err());
+        assert!(v5_terminal_m5_typed_retained_upper_bound(1, u64::MAX).is_err());
     }
 }
