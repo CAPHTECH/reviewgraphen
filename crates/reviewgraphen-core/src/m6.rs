@@ -10,13 +10,14 @@ use crate::event::{
     HistoricalPrefixAdmissionV4, HistoricalPrefixProjectionV4, HistoricalSourceRecordKindV4,
     HistoricalSourceRecordProjectionV4, HistoricalSourceRecordValueV4,
     TargetActualRecordInventoryV5, TargetActualRecordProjectionV5, TargetActualRecordV5,
+    TargetPredecessorSuppressionProjectionV5, TargetSuppressionRecordWitnessV5,
     V5PreIncrementalStructuralPrefixProjection,
 };
 use crate::{
     ArtifactSensitivity, ArtifactSourceV3, ArtifactSourceV4, AuthorityReplayBasisV4, ContentHash,
     DecisionOutcomeV3, DomainError, EventLogV4, EventLogV5, FindingStatusV3,
-    M5CompletedGluingProfileV4, Obligation, ProgramSpace, ReviewAggregate, StableId,
-    VerificationOutcomeV3,
+    M5CompletedGluingProfileV4, Obligation, ObligationLifecycle, ProgramSpace, ReviewAggregate,
+    StableId, VerificationOutcomeV3,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -85,6 +86,13 @@ pub enum M6Error {
     InvalidStalenessAssessment(&'static str),
     #[error("target preservation is unsupported: {0}")]
     PreservationUnsupported(&'static str),
+    #[error("M6 reviewer execution {execution_id} has unsupported claim cardinality {observed}")]
+    M6ClaimCardinalityUnsupported {
+        execution_id: StableId,
+        observed: usize,
+    },
+    #[error("completed target obligation {obligation_id} lacks its exact reviewer closure")]
+    CompletedReviewerClosureMismatch { obligation_id: StableId },
     #[error("missing accepted M6 {kind} fact for {object_id}")]
     MissingAcceptedMappingFact {
         kind: &'static str,
@@ -1439,6 +1447,89 @@ pub struct M6PreservationPhaseV5 {
 }
 
 impl M6PreservationPhaseV5 {
+    pub(crate) fn retained_bytes(&self) -> M6Result<usize> {
+        let mut total = std::mem::size_of::<Self>();
+        let add = |total: &mut usize, value: usize| -> M6Result<()> {
+            *total = total.checked_add(value).ok_or(M6Error::Incomplete {
+                operation: "M6 preservation retained bytes",
+                limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                observed: usize::MAX,
+            })?;
+            Ok(())
+        };
+        for id in [
+            &self.source_closure_id,
+            &self.morphism_id,
+            &self.correspondence_id,
+            &self.staleness_assessment_id,
+            &self.target_snapshot_id,
+        ] {
+            add(&mut total, id.allocated_bytes())?;
+        }
+        add(
+            &mut total,
+            self.evidence
+                .capacity()
+                .checked_mul(std::mem::size_of::<PreservationEvidenceV5>())
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 preservation retained bytes",
+                    limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                    observed: usize::MAX,
+                })?,
+        )?;
+        for value in &self.evidence {
+            for bytes in [
+                value.schema.capacity(),
+                value.id.allocated_bytes(),
+                value.target_snapshot_id.allocated_bytes(),
+                value.target_obligation_id.allocated_bytes(),
+                value.source_closure_id.allocated_bytes(),
+                value.morphism_id.allocated_bytes(),
+                value.correspondence_entry_id.allocated_bytes(),
+                value.source_claim_id.allocated_bytes(),
+                value.source_verification_id.allocated_bytes(),
+                value.input_registration_id.allocated_bytes(),
+                value.output_registration_id.allocated_bytes(),
+                value.descriptor_id.capacity(),
+                value.procedure_version.capacity(),
+                value.observation.capacity(),
+                id_set_heap(&value.source_evidence_ids),
+                id_set_heap(&value.dependency_mapping_ids),
+                id_set_heap(&value.source_ids),
+            ] {
+                add(&mut total, bytes)?;
+            }
+        }
+        add(
+            &mut total,
+            self.verifications
+                .capacity()
+                .checked_mul(std::mem::size_of::<PreservationVerificationV5>())
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 preservation retained bytes",
+                    limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                    observed: usize::MAX,
+                })?,
+        )?;
+        for value in &self.verifications {
+            for bytes in [
+                value.schema.capacity(),
+                value.id.allocated_bytes(),
+                value.target_snapshot_id.allocated_bytes(),
+                value.target_obligation_id.allocated_bytes(),
+                value.evidence_id.allocated_bytes(),
+                value.source_verification_id.allocated_bytes(),
+                value.descriptor_id.capacity(),
+                value.procedure_version.capacity(),
+                value.outcome.capacity(),
+                id_set_heap(&value.source_ids),
+            ] {
+                add(&mut total, bytes)?;
+            }
+        }
+        Ok(total)
+    }
+
     pub(crate) fn from_admitted_bundles(
         staleness: &M6StalenessPhaseV5,
         correspondence: &M6ObligationCorrespondencePhaseV5,
@@ -10207,6 +10298,16 @@ struct PartialRerunActionSeedV5 {
     reasons: BTreeSet<StaleReasonV5>,
 }
 
+fn existing_target_prerequisite_v5(
+    witness: &TargetSuppressionRecordWitnessV5,
+) -> ActionPrerequisiteV5 {
+    ActionPrerequisiteV5::ExistingTargetRecord {
+        record_id: witness.record_id().clone(),
+        body_hash: witness.body_hash().clone(),
+        event_id: witness.event_id().clone(),
+    }
+}
+
 fn historical_kind_requires_native_rerun_v5(kind: HistoricalRecordKindV5) -> bool {
     !matches!(
         kind,
@@ -10367,6 +10468,12 @@ pub struct M6StalenessPhaseV5 {
     partial_rerun_seeds: BTreeMap<StableId, PartialRerunActionSeedV5>,
     target_plan_id: StableId,
     target_snapshot_id: StableId,
+    target_run_id: StableId,
+    target_genesis_hash: ContentHash,
+    target_tail_hash: ContentHash,
+    target_event_count: u64,
+    target_policy_revision_hash: ContentHash,
+    target_pre_incremental_basis_digest: ContentHash,
     working_bytes: usize,
 }
 
@@ -10391,23 +10498,56 @@ impl M6StalenessPhaseV5 {
     /// Deterministically reduces the sealed staleness/preservation facts into
     /// the initial no-suppression partial-rerun DAG.  It performs no journal,
     /// CAS, lifecycle, verifier, human, or gluing mutation.
-    pub fn plan_partial_rerun_v5(
+    #[cfg(test)]
+    pub(crate) fn plan_partial_rerun_without_target_suppression_v5(
         &self,
         preservation: &M6PreservationPhaseV5,
     ) -> M6Result<(Vec<PartialRerunActionV5>, PartialRerunPlanV5)> {
         self.plan_partial_rerun_with_limits_v5(
             preservation,
+            None,
             MAX_M6_PARTIAL_RERUN_ACTIONS,
             MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+        )
+    }
+
+    pub(crate) fn plan_partial_rerun_with_target_suppression_v5(
+        &self,
+        preservation: &M6PreservationPhaseV5,
+        suppression: &TargetPredecessorSuppressionProjectionV5,
+    ) -> M6Result<(Vec<PartialRerunActionV5>, PartialRerunPlanV5)> {
+        self.plan_partial_rerun_with_limits_v5(
+            preservation,
+            Some(suppression),
+            MAX_M6_PARTIAL_RERUN_ACTIONS,
+            MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+        )
+    }
+
+    pub(crate) fn plan_partial_rerun_with_target_suppression_and_limit_v5(
+        &self,
+        preservation: &M6PreservationPhaseV5,
+        suppression: &TargetPredecessorSuppressionProjectionV5,
+        working_limit: usize,
+    ) -> M6Result<(Vec<PartialRerunActionV5>, PartialRerunPlanV5)> {
+        self.plan_partial_rerun_with_limits_v5(
+            preservation,
+            Some(suppression),
+            MAX_M6_PARTIAL_RERUN_ACTIONS,
+            working_limit,
         )
     }
 
     fn plan_partial_rerun_with_limits_v5(
         &self,
         preservation: &M6PreservationPhaseV5,
+        suppression: Option<&TargetPredecessorSuppressionProjectionV5>,
         action_limit: usize,
         working_limit: usize,
     ) -> M6Result<(Vec<PartialRerunActionV5>, PartialRerunPlanV5)> {
+        if let Some(suppression) = suppression {
+            suppression.validate_seal().map_err(M6Error::from)?;
+        }
         if preservation.source_closure_id != self.assessment.source_closure_id
             || preservation.morphism_id != self.assessment.morphism_id
             || preservation.correspondence_id != self.assessment.correspondence_id
@@ -10417,6 +10557,20 @@ impl M6StalenessPhaseV5 {
         {
             return Err(M6Error::PreservationUnsupported(
                 "preservation phase is not bound to this sealed staleness phase",
+            ));
+        }
+        if suppression.is_some_and(|value| {
+            value.target_run_id() != &self.target_run_id
+                || value.target_genesis_hash() != &self.target_genesis_hash
+                || value.target_tail_hash() != &self.target_tail_hash
+                || value.target_event_count() != self.target_event_count
+                || value.policy_revision_hash() != &self.target_policy_revision_hash
+                || value.pre_incremental_basis_digest() != &self.target_pre_incremental_basis_digest
+                || value.target_plan_id() != &self.target_plan_id
+                || value.target_snapshot_id() != &self.target_snapshot_id
+        }) {
+            return Err(M6Error::InvalidStalenessAssessment(
+                "target suppression projection is not bound to the sealed predecessor",
             ));
         }
         bounded(
@@ -10448,22 +10602,77 @@ impl M6StalenessPhaseV5 {
             MAX_M6_OBLIGATIONS_PER_UNIVERSE,
             "M6 selected rerun targets",
         )?;
-        let action_count = selected_target_ids
-            .len()
-            .checked_mul(3)
-            .and_then(|count| {
-                count.checked_add(
-                    seeds
-                        .values()
-                        .filter(|seed| seed.require_human_resolution)
-                        .count(),
-                )
-            })
-            .ok_or(M6Error::Incomplete {
-                operation: "M6 partial rerun action count",
-                limit: action_limit,
-                observed: usize::MAX,
-            })?;
+        #[derive(Clone, Default)]
+        struct SuppressionDecision {
+            context: Option<TargetSuppressionRecordWitnessV5>,
+            reviewer: Option<(
+                TargetSuppressionRecordWitnessV5,
+                TargetSuppressionRecordWitnessV5,
+            )>,
+            verification: Option<TargetSuppressionRecordWitnessV5>,
+            human: bool,
+        }
+        let mut decisions = BTreeMap::new();
+        let mut action_count = 0_usize;
+        for (target, seed) in &seeds {
+            let mut decision = SuppressionDecision::default();
+            if let Some(suppression) = suppression {
+                let lifecycle = suppression.lifecycle(target);
+                let reviewer = suppression.reviewer_closure(target);
+                let context = suppression.context_envelope(target).cloned();
+                if let Some(reviewer) = reviewer {
+                    let observed = reviewer.claims().len();
+                    if observed != 1 {
+                        return Err(M6Error::M6ClaimCardinalityUnsupported {
+                            execution_id: reviewer.execution().record_id().clone(),
+                            observed,
+                        });
+                    }
+                    if reviewer.closure_exact() && context.is_some() {
+                        decision.reviewer =
+                            Some((reviewer.execution().clone(), reviewer.claims()[0].clone()));
+                    }
+                }
+                if lifecycle == Some(ObligationLifecycle::Completed) && decision.reviewer.is_none()
+                {
+                    return Err(M6Error::CompletedReviewerClosureMismatch {
+                        obligation_id: target.clone(),
+                    });
+                }
+                if decision.reviewer.is_some() || lifecycle == Some(ObligationLifecycle::InProgress)
+                {
+                    decision.context = context;
+                }
+                if decision.reviewer.is_some() {
+                    decision.verification = suppression.native_verification(target).cloned();
+                }
+                decision.human = decision.verification.is_some()
+                    && suppression.human_exact(target)
+                    && seed.require_human_resolution;
+            }
+            let subject_actions = usize::from(decision.context.is_none())
+                .checked_add(usize::from(decision.reviewer.is_none()))
+                .and_then(|count| count.checked_add(usize::from(decision.verification.is_none())))
+                .and_then(|count| {
+                    count.checked_add(usize::from(
+                        seed.require_human_resolution && !decision.human,
+                    ))
+                })
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 partial rerun action count",
+                    limit: action_limit,
+                    observed: usize::MAX,
+                })?;
+            action_count =
+                action_count
+                    .checked_add(subject_actions)
+                    .ok_or(M6Error::Incomplete {
+                        operation: "M6 partial rerun action count",
+                        limit: action_limit,
+                        observed: usize::MAX,
+                    })?;
+            decisions.insert(target.clone(), decision);
+        }
         bounded(action_count, action_limit, "M6 partial rerun actions")?;
         let metadata_ids = seeds.values().try_fold(0_usize, |total, seed| {
             total
@@ -10486,41 +10695,97 @@ impl M6StalenessPhaseV5 {
         let mut actions = Vec::with_capacity(action_count);
         let mut required_human_resolution_ids = BTreeSet::new();
         for (target, seed) in &seeds {
-            let context = PartialRerunActionV5::derive(
-                self.assessment.id.clone(),
-                target.clone(),
-                PartialRerunActionKindV5::ReprojectContext,
-                Vec::new(),
-                seed.stale_source_record_ids.clone(),
-                seed.reasons.clone(),
-            )?;
-            let reviewer = PartialRerunActionV5::derive(
-                self.assessment.id.clone(),
-                target.clone(),
-                PartialRerunActionKindV5::RerunReviewer,
-                vec![ActionPrerequisiteV5::scheduled(context.id.clone())?],
-                seed.stale_source_record_ids.clone(),
-                seed.reasons.clone(),
-            )?;
-            let verifier = PartialRerunActionV5::derive(
-                self.assessment.id.clone(),
-                target.clone(),
-                PartialRerunActionKindV5::RerunVerifier,
-                vec![ActionPrerequisiteV5::scheduled(reviewer.id.clone())?],
-                seed.stale_source_record_ids.clone(),
-                seed.reasons.clone(),
-            )?;
-            actions.extend([context, reviewer, verifier.clone()]);
-            if seed.require_human_resolution {
-                required_human_resolution_ids.insert(target.clone());
-                actions.push(PartialRerunActionV5::derive(
+            let decision = &decisions[target];
+            let context = if decision.context.is_none() {
+                Some(PartialRerunActionV5::derive(
                     self.assessment.id.clone(),
                     target.clone(),
-                    PartialRerunActionKindV5::RerunHumanDecision,
-                    vec![ActionPrerequisiteV5::scheduled(verifier.id.clone())?],
+                    PartialRerunActionKindV5::ReprojectContext,
+                    Vec::new(),
                     seed.stale_source_record_ids.clone(),
                     seed.reasons.clone(),
-                )?);
+                )?)
+            } else {
+                None
+            };
+            if let Some(context) = &context {
+                actions.push(context.clone());
+            }
+            let reviewer = if decision.reviewer.is_none() {
+                let prerequisites = if let Some(context) = &context {
+                    vec![ActionPrerequisiteV5::scheduled(context.id.clone())?]
+                } else {
+                    vec![existing_target_prerequisite_v5(
+                        decision
+                            .context
+                            .as_ref()
+                            .expect("suppressed context witness"),
+                    )]
+                };
+                Some(PartialRerunActionV5::derive(
+                    self.assessment.id.clone(),
+                    target.clone(),
+                    PartialRerunActionKindV5::RerunReviewer,
+                    prerequisites,
+                    seed.stale_source_record_ids.clone(),
+                    seed.reasons.clone(),
+                )?)
+            } else {
+                None
+            };
+            if let Some(reviewer) = &reviewer {
+                actions.push(reviewer.clone());
+            }
+            let verifier = if decision.verification.is_none() {
+                let mut prerequisites = if let Some(reviewer) = &reviewer {
+                    vec![ActionPrerequisiteV5::scheduled(reviewer.id.clone())?]
+                } else {
+                    let (execution, claim) = decision
+                        .reviewer
+                        .as_ref()
+                        .expect("suppressed reviewer witnesses");
+                    vec![
+                        existing_target_prerequisite_v5(execution),
+                        existing_target_prerequisite_v5(claim),
+                    ]
+                };
+                prerequisites.sort();
+                Some(PartialRerunActionV5::derive(
+                    self.assessment.id.clone(),
+                    target.clone(),
+                    PartialRerunActionKindV5::RerunVerifier,
+                    prerequisites,
+                    seed.stale_source_record_ids.clone(),
+                    seed.reasons.clone(),
+                )?)
+            } else {
+                None
+            };
+            if let Some(verifier) = &verifier {
+                actions.push(verifier.clone());
+            }
+            if seed.require_human_resolution {
+                required_human_resolution_ids.insert(target.clone());
+                if !decision.human {
+                    let prerequisites = if let Some(verifier) = &verifier {
+                        vec![ActionPrerequisiteV5::scheduled(verifier.id.clone())?]
+                    } else {
+                        vec![existing_target_prerequisite_v5(
+                            decision
+                                .verification
+                                .as_ref()
+                                .expect("suppressed native verification witness"),
+                        )]
+                    };
+                    actions.push(PartialRerunActionV5::derive(
+                        self.assessment.id.clone(),
+                        target.clone(),
+                        PartialRerunActionKindV5::RerunHumanDecision,
+                        prerequisites,
+                        seed.stale_source_record_ids.clone(),
+                        seed.reasons.clone(),
+                    )?);
+                }
             }
         }
         actions.sort_by(|left, right| left.id.cmp(&right.id));
@@ -10545,7 +10810,7 @@ impl M6StalenessPhaseV5 {
         action_limit: usize,
         working_limit: usize,
     ) -> M6Result<(Vec<PartialRerunActionV5>, PartialRerunPlanV5)> {
-        self.plan_partial_rerun_with_limits_v5(preservation, action_limit, working_limit)
+        self.plan_partial_rerun_with_limits_v5(preservation, None, action_limit, working_limit)
     }
 
     pub(crate) fn is_sealed_preservation_candidate(
@@ -10652,6 +10917,11 @@ impl M6StalenessPhaseV5 {
             .saturating_add(id_set_heap(&self.m5_dependent_successor_obligation_ids))
             .saturating_add(self.target_plan_id.allocated_bytes())
             .saturating_add(self.target_snapshot_id.allocated_bytes())
+            .saturating_add(self.target_run_id.allocated_bytes())
+            .saturating_add(self.target_genesis_hash.allocated_bytes())
+            .saturating_add(self.target_tail_hash.allocated_bytes())
+            .saturating_add(self.target_policy_revision_hash.allocated_bytes())
+            .saturating_add(self.target_pre_incremental_basis_digest.allocated_bytes())
             .saturating_add(
                 self.partial_rerun_seeds
                     .iter()
@@ -11602,6 +11872,14 @@ impl IncrementalStalenessInputV5<'_> {
             partial_rerun_seeds,
             target_plan_id: self.target.plan().id().clone(),
             target_snapshot_id: self.target.program_space().snapshot_id().clone(),
+            target_run_id: target_actual.target_run_id().clone(),
+            target_genesis_hash: target_actual.target_genesis_hash().clone(),
+            target_tail_hash: target_actual.target_tail_hash().clone(),
+            target_event_count: target_actual.target_event_count(),
+            target_policy_revision_hash: target_actual.authority_policy_revision_hash().clone(),
+            target_pre_incremental_basis_digest: target_actual
+                .authority_replay_basis_digest()
+                .clone(),
             working_bytes: preflight_peak,
         };
         // Capacity-aware second gate covers the actual retained result before
@@ -16074,6 +16352,12 @@ mod tests {
             partial_rerun_seeds: seeds,
             target_plan_id: id("plan:target"),
             target_snapshot_id: id("snapshot:target"),
+            target_run_id: id("run:target"),
+            target_genesis_hash: sha(91),
+            target_tail_hash: sha(92),
+            target_event_count: 9,
+            target_policy_revision_hash: sha(93),
+            target_pre_incremental_basis_digest: sha(94),
             working_bytes: 1,
         }
     }
@@ -16169,7 +16453,9 @@ mod tests {
             BTreeSet::new(),
         );
         let preservation = M6PreservationPhaseV5::empty(&phase);
-        let (actions, plan) = phase.plan_partial_rerun_v5(&preservation).unwrap();
+        let (actions, plan) = phase
+            .plan_partial_rerun_without_target_suppression_v5(&preservation)
+            .unwrap();
         assert_eq!(actions.len(), 3);
         assert_eq!(plan.action_count(), 3);
         assert_eq!(plan.selected_target_count(), 1);
@@ -16234,7 +16520,7 @@ mod tests {
         let mut detached_preservation = preservation.clone();
         detached_preservation.target_snapshot_id = id("snapshot:other");
         assert!(matches!(
-            phase.plan_partial_rerun_v5(&detached_preservation),
+            phase.plan_partial_rerun_without_target_suppression_v5(&detached_preservation),
             Err(M6Error::PreservationUnsupported(_))
         ));
 
@@ -16477,7 +16763,9 @@ mod tests {
             BTreeSet::from([first.clone()]),
         );
         let preservation = M6PreservationPhaseV5::empty(&phase);
-        let (actions, plan) = phase.plan_partial_rerun_v5(&preservation).unwrap();
+        let (actions, plan) = phase
+            .plan_partial_rerun_without_target_suppression_v5(&preservation)
+            .unwrap();
         assert_eq!(actions.len(), 7);
         assert_eq!(plan.selected_target_count(), 2);
         assert_eq!(plan.required_human_resolution_count(), 1);
@@ -16489,7 +16777,9 @@ mod tests {
             1
         );
         assert!(actions.windows(2).all(|pair| pair[0].id() < pair[1].id()));
-        let reversed = phase.plan_partial_rerun_v5(&preservation).unwrap();
+        let reversed = phase
+            .plan_partial_rerun_without_target_suppression_v5(&preservation)
+            .unwrap();
         assert_eq!(actions, reversed.0);
         assert_eq!(plan, reversed.1);
     }
@@ -16498,7 +16788,9 @@ mod tests {
     fn partial_rerun_removed_and_gluing_only_rows_schedule_nothing() {
         let phase = partial_rerun_phase_fixture(BTreeMap::new(), BTreeSet::new());
         let preservation = M6PreservationPhaseV5::empty(&phase);
-        let (actions, plan) = phase.plan_partial_rerun_v5(&preservation).unwrap();
+        let (actions, plan) = phase
+            .plan_partial_rerun_without_target_suppression_v5(&preservation)
+            .unwrap();
         assert!(actions.is_empty());
         assert_eq!(plan.action_count(), 0);
         assert_eq!(plan.selected_target_count(), 0);
@@ -17325,6 +17617,12 @@ mod tests {
             partial_rerun_seeds: BTreeMap::new(),
             target_plan_id: id("plan:target"),
             target_snapshot_id: id("snapshot:target"),
+            target_run_id: id("run:target"),
+            target_genesis_hash: sha(91),
+            target_tail_hash: sha(92),
+            target_event_count: 9,
+            target_policy_revision_hash: sha(93),
+            target_pre_incremental_basis_digest: sha(94),
             working_bytes: 123,
         };
         assert!(phase.retained_bytes() >= std::mem::size_of::<M6StalenessPhaseV5>());

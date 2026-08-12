@@ -20756,6 +20756,369 @@ pub(crate) struct TargetActualRecordProjectionV5<'a, 'state> {
     basis: &'a PreIncrementalAuthorityReplayBasisV5,
 }
 
+/// One immutable record/event tuple revalidated from the exact terminal V5
+/// predecessor.  This is deliberately crate-private and non-serializable.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct TargetSuppressionRecordWitnessV5 {
+    record_id: StableId,
+    body_hash: ContentHash,
+    event_id: StableId,
+    event_sequence: u64,
+    actor: String,
+    logical_time: u64,
+    payload_hash: ContentHash,
+    event_hash: ContentHash,
+}
+
+impl TargetSuppressionRecordWitnessV5 {
+    fn allocated_bytes(&self) -> usize {
+        self.record_id
+            .allocated_bytes()
+            .saturating_add(self.body_hash.allocated_bytes())
+            .saturating_add(self.event_id.allocated_bytes())
+            .saturating_add(self.actor.capacity())
+            .saturating_add(self.payload_hash.allocated_bytes())
+            .saturating_add(self.event_hash.allocated_bytes())
+    }
+    pub(crate) fn record_id(&self) -> &StableId {
+        &self.record_id
+    }
+    pub(crate) fn body_hash(&self) -> &ContentHash {
+        &self.body_hash
+    }
+    pub(crate) fn event_id(&self) -> &StableId {
+        &self.event_id
+    }
+}
+
+#[allow(dead_code)] // Gluing and reviewer-envelope accessors are consumed by the next execution slices.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct TargetReviewerSuppressionClosureV5 {
+    envelope: TargetSuppressionRecordWitnessV5,
+    execution: TargetSuppressionRecordWitnessV5,
+    claims: Vec<TargetSuppressionRecordWitnessV5>,
+    closure_exact: bool,
+}
+
+#[allow(dead_code)]
+impl TargetReviewerSuppressionClosureV5 {
+    fn allocated_bytes(&self) -> usize {
+        self.envelope
+            .allocated_bytes()
+            .saturating_add(self.execution.allocated_bytes())
+            .saturating_add(
+                self.claims
+                    .capacity()
+                    .saturating_mul(size_of::<TargetSuppressionRecordWitnessV5>()),
+            )
+            .saturating_add(
+                self.claims
+                    .iter()
+                    .map(TargetSuppressionRecordWitnessV5::allocated_bytes)
+                    .sum::<usize>(),
+            )
+    }
+    pub(crate) fn envelope(&self) -> &TargetSuppressionRecordWitnessV5 {
+        &self.envelope
+    }
+    pub(crate) fn execution(&self) -> &TargetSuppressionRecordWitnessV5 {
+        &self.execution
+    }
+    pub(crate) fn claims(&self) -> &[TargetSuppressionRecordWitnessV5] {
+        &self.claims
+    }
+    pub(crate) const fn closure_exact(&self) -> bool {
+        self.closure_exact
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct TargetSuppressionSubjectV5 {
+    lifecycle: Option<ObligationLifecycle>,
+    envelope: Option<TargetSuppressionRecordWitnessV5>,
+    duplicate_envelope: bool,
+    reviewer: Option<TargetReviewerSuppressionClosureV5>,
+    native_verification: Option<TargetSuppressionRecordWitnessV5>,
+    human_decision: Option<TargetSuppressionRecordWitnessV5>,
+    human_finding: Option<TargetSuppressionRecordWitnessV5>,
+}
+
+/// Opaque roots/CAS-bound target-predecessor suppression view.  Its only mint
+/// path is the terminal semantic replay which also mints the actual-record
+/// projection and pre-incremental authority basis.
+#[allow(dead_code)] // The same opaque projection also carries §11.1 suppression witnesses.
+#[derive(Clone, Debug)]
+pub(crate) struct TargetPredecessorSuppressionProjectionV5 {
+    target_run_id: StableId,
+    target_genesis_hash: ContentHash,
+    target_tail_hash: ContentHash,
+    target_event_count: u64,
+    policy_revision_hash: ContentHash,
+    pre_incremental_basis_digest: ContentHash,
+    target_plan_id: StableId,
+    target_snapshot_id: StableId,
+    subjects: Vec<(StableId, TargetSuppressionSubjectV5)>,
+    gluing_inputs: Vec<(StableId, [TargetSuppressionRecordWitnessV5; 2])>,
+    m5_bundle: Option<TargetSuppressionRecordWitnessV5>,
+    seal_digest: ContentHash,
+}
+
+#[derive(Serialize)]
+struct TargetSuppressionProjectionIdentityV5<'a> {
+    gluing_inputs: &'a [(StableId, [TargetSuppressionRecordWitnessV5; 2])],
+    m5_bundle: &'a Option<TargetSuppressionRecordWitnessV5>,
+    policy_revision_hash: &'a ContentHash,
+    pre_incremental_basis_digest: &'a ContentHash,
+    subjects: &'a [(StableId, TargetSuppressionSubjectV5)],
+    target_event_count: u64,
+    target_genesis_hash: &'a ContentHash,
+    target_plan_id: &'a StableId,
+    target_run_id: &'a StableId,
+    target_snapshot_id: &'a StableId,
+    target_tail_hash: &'a ContentHash,
+}
+
+#[allow(dead_code)]
+impl TargetPredecessorSuppressionProjectionV5 {
+    pub(crate) fn retained_bytes(&self) -> Result<usize> {
+        let mut total = size_of::<Self>();
+        let add = |total: &mut usize, value: usize| -> Result<()> {
+            *total = total.checked_add(value).ok_or(DomainError::Incomplete {
+                operation: "event-v5 target suppression retained bytes",
+                limit: usize::try_from(MAX_V5_REPLAY_WORKING_BYTES).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+            Ok(())
+        };
+        fn optional_witness(value: &Option<TargetSuppressionRecordWitnessV5>) -> usize {
+            value
+                .as_ref()
+                .map_or(0, TargetSuppressionRecordWitnessV5::allocated_bytes)
+        }
+        let subjects = self
+            .subjects
+            .capacity()
+            .saturating_mul(size_of::<(StableId, TargetSuppressionSubjectV5)>())
+            .saturating_add(
+                self.subjects
+                    .iter()
+                    .map(|(id, subject)| {
+                        id.allocated_bytes()
+                            .saturating_add(optional_witness(&subject.envelope))
+                            .saturating_add(
+                                subject
+                                    .reviewer
+                                    .as_ref()
+                                    .map_or(0, TargetReviewerSuppressionClosureV5::allocated_bytes),
+                            )
+                            .saturating_add(optional_witness(&subject.native_verification))
+                            .saturating_add(optional_witness(&subject.human_decision))
+                            .saturating_add(optional_witness(&subject.human_finding))
+                    })
+                    .sum::<usize>(),
+            );
+        let gluing = self
+            .gluing_inputs
+            .capacity()
+            .saturating_mul(size_of::<(StableId, [TargetSuppressionRecordWitnessV5; 2])>())
+            .saturating_add(
+                self.gluing_inputs
+                    .iter()
+                    .map(|(id, pair)| {
+                        id.allocated_bytes()
+                            .saturating_add(pair[0].allocated_bytes())
+                            .saturating_add(pair[1].allocated_bytes())
+                    })
+                    .sum::<usize>(),
+            );
+        for bytes in [
+            self.target_run_id.allocated_bytes(),
+            self.target_genesis_hash.allocated_bytes(),
+            self.target_tail_hash.allocated_bytes(),
+            self.policy_revision_hash.allocated_bytes(),
+            self.pre_incremental_basis_digest.allocated_bytes(),
+            self.target_plan_id.allocated_bytes(),
+            self.target_snapshot_id.allocated_bytes(),
+            subjects,
+            gluing,
+            optional_witness(&self.m5_bundle),
+            self.seal_digest.allocated_bytes(),
+        ] {
+            add(&mut total, bytes)?;
+        }
+        Ok(total)
+    }
+    fn subject(&self, obligation_id: &StableId) -> Option<&TargetSuppressionSubjectV5> {
+        self.subjects
+            .binary_search_by(|(id, _)| id.cmp(obligation_id))
+            .ok()
+            .map(|index| &self.subjects[index].1)
+    }
+
+    #[cfg(test)]
+    fn subject_mut(&mut self, obligation_id: &StableId) -> Option<&mut TargetSuppressionSubjectV5> {
+        self.subjects
+            .binary_search_by(|(id, _)| id.cmp(obligation_id))
+            .ok()
+            .map(|index| &mut self.subjects[index].1)
+    }
+
+    fn identity(&self) -> TargetSuppressionProjectionIdentityV5<'_> {
+        TargetSuppressionProjectionIdentityV5 {
+            gluing_inputs: &self.gluing_inputs,
+            m5_bundle: &self.m5_bundle,
+            policy_revision_hash: &self.policy_revision_hash,
+            pre_incremental_basis_digest: &self.pre_incremental_basis_digest,
+            subjects: &self.subjects,
+            target_event_count: self.target_event_count,
+            target_genesis_hash: &self.target_genesis_hash,
+            target_plan_id: &self.target_plan_id,
+            target_run_id: &self.target_run_id,
+            target_snapshot_id: &self.target_snapshot_id,
+            target_tail_hash: &self.target_tail_hash,
+        }
+    }
+    pub(crate) fn validate_seal(&self) -> Result<()> {
+        let digest = crate::canonical::compact_json_sha256_streaming(&self.identity())?;
+        if digest != self.seal_digest {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "target suppression projection seal mismatch",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn target_run_id(&self) -> &StableId {
+        &self.target_run_id
+    }
+    pub(crate) fn target_genesis_hash(&self) -> &ContentHash {
+        &self.target_genesis_hash
+    }
+    pub(crate) fn target_tail_hash(&self) -> &ContentHash {
+        &self.target_tail_hash
+    }
+    pub(crate) const fn target_event_count(&self) -> u64 {
+        self.target_event_count
+    }
+    pub(crate) fn policy_revision_hash(&self) -> &ContentHash {
+        &self.policy_revision_hash
+    }
+    pub(crate) fn pre_incremental_basis_digest(&self) -> &ContentHash {
+        &self.pre_incremental_basis_digest
+    }
+    pub(crate) fn target_plan_id(&self) -> &StableId {
+        &self.target_plan_id
+    }
+    pub(crate) fn target_snapshot_id(&self) -> &StableId {
+        &self.target_snapshot_id
+    }
+    pub(crate) fn lifecycle(&self, obligation_id: &StableId) -> Option<ObligationLifecycle> {
+        self.subject(obligation_id)
+            .and_then(|value| value.lifecycle)
+    }
+    pub(crate) fn context_envelope(
+        &self,
+        obligation_id: &StableId,
+    ) -> Option<&TargetSuppressionRecordWitnessV5> {
+        self.subject(obligation_id).and_then(|value| {
+            (!value.duplicate_envelope)
+                .then_some(value.envelope.as_ref())
+                .flatten()
+        })
+    }
+    pub(crate) fn reviewer_closure(
+        &self,
+        obligation_id: &StableId,
+    ) -> Option<&TargetReviewerSuppressionClosureV5> {
+        self.subject(obligation_id)
+            .and_then(|value| value.reviewer.as_ref())
+    }
+    pub(crate) fn native_verification(
+        &self,
+        obligation_id: &StableId,
+    ) -> Option<&TargetSuppressionRecordWitnessV5> {
+        self.subject(obligation_id)
+            .and_then(|value| value.native_verification.as_ref())
+    }
+    pub(crate) fn human_exact(&self, obligation_id: &StableId) -> bool {
+        self.subject(obligation_id)
+            .is_some_and(|value| value.human_decision.is_some() && value.human_finding.is_some())
+    }
+    pub(crate) fn gluing_input_pair(
+        &self,
+        context_id: &StableId,
+    ) -> Option<&[TargetSuppressionRecordWitnessV5; 2]> {
+        self.gluing_inputs
+            .binary_search_by(|(id, _)| id.cmp(context_id))
+            .ok()
+            .map(|index| &self.gluing_inputs[index].1)
+    }
+    pub(crate) fn m5_bundle(&self) -> Option<&TargetSuppressionRecordWitnessV5> {
+        self.m5_bundle.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_reviewer_claim_count_for_test(
+        &mut self,
+        obligation_id: &StableId,
+        count: usize,
+    ) {
+        let reviewer = self
+            .subject_mut(obligation_id)
+            .and_then(|value| value.reviewer.as_mut())
+            .expect("test reviewer closure");
+        let original = reviewer.claims.first().cloned();
+        reviewer.claims.clear();
+        if let Some(original) = original {
+            for index in 0..count {
+                let mut value = original.clone();
+                value.record_id = StableId::parse(format!("claim:test-{index}")).unwrap();
+                reviewer.claims.push(value);
+            }
+        }
+        self.reseal_for_test();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_reviewer_closure_exact_for_test(
+        &mut self,
+        obligation_id: &StableId,
+        exact: bool,
+    ) {
+        self.subject_mut(obligation_id)
+            .and_then(|value| value.reviewer.as_mut())
+            .expect("test reviewer closure")
+            .closure_exact = exact;
+        self.reseal_for_test();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_duplicate_envelope_for_test(
+        &mut self,
+        obligation_id: &StableId,
+        duplicate: bool,
+    ) {
+        self.subject_mut(obligation_id)
+            .expect("test suppression subject")
+            .duplicate_envelope = duplicate;
+        self.reseal_for_test();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_witness_body_hash_for_test(&mut self, obligation_id: &StableId) {
+        self.subject_mut(obligation_id)
+            .and_then(|value| value.reviewer.as_mut())
+            .expect("test reviewer closure")
+            .execution
+            .body_hash = ContentHash::sha256(b"tampered suppression witness");
+    }
+
+    #[cfg(test)]
+    fn reseal_for_test(&mut self) {
+        self.seal_digest =
+            crate::canonical::compact_json_sha256_streaming(&self.identity()).unwrap();
+    }
+}
+
 #[derive(Clone, Copy)]
 enum StoredTargetActualRecordValueV5<'a> {
     Value(TargetActualRecordValueV5<'a>),
@@ -20998,6 +21361,68 @@ impl<'borrow, 'state> ReplayedV5TerminalPredecessorV5<'borrow, 'state> {
             }
         }
     }
+
+    /// Sole production partial-plan sealing route.  The caller cannot omit,
+    /// replace, or synthesize predecessor suppression facts: both the actual
+    /// inventory and its suppression view are derived here from this exact
+    /// roots/CAS-validated terminal predecessor.
+    pub(crate) fn seal_partial_rerun_plan_v5(
+        &'borrow self,
+        staleness: &crate::M6StalenessPhaseV5,
+        preservation: &crate::M6PreservationPhaseV5,
+    ) -> crate::M6Result<(Vec<crate::PartialRerunActionV5>, crate::PartialRerunPlanV5)> {
+        self.seal_partial_rerun_plan_with_limit_v5(
+            staleness,
+            preservation,
+            u64::try_from(crate::m6::MAX_M6_PARTIAL_RERUN_WORKING_BYTES).unwrap_or(u64::MAX),
+        )
+    }
+
+    fn seal_partial_rerun_plan_with_limit_v5(
+        &'borrow self,
+        staleness: &crate::M6StalenessPhaseV5,
+        preservation: &crate::M6PreservationPhaseV5,
+        combined_limit: u64,
+    ) -> crate::M6Result<(Vec<crate::PartialRerunActionV5>, crate::PartialRerunPlanV5)> {
+        let projection = self
+            .target_actual_record_projection_v5()
+            .map_err(crate::M6Error::from)?;
+        let inventory = projection
+            .materialize_inventory_v5()
+            .map_err(crate::M6Error::from)?;
+        let suppression = projection
+            .suppression_projection_from_inventory_v5(&inventory)
+            .map_err(crate::M6Error::from)?;
+        drop(inventory);
+        let terminal = v5_terminal_and_basis_retained_bytes(projection.terminal, projection.basis)
+            .map_err(crate::M6Error::from)?;
+        let suppression_bytes =
+            u64::try_from(suppression.retained_bytes().map_err(crate::M6Error::from)?)
+                .unwrap_or(u64::MAX);
+        let staleness_bytes = u64::try_from(staleness.retained_bytes()).unwrap_or(u64::MAX);
+        let preservation_bytes = u64::try_from(preservation.retained_bytes()?).unwrap_or(u64::MAX);
+        let base = terminal
+            .checked_add(suppression_bytes)
+            .and_then(|value| value.checked_add(staleness_bytes))
+            .and_then(|value| value.checked_add(preservation_bytes))
+            .ok_or(crate::M6Error::Incomplete {
+                operation: "M6 combined partial rerun working bytes",
+                limit: crate::m6::MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                observed: usize::MAX,
+            })?;
+        let remaining = combined_limit
+            .checked_sub(base)
+            .ok_or(crate::M6Error::Incomplete {
+                operation: "M6 combined partial rerun working bytes",
+                limit: usize::try_from(combined_limit).unwrap_or(usize::MAX),
+                observed: usize::try_from(base).unwrap_or(usize::MAX),
+            })?;
+        staleness.plan_partial_rerun_with_target_suppression_and_limit_v5(
+            preservation,
+            &suppression,
+            usize::try_from(remaining).unwrap_or(usize::MAX),
+        )
+    }
 }
 
 #[allow(dead_code)]
@@ -21016,6 +21441,621 @@ impl<'a, 'state> TargetActualRecordProjectionV5<'a, 'state> {
 
     pub(crate) const fn event_count(&self) -> u64 {
         self.basis.target_confirmed_event_count
+    }
+
+    fn suppression_projection_from_inventory_v5(
+        &self,
+        inventory: &TargetActualRecordInventoryV5<'_>,
+    ) -> Result<TargetPredecessorSuppressionProjectionV5> {
+        self.suppression_projection_from_inventory_with_limit_v5(
+            inventory,
+            MAX_V5_REPLAY_WORKING_BYTES,
+        )
+    }
+
+    fn suppression_projection_from_inventory_with_limit_v5(
+        &self,
+        inventory: &TargetActualRecordInventoryV5<'_>,
+        working_limit: u64,
+    ) -> Result<TargetPredecessorSuppressionProjectionV5> {
+        use HistoricalSourceRecordKindV4 as Kind;
+        self.terminal.validate_terminal()?;
+        let terminal = v5_terminal_and_basis_retained_bytes(self.terminal, self.basis)?;
+        let preflight = terminal
+            .checked_add(inventory.retained_bytes())
+            .and_then(|value| value.checked_add(inventory.working_reservation_bytes()))
+            .ok_or(DomainError::Incomplete {
+                operation: "event-v5 target suppression projection preflight bytes",
+                limit: usize::try_from(working_limit).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if preflight > working_limit {
+            return Err(DomainError::Incomplete {
+                operation: "event-v5 target suppression projection preflight bytes",
+                limit: usize::try_from(working_limit).unwrap_or(usize::MAX),
+                observed: usize::try_from(preflight).unwrap_or(usize::MAX),
+            });
+        }
+        let mut witnesses = BTreeMap::<
+            (HistoricalSourceRecordKindV4, StableId),
+            TargetSuppressionRecordWitnessV5,
+        >::new();
+        inventory.try_visit_records(|record| {
+            let event = self
+                .terminal
+                .structural()
+                .event_log
+                .envelopes
+                .get(
+                    usize::try_from(record.event_witness().event_sequence() - 1).map_err(|_| {
+                        DomainError::HistoricalPrefixMismatch(
+                            "suppression event sequence does not fit memory",
+                        )
+                    })?,
+                )
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "suppression record event is absent",
+                ))?;
+            witnesses.insert(
+                (record.kind(), record.id().clone()),
+                TargetSuppressionRecordWitnessV5 {
+                    record_id: record.id().clone(),
+                    body_hash: record.body_hash().clone(),
+                    event_id: record.event_witness().event_id().clone(),
+                    event_sequence: record.event_witness().event_sequence(),
+                    actor: event.actor().to_owned(),
+                    logical_time: event.logical_time(),
+                    payload_hash: record.event_witness().payload_hash().clone(),
+                    event_hash: record.event_witness().event_hash().clone(),
+                },
+            );
+            Ok(())
+        })?;
+        let aggregate = self.terminal.aggregate();
+        let plan = &self.terminal.structural().pre_incremental.plan;
+        let snapshot_id = aggregate.program().snapshot_id();
+        let mut transitions = BTreeMap::<StableId, Vec<(ObligationLifecycle, u64)>>::new();
+        let prefix = self
+            .terminal
+            .structural()
+            .event_log
+            .envelopes
+            .get(
+                ..usize::try_from(self.basis.target_confirmed_event_count).map_err(|_| {
+                    DomainError::HistoricalPrefixMismatch("suppression predecessor count overflow")
+                })?,
+            )
+            .ok_or(DomainError::HistoricalPrefixMismatch(
+                "suppression predecessor prefix is absent",
+            ))?;
+        for envelope in prefix {
+            if let PersistedPayload::ObligationTransition {
+                obligation_id,
+                next,
+            } = decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?
+            {
+                transitions
+                    .entry(obligation_id)
+                    .or_default()
+                    .push((next, envelope.sequence()));
+            }
+        }
+        let mut subjects = BTreeMap::new();
+        for obligation in aggregate.obligations() {
+            let obligation_id = obligation.id().clone();
+            let mut subject = TargetSuppressionSubjectV5 {
+                lifecycle: Some(obligation.lifecycle()),
+                ..TargetSuppressionSubjectV5::default()
+            };
+            let Some(wave_id) = plan
+                .waves()
+                .iter()
+                .find(|wave| wave.obligation_ids().contains(&obligation_id))
+                .map(|wave| wave.id())
+            else {
+                subjects.insert(obligation_id, subject);
+                continue;
+            };
+            let contexts = aggregate
+                .context_envelopes()
+                .filter(|context| {
+                    context.obligation_ids() == &BTreeSet::from([obligation_id.clone()])
+                        && context.snapshot_id() == snapshot_id
+                })
+                .collect::<Vec<_>>();
+            subject.duplicate_envelope = contexts.len() > 1;
+            if let [context] = contexts.as_slice() {
+                let context_witness = witnesses
+                    .get(&(Kind::ContextEnvelope, context.id().clone()))
+                    .cloned();
+                let history = transitions
+                    .get(&obligation_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                let lifecycle_prefix_exact = context_witness.as_ref().is_some_and(|witness| {
+                    matches!(
+                        history,
+                        [
+                            (ObligationLifecycle::Planned, planned),
+                            (ObligationLifecycle::InProgress, in_progress),
+                        ] | [
+                            (ObligationLifecycle::Planned, planned),
+                            (ObligationLifecycle::InProgress, in_progress),
+                            (ObligationLifecycle::Completed, _),
+                        ] if planned.checked_add(1) == Some(*in_progress)
+                            && in_progress.checked_add(1) == Some(witness.event_sequence)
+                    )
+                });
+                if lifecycle_prefix_exact {
+                    subject.envelope = context_witness.clone();
+                }
+                let structured = aggregate
+                    .executions()
+                    .filter(|execution| {
+                        execution.plan_id() == plan.id()
+                            && execution.wave_id() == wave_id
+                            && execution.obligation_ids()
+                                == &BTreeSet::from([obligation_id.clone()])
+                            && execution.envelope_id() == context.id()
+                            && execution.snapshot_id() == snapshot_id
+                            && execution.outcome().is_structured()
+                    })
+                    .collect::<Vec<_>>();
+                if let [execution] = structured.as_slice() {
+                    let execution_witness = witnesses
+                        .get(&(Kind::Execution, execution.id().clone()))
+                        .cloned();
+                    let claim_values = aggregate
+                        .execution_claims()
+                        .filter(|claim| claim.execution_id() == execution.id())
+                        .collect::<Vec<_>>();
+                    let claim_witnesses = claim_values
+                        .iter()
+                        .filter_map(|claim| {
+                            witnesses.get(&(Kind::Claim, claim.id().clone())).cloned()
+                        })
+                        .collect::<Vec<_>>();
+                    let registration = self
+                        .terminal
+                        .v3()
+                        .registrations
+                        .get(execution.raw_artifact_registration_id());
+                    let registration_witness = registration.and_then(|value| {
+                        witnesses.get(&(
+                            Kind::ArtifactRegistrationV3,
+                            value.registration_id().clone(),
+                        ))
+                    });
+                    let completed_after = execution_witness.as_ref().is_some_and(|witness| {
+                        matches!(
+                            history,
+                            [
+                                (ObligationLifecycle::Planned, _),
+                                (ObligationLifecycle::InProgress, _),
+                                (ObligationLifecycle::Completed, completed),
+                            ] if witness.event_sequence.checked_add(1) == Some(*completed)
+                        )
+                    });
+                    let registration_exact = registration.is_some_and(|registration| {
+                        matches!(
+                            registration.source(),
+                            ArtifactSourceV3::ReviewerExecution {
+                                execution_id,
+                                reviewer_id,
+                                run_id,
+                            } if execution_id == execution.id()
+                                && reviewer_id == execution.reviewer_id()
+                                && run_id == &self.basis.target_run_id
+                        ) && registration.run_id() == &self.basis.target_run_id
+                            && registration.registration_id()
+                                == execution.raw_artifact_registration_id()
+                            && registration.cas_hash() == execution.raw_artifact_hash()
+                            && registration.media_type() == "application/json"
+                            && registration.size() > 0
+                            && registration.sensitivity() == ArtifactSensitivity::Sensitive
+                            && registration_witness.is_some_and(|witness| {
+                                execution_witness.as_ref().is_some_and(|execution_event| {
+                                    witness.event_sequence.checked_add(1)
+                                        == Some(execution_event.event_sequence)
+                                })
+                            })
+                    });
+                    let execution_policy_exact = execution.validate_shape().is_ok()
+                        && execution.reviewer_kind() == crate::execution::FAKE_REVIEWER_KIND
+                        && execution.reviewer_id() == crate::execution::FAKE_REVIEWER_ID
+                        && execution.provider().is_none()
+                        && execution.model().is_none()
+                        && execution.model_revision().is_none()
+                        && execution.system_prompt_version()
+                            == crate::execution::NO_TOOLS_SYSTEM_PROMPT_VERSION
+                        && execution.prompt_template_version()
+                            == crate::execution::FIXTURE_PROMPT_TEMPLATE_VERSION
+                        && execution.inference_settings().is_empty()
+                        && execution.tool_policy_version()
+                            == crate::execution::NO_TOOLS_POLICY_VERSION
+                        && execution.tool_call_count() == 0;
+                    let shared_atomic_event_exact =
+                        execution_witness.as_ref().is_some_and(|event| {
+                            claim_witnesses.iter().all(|claim| {
+                                claim.event_id == event.event_id
+                                    && claim.event_sequence == event.event_sequence
+                                    && claim.actor == event.actor
+                                    && claim.logical_time == event.logical_time
+                                    && claim.payload_hash == event.payload_hash
+                                    && claim.event_hash == event.event_hash
+                            })
+                        });
+                    let noninterleaved_reviewer_exact =
+                        registration_witness.is_some_and(|registration| {
+                            execution_witness.as_ref().is_some_and(|execution| {
+                                registration.event_sequence.checked_add(1)
+                                    == Some(execution.event_sequence)
+                            })
+                        });
+                    let closure_exact = subject.envelope.is_some()
+                        && execution_policy_exact
+                        && execution.parsed_claim_ids()
+                            == &claim_values
+                                .iter()
+                                .map(|claim| claim.id().clone())
+                                .collect::<BTreeSet<_>>()
+                        && claim_witnesses.len() == claim_values.len()
+                        && claim_values.iter().all(|claim| {
+                            claim.validate_shape().is_ok()
+                                && claim.obligation_ids()
+                                    == &BTreeSet::from([obligation_id.clone()])
+                                && claim.execution_id() == execution.id()
+                        })
+                        && execution_witness.is_some()
+                        && shared_atomic_event_exact
+                        && noninterleaved_reviewer_exact
+                        && registration_exact
+                        && completed_after
+                        && obligation.lifecycle() == ObligationLifecycle::Completed;
+                    if let (Some(envelope), Some(execution)) =
+                        (subject.envelope.clone(), execution_witness)
+                    {
+                        subject.reviewer = Some(TargetReviewerSuppressionClosureV5 {
+                            envelope,
+                            execution,
+                            claims: claim_witnesses,
+                            closure_exact,
+                        });
+                    }
+                    if closure_exact && claim_values.len() == 1 {
+                        let claim = claim_values[0];
+                        let assessment = self.terminal.v3().assessments.get(claim.id());
+                        let passed = assessment
+                            .into_iter()
+                            .flat_map(|assessment| assessment.verification_ids())
+                            .filter_map(|id| self.terminal.v3().verifications.get(id))
+                            .filter(|verification| {
+                                verification.claim_id() == claim.id()
+                                    && verification.outcome()
+                                        == crate::VerificationOutcomeV3::Passed
+                            })
+                            .collect::<Vec<_>>();
+                        if let [verification] = passed.as_slice()
+                            && let Some(verification_witness) = witnesses
+                                .get(&(Kind::Verification, verification.id().clone()))
+                                .cloned()
+                        {
+                            let evidence = verification
+                                .evidence_ids()
+                                .iter()
+                                .filter_map(|id| self.terminal.v3().evidence.get(id))
+                                .collect::<Vec<_>>();
+                            let bindings = self
+                                .terminal
+                                .v3()
+                                .bindings
+                                .values()
+                                .filter(|binding| {
+                                    binding.claim_id() == claim.id()
+                                        && verification
+                                            .evidence_ids()
+                                            .contains(&binding.evidence_id().clone())
+                                })
+                                .collect::<Vec<_>>();
+                            let input = self
+                                .terminal
+                                .v3()
+                                .registrations
+                                .get(verification.input_registration_id());
+                            let output = self
+                                .terminal
+                                .v3()
+                                .registrations
+                                .get(verification.output_registration_id());
+                            let evidence_witness = evidence.first().and_then(|value| {
+                                witnesses.get(&(Kind::Evidence, value.id().clone()))
+                            });
+                            let binding_witness = bindings.first().and_then(|value| {
+                                witnesses.get(&(Kind::EvidenceBinding, value.id().clone()))
+                            });
+                            let native_event_order_exact =
+                                evidence_witness.is_some_and(|evidence| {
+                                    binding_witness.is_some_and(|binding| {
+                                        evidence.event_sequence.checked_add(1)
+                                            == Some(binding.event_sequence)
+                                            && binding.event_sequence.checked_add(1)
+                                                == Some(verification_witness.event_sequence)
+                                    })
+                                });
+                            let input_exact = input.is_some_and(|registration| {
+                                matches!(
+                                    registration.source(),
+                                    ArtifactSourceV3::ExternalHarnessWitness {
+                                        claim_body_hash,
+                                        claim_id,
+                                        descriptor_id,
+                                        genesis_hash,
+                                        harness_id,
+                                        harness_revision,
+                                        harness_source_hash,
+                                        policy_revision_hash,
+                                        procedure_version,
+                                        property_id,
+                                        repository_id,
+                                        repository_source_hash,
+                                        run_id,
+                                        snapshot_id: source_snapshot_id,
+                                        test_artifact_id,
+                                        universe_id,
+                                    } if claim_id == claim.id()
+                                        && claim_body_hash == &claim.body_hash().expect("validated claim")
+                                        && descriptor_id == FIXTURE_DESCRIPTOR_ID
+                                        && procedure_version == FIXTURE_PROCEDURE_ID
+                                        && harness_id == FIXTURE_HARNESS_ID
+                                        && harness_revision == FIXTURE_HARNESS_REVISION
+                                        && harness_source_hash.as_str() == FIXTURE_HARNESS_SOURCE_HASH
+                                        && test_artifact_id.as_str() == FIXTURE_TEST_ARTIFACT_ID
+                                        && property_id == crate::M4_PROPERTY_ID
+                                        && run_id == &self.basis.target_run_id
+                                        && genesis_hash == &self.basis.target_genesis_hash
+                                        && source_snapshot_id == snapshot_id
+                                        && universe_id == aggregate.universe().id()
+                                        && repository_id == aggregate.program().repository_id()
+                                        && repository_source_hash
+                                            == aggregate.program().repository_source()
+                                                .content_hash().expect("validated repository hash")
+                                        && policy_revision_hash == &self.basis.policy_revision_hash
+                                ) && registration.run_id() == &self.basis.target_run_id
+                                    && registration.media_type() == FIXTURE_MEDIA_TYPE
+                                    && registration.size() == FIXTURE_WITNESS_SIZE
+                                    && registration.cas_hash().as_str() == FIXTURE_WITNESS_HASH
+                                    && registration.sensitivity()
+                                        == ArtifactSensitivity::CanonicalState
+                            });
+                            let output_exact = output.is_some_and(|registration| {
+                                matches!(
+                                    registration.source(),
+                                    ArtifactSourceV3::VerifierArtifact {
+                                        claim_id,
+                                        descriptor_id,
+                                        procedure_version,
+                                        role: VerifierArtifactRoleV3::Output,
+                                        run_id,
+                                    } if claim_id == claim.id()
+                                        && descriptor_id == FIXTURE_DESCRIPTOR_ID
+                                        && procedure_version == FIXTURE_PROCEDURE_ID
+                                        && run_id == &self.basis.target_run_id
+                                ) && registration.run_id() == &self.basis.target_run_id
+                                    && registration.media_type() == FIXTURE_OUTPUT_MEDIA_TYPE
+                                    && registration.sensitivity()
+                                        == ArtifactSensitivity::CanonicalState
+                            });
+                            let native_closure_exact = assessment.is_some_and(|assessment| {
+                                assessment
+                                    .evidence_ids()
+                                    .contains(&evidence[0].id().clone())
+                                    && assessment.binding_ids().contains(&bindings[0].id().clone())
+                                    && assessment
+                                        .verification_ids()
+                                        .contains(&verification.id().clone())
+                            }) && evidence.len() == 1
+                                && bindings.len() == 1
+                                && evidence[0].descriptor()
+                                    == crate::VerifierDescriptorV3::FixedFixtureV1
+                                && evidence[0].procedure()
+                                    == crate::VerifierProcedureV3::DuplicateSubmitV1
+                                && evidence[0].input_registration_id()
+                                    == verification.input_registration_id()
+                                && evidence[0].output_registration_id()
+                                    == verification.output_registration_id()
+                                && bindings[0].claim_id() == claim.id()
+                                && bindings[0].evidence_id() == evidence[0].id()
+                                && bindings[0].property_id() == crate::M4_PROPERTY_ID
+                                && bindings[0].relation() == crate::EvidenceRelationV3::Reproduces
+                                && verification.descriptor()
+                                    == crate::VerifierDescriptorV3::FixedFixtureV1
+                                && verification.procedure()
+                                    == crate::VerifierProcedureV3::DuplicateSubmitV1
+                                && input_exact
+                                && output_exact
+                                && native_event_order_exact;
+                            if native_closure_exact {
+                                subject.native_verification = Some(verification_witness.clone());
+                            }
+                            if native_closure_exact
+                                && let Some((decision_witness, finding_witness)) = assessment
+                                    .and_then(|assessment| {
+                                        let decision_id = assessment.active_decision_id()?;
+                                        let finding_id = assessment.current_finding_id()?;
+                                        let decision =
+                                            self.terminal.v3().decisions.get(decision_id)?;
+                                        let finding =
+                                            self.terminal.v3().findings.get(finding_id)?;
+                                        let decision_witness =
+                                            witnesses.get(&(Kind::Decision, decision_id.clone()));
+                                        let finding_witness =
+                                            witnesses.get(&(Kind::Finding, finding_id.clone()));
+                                        (decision.claim_id() == claim.id()
+                                            && decision.property_id() == crate::M4_PROPERTY_ID
+                                            && decision.run_id() == &self.basis.target_run_id
+                                            && decision.snapshot_id() == snapshot_id
+                                            && decision.universe_id() == aggregate.universe().id()
+                                            && decision.policy_revision_hash()
+                                                == &self.basis.policy_revision_hash
+                                            && decision
+                                                .source_ids()
+                                                .contains(&verification.id().clone())
+                                            && finding.claim_id() == claim.id()
+                                            && finding.decision_id() == Some(decision.id())
+                                            && finding.evidence_ids()
+                                                == verification.evidence_ids()
+                                            && finding.verification_ids()
+                                                == [verification.id().clone()]
+                                            && decision_witness.is_some_and(|decision_event| {
+                                                verification_witness.event_sequence
+                                                    < decision_event.event_sequence
+                                                    && decision_event.event_sequence
+                                                        <= self.basis.target_confirmed_event_count
+                                                    && finding_witness.is_some_and(
+                                                        |finding_event| {
+                                                            decision_event.event_sequence
+                                                    < finding_event.event_sequence
+                                                    && finding_event.event_sequence
+                                                        <= self.basis.target_confirmed_event_count
+                                                        },
+                                                    )
+                                            }))
+                                        .then(|| {
+                                            (
+                                                decision_witness.unwrap().clone(),
+                                                finding_witness.unwrap().clone(),
+                                            )
+                                        })
+                                    })
+                            {
+                                subject.human_decision = Some(decision_witness);
+                                subject.human_finding = Some(finding_witness);
+                            }
+                        }
+                    }
+                }
+            }
+            subjects.insert(obligation_id, subject);
+        }
+
+        let mut gluing_inputs = BTreeMap::new();
+        if let (Some(descriptors), Some(registrations)) = (
+            self.terminal.v4_descriptors(),
+            self.terminal.v4_registrations(),
+        ) {
+            for descriptor in descriptors.values() {
+                let registration = registrations.values().find(|registration| {
+                    matches!(
+                        registration.source(),
+                        ArtifactSourceV4::GluingInput { context_id, descriptor_id, .. }
+                            if context_id == descriptor.context_id()
+                                && descriptor_id == descriptor.id()
+                    )
+                });
+                if let Some(registration) = registration
+                    && let (Some(descriptor_witness), Some(registration_witness)) = (
+                        witnesses
+                            .get(&(Kind::GluingInputDescriptor, descriptor.id().clone()))
+                            .cloned(),
+                        witnesses
+                            .get(&(Kind::ArtifactRegistrationV4, registration.id().clone()))
+                            .cloned(),
+                    )
+                {
+                    gluing_inputs.insert(
+                        descriptor.context_id().clone(),
+                        [descriptor_witness, registration_witness],
+                    );
+                }
+            }
+        }
+        let m5_bundle = self.terminal.bundle().and_then(|bundle| {
+            witnesses
+                .get(&(Kind::GluingAttempt, bundle.attempt().id().clone()))
+                .cloned()
+        });
+        let mut projection = TargetPredecessorSuppressionProjectionV5 {
+            target_run_id: self.basis.target_run_id.clone(),
+            target_genesis_hash: self.basis.target_genesis_hash.clone(),
+            target_tail_hash: self.basis.target_confirmed_tail_hash.clone(),
+            target_event_count: self.basis.target_confirmed_event_count,
+            policy_revision_hash: self.basis.policy_revision_hash.clone(),
+            pre_incremental_basis_digest: self.basis.basis_digest.clone(),
+            target_plan_id: plan.id().clone(),
+            target_snapshot_id: snapshot_id.clone(),
+            subjects: subjects.into_iter().collect(),
+            gluing_inputs: gluing_inputs.into_iter().collect(),
+            m5_bundle,
+            seal_digest: ContentHash::sha256(b"unsealed target suppression projection"),
+        };
+        projection.seal_digest =
+            crate::canonical::compact_json_sha256_streaming(&projection.identity())?;
+        let witness_index_bytes = witnesses.iter().try_fold(0_u64, |total, (key, witness)| {
+            total
+                .checked_add(u64::try_from(size_of_val(key)).unwrap_or(u64::MAX))
+                .and_then(|value| {
+                    value.checked_add(u64::try_from(key.1.allocated_bytes()).unwrap_or(u64::MAX))
+                })
+                .and_then(|value| {
+                    value.checked_add(
+                        u64::try_from(size_of_val(witness) + witness.allocated_bytes())
+                            .unwrap_or(u64::MAX),
+                    )
+                })
+                .ok_or(DomainError::Incomplete {
+                    operation: "event-v5 target suppression projection working bytes",
+                    limit: usize::try_from(working_limit).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })
+        })?;
+        let transition_index_bytes =
+            transitions.iter().try_fold(0_u64, |total, (id, values)| {
+                total
+                    .checked_add(
+                        u64::try_from(size_of::<(StableId, Vec<(ObligationLifecycle, u64)>)>())
+                            .unwrap_or(u64::MAX),
+                    )
+                    .and_then(|value| {
+                        value.checked_add(u64::try_from(id.allocated_bytes()).unwrap_or(u64::MAX))
+                    })
+                    .and_then(|value| {
+                        value.checked_add(
+                            u64::try_from(values.capacity().saturating_mul(size_of::<(
+                                ObligationLifecycle,
+                                u64,
+                            )>(
+                            )))
+                            .unwrap_or(u64::MAX),
+                        )
+                    })
+                    .ok_or(DomainError::Incomplete {
+                        operation: "event-v5 target suppression projection working bytes",
+                        limit: usize::try_from(working_limit).unwrap_or(usize::MAX),
+                        observed: usize::MAX,
+                    })
+            })?;
+        let observed = terminal
+            .checked_add(inventory.retained_bytes())
+            .and_then(|value| value.checked_add(witness_index_bytes))
+            .and_then(|value| value.checked_add(transition_index_bytes))
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(projection.retained_bytes().ok()?).unwrap_or(u64::MAX),
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "event-v5 target suppression projection working bytes",
+                limit: usize::try_from(working_limit).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if observed > working_limit {
+            return Err(DomainError::Incomplete {
+                operation: "event-v5 target suppression projection working bytes",
+                limit: usize::try_from(working_limit).unwrap_or(usize::MAX),
+                observed: usize::try_from(observed).unwrap_or(usize::MAX),
+            });
+        }
+        Ok(projection)
     }
 
     pub(crate) fn program_space(&self) -> &ProgramSpace {
@@ -36174,10 +37214,19 @@ pub(crate) struct NoM5V5Fixture {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum NoM5V5FixtureTerminalStage {
+    ReviewerCompleted,
+    NativeVerification,
+    HumanFinding,
+}
+
+#[cfg(test)]
 impl NoM5V5Fixture {
-    pub(crate) fn from_native_m4_fixture(
+    pub(crate) fn from_native_m4_fixture_through(
         source: CompleteM5V4Fixture,
         program: ProgramSpace,
+        terminal_stage: NoM5V5FixtureTerminalStage,
     ) -> Result<Self> {
         let target_payment_obligation_id = source
             .log
@@ -36189,6 +37238,20 @@ impl NoM5V5Fixture {
             })?
             .id()
             .clone();
+        let target_payment_claim_id = source
+            .log
+            .aggregate
+            .execution_claims()
+            .find(|claim| {
+                claim
+                    .obligation_ids()
+                    .contains(&target_payment_obligation_id)
+                    && claim.property_id() == crate::M4_PROPERTY_ID
+            })
+            .map(|claim| claim.id().clone())
+            .ok_or_else(|| {
+                DomainError::Validation("native target payment claim is absent".to_owned())
+            })?;
         let mut program_sources = BTreeMap::new();
         for artifact in program
             .artifacts()
@@ -36293,6 +37356,17 @@ impl NoM5V5Fixture {
                     next: ObligationLifecycle::Completed,
                 } if obligation_id == &target_payment_obligation_id
             );
+            let completes_native_verification = matches!(
+                &payload,
+                PersistedPayload::VerificationRecordedV3(value)
+                    if value.claim_id() == &target_payment_claim_id
+                        && value.outcome() == crate::VerificationOutcomeV3::Passed
+            );
+            let completes_human = matches!(
+                &payload,
+                PersistedPayload::FindingRecordedV3(value)
+                    if value.claim_id() == &target_payment_claim_id
+            );
             let sequence = u64::try_from(target.log.envelopes.len())
                 .ok()
                 .and_then(|value| value.checked_add(1))
@@ -36310,10 +37384,12 @@ impl NoM5V5Fixture {
                 payload,
             )?;
             target.log.append_sealed_envelope_v5(envelope)?;
-            // The S1 predecessor deliberately retains the complete native D2
-            // reviewer/claim closure and Completed lifecycle, but no native M4
-            // evidence, binding, verification, decision, finding, or M5 state.
-            if completes_payment {
+            let complete = match terminal_stage {
+                NoM5V5FixtureTerminalStage::ReviewerCompleted => completes_payment,
+                NoM5V5FixtureTerminalStage::NativeVerification => completes_native_verification,
+                NoM5V5FixtureTerminalStage::HumanFinding => completes_human,
+            };
+            if complete {
                 break;
             }
         }
@@ -36465,6 +37541,7 @@ impl NoM5V5Fixture {
         callback: impl for<'a> FnOnce(
             &V5PreIncrementalStructuralPrefixProjection<'a>,
             &TargetActualRecordInventoryV5<'a>,
+            &TargetPredecessorSuppressionProjectionV5,
         ) -> crate::m6::M6Result<R>,
     ) -> crate::m6::M6Result<R> {
         struct Resolver<'a>(&'a BTreeMap<StableId, Vec<u8>>);
@@ -36528,7 +37605,73 @@ impl NoM5V5Fixture {
         let inventory = projection
             .materialize_inventory_v5()
             .map_err(crate::m6::M6Error::from)?;
-        callback(&structural.projection(), &inventory)
+        let suppression = projection
+            .suppression_projection_from_inventory_v5(&inventory)
+            .map_err(crate::m6::M6Error::from)?;
+        callback(&structural.projection(), &inventory, &suppression)
+    }
+
+    pub(crate) fn seal_partial_rerun_plan_v5(
+        &self,
+        staleness: &crate::M6StalenessPhaseV5,
+        preservation: &crate::M6PreservationPhaseV5,
+    ) -> crate::m6::M6Result<(Vec<crate::PartialRerunActionV5>, crate::PartialRerunPlanV5)> {
+        struct Resolver<'a>(&'a BTreeMap<StableId, Vec<u8>>);
+        impl AuthorityArtifactResolverV5 for Resolver<'_> {
+            fn read_exact(&self, hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                let bytes = self
+                    .0
+                    .values()
+                    .find(|bytes| ContentHash::sha256(bytes) == *hash)
+                    .ok_or_else(|| {
+                        DomainError::Validation("M6 target fixture CAS object is absent".to_owned())
+                    })?;
+                if bytes.len() != destination.len() {
+                    return Err(DomainError::Validation(
+                        "M6 target fixture CAS object size differs".to_owned(),
+                    ));
+                }
+                destination.copy_from_slice(bytes);
+                Ok(())
+            }
+        }
+        let structural = self
+            .log
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                self.log.run_id(),
+                self.log.genesis_hash(),
+                self.log.canonical_prefix_bytes_for_store(),
+                u64::try_from(self.log.envelopes().len()).map_err(|_| {
+                    crate::m6::M6Error::Incomplete {
+                        operation: "M6 target fixture event count",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    }
+                })?,
+                self.log.tail_hash(),
+            ))
+            .map_err(crate::m6::M6Error::from)?;
+        let resolver = Resolver(&self.sources);
+        let checkpoint = EventLogV5::certify_plan_authority_checkpoint_v5_with_limits(
+            &structural,
+            &resolver,
+            &self.roots,
+            self.log.limits.max_retained_bytes,
+            self.log.limits.max_working_bytes,
+        )
+        .map_err(crate::m6::M6Error::from)?;
+        let d2 = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &checkpoint,
+            &resolver,
+            &self.roots,
+        )
+        .map_err(crate::m6::M6Error::from)?;
+        let m4 = EventLogV5::replay_ordered_m4_authority_prefix_v5(d2, &resolver, &self.roots)
+            .map_err(crate::m6::M6Error::from)?;
+        let terminal =
+            EventLogV5::replay_terminal_pre_incremental_authority_v5(&m4, &resolver, &self.roots)
+                .map_err(crate::m6::M6Error::from)?;
+        terminal.seal_partial_rerun_plan_v5(staleness, preservation)
     }
 
     pub(crate) fn with_terminal_persistence<R>(
@@ -36538,7 +37681,7 @@ impl NoM5V5Fixture {
             PreIncrementalAuthorityReplayBasisV5,
         ) -> crate::m6::M6Result<R>,
     ) -> crate::m6::M6Result<R> {
-        self.with_terminal(|_, _| {
+        self.with_terminal(|_, _, _| {
             struct Resolver<'a>(&'a BTreeMap<StableId, Vec<u8>>);
             impl AuthorityArtifactResolverV5 for Resolver<'_> {
                 fn read_exact(&self, hash: &ContentHash, destination: &mut [u8]) -> Result<()> {

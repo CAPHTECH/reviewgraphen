@@ -44,7 +44,7 @@ impl DistinctS0S1StalenessFixture {
             target_bytes,
             crate::StableId::parse("run:m6-distinct-s1-fixture")?,
         )?;
-        let phases = target.with_terminal(|_, target_actual| {
+        let phases = target.with_terminal(|_, target_actual, _| {
             m6_fixture_phases_from_exact_prefixes(&source, &target, target_actual)
         })?;
         let value = Self {
@@ -60,7 +60,7 @@ impl DistinctS0S1StalenessFixture {
     /// by the terminal selector.  In particular, no `StableId -> JSON` test
     /// map can stand in for the target predecessor.
     pub(crate) fn reduce(&self) -> M6Result<M6StalenessPhaseV5> {
-        self.target.with_terminal(|target, target_actual| {
+        self.target.with_terminal(|target, target_actual, _| {
             let input = IncrementalStalenessInputV5::new(
                 self.source.log(),
                 self.phases.closure(),
@@ -74,7 +74,7 @@ impl DistinctS0S1StalenessFixture {
 
     #[cfg(test)]
     fn reduce_with_working_limit(&self, working_limit: usize) -> M6Result<M6StalenessPhaseV5> {
-        self.target.with_terminal(|target, target_actual| {
+        self.target.with_terminal(|target, target_actual, _| {
             let input = IncrementalStalenessInputV5::new(
                 self.source.log(),
                 self.phases.closure(),
@@ -93,7 +93,7 @@ impl DistinctS0S1StalenessFixture {
     #[cfg(test)]
     pub(crate) fn target_plan_json_for_test(&self) -> serde_json::Value {
         self.target
-            .with_terminal(|target, _| {
+            .with_terminal(|target, _, _| {
                 serde_json::to_value(target.plan())
                     .map_err(|error| crate::m6::M6Error::Canonical(error.to_string()))
             })
@@ -102,7 +102,7 @@ impl DistinctS0S1StalenessFixture {
 
     #[cfg(test)]
     fn external_component_sum(&self) -> M6Result<(usize, [usize; 5])> {
-        self.target.with_terminal(|target, target_actual| {
+        self.target.with_terminal(|target, target_actual, _| {
             let input = IncrementalStalenessInputV5::new(
                 self.source.log(),
                 self.phases.closure(),
@@ -191,10 +191,28 @@ impl PreservationDistinctS0S1StalenessFixture {
 
     #[cfg(test)]
     fn new_with_human_source(include_human_state: bool) -> M6Result<Self> {
+        Self::new_with_stages(
+            include_human_state,
+            crate::event::NoM5V5FixtureTerminalStage::ReviewerCompleted,
+        )
+    }
+
+    #[cfg(test)]
+    fn new_with_target_stage(
+        target_stage: crate::event::NoM5V5FixtureTerminalStage,
+    ) -> M6Result<Self> {
+        Self::new_with_stages(false, target_stage)
+    }
+
+    #[cfg(test)]
+    fn new_with_stages(
+        include_human_source: bool,
+        target_stage: crate::event::NoM5V5FixtureTerminalStage,
+    ) -> M6Result<Self> {
         let (source_program, target_program, source_bytes, target_bytes) =
             preservation_distinct_s0_s1_program_fixture()?;
         let source_run_id = crate::StableId::parse("run:m6-preservation-s0-fixture")?;
-        let source = if include_human_state {
+        let source = if include_human_source {
             CompleteM5V4Fixture::from_program_and_sources(
                 source_program,
                 source_bytes,
@@ -208,15 +226,29 @@ impl PreservationDistinctS0S1StalenessFixture {
             )?
         };
         let target_program_copy = target_program.clone();
-        let target_native = CompleteM5V4Fixture::preservation_source_from_program_and_sources(
-            target_program,
-            target_bytes,
-            crate::StableId::parse("run:m6-preservation-s1-fixture")?,
-        )?;
-        let target = NoM5V5Fixture::from_native_m4_fixture(target_native, target_program_copy)
-            .map_err(|error| crate::M6Error::Canonical(format!("native target: {error}")))?;
+        let target_run_id = crate::StableId::parse("run:m6-preservation-s1-fixture")?;
+        let target_native = match target_stage {
+            crate::event::NoM5V5FixtureTerminalStage::HumanFinding => {
+                CompleteM5V4Fixture::from_program_and_sources(
+                    target_program,
+                    target_bytes,
+                    target_run_id,
+                )?
+            }
+            _ => CompleteM5V4Fixture::preservation_source_from_program_and_sources(
+                target_program,
+                target_bytes,
+                target_run_id,
+            )?,
+        };
+        let target = NoM5V5Fixture::from_native_m4_fixture_through(
+            target_native,
+            target_program_copy,
+            target_stage,
+        )
+        .map_err(|error| crate::M6Error::Canonical(format!("native target: {error}")))?;
         let phases = target
-            .with_terminal(|_, target_actual| {
+            .with_terminal(|_, target_actual, _| {
                 m6_fixture_phases_from_exact_prefixes(&source, &target, target_actual)
             })
             .map_err(|error| crate::M6Error::Canonical(format!("native target phases: {error}")))?;
@@ -228,7 +260,7 @@ impl PreservationDistinctS0S1StalenessFixture {
     }
 
     pub(crate) fn reduce(&self) -> M6Result<M6StalenessPhaseV5> {
-        self.target.with_terminal(|target, target_actual| {
+        self.target.with_terminal(|target, target_actual, _| {
             IncrementalStalenessInputV5::new(
                 self.source.log(),
                 self.phases.closure(),
@@ -238,6 +270,16 @@ impl PreservationDistinctS0S1StalenessFixture {
             )?
             .reduce_v5(target_actual, DISTINCT_S0_S1_ASSESSMENT_TIME)
         })
+    }
+
+    #[cfg(test)]
+    fn plan_with_target_suppression(
+        &self,
+        staleness: &M6StalenessPhaseV5,
+        preservation: &crate::M6PreservationPhaseV5,
+    ) -> M6Result<(Vec<crate::PartialRerunActionV5>, crate::PartialRerunPlanV5)> {
+        self.target
+            .seal_partial_rerun_plan_v5(staleness, preservation)
     }
 }
 
@@ -273,7 +315,7 @@ impl SuccessfulM5DistinctS0S1StalenessFixture {
             target_bytes,
             crate::StableId::parse("run:m6-successful-s1-fixture")?,
         )?;
-        let phases = target.with_terminal(|_, target_actual| {
+        let phases = target.with_terminal(|_, target_actual, _| {
             m6_fixture_phases_from_exact_prefixes(&source, &target, target_actual)
         })?;
         let value = Self {
@@ -286,7 +328,7 @@ impl SuccessfulM5DistinctS0S1StalenessFixture {
     }
 
     pub(crate) fn reduce(&self) -> M6Result<M6StalenessPhaseV5> {
-        self.target.with_terminal(|target, target_actual| {
+        self.target.with_terminal(|target, target_actual, _| {
             let input = IncrementalStalenessInputV5::new(
                 self.source.log(),
                 self.phases.closure(),
@@ -332,6 +374,216 @@ mod tests {
     };
     use std::collections::BTreeSet;
 
+    fn suppression_case() -> (
+        PreservationDistinctS0S1StalenessFixture,
+        crate::M6StalenessPhaseV5,
+        crate::M6PreservationPhaseV5,
+        crate::StableId,
+    ) {
+        suppression_case_with_stage(crate::event::NoM5V5FixtureTerminalStage::ReviewerCompleted)
+    }
+
+    fn suppression_case_with_stage(
+        stage: crate::event::NoM5V5FixtureTerminalStage,
+    ) -> (
+        PreservationDistinctS0S1StalenessFixture,
+        crate::M6StalenessPhaseV5,
+        crate::M6PreservationPhaseV5,
+        crate::StableId,
+    ) {
+        let fixture = PreservationDistinctS0S1StalenessFixture::new_with_target_stage(stage)
+            .expect("preservation fixture");
+        let staleness = fixture.reduce().expect("sealed preservation staleness");
+        let source_obligation_id = fixture
+            .source
+            .passed_fixture_obligation_id()
+            .expect("passed source obligation");
+        let target_obligation_id = staleness
+            .records()
+            .iter()
+            .find(|record| {
+                record.source_record_kind() == crate::HistoricalRecordKindV5::Obligation
+                    && record.source_record_id() == source_obligation_id
+            })
+            .and_then(|record| record.successor_record_ids().first())
+            .cloned()
+            .expect("preserved target obligation");
+        let bundle = fixture
+            .source
+            .preservation_bundle_v5(
+                fixture.target.run_id().clone(),
+                fixture.phases.closure(),
+                fixture.phases.mapping(),
+                fixture.phases.correspondence(),
+                &staleness,
+                ContentHash::sha256(b"policy"),
+            )
+            .expect("admitted preservation bundle");
+        let preservation = crate::M6PreservationPhaseV5::from_admitted_bundles(
+            &staleness,
+            fixture.phases.correspondence(),
+            std::slice::from_ref(&bundle),
+        )
+        .expect("opaque preservation phase");
+        (fixture, staleness, preservation, target_obligation_id)
+    }
+
+    #[test]
+    fn exact_native_and_human_predecessor_closures_suppress_only_their_completed_stages() {
+        let (native_fixture, native_staleness, native_preservation, target_obligation_id) =
+            suppression_case_with_stage(
+                crate::event::NoM5V5FixtureTerminalStage::NativeVerification,
+            );
+        let (native_actions, _) = native_fixture
+            .plan_with_target_suppression(&native_staleness, &native_preservation)
+            .expect("native-verification predecessor plan");
+        assert_eq!(
+            native_actions
+                .iter()
+                .filter(|action| action.subject_ids().contains(&target_obligation_id))
+                .map(|action| action.action())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([crate::PartialRerunActionKindV5::RerunHumanDecision])
+        );
+
+        let (human_fixture, human_staleness, human_preservation, target_obligation_id) =
+            suppression_case_with_stage(crate::event::NoM5V5FixtureTerminalStage::HumanFinding);
+        let (human_actions, _) = human_fixture
+            .plan_with_target_suppression(&human_staleness, &human_preservation)
+            .expect("human predecessor plan");
+        assert!(
+            human_actions
+                .iter()
+                .all(|action| !action.subject_ids().contains(&target_obligation_id)),
+            "an exact current target human closure suppresses all four subject stages"
+        );
+    }
+
+    #[test]
+    fn target_predecessor_suppression_emits_exact_subject_action_set() {
+        let (fixture, staleness, preservation, target_obligation_id) = suppression_case();
+        let (unsuppressed, _) = staleness
+            .plan_partial_rerun_without_target_suppression_v5(&preservation)
+            .expect("no-suppression public plan");
+        let unsuppressed_subject = unsuppressed
+            .iter()
+            .filter(|action| action.subject_ids().contains(&target_obligation_id))
+            .map(|action| action.action())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            unsuppressed_subject,
+            BTreeSet::from([
+                crate::PartialRerunActionKindV5::ReprojectContext,
+                crate::PartialRerunActionKindV5::RerunReviewer,
+                crate::PartialRerunActionKindV5::RerunVerifier,
+                crate::PartialRerunActionKindV5::RerunHumanDecision,
+            ])
+        );
+
+        let (actions, plan) = fixture
+            .plan_with_target_suppression(&staleness, &preservation)
+            .expect("suppression-aware plan");
+        let subject = actions
+            .iter()
+            .filter(|action| action.subject_ids().contains(&target_obligation_id))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            subject
+                .iter()
+                .map(|action| action.action())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                crate::PartialRerunActionKindV5::RerunVerifier,
+                crate::PartialRerunActionKindV5::RerunHumanDecision,
+            ])
+        );
+        let verifier = subject
+            .iter()
+            .find(|action| action.action() == crate::PartialRerunActionKindV5::RerunVerifier)
+            .expect("remaining verifier");
+        assert_eq!(verifier.prerequisites().len(), 2);
+        assert!(verifier.prerequisites().iter().all(|value| matches!(
+            value,
+            crate::ActionPrerequisiteV5::ExistingTargetRecord { .. }
+        )));
+        assert_eq!(
+            plan.action_count(),
+            u64::try_from(actions.len()).expect("bounded action count")
+        );
+    }
+
+    #[test]
+    fn target_predecessor_suppression_rejects_zero_and_two_claims_before_completed_mismatch() {
+        let (fixture, staleness, preservation, target_obligation_id) = suppression_case();
+        for observed in [0_usize, 2] {
+            let error = fixture
+                .target
+                .with_terminal(|_, _, suppression| {
+                    let mut mutated = suppression.clone();
+                    mutated.set_reviewer_claim_count_for_test(&target_obligation_id, observed);
+                    mutated.set_reviewer_closure_exact_for_test(&target_obligation_id, false);
+                    staleness
+                        .plan_partial_rerun_with_target_suppression_v5(&preservation, &mutated)
+                        .map(|_| ())
+                })
+                .expect_err("unsupported claim cardinality");
+            assert!(matches!(
+                error,
+                crate::M6Error::M6ClaimCardinalityUnsupported {
+                    observed: actual,
+                    ..
+                } if actual == observed
+            ));
+        }
+    }
+
+    #[test]
+    fn target_predecessor_suppression_refuses_completed_closure_mismatch_without_reopening() {
+        let (fixture, staleness, preservation, target_obligation_id) = suppression_case();
+        for duplicate_envelope in [false, true] {
+            let error = fixture
+                .target
+                .with_terminal(|_, _, suppression| {
+                    let mut mutated = suppression.clone();
+                    if duplicate_envelope {
+                        mutated.set_duplicate_envelope_for_test(&target_obligation_id, true);
+                    } else {
+                        mutated.set_reviewer_closure_exact_for_test(&target_obligation_id, false);
+                    }
+                    staleness
+                        .plan_partial_rerun_with_target_suppression_v5(&preservation, &mutated)
+                        .map(|_| ())
+                })
+                .expect_err("completed mismatch must refuse rather than reopen");
+            assert_eq!(
+                error,
+                crate::M6Error::CompletedReviewerClosureMismatch {
+                    obligation_id: target_obligation_id.clone(),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn target_predecessor_suppression_fails_closed_on_cas_bound_witness_mutation() {
+        let (fixture, staleness, preservation, target_obligation_id) = suppression_case();
+        let error = fixture
+            .target
+            .with_terminal(|_, _, suppression| {
+                let mut mutated = suppression.clone();
+                mutated.corrupt_witness_body_hash_for_test(&target_obligation_id);
+                staleness
+                    .plan_partial_rerun_with_target_suppression_v5(&preservation, &mutated)
+                    .map(|_| ())
+            })
+            .expect_err("unsealed CAS witness mutation");
+        assert!(matches!(
+            error,
+            crate::M6Error::Canonical(message)
+                if message.contains("target suppression projection seal mismatch")
+        ));
+    }
+
     #[test]
     fn actual_reducer_keeps_shared_record_obligation_cones_isolated() {
         let fixture =
@@ -374,7 +626,9 @@ mod tests {
             std::slice::from_ref(&bundle),
         )
         .expect("opaque preservation phase");
-        let (actions, _) = phase.plan_partial_rerun_v5(&preservation).expect("plan");
+        let (actions, _) = phase
+            .plan_partial_rerun_without_target_suppression_v5(&preservation)
+            .expect("plan");
         let contexts = actions
             .iter()
             .filter(|value| value.action() == crate::PartialRerunActionKindV5::ReprojectContext)
@@ -737,7 +991,7 @@ mod tests {
         )
         .expect("opaque admitted preservation phase");
         let (actions, plan) = staleness
-            .plan_partial_rerun_v5(&preservation)
+            .plan_partial_rerun_without_target_suppression_v5(&preservation)
             .expect("phase-bound partial rerun plan");
         assert!(
             actions
@@ -751,9 +1005,78 @@ mod tests {
         assert_eq!(plan.preservation_verification_count(), 1);
         let target_plan_id = fixture
             .target
-            .with_terminal(|target, _| Ok(target.plan().id().clone()))
+            .with_terminal(|target, _, _| Ok(target.plan().id().clone()))
             .expect("target plan ID");
         assert_eq!(plan.target_plan_id(), &target_plan_id);
+
+        let (suppressed_actions, suppressed_plan) = fixture
+            .plan_with_target_suppression(&staleness, &preservation)
+            .expect("target-predecessor suppression plan");
+        let subject_actions = suppressed_actions
+            .iter()
+            .filter(|action| action.subject_ids().contains(target_obligation_id))
+            .collect::<Vec<_>>();
+        assert_eq!(subject_actions.len(), 2);
+        assert_eq!(
+            subject_actions
+                .iter()
+                .map(|action| action.action())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                crate::PartialRerunActionKindV5::RerunVerifier,
+                crate::PartialRerunActionKindV5::RerunHumanDecision,
+            ])
+        );
+        let verifier = subject_actions
+            .iter()
+            .find(|action| action.action() == crate::PartialRerunActionKindV5::RerunVerifier)
+            .expect("remaining verifier");
+        assert_eq!(verifier.prerequisites().len(), 2);
+        assert!(verifier.prerequisites().iter().all(|value| matches!(
+            value,
+            crate::ActionPrerequisiteV5::ExistingTargetRecord { .. }
+        )));
+        assert!(verifier.prerequisites().iter().any(|value| matches!(
+            value,
+            crate::ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }
+                if record_id.kind() == "execution"
+        )));
+        assert!(verifier.prerequisites().iter().any(|value| matches!(
+            value,
+            crate::ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }
+                if record_id.kind() == "claim"
+        )));
+        let expected = actions
+            .iter()
+            .filter(|action| {
+                let subject_has_existing_reviewer_witness =
+                    suppressed_actions.iter().any(|candidate| {
+                        candidate.subject_ids() == action.subject_ids()
+                        && candidate.action() == crate::PartialRerunActionKindV5::RerunVerifier
+                        && candidate.prerequisites().iter().any(|value| matches!(
+                            value,
+                            crate::ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }
+                                if record_id.kind() == "execution"
+                        ))
+                    });
+                !(subject_has_existing_reviewer_witness
+                    && matches!(
+                        action.action(),
+                        crate::PartialRerunActionKindV5::ReprojectContext
+                            | crate::PartialRerunActionKindV5::RerunReviewer
+                    ))
+            })
+            .map(|action| (action.subject_ids().clone(), action.action()))
+            .collect::<BTreeSet<_>>();
+        let observed = suppressed_actions
+            .iter()
+            .map(|action| (action.subject_ids().clone(), action.action()))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(observed, expected);
+        assert_eq!(
+            suppressed_plan.action_count(),
+            u64::try_from(observed.len()).expect("action count")
+        );
     }
 
     #[test]
