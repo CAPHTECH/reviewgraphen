@@ -18,6 +18,7 @@ use crate::{
     ProgramSpace, ReviewAggregate, StableId, VerificationOutcomeV3,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use thiserror::Error;
 
@@ -43,6 +44,10 @@ pub const MAX_M6_CORRESPONDENCE_DTO_BYTES: usize = 1_048_576;
 pub const MAX_M6_CORRESPONDENCE_WORKING_BYTES: usize = 536_870_912;
 pub const MAX_M6_STALENESS_WORKING_BYTES: usize = 536_870_912;
 pub const MAX_M6_RECORD_METADATA_IDS: usize = 512;
+pub const MAX_M6_HISTORICAL_ASSESSMENTS: usize = 8_192;
+pub const MAX_M6_GLUE_FRESHNESS_RECORDS: usize = 1;
+pub const MAX_M6_RELATION_VISITS: usize = 65_536;
+pub const MVP_PROPERTY_IMPACT_POLICY_V5: &str = "reviewgraphen.mvp_property_impact@1";
 
 pub type M6Result<T> = std::result::Result<T, M6Error>;
 
@@ -60,6 +65,8 @@ pub enum M6Error {
     InvalidObligationUniverse(&'static str),
     #[error("invalid M6 historical staleness topology: {0}")]
     InvalidHistoricalTopology(&'static str),
+    #[error("invalid M6 staleness assessment: {0}")]
+    InvalidStalenessAssessment(&'static str),
     #[error("missing accepted M6 {kind} fact for {object_id}")]
     MissingAcceptedMappingFact {
         kind: &'static str,
@@ -514,6 +521,42 @@ impl IncrementalSourceClosureV5 {
 
     pub(crate) fn target_universe_id(&self) -> &StableId {
         &self.input.target_universe_id
+    }
+
+    pub(crate) fn target_authority_policy_revision_hash(&self) -> &ContentHash {
+        &self.input.target_authority_policy_revision_hash
+    }
+
+    pub(crate) fn target_pre_incremental_authority_replay_basis_digest(&self) -> &ContentHash {
+        &self
+            .input
+            .target_pre_incremental_authority_replay_basis_digest
+    }
+
+    /// Rebinds an otherwise inert structural proposal to the only target
+    /// authority proof the reducer accepts: a roots-validated terminal replay.
+    /// This deliberately changes the closure ID, so every mapping and
+    /// correspondence derived from the structural-only proposal must be
+    /// rederived before reduction.
+    pub(crate) fn bind_terminal_target_authority_v5(
+        &self,
+        target_actual: &TargetActualRecordInventoryV5<'_>,
+    ) -> M6Result<Self> {
+        if target_actual.target_run_id() != &self.input.target_run_id
+            || target_actual.target_genesis_hash() != &self.input.target_genesis_hash
+            || target_actual.target_tail_hash() != &self.input.target_predecessor_tail_hash
+            || target_actual.target_event_count() != self.input.target_predecessor_event_count
+        {
+            return Err(M6Error::InvalidSourceClosure(
+                "terminal target authority does not match the structural target predecessor",
+            ));
+        }
+        let mut input = self.input.clone();
+        input.target_authority_policy_revision_hash =
+            target_actual.authority_policy_revision_hash().clone();
+        input.target_pre_incremental_authority_replay_basis_digest =
+            target_actual.authority_replay_basis_digest().clone();
+        Self::from_validated_structure(ValidatedIncrementalStructureV5 { input })
     }
 
     pub fn body_hash(&self) -> M6Result<ContentHash> {
@@ -5294,6 +5337,3252 @@ impl ObligationCorrespondenceV5 {
     }
 }
 
+/// Closed ADR 0023 historical-record order.  Declaration order is part of
+/// `record_set_digest`; it is deliberately independent of append order.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalRecordKindV5 {
+    Obligation,
+    ReviewPlan,
+    ContextEnvelope,
+    Execution,
+    Claim,
+    ClaimAssessment,
+    ArtifactRegistrationV3,
+    ArtifactRegistrationV4,
+    Evidence,
+    EvidenceBinding,
+    Verification,
+    Decision,
+    Finding,
+    GluingInputDescriptor,
+    ContextCover,
+    Section,
+    Restriction,
+    GluingAttempt,
+    GlobalCandidate,
+    GluingObstruction,
+    Coverage,
+}
+
+impl HistoricalRecordKindV5 {
+    const fn from_internal(value: HistoricalSourceRecordKindV4) -> Self {
+        match value {
+            HistoricalSourceRecordKindV4::Obligation => Self::Obligation,
+            HistoricalSourceRecordKindV4::ReviewPlan => Self::ReviewPlan,
+            HistoricalSourceRecordKindV4::ContextEnvelope => Self::ContextEnvelope,
+            HistoricalSourceRecordKindV4::Execution => Self::Execution,
+            HistoricalSourceRecordKindV4::Claim => Self::Claim,
+            HistoricalSourceRecordKindV4::ClaimAssessment => Self::ClaimAssessment,
+            HistoricalSourceRecordKindV4::ArtifactRegistrationV3 => Self::ArtifactRegistrationV3,
+            HistoricalSourceRecordKindV4::ArtifactRegistrationV4 => Self::ArtifactRegistrationV4,
+            HistoricalSourceRecordKindV4::Evidence => Self::Evidence,
+            HistoricalSourceRecordKindV4::EvidenceBinding => Self::EvidenceBinding,
+            HistoricalSourceRecordKindV4::Verification => Self::Verification,
+            HistoricalSourceRecordKindV4::Decision => Self::Decision,
+            HistoricalSourceRecordKindV4::Finding => Self::Finding,
+            HistoricalSourceRecordKindV4::GluingInputDescriptor => Self::GluingInputDescriptor,
+            HistoricalSourceRecordKindV4::ContextCover => Self::ContextCover,
+            HistoricalSourceRecordKindV4::Section => Self::Section,
+            HistoricalSourceRecordKindV4::Restriction => Self::Restriction,
+            HistoricalSourceRecordKindV4::GluingAttempt => Self::GluingAttempt,
+            HistoricalSourceRecordKindV4::GlobalCandidate => Self::GlobalCandidate,
+            HistoricalSourceRecordKindV4::GluingObstruction => Self::GluingObstruction,
+            HistoricalSourceRecordKindV4::Coverage => Self::Coverage,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalAssessmentStatusV5 {
+    StructurallyPreserved,
+    Stale,
+    Superseded,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StalenessDirectnessV5 {
+    NotApplicable,
+    Indirect,
+    Direct,
+    DirectAndIndirect,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StaleReasonV5 {
+    TargetChanged,
+    DependencyChanged,
+    ContextChanged,
+    EvidenceChanged,
+    TestChanged,
+    PolicyChanged,
+    RuleChanged,
+    ExtractorChanged,
+    ModelPolicyChanged,
+    HumanAuthorityNotCarried,
+    MappingUnresolved,
+    ObligationChanged,
+    GluingInputChanged,
+    UnsupportedImpactPolicy,
+}
+
+#[derive(Serialize)]
+struct HistoricalRecordAssessmentIdentityV5<'a> {
+    assessment_id: &'a StableId,
+    source_record_kind: HistoricalRecordKindV5,
+    source_record_id: &'a StableId,
+    source_record_body_hash: &'a ContentHash,
+    successor_record_ids: &'a BTreeSet<StableId>,
+    status: HistoricalAssessmentStatusV5,
+    directness: StalenessDirectnessV5,
+    reasons: &'a BTreeSet<StaleReasonV5>,
+    dependency_source_ids: &'a BTreeSet<StableId>,
+    mapping_ids: &'a BTreeSet<StableId>,
+    correspondence_entry_ids: &'a BTreeSet<StableId>,
+    source_ids: &'a BTreeSet<StableId>,
+}
+
+/// Immutable assessment of one pinned V4 historical record.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HistoricalRecordAssessmentV5 {
+    schema: &'static str,
+    id: StableId,
+    assessment_id: StableId,
+    source_record_kind: HistoricalRecordKindV5,
+    source_record_id: StableId,
+    source_record_body_hash: ContentHash,
+    successor_record_ids: BTreeSet<StableId>,
+    status: HistoricalAssessmentStatusV5,
+    directness: StalenessDirectnessV5,
+    reasons: BTreeSet<StaleReasonV5>,
+    dependency_source_ids: BTreeSet<StableId>,
+    mapping_ids: BTreeSet<StableId>,
+    correspondence_entry_ids: BTreeSet<StableId>,
+    source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoricalRecordAssessmentWireV5 {
+    schema: String,
+    id: StableId,
+    assessment_id: StableId,
+    source_record_kind: HistoricalRecordKindV5,
+    source_record_id: StableId,
+    source_record_body_hash: ContentHash,
+    successor_record_ids: BTreeSet<StableId>,
+    status: HistoricalAssessmentStatusV5,
+    directness: StalenessDirectnessV5,
+    reasons: BTreeSet<StaleReasonV5>,
+    dependency_source_ids: BTreeSet<StableId>,
+    mapping_ids: BTreeSet<StableId>,
+    correspondence_entry_ids: BTreeSet<StableId>,
+    source_ids: BTreeSet<StableId>,
+}
+
+struct HistoricalRecordAssessmentPartsV5 {
+    assessment_id: StableId,
+    source_record_kind: HistoricalRecordKindV5,
+    source_record_id: StableId,
+    source_record_body_hash: ContentHash,
+    successor_record_ids: BTreeSet<StableId>,
+    status: HistoricalAssessmentStatusV5,
+    directness: StalenessDirectnessV5,
+    reasons: BTreeSet<StaleReasonV5>,
+    dependency_source_ids: BTreeSet<StableId>,
+    mapping_ids: BTreeSet<StableId>,
+    correspondence_entry_ids: BTreeSet<StableId>,
+}
+
+impl HistoricalRecordAssessmentV5 {
+    fn from_parts(parts: HistoricalRecordAssessmentPartsV5) -> M6Result<Self> {
+        require_kind(
+            &parts.assessment_id,
+            "staleness-assessment-v5",
+            "assessment_id",
+        )?;
+        for (operation, count) in [
+            ("M6 historical successors", parts.successor_record_ids.len()),
+            (
+                "M6 historical dependency sources",
+                parts.dependency_source_ids.len(),
+            ),
+            ("M6 historical mapping IDs", parts.mapping_ids.len()),
+            (
+                "M6 historical correspondence IDs",
+                parts.correspondence_entry_ids.len(),
+            ),
+        ] {
+            bounded(count, MAX_M6_RECORD_METADATA_IDS, operation)?;
+        }
+        if parts
+            .mapping_ids
+            .iter()
+            .any(|id| id.kind() != "program-mapping-v5")
+            || parts
+                .correspondence_entry_ids
+                .iter()
+                .any(|id| id.kind() != "obligation-correspondence-entry-v5")
+        {
+            return Err(M6Error::InvalidStalenessAssessment(
+                "historical assessment mapping/correspondence namespace mismatch",
+            ));
+        }
+        let status_shape = match parts.status {
+            HistoricalAssessmentStatusV5::StructurallyPreserved => {
+                parts.directness == StalenessDirectnessV5::NotApplicable
+                    && parts.reasons.is_empty()
+                    && !parts.successor_record_ids.is_empty()
+            }
+            HistoricalAssessmentStatusV5::Stale => {
+                parts.directness != StalenessDirectnessV5::NotApplicable
+                    && !parts.reasons.is_empty()
+            }
+            HistoricalAssessmentStatusV5::Superseded => {
+                parts.directness != StalenessDirectnessV5::NotApplicable
+                    && !parts.reasons.is_empty()
+                    && parts.successor_record_ids.is_empty()
+            }
+        };
+        if !status_shape {
+            return Err(M6Error::InvalidStalenessAssessment(
+                "historical assessment status/directness/reason shape mismatch",
+            ));
+        }
+        let source_ids = std::iter::once(parts.assessment_id.clone())
+            .chain(std::iter::once(parts.source_record_id.clone()))
+            .chain(parts.successor_record_ids.iter().cloned())
+            .chain(parts.dependency_source_ids.iter().cloned())
+            .chain(parts.mapping_ids.iter().cloned())
+            .chain(parts.correspondence_entry_ids.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        bounded(
+            source_ids.len(),
+            MAX_M6_RECORD_METADATA_IDS,
+            "M6 historical source IDs",
+        )?;
+        let identity = HistoricalRecordAssessmentIdentityV5 {
+            assessment_id: &parts.assessment_id,
+            source_record_kind: parts.source_record_kind,
+            source_record_id: &parts.source_record_id,
+            source_record_body_hash: &parts.source_record_body_hash,
+            successor_record_ids: &parts.successor_record_ids,
+            status: parts.status,
+            directness: parts.directness,
+            reasons: &parts.reasons,
+            dependency_source_ids: &parts.dependency_source_ids,
+            mapping_ids: &parts.mapping_ids,
+            correspondence_entry_ids: &parts.correspondence_entry_ids,
+            source_ids: &source_ids,
+        };
+        let value = Self {
+            schema: "reviewgraphen.historical_record_assessment.v5",
+            id: derive("historical-record-assessment-v5", &identity)?,
+            assessment_id: parts.assessment_id,
+            source_record_kind: parts.source_record_kind,
+            source_record_id: parts.source_record_id,
+            source_record_body_hash: parts.source_record_body_hash,
+            successor_record_ids: parts.successor_record_ids,
+            status: parts.status,
+            directness: parts.directness,
+            reasons: parts.reasons,
+            dependency_source_ids: parts.dependency_source_ids,
+            mapping_ids: parts.mapping_ids,
+            correspondence_entry_ids: parts.correspondence_entry_ids,
+            source_ids,
+        };
+        bounded_event_dto(
+            &value,
+            MAX_M6_CANONICAL_BYTES,
+            "M6 historical assessment DTO bytes",
+        )?;
+        Ok(value)
+    }
+
+    #[doc(hidden)]
+    pub(crate) fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 historical assessment JSON bytes",
+        )?;
+        preflight_event_line(input.len(), 1)?;
+        let wire: HistoricalRecordAssessmentWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if wire.schema != "reviewgraphen.historical_record_assessment.v5" {
+            return Err(M6Error::InvalidWire(
+                "wrong historical assessment schema".to_owned(),
+            ));
+        }
+        let expected = Self::from_parts(HistoricalRecordAssessmentPartsV5 {
+            assessment_id: wire.assessment_id,
+            source_record_kind: wire.source_record_kind,
+            source_record_id: wire.source_record_id,
+            source_record_body_hash: wire.source_record_body_hash,
+            successor_record_ids: wire.successor_record_ids,
+            status: wire.status,
+            directness: wire.directness,
+            reasons: wire.reasons,
+            dependency_source_ids: wire.dependency_source_ids,
+            mapping_ids: wire.mapping_ids,
+            correspondence_entry_ids: wire.correspondence_entry_ids,
+        })?;
+        if expected.id != wire.id
+            || expected.source_ids != wire.source_ids
+            || crate::canonical_json(&expected)? != input
+        {
+            return Err(M6Error::InvalidWire(
+                "historical assessment wire is not exact canonical derived content".to_owned(),
+            ));
+        }
+        Ok(expected)
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn assessment_id(&self) -> &StableId {
+        &self.assessment_id
+    }
+    #[must_use]
+    pub const fn source_record_kind(&self) -> HistoricalRecordKindV5 {
+        self.source_record_kind
+    }
+    #[must_use]
+    pub fn source_record_id(&self) -> &StableId {
+        &self.source_record_id
+    }
+    #[must_use]
+    pub fn source_record_body_hash(&self) -> &ContentHash {
+        &self.source_record_body_hash
+    }
+    #[must_use]
+    pub fn successor_record_ids(&self) -> &BTreeSet<StableId> {
+        &self.successor_record_ids
+    }
+    #[must_use]
+    pub const fn status(&self) -> HistoricalAssessmentStatusV5 {
+        self.status
+    }
+    #[must_use]
+    pub const fn directness(&self) -> StalenessDirectnessV5 {
+        self.directness
+    }
+    #[must_use]
+    pub fn reasons(&self) -> &BTreeSet<StaleReasonV5> {
+        &self.reasons
+    }
+    #[must_use]
+    pub fn dependency_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.dependency_source_ids
+    }
+    #[must_use]
+    pub fn mapping_ids(&self) -> &BTreeSet<StableId> {
+        &self.mapping_ids
+    }
+    #[must_use]
+    pub fn correspondence_entry_ids(&self) -> &BTreeSet<StableId> {
+        &self.correspondence_entry_ids
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        [
+            self.id.allocated_bytes(),
+            self.assessment_id.allocated_bytes(),
+            self.source_record_id.allocated_bytes(),
+            self.source_record_body_hash.allocated_bytes(),
+            id_set_heap(&self.successor_record_ids),
+            id_set_heap(&self.dependency_source_ids),
+            id_set_heap(&self.mapping_ids),
+            id_set_heap(&self.correspondence_entry_ids),
+            id_set_heap(&self.source_ids),
+        ]
+        .into_iter()
+        .fold(0, usize::saturating_add)
+    }
+}
+
+#[derive(Serialize)]
+struct GluingFreshnessIdentityV5<'a> {
+    assessment_id: &'a StableId,
+    source_attempt_id: &'a StableId,
+    status: HistoricalAssessmentStatusV5,
+    reasons: &'a BTreeSet<StaleReasonV5>,
+    dependency_mapping_ids: &'a BTreeSet<StableId>,
+    successor_target_attempt_ids: &'a BTreeSet<StableId>,
+    source_ids: &'a BTreeSet<StableId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GluingFreshnessV5 {
+    schema: &'static str,
+    id: StableId,
+    assessment_id: StableId,
+    source_attempt_id: StableId,
+    status: HistoricalAssessmentStatusV5,
+    reasons: BTreeSet<StaleReasonV5>,
+    dependency_mapping_ids: BTreeSet<StableId>,
+    successor_target_attempt_ids: BTreeSet<StableId>,
+    source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GluingFreshnessWireV5 {
+    schema: String,
+    id: StableId,
+    assessment_id: StableId,
+    source_attempt_id: StableId,
+    status: HistoricalAssessmentStatusV5,
+    reasons: BTreeSet<StaleReasonV5>,
+    dependency_mapping_ids: BTreeSet<StableId>,
+    successor_target_attempt_ids: BTreeSet<StableId>,
+    source_ids: BTreeSet<StableId>,
+}
+
+impl GluingFreshnessV5 {
+    fn derive(
+        assessment_id: StableId,
+        source_attempt_id: StableId,
+        status: HistoricalAssessmentStatusV5,
+        reasons: BTreeSet<StaleReasonV5>,
+        dependency_mapping_ids: BTreeSet<StableId>,
+        successor_target_attempt_ids: BTreeSet<StableId>,
+    ) -> M6Result<Self> {
+        require_kind(&assessment_id, "staleness-assessment-v5", "assessment_id")?;
+        if source_attempt_id.kind() != "gluing-attempt-v4"
+            || successor_target_attempt_ids.len() > 1
+            || successor_target_attempt_ids
+                .iter()
+                .any(|id| id.kind() != "gluing-attempt-v4")
+            || dependency_mapping_ids
+                .iter()
+                .any(|id| id.kind() != "program-mapping-v5")
+        {
+            return Err(M6Error::InvalidStalenessAssessment(
+                "gluing freshness ID shape mismatch",
+            ));
+        }
+        bounded(
+            dependency_mapping_ids.len(),
+            MAX_M6_RECORD_METADATA_IDS,
+            "M6 gluing dependency mappings",
+        )?;
+        let shape = match status {
+            HistoricalAssessmentStatusV5::StructurallyPreserved => {
+                reasons.is_empty() && successor_target_attempt_ids.len() == 1
+            }
+            HistoricalAssessmentStatusV5::Stale => !reasons.is_empty(),
+            HistoricalAssessmentStatusV5::Superseded => {
+                !reasons.is_empty() && successor_target_attempt_ids.is_empty()
+            }
+        };
+        if !shape {
+            return Err(M6Error::InvalidStalenessAssessment(
+                "gluing freshness status/reason/successor shape mismatch",
+            ));
+        }
+        let source_ids = std::iter::once(assessment_id.clone())
+            .chain(std::iter::once(source_attempt_id.clone()))
+            .chain(dependency_mapping_ids.iter().cloned())
+            .chain(successor_target_attempt_ids.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let identity = GluingFreshnessIdentityV5 {
+            assessment_id: &assessment_id,
+            source_attempt_id: &source_attempt_id,
+            status,
+            reasons: &reasons,
+            dependency_mapping_ids: &dependency_mapping_ids,
+            successor_target_attempt_ids: &successor_target_attempt_ids,
+            source_ids: &source_ids,
+        };
+        let value = Self {
+            schema: "reviewgraphen.gluing_freshness.v5",
+            id: derive("gluing-freshness-v5", &identity)?,
+            assessment_id,
+            source_attempt_id,
+            status,
+            reasons,
+            dependency_mapping_ids,
+            successor_target_attempt_ids,
+            source_ids,
+        };
+        bounded_event_dto(
+            &value,
+            MAX_M6_CANONICAL_BYTES,
+            "M6 gluing freshness DTO bytes",
+        )?;
+        Ok(value)
+    }
+
+    #[doc(hidden)]
+    pub(crate) fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 gluing freshness JSON bytes",
+        )?;
+        preflight_event_line(input.len(), 1)?;
+        let wire: GluingFreshnessWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if wire.schema != "reviewgraphen.gluing_freshness.v5" {
+            return Err(M6Error::InvalidWire(
+                "wrong gluing freshness schema".to_owned(),
+            ));
+        }
+        let expected = Self::derive(
+            wire.assessment_id,
+            wire.source_attempt_id,
+            wire.status,
+            wire.reasons,
+            wire.dependency_mapping_ids,
+            wire.successor_target_attempt_ids,
+        )?;
+        if expected.id != wire.id
+            || expected.source_ids != wire.source_ids
+            || crate::canonical_json(&expected)? != input
+        {
+            return Err(M6Error::InvalidWire(
+                "gluing freshness wire is not exact canonical derived content".to_owned(),
+            ));
+        }
+        Ok(expected)
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn assessment_id(&self) -> &StableId {
+        &self.assessment_id
+    }
+    #[must_use]
+    pub fn source_attempt_id(&self) -> &StableId {
+        &self.source_attempt_id
+    }
+    #[must_use]
+    pub const fn status(&self) -> HistoricalAssessmentStatusV5 {
+        self.status
+    }
+    #[must_use]
+    pub fn reasons(&self) -> &BTreeSet<StaleReasonV5> {
+        &self.reasons
+    }
+    #[must_use]
+    pub fn dependency_mapping_ids(&self) -> &BTreeSet<StableId> {
+        &self.dependency_mapping_ids
+    }
+    #[must_use]
+    pub fn successor_target_attempt_ids(&self) -> &BTreeSet<StableId> {
+        &self.successor_target_attempt_ids
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+}
+
+fn validate_assessment_time_v5(value: &str) -> M6Result<()> {
+    let bytes = value.as_bytes();
+    let digit = |index: usize| bytes.get(index).is_some_and(u8::is_ascii_digit);
+    if bytes.len() != 20
+        || !(digit(0) && digit(1) && digit(2) && digit(3))
+        || bytes[4] != b'-'
+        || !(digit(5) && digit(6))
+        || bytes[7] != b'-'
+        || !(digit(8) && digit(9))
+        || bytes[10] != b'T'
+        || !(digit(11) && digit(12))
+        || bytes[13] != b':'
+        || !(digit(14) && digit(15))
+        || bytes[16] != b':'
+        || !(digit(17) && digit(18))
+        || bytes[19] != b'Z'
+    {
+        return Err(M6Error::InvalidStalenessAssessment(
+            "assessment_time must be exact 20-byte UTC seconds",
+        ));
+    }
+    let number = |start: usize| -> u8 { (bytes[start] - b'0') * 10 + bytes[start + 1] - b'0' };
+    let year = u16::from(bytes[0] - b'0') * 1000
+        + u16::from(bytes[1] - b'0') * 100
+        + u16::from(bytes[2] - b'0') * 10
+        + u16::from(bytes[3] - b'0');
+    let month = number(5);
+    let day = number(8);
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => 0,
+    };
+    if day == 0 || day > max_day || number(11) > 23 || number(14) > 59 || number(17) > 59 {
+        return Err(M6Error::InvalidStalenessAssessment(
+            "assessment_time contains an invalid UTC calendar second",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct StalenessAssessmentIdentityV5<'a> {
+    source_closure_id: &'a StableId,
+    morphism_id: &'a StableId,
+    correspondence_id: &'a StableId,
+    impact_policy_descriptor_id: &'static str,
+    assessment_time: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StalenessAssessmentV5 {
+    schema: &'static str,
+    id: StableId,
+    source_closure_id: StableId,
+    morphism_id: StableId,
+    correspondence_id: StableId,
+    impact_policy_descriptor_id: &'static str,
+    assessment_time: String,
+    record_count: u64,
+    record_set_digest: ContentHash,
+    gluing_freshness_count: u64,
+    gluing_freshness_set_digest: ContentHash,
+    stale_source_count: u64,
+    stale_source_digest: ContentHash,
+    superseded_source_count: u64,
+    superseded_source_digest: ContentHash,
+    preservation_candidate_count: u64,
+    preservation_candidate_digest: ContentHash,
+    m5_dependent_successor_count: u64,
+    m5_dependent_successor_digest: ContentHash,
+    source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StalenessAssessmentWireV5 {
+    schema: String,
+    id: StableId,
+    source_closure_id: StableId,
+    morphism_id: StableId,
+    correspondence_id: StableId,
+    impact_policy_descriptor_id: String,
+    assessment_time: String,
+    record_count: u64,
+    record_set_digest: ContentHash,
+    gluing_freshness_count: u64,
+    gluing_freshness_set_digest: ContentHash,
+    stale_source_count: u64,
+    stale_source_digest: ContentHash,
+    superseded_source_count: u64,
+    superseded_source_digest: ContentHash,
+    preservation_candidate_count: u64,
+    preservation_candidate_digest: ContentHash,
+    m5_dependent_successor_count: u64,
+    m5_dependent_successor_digest: ContentHash,
+    source_ids: BTreeSet<StableId>,
+}
+
+struct StalenessAssessmentSealPartsV5 {
+    source_closure_id: StableId,
+    morphism_id: StableId,
+    correspondence_id: StableId,
+    assessment_time: String,
+    records: Vec<HistoricalRecordAssessmentV5>,
+    gluing: Vec<GluingFreshnessV5>,
+    preservation_candidates: BTreeSet<StableId>,
+    m5_dependent_successors: BTreeSet<StableId>,
+}
+
+impl StalenessAssessmentV5 {
+    fn assessment_id(
+        source_closure_id: &StableId,
+        morphism_id: &StableId,
+        correspondence_id: &StableId,
+        assessment_time: &str,
+    ) -> M6Result<StableId> {
+        validate_assessment_time_v5(assessment_time)?;
+        derive(
+            "staleness-assessment-v5",
+            &StalenessAssessmentIdentityV5 {
+                source_closure_id,
+                morphism_id,
+                correspondence_id,
+                impact_policy_descriptor_id: MVP_PROPERTY_IMPACT_POLICY_V5,
+                assessment_time,
+            },
+        )
+    }
+
+    fn seal(parts: &StalenessAssessmentSealPartsV5) -> M6Result<Self> {
+        bounded(
+            parts.records.len(),
+            MAX_M6_HISTORICAL_ASSESSMENTS,
+            "M6 historical assessments",
+        )?;
+        bounded(
+            parts.gluing.len(),
+            MAX_M6_GLUE_FRESHNESS_RECORDS,
+            "M6 gluing freshness",
+        )?;
+        if parts.gluing.len() != 1 {
+            return Err(M6Error::InvalidStalenessAssessment(
+                "staleness seal requires exactly one gluing freshness member",
+            ));
+        }
+        let assessment_id = Self::assessment_id(
+            &parts.source_closure_id,
+            &parts.morphism_id,
+            &parts.correspondence_id,
+            &parts.assessment_time,
+        )?;
+        if parts
+            .records
+            .iter()
+            .any(|value| value.assessment_id != assessment_id)
+            || parts
+                .gluing
+                .iter()
+                .any(|value| value.assessment_id != assessment_id)
+            || parts.records.windows(2).any(|pair| {
+                (pair[0].source_record_kind, &pair[0].source_record_id)
+                    >= (pair[1].source_record_kind, &pair[1].source_record_id)
+            })
+        {
+            return Err(M6Error::InvalidStalenessAssessment(
+                "assessment members do not match ID or closed kind/ID order",
+            ));
+        }
+        let record_set_digest = crate::canonical::compact_json_array_sha256_streaming(
+            parts.records.iter().map(|value| {
+                value
+                    .body_hash()
+                    .and_then(|hash| IdBodyHashV5::new(value.id.clone(), hash))
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }),
+        )?;
+        let gluing_freshness_set_digest = crate::canonical::compact_json_array_sha256_streaming(
+            parts.gluing.iter().map(|value| {
+                value
+                    .body_hash()
+                    .and_then(|hash| IdBodyHashV5::new(value.id.clone(), hash))
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }),
+        )?;
+        let stale_sources = parts
+            .records
+            .iter()
+            .filter_map(|value| {
+                (value.status == HistoricalAssessmentStatusV5::Stale)
+                    .then_some(value.source_record_id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        let superseded_sources = parts
+            .records
+            .iter()
+            .filter_map(|value| {
+                (value.status == HistoricalAssessmentStatusV5::Superseded)
+                    .then_some(value.source_record_id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        let source_ids = BTreeSet::from([
+            parts.source_closure_id.clone(),
+            parts.morphism_id.clone(),
+            parts.correspondence_id.clone(),
+        ]);
+        let value = Self {
+            schema: "reviewgraphen.staleness_assessment.v5",
+            id: assessment_id,
+            source_closure_id: parts.source_closure_id.clone(),
+            morphism_id: parts.morphism_id.clone(),
+            correspondence_id: parts.correspondence_id.clone(),
+            impact_policy_descriptor_id: MVP_PROPERTY_IMPACT_POLICY_V5,
+            assessment_time: parts.assessment_time.clone(),
+            record_count: parts.records.len() as u64,
+            record_set_digest,
+            gluing_freshness_count: parts.gluing.len() as u64,
+            gluing_freshness_set_digest,
+            stale_source_count: stale_sources.len() as u64,
+            stale_source_digest: digest_ids(&stale_sources)?,
+            superseded_source_count: superseded_sources.len() as u64,
+            superseded_source_digest: digest_ids(&superseded_sources)?,
+            preservation_candidate_count: parts.preservation_candidates.len() as u64,
+            preservation_candidate_digest: digest_ids(&parts.preservation_candidates)?,
+            m5_dependent_successor_count: parts.m5_dependent_successors.len() as u64,
+            m5_dependent_successor_digest: digest_ids(&parts.m5_dependent_successors)?,
+            source_ids,
+        };
+        bounded_event_dto(
+            &value,
+            MAX_M6_CANONICAL_BYTES,
+            "M6 staleness seal DTO bytes",
+        )?;
+        Ok(value)
+    }
+
+    #[doc(hidden)]
+    pub(crate) fn from_json_bytes(input: &[u8], expected: &Self) -> M6Result<Self> {
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 staleness seal JSON bytes",
+        )?;
+        preflight_event_line(input.len(), 1)?;
+        let wire: StalenessAssessmentWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if wire.schema != "reviewgraphen.staleness_assessment.v5"
+            || wire.impact_policy_descriptor_id != MVP_PROPERTY_IMPACT_POLICY_V5
+            || wire.id != expected.id
+            || wire.source_closure_id != expected.source_closure_id
+            || wire.morphism_id != expected.morphism_id
+            || wire.correspondence_id != expected.correspondence_id
+            || wire.assessment_time != expected.assessment_time
+            || wire.record_count != expected.record_count
+            || wire.record_set_digest != expected.record_set_digest
+            || wire.gluing_freshness_count != expected.gluing_freshness_count
+            || wire.gluing_freshness_set_digest != expected.gluing_freshness_set_digest
+            || wire.stale_source_count != expected.stale_source_count
+            || wire.stale_source_digest != expected.stale_source_digest
+            || wire.superseded_source_count != expected.superseded_source_count
+            || wire.superseded_source_digest != expected.superseded_source_digest
+            || wire.preservation_candidate_count != expected.preservation_candidate_count
+            || wire.preservation_candidate_digest != expected.preservation_candidate_digest
+            || wire.m5_dependent_successor_count != expected.m5_dependent_successor_count
+            || wire.m5_dependent_successor_digest != expected.m5_dependent_successor_digest
+            || wire.source_ids != expected.source_ids
+            || crate::canonical_json(expected)? != input
+        {
+            return Err(M6Error::InvalidWire(
+                "staleness seal wire is not exact canonical derived content".to_owned(),
+            ));
+        }
+        validate_assessment_time_v5(&wire.assessment_time)?;
+        Ok(expected.clone())
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn source_closure_id(&self) -> &StableId {
+        &self.source_closure_id
+    }
+    #[must_use]
+    pub fn morphism_id(&self) -> &StableId {
+        &self.morphism_id
+    }
+    #[must_use]
+    pub fn correspondence_id(&self) -> &StableId {
+        &self.correspondence_id
+    }
+    #[must_use]
+    pub fn assessment_time(&self) -> &str {
+        &self.assessment_time
+    }
+    #[must_use]
+    pub const fn record_count(&self) -> u64 {
+        self.record_count
+    }
+    #[must_use]
+    pub fn record_set_digest(&self) -> &ContentHash {
+        &self.record_set_digest
+    }
+    #[must_use]
+    pub const fn gluing_freshness_count(&self) -> u64 {
+        self.gluing_freshness_count
+    }
+    #[must_use]
+    pub fn gluing_freshness_set_digest(&self) -> &ContentHash {
+        &self.gluing_freshness_set_digest
+    }
+    #[must_use]
+    pub const fn stale_source_count(&self) -> u64 {
+        self.stale_source_count
+    }
+    #[must_use]
+    pub fn stale_source_digest(&self) -> &ContentHash {
+        &self.stale_source_digest
+    }
+    #[must_use]
+    pub const fn superseded_source_count(&self) -> u64 {
+        self.superseded_source_count
+    }
+    #[must_use]
+    pub fn superseded_source_digest(&self) -> &ContentHash {
+        &self.superseded_source_digest
+    }
+    #[must_use]
+    pub const fn preservation_candidate_count(&self) -> u64 {
+        self.preservation_candidate_count
+    }
+    #[must_use]
+    pub fn preservation_candidate_digest(&self) -> &ContentHash {
+        &self.preservation_candidate_digest
+    }
+    #[must_use]
+    pub const fn m5_dependent_successor_count(&self) -> u64 {
+        self.m5_dependent_successor_count
+    }
+    #[must_use]
+    pub fn m5_dependent_successor_digest(&self) -> &ContentHash {
+        &self.m5_dependent_successor_digest
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+}
+
+#[derive(Clone)]
+struct AssessmentRecordNodeV5 {
+    key: OwnedHistoricalRecordKeyV5,
+    body_hash: ContentHash,
+    pinned_active_or_current: bool,
+    body: Value,
+    direct_program_ids: BTreeSet<StableId>,
+    // `required_records` is the acyclic predecessor graph used to determine
+    // deterministic reduction order. `closure_records` additionally contains
+    // source-object references which are real audit dependencies but form an
+    // ownership back-reference (for example execution <-> raw registration)
+    // or a derived M4 cycle (assessment <-> decision/finding).  They must
+    // appear in dependency_source_ids and M/C reduction without making the
+    // reducer's Kahn ordering cyclic.
+    required_records: BTreeSet<OwnedHistoricalRecordKeyV5>,
+    closure_records: BTreeSet<OwnedHistoricalRecordKeyV5>,
+}
+
+fn assessment_node_map_retained_bytes_v5(
+    values: &BTreeMap<OwnedHistoricalRecordKeyV5, AssessmentRecordNodeV5>,
+) -> usize {
+    values.iter().fold(0_usize, |total, (key, node)| {
+        total
+            .saturating_add(std::mem::size_of::<(
+                OwnedHistoricalRecordKeyV5,
+                AssessmentRecordNodeV5,
+            )>())
+            .saturating_add(256)
+            .saturating_add(key.id.allocated_bytes())
+            .saturating_add(node.key.id.allocated_bytes())
+            .saturating_add(node.body_hash.allocated_bytes())
+            .saturating_add(json_retained_bytes_v5(&node.body))
+            .saturating_add(id_set_heap(&node.direct_program_ids))
+            .saturating_add(
+                node.required_records
+                    .iter()
+                    .map(|key| {
+                        std::mem::size_of::<OwnedHistoricalRecordKeyV5>()
+                            .saturating_add(key.id.allocated_bytes())
+                            .saturating_add(128)
+                    })
+                    .sum::<usize>(),
+            )
+            .saturating_add(
+                node.closure_records
+                    .iter()
+                    .map(|key| {
+                        std::mem::size_of::<OwnedHistoricalRecordKeyV5>()
+                            .saturating_add(key.id.allocated_bytes())
+                            .saturating_add(128)
+                    })
+                    .sum::<usize>(),
+            )
+    })
+}
+
+fn historical_typed_json_v5(value: HistoricalSourceRecordValueV4<'_>) -> M6Result<Value> {
+    macro_rules! typed {
+        ($value:expr) => {
+            serde_json::to_value($value).map_err(|error| M6Error::Canonical(error.to_string()))
+        };
+    }
+    match value {
+        HistoricalSourceRecordValueV4::Obligation(value) => typed!(value),
+        HistoricalSourceRecordValueV4::ReviewPlan(value) => typed!(value),
+        HistoricalSourceRecordValueV4::ContextEnvelope(value) => typed!(value),
+        HistoricalSourceRecordValueV4::Execution(value) => typed!(value),
+        HistoricalSourceRecordValueV4::Claim(value) => typed!(value),
+        HistoricalSourceRecordValueV4::ClaimAssessment(value) => typed!(value),
+        HistoricalSourceRecordValueV4::ArtifactRegistrationV3(value) => typed!(value),
+        HistoricalSourceRecordValueV4::ArtifactRegistrationV4(value) => typed!(value),
+        HistoricalSourceRecordValueV4::Evidence(value) => typed!(value),
+        HistoricalSourceRecordValueV4::EvidenceBinding(value) => typed!(value),
+        HistoricalSourceRecordValueV4::Verification(value) => typed!(value),
+        HistoricalSourceRecordValueV4::Decision(value) => typed!(value),
+        HistoricalSourceRecordValueV4::Finding(value) => typed!(value),
+        HistoricalSourceRecordValueV4::GluingInputDescriptor(value) => typed!(value),
+        HistoricalSourceRecordValueV4::ContextCover(value) => typed!(value),
+        HistoricalSourceRecordValueV4::Section(value) => typed!(value),
+        HistoricalSourceRecordValueV4::Restriction(value) => typed!(value),
+        HistoricalSourceRecordValueV4::GluingAttempt(value) => typed!(value),
+        HistoricalSourceRecordValueV4::GlobalCandidate(value) => typed!(value),
+        HistoricalSourceRecordValueV4::GluingObstruction(value) => typed!(value),
+        HistoricalSourceRecordValueV4::Coverage(value) => typed!(value),
+    }
+}
+
+fn historical_typed_canonical_len_v5(value: HistoricalSourceRecordValueV4<'_>) -> M6Result<usize> {
+    macro_rules! count {
+        ($value:expr) => {
+            usize::try_from(crate::canonical::canonical_json_count_bounded(
+                $value,
+                MAX_M6_CANONICAL_BYTES,
+                "M6 historical typed body bytes",
+            )?)
+            .map_err(|_| M6Error::Incomplete {
+                operation: "M6 historical typed body bytes",
+                limit: MAX_M6_CANONICAL_BYTES,
+                observed: usize::MAX,
+            })
+        };
+    }
+    match value {
+        HistoricalSourceRecordValueV4::Obligation(value) => count!(value),
+        HistoricalSourceRecordValueV4::ReviewPlan(value) => count!(value),
+        HistoricalSourceRecordValueV4::ContextEnvelope(value) => count!(value),
+        HistoricalSourceRecordValueV4::Execution(value) => count!(value),
+        HistoricalSourceRecordValueV4::Claim(value) => count!(value),
+        HistoricalSourceRecordValueV4::ClaimAssessment(value) => count!(value),
+        HistoricalSourceRecordValueV4::ArtifactRegistrationV3(value) => count!(value),
+        HistoricalSourceRecordValueV4::ArtifactRegistrationV4(value) => count!(value),
+        HistoricalSourceRecordValueV4::Evidence(value) => count!(value),
+        HistoricalSourceRecordValueV4::EvidenceBinding(value) => count!(value),
+        HistoricalSourceRecordValueV4::Verification(value) => count!(value),
+        HistoricalSourceRecordValueV4::Decision(value) => count!(value),
+        HistoricalSourceRecordValueV4::Finding(value) => count!(value),
+        HistoricalSourceRecordValueV4::GluingInputDescriptor(value) => count!(value),
+        HistoricalSourceRecordValueV4::ContextCover(value) => count!(value),
+        HistoricalSourceRecordValueV4::Section(value) => count!(value),
+        HistoricalSourceRecordValueV4::Restriction(value) => count!(value),
+        HistoricalSourceRecordValueV4::GluingAttempt(value) => count!(value),
+        HistoricalSourceRecordValueV4::GlobalCandidate(value) => count!(value),
+        HistoricalSourceRecordValueV4::GluingObstruction(value) => count!(value),
+        HistoricalSourceRecordValueV4::Coverage(value) => count!(value),
+    }
+}
+
+fn collect_assessment_node_v5(
+    descriptor: &HistoricalRecordDescriptorV5<'_>,
+    inventory: &impl HistoricalInventoryViewV5,
+) -> M6Result<AssessmentRecordNodeV5> {
+    let mut direct_program_ids = BTreeSet::new();
+    let mut required_records = BTreeSet::new();
+    let mut closure_records = BTreeSet::new();
+    let mut refusal = None;
+    descriptor.visit_direct_program_ids(inventory, |id| {
+        if direct_program_ids.len() == MAX_M6_RECORD_METADATA_IDS
+            && !direct_program_ids.contains(id)
+        {
+            refusal = Some(M6Error::Incomplete {
+                operation: "M6 direct Program dependencies",
+                limit: MAX_M6_RECORD_METADATA_IDS,
+                observed: MAX_M6_RECORD_METADATA_IDS + 1,
+            });
+        } else if refusal.is_none() {
+            direct_program_ids.insert(id.clone());
+        }
+    });
+    descriptor.visit_required_records(inventory, |kind, id| {
+        let key = OwnedHistoricalRecordKeyV5 {
+            kind,
+            id: id.clone(),
+        };
+        if required_records.len() == MAX_M6_RECORD_METADATA_IDS && !required_records.contains(&key)
+        {
+            refusal = Some(M6Error::Incomplete {
+                operation: "M6 direct required records",
+                limit: MAX_M6_RECORD_METADATA_IDS,
+                observed: MAX_M6_RECORD_METADATA_IDS + 1,
+            });
+        } else if refusal.is_none() {
+            required_records.insert(key);
+        }
+    });
+    descriptor.visit_closure_records(inventory, |kind, id| {
+        let key = OwnedHistoricalRecordKeyV5 {
+            kind,
+            id: id.clone(),
+        };
+        if closure_records.len() == MAX_M6_RECORD_METADATA_IDS && !closure_records.contains(&key) {
+            refusal = Some(M6Error::Incomplete {
+                operation: "M6 transitive closure records",
+                limit: MAX_M6_RECORD_METADATA_IDS,
+                observed: MAX_M6_RECORD_METADATA_IDS + 1,
+            });
+        } else if refusal.is_none() {
+            closure_records.insert(key);
+        }
+    });
+    if let Some(error) = refusal {
+        return Err(error);
+    }
+    Ok(AssessmentRecordNodeV5 {
+        key: OwnedHistoricalRecordKeyV5 {
+            kind: descriptor.key().kind,
+            id: descriptor.key().id.clone(),
+        },
+        body_hash: descriptor.body_hash().clone(),
+        pinned_active_or_current: descriptor.pinned_active_or_current(),
+        body: historical_typed_json_v5(descriptor.typed_body())?,
+        direct_program_ids,
+        required_records,
+        closure_records,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum ImpactDirectionV5 {
+    In,
+    Out,
+    Both,
+}
+
+#[derive(Clone, Copy)]
+struct ImpactEdgeV5 {
+    kind: &'static str,
+    direction: ImpactDirectionV5,
+    depth: usize,
+}
+
+fn impact_edges_v5(rule: &str, property: &str) -> Option<&'static [ImpactEdgeV5]> {
+    const NODE: &[ImpactEdgeV5] = &[
+        ImpactEdgeV5 {
+            kind: "handled_by",
+            direction: ImpactDirectionV5::Out,
+            depth: 2,
+        },
+        ImpactEdgeV5 {
+            kind: "awaits",
+            direction: ImpactDirectionV5::Out,
+            depth: 2,
+        },
+        ImpactEdgeV5 {
+            kind: "writes",
+            direction: ImpactDirectionV5::Out,
+            depth: 2,
+        },
+    ];
+    const RELATION_REENTRY: &[ImpactEdgeV5] = &[
+        ImpactEdgeV5 {
+            kind: "handled_by",
+            direction: ImpactDirectionV5::Both,
+            depth: 2,
+        },
+        ImpactEdgeV5 {
+            kind: "awaits",
+            direction: ImpactDirectionV5::Out,
+            depth: 2,
+        },
+        ImpactEdgeV5 {
+            kind: "writes",
+            direction: ImpactDirectionV5::Out,
+            depth: 2,
+        },
+    ];
+    const CALL: &[ImpactEdgeV5] = &[
+        ImpactEdgeV5 {
+            kind: "calls",
+            direction: ImpactDirectionV5::Both,
+            depth: 2,
+        },
+        ImpactEdgeV5 {
+            kind: "covers",
+            direction: ImpactDirectionV5::In,
+            depth: 2,
+        },
+        ImpactEdgeV5 {
+            kind: "reads",
+            direction: ImpactDirectionV5::Out,
+            depth: 2,
+        },
+    ];
+    const PATH: &[ImpactEdgeV5] = &[
+        ImpactEdgeV5 {
+            kind: "handled_by",
+            direction: ImpactDirectionV5::Both,
+            depth: 4,
+        },
+        ImpactEdgeV5 {
+            kind: "calls",
+            direction: ImpactDirectionV5::Both,
+            depth: 4,
+        },
+        ImpactEdgeV5 {
+            kind: "covers",
+            direction: ImpactDirectionV5::In,
+            depth: 4,
+        },
+    ];
+    const INVARIANT: &[ImpactEdgeV5] = &[
+        ImpactEdgeV5 {
+            kind: "handled_by",
+            direction: ImpactDirectionV5::Both,
+            depth: 4,
+        },
+        ImpactEdgeV5 {
+            kind: "calls",
+            direction: ImpactDirectionV5::Both,
+            depth: 4,
+        },
+        ImpactEdgeV5 {
+            kind: "covers",
+            direction: ImpactDirectionV5::In,
+            depth: 4,
+        },
+        ImpactEdgeV5 {
+            kind: "constrains",
+            direction: ImpactDirectionV5::Both,
+            depth: 4,
+        },
+    ];
+    const NONE: &[ImpactEdgeV5] = &[];
+    match (rule, property) {
+        ("node.changed_public_symbol@1", "async.concurrent_reentry") => Some(NODE),
+        ("relation.concurrent_reentry@1", "async.concurrent_reentry") => Some(RELATION_REENTRY),
+        ("relation.changed_call_contract@1", "payment.idempotency_contract") => Some(CALL),
+        ("path.external_side_effect@1", "payment.at_most_once") => Some(PATH),
+        ("invariant.payment_at_most_once@1", "payment.at_most_once") => Some(INVARIANT),
+        ("capability_gap.origin_rule@1", "reviewgraphen.capability_gap") => Some(NONE),
+        _ => None,
+    }
+}
+
+#[derive(Clone)]
+struct ObligationImpactRowV5 {
+    direct: BTreeSet<StableId>,
+    indirect: BTreeSet<StableId>,
+    supported: bool,
+}
+
+fn exact_target_candidates_for_row_v5(
+    key: &OwnedHistoricalRecordKeyV5,
+    obligation_id: Option<&StableId>,
+    correspondence: &M6ObligationCorrespondencePhaseV5,
+    target_nodes: &BTreeMap<OwnedHistoricalRecordKeyV5, AssessmentRecordNodeV5>,
+) -> BTreeSet<OwnedHistoricalRecordKeyV5> {
+    if key.kind == HistoricalSourceRecordKindV4::Obligation {
+        return correspondence
+            .entries()
+            .iter()
+            .filter(|entry| entry.from_obligation_ids().contains(&key.id))
+            .flat_map(|entry| entry.to_obligation_ids().iter())
+            .filter_map(|id| {
+                let target = OwnedHistoricalRecordKeyV5 {
+                    kind: key.kind,
+                    id: id.clone(),
+                };
+                target_nodes.contains_key(&target).then_some(target)
+            })
+            .collect();
+    }
+    if key.kind == HistoricalSourceRecordKindV4::ReviewPlan {
+        return target_nodes
+            .keys()
+            .filter(|candidate| candidate.kind == HistoricalSourceRecordKindV4::ReviewPlan)
+            .cloned()
+            .collect();
+    }
+    if let Some(obligation_id) = obligation_id {
+        let reaches = |candidate: &OwnedHistoricalRecordKeyV5, target_obligation: &StableId| {
+            let wanted = OwnedHistoricalRecordKeyV5 {
+                kind: HistoricalSourceRecordKindV4::Obligation,
+                id: target_obligation.clone(),
+            };
+            let mut frontier = target_nodes
+                .get(candidate)
+                .map(|node| node.required_records.clone())
+                .unwrap_or_default();
+            let mut visited = BTreeSet::new();
+            while let Some(current) = frontier.pop_first() {
+                if current == wanted {
+                    return true;
+                }
+                if visited.insert(current.clone())
+                    && let Some(node) = target_nodes.get(&current)
+                {
+                    frontier.extend(node.required_records.iter().cloned());
+                }
+            }
+            false
+        };
+        return correspondence
+            .entries()
+            .iter()
+            .filter(|entry| entry.from_obligation_ids().contains(obligation_id))
+            .flat_map(|entry| entry.to_obligation_ids().iter())
+            .flat_map(|target_obligation| {
+                target_nodes
+                    .iter()
+                    .filter(move |(candidate, _)| {
+                        candidate.kind == key.kind
+                            && (reaches(candidate, target_obligation)
+                                || candidate.id == *target_obligation)
+                    })
+                    .map(|(candidate, _)| candidate.clone())
+            })
+            .collect();
+    }
+    // Records outside an obligation closure (for example run-genesis or
+    // snapshot-ingest registrations) still have actual target successors.
+    // They are only candidates here; the closed per-kind structural
+    // predicate below must prove exact equality after permitted ID mapping.
+    target_nodes
+        .keys()
+        .filter(|candidate| candidate.kind == key.kind)
+        .cloned()
+        .collect()
+}
+
+fn row_successors_v5(
+    key: &OwnedHistoricalRecordKeyV5,
+    node: &AssessmentRecordNodeV5,
+    obligation_id: Option<&StableId>,
+    correspondence: &M6ObligationCorrespondencePhaseV5,
+    target_nodes: &BTreeMap<OwnedHistoricalRecordKeyV5, AssessmentRecordNodeV5>,
+    replacements: &BTreeMap<String, String>,
+    successor_map: &BTreeMap<OwnedHistoricalRecordKeyV5, BTreeSet<StableId>>,
+) -> M6Result<BTreeSet<StableId>> {
+    let candidates =
+        exact_target_candidates_for_row_v5(key, obligation_id, correspondence, target_nodes);
+    let mut result = BTreeSet::new();
+    for candidate_key in candidates {
+        let candidate =
+            target_nodes
+                .get(&candidate_key)
+                .ok_or(M6Error::InvalidHistoricalTopology(
+                    "target successor candidate disappeared",
+                ))?;
+        let (local_replacements, removals) = row_replacements_v5(
+            replacements,
+            key,
+            &candidate_key,
+            &node.required_records,
+            successor_map,
+        );
+        if exact_substituted_successor_v5(
+            key.kind,
+            &node.body,
+            &candidate.body,
+            &local_replacements,
+            &removals,
+        ) {
+            if result.len() == MAX_M6_RECORD_METADATA_IDS {
+                return Err(M6Error::Incomplete {
+                    operation: "M6 row successor record IDs",
+                    limit: MAX_M6_RECORD_METADATA_IDS,
+                    observed: MAX_M6_RECORD_METADATA_IDS + 1,
+                });
+            }
+            result.insert(candidate_key.id);
+        }
+    }
+    Ok(result)
+}
+
+fn row_replacements_v5(
+    base: &BTreeMap<String, String>,
+    key: &OwnedHistoricalRecordKeyV5,
+    candidate: &OwnedHistoricalRecordKeyV5,
+    required_records: &BTreeSet<OwnedHistoricalRecordKeyV5>,
+    successor_map: &BTreeMap<OwnedHistoricalRecordKeyV5, BTreeSet<StableId>>,
+) -> (BTreeMap<String, String>, BTreeSet<String>) {
+    let mut replacements = base.clone();
+    replacements.insert(key.id.as_str().to_owned(), candidate.id.as_str().to_owned());
+    let removals = BTreeSet::new();
+    for dependency in required_records {
+        match successor_map.get(dependency) {
+            Some(successors) if successors.len() == 1 => {
+                replacements.insert(
+                    dependency.id.as_str().to_owned(),
+                    successors
+                        .first()
+                        .expect("one successor")
+                        .as_str()
+                        .to_owned(),
+                );
+            }
+            // A removed or stale predecessor never disappears from an
+            // otherwise preserved record.  Semantic removal is reduced by
+            // the obligation/correspondence row, not by editing arbitrary
+            // record lists until they happen to compare equal.
+            Some(successors) if successors.is_empty() => {}
+            _ => {}
+        }
+    }
+    (replacements, removals)
+}
+
+fn exact_substituted_successor_v5(
+    kind: HistoricalSourceRecordKindV4,
+    source: &Value,
+    target: &Value,
+    replacements: &BTreeMap<String, String>,
+    removals: &BTreeSet<String>,
+) -> bool {
+    let mut substituted = source.clone();
+    // Every arm below is a closed, DTO-specific root-path projection.  This
+    // must not recurse by field name: `id`, `artifact_id`, or `source_ids`
+    // inside tool arguments, model output, policy details, or a future nested
+    // extension is not an ADR 0023 structural reference.
+    let normalized = match kind {
+        HistoricalSourceRecordKindV4::Obligation => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "context_ids",
+                "generator_ids",
+                "normalized_context_ids",
+                "normalized_source_ids",
+                "normalized_target_refs",
+                "qualification_ids",
+                "source_ids",
+                "target_refs",
+                "depends_on",
+                "normalized_depends_on",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::ReviewPlan => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "snapshot_id",
+                "universe_id",
+                "obligation_ids",
+                "source_ids",
+                "wave_id",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::ContextEnvelope => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "snapshot_id",
+                "obligation_ids",
+                "candidate_source_ids",
+                "normalized_included_source_ids",
+                "registration_id",
+                "artifact_id",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::Execution => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "run_id",
+                "snapshot_id",
+                "plan_id",
+                "envelope_id",
+                "wave_id",
+                "obligation_ids",
+                "raw_artifact_registration_id",
+                "parsed_claim_ids",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::Claim => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "execution_id",
+                "obligation_ids",
+                "target_refs",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::ClaimAssessment => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "claim_id",
+                "active_decision_id",
+                "current_finding_id",
+                "last_finding_id",
+                "binding_ids",
+                "evidence_ids",
+                "verification_ids",
+                "decision_ids",
+                "finding_ids",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::ArtifactRegistrationV3 => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "registration_id",
+                "run_id",
+                "repository_id",
+                "snapshot_id",
+                "universe_id",
+                "plan_id",
+                "context_id",
+                "descriptor_id",
+                "execution_id",
+                "artifact_id",
+                "claim_id",
+                "verification_id",
+                "witness_registration_id",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::ArtifactRegistrationV4 => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "registration_id",
+                "run_id",
+                "repository_id",
+                "snapshot_id",
+                "universe_id",
+                "plan_id",
+                "context_id",
+                "descriptor_id",
+                "execution_id",
+                "artifact_id",
+                "claim_id",
+                "verification_id",
+                "witness_registration_id",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::Evidence => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "run_id",
+                "claim_id",
+                "artifact_id",
+                "snapshot_id",
+                "input_registration_id",
+                "output_registration_id",
+                "source_ids",
+                "subject_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::EvidenceBinding => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &["id", "run_id", "claim_id", "evidence_id", "source_ids"],
+        ),
+        HistoricalSourceRecordKindV4::Verification => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "run_id",
+                "claim_id",
+                "evidence_ids",
+                "input_registration_id",
+                "output_registration_id",
+                "source_ids",
+                "artifact_id",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::Decision => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "run_id",
+                "claim_id",
+                "snapshot_id",
+                "universe_id",
+                "evidence_ids",
+                "verification_ids",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::Finding => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "run_id",
+                "claim_id",
+                "decision_id",
+                "evidence_ids",
+                "verification_ids",
+                "supersedes_finding_id",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::GluingInputDescriptor => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "run_id",
+                "snapshot_id",
+                "universe_id",
+                "plan_id",
+                "context_id",
+                "qualification_source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::ContextCover => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "run_id",
+                "snapshot_id",
+                "universe_id",
+                "plan_id",
+                "selected_obligation_ids",
+                "required_context_ids",
+                "cover_domain_ids",
+                "covered_domain_ids",
+                "uncovered_domain_ids",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::Section => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "cover_id",
+                "input_descriptor_id",
+                "input_registration_id",
+                "context_id",
+                "snapshot_id",
+                "invariant_id",
+                "obligation_id",
+                "claim_id",
+                "claim_assessment_id",
+                "binding_ids",
+                "evidence_ids",
+                "verification_ids",
+                "decision_ids",
+                "finding_ids",
+                "qualification_source_ids",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::Restriction => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "section_id",
+                "context_pair",
+                "overlap_member_ids",
+                "claim_ids",
+                "qualification_source_ids",
+                "evidence_ids",
+                "verification_ids",
+                "decision_ids",
+                "finding_ids",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::GluingAttempt => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "cover_id",
+                "snapshot_id",
+                "invariant_id",
+                "input_descriptor_ids",
+                "section_ids",
+                "restriction_ids",
+                "claim_ids",
+                "global_candidate_id",
+                "obstruction_id",
+                "evidence_ids",
+                "verification_ids",
+                "decision_ids",
+                "finding_ids",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::GlobalCandidate => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "attempt_id",
+                "cover_id",
+                "claim_ids",
+                "invariant_id",
+                "required_section_ids",
+                "restriction_ids",
+                "qualification_source_ids",
+                "evidence_ids",
+                "verification_ids",
+                "decision_ids",
+                "finding_ids",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::GluingObstruction => normalize_successor_root_fields_v5(
+            &mut substituted,
+            replacements,
+            removals,
+            &[
+                "id",
+                "attempt_id",
+                "conflicting_context_ids",
+                "section_ids",
+                "overlap_member_ids",
+                "claim_ids",
+                "evidence_ids",
+                "verification_ids",
+                "decision_ids",
+                "finding_ids",
+                "affected_invariant_id",
+                "blocks",
+                "source_ids",
+            ],
+        ),
+        HistoricalSourceRecordKindV4::Coverage => return false,
+    };
+    if !normalized {
+        return false;
+    }
+    if !normalize_successor_nested_paths_v5(kind, &mut substituted, replacements, removals) {
+        return false;
+    }
+    match kind {
+        HistoricalSourceRecordKindV4::Obligation => substituted == *target,
+        HistoricalSourceRecordKindV4::ReviewPlan => substituted == *target,
+        HistoricalSourceRecordKindV4::ContextEnvelope => substituted == *target,
+        HistoricalSourceRecordKindV4::Execution => substituted == *target,
+        HistoricalSourceRecordKindV4::Claim => substituted == *target,
+        HistoricalSourceRecordKindV4::ClaimAssessment => substituted == *target,
+        HistoricalSourceRecordKindV4::ArtifactRegistrationV3 => substituted == *target,
+        HistoricalSourceRecordKindV4::ArtifactRegistrationV4 => substituted == *target,
+        HistoricalSourceRecordKindV4::Evidence => substituted == *target,
+        HistoricalSourceRecordKindV4::EvidenceBinding => substituted == *target,
+        HistoricalSourceRecordKindV4::Verification => substituted == *target,
+        HistoricalSourceRecordKindV4::Decision => substituted == *target,
+        HistoricalSourceRecordKindV4::Finding => substituted == *target,
+        HistoricalSourceRecordKindV4::GluingInputDescriptor => substituted == *target,
+        HistoricalSourceRecordKindV4::ContextCover => substituted == *target,
+        HistoricalSourceRecordKindV4::Section => substituted == *target,
+        HistoricalSourceRecordKindV4::Restriction => substituted == *target,
+        HistoricalSourceRecordKindV4::GluingAttempt => substituted == *target,
+        HistoricalSourceRecordKindV4::GlobalCandidate => substituted == *target,
+        HistoricalSourceRecordKindV4::GluingObstruction => substituted == *target,
+        HistoricalSourceRecordKindV4::Coverage => unreachable!(),
+    }
+}
+
+/// Rewrites only declared, top-level DTO reference leaves. The actual DTO is
+/// serialized into `Value` solely because the historical inventory carries an
+/// enum of twenty concrete borrowed types; the enum dispatch above fixes the
+/// DTO and each root path before this helper runs. It intentionally never
+/// descends into an object or array element.
+fn normalize_successor_root_fields_v5(
+    value: &mut Value,
+    replacements: &BTreeMap<String, String>,
+    removals: &BTreeSet<String>,
+    fields: &[&str],
+) -> bool {
+    let Some(object) = value.as_object_mut() else {
+        return false;
+    };
+    fields.iter().all(|field| {
+        let Some(reference) = object.get_mut(*field) else {
+            return true;
+        };
+        match reference {
+            Value::Null => true,
+            Value::String(id) => {
+                if let Some(replacement) = replacements.get(id) {
+                    *id = replacement.clone();
+                }
+                true
+            }
+            Value::Array(ids) => {
+                if ids.iter().any(|id| !id.is_string()) {
+                    return false;
+                }
+                ids.retain(|id| !id.as_str().is_some_and(|id| removals.contains(id)));
+                for id in ids {
+                    let Value::String(id) = id else {
+                        return false;
+                    };
+                    if let Some(replacement) = replacements.get(id) {
+                        *id = replacement.clone();
+                    }
+                }
+                true
+            }
+            Value::Bool(_) | Value::Number(_) | Value::Object(_) => false,
+        }
+    })
+}
+
+/// Closed nested paths for the few canonical DTOs whose semantic references
+/// are intentionally nested. `*` is legal only at a known collection field.
+/// It is never a recursive field-name search, so extensions and tool/model
+/// payloads stay byte-equal.
+fn normalize_successor_nested_paths_v5(
+    kind: HistoricalSourceRecordKindV4,
+    value: &mut Value,
+    replacements: &BTreeMap<String, String>,
+    removals: &BTreeSet<String>,
+) -> bool {
+    const NONE: &[&[&str]] = &[];
+    const REVIEW_PLAN: &[&[&str]] = &[
+        &["waves", "*", "obligation_ids"],
+        &["risk_breakdown", "*", "id"],
+        &["deferred", "*", "id"],
+    ];
+    const CONTEXT_ENVELOPE: &[&[&str]] = &[
+        &["included_sources", "*", "registration_id"],
+        &["included_sources", "*", "artifact_id"],
+        &["excluded_sources", "*", "artifact_id"],
+        &["unknowns", "*", "source_ids"],
+        &["losses", "*", "source_ids"],
+    ];
+    const REGISTRATION: &[&[&str]] = &[
+        &["source", "run_id"],
+        &["source", "snapshot_id"],
+        &["source", "execution_id"],
+        &["source", "claim_id"],
+        &["source", "repository_id"],
+        &["source", "test_artifact_id"],
+        &["source", "universe_id"],
+        &["source", "context_id"],
+        &["source", "descriptor_id"],
+        &["source", "plan_id"],
+    ];
+    let paths = match kind {
+        HistoricalSourceRecordKindV4::ReviewPlan => REVIEW_PLAN,
+        HistoricalSourceRecordKindV4::ContextEnvelope => CONTEXT_ENVELOPE,
+        HistoricalSourceRecordKindV4::ArtifactRegistrationV3
+        | HistoricalSourceRecordKindV4::ArtifactRegistrationV4 => REGISTRATION,
+        HistoricalSourceRecordKindV4::Obligation
+        | HistoricalSourceRecordKindV4::Execution
+        | HistoricalSourceRecordKindV4::Claim
+        | HistoricalSourceRecordKindV4::ClaimAssessment
+        | HistoricalSourceRecordKindV4::Evidence
+        | HistoricalSourceRecordKindV4::EvidenceBinding
+        | HistoricalSourceRecordKindV4::Verification
+        | HistoricalSourceRecordKindV4::Decision
+        | HistoricalSourceRecordKindV4::Finding
+        | HistoricalSourceRecordKindV4::GluingInputDescriptor
+        | HistoricalSourceRecordKindV4::ContextCover
+        | HistoricalSourceRecordKindV4::Section
+        | HistoricalSourceRecordKindV4::Restriction
+        | HistoricalSourceRecordKindV4::GluingAttempt
+        | HistoricalSourceRecordKindV4::GlobalCandidate
+        | HistoricalSourceRecordKindV4::GluingObstruction
+        | HistoricalSourceRecordKindV4::Coverage => NONE,
+    };
+    paths
+        .iter()
+        .all(|path| normalize_successor_path_v5(value, path, replacements, removals))
+}
+
+fn normalize_successor_path_v5(
+    value: &mut Value,
+    path: &[&str],
+    replacements: &BTreeMap<String, String>,
+    removals: &BTreeSet<String>,
+) -> bool {
+    let Some((segment, rest)) = path.split_first() else {
+        return normalize_successor_reference_leaf_v5(value, replacements, removals);
+    };
+    match *segment {
+        "*" => match value {
+            Value::Array(values) => values
+                .iter_mut()
+                .all(|value| normalize_successor_path_v5(value, rest, replacements, removals)),
+            _ => false,
+        },
+        field => match value {
+            Value::Object(values) => values.get_mut(field).is_none_or(|value| {
+                normalize_successor_path_v5(value, rest, replacements, removals)
+            }),
+            _ => false,
+        },
+    }
+}
+
+fn normalize_successor_reference_leaf_v5(
+    value: &mut Value,
+    replacements: &BTreeMap<String, String>,
+    removals: &BTreeSet<String>,
+) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(id) => {
+            if let Some(replacement) = replacements.get(id) {
+                *id = replacement.clone();
+            }
+            true
+        }
+        Value::Array(ids) => {
+            if ids.iter().any(|id| !id.is_string()) {
+                return false;
+            }
+            ids.retain(|id| !id.as_str().is_some_and(|id| removals.contains(id)));
+            for id in ids {
+                let Value::String(id) = id else {
+                    return false;
+                };
+                if let Some(replacement) = replacements.get(id) {
+                    *id = replacement.clone();
+                }
+            }
+            true
+        }
+        Value::Bool(_) | Value::Number(_) | Value::Object(_) => false,
+    }
+}
+
+fn obligation_impact_row_v5(
+    obligation: &Obligation,
+    program: &ProgramSpace,
+) -> M6Result<ObligationImpactRowV5> {
+    let mut direct = obligation
+        .normalized_target_refs()
+        .iter()
+        .chain(obligation.normalized_source_ids())
+        .chain(obligation.qualification_ids())
+        .chain(obligation.normalized_context_ids())
+        .chain(obligation.generator_ids())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    // Relation/path direct classes include their exact ordered endpoints.
+    let initial = direct.clone();
+    for relation in program.relations() {
+        if initial.contains(&relation.id) {
+            direct.insert(relation.source_id.clone());
+            direct.extend(relation.target_ids.iter().cloned());
+        }
+    }
+    let Some(edges) = impact_edges_v5(obligation.version().rule(), obligation.property_id()) else {
+        return Ok(ObligationImpactRowV5 {
+            direct,
+            indirect: BTreeSet::new(),
+            supported: false,
+        });
+    };
+    let mut indirect = BTreeSet::new();
+    let mut frontier = direct
+        .iter()
+        .cloned()
+        .map(|id| (0_usize, id))
+        .collect::<BTreeSet<_>>();
+    let mut visited_relations = BTreeSet::new();
+    while let Some((depth, current)) = frontier.pop_first() {
+        for relation in program.relations() {
+            let Some(policy) = edges.iter().find(|edge| edge.kind == relation.kind) else {
+                continue;
+            };
+            if depth >= policy.depth || visited_relations.contains(&relation.id) {
+                continue;
+            }
+            let from_source = relation.source_id == current;
+            let from_target = relation.target_ids.contains(&current);
+            let traversable = match policy.direction {
+                ImpactDirectionV5::Out => from_source,
+                ImpactDirectionV5::In => from_target,
+                ImpactDirectionV5::Both => from_source || from_target,
+            };
+            if !traversable {
+                continue;
+            }
+            if visited_relations.len() == MAX_M6_RELATION_VISITS {
+                return Err(M6Error::Incomplete {
+                    operation: "M6 impact relation visits",
+                    limit: MAX_M6_RELATION_VISITS,
+                    observed: MAX_M6_RELATION_VISITS + 1,
+                });
+            }
+            visited_relations.insert(relation.id.clone());
+            indirect.insert(relation.id.clone());
+            let mut next = BTreeSet::new();
+            match policy.direction {
+                ImpactDirectionV5::Out => next.extend(relation.target_ids.iter().cloned()),
+                ImpactDirectionV5::In => {
+                    next.insert(relation.source_id.clone());
+                }
+                ImpactDirectionV5::Both => {
+                    next.insert(relation.source_id.clone());
+                    next.extend(relation.target_ids.iter().cloned());
+                }
+            }
+            for id in next {
+                indirect.insert(id.clone());
+                frontier.insert((depth + 1, id));
+            }
+        }
+    }
+    Ok(ObligationImpactRowV5 {
+        direct,
+        indirect,
+        supported: true,
+    })
+}
+
+fn json_retained_bytes_v5(value: &Value) -> usize {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => std::mem::size_of::<Value>(),
+        Value::String(text) => std::mem::size_of::<Value>().saturating_add(text.capacity()),
+        Value::Array(values) => std::mem::size_of::<Value>()
+            .saturating_add(
+                values
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Value>()),
+            )
+            .saturating_add(values.iter().map(json_retained_bytes_v5).sum::<usize>()),
+        Value::Object(values) => std::mem::size_of::<Value>().saturating_add(
+            values
+                .iter()
+                .map(|(key, value)| {
+                    std::mem::size_of::<(String, Value)>()
+                        .saturating_add(key.capacity())
+                        .saturating_add(json_retained_bytes_v5(value))
+                        .saturating_add(128)
+                })
+                .sum::<usize>(),
+        ),
+    }
+}
+
+fn correspondence_direct_reason_v5(
+    entry: &ObligationCorrespondenceEntryV5,
+    source_nodes: &BTreeMap<OwnedHistoricalRecordKeyV5, AssessmentRecordNodeV5>,
+    target_nodes: &BTreeMap<OwnedHistoricalRecordKeyV5, AssessmentRecordNodeV5>,
+) -> StaleReasonV5 {
+    if entry.status() != MappingStatusV5::Modified
+        || entry.from_obligation_ids().len() != 1
+        || entry.to_obligation_ids().len() != 1
+    {
+        return StaleReasonV5::ObligationChanged;
+    }
+    let source_key = OwnedHistoricalRecordKeyV5 {
+        kind: HistoricalSourceRecordKindV4::Obligation,
+        id: entry
+            .from_obligation_ids()
+            .first()
+            .expect("one source obligation")
+            .clone(),
+    };
+    let target_key = OwnedHistoricalRecordKeyV5 {
+        kind: HistoricalSourceRecordKindV4::Obligation,
+        id: entry
+            .to_obligation_ids()
+            .first()
+            .expect("one target obligation")
+            .clone(),
+    };
+    let field = |node: Option<&AssessmentRecordNodeV5>, path: &[&str]| -> Option<String> {
+        let mut value = &node?.body;
+        for key in path {
+            value = value.get(*key)?;
+        }
+        value.as_str().map(str::to_owned)
+    };
+    let source = source_nodes.get(&source_key);
+    let target = target_nodes.get(&target_key);
+    if field(source, &["version", "rule"]) != field(target, &["version", "rule"])
+        || field(source, &["property_version"]) != field(target, &["property_version"])
+    {
+        StaleReasonV5::RuleChanged
+    } else if field(source, &["version", "profile"]) != field(target, &["version", "profile"]) {
+        StaleReasonV5::PolicyChanged
+    } else if field(source, &["version", "extractor_set"])
+        != field(target, &["version", "extractor_set"])
+    {
+        StaleReasonV5::ExtractorChanged
+    } else {
+        StaleReasonV5::ObligationChanged
+    }
+}
+
+fn record_class_reason_v5(kind: HistoricalSourceRecordKindV4) -> StaleReasonV5 {
+    match kind {
+        HistoricalSourceRecordKindV4::ReviewPlan => StaleReasonV5::PolicyChanged,
+        HistoricalSourceRecordKindV4::ContextEnvelope => StaleReasonV5::ContextChanged,
+        HistoricalSourceRecordKindV4::ArtifactRegistrationV3
+        | HistoricalSourceRecordKindV4::ArtifactRegistrationV4
+        | HistoricalSourceRecordKindV4::Evidence
+        | HistoricalSourceRecordKindV4::EvidenceBinding
+        | HistoricalSourceRecordKindV4::Verification => StaleReasonV5::EvidenceChanged,
+        HistoricalSourceRecordKindV4::Execution => StaleReasonV5::ModelPolicyChanged,
+        HistoricalSourceRecordKindV4::Obligation => StaleReasonV5::ObligationChanged,
+        HistoricalSourceRecordKindV4::GluingInputDescriptor
+        | HistoricalSourceRecordKindV4::ContextCover
+        | HistoricalSourceRecordKindV4::Section
+        | HistoricalSourceRecordKindV4::Restriction
+        | HistoricalSourceRecordKindV4::GluingAttempt
+        | HistoricalSourceRecordKindV4::GlobalCandidate
+        | HistoricalSourceRecordKindV4::GluingObstruction => StaleReasonV5::GluingInputChanged,
+        _ => StaleReasonV5::TargetChanged,
+    }
+}
+
+fn mapping_direct_reason_v5(
+    mapping: &ProgramMappingV5,
+    source_program: &ProgramSpace,
+) -> StaleReasonV5 {
+    match mapping.object_kind() {
+        ProgramObjectKindV5::Context => StaleReasonV5::ContextChanged,
+        ProgramObjectKindV5::Artifact
+            if mapping.from_ids().iter().any(|id| {
+                source_program
+                    .artifacts()
+                    .iter()
+                    .any(|artifact| &artifact.id == id && artifact.kind == "test")
+            }) =>
+        {
+            StaleReasonV5::TestChanged
+        }
+        ProgramObjectKindV5::Repository
+        | ProgramObjectKindV5::Snapshot
+        | ProgramObjectKindV5::Artifact
+        | ProgramObjectKindV5::Relation
+        | ProgramObjectKindV5::Invariant
+        | ProgramObjectKindV5::Limitation => StaleReasonV5::TargetChanged,
+    }
+}
+
+fn directness_v5(direct: bool, indirect: bool) -> StalenessDirectnessV5 {
+    match (direct, indirect) {
+        (true, true) => StalenessDirectnessV5::DirectAndIndirect,
+        (true, false) => StalenessDirectnessV5::Direct,
+        (false, true) => StalenessDirectnessV5::Indirect,
+        (false, false) => StalenessDirectnessV5::NotApplicable,
+    }
+}
+
+fn reduce_mapping_position_v5(
+    status: MappingStatusV5,
+    direct_position: bool,
+    indirect_position: bool,
+    direct_reason: StaleReasonV5,
+) -> (BTreeSet<StaleReasonV5>, StalenessDirectnessV5) {
+    let mut reasons = BTreeSet::new();
+    if status == MappingStatusV5::Preserved {
+        return (reasons, StalenessDirectnessV5::NotApplicable);
+    }
+    if direct_position {
+        reasons.insert(match status {
+            MappingStatusV5::Modified => direct_reason,
+            MappingStatusV5::Added | MappingStatusV5::Removed => StaleReasonV5::TargetChanged,
+            MappingStatusV5::Split | MappingStatusV5::Merged | MappingStatusV5::Unresolved => {
+                StaleReasonV5::MappingUnresolved
+            }
+            MappingStatusV5::Preserved => unreachable!(),
+        });
+    }
+    if indirect_position {
+        reasons.insert(match status {
+            MappingStatusV5::Modified | MappingStatusV5::Added | MappingStatusV5::Removed => {
+                StaleReasonV5::DependencyChanged
+            }
+            MappingStatusV5::Split | MappingStatusV5::Merged | MappingStatusV5::Unresolved => {
+                StaleReasonV5::MappingUnresolved
+            }
+            MappingStatusV5::Preserved => unreachable!(),
+        });
+    }
+    (reasons, directness_v5(direct_position, indirect_position))
+}
+
+fn transitive_record_closure_v5(
+    key: &OwnedHistoricalRecordKeyV5,
+    nodes: &BTreeMap<OwnedHistoricalRecordKeyV5, AssessmentRecordNodeV5>,
+) -> M6Result<BTreeSet<OwnedHistoricalRecordKeyV5>> {
+    let mut result = BTreeSet::new();
+    let mut frontier = nodes
+        .get(key)
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "missing source record node",
+        ))?
+        .closure_records
+        .clone();
+    while let Some(current) = frontier.pop_first() {
+        if current == *key || result.contains(&current) {
+            continue;
+        }
+        if result.len() == MAX_M6_RECORD_METADATA_IDS {
+            return Err(M6Error::Incomplete {
+                operation: "M6 transitive dependency_source_ids",
+                limit: MAX_M6_RECORD_METADATA_IDS,
+                observed: MAX_M6_RECORD_METADATA_IDS + 1,
+            });
+        }
+        let node = nodes
+            .get(&current)
+            .ok_or(M6Error::InvalidHistoricalTopology(
+                "transitive source dependency is absent",
+            ))?;
+        result.insert(current);
+        frontier.extend(node.closure_records.iter().cloned());
+    }
+    Ok(result)
+}
+
+#[derive(Clone, Debug)]
+pub struct M6StalenessPhaseV5 {
+    records: Vec<HistoricalRecordAssessmentV5>,
+    gluing_freshness: Vec<GluingFreshnessV5>,
+    assessment: StalenessAssessmentV5,
+    target_gluing_required: bool,
+    m5_dependent_successor_obligation_ids: BTreeSet<StableId>,
+    working_bytes: usize,
+}
+
+impl M6StalenessPhaseV5 {
+    #[must_use]
+    pub fn records(&self) -> &[HistoricalRecordAssessmentV5] {
+        &self.records
+    }
+    #[must_use]
+    pub fn gluing_freshness(&self) -> &[GluingFreshnessV5] {
+        &self.gluing_freshness
+    }
+    #[must_use]
+    pub fn assessment(&self) -> &StalenessAssessmentV5 {
+        &self.assessment
+    }
+    #[must_use]
+    pub const fn target_gluing_required(&self) -> bool {
+        self.target_gluing_required
+    }
+    #[must_use]
+    pub fn m5_dependent_successor_obligation_ids(&self) -> &BTreeSet<StableId> {
+        &self.m5_dependent_successor_obligation_ids
+    }
+    #[must_use]
+    pub const fn working_bytes(&self) -> usize {
+        self.working_bytes
+    }
+
+    #[must_use]
+    pub fn retained_bytes(&self) -> usize {
+        let record_bytes = self
+            .records
+            .capacity()
+            .saturating_mul(std::mem::size_of::<HistoricalRecordAssessmentV5>())
+            .saturating_add(
+                self.records
+                    .iter()
+                    .map(HistoricalRecordAssessmentV5::allocated_bytes)
+                    .sum::<usize>(),
+            );
+        let gluing_bytes = self
+            .gluing_freshness
+            .capacity()
+            .saturating_mul(std::mem::size_of::<GluingFreshnessV5>())
+            .saturating_add(
+                self.gluing_freshness
+                    .iter()
+                    .map(|value| {
+                        value
+                            .id
+                            .allocated_bytes()
+                            .saturating_add(value.assessment_id.allocated_bytes())
+                            .saturating_add(value.source_attempt_id.allocated_bytes())
+                            .saturating_add(id_set_heap(&value.dependency_mapping_ids))
+                            .saturating_add(id_set_heap(&value.successor_target_attempt_ids))
+                            .saturating_add(id_set_heap(&value.source_ids))
+                    })
+                    .sum::<usize>(),
+            );
+        std::mem::size_of::<Self>()
+            .saturating_add(record_bytes)
+            .saturating_add(gluing_bytes)
+            .saturating_add(self.assessment.id.allocated_bytes())
+            .saturating_add(self.assessment.source_closure_id.allocated_bytes())
+            .saturating_add(self.assessment.morphism_id.allocated_bytes())
+            .saturating_add(self.assessment.correspondence_id.allocated_bytes())
+            .saturating_add(self.assessment.assessment_time.capacity())
+            .saturating_add(self.assessment.record_set_digest.allocated_bytes())
+            .saturating_add(
+                self.assessment
+                    .gluing_freshness_set_digest
+                    .allocated_bytes(),
+            )
+            .saturating_add(self.assessment.stale_source_digest.allocated_bytes())
+            .saturating_add(self.assessment.superseded_source_digest.allocated_bytes())
+            .saturating_add(
+                self.assessment
+                    .preservation_candidate_digest
+                    .allocated_bytes(),
+            )
+            .saturating_add(
+                self.assessment
+                    .m5_dependent_successor_digest
+                    .allocated_bytes(),
+            )
+            .saturating_add(id_set_heap(&self.assessment.source_ids))
+            .saturating_add(id_set_heap(&self.m5_dependent_successor_obligation_ids))
+    }
+}
+
+fn impact_rows_retained_bytes_v5(values: &BTreeMap<StableId, ObligationImpactRowV5>) -> usize {
+    values.iter().fold(0_usize, |total, (id, row)| {
+        total
+            .saturating_add(std::mem::size_of::<(StableId, ObligationImpactRowV5)>())
+            .saturating_add(128)
+            .saturating_add(id.allocated_bytes())
+            .saturating_add(id_set_heap(&row.direct))
+            .saturating_add(id_set_heap(&row.indirect))
+    })
+}
+
+fn replacements_retained_bytes_v5(values: &BTreeMap<String, String>) -> usize {
+    values.iter().fold(0_usize, |total, (source, target)| {
+        total
+            .saturating_add(std::mem::size_of::<(String, String)>())
+            .saturating_add(128)
+            .saturating_add(source.capacity())
+            .saturating_add(target.capacity())
+    })
+}
+
+fn key_count_map_retained_bytes_v5(values: &BTreeMap<OwnedHistoricalRecordKeyV5, usize>) -> usize {
+    values.iter().fold(0_usize, |total, (key, _)| {
+        total
+            .saturating_add(std::mem::size_of::<(OwnedHistoricalRecordKeyV5, usize)>())
+            .saturating_add(128)
+            .saturating_add(key.id.allocated_bytes())
+    })
+}
+
+fn key_key_set_map_retained_bytes_v5(
+    values: &BTreeMap<OwnedHistoricalRecordKeyV5, BTreeSet<OwnedHistoricalRecordKeyV5>>,
+) -> usize {
+    values.iter().fold(0_usize, |total, (key, members)| {
+        total
+            .saturating_add(std::mem::size_of::<(
+                OwnedHistoricalRecordKeyV5,
+                BTreeSet<OwnedHistoricalRecordKeyV5>,
+            )>())
+            .saturating_add(128)
+            .saturating_add(key.id.allocated_bytes())
+            .saturating_add(members.iter().fold(0_usize, |member_total, member| {
+                member_total
+                    .saturating_add(std::mem::size_of::<OwnedHistoricalRecordKeyV5>())
+                    .saturating_add(128)
+                    .saturating_add(member.id.allocated_bytes())
+            }))
+    })
+}
+
+fn key_id_set_map_retained_bytes_v5(
+    values: &BTreeMap<OwnedHistoricalRecordKeyV5, BTreeSet<StableId>>,
+) -> usize {
+    values.iter().fold(0_usize, |total, (key, members)| {
+        total
+            .saturating_add(std::mem::size_of::<(
+                OwnedHistoricalRecordKeyV5,
+                BTreeSet<StableId>,
+            )>())
+            .saturating_add(128)
+            .saturating_add(key.id.allocated_bytes())
+            .saturating_add(id_set_heap(members))
+    })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StalenessResourcePhasesV5 {
+    external: usize,
+    impact_walk: usize,
+    dependency_closure: usize,
+    per_row_unions: usize,
+    members: usize,
+    gluing: usize,
+    streaming_seal: usize,
+}
+
+impl StalenessResourcePhasesV5 {
+    fn peak(self) -> M6Result<usize> {
+        // These structures are simultaneously live in the reducer.  Summing
+        // is intentionally conservative; taking their maximum would pretend
+        // that the node maps disappear before row/topology/member reduction.
+        let dynamic = [
+            self.impact_walk,
+            self.dependency_closure,
+            self.per_row_unions,
+            self.members,
+            self.gluing,
+            self.streaming_seal,
+        ]
+        .into_iter()
+        .try_fold(0_usize, usize::checked_add)
+        .ok_or(M6Error::Incomplete {
+            operation: "M6 staleness simultaneous working bytes",
+            limit: MAX_M6_STALENESS_WORKING_BYTES,
+            observed: usize::MAX,
+        })?;
+        self.external
+            .checked_add(dynamic)
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 staleness phase working bytes",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })
+    }
+}
+
+impl IncrementalStalenessInputV5<'_> {
+    #[cfg(test)]
+    pub(crate) fn external_component_sum_for_test(
+        &self,
+        target_actual: &TargetActualRecordInventoryV5<'_>,
+    ) -> M6Result<(usize, [usize; 5])> {
+        let (mapping, correspondence) =
+            staleness_mapping_correspondence_retained_bytes(self.mapping, self.correspondence)?;
+        let components = [
+            self.source.working_reservation_bytes(),
+            self.inventory.target_retained_bytes(),
+            mapping,
+            correspondence,
+            usize::try_from(target_actual.working_reservation_bytes()).map_err(|_| {
+                M6Error::Incomplete {
+                    operation: "M6 staleness external retained bytes",
+                    limit: MAX_M6_STALENESS_WORKING_BYTES,
+                    observed: usize::MAX,
+                }
+            })?,
+        ];
+        let expected = components
+            .into_iter()
+            .try_fold(0_usize, usize::checked_add)
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 staleness external component sum",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?;
+        let actual = self.sparse_resource_preflight_v5(target_actual)?.external;
+        debug_assert_eq!(actual, expected);
+        Ok((actual, components))
+    }
+
+    fn sparse_resource_preflight_v5(
+        &self,
+        target_actual: &TargetActualRecordInventoryV5<'_>,
+    ) -> M6Result<StalenessResourcePhasesV5> {
+        let mut records = 0_usize;
+        let mut edges = 0_usize;
+        let mut direct_ids = 0_usize;
+        let mut obligation_rows = 0_usize;
+        let mut source_body_bytes = 0_usize;
+        let mut target_body_bytes = 0_usize;
+        let mut largest_body_bytes = 0_usize;
+        self.visit_source_descriptors(|descriptor| {
+            records = records.checked_add(1).ok_or(M6Error::Incomplete {
+                operation: "M6 staleness source record count",
+                limit: MAX_M6_HISTORICAL_ASSESSMENTS,
+                observed: usize::MAX,
+            })?;
+            descriptor
+                .visit_closure_records(&self.inventory, |_, _| edges = edges.saturating_add(1));
+            descriptor.visit_direct_program_ids(&self.inventory, |_| {
+                direct_ids = direct_ids.saturating_add(1)
+            });
+            if matches!(
+                descriptor.typed_body(),
+                HistoricalSourceRecordValueV4::Obligation(_)
+            ) {
+                obligation_rows = obligation_rows.saturating_add(1);
+            }
+            let bytes = historical_typed_canonical_len_v5(descriptor.typed_body())?;
+            source_body_bytes =
+                source_body_bytes
+                    .checked_add(bytes)
+                    .ok_or(M6Error::Incomplete {
+                        operation: "M6 source typed body bytes",
+                        limit: MAX_M6_STALENESS_WORKING_BYTES,
+                        observed: usize::MAX,
+                    })?;
+            largest_body_bytes = largest_body_bytes.max(bytes);
+            Ok(())
+        })?;
+        bounded(
+            records,
+            MAX_M6_HISTORICAL_ASSESSMENTS,
+            "M6 historical assessments",
+        )?;
+        let mut target_records = 0_usize;
+        target_actual
+            .try_visit_records(|record| {
+                target_records = target_records.saturating_add(1);
+                let bytes = historical_typed_canonical_len_v5(record.value().historical_value())
+                    .map_err(|error| DomainError::Validation(error.to_string()))?;
+                target_body_bytes =
+                    target_body_bytes
+                        .checked_add(bytes)
+                        .ok_or(DomainError::Incomplete {
+                            operation: "M6 target typed body bytes",
+                            limit: MAX_M6_STALENESS_WORKING_BYTES,
+                            observed: usize::MAX,
+                        })?;
+                largest_body_bytes = largest_body_bytes.max(bytes);
+                Ok(())
+            })
+            .map_err(M6Error::from)?;
+        let slot = std::mem::size_of::<StableId>() + 128;
+        let checked = |left: usize, right: usize, operation| {
+            left.checked_mul(right).ok_or(M6Error::Incomplete {
+                operation,
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })
+        };
+        let (mapping_retained, correspondence_retained) =
+            staleness_mapping_correspondence_retained_bytes(self.mapping, self.correspondence)?;
+        // This sealed reservation is Event's capacity-aware upper image of
+        // the roots-validated terminal replay, its authority basis and the
+        // borrowed actual-record inventory.  Charge it once as one resident
+        // backing graph: adding `retained_bytes()` separately would omit the
+        // terminal/basis, while adding both would double-count the inventory.
+        let target_actual_backing = usize::try_from(target_actual.working_reservation_bytes())
+            .map_err(|_| M6Error::Incomplete {
+                operation: "M6 staleness external retained bytes",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?;
+        let external = self
+            .source
+            .working_reservation_bytes()
+            .checked_add(self.inventory.target_retained_bytes())
+            .and_then(|value| value.checked_add(mapping_retained))
+            .and_then(|value| value.checked_add(correspondence_retained))
+            .and_then(|value| value.checked_add(target_actual_backing))
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 staleness external retained bytes",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?;
+        Ok(StalenessResourcePhasesV5 {
+            external,
+            impact_walk: checked(
+                obligation_rows.max(1),
+                self.source
+                    .program_space()
+                    .relations()
+                    .len()
+                    .saturating_add(direct_ids)
+                    .saturating_mul(slot),
+                "M6 impact walk working bytes",
+            )?,
+            dependency_closure: checked(
+                records.saturating_add(edges),
+                slot * 3,
+                "M6 dependency closure working bytes",
+            )?,
+            per_row_unions: checked(
+                edges.saturating_add(direct_ids).saturating_add(records),
+                slot * 6,
+                "M6 per-row union working bytes",
+            )?
+            .checked_add(largest_body_bytes.saturating_mul(3))
+            .and_then(|value| {
+                value.checked_add(
+                    self.mapping
+                        .mappings()
+                        .iter()
+                        .map(ProgramMappingV5::allocated_bytes)
+                        .sum::<usize>(),
+                )
+            })
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 per-row union working bytes",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?,
+            members: checked(
+                records.saturating_add(target_records),
+                std::mem::size_of::<AssessmentRecordNodeV5>().saturating_add(slot * 4),
+                "M6 assessment member working bytes",
+            )?
+            .checked_add(
+                source_body_bytes
+                    .checked_add(target_body_bytes)
+                    .and_then(|value| value.checked_mul(16))
+                    .ok_or(M6Error::Incomplete {
+                        operation: "M6 typed Value body working bytes",
+                        limit: MAX_M6_STALENESS_WORKING_BYTES,
+                        observed: usize::MAX,
+                    })?,
+            )
+            .and_then(|value| {
+                value.checked_add(
+                    checked(records, 16_384, "M6 sealed assessment ownership bytes").ok()?,
+                )
+            })
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 assessment member working bytes",
+                limit: MAX_M6_STALENESS_WORKING_BYTES,
+                observed: usize::MAX,
+            })?,
+            gluing: checked(
+                1,
+                std::mem::size_of::<GluingFreshnessV5>().saturating_add(slot * 4),
+                "M6 gluing working bytes",
+            )?,
+            streaming_seal: MAX_M6_CANONICAL_BYTES,
+        })
+    }
+
+    pub(crate) fn reduce_v5(
+        &self,
+        target_actual: &TargetActualRecordInventoryV5<'_>,
+        assessment_time: &str,
+    ) -> M6Result<M6StalenessPhaseV5> {
+        // The target actual inventory is minted only by a roots-validated
+        // terminal replay.  Bind every terminal coordinate and its actual
+        // authority basis before it is materialized into reducer state; a
+        // merely structural target prefix cannot stand in for this proof.
+        if target_actual.target_run_id() != &self.closure.input.target_run_id
+            || target_actual.target_genesis_hash() != &self.closure.input.target_genesis_hash
+            || target_actual.target_tail_hash() != self.closure.target_predecessor_tail_hash()
+            || target_actual.target_event_count()
+                != self.closure.input.target_predecessor_event_count
+            || target_actual.authority_policy_revision_hash()
+                != self.closure.target_authority_policy_revision_hash()
+            || target_actual.authority_replay_basis_digest()
+                != self
+                    .closure
+                    .target_pre_incremental_authority_replay_basis_digest()
+        {
+            return Err(M6Error::InvalidHistoricalTopology(
+                "target actual inventory is not the closure-bound terminal authority replay",
+            ));
+        }
+        self.reduce_v5_with_working_limit(
+            target_actual,
+            assessment_time,
+            MAX_M6_STALENESS_WORKING_BYTES,
+        )
+    }
+
+    fn reduce_v5_with_working_limit(
+        &self,
+        target_actual: &TargetActualRecordInventoryV5<'_>,
+        assessment_time: &str,
+        working_limit: usize,
+    ) -> M6Result<M6StalenessPhaseV5> {
+        validate_assessment_time_v5(assessment_time)?;
+        let resource = self.sparse_resource_preflight_v5(target_actual)?;
+        let preflight_peak = resource.peak()?;
+        bounded(
+            preflight_peak,
+            working_limit,
+            "M6 staleness phase working bytes",
+        )?;
+
+        let mut source_nodes = BTreeMap::new();
+        self.visit_source_descriptors(|descriptor| {
+            let node = collect_assessment_node_v5(&descriptor, &self.inventory)?;
+            if source_nodes.insert(node.key.clone(), node).is_some() {
+                return Err(M6Error::InvalidHistoricalTopology(
+                    "duplicate source assessment node",
+                ));
+            }
+            Ok(())
+        })?;
+        let target_inventory =
+            HistoricalSourceInventoryV5::new_target(target_actual, self.target.program_space())?;
+        let mut target_nodes = BTreeMap::new();
+        let mut target_error = None;
+        target_actual
+            .try_visit_records(|record| {
+                let descriptor = HistoricalRecordDescriptorV5::from_target(&record);
+                match collect_assessment_node_v5(&descriptor, &target_inventory) {
+                    Ok(node) => {
+                        if target_nodes.insert(node.key.clone(), node).is_some() {
+                            target_error = Some(M6Error::InvalidHistoricalTopology(
+                                "duplicate target assessment node",
+                            ));
+                        }
+                    }
+                    Err(error) => target_error = Some(error),
+                }
+                if target_error.is_some() {
+                    Err(DomainError::HistoricalPrefixMismatch(
+                        "target assessment collection failed",
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+            .map_err(M6Error::from)?;
+        if let Some(error) = target_error {
+            return Err(error);
+        }
+
+        let mut obligation_rows = BTreeMap::<StableId, ObligationImpactRowV5>::new();
+        self.source.try_visit_records(|record| {
+            if let HistoricalSourceRecordValueV4::Obligation(obligation) = record.value() {
+                obligation_rows.insert(
+                    obligation.id().clone(),
+                    obligation_impact_row_v5(obligation, self.source.program_space())?,
+                );
+            }
+            Ok::<(), M6Error>(())
+        })?;
+
+        let mut replacements = BTreeMap::<String, String>::new();
+        replacements.insert(
+            self.closure.source_snapshot_id().as_str().to_owned(),
+            self.closure.target_snapshot_id().as_str().to_owned(),
+        );
+        replacements.insert(
+            self.closure.input.source_run_id.as_str().to_owned(),
+            self.closure.input.target_run_id.as_str().to_owned(),
+        );
+        replacements.insert(
+            self.closure.source_universe_id().as_str().to_owned(),
+            self.closure.target_universe_id().as_str().to_owned(),
+        );
+        for mapping in self.mapping.mappings() {
+            if mapping.status() == MappingStatusV5::Preserved
+                && mapping.from_ids().len() == 1
+                && mapping.to_ids().len() == 1
+            {
+                replacements.insert(
+                    mapping
+                        .from_ids()
+                        .first()
+                        .expect("one source")
+                        .as_str()
+                        .to_owned(),
+                    mapping
+                        .to_ids()
+                        .first()
+                        .expect("one target")
+                        .as_str()
+                        .to_owned(),
+                );
+            }
+        }
+        for entry in self.correspondence.entries() {
+            if entry.status() == MappingStatusV5::Preserved
+                && entry.from_obligation_ids().len() == 1
+                && entry.to_obligation_ids().len() == 1
+            {
+                replacements.insert(
+                    entry
+                        .from_obligation_ids()
+                        .first()
+                        .expect("one source")
+                        .as_str()
+                        .to_owned(),
+                    entry
+                        .to_obligation_ids()
+                        .first()
+                        .expect("one target")
+                        .as_str()
+                        .to_owned(),
+                );
+            }
+        }
+
+        // Canonical Kahn order guarantees that every required predecessor's
+        // exact successor set is known before the dependent body comparison.
+        let mut indegree = source_nodes
+            .iter()
+            .map(|(key, node)| (key.clone(), node.required_records.len()))
+            .collect::<BTreeMap<_, _>>();
+        let mut dependents =
+            BTreeMap::<OwnedHistoricalRecordKeyV5, BTreeSet<OwnedHistoricalRecordKeyV5>>::new();
+        for (key, node) in &source_nodes {
+            for dependency in &node.required_records {
+                dependents
+                    .entry(dependency.clone())
+                    .or_default()
+                    .insert(key.clone());
+            }
+        }
+        let mut ready = indegree
+            .iter()
+            .filter_map(|(key, count)| (*count == 0).then_some(key.clone()))
+            .collect::<BTreeSet<_>>();
+        let assessment_id = StalenessAssessmentV5::assessment_id(
+            self.closure.id(),
+            self.mapping.morphism().id(),
+            self.correspondence.correspondence().id(),
+            assessment_time,
+        )?;
+        let mut completed =
+            BTreeMap::<OwnedHistoricalRecordKeyV5, HistoricalRecordAssessmentV5>::new();
+        let mut successor_map = BTreeMap::<OwnedHistoricalRecordKeyV5, BTreeSet<StableId>>::new();
+
+        while let Some(key) = ready.pop_first() {
+            let node = &source_nodes[&key];
+            let dependency_keys = transitive_record_closure_v5(&key, &source_nodes)?;
+            let dependency_source_ids = dependency_keys
+                .iter()
+                .map(|key| key.id.clone())
+                .collect::<BTreeSet<_>>();
+            let mut program_ids = node.direct_program_ids.clone();
+            for dependency in &dependency_keys {
+                program_ids.extend(source_nodes[dependency].direct_program_ids.iter().cloned());
+            }
+            bounded(
+                program_ids.len(),
+                MAX_M6_RECORD_METADATA_IDS,
+                "M6 Program dependency union",
+            )?;
+            let obligation_ids = std::iter::once(&key)
+                .chain(dependency_keys.iter())
+                .filter(|key| key.kind == HistoricalSourceRecordKindV4::Obligation)
+                .map(|key| key.id.clone())
+                .collect::<BTreeSet<_>>();
+            let mapping_ids = self
+                .mapping
+                .mappings()
+                .iter()
+                .filter(|mapping| {
+                    mapping
+                        .from_ids()
+                        .iter()
+                        .chain(mapping.to_ids())
+                        .any(|id| program_ids.contains(id))
+                })
+                .map(|mapping| mapping.id().clone())
+                .collect::<BTreeSet<_>>();
+            let correspondence_entry_ids = self
+                .correspondence
+                .entries()
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .from_obligation_ids()
+                        .iter()
+                        .chain(entry.to_obligation_ids())
+                        .any(|id| obligation_ids.contains(id))
+                })
+                .map(|entry| entry.id().clone())
+                .collect::<BTreeSet<_>>();
+            for (operation, count) in [
+                ("M6 mapping ID union", mapping_ids.len()),
+                ("M6 correspondence ID union", correspondence_entry_ids.len()),
+                ("M6 dependency source union", dependency_source_ids.len()),
+            ] {
+                bounded(count, MAX_M6_RECORD_METADATA_IDS, operation)?;
+            }
+
+            let mut reasons = BTreeSet::new();
+            let mut direct = false;
+            let mut indirect = false;
+            let mut all_rows_removed = !obligation_ids.is_empty();
+            let mut successor_record_ids = BTreeSet::new();
+            for obligation_id in &obligation_ids {
+                let Some(row) = obligation_rows.get(obligation_id) else {
+                    reasons.insert(StaleReasonV5::UnsupportedImpactPolicy);
+                    direct = true;
+                    all_rows_removed = false;
+                    continue;
+                };
+                if !row.supported {
+                    reasons.insert(StaleReasonV5::UnsupportedImpactPolicy);
+                    direct = true;
+                    all_rows_removed = false;
+                }
+                let matching_entries = self
+                    .correspondence
+                    .entries()
+                    .iter()
+                    .filter(|entry| entry.from_obligation_ids().contains(obligation_id))
+                    .collect::<Vec<_>>();
+                let mut row_removed = matching_entries.len() == 1;
+                if matching_entries.is_empty() {
+                    reasons.insert(StaleReasonV5::ObligationChanged);
+                    direct = true;
+                }
+                for entry in matching_entries {
+                    match entry.status() {
+                        MappingStatusV5::Preserved => row_removed = false,
+                        MappingStatusV5::Modified => {
+                            reasons.insert(correspondence_direct_reason_v5(
+                                entry,
+                                &source_nodes,
+                                &target_nodes,
+                            ));
+                            direct = true;
+                            row_removed = false;
+                        }
+                        MappingStatusV5::Removed if entry.to_obligation_ids().is_empty() => {
+                            reasons.insert(StaleReasonV5::TargetChanged);
+                            direct = true;
+                        }
+                        MappingStatusV5::Added | MappingStatusV5::Removed => {
+                            reasons.insert(StaleReasonV5::TargetChanged);
+                            direct = true;
+                            row_removed = false;
+                        }
+                        MappingStatusV5::Split
+                        | MappingStatusV5::Merged
+                        | MappingStatusV5::Unresolved => {
+                            reasons.insert(StaleReasonV5::MappingUnresolved);
+                            direct = true;
+                            row_removed = false;
+                        }
+                    }
+                }
+                all_rows_removed &= row_removed;
+                successor_record_ids.extend(row_successors_v5(
+                    &key,
+                    node,
+                    Some(obligation_id),
+                    self.correspondence,
+                    &target_nodes,
+                    &replacements,
+                    &successor_map,
+                )?);
+                for mapping in self
+                    .mapping
+                    .mappings()
+                    .iter()
+                    .filter(|mapping| mapping_ids.contains(mapping.id()))
+                {
+                    let direct_position =
+                        mapping.from_ids().iter().any(|id| row.direct.contains(id));
+                    let indirect_position = mapping
+                        .from_ids()
+                        .iter()
+                        .any(|id| row.indirect.contains(id));
+                    let mapping_reason =
+                        mapping_direct_reason_v5(mapping, self.source.program_space());
+                    let direct_reason = if mapping_reason == StaleReasonV5::TargetChanged {
+                        record_class_reason_v5(key.kind)
+                    } else {
+                        mapping_reason
+                    };
+                    let (mapping_reasons, mapping_directness) = reduce_mapping_position_v5(
+                        mapping.status(),
+                        direct_position,
+                        indirect_position,
+                        direct_reason,
+                    );
+                    reasons.extend(mapping_reasons);
+                    direct |= matches!(
+                        mapping_directness,
+                        StalenessDirectnessV5::Direct | StalenessDirectnessV5::DirectAndIndirect
+                    );
+                    indirect |= matches!(
+                        mapping_directness,
+                        StalenessDirectnessV5::Indirect | StalenessDirectnessV5::DirectAndIndirect
+                    );
+                }
+            }
+            if obligation_ids.is_empty() {
+                all_rows_removed = !mapping_ids.is_empty()
+                    && self
+                        .mapping
+                        .mappings()
+                        .iter()
+                        .filter(|mapping| mapping_ids.contains(mapping.id()))
+                        .all(|mapping| mapping.status() == MappingStatusV5::Removed);
+                successor_record_ids.extend(row_successors_v5(
+                    &key,
+                    node,
+                    None,
+                    self.correspondence,
+                    &target_nodes,
+                    &replacements,
+                    &successor_map,
+                )?);
+            }
+            if dependency_keys.iter().any(|dependency| {
+                completed.get(dependency).is_some_and(|value| {
+                    value.status != HistoricalAssessmentStatusV5::StructurallyPreserved
+                })
+            }) {
+                reasons.insert(StaleReasonV5::DependencyChanged);
+                indirect = true;
+            }
+            if node.pinned_active_or_current
+                && matches!(
+                    key.kind,
+                    HistoricalSourceRecordKindV4::Decision | HistoricalSourceRecordKindV4::Finding
+                )
+            {
+                reasons.insert(StaleReasonV5::HumanAuthorityNotCarried);
+                direct = true;
+            }
+
+            bounded(
+                successor_record_ids.len(),
+                MAX_M6_RECORD_METADATA_IDS,
+                "M6 successor record union",
+            )?;
+            let (status, directness) = if key.kind == HistoricalSourceRecordKindV4::Coverage {
+                reasons.insert(StaleReasonV5::TargetChanged);
+                direct = true;
+                (
+                    HistoricalAssessmentStatusV5::Superseded,
+                    directness_v5(direct, indirect),
+                )
+            } else if successor_record_ids.is_empty()
+                && all_rows_removed
+                && !node.pinned_active_or_current
+            {
+                if reasons.is_empty() {
+                    reasons.insert(StaleReasonV5::TargetChanged);
+                    direct = true;
+                }
+                (
+                    HistoricalAssessmentStatusV5::Superseded,
+                    directness_v5(direct, indirect),
+                )
+            } else if !successor_record_ids.is_empty() && reasons.is_empty() {
+                (
+                    HistoricalAssessmentStatusV5::StructurallyPreserved,
+                    StalenessDirectnessV5::NotApplicable,
+                )
+            } else {
+                if successor_record_ids.is_empty() {
+                    reasons.insert(StaleReasonV5::TargetChanged);
+                    direct = true;
+                }
+                (
+                    HistoricalAssessmentStatusV5::Stale,
+                    directness_v5(direct, indirect),
+                )
+            };
+            let assessment =
+                HistoricalRecordAssessmentV5::from_parts(HistoricalRecordAssessmentPartsV5 {
+                    assessment_id: assessment_id.clone(),
+                    source_record_kind: HistoricalRecordKindV5::from_internal(key.kind),
+                    source_record_id: key.id.clone(),
+                    source_record_body_hash: node.body_hash.clone(),
+                    successor_record_ids: successor_record_ids.clone(),
+                    status,
+                    directness,
+                    reasons,
+                    dependency_source_ids,
+                    mapping_ids,
+                    correspondence_entry_ids,
+                })?;
+            successor_map.insert(key.clone(), successor_record_ids);
+            completed.insert(key.clone(), assessment);
+            for dependent in dependents.get(&key).into_iter().flatten() {
+                let count =
+                    indegree
+                        .get_mut(dependent)
+                        .ok_or(M6Error::InvalidHistoricalTopology(
+                            "dependent has no indegree",
+                        ))?;
+                *count = count
+                    .checked_sub(1)
+                    .ok_or(M6Error::InvalidHistoricalTopology(
+                        "assessment indegree underflow",
+                    ))?;
+                if *count == 0 {
+                    ready.insert(dependent.clone());
+                }
+            }
+        }
+        if completed.len() != source_nodes.len() {
+            return Err(M6Error::InvalidHistoricalTopology(
+                "assessment dependency graph did not close",
+            ));
+        }
+        let records = completed.into_values().collect::<Vec<_>>();
+        let source_attempt = records
+            .iter()
+            .find(|value| value.source_record_kind == HistoricalRecordKindV5::GluingAttempt)
+            .ok_or(M6Error::InvalidStalenessAssessment(
+                "source has no sole gluing attempt",
+            ))?;
+        if records
+            .iter()
+            .filter(|value| value.source_record_kind == HistoricalRecordKindV5::GluingAttempt)
+            .count()
+            != 1
+        {
+            return Err(M6Error::InvalidStalenessAssessment(
+                "source must have exactly one gluing attempt",
+            ));
+        }
+        let gluing_status =
+            if source_attempt.status == HistoricalAssessmentStatusV5::StructurallyPreserved {
+                HistoricalAssessmentStatusV5::StructurallyPreserved
+            } else if source_attempt.status == HistoricalAssessmentStatusV5::Superseded {
+                HistoricalAssessmentStatusV5::Superseded
+            } else {
+                HistoricalAssessmentStatusV5::Stale
+            };
+        let gluing_reasons = source_attempt.reasons.clone();
+        let gluing = vec![GluingFreshnessV5::derive(
+            assessment_id.clone(),
+            source_attempt.source_record_id.clone(),
+            gluing_status,
+            gluing_reasons,
+            source_attempt.mapping_ids.clone(),
+            source_attempt.successor_record_ids.clone(),
+        )?];
+
+        let selected_target = self
+            .target
+            .plan()
+            .waves()
+            .iter()
+            .flat_map(|wave| wave.obligation_ids())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let target_payment = target_nodes
+            .values()
+            .filter_map(|node| {
+                if node.key.kind != HistoricalSourceRecordKindV4::Obligation {
+                    return None;
+                }
+                let value = node.body.as_object()?;
+                (value.get("property_id")?.as_str()? == "payment.at_most_once"
+                    && selected_target.contains(&node.key.id))
+                .then_some(node.key.id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        let invariant_present = self
+            .target
+            .program_space()
+            .invariants()
+            .iter()
+            .any(|invariant| invariant.id.as_str() == "invariant:payment-at-most-once");
+        let target_gluing_required = !target_payment.is_empty() && invariant_present;
+        let m5_dependent_successors = if target_gluing_required {
+            target_payment
+        } else {
+            BTreeSet::new()
+        };
+        let preservation_candidates = records
+            .iter()
+            .filter(|record| {
+                record.source_record_kind == HistoricalRecordKindV5::Obligation
+                    && record.status == HistoricalAssessmentStatusV5::StructurallyPreserved
+                    && source_nodes
+                        .get(&OwnedHistoricalRecordKeyV5 {
+                            kind: HistoricalSourceRecordKindV4::Obligation,
+                            id: record.source_record_id.clone(),
+                        })
+                        .and_then(|node| match &node.body {
+                            Value::Object(fields) => {
+                                fields.get("property_id").and_then(Value::as_str)
+                            }
+                            _ => None,
+                        })
+                        == Some("payment.at_most_once")
+            })
+            .flat_map(|record| record.successor_record_ids.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let seal_parts = StalenessAssessmentSealPartsV5 {
+            source_closure_id: self.closure.id().clone(),
+            morphism_id: self.mapping.morphism().id().clone(),
+            correspondence_id: self.correspondence.correspondence().id().clone(),
+            assessment_time: assessment_time.to_owned(),
+            records,
+            gluing,
+            preservation_candidates,
+            m5_dependent_successors: m5_dependent_successors.clone(),
+        };
+        let assessment = StalenessAssessmentV5::seal(&seal_parts)?;
+        let phase = M6StalenessPhaseV5 {
+            records: seal_parts.records,
+            gluing_freshness: seal_parts.gluing,
+            assessment,
+            target_gluing_required,
+            m5_dependent_successor_obligation_ids: m5_dependent_successors,
+            working_bytes: preflight_peak,
+        };
+        // Capacity-aware second gate covers the actual retained result before
+        // it can escape as a sealed phase.
+        let realized = resource
+            .external
+            .checked_add(assessment_node_map_retained_bytes_v5(&source_nodes))
+            .and_then(|value| {
+                value.checked_add(assessment_node_map_retained_bytes_v5(&target_nodes))
+            })
+            .and_then(|value| value.checked_add(impact_rows_retained_bytes_v5(&obligation_rows)))
+            .and_then(|value| value.checked_add(replacements_retained_bytes_v5(&replacements)))
+            .and_then(|value| value.checked_add(key_count_map_retained_bytes_v5(&indegree)))
+            .and_then(|value| value.checked_add(key_key_set_map_retained_bytes_v5(&dependents)))
+            .and_then(|value| value.checked_add(key_id_set_map_retained_bytes_v5(&successor_map)))
+            .and_then(|value| value.checked_add(phase.retained_bytes()))
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 staleness realized retained bytes",
+                limit: working_limit,
+                observed: usize::MAX,
+            })?;
+        bounded(
+            realized,
+            working_limit,
+            "M6 staleness realized retained bytes",
+        )?;
+        if realized > preflight_peak {
+            return Err(M6Error::Incomplete {
+                operation: "M6 staleness reservation underflow",
+                limit: preflight_peak,
+                observed: realized,
+            });
+        }
+        Ok(phase)
+    }
+
+    /// Test-only boundary seam for proving that the sealed resource oracle is
+    /// inclusive and that one byte below it yields no phase value.
+    #[cfg(test)]
+    pub(crate) fn reduce_v5_with_working_limit_for_test(
+        &self,
+        target_actual: &TargetActualRecordInventoryV5<'_>,
+        assessment_time: &str,
+        working_limit: usize,
+    ) -> M6Result<M6StalenessPhaseV5> {
+        self.reduce_v5_with_working_limit(target_actual, assessment_time, working_limit)
+    }
+}
+
 /// A `(kind, id)` key is required because claim assessments deliberately use
 /// their claim ID; collapsing it with a claim would lose an ADR 0023 source
 /// record.  This is input-only and carries no event or append authority.
@@ -6495,6 +9784,7 @@ impl<'a> HistoricalRecordDescriptorV5<'a> {
                     .iter()
                     .chain(v.normalized_context_ids())
                     .chain(v.normalized_source_ids())
+                    .chain(v.qualification_ids())
                     .chain(v.generator_ids())
                 {
                     program(id, &mut visit);
@@ -6876,8 +10166,9 @@ impl<'a> HistoricalRecordDescriptorV5<'a> {
                 if let Some(id) = v.projection_global_candidate_id() {
                     emit(HistoricalSourceRecordKindV4::GlobalCandidate, id);
                 }
-                // Obstruction points to its owner attempt.  The reverse option
-                // is an explicit ownership back-reference and is omitted.
+                if let Some(id) = v.projection_obstruction_id() {
+                    emit(HistoricalSourceRecordKindV4::GluingObstruction, id);
+                }
                 for id in v.projection_claim_ids() {
                     emit(HistoricalSourceRecordKindV4::Claim, id);
                 }
@@ -6922,10 +10213,10 @@ impl<'a> HistoricalRecordDescriptorV5<'a> {
                 }
             }
             HistoricalSourceRecordValueV4::GluingObstruction(v) => {
-                emit(
-                    HistoricalSourceRecordKindV4::GluingAttempt,
-                    v.projection_attempt_id(),
-                );
+                // The attempt owns its selected obstruction.  `attempt_id`
+                // is therefore the one M5 ownership back-reference omitted
+                // from the acyclic predecessor graph; the attempt itself
+                // includes the complete option closure above.
                 for id in v.projection_section_ids() {
                     emit(HistoricalSourceRecordKindV4::Section, id);
                 }
@@ -6955,6 +10246,45 @@ impl<'a> HistoricalRecordDescriptorV5<'a> {
                     inventory.visit_coverage_contributors(id, &mut |kind, id| emit(kind, id));
                 }
             }
+        }
+    }
+
+    /// Full audit closure for one source record.  This extends the acyclic
+    /// predecessor graph with closed DTO references that would otherwise
+    /// introduce only ownership/derived-state cycles.  The reducer uses it
+    /// for dependency_source_ids and M/C selection, while preserving the
+    /// acyclic graph above for deterministic successor ordering.
+    fn visit_closure_records(
+        &self,
+        inventory: &impl HistoricalInventoryViewV5,
+        mut visit: impl FnMut(HistoricalSourceRecordKindV4, &StableId),
+    ) {
+        self.visit_required_records(inventory, |kind, id| visit(kind, id));
+        match self.value {
+            HistoricalSourceRecordValueV4::ArtifactRegistrationV3(v) => match v.source() {
+                ArtifactSourceV3::ReviewerExecution { execution_id, .. } => {
+                    visit(HistoricalSourceRecordKindV4::Execution, execution_id);
+                }
+                ArtifactSourceV3::VerifierArtifact { claim_id, .. }
+                | ArtifactSourceV3::ExternalHarnessWitness { claim_id, .. } => {
+                    visit(HistoricalSourceRecordKindV4::Claim, claim_id);
+                }
+                ArtifactSourceV3::RunGenesis { .. } | ArtifactSourceV3::SnapshotIngest { .. } => {}
+            },
+            HistoricalSourceRecordValueV4::Decision(v) => {
+                // ClaimAssessment deliberately shares the claim StableId, but
+                // it is a different historical kind.  Carry both types so a
+                // decision's closure contains its actual M4 disposition and
+                // the verifier/registration predecessors it owns.
+                visit(HistoricalSourceRecordKindV4::ClaimAssessment, v.claim_id());
+            }
+            HistoricalSourceRecordValueV4::Finding(v) => {
+                // A finding is current only through its decision/assessment
+                // chain.  Do not infer this from an ID namespace; the typed
+                // ClaimAssessment kind is explicit.
+                visit(HistoricalSourceRecordKindV4::ClaimAssessment, v.claim_id());
+            }
+            _ => {}
         }
     }
 }
@@ -7033,7 +10363,7 @@ impl TargetActualRecordProjectionV5<'_, '_> {
                 }
                 program_ids.insert(id.clone());
             });
-            descriptor.visit_required_records(&inventory, |kind, id| {
+            descriptor.visit_closure_records(&inventory, |kind, id| {
                 if error.is_some() {
                     return;
                 }
@@ -7141,7 +10471,7 @@ fn historical_admission_reference_stats_v5(
     let mut failed = None;
     source.try_visit_replay_records(|record| {
         let descriptor = HistoricalRecordDescriptorV5::from_admission(record);
-        descriptor.visit_required_records(&inventory, |_, id| {
+        descriptor.visit_closure_records(&inventory, |_, id| {
             if failed.is_none() {
                 failed = add(&mut stats, id).err();
             }
@@ -7842,8 +11172,8 @@ fn obligation_program_ids(
         .normalized_target_refs()
         .iter()
         .chain(obligation.normalized_source_ids())
-        .chain(obligation.normalized_context_ids())
         .chain(obligation.qualification_ids())
+        .chain(obligation.normalized_context_ids())
         .chain(obligation.generator_ids())
         .filter(|id| program_domain.contains(*id))
         .cloned()
@@ -9158,6 +12488,329 @@ impl ObligationCorrespondenceV5 {
 }
 
 #[cfg(test)]
+pub(crate) struct M6ProgramFixture {
+    program: ProgramSpace,
+    source_bytes: BTreeMap<StableId, Vec<u8>>,
+}
+
+#[cfg(test)]
+impl M6ProgramFixture {
+    pub(crate) fn program(&self) -> &ProgramSpace {
+        &self.program
+    }
+
+    pub(crate) fn source_bytes(&self) -> &BTreeMap<StableId, Vec<u8>> {
+        &self.source_bytes
+    }
+
+    pub(crate) fn into_parts(self) -> (ProgramSpace, BTreeMap<StableId, Vec<u8>>) {
+        (self.program, self.source_bytes)
+    }
+}
+
+/// Accepted ProgramSpace-v3 source used by the cross-run M6 fixture.  The
+/// source bytes are returned with the program so Event can admit the exact CAS
+/// content whose hashes appear in the accepted file facts.
+#[cfg(test)]
+pub(crate) fn complete_m5_s0_program_fixture() -> M6Result<M6ProgramFixture> {
+    let mut value: Value = serde_json::from_slice(include_bytes!(
+        "../../../examples/double-submit-payment/program-space.json"
+    ))
+    .map_err(|error| M6Error::Canonical(error.to_string()))?;
+    let checkout_id = StableId::parse("file:checkout-controller")?;
+    let repository_id = StableId::parse("file:payment-repository")?;
+    let source_bytes = BTreeMap::from([
+        (checkout_id.clone(), b"checkout\n".repeat(40)),
+        (repository_id.clone(), b"repository\n".repeat(40)),
+    ]);
+
+    value["schema"] = Value::String("reviewgraphen.program_space.input.v3".to_owned());
+    value["source"]["kind"] = Value::String("git".to_owned());
+    value["source"]["revision"] = Value::String(format!("{:040x}", 10));
+    value["source"]["content_hash"] = Value::String(format!("git:{:040x}", 11));
+    value["snapshot"]["base_revision"] = Value::String(format!("{:040x}", 9));
+    value["snapshot"]["target_revision"] = Value::String(format!("{:040x}", 10));
+    value["snapshot"]["tree_hash"] = Value::String(format!("git:{:040x}", 11));
+    value["profile"]["id"] = Value::String("double-submit-payment".to_owned());
+    value["profile"]["version"] = Value::String("1".to_owned());
+
+    for context in value["contexts"]
+        .as_array_mut()
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "fixture contexts are not an array",
+        ))?
+    {
+        if context["id"] == crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID {
+            let members =
+                context["member_ids"]
+                    .as_array_mut()
+                    .ok_or(M6Error::InvalidHistoricalTopology(
+                        "fixture context members are not an array",
+                    ))?;
+            members.extend([
+                Value::String(checkout_id.to_string()),
+                Value::String(repository_id.to_string()),
+            ]);
+            members.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+        }
+    }
+
+    let relation_template = value["relations"]
+        .as_array()
+        .and_then(|relations| relations.first())
+        .cloned()
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "fixture has no relation template",
+        ))?;
+    let mut contains = relation_template;
+    contains["id"] = Value::String("relation:file-contains-payment-charge".to_owned());
+    contains["kind"] = Value::String("contains".to_owned());
+    contains["source_id"] = Value::String(repository_id.to_string());
+    contains["target_ids"] = serde_json::json!(["function:payment-charge"]);
+    contains["directed"] = Value::Bool(true);
+    value["relations"]
+        .as_array_mut()
+        .expect("fixture relations checked above")
+        .push(contains);
+
+    let mut anchors = serde_json::Map::new();
+    for artifact in value["artifacts"]
+        .as_array_mut()
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "fixture artifacts are not an array",
+        ))?
+    {
+        let artifact_id = artifact["id"]
+            .as_str()
+            .ok_or(M6Error::InvalidHistoricalTopology(
+                "fixture artifact has no ID",
+            ))?
+            .to_owned();
+        if artifact["kind"] == "file" {
+            let id = StableId::parse(&artifact_id)?;
+            let bytes = source_bytes
+                .get(&id)
+                .ok_or(M6Error::InvalidHistoricalTopology(
+                    "fixture file has no source bytes",
+                ))?;
+            artifact["content_hash"] = Value::String(ContentHash::sha256(bytes).to_string());
+        }
+        if artifact_id == "test:double-submit" {
+            artifact["location"]["start_line"] = Value::Null;
+            artifact["location"]["end_line"] = Value::Null;
+        }
+        let rust_symbol = artifact["language"] == "rust"
+            && matches!(
+                artifact["kind"].as_str(),
+                Some("function" | "method" | "type")
+            );
+        if rust_symbol {
+            artifact["provenance"]["extraction_method"] =
+                Value::String("reviewgraphen.ingest.rust_syn.v1".to_owned());
+            anchors.insert(
+                artifact_id.clone(),
+                serde_json::json!({
+                    "descriptor": RUST_SYMBOL_ANCHOR_V1,
+                    "language": "rust",
+                    "symbol_kind": artifact["kind"].as_str().expect("symbol kind"),
+                    "signature_shape_hash": ContentHash::sha256(format!("{artifact_id}:signature").as_bytes()),
+                    "normalized_body_hash": ContentHash::sha256(format!("{artifact_id}:body").as_bytes()),
+                }),
+            );
+        }
+    }
+
+    for relation in value["relations"]
+        .as_array_mut()
+        .expect("fixture relations checked above")
+    {
+        relation["ordered_target_ids"] = relation["target_ids"].clone();
+    }
+    let provenance = value["artifacts"][0]["provenance"].clone();
+    value["evidence"] = serde_json::json!([{
+        "id": "evidence:seeded-payment-source",
+        "kind": "static_analysis",
+        "target_ids": ["function:payment-charge"],
+        "artifact_ref": null,
+        "content_hash": null,
+        "attributes": {"seeded": true},
+        "provenance": provenance,
+    }]);
+    let invariant = value["invariants"]
+        .as_array_mut()
+        .and_then(|invariants| {
+            invariants
+                .iter_mut()
+                .find(|invariant| invariant["property_id"] == crate::M4_PROPERTY_ID)
+        })
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "fixture payment invariant is absent",
+        ))?;
+    invariant["scope_ids"] = serde_json::json!(["context:payment", "context:ui-event"]);
+    value["incremental_facts"] = serde_json::json!({
+        "git_revision_closure": {
+            "base_commit_oid": format!("{:040x}", 9),
+            "base_tree_hash": format!("git:{:040x}", 8),
+            "target_commit_oid": format!("{:040x}", 10),
+            "target_tree_hash": format!("git:{:040x}", 11),
+        },
+        "rust_anchor_extractor_id": crate::RUST_SYMBOL_ANCHOR_EXTRACTOR_V1,
+        "rust_anchor_syn_version": crate::RUST_SYMBOL_ANCHOR_SYN_VERSION_V1,
+        "rust_symbol_anchors": anchors,
+    });
+    let program = ProgramSpace::from_json_slice(
+        &serde_json::to_vec(&value).map_err(|error| M6Error::Canonical(error.to_string()))?,
+    )?;
+    Ok(M6ProgramFixture {
+        program,
+        source_bytes,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn distinct_s1_program_fixture_from(
+    source: &M6ProgramFixture,
+) -> M6Result<M6ProgramFixture> {
+    Ok(M6ProgramFixture {
+        program: distinct_s1_program_from(source.program())?,
+        source_bytes: source.source_bytes().clone(),
+    })
+}
+
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn m6_distinct_s0_s1_program_fixture() -> M6Result<(
+    ProgramSpace,
+    ProgramSpace,
+    BTreeMap<StableId, Vec<u8>>,
+    BTreeMap<StableId, Vec<u8>>,
+)> {
+    let source = complete_m5_s0_program_fixture()?;
+    let target = distinct_s1_program_fixture_from(&source)?;
+    let (source_program, source_bytes) = source.into_parts();
+    let (target_program, target_bytes) = target.into_parts();
+    Ok((source_program, target_program, source_bytes, target_bytes))
+}
+
+#[cfg(test)]
+pub(crate) fn distinct_s1_program_from(source: &ProgramSpace) -> M6Result<ProgramSpace> {
+    fn replace(value: &mut Value, from: &str, to: &str) {
+        match value {
+            Value::String(text) if text == from => *text = to.to_owned(),
+            Value::Array(values) => values.iter_mut().for_each(|value| replace(value, from, to)),
+            Value::Object(values) => values
+                .values_mut()
+                .for_each(|value| replace(value, from, to)),
+            _ => {}
+        }
+    }
+    let mut target = serde_json::to_value(source.streaming_ref())
+        .map_err(|error| M6Error::Canonical(error.to_string()))?;
+    replace(
+        &mut target,
+        source.snapshot_id().as_str(),
+        "snapshot:double-submit-v2",
+    );
+    let target_commit_oid = format!("{:040x}", 12);
+    let target_tree_hash = format!("git:{:040x}", 13);
+    target["snapshot"]["base_revision"] = Value::String(source.target_revision().to_owned());
+    target["snapshot"]["target_revision"] = Value::String(target_commit_oid.clone());
+    target["snapshot"]["tree_hash"] = Value::String(target_tree_hash.clone());
+    if let Some(source_git) = source.accepted_git_revision_closure() {
+        // ProgramSpace v3 binds both the accepted source descriptor and the
+        // incremental closure to the target revision.  Preserve S0's target
+        // as the exact S1 base while advancing only S1's target coordinate.
+        target["source"]["revision"] = Value::String(target_commit_oid.clone());
+        target["source"]["content_hash"] = Value::String(target_tree_hash.clone());
+        let revisions = &mut target["incremental_facts"]["git_revision_closure"];
+        revisions["base_commit_oid"] = Value::String(source_git.target_commit_oid().to_owned());
+        revisions["base_tree_hash"] = Value::String(source_git.target_tree_hash().to_string());
+        revisions["target_commit_oid"] = Value::String(target_commit_oid);
+        revisions["target_tree_hash"] = Value::String(target_tree_hash);
+    }
+    ProgramSpace::from_json_slice(
+        &serde_json::to_vec(&target).map_err(|error| M6Error::Canonical(error.to_string()))?,
+    )
+    .map_err(M6Error::from)
+}
+
+#[cfg(test)]
+pub(crate) struct M6FixturePhases {
+    closure: IncrementalSourceClosureV5,
+    mapping: M6MappingPhaseV5,
+    correspondence: M6ObligationCorrespondencePhaseV5,
+}
+
+#[cfg(test)]
+impl M6FixturePhases {
+    pub(crate) fn closure(&self) -> &IncrementalSourceClosureV5 {
+        &self.closure
+    }
+
+    pub(crate) fn mapping(&self) -> &M6MappingPhaseV5 {
+        &self.mapping
+    }
+
+    pub(crate) fn correspondence(&self) -> &M6ObligationCorrespondencePhaseV5 {
+        &self.correspondence
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn m6_fixture_phases_from_exact_prefixes(
+    source: &crate::event::CompleteM5V4Fixture,
+    target: &crate::event::NoM5V5Fixture,
+    target_actual: &TargetActualRecordInventoryV5<'_>,
+) -> M6Result<M6FixturePhases> {
+    let source_index = ContentHash::sha256(b"m6-e2e-source-index-v5");
+    let target_index = ContentHash::sha256(b"m6-e2e-target-index-v6");
+    let proposal = derive_untrusted_incremental_mapping_proposal_v5(
+        source.log(),
+        source.basis(),
+        source.completed(),
+        &source_index,
+        target.log(),
+        &target_index,
+    )?;
+    let closure = proposal
+        .closure
+        .bind_terminal_target_authority_v5(target_actual)?;
+    if closure.source_snapshot_id() != source.program().snapshot_id()
+        || closure.target_snapshot_id() != target.program().snapshot_id()
+        || closure.input.source_run_id != *source.run_id()
+        || closure.input.target_run_id != *target.run_id()
+    {
+        return Err(M6Error::InvalidHistoricalTopology(
+            "fixture proposal coordinates differ from exact replay prefixes",
+        ));
+    }
+    let accepted = |program: &ProgramSpace| -> M6Result<ReviewAggregate> {
+        let (universe, obligations) = crate::MvpRulePack::synthesize(program)
+            .map_err(M6Error::from)?
+            .into_parts();
+        ReviewAggregate::new(program.clone(), universe, obligations).map_err(M6Error::from)
+    };
+    let source_aggregate = accepted(source.program())?;
+    let target_aggregate = accepted(target.program())?;
+    let mapping = ChangeMorphismV5::derive_from_accepted_program_facts(
+        &closure,
+        source.program(),
+        target.program(),
+    )?;
+    let correspondence = ObligationCorrespondenceV5::derive_from_accepted_universes(
+        &closure,
+        &mapping,
+        &source_aggregate,
+        &target_aggregate,
+    )?;
+    Ok(M6FixturePhases {
+        closure,
+        mapping,
+        correspondence,
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
@@ -9176,6 +12829,285 @@ mod tests {
 
     fn tree(value: usize) -> ContentHash {
         ContentHash::parse(format!("git:{value:040x}")).unwrap()
+    }
+
+    fn staleness_dto_fixture() -> (
+        HistoricalRecordAssessmentV5,
+        GluingFreshnessV5,
+        StalenessAssessmentV5,
+    ) {
+        let closure_id = id("incremental-source-closure-v5:fixture");
+        let morphism_id = id("change-morphism-v5:fixture");
+        let correspondence_id = id("obligation-correspondence-v5:fixture");
+        let time = "2026-08-12T01:02:03Z";
+        let assessment_id = StalenessAssessmentV5::assessment_id(
+            &closure_id,
+            &morphism_id,
+            &correspondence_id,
+            time,
+        )
+        .unwrap();
+        let record = HistoricalRecordAssessmentV5::from_parts(HistoricalRecordAssessmentPartsV5 {
+            assessment_id: assessment_id.clone(),
+            source_record_kind: HistoricalRecordKindV5::Obligation,
+            source_record_id: id("obligation:source"),
+            source_record_body_hash: sha(1),
+            successor_record_ids: BTreeSet::from([id("obligation:target")]),
+            status: HistoricalAssessmentStatusV5::StructurallyPreserved,
+            directness: StalenessDirectnessV5::NotApplicable,
+            reasons: BTreeSet::new(),
+            dependency_source_ids: BTreeSet::from([id("artifact:dependency")]),
+            mapping_ids: BTreeSet::from([id("program-mapping-v5:fixture")]),
+            correspondence_entry_ids: BTreeSet::from([id(
+                "obligation-correspondence-entry-v5:fixture",
+            )]),
+        })
+        .unwrap();
+        let gluing = GluingFreshnessV5::derive(
+            assessment_id,
+            id("gluing-attempt-v4:source"),
+            HistoricalAssessmentStatusV5::Stale,
+            BTreeSet::from([StaleReasonV5::TargetChanged]),
+            BTreeSet::from([id("program-mapping-v5:gluing")]),
+            BTreeSet::new(),
+        )
+        .unwrap();
+        let parts = StalenessAssessmentSealPartsV5 {
+            source_closure_id: closure_id,
+            morphism_id,
+            correspondence_id,
+            assessment_time: time.to_owned(),
+            records: vec![record.clone()],
+            gluing: vec![gluing.clone()],
+            preservation_candidates: BTreeSet::from([id("obligation:target")]),
+            m5_dependent_successors: BTreeSet::from([id("obligation:target")]),
+        };
+        let seal = StalenessAssessmentV5::seal(&parts).unwrap();
+        (record, gluing, seal)
+    }
+
+    #[test]
+    fn staleness_dtos_are_strict_canonical_and_body_bound() {
+        let (record, gluing, seal) = staleness_dto_fixture();
+        let record_bytes = crate::canonical_json(&record).unwrap();
+        let gluing_bytes = crate::canonical_json(&gluing).unwrap();
+        let seal_bytes = crate::canonical_json(&seal).unwrap();
+        assert_eq!(
+            HistoricalRecordAssessmentV5::from_json_bytes(&record_bytes).unwrap(),
+            record
+        );
+        assert_eq!(
+            GluingFreshnessV5::from_json_bytes(&gluing_bytes).unwrap(),
+            gluing
+        );
+        assert_eq!(
+            StalenessAssessmentV5::from_json_bytes(&seal_bytes, &seal).unwrap(),
+            seal
+        );
+
+        for bytes in [&record_bytes, &gluing_bytes, &seal_bytes] {
+            let mut value: Value = serde_json::from_slice(bytes).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert("unknown".to_owned(), Value::Bool(true));
+            let tampered = crate::canonical_json(&value).unwrap();
+            if bytes.as_slice() == record_bytes.as_slice() {
+                assert!(HistoricalRecordAssessmentV5::from_json_bytes(&tampered).is_err());
+            } else if bytes.as_slice() == gluing_bytes.as_slice() {
+                assert!(GluingFreshnessV5::from_json_bytes(&tampered).is_err());
+            } else {
+                assert!(StalenessAssessmentV5::from_json_bytes(&tampered, &seal).is_err());
+            }
+        }
+
+        let mut body_collision: Value = serde_json::from_slice(&record_bytes).unwrap();
+        body_collision["source_record_body_hash"] = serde_json::json!(sha(99));
+        assert!(
+            HistoricalRecordAssessmentV5::from_json_bytes(
+                &crate::canonical_json(&body_collision).unwrap()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn assessment_time_is_exact_utc_calendar_seconds() {
+        for valid in [
+            "2024-02-29T23:59:59Z",
+            "2000-02-29T00:00:00Z",
+            "2026-08-12T01:02:03Z",
+        ] {
+            validate_assessment_time_v5(valid).unwrap();
+        }
+        for invalid in [
+            "2026-08-12T01:02:03.0Z",
+            "2026-08-12t01:02:03Z",
+            "2026-08-12T01:02:03+00:00",
+            "2023-02-29T00:00:00Z",
+            "1900-02-29T00:00:00Z",
+            "2026-13-01T00:00:00Z",
+            "2026-04-31T00:00:00Z",
+            "2026-08-12T24:00:00Z",
+            "2026-08-12T23:60:00Z",
+            "2026-08-12T23:59:60Z",
+        ] {
+            assert!(validate_assessment_time_v5(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn mapping_status_position_table_is_closed_for_direct_indirect_and_both() {
+        let statuses = [
+            MappingStatusV5::Preserved,
+            MappingStatusV5::Modified,
+            MappingStatusV5::Added,
+            MappingStatusV5::Removed,
+            MappingStatusV5::Split,
+            MappingStatusV5::Merged,
+            MappingStatusV5::Unresolved,
+        ];
+        for status in statuses {
+            for (direct, indirect, expected_directness) in [
+                (true, false, StalenessDirectnessV5::Direct),
+                (false, true, StalenessDirectnessV5::Indirect),
+                (true, true, StalenessDirectnessV5::DirectAndIndirect),
+            ] {
+                let (reasons, actual_directness) = reduce_mapping_position_v5(
+                    status,
+                    direct,
+                    indirect,
+                    StaleReasonV5::ContextChanged,
+                );
+                if status == MappingStatusV5::Preserved {
+                    assert!(reasons.is_empty());
+                    assert_eq!(actual_directness, StalenessDirectnessV5::NotApplicable);
+                    continue;
+                }
+                assert_eq!(actual_directness, expected_directness);
+                if direct {
+                    assert!(reasons.contains(&match status {
+                        MappingStatusV5::Modified => StaleReasonV5::ContextChanged,
+                        MappingStatusV5::Added | MappingStatusV5::Removed => {
+                            StaleReasonV5::TargetChanged
+                        }
+                        MappingStatusV5::Split
+                        | MappingStatusV5::Merged
+                        | MappingStatusV5::Unresolved => StaleReasonV5::MappingUnresolved,
+                        MappingStatusV5::Preserved => unreachable!(),
+                    }));
+                }
+                if indirect {
+                    assert!(reasons.contains(&match status {
+                        MappingStatusV5::Modified
+                        | MappingStatusV5::Added
+                        | MappingStatusV5::Removed => StaleReasonV5::DependencyChanged,
+                        MappingStatusV5::Split
+                        | MappingStatusV5::Merged
+                        | MappingStatusV5::Unresolved => StaleReasonV5::MappingUnresolved,
+                        MappingStatusV5::Preserved => unreachable!(),
+                    }));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn all_twenty_one_historical_kinds_have_the_exact_adr_order() {
+        let kinds = [
+            HistoricalSourceRecordKindV4::Obligation,
+            HistoricalSourceRecordKindV4::ReviewPlan,
+            HistoricalSourceRecordKindV4::ContextEnvelope,
+            HistoricalSourceRecordKindV4::Execution,
+            HistoricalSourceRecordKindV4::Claim,
+            HistoricalSourceRecordKindV4::ClaimAssessment,
+            HistoricalSourceRecordKindV4::ArtifactRegistrationV3,
+            HistoricalSourceRecordKindV4::ArtifactRegistrationV4,
+            HistoricalSourceRecordKindV4::Evidence,
+            HistoricalSourceRecordKindV4::EvidenceBinding,
+            HistoricalSourceRecordKindV4::Verification,
+            HistoricalSourceRecordKindV4::Decision,
+            HistoricalSourceRecordKindV4::Finding,
+            HistoricalSourceRecordKindV4::GluingInputDescriptor,
+            HistoricalSourceRecordKindV4::ContextCover,
+            HistoricalSourceRecordKindV4::Section,
+            HistoricalSourceRecordKindV4::Restriction,
+            HistoricalSourceRecordKindV4::GluingAttempt,
+            HistoricalSourceRecordKindV4::GlobalCandidate,
+            HistoricalSourceRecordKindV4::GluingObstruction,
+            HistoricalSourceRecordKindV4::Coverage,
+        ];
+        let public = kinds
+            .into_iter()
+            .map(HistoricalRecordKindV5::from_internal)
+            .collect::<Vec<_>>();
+        assert!(public.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(
+            crate::canonical_json(&public).unwrap(),
+            br#"["obligation","review_plan","context_envelope","execution","claim","claim_assessment","artifact_registration_v3","artifact_registration_v4","evidence","evidence_binding","verification","decision","finding","gluing_input_descriptor","context_cover","section","restriction","gluing_attempt","global_candidate","gluing_obstruction","coverage"]"#
+        );
+    }
+
+    #[test]
+    fn staleness_id_preimage_and_streaming_digests_have_literal_oracles() {
+        let (record, gluing, seal) = staleness_dto_fixture();
+        assert_eq!(
+            seal.id().as_str(),
+            "staleness-assessment-v5:sha256:23d190767a22ac7d18e0b3072c8433bb1a0100306c278a072fa623651dd1f2b9"
+        );
+        let record_oracle = ContentHash::sha256(
+            &crate::canonical_json(&vec![
+                IdBodyHashV5::new(record.id().clone(), record.body_hash().unwrap()).unwrap(),
+            ])
+            .unwrap(),
+        );
+        let gluing_oracle = ContentHash::sha256(
+            &crate::canonical_json(&vec![
+                IdBodyHashV5::new(gluing.id().clone(), gluing.body_hash().unwrap()).unwrap(),
+            ])
+            .unwrap(),
+        );
+        assert_eq!(seal.record_set_digest(), &record_oracle);
+        assert_eq!(seal.gluing_freshness_set_digest(), &gluing_oracle);
+    }
+
+    #[test]
+    fn cross_run_fixture_programs_are_accepted_v3_and_bind_exact_cas_and_git_continuity() {
+        let (source, target, source_bytes, target_bytes) =
+            m6_distinct_s0_s1_program_fixture().expect("accepted M6 Program fixtures");
+        let source_git = source
+            .accepted_git_revision_closure()
+            .expect("source accepted Git closure");
+        let target_git = target
+            .accepted_git_revision_closure()
+            .expect("target accepted Git closure");
+        assert_eq!(source_git.target_commit_oid(), target_git.base_commit_oid());
+        assert_eq!(source_git.target_tree_hash(), target_git.base_tree_hash());
+        assert_ne!(target_git.base_commit_oid(), target_git.target_commit_oid());
+        assert_eq!(source.repository_id(), target.repository_id());
+        assert_ne!(source.snapshot_id(), target.snapshot_id());
+        assert_eq!(source_bytes, target_bytes);
+        for (program, bytes_by_id) in [(&source, &source_bytes), (&target, &target_bytes)] {
+            let file_ids = program
+                .artifacts()
+                .iter()
+                .filter(|artifact| artifact.kind == "file")
+                .map(|artifact| artifact.id.clone())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(file_ids, bytes_by_id.keys().cloned().collect());
+            for artifact in program
+                .artifacts()
+                .iter()
+                .filter(|artifact| artifact.kind == "file")
+            {
+                assert_eq!(
+                    artifact.content_hash.as_ref(),
+                    Some(&ContentHash::sha256(&bytes_by_id[&artifact.id]))
+                );
+            }
+        }
+        ChangeMorphismV5::mapping_reservation_bytes_from_accepted_program_facts(&source, &target)
+            .expect("accepted mapping facts");
     }
 
     fn replace_string(value: &mut Value, from: &str, to: &str) {
@@ -9208,19 +13140,9 @@ mod tests {
                 artifact["content_hash"] = Value::String(sha(44).to_string());
             }
         }
-        let mut target = source.clone();
-        replace_string(
-            &mut target,
-            "snapshot:double-submit-v1",
-            "snapshot:double-submit-v2",
-        );
-        target["snapshot"]["base_revision"] = Value::String(oid(10));
-        target["snapshot"]["target_revision"] = Value::String(oid(12));
-        target["snapshot"]["tree_hash"] = Value::String(tree(13).to_string());
-        (
-            ProgramSpace::from_json_slice(&serde_json::to_vec(&source).unwrap()).unwrap(),
-            ProgramSpace::from_json_slice(&serde_json::to_vec(&target).unwrap()).unwrap(),
-        )
+        let source = ProgramSpace::from_json_slice(&serde_json::to_vec(&source).unwrap()).unwrap();
+        let target = distinct_s1_program_from(&source).unwrap();
+        (source, target)
     }
 
     fn spaces_with_relation_chain(length: usize) -> (ProgramSpace, ProgramSpace) {
@@ -9646,6 +13568,18 @@ mod tests {
                 + correspondence.entries.capacity()
                     * std::mem::size_of::<ObligationCorrespondenceEntryV5>()
         );
+
+        let (record, gluing, assessment) = staleness_dto_fixture();
+        let phase = M6StalenessPhaseV5 {
+            records: vec![record],
+            gluing_freshness: vec![gluing],
+            assessment,
+            target_gluing_required: true,
+            m5_dependent_successor_obligation_ids: BTreeSet::from([id("obligation:target")]),
+            working_bytes: 123,
+        };
+        assert!(phase.retained_bytes() >= std::mem::size_of::<M6StalenessPhaseV5>());
+        assert_eq!(phase.working_bytes(), 123);
     }
 
     #[test]
@@ -11781,5 +15715,282 @@ mod tests {
             phase.mappings().first().unwrap().id().as_str(),
             "program-mapping-v5:sha256:04a21071bd5b70720917396e1ccd4024a62982e84d3ec1892c6ad671129ee459"
         );
+    }
+
+    #[test]
+    fn successor_normalization_rewrites_only_declared_reference_leaves() {
+        let replacements = BTreeMap::from([("run:old".to_owned(), "run:new".to_owned())]);
+        let source_execution = serde_json::json!({
+            "id": "execution:one",
+            "run_id": "run:old",
+            "future_token_id": "run:old",
+            "tool_calls": [{"argument": "run:old", "artifact_id": "run:old"}],
+            "summary": "run:old"
+        });
+        let target_execution = serde_json::json!({
+            "id": "execution:one",
+            "run_id": "run:new",
+            "future_token_id": "run:new",
+            "tool_calls": [{"argument": "run:new", "artifact_id": "run:new"}],
+            "summary": "run:new"
+        });
+        assert!(!exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::Execution,
+            &source_execution,
+            &target_execution,
+            &replacements,
+            &BTreeSet::new(),
+        ));
+
+        let obligation_source = serde_json::json!({
+            "id": "obligation:one",
+            "normalized_target_refs": ["run:old"],
+            "summary": "unchanged"
+        });
+        let obligation_target = serde_json::json!({
+            "id": "obligation:one",
+            "normalized_target_refs": ["run:new"],
+            "summary": "unchanged"
+        });
+        assert!(exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::Obligation,
+            &obligation_source,
+            &obligation_target,
+            &replacements,
+            &BTreeSet::new(),
+        ));
+
+        let cases = [
+            (HistoricalSourceRecordKindV4::Obligation, "id"),
+            (HistoricalSourceRecordKindV4::ReviewPlan, "id"),
+            (HistoricalSourceRecordKindV4::ContextEnvelope, "id"),
+            (HistoricalSourceRecordKindV4::Execution, "id"),
+            (HistoricalSourceRecordKindV4::Claim, "id"),
+            (HistoricalSourceRecordKindV4::ClaimAssessment, "claim_id"),
+            (HistoricalSourceRecordKindV4::ArtifactRegistrationV3, "id"),
+            (HistoricalSourceRecordKindV4::ArtifactRegistrationV4, "id"),
+            (HistoricalSourceRecordKindV4::Evidence, "id"),
+            (HistoricalSourceRecordKindV4::EvidenceBinding, "id"),
+            (HistoricalSourceRecordKindV4::Verification, "id"),
+            (HistoricalSourceRecordKindV4::Decision, "id"),
+            (HistoricalSourceRecordKindV4::Finding, "id"),
+            (HistoricalSourceRecordKindV4::GluingInputDescriptor, "id"),
+            (HistoricalSourceRecordKindV4::ContextCover, "id"),
+            (HistoricalSourceRecordKindV4::Section, "id"),
+            (HistoricalSourceRecordKindV4::Restriction, "id"),
+            (HistoricalSourceRecordKindV4::GluingAttempt, "id"),
+            (HistoricalSourceRecordKindV4::GlobalCandidate, "id"),
+            (HistoricalSourceRecordKindV4::GluingObstruction, "id"),
+        ];
+        for (kind, field) in cases {
+            let source = serde_json::json!({
+                field: "run:old",
+                "future_token_id": "run:old",
+                "nested": { field: "run:old" },
+            });
+            let target = serde_json::json!({
+                field: "run:new",
+                "future_token_id": "run:old",
+                "nested": { field: "run:old" },
+            });
+            assert!(
+                exact_substituted_successor_v5(
+                    kind,
+                    &source,
+                    &target,
+                    &replacements,
+                    &BTreeSet::new(),
+                ),
+                "{kind:?} must substitute its declared root reference leaf"
+            );
+            let widened = serde_json::json!({
+                field: "run:new",
+                "future_token_id": "run:old",
+                "nested": { field: "run:new" },
+            });
+            assert!(
+                !exact_substituted_successor_v5(
+                    kind,
+                    &source,
+                    &widened,
+                    &replacements,
+                    &BTreeSet::new(),
+                ),
+                "{kind:?} must not rewrite a nested same-name field"
+            );
+        }
+
+        let source = serde_json::json!({
+            "id": "run:old",
+            "summary": "before",
+            "confidence": 0.1,
+            "artifact_hash": "sha256:old",
+            "policy": {"id": "run:old"},
+            "model": {"id": "run:old"},
+            "outcome": {"id": "run:old"},
+            "tool_calls": [{"id": "run:old", "argument": "run:old"}],
+            "future_extension": {"source_ids": ["run:old"]},
+        });
+        for (field, changed) in [
+            ("summary", serde_json::json!("after")),
+            ("confidence", serde_json::json!(0.2)),
+            ("artifact_hash", serde_json::json!("sha256:new")),
+            ("policy", serde_json::json!({"id": "run:new"})),
+            ("model", serde_json::json!({"id": "run:new"})),
+            ("outcome", serde_json::json!({"id": "run:new"})),
+            (
+                "tool_calls",
+                serde_json::json!([{"id": "run:new", "argument": "run:new"}]),
+            ),
+            (
+                "future_extension",
+                serde_json::json!({"source_ids": ["run:new"]}),
+            ),
+        ] {
+            let mut target = source.clone();
+            target["id"] = serde_json::json!("run:new");
+            target[field] = changed;
+            assert!(
+                !exact_substituted_successor_v5(
+                    HistoricalSourceRecordKindV4::Execution,
+                    &source,
+                    &target,
+                    &replacements,
+                    &BTreeSet::new(),
+                ),
+                "{field} must remain byte-equal"
+            );
+        }
+    }
+
+    #[test]
+    fn successor_normalization_covers_closed_nested_canonical_paths_only() {
+        // This is the actual canonical ReviewPlan emitted by the roots-bound
+        // target fixture, not a hand-written schema approximation.
+        let fixture = crate::m6_test_support::DistinctS0S1StalenessFixture::new().unwrap();
+        let source_plan = fixture.target_plan_json_for_test();
+        assert!(source_plan["waves"].is_array());
+        assert!(source_plan["risk_breakdown"].is_array());
+        assert!(source_plan["deferred"].is_array());
+        let old = source_plan["waves"][0]["obligation_ids"][0]
+            .as_str()
+            .expect("actual plan wave obligation ID")
+            .to_owned();
+        let new = "obligation:successor-nested".to_owned();
+        let replacements = BTreeMap::from([(old.clone(), new.clone())]);
+        let mut target_plan = source_plan.clone();
+        let mut changed = false;
+        for wave in target_plan["waves"].as_array_mut().unwrap() {
+            for id in wave["obligation_ids"].as_array_mut().unwrap() {
+                if id.as_str() == Some(old.as_str()) {
+                    *id = Value::String(new.clone());
+                    changed = true;
+                }
+            }
+        }
+        for field in ["risk_breakdown", "deferred"] {
+            for member in target_plan[field].as_array_mut().unwrap() {
+                if member["id"].as_str() == Some(old.as_str()) {
+                    member["id"] = Value::String(new.clone());
+                    changed = true;
+                }
+            }
+        }
+        assert!(
+            changed,
+            "actual plan must expose at least one mapped nested ID"
+        );
+        assert!(exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::ReviewPlan,
+            &source_plan,
+            &target_plan,
+            &replacements,
+            &BTreeSet::new(),
+        ));
+        let mut bad_plan = target_plan.clone();
+        bad_plan["waves"][0]["future_extension"]["obligation_ids"] = serde_json::json!([new]);
+        let mut source_with_extension = source_plan.clone();
+        source_with_extension["waves"][0]["future_extension"]["obligation_ids"] =
+            serde_json::json!([old]);
+        assert!(!exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::ReviewPlan,
+            &source_with_extension,
+            &bad_plan,
+            &replacements,
+            &BTreeSet::new(),
+        ));
+
+        let source_context = serde_json::json!({
+            "id": "context-envelope:old",
+            "included_sources": [{"registration_id": "obligation:old", "artifact_id": "obligation:old", "content_hash": "sha256:unchanged"}],
+            "excluded_sources": [{"artifact_id": "obligation:old", "reason": "budget"}],
+            "unknowns": [{"source_ids": ["obligation:old"], "description": "unchanged"}],
+            "losses": [{"source_ids": ["obligation:old"], "description": "unchanged", "affected_properties": ["p"]}],
+        });
+        let context_replacements =
+            BTreeMap::from([("obligation:old".to_owned(), "obligation:new".to_owned())]);
+        let mut target_context = source_context.clone();
+        for field in ["registration_id", "artifact_id"] {
+            target_context["included_sources"][0][field] = serde_json::json!("obligation:new");
+        }
+        target_context["excluded_sources"][0]["artifact_id"] = serde_json::json!("obligation:new");
+        target_context["unknowns"][0]["source_ids"] = serde_json::json!(["obligation:new"]);
+        target_context["losses"][0]["source_ids"] = serde_json::json!(["obligation:new"]);
+        assert!(exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::ContextEnvelope,
+            &source_context,
+            &target_context,
+            &context_replacements,
+            &BTreeSet::new(),
+        ));
+        let mut bad_context = target_context.clone();
+        bad_context["included_sources"][0]["content_hash"] = serde_json::json!("sha256:changed");
+        assert!(!exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::ContextEnvelope,
+            &source_context,
+            &bad_context,
+            &context_replacements,
+            &BTreeSet::new(),
+        ));
+
+        let source_registration = serde_json::json!({
+            "id": "registration-v4:old",
+            "source": {
+                "kind": "external_harness_witness",
+                "run_id": "obligation:old",
+                "snapshot_id": "obligation:old",
+                "claim_id": "obligation:old",
+                "repository_id": "obligation:old",
+                "test_artifact_id": "obligation:old",
+                "universe_id": "obligation:old",
+                "claim_body_hash": "sha256:unchanged",
+            },
+        });
+        let mut target_registration = source_registration.clone();
+        for field in [
+            "run_id",
+            "snapshot_id",
+            "claim_id",
+            "repository_id",
+            "test_artifact_id",
+            "universe_id",
+        ] {
+            target_registration["source"][field] = serde_json::json!("obligation:new");
+        }
+        assert!(exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::ArtifactRegistrationV4,
+            &source_registration,
+            &target_registration,
+            &context_replacements,
+            &BTreeSet::new(),
+        ));
+        target_registration["source"]["claim_body_hash"] = serde_json::json!("sha256:changed");
+        assert!(!exact_substituted_successor_v5(
+            HistoricalSourceRecordKindV4::ArtifactRegistrationV4,
+            &source_registration,
+            &target_registration,
+            &context_replacements,
+            &BTreeSet::new(),
+        ));
     }
 }

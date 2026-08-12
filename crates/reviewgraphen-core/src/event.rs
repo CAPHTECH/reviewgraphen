@@ -11151,7 +11151,7 @@ fn v5_gluing_input_position_digest(
 
 #[allow(dead_code)] // No public partial authority basis is exposed.
 #[derive(Debug)]
-struct PreIncrementalAuthorityReplayBasisV5 {
+pub(crate) struct PreIncrementalAuthorityReplayBasisV5 {
     schema: &'static str,
     target_run_id: StableId,
     target_genesis_hash: ContentHash,
@@ -14615,6 +14615,7 @@ impl HistoricalPrefixProjectionV4<'_> {
     pub(crate) fn coverage(&self) -> &crate::coverage::HistoricalCoverageSnapshotV4 {
         &self.coverage
     }
+
     pub(crate) const fn working_reservation_bytes(&self) -> usize {
         self.working_reservation_bytes
     }
@@ -19927,7 +19928,7 @@ struct ReplayedV5M4AuthorityState<'a> {
 /// registration.  It deliberately contains no authority basis: ADR 0023 §4
 /// permits that basis only after the terminal M5 semantics have been replayed.
 #[allow(dead_code)] // Consumed by the following M5 continuation slice.
-struct ReplayedV5M5ContinuationState<'a> {
+pub(crate) struct ReplayedV5M5ContinuationState<'a> {
     plan_checkpoint: &'a PlanAuthorityCheckpointV5<'a>,
     aggregate: ReviewAggregate,
     v3_aggregate: V3RunAggregate,
@@ -19955,6 +19956,113 @@ struct ReplayedV5M5AuthorityState<'a> {
     confirmed_tail_hash: ContentHash,
     confirmed_event_count: u64,
     phase: V5StructuralPostPlanPhase,
+}
+
+#[derive(Clone, Copy)]
+enum ReplayedV5TerminalAuthorityStateRef<'a, 'state> {
+    WithoutM5(&'a ReplayedV5M5ContinuationState<'state>),
+    WithM5(&'a ReplayedV5M5AuthorityState<'state>),
+}
+
+impl<'a, 'state> ReplayedV5TerminalAuthorityStateRef<'a, 'state> {
+    fn structural(&self) -> &'a ReplayedV5PreIncrementalStructuralPrefixState<'state> {
+        match self {
+            Self::WithoutM5(value) => value.plan_checkpoint.structural,
+            Self::WithM5(value) => value.plan_checkpoint.structural,
+        }
+    }
+
+    fn aggregate(&self) -> &'a ReviewAggregate {
+        match self {
+            Self::WithoutM5(value) => &value.aggregate,
+            Self::WithM5(value) => &value.aggregate,
+        }
+    }
+
+    fn v3(&self) -> &'a V3RunAggregate {
+        match self {
+            Self::WithoutM5(value) => &value.v3_aggregate,
+            Self::WithM5(value) => &value.v3_aggregate,
+        }
+    }
+
+    fn inherited_entries(&self) -> &'a [AuthorityReplayEntryV3AtV5] {
+        match self {
+            Self::WithoutM5(value) => &value.inherited_m4_entries,
+            Self::WithM5(value) => &value.inherited_m4_entries,
+        }
+    }
+
+    fn confirmed_tail(&self) -> &'a ContentHash {
+        match self {
+            Self::WithoutM5(value) => &value.consumed_tail_hash,
+            Self::WithM5(value) => &value.confirmed_tail_hash,
+        }
+    }
+
+    fn confirmed_count(&self) -> u64 {
+        match self {
+            Self::WithoutM5(value) => value.consumed_through_event,
+            Self::WithM5(value) => value.confirmed_event_count,
+        }
+    }
+
+    fn gluing_entries(&self) -> &'a [GluingInputReplayEntryV5] {
+        match self {
+            Self::WithoutM5(_) => &[],
+            Self::WithM5(value) => &value.gluing_input_entries,
+        }
+    }
+
+    fn bundle(&self) -> Option<&'a crate::GluingBundleV4> {
+        match self {
+            Self::WithoutM5(_) => None,
+            Self::WithM5(value) => Some(&value.m5_bundle),
+        }
+    }
+
+    fn v4_registrations(&self) -> Option<&'a BTreeMap<StableId, ArtifactRegistrationV4>> {
+        match self {
+            Self::WithoutM5(_) => None,
+            Self::WithM5(value) => Some(&value.v4_registrations),
+        }
+    }
+
+    fn v4_descriptors(&self) -> Option<&'a BTreeMap<StableId, crate::GluingInputDescriptorV4>> {
+        match self {
+            Self::WithoutM5(_) => None,
+            Self::WithM5(value) => Some(&value.v4_gluing_descriptors),
+        }
+    }
+
+    fn validate_terminal(&self) -> Result<()> {
+        let structural = self.structural();
+        match self {
+            Self::WithoutM5(value)
+                if value.phase
+                    == (V5StructuralPostPlanPhase::Inherited {
+                        m4_bundle: V5StructuralM4BundlePhase::Idle,
+                    })
+                    && value.consumed_through_event == structural.predecessor_event_count
+                    && value.consumed_tail_hash == structural.tail_hash =>
+            {
+                Ok(())
+            }
+            Self::WithM5(value)
+                if value.phase == V5StructuralPostPlanPhase::M5BundleRecorded
+                    && value.confirmed_event_count == structural.predecessor_event_count
+                    && value.confirmed_tail_hash == structural.tail_hash
+                    && value.gluing_input_entries.len() == 2
+                    && value.v4_registrations.len() == 2
+                    && value.v4_gluing_descriptors.len() == 2 =>
+            {
+                Ok(())
+            }
+            _ => Err(DomainError::EventSequence(
+                "V5 pre-incremental basis requires a terminal zero-or-one M5 replay".to_owned(),
+            )),
+        }
+    }
 }
 
 /// Exact provenance class for one actual target record. Derived records still
@@ -20111,7 +20219,7 @@ pub(crate) enum TargetActualProjectionInformationLossV5 {
 /// borrowed for the projection's whole lifetime.
 #[allow(dead_code)]
 pub(crate) struct TargetActualRecordProjectionV5<'a, 'state> {
-    terminal: &'a ReplayedV5M5AuthorityState<'state>,
+    terminal: ReplayedV5TerminalAuthorityStateRef<'a, 'state>,
     basis: &'a PreIncrementalAuthorityReplayBasisV5,
 }
 
@@ -20135,6 +20243,15 @@ struct StoredTargetActualRecordV5<'a> {
 pub(crate) struct TargetActualRecordInventoryV5<'a> {
     coverage: crate::coverage::HistoricalCoverageSnapshotV4,
     records: Vec<StoredTargetActualRecordV5<'a>>,
+    // Captured only from the roots-validated terminal replay that produced
+    // this inventory.  A structural V5 prefix cannot fabricate this digest:
+    // it commits the actual M4/M5 authority entries and terminal position.
+    authority_replay_basis_digest: &'a ContentHash,
+    authority_policy_revision_hash: &'a ContentHash,
+    target_run_id: &'a StableId,
+    target_genesis_hash: &'a ContentHash,
+    target_tail_hash: &'a ContentHash,
+    target_event_count: u64,
     working_reservation_bytes: u64,
 }
 
@@ -20223,6 +20340,30 @@ impl<'a> TargetActualRecordInventoryV5<'a> {
         &self.coverage
     }
 
+    pub(crate) fn authority_replay_basis_digest(&self) -> &ContentHash {
+        self.authority_replay_basis_digest
+    }
+
+    pub(crate) fn authority_policy_revision_hash(&self) -> &ContentHash {
+        self.authority_policy_revision_hash
+    }
+
+    pub(crate) fn target_run_id(&self) -> &StableId {
+        self.target_run_id
+    }
+
+    pub(crate) fn target_genesis_hash(&self) -> &ContentHash {
+        self.target_genesis_hash
+    }
+
+    pub(crate) fn target_tail_hash(&self) -> &ContentHash {
+        self.target_tail_hash
+    }
+
+    pub(crate) const fn target_event_count(&self) -> u64 {
+        self.target_event_count
+    }
+
     pub(crate) fn retained_bytes(&self) -> u64 {
         let mut total = self
             .coverage
@@ -20252,9 +20393,77 @@ impl<'state> ReplayedV5M5AuthorityState<'state> {
     ) -> Result<TargetActualRecordProjectionV5<'a, 'state>> {
         basis.validate_for_terminal_m5(self)?;
         Ok(TargetActualRecordProjectionV5 {
-            terminal: self,
+            terminal: ReplayedV5TerminalAuthorityStateRef::WithM5(self),
             basis,
         })
+    }
+}
+
+#[allow(dead_code)]
+impl<'state> ReplayedV5M5ContinuationState<'state> {
+    fn terminal_without_m5_basis_v5(
+        &self,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<PreIncrementalAuthorityReplayBasisV5> {
+        PreIncrementalAuthorityReplayBasisV5::from_terminal_without_m5(self, roots)
+    }
+
+    fn target_actual_record_projection_without_m5_v5<'a>(
+        &'a self,
+        basis: &'a PreIncrementalAuthorityReplayBasisV5,
+    ) -> Result<TargetActualRecordProjectionV5<'a, 'state>> {
+        basis.validate_for_terminal_without_m5(self)?;
+        Ok(TargetActualRecordProjectionV5 {
+            terminal: ReplayedV5TerminalAuthorityStateRef::WithoutM5(self),
+            basis,
+        })
+    }
+}
+
+/// Opaque production result of selecting the exact terminal predecessor.
+/// The variant is intentionally private; consumers can only request the
+/// source-bound actual-record projection and inspect the sealed 0/1 basis.
+#[allow(dead_code)] // Opaque production seam consumed by the following Store/session slice.
+enum ReplayedV5TerminalPredecessorInnerV5<'borrow, 'state> {
+    WithoutM5 {
+        terminal: &'borrow ReplayedV5M5ContinuationState<'state>,
+        basis: PreIncrementalAuthorityReplayBasisV5,
+    },
+    WithM5 {
+        terminal: Box<ReplayedV5M5AuthorityState<'state>>,
+        basis: PreIncrementalAuthorityReplayBasisV5,
+    },
+}
+
+#[allow(dead_code)]
+pub(crate) struct ReplayedV5TerminalPredecessorV5<'borrow, 'state> {
+    inner: ReplayedV5TerminalPredecessorInnerV5<'borrow, 'state>,
+}
+
+#[allow(dead_code)]
+impl<'borrow, 'state> ReplayedV5TerminalPredecessorV5<'borrow, 'state> {
+    pub(crate) fn basis(&self) -> &PreIncrementalAuthorityReplayBasisV5 {
+        match self {
+            Self {
+                inner: ReplayedV5TerminalPredecessorInnerV5::WithoutM5 { basis, .. },
+            }
+            | Self {
+                inner: ReplayedV5TerminalPredecessorInnerV5::WithM5 { basis, .. },
+            } => basis,
+        }
+    }
+
+    pub(crate) fn target_actual_record_projection_v5(
+        &'borrow self,
+    ) -> Result<TargetActualRecordProjectionV5<'borrow, 'state>> {
+        match &self.inner {
+            ReplayedV5TerminalPredecessorInnerV5::WithoutM5 { terminal, basis } => {
+                terminal.target_actual_record_projection_without_m5_v5(basis)
+            }
+            ReplayedV5TerminalPredecessorInnerV5::WithM5 { terminal, basis } => {
+                terminal.target_actual_record_projection_v5(basis)
+            }
+        }
     }
 }
 
@@ -20277,13 +20486,13 @@ impl<'a, 'state> TargetActualRecordProjectionV5<'a, 'state> {
     }
 
     pub(crate) fn program_space(&self) -> &ProgramSpace {
-        self.terminal.aggregate.program()
+        self.terminal.aggregate().program()
     }
 
     pub(crate) fn record_count(&self) -> Result<usize> {
-        let aggregate = &self.terminal.aggregate;
-        let v3 = &self.terminal.v3_aggregate;
-        let bundle = &self.terminal.m5_bundle;
+        let aggregate = self.terminal.aggregate();
+        let v3 = self.terminal.v3();
+        let bundle = self.terminal.bundle();
         let counts = [
             aggregate.obligations().count(),
             aggregate.review_plans().count(),
@@ -20292,19 +20501,19 @@ impl<'a, 'state> TargetActualRecordProjectionV5<'a, 'state> {
             aggregate.execution_claims().count(),
             v3.assessments.len(),
             v3.registrations.len(),
-            self.terminal.v4_registrations.len(),
+            self.terminal.v4_registrations().map_or(0, BTreeMap::len),
             v3.evidence.len(),
             v3.bindings.len(),
             v3.verifications.len(),
             v3.decisions.len(),
             v3.findings.len(),
-            self.terminal.v4_gluing_descriptors.len(),
-            1,
-            bundle.sections().len(),
-            bundle.restrictions().len(),
-            1,
-            usize::from(bundle.global_candidate().is_some()),
-            usize::from(bundle.obstruction().is_some()),
+            self.terminal.v4_descriptors().map_or(0, BTreeMap::len),
+            usize::from(bundle.is_some()),
+            bundle.map_or(0, |value| value.sections().len()),
+            bundle.map_or(0, |value| value.restrictions().len()),
+            usize::from(bundle.is_some()),
+            bundle.map_or(0, |value| usize::from(value.global_candidate().is_some())),
+            bundle.map_or(0, |value| usize::from(value.obstruction().is_some())),
             1,
         ];
         let count = counts.into_iter().try_fold(0_usize, |total, value| {
@@ -20366,17 +20575,23 @@ impl<'a, 'state> TargetActualRecordProjectionV5<'a, 'state> {
         #[cfg(test)]
         TARGET_ACTUAL_INVENTORY_MATERIALIZATIONS_V5.with(|value| value.set(value.get() + 1));
         validate_historical_dependency_graph_v4(
-            self.terminal.aggregate.universe().obligation_ids(),
+            self.terminal.aggregate().universe().obligation_ids(),
             self.terminal
-                .aggregate
+                .aggregate()
                 .obligations()
                 .map(|value| (value.id(), value.normalized_depends_on())),
         )?;
-        let coverage = crate::coverage::HistoricalCoverageSnapshotV4::derive_from_parts(
-            &self.terminal.aggregate,
-            &self.terminal.v3_aggregate,
-            self.terminal.m5_bundle.cover(),
-        )?;
+        let coverage = match self.terminal.bundle() {
+            Some(bundle) => crate::coverage::HistoricalCoverageSnapshotV4::derive_from_parts(
+                self.terminal.aggregate(),
+                self.terminal.v3(),
+                bundle.cover(),
+            )?,
+            None => crate::coverage::HistoricalCoverageSnapshotV4::derive_without_m5(
+                self.terminal.aggregate(),
+                self.terminal.v3(),
+            )?,
+        };
         crate::canonical::canonical_json_count_bounded(
             &coverage,
             MAX_D1_EVENT_LINE_BYTES,
@@ -20414,63 +20629,69 @@ impl<'a, 'state> TargetActualRecordProjectionV5<'a, 'state> {
                 previous = Some((kind, id));
             }};
         }
-        for value in self.terminal.aggregate.obligations() {
+        for value in self.terminal.aggregate().obligations() {
             store!(Obligation, value.id(), value);
         }
-        for value in self.terminal.aggregate.review_plans() {
+        for value in self.terminal.aggregate().review_plans() {
             store!(ReviewPlan, value.id(), value);
         }
-        for value in self.terminal.aggregate.context_envelopes() {
+        for value in self.terminal.aggregate().context_envelopes() {
             store!(ContextEnvelope, value.id(), value);
         }
-        for value in self.terminal.aggregate.executions() {
+        for value in self.terminal.aggregate().executions() {
             store!(Execution, value.id(), value);
         }
-        for value in self.terminal.aggregate.execution_claims() {
+        for value in self.terminal.aggregate().execution_claims() {
             store!(Claim, value.id(), value);
         }
-        for value in self.terminal.v3_aggregate.assessments.values() {
+        for value in self.terminal.v3().assessments.values() {
             store!(ClaimAssessment, value.claim_id(), value);
         }
-        for value in self.terminal.v3_aggregate.registrations.values() {
+        for value in self.terminal.v3().registrations.values() {
             store!(ArtifactRegistrationV3, value.registration_id(), value);
         }
-        for value in self.terminal.v4_registrations.values() {
-            store!(ArtifactRegistrationV4, value.id(), value);
+        if let Some(registrations) = self.terminal.v4_registrations() {
+            for value in registrations.values() {
+                store!(ArtifactRegistrationV4, value.id(), value);
+            }
         }
-        for value in self.terminal.v3_aggregate.evidence.values() {
+        for value in self.terminal.v3().evidence.values() {
             store!(Evidence, value.id(), value);
         }
-        for value in self.terminal.v3_aggregate.bindings.values() {
+        for value in self.terminal.v3().bindings.values() {
             store!(EvidenceBinding, value.id(), value);
         }
-        for value in self.terminal.v3_aggregate.verifications.values() {
+        for value in self.terminal.v3().verifications.values() {
             store!(Verification, value.id(), value);
         }
-        for value in self.terminal.v3_aggregate.decisions.values() {
+        for value in self.terminal.v3().decisions.values() {
             store!(Decision, value.id(), value);
         }
-        for value in self.terminal.v3_aggregate.findings.values() {
+        for value in self.terminal.v3().findings.values() {
             store!(Finding, value.id(), value);
         }
-        for value in self.terminal.v4_gluing_descriptors.values() {
-            store!(GluingInputDescriptor, value.id(), value);
+        if let Some(descriptors) = self.terminal.v4_descriptors() {
+            for value in descriptors.values() {
+                store!(GluingInputDescriptor, value.id(), value);
+            }
         }
-        let value = self.terminal.m5_bundle.cover();
-        store!(ContextCover, value.id(), value);
-        for value in self.terminal.m5_bundle.sections() {
-            store!(Section, value.id(), value);
-        }
-        for value in self.terminal.m5_bundle.restrictions() {
-            store!(Restriction, value.id(), value);
-        }
-        let value = self.terminal.m5_bundle.attempt();
-        store!(GluingAttempt, value.id(), value);
-        if let Some(value) = self.terminal.m5_bundle.global_candidate() {
-            store!(GlobalCandidate, value.projection_id(), value);
-        }
-        if let Some(value) = self.terminal.m5_bundle.obstruction() {
-            store!(GluingObstruction, value.id(), value);
+        if let Some(bundle) = self.terminal.bundle() {
+            let value = bundle.cover();
+            store!(ContextCover, value.id(), value);
+            for value in bundle.sections() {
+                store!(Section, value.id(), value);
+            }
+            for value in bundle.restrictions() {
+                store!(Restriction, value.id(), value);
+            }
+            let value = bundle.attempt();
+            store!(GluingAttempt, value.id(), value);
+            if let Some(value) = bundle.global_candidate() {
+                store!(GlobalCandidate, value.projection_id(), value);
+            }
+            if let Some(value) = bundle.obstruction() {
+                store!(GluingObstruction, value.id(), value);
+            }
         }
         let coverage_hash = coverage.body_hash()?;
         if previous.is_some_and(|(kind, id)| {
@@ -20502,9 +20723,15 @@ impl<'a, 'state> TargetActualRecordProjectionV5<'a, 'state> {
         let inventory = TargetActualRecordInventoryV5 {
             coverage,
             records,
+            authority_replay_basis_digest: &self.basis.basis_digest,
+            authority_policy_revision_hash: &self.basis.policy_revision_hash,
+            target_run_id: &self.basis.target_run_id,
+            target_genesis_hash: &self.basis.target_genesis_hash,
+            target_tail_hash: &self.basis.target_confirmed_tail_hash,
+            target_event_count: self.basis.target_confirmed_event_count,
             working_reservation_bytes: observed,
         };
-        let realized = v5_terminal_m5_and_basis_retained_bytes(self.terminal, self.basis)?
+        let realized = v5_terminal_and_basis_retained_bytes(self.terminal, self.basis)?
             .checked_add(inventory.retained_bytes())
             .ok_or(DomainError::Incomplete {
                 operation: "event-v5 target actual realized retained bytes",
@@ -20541,8 +20768,8 @@ impl<'a, 'state> TargetActualRecordProjectionV5<'a, 'state> {
                 observed: usize::MAX,
             })
         };
-        let retained = v5_terminal_m5_and_basis_retained_bytes(self.terminal, self.basis)?;
-        let denominator = self.terminal.aggregate.universe().obligation_ids();
+        let retained = v5_terminal_and_basis_retained_bytes(self.terminal, self.basis)?;
+        let denominator = self.terminal.aggregate().universe().obligation_ids();
         let denominator_id_bytes = denominator.iter().try_fold(0_u64, |total, id| {
             add(
                 total,
@@ -20568,8 +20795,7 @@ impl<'a, 'state> TargetActualRecordProjectionV5<'a, 'state> {
         let coverage_reduction = multiply(u64::try_from(record_count).unwrap_or(u64::MAX), 4_096)?;
         let canonical_line = self
             .terminal
-            .plan_checkpoint
-            .structural
+            .structural()
             .event_log
             .maximum_canonical_event_line_bytes_for_store()?;
         let sequential_scratch = multiply(
@@ -20638,7 +20864,7 @@ fn target_actual_record_body_hash_v5(value: TargetActualRecordValueV5<'_>) -> Re
 fn assign_target_actual_event_witnesses_v5<'a>(
     records: &mut [StoredTargetActualRecordV5<'a>],
     coverage: &crate::coverage::HistoricalCoverageSnapshotV4,
-    terminal: &'a ReplayedV5M5AuthorityState<'_>,
+    terminal: ReplayedV5TerminalAuthorityStateRef<'a, '_>,
     basis: &PreIncrementalAuthorityReplayBasisV5,
 ) -> Result<()> {
     use HistoricalSourceRecordKindV4 as Kind;
@@ -20647,8 +20873,7 @@ fn assign_target_actual_event_witnesses_v5<'a>(
         DomainError::HistoricalPrefixMismatch("target event count does not fit memory")
     })?;
     let envelopes = terminal
-        .plan_checkpoint
-        .structural
+        .structural()
         .event_log
         .envelopes
         .get(..count)
@@ -20669,6 +20894,22 @@ fn assign_target_actual_event_witnesses_v5<'a>(
             event_hash: envelope.event_hash(),
             payload_kind,
         }
+    }
+    if terminal.bundle().is_none()
+        && let Some(record) = records
+            .iter_mut()
+            .find(|record| record.kind == Kind::Coverage && record.event_witness.is_none())
+    {
+        let envelope = envelopes
+            .last()
+            .ok_or(DomainError::HistoricalPrefixMismatch(
+                "target no-M5 coverage has no terminal witness event",
+            ))?;
+        record.event_witness = Some(witness(
+            envelope,
+            Origin::CoverageDerived,
+            "pre_incremental_terminal_coverage",
+        ));
     }
     fn id_for<'a>(
         record: &'a StoredTargetActualRecordV5<'_>,
@@ -21052,7 +21293,7 @@ fn validate_v5_m5_continuation(
             m4_bundle: V5StructuralM4BundlePhase::Idle,
         })
         || state.consumed_through_event < state.plan_checkpoint.plan_event_count
-        || state.consumed_through_event >= structural.predecessor_event_count
+        || state.consumed_through_event > structural.predecessor_event_count
     {
         return Err(DomainError::EventSequence(
             "V5 M5 continuation coordinates or phase mismatch".to_owned(),
@@ -21075,12 +21316,13 @@ fn validate_v5_m5_continuation(
         })?)
         .map(EventEnvelope::event_hash)
         != Some(&state.consumed_tail_hash)
-        || !matches!(
-            prefix.get(consumed).map(|envelope| {
-                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())
-            }),
-            Some(Ok(PersistedPayload::ArtifactRegisteredV4(_)))
-        )
+        || (consumed < prefix.len()
+            && !matches!(
+                prefix.get(consumed).map(|envelope| {
+                    decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())
+                }),
+                Some(Ok(PersistedPayload::ArtifactRegisteredV4(_)))
+            ))
     {
         return Err(DomainError::EventSequence(
             "V5 M5 continuation does not stop before the first V4 registration".to_owned(),
@@ -21489,6 +21731,65 @@ fn v5_terminal_m5_and_basis_retained_bytes(
         total = total.saturating_add(v5_gluing_entry_dynamic_bytes(entry));
     }
     Ok(total)
+}
+
+fn v5_basis_retained_bytes(basis: &PreIncrementalAuthorityReplayBasisV5) -> u64 {
+    let mut total = u64::try_from(size_of::<PreIncrementalAuthorityReplayBasisV5>())
+        .unwrap_or(u64::MAX)
+        .saturating_add(u64::try_from(basis.target_run_id.allocated_bytes()).unwrap_or(u64::MAX))
+        .saturating_add(
+            u64::try_from(basis.target_genesis_hash.allocated_bytes()).unwrap_or(u64::MAX),
+        )
+        .saturating_add(
+            u64::try_from(basis.target_confirmed_tail_hash.allocated_bytes()).unwrap_or(u64::MAX),
+        )
+        .saturating_add(
+            u64::try_from(basis.policy_revision_hash.allocated_bytes()).unwrap_or(u64::MAX),
+        )
+        .saturating_add(u64::try_from(basis.basis_digest.allocated_bytes()).unwrap_or(u64::MAX))
+        .saturating_add(
+            u64::try_from(
+                basis
+                    .inherited_m4_entries
+                    .capacity()
+                    .saturating_mul(size_of::<AuthorityReplayEntryV3AtV5>()),
+            )
+            .unwrap_or(u64::MAX),
+        )
+        .saturating_add(
+            u64::try_from(
+                basis
+                    .gluing_input_entries
+                    .capacity()
+                    .saturating_mul(size_of::<GluingInputReplayEntryV5>()),
+            )
+            .unwrap_or(u64::MAX),
+        );
+    for entry in &basis.inherited_m4_entries {
+        total = total.saturating_add(v5_authority_entry_dynamic_bytes(entry));
+    }
+    for entry in &basis.gluing_input_entries {
+        total = total.saturating_add(v5_gluing_entry_dynamic_bytes(entry));
+    }
+    total
+}
+
+fn v5_terminal_and_basis_retained_bytes(
+    state: ReplayedV5TerminalAuthorityStateRef<'_, '_>,
+    basis: &PreIncrementalAuthorityReplayBasisV5,
+) -> Result<u64> {
+    match state {
+        ReplayedV5TerminalAuthorityStateRef::WithM5(value) => {
+            v5_terminal_m5_and_basis_retained_bytes(value, basis)
+        }
+        ReplayedV5TerminalAuthorityStateRef::WithoutM5(value) => {
+            v5_m4_realized_retained_bytes(value)?
+                .checked_add(v5_basis_retained_bytes(basis))
+                .ok_or_else(|| {
+                    replay_incomplete("V5 no-M5 terminal retained bytes", u64::MAX, u64::MAX)
+                })
+        }
+    }
 }
 
 /// Finishes one named D2 working phase. Each addition is checked before the
@@ -22219,19 +22520,23 @@ impl PreIncrementalAuthorityReplayBasisV5 {
         state: &ReplayedV5M5AuthorityState<'_>,
         roots: &AuthorityTrustRootsV5,
     ) -> Result<Self> {
-        let structural = state.plan_checkpoint.structural;
-        if state.phase != V5StructuralPostPlanPhase::M5BundleRecorded
-            || state.confirmed_event_count != structural.predecessor_event_count
-            || state.confirmed_tail_hash != structural.tail_hash
-            || state.gluing_input_entries.len() != 2
-            || state.v4_registrations.len() != 2
-            || state.v4_gluing_descriptors.len() != 2
-        {
-            return Err(DomainError::EventSequence(
-                "V5 pre-incremental basis requires terminal M5 authority replay".to_owned(),
-            ));
-        }
-        let target_next_sequence = state.confirmed_event_count.checked_add(1).ok_or_else(|| {
+        Self::from_terminal(ReplayedV5TerminalAuthorityStateRef::WithM5(state), roots)
+    }
+
+    fn from_terminal_without_m5(
+        state: &ReplayedV5M5ContinuationState<'_>,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<Self> {
+        Self::from_terminal(ReplayedV5TerminalAuthorityStateRef::WithoutM5(state), roots)
+    }
+
+    fn from_terminal(
+        state: ReplayedV5TerminalAuthorityStateRef<'_, '_>,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<Self> {
+        state.validate_terminal()?;
+        let structural = state.structural();
+        let target_next_sequence = state.confirmed_count().checked_add(1).ok_or_else(|| {
             DomainError::EventSequence("V5 authority replay next sequence overflow".to_owned())
         })?;
         let schema = "reviewgraphen.pre_incremental_authority_replay_basis.v5";
@@ -22251,12 +22556,12 @@ impl PreIncrementalAuthorityReplayBasisV5 {
             target_run_id: &'a StableId,
         }
         let basis_digest = crate::canonical::compact_json_sha256_streaming(&Body {
-            gluing_input_entries: &state.gluing_input_entries,
-            inherited_m4_entries: &state.inherited_m4_entries,
+            gluing_input_entries: state.gluing_entries(),
+            inherited_m4_entries: state.inherited_entries(),
             policy_revision_hash: &roots.policy_revision_hash,
             schema,
-            target_confirmed_event_count: state.confirmed_event_count,
-            target_confirmed_tail_hash: &state.confirmed_tail_hash,
+            target_confirmed_event_count: state.confirmed_count(),
+            target_confirmed_tail_hash: state.confirmed_tail(),
             target_genesis_hash: &structural.genesis_hash,
             target_next_sequence,
             target_run_id: &structural.pre_incremental.run_id,
@@ -22265,32 +22570,46 @@ impl PreIncrementalAuthorityReplayBasisV5 {
             schema,
             target_run_id: structural.pre_incremental.run_id.clone(),
             target_genesis_hash: structural.genesis_hash.clone(),
-            target_confirmed_tail_hash: state.confirmed_tail_hash.clone(),
-            target_confirmed_event_count: state.confirmed_event_count,
+            target_confirmed_tail_hash: state.confirmed_tail().clone(),
+            target_confirmed_event_count: state.confirmed_count(),
             target_next_sequence,
             policy_revision_hash: roots.policy_revision_hash.clone(),
-            inherited_m4_entries: state.inherited_m4_entries.clone(),
-            gluing_input_entries: state.gluing_input_entries.clone(),
+            inherited_m4_entries: state.inherited_entries().to_vec(),
+            gluing_input_entries: state.gluing_entries().to_vec(),
             basis_digest,
         })
     }
 
     fn validate_for_terminal_m5(&self, state: &ReplayedV5M5AuthorityState<'_>) -> Result<()> {
-        let structural = state.plan_checkpoint.structural;
-        let expected_next = state.confirmed_event_count.checked_add(1).ok_or_else(|| {
+        self.validate_for_terminal(ReplayedV5TerminalAuthorityStateRef::WithM5(state))
+    }
+
+    fn validate_for_terminal_without_m5(
+        &self,
+        state: &ReplayedV5M5ContinuationState<'_>,
+    ) -> Result<()> {
+        self.validate_for_terminal(ReplayedV5TerminalAuthorityStateRef::WithoutM5(state))
+    }
+
+    fn validate_for_terminal(
+        &self,
+        state: ReplayedV5TerminalAuthorityStateRef<'_, '_>,
+    ) -> Result<()> {
+        state.validate_terminal()?;
+        let structural = state.structural();
+        let expected_next = state.confirmed_count().checked_add(1).ok_or_else(|| {
             DomainError::EventSequence("V5 target projection next sequence overflow".to_owned())
         })?;
         if self.schema != "reviewgraphen.pre_incremental_authority_replay_basis.v5"
-            || state.phase != V5StructuralPostPlanPhase::M5BundleRecorded
             || self.target_run_id != structural.pre_incremental.run_id
             || self.target_genesis_hash != structural.genesis_hash
-            || self.target_confirmed_tail_hash != state.confirmed_tail_hash
-            || self.target_confirmed_event_count != state.confirmed_event_count
+            || self.target_confirmed_tail_hash != *state.confirmed_tail()
+            || self.target_confirmed_event_count != state.confirmed_count()
             || self.target_next_sequence != expected_next
             || self.policy_revision_hash
-                != target_policy_revision_hash_v5(state.aggregate.program())?
-            || self.inherited_m4_entries != state.inherited_m4_entries
-            || self.gluing_input_entries != state.gluing_input_entries
+                != target_policy_revision_hash_v5(state.aggregate().program())?
+            || self.inherited_m4_entries != state.inherited_entries()
+            || self.gluing_input_entries != state.gluing_entries()
         {
             return Err(DomainError::HistoricalPrefixMismatch(
                 "target actual projection basis does not bind the terminal M5 replay",
@@ -24283,12 +24602,12 @@ impl EventLogV5 {
     /// provisional until both registrations and the authority-free bundle
     /// have closed successfully.
     #[allow(dead_code)]
-    fn replay_terminal_m5_authority_v5<'a>(
-        continuation: &'a ReplayedV5M5ContinuationState<'a>,
+    fn replay_terminal_m5_authority_v5<'state>(
+        continuation: &ReplayedV5M5ContinuationState<'state>,
         resolver: &dyn AuthorityArtifactResolverV5,
         roots: &AuthorityTrustRootsV5,
     ) -> Result<(
-        ReplayedV5M5AuthorityState<'a>,
+        ReplayedV5M5AuthorityState<'state>,
         PreIncrementalAuthorityReplayBasisV5,
     )> {
         let limits = continuation.plan_checkpoint.structural.event_log.limits;
@@ -24301,14 +24620,121 @@ impl EventLogV5 {
         )
     }
 
-    fn replay_terminal_m5_authority_v5_with_limits<'a>(
-        continuation: &'a ReplayedV5M5ContinuationState<'a>,
+    /// Selects the only two terminal predecessor shapes accepted by M6: the
+    /// complete M4 tail with no M5 records, or the exact two-registration plus
+    /// bundle suffix. A one/two-registration partial suffix is refused by the
+    /// M5 replay and can never obtain a basis.
+    #[allow(dead_code)] // Opaque production seam consumed by the following Store/session slice.
+    pub(crate) fn replay_terminal_pre_incremental_authority_v5<'borrow, 'state>(
+        continuation: &'borrow ReplayedV5M5ContinuationState<'state>,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<ReplayedV5TerminalPredecessorV5<'borrow, 'state>> {
+        let limits = continuation.plan_checkpoint.structural.event_log.limits;
+        Self::replay_terminal_pre_incremental_authority_v5_with_limits(
+            continuation,
+            resolver,
+            roots,
+            limits.max_retained_bytes,
+            limits.max_working_bytes,
+        )
+    }
+
+    fn replay_terminal_pre_incremental_authority_v5_with_limits<'borrow, 'state>(
+        continuation: &'borrow ReplayedV5M5ContinuationState<'state>,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+        max_retained_bytes: u64,
+        max_working_bytes: u64,
+    ) -> Result<ReplayedV5TerminalPredecessorV5<'borrow, 'state>> {
+        let structural = continuation.plan_checkpoint.structural;
+        if continuation.consumed_through_event == structural.predecessor_event_count {
+            let baseline = v5_m4_realized_retained_bytes(continuation)?;
+            let entry_slots = u64::try_from(
+                continuation
+                    .inherited_m4_entries
+                    .len()
+                    .saturating_mul(size_of::<AuthorityReplayEntryV3AtV5>()),
+            )
+            .unwrap_or(u64::MAX);
+            let basis_upper = u64::try_from(size_of::<PreIncrementalAuthorityReplayBasisV5>())
+                .unwrap_or(u64::MAX)
+                .checked_add(entry_slots)
+                .and_then(|value| {
+                    value.checked_add(
+                        continuation
+                            .inherited_m4_entries
+                            .iter()
+                            .map(v5_authority_entry_dynamic_bytes)
+                            .sum::<u64>(),
+                    )
+                })
+                .ok_or_else(|| {
+                    replay_incomplete("V5 no-M5 basis retained preflight", u64::MAX, u64::MAX)
+                })?;
+            let preflight = baseline.checked_add(basis_upper).ok_or_else(|| {
+                replay_incomplete("V5 no-M5 terminal retained preflight", u64::MAX, u64::MAX)
+            })?;
+            if preflight > max_retained_bytes {
+                return Err(replay_incomplete(
+                    "V5 no-M5 terminal retained preflight",
+                    max_retained_bytes,
+                    preflight,
+                ));
+            }
+            if preflight > max_working_bytes {
+                return Err(replay_incomplete(
+                    "V5 no-M5 terminal working preflight",
+                    max_working_bytes,
+                    preflight,
+                ));
+            }
+            let basis = PreIncrementalAuthorityReplayBasisV5::from_terminal_without_m5(
+                continuation,
+                roots,
+            )?;
+            let realized = baseline
+                .checked_add(v5_basis_retained_bytes(&basis))
+                .ok_or_else(|| {
+                    replay_incomplete("V5 no-M5 terminal realized bytes", u64::MAX, u64::MAX)
+                })?;
+            if realized > max_retained_bytes || realized > max_working_bytes {
+                return Err(replay_incomplete(
+                    "V5 no-M5 terminal realized bytes",
+                    max_retained_bytes.min(max_working_bytes),
+                    realized,
+                ));
+            }
+            return Ok(ReplayedV5TerminalPredecessorV5 {
+                inner: ReplayedV5TerminalPredecessorInnerV5::WithoutM5 {
+                    terminal: continuation,
+                    basis,
+                },
+            });
+        }
+        let (terminal, basis) = Self::replay_terminal_m5_authority_v5_with_limits(
+            continuation,
+            resolver,
+            roots,
+            max_retained_bytes,
+            max_working_bytes,
+        )?;
+        Ok(ReplayedV5TerminalPredecessorV5 {
+            inner: ReplayedV5TerminalPredecessorInnerV5::WithM5 {
+                terminal: Box::new(terminal),
+                basis,
+            },
+        })
+    }
+
+    fn replay_terminal_m5_authority_v5_with_limits<'state>(
+        continuation: &ReplayedV5M5ContinuationState<'state>,
         resolver: &dyn AuthorityArtifactResolverV5,
         roots: &AuthorityTrustRootsV5,
         max_retained_bytes: u64,
         max_working_bytes: u64,
     ) -> Result<(
-        ReplayedV5M5AuthorityState<'a>,
+        ReplayedV5M5AuthorityState<'state>,
         PreIncrementalAuthorityReplayBasisV5,
     )> {
         validate_v5_m5_continuation(continuation, roots)?;
@@ -33078,6 +33504,268 @@ fn apply_for_log(
     }
 }
 
+/// Test-only roots-bound source fixture reused by the M6 end-to-end test.
+/// It exposes replay products, never a mutable journal or authority token.
+#[cfg(test)]
+pub(crate) struct CompleteM5V4Fixture {
+    log: EventLogV4,
+    basis: AuthorityReplayBasisV4,
+    completed: M5CompletedGluingProfileV4,
+}
+
+#[cfg(test)]
+impl CompleteM5V4Fixture {
+    pub(crate) fn from_program_and_sources(
+        program: ProgramSpace,
+        sources: BTreeMap<StableId, Vec<u8>>,
+        run_id: StableId,
+    ) -> Result<Self> {
+        tests::complete_m5_v4_fixture_from_program_and_sources(program, sources, run_id)
+    }
+
+    pub(crate) fn log(&self) -> &EventLogV4 {
+        &self.log
+    }
+
+    pub(crate) fn basis(&self) -> &AuthorityReplayBasisV4 {
+        &self.basis
+    }
+
+    pub(crate) fn completed(&self) -> &M5CompletedGluingProfileV4 {
+        &self.completed
+    }
+
+    pub(crate) fn program(&self) -> &ProgramSpace {
+        self.log.aggregate.program()
+    }
+
+    pub(crate) fn run_id(&self) -> &StableId {
+        self.log.run_id()
+    }
+
+    pub(crate) fn snapshot_id(&self) -> &StableId {
+        self.program().snapshot_id()
+    }
+
+    pub(crate) fn has_m5_bundle(&self) -> bool {
+        self.log.has_gluing_bundle_v4()
+    }
+
+    /// M5 is an atomic terminal bundle in a V4 history: a completed fixture
+    /// consequently has precisely one such boundary, never a hand-counted
+    /// envelope approximation.
+    pub(crate) fn m5_event_count(&self) -> usize {
+        usize::from(self.log.m5_bundle.is_some())
+    }
+}
+
+/// Test-only terminal V5 predecessor.  Construction is restricted to typed
+/// ProgramSpace facts plus file bytes whose SHA-256 values are checked against
+/// those accepted facts before any source registration is minted.
+#[cfg(test)]
+pub(crate) struct NoM5V5Fixture {
+    log: EventLogV5,
+    roots: AuthorityTrustRootsV5,
+    sources: BTreeMap<StableId, Vec<u8>>,
+    program: ProgramSpace,
+}
+
+#[cfg(test)]
+impl NoM5V5Fixture {
+    pub(crate) fn from_program_and_sources(
+        program: ProgramSpace,
+        sources: BTreeMap<StableId, Vec<u8>>,
+        run_id: StableId,
+    ) -> Result<Self> {
+        let (universe, obligations) = crate::MvpRulePack::synthesize(&program)?.into_parts();
+        let mut aggregate = ReviewAggregate::new(program.clone(), universe, obligations)?;
+        let snapshot_id = aggregate.program().snapshot_id().clone();
+        let mut registrations = Vec::new();
+        let mut entries = Vec::new();
+        for artifact in aggregate
+            .program()
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+        {
+            let bytes = sources.get(&artifact.id).ok_or_else(|| {
+                DomainError::Validation(
+                    "M6 target fixture lacks accepted file CAS bytes".to_owned(),
+                )
+            })?;
+            let expected = artifact.content_hash.as_ref().ok_or_else(|| {
+                DomainError::Validation("M6 target fixture file lacks content hash".to_owned())
+            })?;
+            if &ContentHash::sha256(bytes) != expected {
+                return Err(DomainError::Validation(
+                    "M6 target fixture CAS bytes do not equal accepted file hash".to_owned(),
+                ));
+            }
+            let location = artifact.location.as_ref().ok_or_else(|| {
+                DomainError::Validation("M6 target fixture file lacks location".to_owned())
+            })?;
+            let registration = ArtifactRegisteredV3::new(
+                run_id.clone(),
+                expected.clone(),
+                "text/plain",
+                u64::try_from(bytes.len()).map_err(|_| {
+                    DomainError::Validation("M6 target fixture source is too large".to_owned())
+                })?,
+                ArtifactSensitivity::WorkspaceSource,
+                ArtifactSourceV3::SnapshotIngest {
+                    adapter_id: "m6-distinct-s1-fixture".to_owned(),
+                    run_id: run_id.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                },
+            )?;
+            entries.push(SnapshotSourceRecordEntry::new(
+                artifact.id.clone(),
+                location.path.clone(),
+                expected.clone(),
+                registration.registration_id().clone(),
+                expected.clone(),
+                u64::try_from(bytes.iter().filter(|byte| **byte == b'\n').count())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+            )?);
+            registrations.push(registration);
+        }
+        if sources.len() != entries.len() {
+            return Err(DomainError::Validation(
+                "M6 target fixture source map has an unaccepted file entry".to_owned(),
+            ));
+        }
+        registrations.sort_by(|left, right| left.registration_id().cmp(right.registration_id()));
+        entries.sort_by(|left, right| left.path().cmp(right.path()));
+        for registration in &registrations {
+            aggregate.register_artifact_v3(&run_id, registration.clone())?;
+        }
+        let recorded_sources = SnapshotSourcesRecorded::new(snapshot_id, entries)?;
+        aggregate.record_snapshot_sources(recorded_sources.clone())?;
+        let plan = crate::plan(&aggregate, crate::PlanBudget::new(16, 16)?)?;
+        let genesis = RunGenesisSnapshot::from_aggregate_v3(&aggregate)?.canonical_bytes_v3()?;
+        let request = RunGenesisBootstrapRequestV4::new(
+            run_id,
+            genesis,
+            aggregate.program().repository_identity(),
+            aggregate.program().snapshot_id().clone(),
+            aggregate.program().profile_id(),
+            aggregate.program().profile_version(),
+        )?;
+        let log = EventLogV5::from_planned_bootstrap_request(
+            request,
+            registrations,
+            recorded_sources,
+            plan,
+        )?;
+        let roots = AuthorityTrustRootsV5::new(
+            target_policy_revision_hash_v5(&program)?,
+            program.repository_id().clone(),
+            program
+                .repository_source()
+                .content_hash()
+                .ok_or(DomainError::AuthorityPolicyMismatch)?
+                .clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )?;
+        Ok(Self {
+            log,
+            roots,
+            sources,
+            program,
+        })
+    }
+
+    pub(crate) fn log(&self) -> &EventLogV5 {
+        &self.log
+    }
+    pub(crate) fn program(&self) -> &ProgramSpace {
+        &self.program
+    }
+    pub(crate) fn run_id(&self) -> &StableId {
+        self.log.run_id()
+    }
+    pub(crate) fn snapshot_id(&self) -> &StableId {
+        self.program().snapshot_id()
+    }
+    pub(crate) const fn m5_event_count(&self) -> usize {
+        0
+    }
+
+    pub(crate) fn with_terminal<R>(
+        &self,
+        callback: impl for<'a> FnOnce(
+            &V5PreIncrementalStructuralPrefixProjection<'a>,
+            &TargetActualRecordInventoryV5<'a>,
+        ) -> crate::m6::M6Result<R>,
+    ) -> crate::m6::M6Result<R> {
+        struct Resolver<'a>(&'a BTreeMap<StableId, Vec<u8>>);
+        impl AuthorityArtifactResolverV5 for Resolver<'_> {
+            fn read_exact(&self, hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                let bytes = self
+                    .0
+                    .values()
+                    .find(|bytes| ContentHash::sha256(bytes) == *hash)
+                    .ok_or_else(|| {
+                        DomainError::Validation("M6 target fixture CAS object is absent".to_owned())
+                    })?;
+                if bytes.len() != destination.len() {
+                    return Err(DomainError::Validation(
+                        "M6 target fixture CAS object size differs".to_owned(),
+                    ));
+                }
+                destination.copy_from_slice(bytes);
+                Ok(())
+            }
+        }
+        let structural = self
+            .log
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                self.log.run_id(),
+                self.log.genesis_hash(),
+                self.log.canonical_prefix_bytes_for_store(),
+                u64::try_from(self.log.envelopes().len()).map_err(|_| {
+                    crate::m6::M6Error::Incomplete {
+                        operation: "M6 target fixture event count",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    }
+                })?,
+                self.log.tail_hash(),
+            ))
+            .map_err(crate::m6::M6Error::from)?;
+        let resolver = Resolver(&self.sources);
+        let checkpoint = EventLogV5::certify_plan_authority_checkpoint_v5_with_limits(
+            &structural,
+            &resolver,
+            &self.roots,
+            self.log.limits.max_retained_bytes,
+            self.log.limits.max_working_bytes,
+        )
+        .map_err(crate::m6::M6Error::from)?;
+        let d2 = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &checkpoint,
+            &resolver,
+            &self.roots,
+        )
+        .map_err(crate::m6::M6Error::from)?;
+        let m4 = EventLogV5::replay_ordered_m4_authority_prefix_v5(d2, &resolver, &self.roots)
+            .map_err(crate::m6::M6Error::from)?;
+        let terminal =
+            EventLogV5::replay_terminal_pre_incremental_authority_v5(&m4, &resolver, &self.roots)
+                .map_err(crate::m6::M6Error::from)?;
+        let projection = terminal
+            .target_actual_record_projection_v5()
+            .map_err(crate::m6::M6Error::from)?;
+        let inventory = projection
+            .materialize_inventory_v5()
+            .map_err(crate::m6::M6Error::from)?;
+        callback(&structural.projection(), &inventory)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39383,9 +40071,34 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn v4_gluing_replay_accepts_only_the_zero_one_two_context_prefixes() {
-        let (mut v3, initial, plan, obligation_id, context, sources) = d2_v3_m4_m5_log();
+    /// The existing full V4/M5 replay scenario, exposed as an opaque fixture
+    /// for M6.  Its negative-path assertions remain deliberately in place:
+    /// the E2E consumer receives only the same complete, roots-bound prefix
+    /// which this scenario has exhaustively exercised.
+    pub(crate) fn complete_m5_v4_fixture_for_m6() -> Result<CompleteM5V4Fixture> {
+        complete_m5_v4_fixture_from_d2(d2_v3_m4_m5_log())
+    }
+
+    pub(crate) fn complete_m5_v4_fixture_from_program_and_sources(
+        program: ProgramSpace,
+        sources: BTreeMap<StableId, Vec<u8>>,
+        run_id: StableId,
+    ) -> Result<CompleteM5V4Fixture> {
+        complete_m5_v4_fixture_from_d2(d2_v3_m4_m5_log_from_program(program, sources, run_id)?)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn complete_m5_v4_fixture_from_d2(
+        d2: (
+            EventLog,
+            ReviewAggregate,
+            ReviewPlan,
+            StableId,
+            ReviewContextEnvelope,
+            BTreeMap<StableId, Vec<u8>>,
+        ),
+    ) -> Result<CompleteM5V4Fixture> {
+        let (mut v3, initial, plan, obligation_id, context, sources) = d2;
         assert_eq!(
             v3.aggregate().program().profile_key(),
             crate::DOUBLE_SUBMIT_PROFILE_ID
@@ -40505,6 +41218,185 @@ mod tests {
             &full_tail_v5_roots,
         )
         .expect("positioned full-tail V5 M4");
+
+        // The same roots-bound aggregate ending exactly at the M4 cursor is a
+        // terminal predecessor with zero M5 attempts.  It can mint the full
+        // basis only after the cursor reaches that shorter chain's actual
+        // tail; no registration or partial M5 prefix is accepted here.
+        let no_m5_count = usize::try_from(full_tail_m5_continuation.consumed_through_event)
+            .expect("no-M5 event count");
+        let no_m5_envelopes = full_tail_v5.envelopes[..no_m5_count].to_vec();
+        let no_m5_log = EventLogV5::replay_confirmed_v5_prefix(
+            full_tail_v5.run_id.clone(),
+            full_tail_v5.canonical_genesis_bytes.clone(),
+            no_m5_envelopes,
+            full_tail_v5.limits,
+        )
+        .expect("native no-M5 V5 prefix")
+        .0;
+        let no_m5_structural = no_m5_log
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                no_m5_log.run_id(),
+                no_m5_log.genesis_hash(),
+                no_m5_log.canonical_prefix_bytes_for_store(),
+                u64::try_from(no_m5_log.envelopes.len()).unwrap(),
+                no_m5_log.tail_hash(),
+            ))
+            .expect("no-M5 structural replay");
+        let no_m5_checkpoint = EventLogV5::certify_plan_authority_checkpoint_v5_with_limits(
+            &no_m5_structural,
+            &FullTailV5Resolver(&resolver.objects),
+            &full_tail_v5_roots,
+            no_m5_log.limits.max_retained_bytes,
+            no_m5_log.limits.max_working_bytes,
+        )
+        .expect("no-M5 plan checkpoint");
+        let no_m5_d2 = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &no_m5_checkpoint,
+            &FullTailV5Resolver(&resolver.objects),
+            &full_tail_v5_roots,
+        )
+        .expect("no-M5 D2 replay");
+        let no_m5_terminal = EventLogV5::replay_ordered_m4_authority_prefix_v5(
+            no_m5_d2,
+            &FullTailV5Resolver(&resolver.objects),
+            &full_tail_v5_roots,
+        )
+        .expect("no-M5 terminal M4 replay");
+        let no_m5_selected = EventLogV5::replay_terminal_pre_incremental_authority_v5(
+            &no_m5_terminal,
+            &FullTailV5Resolver(&resolver.objects),
+            &full_tail_v5_roots,
+        )
+        .expect("terminal no-M5 selector");
+        let no_m5_baseline = v5_m4_realized_retained_bytes(&no_m5_terminal).unwrap();
+        let no_m5_exact = no_m5_baseline + v5_basis_retained_bytes(no_m5_selected.basis());
+        assert!(matches!(
+            EventLogV5::replay_terminal_pre_incremental_authority_v5_with_limits(
+                &no_m5_terminal,
+                &FullTailV5Resolver(&resolver.objects),
+                &full_tail_v5_roots,
+                no_m5_exact - 1,
+                u64::MAX,
+            ),
+            Err(DomainError::Incomplete { .. })
+        ));
+        EventLogV5::replay_terminal_pre_incremental_authority_v5_with_limits(
+            &no_m5_terminal,
+            &FullTailV5Resolver(&resolver.objects),
+            &full_tail_v5_roots,
+            no_m5_exact,
+            no_m5_exact,
+        )
+        .expect("exact no-M5 terminal resource limit");
+        let no_m5_basis = no_m5_selected.basis();
+        assert!(no_m5_basis.gluing_input_entries.is_empty());
+        assert_eq!(
+            no_m5_basis.target_confirmed_event_count,
+            no_m5_structural.predecessor_event_count
+        );
+        let no_m5_projection = no_m5_selected
+            .target_actual_record_projection_v5()
+            .expect("no-M5 target actual projection");
+        let no_m5_inventory = no_m5_projection
+            .materialize_inventory_v5()
+            .expect("no-M5 target actual inventory");
+        let mut no_m5_kind_counts = [0_usize; 21];
+        no_m5_inventory
+            .try_visit_records(|record| {
+                no_m5_kind_counts[record.kind as usize] += 1;
+                Ok(())
+            })
+            .unwrap();
+        for kind in [
+            HistoricalSourceRecordKindV4::ArtifactRegistrationV4,
+            HistoricalSourceRecordKindV4::GluingInputDescriptor,
+            HistoricalSourceRecordKindV4::ContextCover,
+            HistoricalSourceRecordKindV4::Section,
+            HistoricalSourceRecordKindV4::Restriction,
+            HistoricalSourceRecordKindV4::GluingAttempt,
+            HistoricalSourceRecordKindV4::GlobalCandidate,
+            HistoricalSourceRecordKindV4::GluingObstruction,
+        ] {
+            assert_eq!(no_m5_kind_counts[kind as usize], 0, "{kind:?}");
+        }
+        assert_eq!(
+            no_m5_kind_counts[HistoricalSourceRecordKindV4::Coverage as usize],
+            1
+        );
+        let partial_registration_sequences = full_tail_v5
+            .envelopes
+            .iter()
+            .filter_map(|envelope| {
+                matches!(
+                    decode_canonical_payload(EventContractVersion::V5, envelope.payload.get()),
+                    Ok(PersistedPayload::ArtifactRegisteredV4(_))
+                )
+                .then_some(envelope.sequence())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(partial_registration_sequences.len(), 2);
+        for partial_count in partial_registration_sequences {
+            let partial_log = EventLogV5::replay_confirmed_v5_prefix(
+                full_tail_v5.run_id.clone(),
+                full_tail_v5.canonical_genesis_bytes.clone(),
+                full_tail_v5.envelopes[..usize::try_from(partial_count).unwrap()].to_vec(),
+                full_tail_v5.limits,
+            )
+            .expect("partial M5 V5 prefix")
+            .0;
+            let structural = partial_log
+                .replay_pre_incremental_structural_prefix_for_store(
+                    V5StructuralPrefixCoordinates::new(
+                        partial_log.run_id(),
+                        partial_log.genesis_hash(),
+                        partial_log.canonical_prefix_bytes_for_store(),
+                        u64::try_from(partial_log.envelopes.len()).unwrap(),
+                        partial_log.tail_hash(),
+                    ),
+                )
+                .expect("partial structural replay");
+            let checkpoint = EventLogV5::certify_plan_authority_checkpoint_v5_with_limits(
+                &structural,
+                &FullTailV5Resolver(&resolver.objects),
+                &full_tail_v5_roots,
+                partial_log.limits.max_retained_bytes,
+                partial_log.limits.max_working_bytes,
+            )
+            .expect("partial plan checkpoint");
+            let d2 = EventLogV5::replay_certified_d2_authority_prefix_v5(
+                &checkpoint,
+                &FullTailV5Resolver(&resolver.objects),
+                &full_tail_v5_roots,
+            )
+            .expect("partial D2 replay");
+            let continuation = EventLogV5::replay_ordered_m4_authority_prefix_v5(
+                d2,
+                &FullTailV5Resolver(&resolver.objects),
+                &full_tail_v5_roots,
+            )
+            .expect("partial M4 continuation");
+            assert!(matches!(
+                continuation.terminal_without_m5_basis_v5(&full_tail_v5_roots),
+                Err(DomainError::EventSequence(_))
+            ));
+            assert!(matches!(
+                EventLogV5::replay_terminal_m5_authority_v5(
+                    &continuation,
+                    &FullTailV5Resolver(&resolver.objects),
+                    &full_tail_v5_roots,
+                ),
+                Err(DomainError::EventSequence(_))
+            ));
+            assert!(matches!(
+                EventLogV5::replay_terminal_pre_incremental_authority_v5(
+                    &continuation,
+                    &FullTailV5Resolver(&resolver.objects),
+                    &full_tail_v5_roots,
+                ),
+                Err(DomainError::EventSequence(_))
+            ));
+        }
         let m5_preflight = v5_m5_authority_preflight(&full_tail_m5_continuation)
             .expect("sealed M5 resource preflight");
         assert!(m5_preflight.retained_bytes > 0);
@@ -40527,6 +41419,19 @@ mod tests {
             full_tail_m5_continuation.consumed_tail_hash, continuation_tail,
             "a failed terminal gate must not mutate its continuation"
         );
+        let selected_with_m5 = EventLogV5::replay_terminal_pre_incremental_authority_v5(
+            &full_tail_m5_continuation,
+            &FullTailV5Resolver(&resolver.objects),
+            &full_tail_v5_roots,
+        )
+        .expect("terminal with-M5 selector");
+        assert_eq!(selected_with_m5.basis().gluing_input_entries.len(), 2);
+        selected_with_m5
+            .target_actual_record_projection_v5()
+            .expect("selected with-M5 projection")
+            .materialize_inventory_v5()
+            .expect("selected with-M5 inventory");
+        drop(selected_with_m5);
         let (terminal_m5, mut full_basis) = EventLogV5::replay_terminal_m5_authority_v5(
             &full_tail_m5_continuation,
             &FullTailV5Resolver(&resolver.objects),
@@ -41858,6 +42763,36 @@ mod tests {
             )
             .is_err()
         );
+
+        let (log, basis) = EventLogV4::replay_confirmed_v4_prefix_for_session(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &sealed_confirmed,
+            &resolver,
+            &roots,
+            limits,
+            &OpaqueSessionIdentityV4::fresh(),
+        )?;
+        let inspection = EventLogV4::inspect_m5_gluing_profile_v4(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &sealed_confirmed,
+            &resolver,
+            inherited_v4_roots(Vec::new()),
+            limits,
+            assignments,
+        )?;
+        let (_, _, completed) = inspection.into_recovery_parts();
+        Ok(CompleteM5V4Fixture {
+            log,
+            basis,
+            completed: completed.ok_or(DomainError::IncompleteSourceM5Baseline)?,
+        })
+    }
+
+    #[test]
+    fn v4_gluing_replay_accepts_only_the_zero_one_two_context_prefixes() {
+        complete_m5_v4_fixture_for_m6().expect("complete M5 fixture");
     }
 
     #[test]
@@ -42675,6 +43610,137 @@ mod tests {
             FIXTURE_TEST_ARTIFACT_ID,
             true,
         )
+    }
+
+    #[allow(clippy::type_complexity)] // mirrors the legacy D2 fixture handoff exactly.
+    fn d2_v3_m4_m5_log_from_program(
+        program: ProgramSpace,
+        source_by_id: BTreeMap<StableId, Vec<u8>>,
+        run_id: StableId,
+    ) -> Result<(
+        EventLog,
+        ReviewAggregate,
+        ReviewPlan,
+        StableId,
+        ReviewContextEnvelope,
+        BTreeMap<StableId, Vec<u8>>,
+    )> {
+        for artifact in program
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+        {
+            let bytes = source_by_id.get(&artifact.id).ok_or_else(|| {
+                DomainError::Validation(
+                    "M6 source fixture lacks accepted file CAS bytes".to_owned(),
+                )
+            })?;
+            if artifact.content_hash.as_ref() != Some(&ContentHash::sha256(bytes)) {
+                return Err(DomainError::Validation(
+                    "M6 source fixture CAS bytes do not equal accepted file hash".to_owned(),
+                ));
+            }
+        }
+        if source_by_id.len()
+            != program
+                .artifacts()
+                .iter()
+                .filter(|artifact| artifact.kind == "file")
+                .count()
+        {
+            return Err(DomainError::Validation(
+                "M6 source fixture source map has an unaccepted file entry".to_owned(),
+            ));
+        }
+        let (universe, obligations) = MvpRulePack::synthesize(&program)?.into_parts();
+        let initial = ReviewAggregate::new(program, universe, obligations)?;
+        let mut log = EventLog::new_v3(run_id.clone(), initial.clone())?;
+        let snapshot_id = initial.program().snapshot_id().clone();
+        let mut entries = Vec::new();
+        let mut registrations = Vec::new();
+        for artifact in initial
+            .program()
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+        {
+            let bytes = &source_by_id[&artifact.id];
+            let hash = ContentHash::sha256(bytes);
+            let registration = ArtifactRegisteredV3::new(
+                run_id.clone(),
+                hash.clone(),
+                "text/plain",
+                u64::try_from(bytes.len()).map_err(|_| {
+                    DomainError::Validation("M6 source fixture source is too large".to_owned())
+                })?,
+                ArtifactSensitivity::WorkspaceSource,
+                ArtifactSourceV3::SnapshotIngest {
+                    adapter_id: "m6-distinct-s0-fixture".to_owned(),
+                    run_id: run_id.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                },
+            )?;
+            let location = artifact.location.as_ref().ok_or_else(|| {
+                DomainError::Validation("M6 source fixture file lacks location".to_owned())
+            })?;
+            entries.push(SnapshotSourceRecordEntry::new(
+                artifact.id.clone(),
+                location.path.clone(),
+                hash.clone(),
+                registration.registration_id().clone(),
+                hash,
+                u64::try_from(bytes.iter().filter(|byte| **byte == b'\n').count())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+            )?);
+            registrations.push(registration);
+        }
+        registrations.sort_by(|left, right| left.registration_id().cmp(right.registration_id()));
+        for registration in registrations {
+            log.append(EventCommand::artifact_registered_v3(registration))?;
+        }
+        entries.sort_by(|left, right| left.path().cmp(right.path()));
+        log.append(EventCommand::snapshot_sources_recorded(
+            SnapshotSourcesRecorded::new(snapshot_id, entries)?,
+        ))?;
+        let plan = plan(log.aggregate(), PlanBudget::new(16, 16)?)?;
+        log.append(EventCommand::review_plan_recorded(plan.clone()))?;
+        let (obligation_id, built) = plan
+            .waves()
+            .iter()
+            .flat_map(|wave| wave.obligation_ids())
+            .find_map(|candidate| {
+                (log.aggregate().obligation(candidate)?.property_id() == M4_PROPERTY_ID).then(
+                    || {
+                        let mut session =
+                            crate::prepare_context(log.aggregate(), candidate.clone()).ok()?;
+                        while let Some(request) = session.next_source_request().ok()? {
+                            session
+                                .submit_source(&request, &source_by_id[request.artifact_id()])
+                                .ok()?;
+                        }
+                        let built = session.finish().ok()?;
+                        (!built.envelope().normalized_included_source_ids().is_empty())
+                            .then_some((candidate.clone(), built))
+                    },
+                )?
+            })
+            .ok_or_else(|| {
+                DomainError::Validation(
+                    "M6 source fixture lacks source-grounded payment obligation".to_owned(),
+                )
+            })?;
+        log.append(EventCommand::obligation_transition(
+            obligation_id.clone(),
+            ObligationLifecycle::Planned,
+        ))?;
+        log.append(EventCommand::obligation_transition(
+            obligation_id.clone(),
+            ObligationLifecycle::InProgress,
+        ))?;
+        let envelope = built.envelope().clone();
+        log.append(EventCommand::context_envelope_projected(built))?;
+        Ok((log, initial, plan, obligation_id, envelope, source_by_id))
     }
 
     fn d2_v3_m4_log_without_fixture_test() -> (

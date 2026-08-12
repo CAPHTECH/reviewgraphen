@@ -1,9 +1,9 @@
-//! Deterministic M0/M1 domain core for ReviewGraphen.
+//! Deterministic ReviewGraphen domain and event core.
 //!
 //! The public model maintains strict boundaries between accepted program facts,
-//! review claims, evidence, verification, and human decisions. It intentionally
-//! stops before ingestion, reviewer execution, verification execution, gluing,
-//! and staleness propagation milestones.
+//! review claims, evidence, verification, and human decisions. Its accepted
+//! contracts extend through source-bound M6 incremental mapping, obligation
+//! correspondence, and property-sensitive staleness assessment.
 
 mod canonical;
 mod context;
@@ -17,6 +17,8 @@ mod m4;
 mod m5;
 #[allow(dead_code)] // M6's crate-only proof seam is consumed by the subsequent Event/Store slice.
 pub mod m6;
+#[cfg(test)]
+mod m6_test_support;
 mod planning;
 mod program;
 mod projection;
@@ -139,17 +141,20 @@ pub use m5::{
     SectionV4,
 };
 pub use m6::{
-    CandidateKeyKindV5, ChangeMorphismV5, IdBodyHashV5, IncrementalSourceClosureV5, M6Error,
-    M6MappingPhaseV5, M6ObligationCorrespondencePhaseV5, M6Result, MAX_M6_CANONICAL_BYTES,
-    MAX_M6_CLOSURE_DTO_BYTES, MAX_M6_CORRESPONDENCE_DTO_BYTES, MAX_M6_CORRESPONDENCE_ENTRIES,
-    MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS, MAX_M6_CORRESPONDENCE_SIDE_IDS,
-    MAX_M6_CORRESPONDENCE_WORKING_BYTES, MAX_M6_EVENT_LINE_BYTES, MAX_M6_MAPPING_DTO_BYTES,
+    CandidateKeyKindV5, ChangeMorphismV5, GluingFreshnessV5, HistoricalAssessmentStatusV5,
+    HistoricalRecordAssessmentV5, HistoricalRecordKindV5, IdBodyHashV5, IncrementalSourceClosureV5,
+    M6Error, M6MappingPhaseV5, M6ObligationCorrespondencePhaseV5, M6Result, M6StalenessPhaseV5,
+    MAX_M6_CANONICAL_BYTES, MAX_M6_CLOSURE_DTO_BYTES, MAX_M6_CORRESPONDENCE_DTO_BYTES,
+    MAX_M6_CORRESPONDENCE_ENTRIES, MAX_M6_CORRESPONDENCE_PREDECESSOR_IDS,
+    MAX_M6_CORRESPONDENCE_SIDE_IDS, MAX_M6_CORRESPONDENCE_WORKING_BYTES, MAX_M6_EVENT_LINE_BYTES,
+    MAX_M6_GLUE_FRESHNESS_RECORDS, MAX_M6_HISTORICAL_ASSESSMENTS, MAX_M6_MAPPING_DTO_BYTES,
     MAX_M6_MAPPING_LINK_IDS, MAX_M6_MAPPING_SIDE_IDS, MAX_M6_MAPPING_WORKING_BYTES,
     MAX_M6_MAPPINGS, MAX_M6_MORPHISM_DTO_BYTES, MAX_M6_OBLIGATIONS_PER_UNIVERSE,
-    MAX_M6_PROGRAM_DOMAIN_IDS, MappingStatusCountsV5, MappingStatusV5,
-    OBLIGATION_CORRESPONDENCE_POLICY_V5, ObligationCorrespondenceEntryV5,
-    ObligationCorrespondenceV5, PROGRAM_MAPPING_POLICY_V5, ProgramMappingV5, ProgramObjectKindV5,
-    RUST_SYMBOL_ANCHOR_V1, RustSymbolAnchorV1, RustSymbolKindV1,
+    MAX_M6_PROGRAM_DOMAIN_IDS, MAX_M6_RELATION_VISITS, MVP_PROPERTY_IMPACT_POLICY_V5,
+    MappingStatusCountsV5, MappingStatusV5, OBLIGATION_CORRESPONDENCE_POLICY_V5,
+    ObligationCorrespondenceEntryV5, ObligationCorrespondenceV5, PROGRAM_MAPPING_POLICY_V5,
+    ProgramMappingV5, ProgramObjectKindV5, RUST_SYMBOL_ANCHOR_V1, RustSymbolAnchorV1,
+    RustSymbolKindV1, StaleReasonV5, StalenessAssessmentV5, StalenessDirectnessV5,
     UntrustedIncrementalMappingProposalV5, derive_untrusted_incremental_mapping_proposal_v5,
 };
 pub use planning::{

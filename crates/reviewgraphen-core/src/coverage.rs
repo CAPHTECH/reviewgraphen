@@ -111,12 +111,42 @@ impl HistoricalCoverageSnapshotV4 {
         v3: &crate::event::V3RunAggregate,
         cover: &crate::ContextCoverV4,
     ) -> crate::Result<Self> {
+        Self::derive_from_optional_parts(aggregate, v3, Some(cover))
+    }
+
+    pub(crate) fn derive_without_m5(
+        aggregate: &ReviewAggregate,
+        v3: &crate::event::V3RunAggregate,
+    ) -> crate::Result<Self> {
+        Self::derive_from_optional_parts(aggregate, v3, None)
+    }
+
+    fn derive_from_optional_parts(
+        aggregate: &ReviewAggregate,
+        v3: &crate::event::V3RunAggregate,
+        cover: Option<&crate::ContextCoverV4>,
+    ) -> crate::Result<Self> {
         let denominator_obligation_ids = aggregate.universe().obligation_ids().clone();
+        let plan_id = match cover {
+            Some(cover) => cover.plan_id(),
+            None => {
+                let mut plans = aggregate.review_plans();
+                let plan = plans.next().ok_or(DomainError::HistoricalPrefixMismatch(
+                    "historical no-M5 coverage has no plan",
+                ))?;
+                if plans.next().is_some() {
+                    return Err(DomainError::HistoricalPrefixMismatch(
+                        "historical no-M5 coverage has multiple plans",
+                    ));
+                }
+                plan.id()
+            }
+        };
 
         let mut execution_ids = BTreeSet::new();
         for execution in aggregate
             .executions()
-            .filter(|execution| execution.plan_id() == cover.plan_id())
+            .filter(|execution| execution.plan_id() == plan_id)
         {
             if execution.obligation_ids().len() != 1
                 || !execution
