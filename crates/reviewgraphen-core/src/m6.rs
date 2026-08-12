@@ -1038,6 +1038,36 @@ impl PreservationResultV1 {
 }
 
 impl PreservationEvidenceV5 {
+    pub(crate) fn retained_bytes(&self) -> M6Result<usize> {
+        [
+            std::mem::size_of::<Self>(),
+            self.schema.capacity(),
+            self.id.allocated_bytes(),
+            self.target_snapshot_id.allocated_bytes(),
+            self.target_obligation_id.allocated_bytes(),
+            self.source_closure_id.allocated_bytes(),
+            self.morphism_id.allocated_bytes(),
+            self.correspondence_entry_id.allocated_bytes(),
+            self.source_claim_id.allocated_bytes(),
+            conservative_id_set_heap(&self.source_evidence_ids)?,
+            self.source_verification_id.allocated_bytes(),
+            conservative_id_set_heap(&self.dependency_mapping_ids)?,
+            self.input_registration_id.allocated_bytes(),
+            self.output_registration_id.allocated_bytes(),
+            self.descriptor_id.capacity(),
+            self.procedure_version.capacity(),
+            self.observation.capacity(),
+            conservative_id_set_heap(&self.source_ids)?,
+        ]
+        .into_iter()
+        .try_fold(0_usize, |total, value| {
+            total.checked_add(value).ok_or(M6Error::Incomplete {
+                operation: "M6 preservation evidence retained bytes",
+                limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                observed: usize::MAX,
+            })
+        })
+    }
     fn new(
         input: &PreservationInputV1,
         input_registration_id: StableId,
@@ -1224,6 +1254,29 @@ impl PreservationEvidenceV5 {
 }
 
 impl PreservationVerificationV5 {
+    pub(crate) fn retained_bytes(&self) -> M6Result<usize> {
+        [
+            std::mem::size_of::<Self>(),
+            self.schema.capacity(),
+            self.id.allocated_bytes(),
+            self.target_snapshot_id.allocated_bytes(),
+            self.target_obligation_id.allocated_bytes(),
+            self.evidence_id.allocated_bytes(),
+            self.source_verification_id.allocated_bytes(),
+            self.descriptor_id.capacity(),
+            self.procedure_version.capacity(),
+            self.outcome.capacity(),
+            conservative_id_set_heap(&self.source_ids)?,
+        ]
+        .into_iter()
+        .try_fold(0_usize, |total, value| {
+            total.checked_add(value).ok_or(M6Error::Incomplete {
+                operation: "M6 preservation verification retained bytes",
+                limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                observed: usize::MAX,
+            })
+        })
+    }
     fn new(input: &PreservationInputV1, evidence: &PreservationEvidenceV5) -> M6Result<Self> {
         let source_ids =
             BTreeSet::from([evidence.id.clone(), input.source_verification_id.clone()]);
@@ -1447,6 +1500,14 @@ pub struct M6PreservationPhaseV5 {
 }
 
 impl M6PreservationPhaseV5 {
+    pub(crate) fn evidence(&self) -> &[PreservationEvidenceV5] {
+        &self.evidence
+    }
+
+    pub(crate) fn verifications(&self) -> &[PreservationVerificationV5] {
+        &self.verifications
+    }
+
     pub(crate) fn retained_bytes(&self) -> M6Result<usize> {
         let mut total = std::mem::size_of::<Self>();
         let add = |total: &mut usize, value: usize| -> M6Result<()> {
@@ -1856,6 +1917,77 @@ struct PartialRerunActionWireV5 {
 }
 
 impl PartialRerunActionV5 {
+    pub(crate) fn retained_bytes(&self) -> M6Result<usize> {
+        let prerequisite_bytes = self
+            .prerequisites
+            .iter()
+            .try_fold(0_usize, |total, value| {
+                let owned = match value {
+                    ActionPrerequisiteV5::ScheduledAction { action_id } => {
+                        action_id.allocated_bytes()
+                    }
+                    ActionPrerequisiteV5::ExistingTargetRecord {
+                        record_id,
+                        body_hash,
+                        event_id,
+                    } => record_id
+                        .allocated_bytes()
+                        .checked_add(body_hash.allocated_bytes())
+                        .and_then(|value| value.checked_add(event_id.allocated_bytes()))
+                        .ok_or(M6Error::Incomplete {
+                            operation: "M6 partial action retained bytes",
+                            limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                            observed: usize::MAX,
+                        })?,
+                };
+                total.checked_add(owned).ok_or(M6Error::Incomplete {
+                    operation: "M6 partial action retained bytes",
+                    limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                    observed: usize::MAX,
+                })
+            })?;
+        [
+            std::mem::size_of::<Self>(),
+            self.id.allocated_bytes(),
+            self.staleness_assessment_id.allocated_bytes(),
+            conservative_id_set_heap(&self.subject_ids)?,
+            self.prerequisites
+                .capacity()
+                .checked_mul(std::mem::size_of::<ActionPrerequisiteV5>())
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 partial action retained bytes",
+                    limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                    observed: usize::MAX,
+                })?,
+            prerequisite_bytes,
+            conservative_id_set_heap(&self.stale_source_record_ids)?,
+            conservative_btree_node_bytes(self.reasons.len())?
+                .checked_add(
+                    self.reasons
+                        .len()
+                        .checked_mul(std::mem::size_of::<StaleReasonV5>())
+                        .ok_or(M6Error::Incomplete {
+                            operation: "M6 partial action retained bytes",
+                            limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                            observed: usize::MAX,
+                        })?,
+                )
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 partial action retained bytes",
+                    limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                    observed: usize::MAX,
+                })?,
+            conservative_id_set_heap(&self.source_ids)?,
+        ]
+        .into_iter()
+        .try_fold(0_usize, |total, value| {
+            total.checked_add(value).ok_or(M6Error::Incomplete {
+                operation: "M6 partial action retained bytes",
+                limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                observed: usize::MAX,
+            })
+        })
+    }
     fn derive(
         staleness_assessment_id: StableId,
         target_obligation_id: StableId,
@@ -2087,6 +2219,30 @@ struct PartialRerunPlanPartsV5<'a> {
 }
 
 impl PartialRerunPlanV5 {
+    pub(crate) fn retained_bytes(&self) -> M6Result<usize> {
+        [
+            std::mem::size_of::<Self>(),
+            self.id.allocated_bytes(),
+            self.source_closure_id.allocated_bytes(),
+            self.morphism_id.allocated_bytes(),
+            self.correspondence_id.allocated_bytes(),
+            self.staleness_assessment_id.allocated_bytes(),
+            self.target_plan_id.allocated_bytes(),
+            self.selected_target_digest.allocated_bytes(),
+            self.action_set_digest.allocated_bytes(),
+            self.preservation_verification_digest.allocated_bytes(),
+            self.required_human_resolution_digest.allocated_bytes(),
+            conservative_id_set_heap(&self.source_ids)?,
+        ]
+        .into_iter()
+        .try_fold(0_usize, |total, value| {
+            total.checked_add(value).ok_or(M6Error::Incomplete {
+                operation: "M6 partial plan retained bytes",
+                limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+                observed: usize::MAX,
+            })
+        })
+    }
     fn seal(parts: PartialRerunPlanPartsV5<'_>) -> M6Result<Self> {
         require_kind(
             &parts.source_closure_id,
@@ -2352,6 +2508,80 @@ impl PartialRerunPlanV5 {
         Ok(value)
     }
 
+    /// Validates a closed event body before the event layer compares it with
+    /// the opaque roots/CAS-derived phase.  This deliberately proves only the
+    /// DTO's own identity and canonical form; action-set equality belongs to
+    /// the phase admission boundary and cannot be supplied by event JSON.
+    pub(crate) fn from_event_json_bytes(input: &[u8]) -> M6Result<Self> {
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 partial rerun plan event JSON bytes",
+        )?;
+        preflight_event_line(input.len(), 1)?;
+        let wire: PartialRerunPlanWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        for (field, digest) in [
+            ("selected_target_digest", &wire.selected_target_digest),
+            ("action_set_digest", &wire.action_set_digest),
+            (
+                "preservation_verification_digest",
+                &wire.preservation_verification_digest,
+            ),
+            (
+                "required_human_resolution_digest",
+                &wire.required_human_resolution_digest,
+            ),
+        ] {
+            full_sha256(field, digest)?;
+        }
+        let source_ids = BTreeSet::from([
+            wire.source_closure_id.clone(),
+            wire.morphism_id.clone(),
+            wire.correspondence_id.clone(),
+            wire.staleness_assessment_id.clone(),
+            wire.target_plan_id.clone(),
+        ]);
+        let value = Self {
+            schema: "reviewgraphen.partial_rerun_plan.v5",
+            id: wire.id,
+            source_closure_id: wire.source_closure_id,
+            morphism_id: wire.morphism_id,
+            correspondence_id: wire.correspondence_id,
+            staleness_assessment_id: wire.staleness_assessment_id,
+            planner_descriptor_id: PARTIAL_RERUN_PLANNER_DESCRIPTOR_V5,
+            target_plan_id: wire.target_plan_id,
+            selected_target_count: wire.selected_target_count,
+            selected_target_digest: wire.selected_target_digest,
+            action_count: wire.action_count,
+            action_set_digest: wire.action_set_digest,
+            preservation_verification_count: wire.preservation_verification_count,
+            preservation_verification_digest: wire.preservation_verification_digest,
+            required_human_resolution_count: wire.required_human_resolution_count,
+            required_human_resolution_digest: wire.required_human_resolution_digest,
+            source_ids,
+        };
+        if wire.schema != value.schema
+            || wire.planner_descriptor_id != PARTIAL_RERUN_PLANNER_DESCRIPTOR_V5
+            || wire.source_ids != value.source_ids
+            || value.id != derive("partial-rerun-plan-v5", &value.identity())?
+            || value.selected_target_count > MAX_M6_OBLIGATIONS_PER_UNIVERSE as u64
+            || value.action_count > MAX_M6_PARTIAL_RERUN_ACTIONS as u64
+            || value.preservation_verification_count > MAX_M6_PRESERVATION_RECORDS as u64
+            || value.required_human_resolution_count > value.selected_target_count
+            || crate::canonical_json(&value)? != input
+        {
+            return Err(M6Error::InvalidWire(
+                "partial rerun plan event JSON is not exact canonical derived content".to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+
+    pub(crate) fn validate_event_wire(input: &[u8]) -> M6Result<()> {
+        Self::from_event_json_bytes(input).map(|_| ())
+    }
+
     #[must_use]
     pub fn id(&self) -> &StableId {
         &self.id
@@ -2371,6 +2601,10 @@ impl PartialRerunPlanV5 {
     #[must_use]
     pub const fn preservation_verification_count(&self) -> u64 {
         self.preservation_verification_count
+    }
+    #[must_use]
+    pub fn preservation_verification_digest(&self) -> &ContentHash {
+        &self.preservation_verification_digest
     }
     #[must_use]
     pub const fn required_human_resolution_count(&self) -> u64 {
@@ -4205,6 +4439,27 @@ fn id_set_heap(ids: &BTreeSet<StableId>) -> usize {
     ids.len()
         .saturating_mul(std::mem::size_of::<StableId>())
         .saturating_add(ids.iter().map(StableId::allocated_bytes).sum::<usize>())
+}
+
+// BTreeSet nodes have allocator metadata and links not reflected by the
+// StableId backing allocations.  Keep a conservative per-node charge in the
+// M6 peak contract instead of treating a set as a flat ID list.
+fn conservative_id_set_heap(ids: &BTreeSet<StableId>) -> M6Result<usize> {
+    id_set_heap(ids)
+        .checked_add(conservative_btree_node_bytes(ids.len())?)
+        .ok_or(M6Error::Incomplete {
+            operation: "M6 BTreeSet node ownership",
+            limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+            observed: usize::MAX,
+        })
+}
+
+fn conservative_btree_node_bytes(len: usize) -> M6Result<usize> {
+    len.checked_mul(128).ok_or(M6Error::Incomplete {
+        operation: "M6 BTreeSet node ownership",
+        limit: MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+        observed: usize::MAX,
+    })
 }
 
 fn id_vec_heap(ids: &Vec<StableId>) -> usize {

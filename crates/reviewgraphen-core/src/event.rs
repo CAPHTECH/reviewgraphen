@@ -3565,6 +3565,10 @@ enum PersistedPayload {
         evidence: crate::PreservationEvidenceV5,
         verification: crate::PreservationVerificationV5,
     },
+    #[serde(rename = "partial_rerun_action_recorded_v5")]
+    PartialRerunActionRecordedV5(crate::PartialRerunActionV5),
+    #[serde(rename = "partial_rerun_plan_sealed_v5")]
+    PartialRerunPlanSealedV5(crate::PartialRerunPlanV5),
     #[serde(rename = "evidence_recorded_v3")]
     EvidenceRecordedV3(EvidenceV3),
     #[serde(rename = "evidence_bound_v3")]
@@ -3632,6 +3636,8 @@ impl PersistedPayload {
             } => canonical_json(evidence)?
                 .len()
                 .saturating_add(canonical_json(verification)?.len()),
+            Self::PartialRerunActionRecordedV5(value) => canonical_json(value)?.len(),
+            Self::PartialRerunPlanSealedV5(value) => canonical_json(value)?.len(),
             Self::EvidenceRecordedV3(value) => {
                 usize::try_from(value.allocated_bytes().map_err(m4_domain_error)?)
                     .unwrap_or(usize::MAX)
@@ -3721,6 +3727,8 @@ impl PersistedPayload {
                 | Self::StalenessAssessmentSealedV5(_)
                 | Self::ArtifactRegisteredV5(_)
                 | Self::PreservationVerifiedV5 { .. }
+                | Self::PartialRerunActionRecordedV5(_)
+                | Self::PartialRerunPlanSealedV5(_)
         )
     }
 
@@ -3832,6 +3840,8 @@ impl PersistedPayload {
                 | Self::StalenessAssessmentSealedV5(_)
                 | Self::ArtifactRegisteredV5(_)
                 | Self::PreservationVerifiedV5 { .. }
+                | Self::PartialRerunActionRecordedV5(_)
+                | Self::PartialRerunPlanSealedV5(_)
         )
     }
 
@@ -3868,6 +3878,9 @@ impl PersistedPayload {
             Self::GluingBundleRecordedV4(_) => "engine:reviewgraphen.m5_gluing@1",
             Self::ArtifactRegisteredV5(_) | Self::PreservationVerifiedV5 { .. } => {
                 "verifier:reviewgraphen.structural_preservation@1"
+            }
+            Self::PartialRerunActionRecordedV5(_) | Self::PartialRerunPlanSealedV5(_) => {
+                SYSTEM_ACTOR
             }
             _ => SYSTEM_ACTOR,
         }
@@ -4001,6 +4014,15 @@ impl PersistedPayload {
                     ));
                 }
                 Ok(())
+            }
+            Self::PartialRerunActionRecordedV5(action) => {
+                crate::PartialRerunActionV5::from_json_bytes(&canonical_json(action)?)
+                    .map(|_| ())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }
+            Self::PartialRerunPlanSealedV5(plan) => {
+                crate::PartialRerunPlanV5::validate_event_wire(&canonical_json(plan)?)
+                    .map_err(|error| DomainError::Validation(error.to_string()))
             }
             Self::EvidenceRecordedV3(evidence) => evidence
                 .canonical_bytes()
@@ -8769,7 +8791,9 @@ fn borrowed_projection_payload_ref_v4<'a>(
         | PersistedPayload::GluingFreshnessRecordedV5(_)
         | PersistedPayload::StalenessAssessmentSealedV5(_)
         | PersistedPayload::ArtifactRegisteredV5(_)
-        | PersistedPayload::PreservationVerifiedV5 { .. } => {
+        | PersistedPayload::PreservationVerifiedV5 { .. }
+        | PersistedPayload::PartialRerunActionRecordedV5(_)
+        | PersistedPayload::PartialRerunPlanSealedV5(_) => {
             return Err(DomainError::EventSequence(
                 "event-v4 projection encountered a payload outside its closed contract".to_owned(),
             ));
@@ -8834,7 +8858,9 @@ fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
         | PersistedPayload::GluingFreshnessRecordedV5(_)
         | PersistedPayload::StalenessAssessmentSealedV5(_)
         | PersistedPayload::ArtifactRegisteredV5(_)
-        | PersistedPayload::PreservationVerifiedV5 { .. } => {
+        | PersistedPayload::PreservationVerifiedV5 { .. }
+        | PersistedPayload::PartialRerunActionRecordedV5(_)
+        | PersistedPayload::PartialRerunPlanSealedV5(_) => {
             unreachable!("v4 payloads are not exposed through the legacy EventLog decoder")
         }
     }
@@ -9540,6 +9566,18 @@ fn decode_payload(version: EventContractVersion, input: &str) -> Result<Persiste
                     evidence: value.evidence,
                     verification: value.verification,
                 }
+            }
+            "partial_rerun_action_recorded_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::PartialRerunActionRecordedV5(
+                    crate::PartialRerunActionV5::from_json_bytes(raw.data.get().as_bytes())
+                        .map_err(|error| DomainError::Validation(error.to_string()))?,
+                )
+            }
+            "partial_rerun_plan_sealed_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::PartialRerunPlanSealedV5(
+                    crate::PartialRerunPlanV5::from_event_json_bytes(raw.data.get().as_bytes())
+                        .map_err(|error| DomainError::Validation(error.to_string()))?,
+                )
             }
             "evidence_recorded_v3" => PersistedPayload::EvidenceRecordedV3(
                 EvidenceV3::from_json_bytes(raw.data.get().as_bytes()).map_err(m4_domain_error)?,
@@ -19603,12 +19641,30 @@ impl EventLogV4 {
 /// ```
 #[derive(Debug)]
 pub struct EventLogV5 {
+    instance_identity: V5LogInstanceIdentity,
     run_id: StableId,
     genesis_hash: ContentHash,
     canonical_genesis_bytes: Vec<u8>,
     envelopes: Vec<EventEnvelope>,
     canonical_prefix_bytes: u64,
     limits: EventReplayLimitsV5,
+}
+
+static NEXT_V5_LOG_INSTANCE: AtomicU64 = AtomicU64::new(1);
+/// Process-local, non-persisted identity for a live V5 log instance.  This is
+/// deliberately stack-only: it binds opaque sealing/preparation capabilities
+/// to one in-memory log without entering an event body, digest, or DTO.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct V5LogInstanceIdentity {
+    process_id: u32,
+    ordinal: u64,
+}
+
+fn fresh_v5_log_instance_identity() -> V5LogInstanceIdentity {
+    V5LogInstanceIdentity {
+        process_id: std::process::id(),
+        ordinal: NEXT_V5_LOG_INSTANCE.fetch_add(1, AtomicOrdering::Relaxed),
+    }
 }
 
 /// Borrow-only accepted target predecessor reconstructed from the complete
@@ -21336,6 +21392,600 @@ pub(crate) struct ReplayedV5TerminalPredecessorV5<'borrow, 'state> {
     inner: ReplayedV5TerminalPredecessorInnerV5<'borrow, 'state>,
 }
 
+/// Opaque, roots/CAS-derived partial-rerun phase.  Its members never cross a
+/// public DTO boundary: the terminal predecessor is the sole production mint
+/// path and append consumes the complete phase in one atomic batch.
+#[allow(dead_code)]
+pub(crate) struct SealedPartialRerunPhaseV5 {
+    log_identity: V5LogInstanceIdentity,
+    source_closure_id: StableId,
+    pre_incremental_basis_digest: ContentHash,
+    policy_revision_hash: ContentHash,
+    target_run_id: StableId,
+    target_genesis_hash: ContentHash,
+    target_predecessor_tail_hash: ContentHash,
+    target_predecessor_event_count: u64,
+    staleness_assessment_id: StableId,
+    staleness_body_hash: ContentHash,
+    actions: Vec<crate::PartialRerunActionV5>,
+    plan: crate::PartialRerunPlanV5,
+    preservation_evidence: Vec<crate::PreservationEvidenceV5>,
+    preservation_verifications: Vec<crate::PreservationVerificationV5>,
+}
+
+/// A single non-serializable member minted from a sealed partial-rerun phase.
+/// It deliberately carries the authority/session position at which it was
+/// minted: a caller cannot transplant an action or the final seal to another
+/// closure, staleness assessment, basis, or journal tail.
+#[allow(dead_code)]
+pub(crate) struct PreparedPartialRerunPhaseAppendV5 {
+    log_identity: V5LogInstanceIdentity,
+    session_identity: OpaquePreservationSessionIdentityV5,
+    source_closure_id: StableId,
+    policy_revision_hash: ContentHash,
+    target_run_id: StableId,
+    target_genesis_hash: ContentHash,
+    basis_digest: ContentHash,
+    predecessor_event_hash: ContentHash,
+    event_count: u64,
+    event_sequence: u64,
+    staleness_event_id: StableId,
+    staleness_body_hash: ContentHash,
+    phase_digest: ContentHash,
+    member_index: usize,
+    payload: PersistedPayload,
+}
+
+impl PreparedPartialRerunPhaseAppendV5 {
+    /// Full retained ownership of a prepared append capability.  This walks
+    /// the closed action/plan payload rather than canonicalizing it, so the
+    /// preflight itself never allocates.
+    fn retained_bytes_for_action(action: &crate::PartialRerunActionV5) -> Result<u64> {
+        let payload_bytes = action
+            .retained_bytes()
+            .map_err(|error| DomainError::Validation(error.to_string()))?
+            .checked_sub(size_of::<crate::PartialRerunActionV5>())
+            .ok_or(DomainError::Incomplete {
+                operation: "partial rerun prepared action inline ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        u64::try_from(payload_bytes).map_err(|_| DomainError::Incomplete {
+            operation: "partial rerun prepared action payload ownership",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })
+    }
+
+    fn retained_bytes_for_plan(plan: &crate::PartialRerunPlanV5) -> Result<u64> {
+        let payload_bytes = plan
+            .retained_bytes()
+            .map_err(|error| DomainError::Validation(error.to_string()))?
+            .checked_sub(size_of::<crate::PartialRerunPlanV5>())
+            .ok_or(DomainError::Incomplete {
+                operation: "partial rerun prepared plan inline ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        u64::try_from(payload_bytes).map_err(|_| DomainError::Incomplete {
+            operation: "partial rerun prepared plan payload ownership",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })
+    }
+
+    fn retained_bytes_with_parts(parts: impl IntoIterator<Item = usize>) -> Result<u64> {
+        parts
+            .into_iter()
+            .try_fold(0_u64, |total, value| {
+                total.checked_add(u64::try_from(value).unwrap_or(u64::MAX))
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "partial rerun prepared ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+    }
+
+    fn retained_bytes(&self) -> Result<u64> {
+        let payload_bytes = match &self.payload {
+            PersistedPayload::PartialRerunActionRecordedV5(action) => action
+                .retained_bytes()
+                .map_err(|error| DomainError::Validation(error.to_string()))?
+                .checked_sub(size_of::<crate::PartialRerunActionV5>()),
+            PersistedPayload::PartialRerunPlanSealedV5(plan) => plan
+                .retained_bytes()
+                .map_err(|error| DomainError::Validation(error.to_string()))?
+                .checked_sub(size_of::<crate::PartialRerunPlanV5>()),
+            _ => None,
+        }
+        .ok_or(DomainError::Incomplete {
+            operation: "partial rerun prepared payload inline ownership",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })?;
+        Self::retained_bytes_with_parts([
+            size_of::<Self>(),
+            payload_bytes,
+            self.session_identity.0.allocated_bytes(),
+            self.source_closure_id.allocated_bytes(),
+            self.policy_revision_hash.allocated_bytes(),
+            self.target_run_id.allocated_bytes(),
+            self.target_genesis_hash.allocated_bytes(),
+            self.basis_digest.allocated_bytes(),
+            self.predecessor_event_hash.allocated_bytes(),
+            self.staleness_event_id.allocated_bytes(),
+            self.staleness_body_hash.allocated_bytes(),
+            self.phase_digest.allocated_bytes(),
+        ])
+    }
+}
+
+impl SealedPartialRerunPhaseV5 {
+    fn preflight_working_bytes(&self, log: &EventLogV5, prepared_bytes: u64) -> Result<()> {
+        let observed = log
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(self.retained_bytes()?)
+            .and_then(|value| value.checked_add(prepared_bytes))
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(crate::m6::MAX_M6_CANONICAL_BYTES).unwrap_or(u64::MAX),
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(crate::m6::MAX_M6_CANONICAL_BYTES).unwrap_or(u64::MAX),
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "partial rerun phase preflight ownership",
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if observed > log.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "partial rerun phase preflight ownership",
+                log.limits.max_working_bytes,
+                observed,
+            ));
+        }
+        Ok(())
+    }
+    fn retained_bytes(&self) -> Result<u64> {
+        let add = |total: u64, value: usize| {
+            total
+                .checked_add(u64::try_from(value).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "partial rerun sealed phase ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })
+        };
+        let mut total = u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX);
+        for value in [
+            self.source_closure_id.allocated_bytes(),
+            self.pre_incremental_basis_digest.allocated_bytes(),
+            self.policy_revision_hash.allocated_bytes(),
+            self.target_run_id.allocated_bytes(),
+            self.target_genesis_hash.allocated_bytes(),
+            self.target_predecessor_tail_hash.allocated_bytes(),
+            self.staleness_assessment_id.allocated_bytes(),
+            self.staleness_body_hash.allocated_bytes(),
+            self.actions
+                .capacity()
+                .checked_mul(size_of::<crate::PartialRerunActionV5>())
+                .ok_or(DomainError::Incomplete {
+                    operation: "partial rerun sealed action slots",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?,
+            self.preservation_evidence
+                .capacity()
+                .checked_mul(size_of::<crate::PreservationEvidenceV5>())
+                .ok_or(DomainError::Incomplete {
+                    operation: "partial rerun sealed evidence slots",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?,
+            self.preservation_verifications
+                .capacity()
+                .checked_mul(size_of::<crate::PreservationVerificationV5>())
+                .ok_or(DomainError::Incomplete {
+                    operation: "partial rerun sealed verification slots",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?,
+        ] {
+            total = add(total, value)?;
+        }
+        total = total
+            .checked_add(
+                u64::try_from(
+                    self.plan
+                        .retained_bytes()
+                        .map_err(|error| DomainError::Validation(error.to_string()))?
+                        .checked_sub(size_of::<crate::PartialRerunPlanV5>())
+                        .ok_or(DomainError::Incomplete {
+                            operation: "partial rerun plan inline ownership",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?,
+                )
+                .unwrap_or(u64::MAX),
+            )
+            .ok_or(DomainError::Incomplete {
+                operation: "partial rerun sealed phase ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        for value in &self.actions {
+            total = total
+                .checked_add(
+                    u64::try_from(
+                        value
+                            .retained_bytes()
+                            .map_err(|error| DomainError::Validation(error.to_string()))?
+                            .checked_sub(size_of::<crate::PartialRerunActionV5>())
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun action inline ownership",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?,
+                    )
+                    .unwrap_or(u64::MAX),
+                )
+                .ok_or(DomainError::Incomplete {
+                    operation: "partial rerun sealed phase ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        for value in &self.preservation_evidence {
+            total = total
+                .checked_add(
+                    u64::try_from(
+                        value
+                            .retained_bytes()
+                            .map_err(|error| DomainError::Validation(error.to_string()))?
+                            .checked_sub(size_of::<crate::PreservationEvidenceV5>())
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun evidence inline ownership",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?,
+                    )
+                    .unwrap_or(u64::MAX),
+                )
+                .ok_or(DomainError::Incomplete {
+                    operation: "partial rerun sealed phase ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        for value in &self.preservation_verifications {
+            total = total
+                .checked_add(
+                    u64::try_from(
+                        value
+                            .retained_bytes()
+                            .map_err(|error| DomainError::Validation(error.to_string()))?
+                            .checked_sub(size_of::<crate::PreservationVerificationV5>())
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun verification inline ownership",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?,
+                    )
+                    .unwrap_or(u64::MAX),
+                )
+                .ok_or(DomainError::Incomplete {
+                    operation: "partial rerun sealed phase ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        Ok(total)
+    }
+    fn future_prepared_peak_bytes(&self) -> Result<u64> {
+        // Both hashes are derived only after the first gate.  A SHA-256
+        // ContentHash is bounded below this reservation; the remaining
+        // fields are exact retained ownership already present in the phase.
+        let fixed = PreparedPartialRerunPhaseAppendV5::retained_bytes_with_parts([
+            size_of::<PreparedPartialRerunPhaseAppendV5>(),
+            self.source_closure_id.allocated_bytes(),
+            self.policy_revision_hash.allocated_bytes(),
+            self.target_run_id.allocated_bytes(),
+            self.target_genesis_hash.allocated_bytes(),
+            self.pre_incremental_basis_digest.allocated_bytes(),
+            self.target_predecessor_tail_hash.allocated_bytes(),
+            self.staleness_assessment_id.allocated_bytes(),
+            self.staleness_body_hash.allocated_bytes(),
+            128, // OpaquePreservationSessionIdentityV5's ContentHash heap.
+            128, // phase.digest() ContentHash heap.
+        ])?;
+        let mut peak = fixed
+            .checked_add(PreparedPartialRerunPhaseAppendV5::retained_bytes_for_plan(
+                &self.plan,
+            )?)
+            .ok_or(DomainError::Incomplete {
+                operation: "partial rerun future prepared ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        for action in &self.actions {
+            let bytes = PreparedPartialRerunPhaseAppendV5::retained_bytes_for_action(action)?;
+            peak = peak.max(fixed.checked_add(bytes).ok_or(DomainError::Incomplete {
+                operation: "partial rerun future prepared ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?);
+        }
+        Ok(peak)
+    }
+
+    fn member_count(&self) -> Result<usize> {
+        self.actions.len().checked_add(1).ok_or_else(|| {
+            DomainError::EventSequence("partial rerun phase member count overflow".to_owned())
+        })
+    }
+
+    fn payload_at(&self, index: usize) -> Result<PersistedPayload> {
+        if let Some(action) = self.actions.get(index) {
+            return Ok(PersistedPayload::PartialRerunActionRecordedV5(
+                action.clone(),
+            ));
+        }
+        if index == self.actions.len() {
+            return Ok(PersistedPayload::PartialRerunPlanSealedV5(
+                self.plan.clone(),
+            ));
+        }
+        Err(DomainError::EventSequence(
+            "partial rerun phase member index is out of range".to_owned(),
+        ))
+    }
+
+    fn digest(&self) -> Result<ContentHash> {
+        #[derive(Serialize)]
+        struct Identity<'a> {
+            source_closure_id: &'a StableId,
+            pre_incremental_basis_digest: &'a ContentHash,
+            policy_revision_hash: &'a ContentHash,
+            target_run_id: &'a StableId,
+            target_genesis_hash: &'a ContentHash,
+            target_predecessor_tail_hash: &'a ContentHash,
+            target_predecessor_event_count: u64,
+            staleness_assessment_id: &'a StableId,
+            staleness_body_hash: &'a ContentHash,
+            actions: &'a [crate::PartialRerunActionV5],
+            plan: &'a crate::PartialRerunPlanV5,
+            preservation_evidence: &'a [crate::PreservationEvidenceV5],
+            preservation_verifications: &'a [crate::PreservationVerificationV5],
+        }
+        crate::canonical::compact_json_sha256_streaming(&Identity {
+            source_closure_id: &self.source_closure_id,
+            pre_incremental_basis_digest: &self.pre_incremental_basis_digest,
+            policy_revision_hash: &self.policy_revision_hash,
+            target_run_id: &self.target_run_id,
+            target_genesis_hash: &self.target_genesis_hash,
+            target_predecessor_tail_hash: &self.target_predecessor_tail_hash,
+            target_predecessor_event_count: self.target_predecessor_event_count,
+            staleness_assessment_id: &self.staleness_assessment_id,
+            staleness_body_hash: &self.staleness_body_hash,
+            actions: &self.actions,
+            plan: &self.plan,
+            preservation_evidence: &self.preservation_evidence,
+            preservation_verifications: &self.preservation_verifications,
+        })
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.actions.len()
+            != usize::try_from(self.plan.action_count()).map_err(|_| {
+                DomainError::EventSequence("partial rerun plan action count overflow".to_owned())
+            })?
+            || self.preservation_evidence.len() != self.preservation_verifications.len()
+            || self.preservation_evidence.len()
+                != usize::try_from(self.plan.preservation_verification_count())
+                    .unwrap_or(usize::MAX)
+            || self
+                .actions
+                .windows(2)
+                .any(|pair| pair[0].id() >= pair[1].id())
+        {
+            return Err(DomainError::EventSequence(
+                "partial rerun phase actions are not exact derived-ID order".to_owned(),
+            ));
+        }
+        let action_records = self
+            .actions
+            .iter()
+            .map(|action| {
+                action
+                    .body_hash()
+                    .and_then(|hash| crate::IdBodyHashV5::new(action.id().clone(), hash))
+            })
+            .collect::<crate::M6Result<Vec<_>>>()
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        let digest = crate::canonical::compact_json_sha256_streaming(&action_records)?;
+        if self.plan.action_set_digest() != &digest {
+            return Err(DomainError::EventSequence(
+                "partial rerun plan action digest differs from phase members".to_owned(),
+            ));
+        }
+        let mut preservation_records = self
+            .preservation_verifications
+            .iter()
+            .map(|verification| {
+                verification
+                    .body_hash()
+                    .and_then(|hash| crate::IdBodyHashV5::new(verification.id().clone(), hash))
+            })
+            .collect::<crate::M6Result<Vec<_>>>()
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        // The planner commits the verification *set* in verification-ID order;
+        // durable preservation triples stay in target-obligation order.
+        preservation_records.sort_by(|left, right| left.id().cmp(right.id()));
+        let preservation_digest =
+            crate::canonical::compact_json_sha256_streaming(&preservation_records)?;
+        if self.plan.preservation_verification_digest() != &preservation_digest {
+            return Err(DomainError::EventSequence(
+                "partial rerun plan preservation digest differs from phase members".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_durable_preservation(
+        &self,
+        log: &EventLogV5,
+        basis: &AuthorityReplayBasisV5,
+    ) -> Result<()> {
+        if self.preservation_evidence.len() != basis.preservation_verification_entries.len()
+            || basis.preservation_registration_entries.len()
+                != basis
+                    .preservation_verification_entries
+                    .len()
+                    .checked_mul(2)
+                    .ok_or_else(|| {
+                        DomainError::EventSequence(
+                            "partial rerun preservation registration count overflow".to_owned(),
+                        )
+                    })?
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "partial rerun preservation closure count differs",
+            ));
+        }
+        for (index, ((evidence, verification), replay)) in self
+            .preservation_evidence
+            .iter()
+            .zip(&self.preservation_verifications)
+            .zip(&basis.preservation_verification_entries)
+            .enumerate()
+        {
+            let registration_start = index.checked_mul(2).ok_or_else(|| {
+                DomainError::EventSequence(
+                    "partial rerun preservation registration index overflow".to_owned(),
+                )
+            })?;
+            let registration_end = registration_start.checked_add(2).ok_or_else(|| {
+                DomainError::EventSequence(
+                    "partial rerun preservation registration range overflow".to_owned(),
+                )
+            })?;
+            let registrations = basis
+                .preservation_registration_entries
+                .get(registration_start..registration_end)
+                .ok_or({
+                    DomainError::HistoricalPrefixMismatch(
+                        "partial rerun preservation registration pair is absent",
+                    )
+                })?;
+            if registrations.len() != 2
+                || evidence.id() != &replay.evidence_id
+                || verification.id() != &replay.verification_id
+                || evidence.input_registration_id() != &replay.input_registration_id
+                || evidence.output_registration_id() != &replay.output_registration_id
+                || verification.evidence_id() != evidence.id()
+                || registrations[0].registration_id != replay.input_registration_id
+                || registrations[1].registration_id != replay.output_registration_id
+                || registrations[0].event_sequence != replay.input_event_sequence
+                || registrations[1].event_sequence != replay.output_event_sequence
+                || replay.verification_event_sequence
+                    != registrations[0]
+                        .event_sequence
+                        .checked_add(2)
+                        .ok_or_else(|| {
+                            DomainError::EventSequence(
+                                "partial rerun preservation verification sequence overflow"
+                                    .to_owned(),
+                            )
+                        })?
+                || registrations[1].event_sequence
+                    != registrations[0]
+                        .event_sequence
+                        .checked_add(1)
+                        .ok_or_else(|| {
+                            DomainError::EventSequence(
+                                "partial rerun preservation output sequence overflow".to_owned(),
+                            )
+                        })?
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "partial rerun preservation IDs or positions differ",
+                ));
+            }
+            let event = |sequence: u64| -> Result<&EventEnvelope> {
+                let index = usize::try_from(sequence.checked_sub(1).ok_or({
+                    DomainError::HistoricalPrefixMismatch(
+                        "partial rerun preservation event sequence is zero",
+                    )
+                })?)
+                .map_err(|_| {
+                    DomainError::HistoricalPrefixMismatch(
+                        "partial rerun preservation event sequence overflows",
+                    )
+                })?;
+                log.envelopes.get(index).ok_or({
+                    DomainError::HistoricalPrefixMismatch(
+                        "partial rerun preservation event is absent",
+                    )
+                })
+            };
+            let input = event(registrations[0].event_sequence)?;
+            let output = event(registrations[1].event_sequence)?;
+            let terminal = event(replay.verification_event_sequence)?;
+            let input_payload =
+                decode_canonical_payload(EventContractVersion::V5, input.payload.get())?;
+            let output_payload =
+                decode_canonical_payload(EventContractVersion::V5, output.payload.get())?;
+            let terminal_payload =
+                decode_canonical_payload(EventContractVersion::V5, terminal.payload.get())?;
+            let (
+                PersistedPayload::ArtifactRegisteredV5(input_registration),
+                PersistedPayload::ArtifactRegisteredV5(output_registration),
+                PersistedPayload::PreservationVerifiedV5 {
+                    evidence: actual_evidence,
+                    verification: actual_verification,
+                },
+            ) = (input_payload, output_payload, terminal_payload)
+            else {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "partial rerun preservation triple payload shape differs",
+                ));
+            };
+            if input.id() != &registrations[0].event_id
+                || output.id() != &registrations[1].event_id
+                || terminal.id() != &replay.verification_event_id
+                || input_registration.id() != &registrations[0].registration_id
+                || output_registration.id() != &registrations[1].registration_id
+                || input_registration.cas_hash() != &registrations[0].cas_hash
+                || output_registration.cas_hash() != &registrations[1].cas_hash
+                || input_registration.size() != registrations[0].size
+                || output_registration.size() != registrations[1].size
+                || input_registration.media_type() != registrations[0].media_type
+                || output_registration.media_type() != registrations[1].media_type
+                || input_registration
+                    .body_hash()
+                    .map_err(|error| DomainError::Validation(error.to_string()))?
+                    != registrations[0].registration_body_hash
+                || output_registration
+                    .body_hash()
+                    .map_err(|error| DomainError::Validation(error.to_string()))?
+                    != registrations[1].registration_body_hash
+                || actual_evidence != *evidence
+                || actual_verification != *verification
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "partial rerun preservation body or CAS closure differs",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[allow(dead_code)]
 impl<'borrow, 'state> ReplayedV5TerminalPredecessorV5<'borrow, 'state> {
     pub(crate) fn basis(&self) -> &PreIncrementalAuthorityReplayBasisV5 {
@@ -21376,6 +22026,38 @@ impl<'borrow, 'state> ReplayedV5TerminalPredecessorV5<'borrow, 'state> {
             preservation,
             u64::try_from(crate::m6::MAX_M6_PARTIAL_RERUN_WORKING_BYTES).unwrap_or(u64::MAX),
         )
+    }
+
+    pub(crate) fn seal_partial_rerun_phase_v5(
+        &'borrow self,
+        event_log: &EventLogV5,
+        staleness: &crate::M6StalenessPhaseV5,
+        preservation: &crate::M6PreservationPhaseV5,
+    ) -> crate::M6Result<SealedPartialRerunPhaseV5> {
+        let (actions, plan) = self.seal_partial_rerun_plan_v5(staleness, preservation)?;
+        let value = SealedPartialRerunPhaseV5 {
+            log_identity: event_log.instance_identity,
+            source_closure_id: staleness.assessment().source_closure_id().clone(),
+            pre_incremental_basis_digest: self.basis().basis_digest.clone(),
+            policy_revision_hash: self.basis().policy_revision_hash.clone(),
+            target_run_id: self.basis().target_run_id.clone(),
+            target_genesis_hash: self.basis().target_genesis_hash.clone(),
+            target_predecessor_tail_hash: self.basis().target_confirmed_tail_hash.clone(),
+            target_predecessor_event_count: self.basis().target_confirmed_event_count,
+            staleness_assessment_id: staleness.assessment().id().clone(),
+            staleness_body_hash: ContentHash::sha256(
+                &payload_canonical_bytes(&PersistedPayload::StalenessAssessmentSealedV5(
+                    m6_persisted_raw(staleness.assessment()).map_err(crate::M6Error::from)?,
+                ))
+                .map_err(crate::M6Error::from)?,
+            ),
+            actions,
+            plan,
+            preservation_evidence: preservation.evidence().to_vec(),
+            preservation_verifications: preservation.verifications().to_vec(),
+        };
+        value.validate().map_err(crate::M6Error::from)?;
+        Ok(value)
     }
 
     fn seal_partial_rerun_plan_with_limit_v5(
@@ -24437,6 +25119,24 @@ impl AuthorityReplayBasisV5 {
         Ok(())
     }
 
+    fn advance_authority_free_to_event(&mut self, event: &EventEnvelope) -> Result<()> {
+        if self.target_run_id != *event.run_id()
+            || self.target_genesis_hash != *event.genesis_hash()
+            || event.sequence() != self.target_next_sequence
+            || event.previous_event_hash() != &self.target_confirmed_tail_hash
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        self.target_confirmed_event_count = event.sequence();
+        self.target_next_sequence = event
+            .sequence()
+            .checked_add(1)
+            .ok_or_else(|| DomainError::EventSequence("V5 basis sequence overflow".to_owned()))?;
+        self.target_confirmed_tail_hash = event.event_hash().clone();
+        self.basis_digest = self.recompute_digest()?;
+        Ok(())
+    }
+
     pub(crate) fn source_closure_id(&self) -> &StableId {
         &self.source_closure_id
     }
@@ -24636,6 +25336,9 @@ pub(crate) enum M6PersistenceRecoveryStageV5 {
     PreservationOutputRegistration { target_index: usize },
     PreservationVerification { target_index: usize },
     PreservationComplete,
+    PartialRerunActions { next_index: usize },
+    PartialRerunPlanPending,
+    PartialRerunSealed,
 }
 
 #[derive(Debug)]
@@ -25675,6 +26378,245 @@ impl EventLogV5 {
         Ok(())
     }
 
+    /// Mints exactly the first missing member of an opaque, terminal-derived
+    /// partial-rerun phase.  This is intentionally a one-event seam: it makes
+    /// an interrupted prefix resumable without exposing a raw action/plan DTO
+    /// append capability.
+    #[allow(dead_code)]
+    pub(crate) fn prepare_partial_rerun_phase_append_v5(
+        &self,
+        phase: &SealedPartialRerunPhaseV5,
+        staleness: &crate::M6StalenessPhaseV5,
+        basis: &AuthorityReplayBasisV5,
+    ) -> Result<PreparedPartialRerunPhaseAppendV5> {
+        // First gate: no basis validation, digesting, canonicalization, or
+        // payload decode has occurred before this allocation-free peak check.
+        phase.preflight_working_bytes(self, phase.future_prepared_peak_bytes()?)?;
+        basis.validate_current_log(self)?;
+        if self.instance_identity != phase.log_identity
+            || phase.source_closure_id != basis.source_closure_id
+            || phase.pre_incremental_basis_digest != basis.pre_incremental_basis_digest
+            || phase.policy_revision_hash != basis.policy_revision_hash
+            || phase.target_run_id != self.run_id
+            || phase.target_genesis_hash != self.genesis_hash
+            || phase.staleness_assessment_id != *staleness.assessment().id()
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        phase.validate()?;
+        phase.validate_durable_preservation(self, basis)?;
+        let mut member_index = 0_usize;
+        for envelope in self.envelopes.iter().rev() {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            if !matches!(payload, PersistedPayload::PartialRerunActionRecordedV5(_)) {
+                break;
+            }
+            member_index = member_index.checked_add(1).ok_or_else(|| {
+                DomainError::EventSequence("partial rerun action prefix overflow".to_owned())
+            })?;
+        }
+        let staleness_payload = PersistedPayload::StalenessAssessmentSealedV5(m6_persisted_raw(
+            staleness.assessment(),
+        )?);
+        let staleness_bytes = payload_canonical_bytes(&staleness_payload)?;
+        let staleness_body_hash = ContentHash::sha256(&staleness_bytes);
+        if staleness_body_hash != phase.staleness_body_hash {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let staleness_sequence = basis
+            .target_confirmed_event_count
+            .checked_sub(
+                u64::try_from(basis.preservation_verification_entries.len())
+                    .unwrap_or(u64::MAX)
+                    .checked_mul(3)
+                    .ok_or_else(|| {
+                        DomainError::EventSequence(
+                            "partial rerun preservation sequence overflow".to_owned(),
+                        )
+                    })?,
+            )
+            .ok_or({
+                DomainError::HistoricalPrefixMismatch(
+                    "partial rerun staleness predecessor is absent",
+                )
+            })?;
+        let staleness_sequence = staleness_sequence
+            .checked_sub(u64::try_from(member_index).map_err(|_| {
+                DomainError::EventSequence(
+                    "partial rerun action prefix overflows sequence".to_owned(),
+                )
+            })?)
+            .ok_or({
+                DomainError::HistoricalPrefixMismatch(
+                    "partial rerun staleness predecessor is absent",
+                )
+            })?;
+        let staleness_index = usize::try_from(staleness_sequence.checked_sub(1).ok_or({
+            DomainError::HistoricalPrefixMismatch("partial rerun staleness sequence is zero")
+        })?)
+        .map_err(|_| {
+            DomainError::HistoricalPrefixMismatch("partial rerun staleness index overflows")
+        })?;
+        let durable_staleness = self.envelopes.get(staleness_index).ok_or({
+            DomainError::HistoricalPrefixMismatch("partial rerun staleness seal is absent")
+        })?;
+        let actual_staleness =
+            decode_canonical_payload(EventContractVersion::V5, durable_staleness.payload.get())?;
+        if !matches!(
+            actual_staleness,
+            PersistedPayload::StalenessAssessmentSealedV5(_)
+        ) || ContentHash::sha256(&payload_canonical_bytes(&actual_staleness)?)
+            != staleness_body_hash
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "partial rerun staleness seal identity or body differs",
+            ));
+        }
+
+        if member_index > phase.actions.len() {
+            return Err(DomainError::EventSequence(
+                "partial rerun action prefix exceeds sealed phase".to_owned(),
+            ));
+        }
+        // Reverse scan found a suffix; compare it in forward derived-ID order.
+        let prefix_start = self
+            .envelopes
+            .len()
+            .checked_sub(member_index)
+            .ok_or_else(|| {
+                DomainError::EventSequence("partial rerun action prefix underflow".to_owned())
+            })?;
+        for (index, envelope) in self.envelopes[prefix_start..].iter().enumerate() {
+            let actual =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            let expected = phase.payload_at(index)?;
+            if payload_canonical_bytes(&actual)? != payload_canonical_bytes(&expected)?
+                || envelope.actor() != expected.actor()
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "partial rerun durable action prefix differs from sealed phase",
+                ));
+            }
+        }
+        if member_index == 0 {
+            let tail_payload = decode_canonical_payload(
+                EventContractVersion::V5,
+                self.envelopes
+                    .last()
+                    .ok_or_else(|| {
+                        DomainError::EventSequence("partial rerun predecessor is absent".to_owned())
+                    })?
+                    .payload
+                    .get(),
+            )?;
+            if basis.preservation_verification_entries.is_empty() {
+                if !matches!(
+                    tail_payload,
+                    PersistedPayload::StalenessAssessmentSealedV5(_)
+                ) {
+                    return Err(DomainError::EventSequence(
+                        "partial rerun phase must immediately follow the staleness seal".to_owned(),
+                    ));
+                }
+            } else if !matches!(
+                tail_payload,
+                PersistedPayload::PreservationVerifiedV5 { .. }
+            ) {
+                return Err(DomainError::EventSequence(
+                    "partial rerun phase must immediately follow preservation verification"
+                        .to_owned(),
+                ));
+            }
+        }
+        let member_count = phase.member_count()?;
+        if member_index >= member_count {
+            return Err(DomainError::EventSequence(
+                "partial rerun plan is already sealed".to_owned(),
+            ));
+        }
+        Ok(PreparedPartialRerunPhaseAppendV5 {
+            log_identity: self.instance_identity,
+            session_identity: OpaquePreservationSessionIdentityV5::for_basis(basis)?,
+            source_closure_id: basis.source_closure_id.clone(),
+            policy_revision_hash: basis.policy_revision_hash.clone(),
+            target_run_id: basis.target_run_id.clone(),
+            target_genesis_hash: basis.target_genesis_hash.clone(),
+            basis_digest: basis.basis_digest.clone(),
+            predecessor_event_hash: basis.target_confirmed_tail_hash.clone(),
+            event_count: basis.target_confirmed_event_count,
+            event_sequence: basis.target_next_sequence,
+            staleness_event_id: durable_staleness.id().clone(),
+            staleness_body_hash,
+            phase_digest: phase.digest()?,
+            member_index,
+            payload: phase.payload_at(member_index)?,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn append_prepared_partial_rerun_phase_v5(
+        &mut self,
+        prepared: PreparedPartialRerunPhaseAppendV5,
+        phase: &SealedPartialRerunPhaseV5,
+        staleness: &crate::M6StalenessPhaseV5,
+        basis: &mut AuthorityReplayBasisV5,
+    ) -> Result<()> {
+        // The prepared value is already live at append entry, so include its
+        // exact recursive ownership in the first working preflight.
+        phase.preflight_working_bytes(self, prepared.retained_bytes()?)?;
+        basis.validate_current_log(self)?;
+        if self.instance_identity != prepared.log_identity
+            || self.instance_identity != phase.log_identity
+            || prepared.session_identity.0
+                != OpaquePreservationSessionIdentityV5::for_basis(basis)?.0
+            || prepared.source_closure_id != basis.source_closure_id
+            || prepared.policy_revision_hash != basis.policy_revision_hash
+            || prepared.target_run_id != self.run_id
+            || prepared.target_genesis_hash != self.genesis_hash
+            || phase.source_closure_id != basis.source_closure_id
+            || phase.pre_incremental_basis_digest != basis.pre_incremental_basis_digest
+            || phase.policy_revision_hash != basis.policy_revision_hash
+            || phase.target_run_id != self.run_id
+            || phase.target_genesis_hash != self.genesis_hash
+            || phase.staleness_assessment_id != *staleness.assessment().id()
+            || prepared.basis_digest != basis.basis_digest
+            || prepared.predecessor_event_hash != *self.tail_hash()
+            || prepared.event_count != basis.target_confirmed_event_count
+            || prepared.event_sequence != basis.target_next_sequence
+            || prepared.phase_digest != phase.digest()?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let durable_staleness = self
+            .envelopes
+            .iter()
+            .find(|envelope| envelope.id() == &prepared.staleness_event_id)
+            .ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+        if prepared.staleness_body_hash != phase.staleness_body_hash
+            || prepared.staleness_event_id != durable_staleness.id().clone()
+            || !durable_staleness
+                .payload
+                .get()
+                .contains("staleness_assessment")
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let actor = prepared.payload.actor().to_owned();
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            prepared.event_sequence,
+            actor,
+            prepared.event_sequence,
+            prepared.predecessor_event_hash.clone(),
+            prepared.payload,
+        )?;
+        self.append_sealed_envelope_v5(envelope)?;
+        basis.advance_authority_free(self)
+    }
+
     /// Exact heap ownership of the retained V5 envelope vector and payloads.
     #[doc(hidden)]
     pub fn retained_envelope_bytes_for_store(&self) -> Result<u64> {
@@ -25791,6 +26733,7 @@ impl EventLogV5 {
             DomainError::EventSequence("V5 genesis line length missing".to_owned())
         })?;
         Ok(Self {
+            instance_identity: fresh_v5_log_instance_identity(),
             run_id: v4.run_id,
             genesis_hash: v4.genesis_hash,
             canonical_genesis_bytes: v4.canonical_genesis_bytes,
@@ -27814,6 +28757,7 @@ impl EventLogV5 {
             limits,
         )?;
         let log = Self {
+            instance_identity: fresh_v5_log_instance_identity(),
             run_id,
             genesis_hash,
             canonical_genesis_bytes,
@@ -28255,6 +29199,15 @@ impl EventLogV5 {
         pre_basis: &PreIncrementalAuthorityReplayBasisV5,
         input: PreservationRecoveryInputV5<'_>,
     ) -> Result<RecoveredM6PersistenceV5> {
+        self.recover_preservation_phase_prefix_v5(pre_basis, input, false)
+    }
+
+    fn recover_preservation_phase_prefix_v5(
+        &self,
+        pre_basis: &PreIncrementalAuthorityReplayBasisV5,
+        input: PreservationRecoveryInputV5<'_>,
+        allow_following: bool,
+    ) -> Result<RecoveredM6PersistenceV5> {
         let PreservationRecoveryInputV5 {
             closure,
             mapping,
@@ -28283,7 +29236,7 @@ impl EventLogV5 {
                 "preservation recovery bundles are not canonical".to_owned(),
             ));
         }
-        let preservation_events = self.envelopes.len().saturating_sub(staleness_end);
+        let suffix_events = self.envelopes.len().saturating_sub(staleness_end);
         let maximum = bundles
             .len()
             .checked_mul(3)
@@ -28292,11 +29245,12 @@ impl EventLogV5 {
                 limit: crate::m6::MAX_M6_PRESERVATION_REGISTRATIONS,
                 observed: usize::MAX,
             })?;
-        if preservation_events > maximum {
+        if suffix_events > maximum && !allow_following {
             return Err(DomainError::EventSequence(
                 "payload follows the eligible preservation phase".to_owned(),
             ));
         }
+        let preservation_events = suffix_events.min(maximum);
         let (mut simulated, _) = Self::replay_confirmed_v5_prefix(
             self.run_id.clone(),
             self.canonical_genesis_bytes.clone(),
@@ -28359,11 +29313,12 @@ impl EventLogV5 {
                 }
             }
         }
-        if simulated.envelopes.len() != self.envelopes.len()
+        let replayed_prefix = &self.envelopes[..staleness_end + preservation_events];
+        if simulated.envelopes.len() != replayed_prefix.len()
             || simulated
                 .envelopes
                 .iter()
-                .zip(&self.envelopes)
+                .zip(replayed_prefix)
                 .any(|(expected, actual)| {
                     expected.canonical_bytes().ok() != actual.canonical_bytes().ok()
                 })
@@ -28381,6 +29336,86 @@ impl EventLogV5 {
                 1 => M6PersistenceRecoveryStageV5::PreservationOutputRegistration { target_index },
                 _ => M6PersistenceRecoveryStageV5::PreservationVerification { target_index },
             }
+        };
+        Ok(RecoveredM6PersistenceV5::Incremental {
+            stage,
+            basis: Box::new(basis),
+        })
+    }
+
+    /// Recovers the deterministic cursor of a partial-rerun action/seal batch.
+    /// The expected phase is opaque and terminal-derived; callers cannot use
+    /// this routine to turn deserialized actions or a plan into append
+    /// authority.  Preservation-bearing recovery is deliberately chained via
+    /// `recover_preservation_phase_v5` by the Store/session slice; this direct
+    /// cursor chains the same preservation recovery input before recognizing
+    /// the action/seal batch.
+    #[allow(dead_code, clippy::too_many_arguments)]
+    pub(crate) fn recover_partial_rerun_phase_v5(
+        &self,
+        pre_basis: &PreIncrementalAuthorityReplayBasisV5,
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+        correspondence: &crate::M6ObligationCorrespondencePhaseV5,
+        staleness: &crate::M6StalenessPhaseV5,
+        preservation: PreservationRecoveryInputV5<'_>,
+        phase: &SealedPartialRerunPhaseV5,
+    ) -> Result<RecoveredM6PersistenceV5> {
+        phase.validate()?;
+        let expected = ExpectedM6PersistenceV5::new(closure, mapping, correspondence, staleness)?;
+        let predecessor_count = usize::try_from(closure.target_predecessor_event_count())
+            .map_err(|_| DomainError::EventSequence("M6 predecessor count overflow".to_owned()))?;
+        let preservation_count = preservation.bundles.len().checked_mul(3).ok_or_else(|| {
+            DomainError::EventSequence("partial rerun preservation count overflow".to_owned())
+        })?;
+        let phase_start = predecessor_count
+            .checked_add(expected.payloads.len())
+            .and_then(|value| value.checked_add(preservation_count))
+            .ok_or_else(|| {
+                DomainError::EventSequence("partial rerun phase start overflow".to_owned())
+            })?;
+        let recovered = self.recover_preservation_phase_prefix_v5(pre_basis, preservation, true)?;
+        let RecoveredM6PersistenceV5::Incremental { stage, basis } = recovered else {
+            return Err(DomainError::EventSequence(
+                "partial rerun recovery lost its source closure".to_owned(),
+            ));
+        };
+        if stage != M6PersistenceRecoveryStageV5::PreservationComplete {
+            return Ok(RecoveredM6PersistenceV5::Incremental { stage, basis });
+        }
+        if self.envelopes.len() < phase_start {
+            return Err(DomainError::EventSequence(
+                "partial rerun recovery requires a sealed staleness phase".to_owned(),
+            ));
+        }
+        let persisted = self.envelopes.len() - phase_start;
+        if persisted > phase.member_count()? {
+            return Err(DomainError::EventSequence(
+                "payload follows the partial rerun plan seal".to_owned(),
+            ));
+        }
+        let mut basis = *basis;
+        for (index, envelope) in self.envelopes[phase_start..].iter().enumerate() {
+            let expected_payload = phase.payload_at(index)?;
+            let actual =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            if payload_canonical_bytes(&actual)? != payload_canonical_bytes(&expected_payload)?
+                || envelope.actor() != expected_payload.actor()
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "partial rerun recovery member body, order, or actor differs",
+                ));
+            }
+            basis.advance_authority_free_to_event(envelope)?;
+        }
+        let stage = if persisted < phase.actions.len() {
+            M6PersistenceRecoveryStageV5::PartialRerunActions {
+                next_index: persisted,
+            }
+        } else if persisted == phase.actions.len() {
+            M6PersistenceRecoveryStageV5::PartialRerunPlanPending
+        } else {
+            M6PersistenceRecoveryStageV5::PartialRerunSealed
         };
         Ok(RecoveredM6PersistenceV5::Incremental {
             stage,
@@ -36519,7 +37554,9 @@ fn apply(
         | PersistedPayload::GluingFreshnessRecordedV5(_)
         | PersistedPayload::StalenessAssessmentSealedV5(_)
         | PersistedPayload::ArtifactRegisteredV5(_)
-        | PersistedPayload::PreservationVerifiedV5 { .. } => Err(DomainError::Validation(
+        | PersistedPayload::PreservationVerifiedV5 { .. }
+        | PersistedPayload::PartialRerunActionRecordedV5(_)
+        | PersistedPayload::PartialRerunPlanSealedV5(_) => Err(DomainError::Validation(
             "event-v3 state requires the versioned aggregate foundation".to_owned(),
         )),
     }
@@ -37672,6 +38709,78 @@ impl NoM5V5Fixture {
             EventLogV5::replay_terminal_pre_incremental_authority_v5(&m4, &resolver, &self.roots)
                 .map_err(crate::m6::M6Error::from)?;
         terminal.seal_partial_rerun_plan_v5(staleness, preservation)
+    }
+
+    pub(crate) fn seal_partial_rerun_phase_v5(
+        &self,
+        staleness: &crate::M6StalenessPhaseV5,
+        preservation: &crate::M6PreservationPhaseV5,
+    ) -> crate::m6::M6Result<SealedPartialRerunPhaseV5> {
+        self.seal_partial_rerun_phase_for_log_v5(&self.log, staleness, preservation)
+    }
+
+    pub(crate) fn seal_partial_rerun_phase_for_log_v5(
+        &self,
+        event_log: &EventLogV5,
+        staleness: &crate::M6StalenessPhaseV5,
+        preservation: &crate::M6PreservationPhaseV5,
+    ) -> crate::m6::M6Result<SealedPartialRerunPhaseV5> {
+        struct Resolver<'a>(&'a BTreeMap<StableId, Vec<u8>>);
+        impl AuthorityArtifactResolverV5 for Resolver<'_> {
+            fn read_exact(&self, hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                let bytes = self
+                    .0
+                    .values()
+                    .find(|bytes| ContentHash::sha256(bytes) == *hash)
+                    .ok_or_else(|| {
+                        DomainError::Validation("M6 target fixture CAS object is absent".to_owned())
+                    })?;
+                if bytes.len() != destination.len() {
+                    return Err(DomainError::Validation(
+                        "M6 target fixture CAS object size differs".to_owned(),
+                    ));
+                }
+                destination.copy_from_slice(bytes);
+                Ok(())
+            }
+        }
+        let structural = self
+            .log
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                self.log.run_id(),
+                self.log.genesis_hash(),
+                self.log.canonical_prefix_bytes_for_store(),
+                u64::try_from(self.log.envelopes.len()).map_err(|_| {
+                    crate::m6::M6Error::Incomplete {
+                        operation: "M6 target fixture event count",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    }
+                })?,
+                self.log.tail_hash(),
+            ))
+            .map_err(crate::m6::M6Error::from)?;
+        let resolver = Resolver(&self.sources);
+        let checkpoint = EventLogV5::certify_plan_authority_checkpoint_v5_with_limits(
+            &structural,
+            &resolver,
+            &self.roots,
+            self.log.limits.max_retained_bytes,
+            self.log.limits.max_working_bytes,
+        )
+        .map_err(crate::m6::M6Error::from)?;
+        let d2 = EventLogV5::replay_certified_d2_authority_prefix_v5(
+            &checkpoint,
+            &resolver,
+            &self.roots,
+        )
+        .map_err(crate::m6::M6Error::from)?;
+        let m4 = EventLogV5::replay_ordered_m4_authority_prefix_v5(d2, &resolver, &self.roots)
+            .map_err(crate::m6::M6Error::from)?;
+        let terminal =
+            EventLogV5::replay_terminal_pre_incremental_authority_v5(&m4, &resolver, &self.roots)
+                .map_err(crate::m6::M6Error::from)?;
+        terminal.seal_partial_rerun_phase_v5(event_log, staleness, preservation)
     }
 
     pub(crate) fn with_terminal_persistence<R>(
@@ -55052,6 +56161,567 @@ mod tests {
             },
         )
         .expect("complete M6 V5 persistence and every recovery prefix");
+    }
+
+    #[test]
+    fn v5_partial_rerun_phase_is_one_shot_ordered_and_recovers_every_prefix() {
+        crate::m6_test_support::with_distinct_s0_s1_persistence_fixture(
+            |_source, target, phases, staleness| {
+                let preservation = crate::M6PreservationPhaseV5::empty(staleness);
+                let mut phase = target.seal_partial_rerun_phase_v5(staleness, &preservation)?;
+                let expected_payloads = (0..phase.member_count()?)
+                    .map(|index| phase.payload_at(index))
+                    .collect::<Result<Vec<_>>>()?;
+                assert!(matches!(
+                    expected_payloads.last(),
+                    Some(PersistedPayload::PartialRerunPlanSealedV5(_))
+                ));
+                let action_ids = expected_payloads[..expected_payloads.len().saturating_sub(1)]
+                    .iter()
+                    .map(|payload| match payload {
+                        PersistedPayload::PartialRerunActionRecordedV5(action) => action.id(),
+                        _ => panic!("partial phase action position has the wrong payload"),
+                    })
+                    .collect::<Vec<_>>();
+                assert!(action_ids.windows(2).all(|pair| pair[0] < pair[1]));
+
+                target.with_terminal_persistence(|mut log, pre_basis| {
+                    let mut basis =
+                        log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                    log.append_program_mapping_phase_v5(
+                        phases.closure(),
+                        phases.mapping().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_obligation_correspondence_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_staleness_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness.clone(),
+                        &mut basis,
+                    )?;
+                    phase = target.seal_partial_rerun_phase_for_log_v5(
+                        &log,
+                        staleness,
+                        &preservation,
+                    )?;
+                    let (identical_replay, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(),
+                        target.log.canonical_genesis_bytes.clone(),
+                        log.envelopes.clone(),
+                        log.limits,
+                    )?;
+                    assert_ne!(identical_replay.instance_identity, log.instance_identity);
+                    assert!(
+                        identical_replay
+                            .prepare_partial_rerun_phase_append_v5(&phase, staleness, &basis)
+                            .is_err()
+                    );
+                    let before = log.envelopes.len();
+                    let before_tail = log.tail_hash().clone();
+                    let before_basis = basis.basis_digest().clone();
+                    // Independent boundary oracle: do not call the production
+                    // `phase.preflight_working_bytes`/`phase.retained_bytes`
+                    // helpers being tested.
+                    let dynamic = |value: usize, inline: usize| -> Result<u64> {
+                        u64::try_from(value.checked_sub(inline).ok_or(DomainError::Incomplete {
+                            operation: "partial rerun test oracle inline ownership",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?)
+                        .map_err(|_| DomainError::Incomplete {
+                            operation: "partial rerun test oracle ownership",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })
+                    };
+                    let mut phase_oracle =
+                        u64::try_from(size_of::<SealedPartialRerunPhaseV5>()).unwrap_or(u64::MAX);
+                    for value in [
+                        phase.source_closure_id.allocated_bytes(),
+                        phase.pre_incremental_basis_digest.allocated_bytes(),
+                        phase.policy_revision_hash.allocated_bytes(),
+                        phase.target_run_id.allocated_bytes(),
+                        phase.target_genesis_hash.allocated_bytes(),
+                        phase.target_predecessor_tail_hash.allocated_bytes(),
+                        phase.staleness_assessment_id.allocated_bytes(),
+                        phase.staleness_body_hash.allocated_bytes(),
+                        phase
+                            .actions
+                            .capacity()
+                            .checked_mul(size_of::<crate::PartialRerunActionV5>())
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun test action slots",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?,
+                        phase
+                            .preservation_evidence
+                            .capacity()
+                            .checked_mul(size_of::<crate::PreservationEvidenceV5>())
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun test evidence slots",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?,
+                        phase
+                            .preservation_verifications
+                            .capacity()
+                            .checked_mul(size_of::<crate::PreservationVerificationV5>())
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun test verification slots",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?,
+                    ] {
+                        phase_oracle = phase_oracle
+                            .checked_add(u64::try_from(value).unwrap_or(u64::MAX))
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun test phase ownership",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?;
+                    }
+                    phase_oracle = phase_oracle
+                        .checked_add(dynamic(
+                            phase
+                                .plan
+                                .retained_bytes()
+                                .map_err(|error| DomainError::Validation(error.to_string()))?,
+                            size_of::<crate::PartialRerunPlanV5>(),
+                        )?)
+                        .ok_or(DomainError::Incomplete {
+                            operation: "partial rerun test phase ownership",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?;
+                    for action in &phase.actions {
+                        phase_oracle = phase_oracle
+                            .checked_add(dynamic(
+                                action
+                                    .retained_bytes()
+                                    .map_err(|error| DomainError::Validation(error.to_string()))?,
+                                size_of::<crate::PartialRerunActionV5>(),
+                            )?)
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun test phase ownership",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?;
+                    }
+                    for evidence in &phase.preservation_evidence {
+                        phase_oracle = phase_oracle
+                            .checked_add(dynamic(
+                                evidence
+                                    .retained_bytes()
+                                    .map_err(|error| DomainError::Validation(error.to_string()))?,
+                                size_of::<crate::PreservationEvidenceV5>(),
+                            )?)
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun test phase ownership",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?;
+                    }
+                    for verification in &phase.preservation_verifications {
+                        phase_oracle = phase_oracle
+                            .checked_add(dynamic(
+                                verification
+                                    .retained_bytes()
+                                    .map_err(|error| DomainError::Validation(error.to_string()))?,
+                                size_of::<crate::PreservationVerificationV5>(),
+                            )?)
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun test phase ownership",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?;
+                    }
+                    // Preparation must reserve a complete future prepared
+                    // member before validation can allocate it.  The two
+                    // hashes materialized by preparation are SHA-256 values;
+                    // reserve 128 bytes each as the production gate does.
+                    let prepared_fixed = [
+                        size_of::<PreparedPartialRerunPhaseAppendV5>(),
+                        phase.source_closure_id.allocated_bytes(),
+                        phase.policy_revision_hash.allocated_bytes(),
+                        phase.target_run_id.allocated_bytes(),
+                        phase.target_genesis_hash.allocated_bytes(),
+                        phase.pre_incremental_basis_digest.allocated_bytes(),
+                        phase.target_predecessor_tail_hash.allocated_bytes(),
+                        phase.staleness_assessment_id.allocated_bytes(),
+                        phase.staleness_body_hash.allocated_bytes(),
+                        128,
+                        128,
+                    ]
+                    .into_iter()
+                    .try_fold(0_u64, |total, value| {
+                        total.checked_add(u64::try_from(value).unwrap_or(u64::MAX))
+                    })
+                    .ok_or(DomainError::Incomplete {
+                        operation: "partial rerun test prepared fixed ownership",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                    let mut prepared_peak = prepared_fixed
+                        .checked_add(dynamic(
+                            phase
+                                .plan
+                                .retained_bytes()
+                                .map_err(|error| DomainError::Validation(error.to_string()))?,
+                            size_of::<crate::PartialRerunPlanV5>(),
+                        )?)
+                        .ok_or(DomainError::Incomplete {
+                            operation: "partial rerun test prepared ownership",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?;
+                    for action in &phase.actions {
+                        let candidate = prepared_fixed
+                            .checked_add(dynamic(
+                                action
+                                    .retained_bytes()
+                                    .map_err(|error| DomainError::Validation(error.to_string()))?,
+                                size_of::<crate::PartialRerunActionV5>(),
+                            )?)
+                            .ok_or(DomainError::Incomplete {
+                                operation: "partial rerun test prepared ownership",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?;
+                        prepared_peak = prepared_peak.max(candidate);
+                    }
+                    let exact = log
+                        .full_resident_bytes_for_structural_store()?
+                        .checked_add(phase_oracle)
+                        .and_then(|value| value.checked_add(prepared_peak))
+                        .and_then(|value| {
+                            value.checked_add(
+                                u64::try_from(crate::m6::MAX_M6_CANONICAL_BYTES)
+                                    .unwrap_or(u64::MAX),
+                            )
+                        })
+                        .and_then(|value| {
+                            value.checked_add(
+                                u64::try_from(crate::m6::MAX_M6_CANONICAL_BYTES)
+                                    .unwrap_or(u64::MAX),
+                            )
+                        })
+                        .ok_or(DomainError::Incomplete {
+                            operation: "partial rerun test oracle peak",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?;
+                    let original_limit = log.limits.max_working_bytes;
+                    log.limits.max_working_bytes =
+                        exact.checked_sub(1).ok_or(DomainError::Incomplete {
+                            operation: "partial rerun test exact-minus-one",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?;
+                    assert!(
+                        log.prepare_partial_rerun_phase_append_v5(&phase, staleness, &basis)
+                            .is_err()
+                    );
+                    assert_eq!(log.envelopes.len(), before);
+                    assert_eq!(log.tail_hash(), &before_tail);
+                    assert_eq!(basis.basis_digest(), &before_basis);
+                    log.limits.max_working_bytes = exact;
+                    assert!(
+                        log.prepare_partial_rerun_phase_append_v5(&phase, staleness, &basis)
+                            .is_ok()
+                    );
+                    log.limits.max_working_bytes = original_limit;
+                    let prepared =
+                        log.prepare_partial_rerun_phase_append_v5(&phase, staleness, &basis)?;
+                    // A prepared member is position-bound: it cannot be used
+                    // after an intervening append or re-used after consumption.
+                    log.append_prepared_partial_rerun_phase_v5(
+                        prepared, &phase, staleness, &mut basis,
+                    )?;
+                    assert_ne!(log.envelopes.len(), before);
+                    assert_ne!(log.tail_hash(), &before_tail);
+                    assert_ne!(basis.basis_digest(), &before_basis);
+                    while log
+                        .prepare_partial_rerun_phase_append_v5(&phase, staleness, &basis)
+                        .is_ok()
+                    {
+                        let prepared =
+                            log.prepare_partial_rerun_phase_append_v5(&phase, staleness, &basis)?;
+                        log.append_prepared_partial_rerun_phase_v5(
+                            prepared, &phase, staleness, &mut basis,
+                        )?;
+                    }
+                    assert_eq!(log.envelopes.len(), before + expected_payloads.len());
+                    assert_eq!(basis.target_confirmed_tail_hash(), log.tail_hash());
+                    assert_eq!(
+                        basis.target_confirmed_event_count(),
+                        u64::try_from(log.envelopes.len()).unwrap()
+                    );
+
+                    struct EmptyResolver;
+                    impl AuthorityArtifactResolverV5 for EmptyResolver {
+                        fn read_exact(
+                            &self,
+                            _hash: &ContentHash,
+                            _destination: &mut [u8],
+                        ) -> Result<()> {
+                            Err(DomainError::Validation(
+                                "unexpected empty CAS read".to_owned(),
+                            ))
+                        }
+                    }
+                    let full = log.envelopes.clone();
+                    target.with_terminal_persistence(|_fresh, recovery_pre_basis| {
+                        for persisted in 0..=expected_payloads.len() {
+                            let (mut prefix, _) = EventLogV5::replay_confirmed_v5_prefix(
+                                target.run_id().clone(),
+                                target.log.canonical_genesis_bytes.clone(),
+                                full[..before + persisted].to_vec(),
+                                target.log.limits,
+                            )?;
+                            let recovery_phase = target.seal_partial_rerun_phase_for_log_v5(
+                                &prefix,
+                                staleness,
+                                &preservation,
+                            )?;
+                            let recovered = prefix.recover_partial_rerun_phase_v5(
+                                &recovery_pre_basis,
+                                phases.closure(),
+                                phases.mapping(),
+                                phases.correspondence(),
+                                staleness,
+                                PreservationRecoveryInputV5 {
+                                    closure: phases.closure(),
+                                    mapping: phases.mapping(),
+                                    correspondence: phases.correspondence(),
+                                    staleness,
+                                    bundles: &[],
+                                    resolver: &EmptyResolver,
+                                    roots: &target.roots,
+                                },
+                                &recovery_phase,
+                            )?;
+                            let RecoveredM6PersistenceV5::Incremental { stage, basis } = recovered
+                            else {
+                                panic!("partial rerun recovery must retain normal basis")
+                            };
+                            let expected_stage = if persisted < expected_payloads.len() - 1 {
+                                M6PersistenceRecoveryStageV5::PartialRerunActions {
+                                    next_index: persisted,
+                                }
+                            } else if persisted == expected_payloads.len() - 1 {
+                                M6PersistenceRecoveryStageV5::PartialRerunPlanPending
+                            } else {
+                                M6PersistenceRecoveryStageV5::PartialRerunSealed
+                            };
+                            assert_eq!(stage, expected_stage);
+                            assert_eq!(basis.target_confirmed_tail_hash(), prefix.tail_hash());
+                            assert_eq!(
+                                basis.target_confirmed_event_count(),
+                                u64::try_from(prefix.envelopes.len()).unwrap()
+                            );
+                            let mut resumed_basis = *basis;
+                            while let Ok(prepared) = prefix.prepare_partial_rerun_phase_append_v5(
+                                &recovery_phase,
+                                staleness,
+                                &resumed_basis,
+                            ) {
+                                prefix.append_prepared_partial_rerun_phase_v5(
+                                    prepared,
+                                    &recovery_phase,
+                                    staleness,
+                                    &mut resumed_basis,
+                                )?;
+                            }
+                            assert_eq!(prefix.envelopes.len(), full.len());
+                            assert_eq!(
+                                prefix.tail_hash(),
+                                full.last().expect("full tail").event_hash()
+                            );
+                        }
+                        Ok(())
+                    })?;
+
+                    Ok(())
+                })
+            },
+        )
+        .expect("partial rerun phase one-shot append and recovery");
+    }
+
+    #[test]
+    fn v5_partial_rerun_phase_revalidates_preservation_triple() {
+        crate::m6_test_support::with_preservation_s0_s1_persistence_fixture(
+            |source, target, phases, staleness| {
+                target.with_terminal_persistence(|mut log, pre_basis| {
+                    let mut basis =
+                        log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                    log.append_program_mapping_phase_v5(
+                        phases.closure(),
+                        phases.mapping().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_obligation_correspondence_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_staleness_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness.clone(),
+                        &mut basis,
+                    )?;
+                    let policy = basis.policy_revision_hash.clone();
+                    let bundle = source.preservation_bundle_v5(
+                        target.run_id().clone(),
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness,
+                        policy.clone(),
+                    )?;
+                    let binding = PreservationTrustBindingV5::from_bundle(
+                        policy.clone(),
+                        phases.closure().id().clone(),
+                        source.run_id().clone(),
+                        log.genesis_hash().clone(),
+                        log.tail_hash().clone(),
+                        basis.target_next_sequence,
+                        &bundle,
+                    )?;
+                    let roots = AuthorityTrustRootsV5::new(
+                        policy,
+                        target.program().repository_id().clone(),
+                        target
+                            .program()
+                            .repository_source()
+                            .content_hash()
+                            .ok_or(DomainError::AuthorityPolicyMismatch)?
+                            .clone(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    )?
+                    .with_preservation_bindings(BTreeSet::from([binding]))?;
+                    struct Resolver(BTreeMap<ContentHash, Vec<u8>>);
+                    impl AuthorityArtifactResolverV5 for Resolver {
+                        fn read_exact(
+                            &self,
+                            hash: &ContentHash,
+                            destination: &mut [u8],
+                        ) -> Result<()> {
+                            let bytes = self
+                                .0
+                                .get(hash)
+                                .ok_or_else(|| DomainError::Validation("CAS miss".to_owned()))?;
+                            if bytes.len() != destination.len() {
+                                return Err(DomainError::Validation("CAS size".to_owned()));
+                            }
+                            destination.copy_from_slice(bytes);
+                            Ok(())
+                        }
+                    }
+                    let resolver = Resolver(BTreeMap::from([
+                        (
+                            bundle.input_registration().cas_hash().clone(),
+                            bundle.input_bytes().to_vec(),
+                        ),
+                        (
+                            bundle.output_registration().cas_hash().clone(),
+                            bundle.output_bytes().to_vec(),
+                        ),
+                    ]));
+                    log.append_preservation_phase_v5(
+                        std::slice::from_ref(&bundle),
+                        &resolver,
+                        &roots,
+                        &mut basis,
+                    )?;
+                    let preservation = crate::M6PreservationPhaseV5::from_admitted_bundles(
+                        staleness,
+                        phases.correspondence(),
+                        std::slice::from_ref(&bundle),
+                    )?;
+                    let phase = target.seal_partial_rerun_phase_for_log_v5(
+                        &log,
+                        staleness,
+                        &preservation,
+                    )?;
+                    let expected_payloads = (0..phase.member_count()?)
+                        .map(|index| phase.payload_at(index))
+                        .collect::<Result<Vec<_>>>()?;
+                    let phase_start = log.envelopes.len();
+                    while let Ok(prepared) =
+                        log.prepare_partial_rerun_phase_append_v5(&phase, staleness, &basis)
+                    {
+                        log.append_prepared_partial_rerun_phase_v5(
+                            prepared, &phase, staleness, &mut basis,
+                        )?;
+                    }
+                    let full = log.envelopes.clone();
+                    target.with_terminal_persistence(|_fresh, recovery_pre_basis| {
+                        for persisted in 0..=expected_payloads.len() {
+                            let (prefix, _) = EventLogV5::replay_confirmed_v5_prefix(
+                                target.run_id().clone(),
+                                target.log.canonical_genesis_bytes.clone(),
+                                full[..phase_start + persisted].to_vec(),
+                                target.log.limits,
+                            )?;
+                            let recovered = prefix.recover_partial_rerun_phase_v5(
+                                &recovery_pre_basis,
+                                phases.closure(),
+                                phases.mapping(),
+                                phases.correspondence(),
+                                staleness,
+                                PreservationRecoveryInputV5 {
+                                    closure: phases.closure(),
+                                    mapping: phases.mapping(),
+                                    correspondence: phases.correspondence(),
+                                    staleness,
+                                    bundles: std::slice::from_ref(&bundle),
+                                    resolver: &resolver,
+                                    roots: &roots,
+                                },
+                                &target.seal_partial_rerun_phase_for_log_v5(
+                                    &prefix,
+                                    staleness,
+                                    &preservation,
+                                )?,
+                            )?;
+                            let RecoveredM6PersistenceV5::Incremental { stage, basis } = recovered
+                            else {
+                                panic!("partial rerun recovery must retain normal basis")
+                            };
+                            assert!(matches!(
+                                stage,
+                                M6PersistenceRecoveryStageV5::PartialRerunActions { .. }
+                                    | M6PersistenceRecoveryStageV5::PartialRerunPlanPending
+                                    | M6PersistenceRecoveryStageV5::PartialRerunSealed
+                            ));
+                            assert_eq!(basis.target_confirmed_tail_hash(), prefix.tail_hash());
+                            assert_eq!(
+                                basis.target_confirmed_event_count(),
+                                u64::try_from(prefix.envelopes.len()).unwrap()
+                            );
+                        }
+                        Ok(())
+                    })?;
+
+                    Ok(())
+                })
+            },
+        )
+        .expect("preservation-bound partial rerun phase");
     }
 
     #[test]
