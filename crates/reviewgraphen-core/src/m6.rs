@@ -60,6 +60,10 @@ pub const MAX_M6_PRESERVATION_DEPENDENCY_MAPPINGS: usize = 512;
 pub const MAX_M6_PRESERVATION_RECORDS: usize = 2_048;
 pub const MAX_M6_PRESERVATION_REGISTRATIONS: usize = 4_096;
 pub const MAX_M6_PRESERVATION_CAS_BYTES: usize = 1_048_576;
+pub const PARTIAL_RERUN_PLANNER_DESCRIPTOR_V5: &str = "reviewgraphen.partial_rerun@1";
+pub const MAX_M6_PARTIAL_RERUN_ACTIONS: usize = 4_096;
+pub const MAX_M6_ACTION_METADATA_IDS: usize = 512;
+pub const MAX_M6_PARTIAL_RERUN_WORKING_BYTES: usize = 536_870_912;
 
 pub type M6Result<T> = std::result::Result<T, M6Error>;
 
@@ -1417,6 +1421,880 @@ impl PreservationBundleV5 {
     #[must_use]
     pub fn verification(&self) -> &PreservationVerificationV5 {
         &self.verification
+    }
+}
+
+/// Opaque, sealed preservation handoff for partial-rerun planning.  Callers
+/// cannot provide detached verification IDs: every member is revalidated as
+/// the exact evidence/verification pair produced by an admitted bundle.
+#[derive(Clone, Debug)]
+pub struct M6PreservationPhaseV5 {
+    source_closure_id: StableId,
+    morphism_id: StableId,
+    correspondence_id: StableId,
+    staleness_assessment_id: StableId,
+    target_snapshot_id: StableId,
+    evidence: Vec<PreservationEvidenceV5>,
+    verifications: Vec<PreservationVerificationV5>,
+}
+
+impl M6PreservationPhaseV5 {
+    pub(crate) fn from_admitted_bundles(
+        staleness: &M6StalenessPhaseV5,
+        correspondence: &M6ObligationCorrespondencePhaseV5,
+        bundles: &[PreservationBundleV5],
+    ) -> M6Result<Self> {
+        bounded(
+            bundles.len(),
+            MAX_M6_PRESERVATION_RECORDS,
+            "M6 preservation phase members",
+        )?;
+        if correspondence.correspondence().id() != staleness.assessment.correspondence_id() {
+            return Err(M6Error::PreservationUnsupported(
+                "preservation correspondence differs from sealed staleness",
+            ));
+        }
+        let entry_ids = correspondence
+            .entries()
+            .iter()
+            .map(|entry| entry.id())
+            .collect::<BTreeSet<_>>();
+        let mut ordered = bundles.iter().collect::<Vec<_>>();
+        ordered.sort_by(|left, right| {
+            left.evidence
+                .target_obligation_id
+                .cmp(&right.evidence.target_obligation_id)
+        });
+        if ordered.windows(2).any(|pair| {
+            pair[0].evidence.target_obligation_id >= pair[1].evidence.target_obligation_id
+        }) {
+            return Err(M6Error::PreservationUnsupported(
+                "preservation phase targets are not unique",
+            ));
+        }
+        let mut evidence = Vec::with_capacity(ordered.len());
+        let mut verifications = Vec::with_capacity(ordered.len());
+        for bundle in ordered {
+            bundle.evidence.validate()?;
+            bundle.verification.validate()?;
+            if bundle.evidence.source_closure_id != staleness.assessment.source_closure_id
+                || bundle.evidence.morphism_id != staleness.assessment.morphism_id
+                || bundle.evidence.target_snapshot_id != staleness.target_snapshot_id
+                || !entry_ids.contains(&bundle.evidence.correspondence_entry_id)
+                || bundle.verification.evidence_id != bundle.evidence.id
+                || bundle.verification.target_snapshot_id != bundle.evidence.target_snapshot_id
+                || bundle.verification.target_obligation_id != bundle.evidence.target_obligation_id
+                || !staleness
+                    .is_sealed_preservation_candidate(&bundle.evidence.target_obligation_id)?
+            {
+                return Err(M6Error::PreservationUnsupported(
+                    "preservation phase pair is not bound to the sealed M6 inputs",
+                ));
+            }
+            evidence.push(bundle.evidence.clone());
+            verifications.push(bundle.verification.clone());
+        }
+        Ok(Self {
+            source_closure_id: staleness.assessment.source_closure_id.clone(),
+            morphism_id: staleness.assessment.morphism_id.clone(),
+            correspondence_id: staleness.assessment.correspondence_id.clone(),
+            staleness_assessment_id: staleness.assessment.id.clone(),
+            target_snapshot_id: staleness.target_snapshot_id.clone(),
+            evidence,
+            verifications,
+        })
+    }
+
+    /// Creates the exact, phase-bound empty preservation handoff.
+    #[must_use]
+    pub fn empty(staleness: &M6StalenessPhaseV5) -> Self {
+        Self {
+            source_closure_id: staleness.assessment.source_closure_id.clone(),
+            morphism_id: staleness.assessment.morphism_id.clone(),
+            correspondence_id: staleness.assessment.correspondence_id.clone(),
+            staleness_assessment_id: staleness.assessment.id.clone(),
+            target_snapshot_id: staleness.target_snapshot_id.clone(),
+            evidence: Vec::new(),
+            verifications: Vec::new(),
+        }
+    }
+}
+
+fn partial_rerun_working_bytes_v5(
+    action_count: usize,
+    metadata_ids: usize,
+    limit: usize,
+) -> M6Result<usize> {
+    let per_action = std::mem::size_of::<PartialRerunActionV5>()
+        .checked_add(1_024)
+        .ok_or(M6Error::Incomplete {
+            operation: "M6 partial rerun working bytes",
+            limit,
+            observed: usize::MAX,
+        })?;
+    let per_metadata_id =
+        std::mem::size_of::<StableId>()
+            .checked_add(128)
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 partial rerun working bytes",
+                limit,
+                observed: usize::MAX,
+            })?;
+    action_count
+        .checked_mul(per_action)
+        .and_then(|value| {
+            metadata_ids
+                .checked_mul(per_metadata_id)
+                .and_then(|metadata| value.checked_add(metadata))
+        })
+        .and_then(|value| value.checked_add(MAX_M6_CANONICAL_BYTES))
+        .ok_or(M6Error::Incomplete {
+            operation: "M6 partial rerun working bytes",
+            limit,
+            observed: usize::MAX,
+        })
+}
+
+/// Immutable target-side record witness used when a later partial-rerun slice
+/// implements exact predecessor suppression.  The initial planner deliberately
+/// emits no values of this type.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExistingTargetRecordV5 {
+    record_id: StableId,
+    body_hash: ContentHash,
+    event_id: StableId,
+}
+
+impl ExistingTargetRecordV5 {
+    pub fn new(record_id: StableId, body_hash: ContentHash, event_id: StableId) -> M6Result<Self> {
+        full_sha256("body_hash", &body_hash)?;
+        require_kind(&event_id, "event", "event_id")?;
+        let value = Self {
+            record_id,
+            body_hash,
+            event_id,
+        };
+        bounded_serialized(
+            &value,
+            MAX_M6_CANONICAL_BYTES,
+            "M6 existing target record DTO bytes",
+        )?;
+        Ok(value)
+    }
+
+    pub fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 existing target record JSON bytes",
+        )?;
+        let value: Self = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        let expected = Self::new(value.record_id, value.body_hash, value.event_id)?;
+        if crate::canonical_json(&expected)? != input {
+            return Err(M6Error::InvalidWire(
+                "existing target record JSON is not exact canonical content".to_owned(),
+            ));
+        }
+        Ok(expected)
+    }
+
+    #[must_use]
+    pub fn record_id(&self) -> &StableId {
+        &self.record_id
+    }
+    #[must_use]
+    pub fn body_hash(&self) -> &ContentHash {
+        &self.body_hash
+    }
+    #[must_use]
+    pub fn event_id(&self) -> &StableId {
+        &self.event_id
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ActionPrerequisiteV5 {
+    ScheduledAction {
+        action_id: StableId,
+    },
+    ExistingTargetRecord {
+        record_id: StableId,
+        body_hash: ContentHash,
+        event_id: StableId,
+    },
+}
+
+impl ActionPrerequisiteV5 {
+    fn scheduled(action_id: StableId) -> M6Result<Self> {
+        require_kind(&action_id, "partial-rerun-action-v5", "action_id")?;
+        Ok(Self::ScheduledAction { action_id })
+    }
+
+    fn validate(&self) -> M6Result<()> {
+        match self {
+            Self::ScheduledAction { action_id } => {
+                require_kind(action_id, "partial-rerun-action-v5", "action_id")
+            }
+            Self::ExistingTargetRecord {
+                record_id,
+                body_hash,
+                event_id,
+            } => {
+                ExistingTargetRecordV5::new(record_id.clone(), body_hash.clone(), event_id.clone())
+                    .map(|_| ())
+            }
+        }
+    }
+
+    pub fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 action prerequisite JSON bytes",
+        )?;
+        let value: Self = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        value.validate()?;
+        if crate::canonical_json(&value)? != input {
+            return Err(M6Error::InvalidWire(
+                "action prerequisite JSON is not exact canonical content".to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartialRerunSubjectKindV5 {
+    Obligation,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartialRerunActionKindV5 {
+    ReprojectContext,
+    RerunReviewer,
+    RerunVerifier,
+    RerunHumanDecision,
+}
+
+fn validate_action_prerequisite_shape_v5(
+    action: PartialRerunActionKindV5,
+    prerequisites: &[ActionPrerequisiteV5],
+) -> M6Result<()> {
+    let scheduled = prerequisites
+        .iter()
+        .filter(|value| matches!(value, ActionPrerequisiteV5::ScheduledAction { .. }))
+        .count();
+    let existing = prerequisites.len().saturating_sub(scheduled);
+    let existing_kinds = prerequisites
+        .iter()
+        .filter_map(|value| match value {
+            ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. } => Some(record_id.kind()),
+            ActionPrerequisiteV5::ScheduledAction { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    let valid = match action {
+        PartialRerunActionKindV5::ReprojectContext => prerequisites.is_empty(),
+        PartialRerunActionKindV5::RerunReviewer => {
+            (prerequisites.len() == 1 && scheduled == 1)
+                || existing_kinds.as_slice() == ["context-envelope"]
+        }
+        PartialRerunActionKindV5::RerunVerifier => {
+            (prerequisites.len() == 1 && scheduled == 1)
+                || (prerequisites.len() == 2
+                    && existing == 2
+                    && existing_kinds.contains(&"execution")
+                    && existing_kinds.contains(&"claim"))
+        }
+        PartialRerunActionKindV5::RerunHumanDecision => {
+            (prerequisites.len() == 1 && scheduled == 1)
+                || existing_kinds.as_slice() == ["verification"]
+        }
+    };
+    if !valid {
+        return Err(M6Error::InvalidStalenessAssessment(
+            "partial rerun prerequisite shape does not match the action",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct PartialRerunActionIdentityV5<'a> {
+    staleness_assessment_id: &'a StableId,
+    subject_kind: PartialRerunSubjectKindV5,
+    subject_ids: &'a BTreeSet<StableId>,
+    action: PartialRerunActionKindV5,
+    prerequisites: &'a [ActionPrerequisiteV5],
+    stale_source_record_ids: &'a BTreeSet<StableId>,
+    reasons: &'a BTreeSet<StaleReasonV5>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PartialRerunActionV5 {
+    schema: &'static str,
+    id: StableId,
+    staleness_assessment_id: StableId,
+    subject_kind: PartialRerunSubjectKindV5,
+    subject_ids: BTreeSet<StableId>,
+    action: PartialRerunActionKindV5,
+    prerequisites: Vec<ActionPrerequisiteV5>,
+    stale_source_record_ids: BTreeSet<StableId>,
+    reasons: BTreeSet<StaleReasonV5>,
+    source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PartialRerunActionWireV5 {
+    schema: String,
+    id: StableId,
+    staleness_assessment_id: StableId,
+    subject_kind: PartialRerunSubjectKindV5,
+    subject_ids: BTreeSet<StableId>,
+    action: PartialRerunActionKindV5,
+    prerequisites: Vec<ActionPrerequisiteV5>,
+    stale_source_record_ids: BTreeSet<StableId>,
+    reasons: BTreeSet<StaleReasonV5>,
+    source_ids: BTreeSet<StableId>,
+}
+
+impl PartialRerunActionV5 {
+    fn derive(
+        staleness_assessment_id: StableId,
+        target_obligation_id: StableId,
+        action: PartialRerunActionKindV5,
+        prerequisites: Vec<ActionPrerequisiteV5>,
+        stale_source_record_ids: BTreeSet<StableId>,
+        reasons: BTreeSet<StaleReasonV5>,
+    ) -> M6Result<Self> {
+        require_kind(
+            &staleness_assessment_id,
+            "staleness-assessment-v5",
+            "staleness_assessment_id",
+        )?;
+        require_kind(&target_obligation_id, "obligation", "subject_ids")?;
+        bounded(
+            prerequisites.len(),
+            MAX_M6_ACTION_METADATA_IDS,
+            "M6 action prerequisites",
+        )?;
+        bounded(
+            stale_source_record_ids.len(),
+            MAX_M6_ACTION_METADATA_IDS,
+            "M6 action stale source records",
+        )?;
+        if prerequisites.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(M6Error::InvalidStalenessAssessment(
+                "partial rerun prerequisites are not strictly ordered",
+            ));
+        }
+        for prerequisite in &prerequisites {
+            prerequisite.validate()?;
+        }
+        validate_action_prerequisite_shape_v5(action, &prerequisites)?;
+        let subject_ids = BTreeSet::from([target_obligation_id]);
+        let identity = PartialRerunActionIdentityV5 {
+            staleness_assessment_id: &staleness_assessment_id,
+            subject_kind: PartialRerunSubjectKindV5::Obligation,
+            subject_ids: &subject_ids,
+            action,
+            prerequisites: &prerequisites,
+            stale_source_record_ids: &stale_source_record_ids,
+            reasons: &reasons,
+        };
+        let id = derive("partial-rerun-action-v5", &identity)?;
+        let source_ids = std::iter::once(staleness_assessment_id.clone())
+            .chain(subject_ids.iter().cloned())
+            .chain(stale_source_record_ids.iter().cloned())
+            .chain(prerequisites.iter().flat_map(|value| match value {
+                ActionPrerequisiteV5::ScheduledAction { action_id } => vec![action_id.clone()],
+                ActionPrerequisiteV5::ExistingTargetRecord {
+                    record_id,
+                    event_id,
+                    ..
+                } => vec![record_id.clone(), event_id.clone()],
+            }))
+            .collect::<BTreeSet<_>>();
+        bounded(
+            source_ids.len(),
+            MAX_M6_ACTION_METADATA_IDS,
+            "M6 action source IDs",
+        )?;
+        let value = Self {
+            schema: "reviewgraphen.partial_rerun_action.v5",
+            id,
+            staleness_assessment_id,
+            subject_kind: PartialRerunSubjectKindV5::Obligation,
+            subject_ids,
+            action,
+            prerequisites,
+            stale_source_record_ids,
+            reasons,
+            source_ids,
+        };
+        bounded_event_dto(
+            &value,
+            MAX_M6_CANONICAL_BYTES,
+            "M6 partial rerun action DTO bytes",
+        )?;
+        Ok(value)
+    }
+
+    pub fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 partial rerun action JSON bytes",
+        )?;
+        preflight_event_line(input.len(), 1)?;
+        let wire: PartialRerunActionWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if wire.schema != "reviewgraphen.partial_rerun_action.v5"
+            || wire.subject_kind != PartialRerunSubjectKindV5::Obligation
+            || wire.subject_ids.len() != 1
+        {
+            return Err(M6Error::InvalidWire(
+                "invalid partial rerun action shape".to_owned(),
+            ));
+        }
+        let target = wire
+            .subject_ids
+            .iter()
+            .next()
+            .expect("singleton checked")
+            .clone();
+        let expected = Self::derive(
+            wire.staleness_assessment_id,
+            target,
+            wire.action,
+            wire.prerequisites,
+            wire.stale_source_record_ids,
+            wire.reasons,
+        )?;
+        if expected.id != wire.id
+            || expected.source_ids != wire.source_ids
+            || crate::canonical_json(&expected)? != input
+        {
+            return Err(M6Error::InvalidWire(
+                "partial rerun action JSON is not exact canonical derived content".to_owned(),
+            ));
+        }
+        Ok(expected)
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub const fn action(&self) -> PartialRerunActionKindV5 {
+        self.action
+    }
+    #[must_use]
+    pub fn subject_ids(&self) -> &BTreeSet<StableId> {
+        &self.subject_ids
+    }
+    #[must_use]
+    pub fn prerequisites(&self) -> &[ActionPrerequisiteV5] {
+        &self.prerequisites
+    }
+    #[must_use]
+    pub fn stale_source_record_ids(&self) -> &BTreeSet<StableId> {
+        &self.stale_source_record_ids
+    }
+    #[must_use]
+    pub fn reasons(&self) -> &BTreeSet<StaleReasonV5> {
+        &self.reasons
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
+    }
+}
+
+#[derive(Serialize)]
+struct PartialRerunPlanIdentityV5<'a> {
+    source_closure_id: &'a StableId,
+    morphism_id: &'a StableId,
+    correspondence_id: &'a StableId,
+    staleness_assessment_id: &'a StableId,
+    planner_descriptor_id: &'static str,
+    target_plan_id: &'a StableId,
+    selected_target_count: u64,
+    selected_target_digest: &'a ContentHash,
+    action_count: u64,
+    action_set_digest: &'a ContentHash,
+    preservation_verification_count: u64,
+    preservation_verification_digest: &'a ContentHash,
+    required_human_resolution_count: u64,
+    required_human_resolution_digest: &'a ContentHash,
+    source_ids: &'a BTreeSet<StableId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PartialRerunPlanV5 {
+    schema: &'static str,
+    id: StableId,
+    source_closure_id: StableId,
+    morphism_id: StableId,
+    correspondence_id: StableId,
+    staleness_assessment_id: StableId,
+    planner_descriptor_id: &'static str,
+    target_plan_id: StableId,
+    selected_target_count: u64,
+    selected_target_digest: ContentHash,
+    action_count: u64,
+    action_set_digest: ContentHash,
+    preservation_verification_count: u64,
+    preservation_verification_digest: ContentHash,
+    required_human_resolution_count: u64,
+    required_human_resolution_digest: ContentHash,
+    source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PartialRerunPlanWireV5 {
+    schema: String,
+    id: StableId,
+    source_closure_id: StableId,
+    morphism_id: StableId,
+    correspondence_id: StableId,
+    staleness_assessment_id: StableId,
+    planner_descriptor_id: String,
+    target_plan_id: StableId,
+    selected_target_count: u64,
+    selected_target_digest: ContentHash,
+    action_count: u64,
+    action_set_digest: ContentHash,
+    preservation_verification_count: u64,
+    preservation_verification_digest: ContentHash,
+    required_human_resolution_count: u64,
+    required_human_resolution_digest: ContentHash,
+    source_ids: BTreeSet<StableId>,
+}
+
+struct PartialRerunPlanPartsV5<'a> {
+    source_closure_id: StableId,
+    morphism_id: StableId,
+    correspondence_id: StableId,
+    staleness_assessment_id: StableId,
+    target_plan_id: StableId,
+    selected_target_ids: &'a BTreeSet<StableId>,
+    actions: &'a [PartialRerunActionV5],
+    preservation_verifications: &'a [PreservationVerificationV5],
+    required_human_resolution_ids: &'a BTreeSet<StableId>,
+}
+
+impl PartialRerunPlanV5 {
+    fn seal(parts: PartialRerunPlanPartsV5<'_>) -> M6Result<Self> {
+        require_kind(
+            &parts.source_closure_id,
+            "incremental-source-closure-v5",
+            "source_closure_id",
+        )?;
+        require_kind(&parts.morphism_id, "change-morphism-v5", "morphism_id")?;
+        require_kind(
+            &parts.correspondence_id,
+            "obligation-correspondence-v5",
+            "correspondence_id",
+        )?;
+        require_kind(
+            &parts.staleness_assessment_id,
+            "staleness-assessment-v5",
+            "staleness_assessment_id",
+        )?;
+        require_kind(&parts.target_plan_id, "plan", "target_plan_id")?;
+        bounded(
+            parts.selected_target_ids.len(),
+            MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+            "M6 selected rerun targets",
+        )?;
+        bounded(
+            parts.actions.len(),
+            MAX_M6_PARTIAL_RERUN_ACTIONS,
+            "M6 partial rerun actions",
+        )?;
+        bounded(
+            parts.preservation_verifications.len(),
+            MAX_M6_PRESERVATION_RECORDS,
+            "M6 preservation verifications",
+        )?;
+        bounded(
+            parts.required_human_resolution_ids.len(),
+            MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+            "M6 required human resolutions",
+        )?;
+        if parts
+            .selected_target_ids
+            .iter()
+            .any(|id| id.kind() != "obligation")
+            || !parts
+                .required_human_resolution_ids
+                .is_subset(parts.selected_target_ids)
+            || parts
+                .actions
+                .windows(2)
+                .any(|pair| pair[0].id >= pair[1].id)
+            || parts
+                .preservation_verifications
+                .windows(2)
+                .any(|pair| pair[0].id >= pair[1].id)
+            || parts.actions.iter().any(|action| {
+                action.staleness_assessment_id != parts.staleness_assessment_id
+                    || !action.subject_ids.is_subset(parts.selected_target_ids)
+            })
+        {
+            return Err(M6Error::InvalidStalenessAssessment(
+                "partial rerun plan members are not exact, ordered, or subject-bound",
+            ));
+        }
+        let action_by_id = parts
+            .actions
+            .iter()
+            .map(|action| (&action.id, action))
+            .collect::<BTreeMap<_, _>>();
+        for action in parts.actions {
+            let expected_predecessor = match action.action {
+                PartialRerunActionKindV5::ReprojectContext => None,
+                PartialRerunActionKindV5::RerunReviewer => {
+                    Some(PartialRerunActionKindV5::ReprojectContext)
+                }
+                PartialRerunActionKindV5::RerunVerifier => {
+                    Some(PartialRerunActionKindV5::RerunReviewer)
+                }
+                PartialRerunActionKindV5::RerunHumanDecision => {
+                    Some(PartialRerunActionKindV5::RerunVerifier)
+                }
+            };
+            for prerequisite in &action.prerequisites {
+                let ActionPrerequisiteV5::ScheduledAction { action_id } = prerequisite else {
+                    continue;
+                };
+                let Some(predecessor) = action_by_id.get(action_id) else {
+                    return Err(M6Error::InvalidStalenessAssessment(
+                        "partial rerun scheduled prerequisite is dangling",
+                    ));
+                };
+                if Some(predecessor.action) != expected_predecessor
+                    || predecessor.subject_ids != action.subject_ids
+                    || predecessor.staleness_assessment_id != action.staleness_assessment_id
+                {
+                    return Err(M6Error::InvalidStalenessAssessment(
+                        "partial rerun scheduled prerequisite is not the same-subject expected predecessor",
+                    ));
+                }
+            }
+        }
+        let action_records = parts
+            .actions
+            .iter()
+            .map(|value| {
+                value
+                    .body_hash()
+                    .and_then(|hash| IdBodyHashV5::new(value.id.clone(), hash))
+            })
+            .collect::<M6Result<Vec<_>>>()?;
+        let preservation_records = parts
+            .preservation_verifications
+            .iter()
+            .map(|value| {
+                value
+                    .body_hash()
+                    .and_then(|hash| IdBodyHashV5::new(value.id.clone(), hash))
+            })
+            .collect::<M6Result<Vec<_>>>()?;
+        let selected_target_digest = digest_ids(parts.selected_target_ids)?;
+        let action_set_digest = digest_records(&action_records)?;
+        let preservation_verification_digest = digest_records(&preservation_records)?;
+        let required_human_resolution_digest = digest_ids(parts.required_human_resolution_ids)?;
+        let source_ids = BTreeSet::from([
+            parts.source_closure_id.clone(),
+            parts.morphism_id.clone(),
+            parts.correspondence_id.clone(),
+            parts.staleness_assessment_id.clone(),
+            parts.target_plan_id.clone(),
+        ]);
+        let mut value = Self {
+            schema: "reviewgraphen.partial_rerun_plan.v5",
+            id: StableId::parse("partial-rerun-plan-v5:pending")?,
+            source_closure_id: parts.source_closure_id,
+            morphism_id: parts.morphism_id,
+            correspondence_id: parts.correspondence_id,
+            staleness_assessment_id: parts.staleness_assessment_id,
+            planner_descriptor_id: PARTIAL_RERUN_PLANNER_DESCRIPTOR_V5,
+            target_plan_id: parts.target_plan_id,
+            selected_target_count: u64::try_from(parts.selected_target_ids.len()).map_err(
+                |_| M6Error::Incomplete {
+                    operation: "M6 selected target count",
+                    limit: MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+                    observed: usize::MAX,
+                },
+            )?,
+            selected_target_digest,
+            action_count: u64::try_from(parts.actions.len()).map_err(|_| M6Error::Incomplete {
+                operation: "M6 action count",
+                limit: MAX_M6_PARTIAL_RERUN_ACTIONS,
+                observed: usize::MAX,
+            })?,
+            action_set_digest,
+            preservation_verification_count: u64::try_from(parts.preservation_verifications.len())
+                .map_err(|_| M6Error::Incomplete {
+                    operation: "M6 preservation verification count",
+                    limit: MAX_M6_PRESERVATION_RECORDS,
+                    observed: usize::MAX,
+                })?,
+            preservation_verification_digest,
+            required_human_resolution_count: u64::try_from(
+                parts.required_human_resolution_ids.len(),
+            )
+            .map_err(|_| M6Error::Incomplete {
+                operation: "M6 required human count",
+                limit: MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+                observed: usize::MAX,
+            })?,
+            required_human_resolution_digest,
+            source_ids,
+        };
+        value.id = derive("partial-rerun-plan-v5", &value.identity())?;
+        bounded_event_dto(
+            &value,
+            MAX_M6_CANONICAL_BYTES,
+            "M6 partial rerun plan DTO bytes",
+        )?;
+        Ok(value)
+    }
+
+    fn identity(&self) -> PartialRerunPlanIdentityV5<'_> {
+        PartialRerunPlanIdentityV5 {
+            source_closure_id: &self.source_closure_id,
+            morphism_id: &self.morphism_id,
+            correspondence_id: &self.correspondence_id,
+            staleness_assessment_id: &self.staleness_assessment_id,
+            planner_descriptor_id: self.planner_descriptor_id,
+            target_plan_id: &self.target_plan_id,
+            selected_target_count: self.selected_target_count,
+            selected_target_digest: &self.selected_target_digest,
+            action_count: self.action_count,
+            action_set_digest: &self.action_set_digest,
+            preservation_verification_count: self.preservation_verification_count,
+            preservation_verification_digest: &self.preservation_verification_digest,
+            required_human_resolution_count: self.required_human_resolution_count,
+            required_human_resolution_digest: &self.required_human_resolution_digest,
+            source_ids: &self.source_ids,
+        }
+    }
+
+    pub fn from_json_bytes(input: &[u8], expected: &Self) -> M6Result<Self> {
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 partial rerun plan JSON bytes",
+        )?;
+        preflight_event_line(input.len(), 1)?;
+        let wire: PartialRerunPlanWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        for (field, digest) in [
+            ("selected_target_digest", &wire.selected_target_digest),
+            ("action_set_digest", &wire.action_set_digest),
+            (
+                "preservation_verification_digest",
+                &wire.preservation_verification_digest,
+            ),
+            (
+                "required_human_resolution_digest",
+                &wire.required_human_resolution_digest,
+            ),
+        ] {
+            full_sha256(field, digest)?;
+        }
+        let source_ids = BTreeSet::from([
+            wire.source_closure_id.clone(),
+            wire.morphism_id.clone(),
+            wire.correspondence_id.clone(),
+            wire.staleness_assessment_id.clone(),
+            wire.target_plan_id.clone(),
+        ]);
+        let value = Self {
+            schema: "reviewgraphen.partial_rerun_plan.v5",
+            id: wire.id,
+            source_closure_id: wire.source_closure_id,
+            morphism_id: wire.morphism_id,
+            correspondence_id: wire.correspondence_id,
+            staleness_assessment_id: wire.staleness_assessment_id,
+            planner_descriptor_id: PARTIAL_RERUN_PLANNER_DESCRIPTOR_V5,
+            target_plan_id: wire.target_plan_id,
+            selected_target_count: wire.selected_target_count,
+            selected_target_digest: wire.selected_target_digest,
+            action_count: wire.action_count,
+            action_set_digest: wire.action_set_digest,
+            preservation_verification_count: wire.preservation_verification_count,
+            preservation_verification_digest: wire.preservation_verification_digest,
+            required_human_resolution_count: wire.required_human_resolution_count,
+            required_human_resolution_digest: wire.required_human_resolution_digest,
+            source_ids,
+        };
+        if wire.schema != value.schema
+            || wire.planner_descriptor_id != PARTIAL_RERUN_PLANNER_DESCRIPTOR_V5
+            || wire.source_ids != value.source_ids
+            || value.id != derive("partial-rerun-plan-v5", &value.identity())?
+            || value.selected_target_count > MAX_M6_OBLIGATIONS_PER_UNIVERSE as u64
+            || value.action_count > MAX_M6_PARTIAL_RERUN_ACTIONS as u64
+            || value.preservation_verification_count > MAX_M6_PRESERVATION_RECORDS as u64
+            || value.required_human_resolution_count > value.selected_target_count
+            || &value != expected
+            || crate::canonical_json(&value)? != input
+        {
+            return Err(M6Error::InvalidWire(
+                "partial rerun plan JSON is not exact canonical derived content".to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn target_plan_id(&self) -> &StableId {
+        &self.target_plan_id
+    }
+    #[must_use]
+    pub const fn action_count(&self) -> u64 {
+        self.action_count
+    }
+    #[must_use]
+    pub const fn selected_target_count(&self) -> u64 {
+        self.selected_target_count
+    }
+    #[must_use]
+    pub const fn preservation_verification_count(&self) -> u64 {
+        self.preservation_verification_count
+    }
+    #[must_use]
+    pub const fn required_human_resolution_count(&self) -> u64 {
+        self.required_human_resolution_count
+    }
+    #[must_use]
+    pub fn action_set_digest(&self) -> &ContentHash {
+        &self.action_set_digest
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+    pub fn body_hash(&self) -> M6Result<ContentHash> {
+        body_hash(self)
     }
 }
 
@@ -9321,6 +10199,163 @@ fn transitive_record_closure_v5(
     Ok(result)
 }
 
+#[derive(Clone, Debug, Default)]
+struct PartialRerunActionSeedV5 {
+    require_native_pipeline: bool,
+    require_human_resolution: bool,
+    stale_source_record_ids: BTreeSet<StableId>,
+    reasons: BTreeSet<StaleReasonV5>,
+}
+
+fn historical_kind_requires_native_rerun_v5(kind: HistoricalRecordKindV5) -> bool {
+    !matches!(
+        kind,
+        HistoricalRecordKindV5::GluingInputDescriptor
+            | HistoricalRecordKindV5::ContextCover
+            | HistoricalRecordKindV5::Section
+            | HistoricalRecordKindV5::Restriction
+            | HistoricalRecordKindV5::GluingAttempt
+            | HistoricalRecordKindV5::GlobalCandidate
+            | HistoricalRecordKindV5::GluingObstruction
+            | HistoricalRecordKindV5::Coverage
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn partial_rerun_row_v5(
+    source_kind: HistoricalSourceRecordKindV4,
+    stale_source_record_ids: &BTreeSet<StableId>,
+    obligation_id: &StableId,
+    row: &ObligationImpactRowV5,
+    mapping_ids: &BTreeSet<StableId>,
+    row_successor_empty: bool,
+    dependency_changed: bool,
+    active_human: bool,
+    mappings: &M6MappingPhaseV5,
+    correspondence: &M6ObligationCorrespondencePhaseV5,
+    source_program: &ProgramSpace,
+    source_nodes: &BTreeMap<OwnedHistoricalRecordKeyV5, AssessmentRecordNodeV5>,
+    target_nodes: &BTreeMap<OwnedHistoricalRecordKeyV5, AssessmentRecordNodeV5>,
+) -> M6Result<Vec<(StableId, PartialRerunActionSeedV5)>> {
+    let entries = correspondence
+        .entries()
+        .iter()
+        .filter(|entry| entry.from_obligation_ids().contains(obligation_id))
+        .collect::<Vec<_>>();
+    let targets = entries
+        .iter()
+        .flat_map(|entry| entry.to_obligation_ids().iter().cloned())
+        .collect::<BTreeSet<_>>();
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut reasons = BTreeSet::new();
+    if !row.supported {
+        reasons.insert(StaleReasonV5::UnsupportedImpactPolicy);
+    }
+    if entries.is_empty() {
+        reasons.insert(StaleReasonV5::ObligationChanged);
+    }
+    for entry in entries {
+        match entry.status() {
+            MappingStatusV5::Preserved => {}
+            MappingStatusV5::Modified => {
+                reasons.insert(correspondence_direct_reason_v5(
+                    entry,
+                    source_nodes,
+                    target_nodes,
+                ));
+            }
+            MappingStatusV5::Added | MappingStatusV5::Removed => {
+                reasons.insert(StaleReasonV5::TargetChanged);
+            }
+            MappingStatusV5::Split | MappingStatusV5::Merged | MappingStatusV5::Unresolved => {
+                reasons.insert(StaleReasonV5::MappingUnresolved);
+            }
+        }
+    }
+    for mapping in mappings
+        .mappings()
+        .iter()
+        .filter(|mapping| mapping_ids.contains(mapping.id()))
+    {
+        let direct_position = mapping.from_ids().iter().any(|id| row.direct.contains(id));
+        let indirect_position = mapping
+            .from_ids()
+            .iter()
+            .any(|id| row.indirect.contains(id));
+        let mapping_reason = mapping_direct_reason_v5(mapping, source_program);
+        let direct_reason = if mapping_reason == StaleReasonV5::TargetChanged {
+            record_class_reason_v5(source_kind)
+        } else {
+            mapping_reason
+        };
+        reasons.extend(
+            reduce_mapping_position_v5(
+                mapping.status(),
+                direct_position,
+                indirect_position,
+                direct_reason,
+            )
+            .0,
+        );
+    }
+    if dependency_changed {
+        reasons.insert(StaleReasonV5::DependencyChanged);
+    }
+    if row_successor_empty {
+        reasons.insert(StaleReasonV5::TargetChanged);
+    }
+    if active_human {
+        reasons.insert(StaleReasonV5::HumanAuthorityNotCarried);
+    }
+    if reasons.is_empty() {
+        return Ok(Vec::new());
+    }
+    let kind = HistoricalRecordKindV5::from_internal(source_kind);
+    if !historical_kind_requires_native_rerun_v5(kind) {
+        return Ok(Vec::new());
+    }
+    Ok(targets
+        .into_iter()
+        .map(|target| {
+            (
+                target,
+                PartialRerunActionSeedV5 {
+                    require_native_pipeline: true,
+                    require_human_resolution: active_human,
+                    stale_source_record_ids: stale_source_record_ids.clone(),
+                    reasons: reasons.clone(),
+                },
+            )
+        })
+        .collect())
+}
+
+fn add_correspondence_only_partial_seeds_v5(
+    correspondence: &M6ObligationCorrespondencePhaseV5,
+    seeds: &mut BTreeMap<StableId, PartialRerunActionSeedV5>,
+) {
+    for entry in correspondence.entries().iter().filter(|entry| {
+        entry.from_obligation_ids().is_empty()
+            && matches!(
+                entry.status(),
+                MappingStatusV5::Added | MappingStatusV5::Unresolved
+            )
+    }) {
+        let reason = if entry.status() == MappingStatusV5::Added {
+            StaleReasonV5::TargetChanged
+        } else {
+            StaleReasonV5::MappingUnresolved
+        };
+        for target in entry.to_obligation_ids() {
+            let seed = seeds.entry(target.clone()).or_default();
+            seed.require_native_pipeline = true;
+            seed.reasons.insert(reason);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct M6StalenessPhaseV5 {
     records: Vec<HistoricalRecordAssessmentV5>,
@@ -9329,6 +10364,9 @@ pub struct M6StalenessPhaseV5 {
     preservation_candidate_obligation_ids: BTreeSet<StableId>,
     target_gluing_required: bool,
     m5_dependent_successor_obligation_ids: BTreeSet<StableId>,
+    partial_rerun_seeds: BTreeMap<StableId, PartialRerunActionSeedV5>,
+    target_plan_id: StableId,
+    target_snapshot_id: StableId,
     working_bytes: usize,
 }
 
@@ -9348,6 +10386,166 @@ impl M6StalenessPhaseV5 {
     #[must_use]
     pub fn preservation_candidate_obligation_ids(&self) -> &BTreeSet<StableId> {
         &self.preservation_candidate_obligation_ids
+    }
+
+    /// Deterministically reduces the sealed staleness/preservation facts into
+    /// the initial no-suppression partial-rerun DAG.  It performs no journal,
+    /// CAS, lifecycle, verifier, human, or gluing mutation.
+    pub fn plan_partial_rerun_v5(
+        &self,
+        preservation: &M6PreservationPhaseV5,
+    ) -> M6Result<(Vec<PartialRerunActionV5>, PartialRerunPlanV5)> {
+        self.plan_partial_rerun_with_limits_v5(
+            preservation,
+            MAX_M6_PARTIAL_RERUN_ACTIONS,
+            MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+        )
+    }
+
+    fn plan_partial_rerun_with_limits_v5(
+        &self,
+        preservation: &M6PreservationPhaseV5,
+        action_limit: usize,
+        working_limit: usize,
+    ) -> M6Result<(Vec<PartialRerunActionV5>, PartialRerunPlanV5)> {
+        if preservation.source_closure_id != self.assessment.source_closure_id
+            || preservation.morphism_id != self.assessment.morphism_id
+            || preservation.correspondence_id != self.assessment.correspondence_id
+            || preservation.staleness_assessment_id != self.assessment.id
+            || preservation.target_snapshot_id != self.target_snapshot_id
+            || preservation.evidence.len() != preservation.verifications.len()
+        {
+            return Err(M6Error::PreservationUnsupported(
+                "preservation phase is not bound to this sealed staleness phase",
+            ));
+        }
+        bounded(
+            preservation.verifications.len(),
+            MAX_M6_PRESERVATION_RECORDS,
+            "M6 preservation verifications",
+        )?;
+        let mut verifications = preservation.verifications.clone();
+        verifications.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut seeds = self.partial_rerun_seeds.clone();
+        for verification in &verifications {
+            verification.validate()?;
+            if !self.is_sealed_preservation_candidate(&verification.target_obligation_id)? {
+                return Err(M6Error::InvalidStalenessAssessment(
+                    "preservation verification is not in the sealed candidate set",
+                ));
+            }
+            let seed = seeds
+                .entry(verification.target_obligation_id.clone())
+                .or_default();
+            seed.require_native_pipeline = true;
+            // ADR 0023's MVP preservation admission is issue_present-only.
+            seed.require_human_resolution = true;
+        }
+        seeds.retain(|_, seed| seed.require_native_pipeline || seed.require_human_resolution);
+        let selected_target_ids = seeds.keys().cloned().collect::<BTreeSet<_>>();
+        bounded(
+            selected_target_ids.len(),
+            MAX_M6_OBLIGATIONS_PER_UNIVERSE,
+            "M6 selected rerun targets",
+        )?;
+        let action_count = selected_target_ids
+            .len()
+            .checked_mul(3)
+            .and_then(|count| {
+                count.checked_add(
+                    seeds
+                        .values()
+                        .filter(|seed| seed.require_human_resolution)
+                        .count(),
+                )
+            })
+            .ok_or(M6Error::Incomplete {
+                operation: "M6 partial rerun action count",
+                limit: action_limit,
+                observed: usize::MAX,
+            })?;
+        bounded(action_count, action_limit, "M6 partial rerun actions")?;
+        let metadata_ids = seeds.values().try_fold(0_usize, |total, seed| {
+            total
+                .checked_add(seed.stale_source_record_ids.len())
+                .and_then(|value| value.checked_add(seed.reasons.len()))
+                .ok_or(M6Error::Incomplete {
+                    operation: "M6 partial rerun working bytes",
+                    limit: working_limit,
+                    observed: usize::MAX,
+                })
+        })?;
+        let working_bytes =
+            partial_rerun_working_bytes_v5(action_count, metadata_ids, working_limit)?;
+        bounded(
+            working_bytes,
+            working_limit,
+            "M6 partial rerun working bytes",
+        )?;
+
+        let mut actions = Vec::with_capacity(action_count);
+        let mut required_human_resolution_ids = BTreeSet::new();
+        for (target, seed) in &seeds {
+            let context = PartialRerunActionV5::derive(
+                self.assessment.id.clone(),
+                target.clone(),
+                PartialRerunActionKindV5::ReprojectContext,
+                Vec::new(),
+                seed.stale_source_record_ids.clone(),
+                seed.reasons.clone(),
+            )?;
+            let reviewer = PartialRerunActionV5::derive(
+                self.assessment.id.clone(),
+                target.clone(),
+                PartialRerunActionKindV5::RerunReviewer,
+                vec![ActionPrerequisiteV5::scheduled(context.id.clone())?],
+                seed.stale_source_record_ids.clone(),
+                seed.reasons.clone(),
+            )?;
+            let verifier = PartialRerunActionV5::derive(
+                self.assessment.id.clone(),
+                target.clone(),
+                PartialRerunActionKindV5::RerunVerifier,
+                vec![ActionPrerequisiteV5::scheduled(reviewer.id.clone())?],
+                seed.stale_source_record_ids.clone(),
+                seed.reasons.clone(),
+            )?;
+            actions.extend([context, reviewer, verifier.clone()]);
+            if seed.require_human_resolution {
+                required_human_resolution_ids.insert(target.clone());
+                actions.push(PartialRerunActionV5::derive(
+                    self.assessment.id.clone(),
+                    target.clone(),
+                    PartialRerunActionKindV5::RerunHumanDecision,
+                    vec![ActionPrerequisiteV5::scheduled(verifier.id.clone())?],
+                    seed.stale_source_record_ids.clone(),
+                    seed.reasons.clone(),
+                )?);
+            }
+        }
+        actions.sort_by(|left, right| left.id.cmp(&right.id));
+        let plan = PartialRerunPlanV5::seal(PartialRerunPlanPartsV5 {
+            source_closure_id: self.assessment.source_closure_id.clone(),
+            morphism_id: self.assessment.morphism_id.clone(),
+            correspondence_id: self.assessment.correspondence_id.clone(),
+            staleness_assessment_id: self.assessment.id.clone(),
+            target_plan_id: self.target_plan_id.clone(),
+            selected_target_ids: &selected_target_ids,
+            actions: &actions,
+            preservation_verifications: &verifications,
+            required_human_resolution_ids: &required_human_resolution_ids,
+        })?;
+        Ok((actions, plan))
+    }
+
+    #[cfg(test)]
+    fn plan_partial_rerun_with_limits_for_test(
+        &self,
+        preservation: &M6PreservationPhaseV5,
+        action_limit: usize,
+        working_limit: usize,
+    ) -> M6Result<(Vec<PartialRerunActionV5>, PartialRerunPlanV5)> {
+        self.plan_partial_rerun_with_limits_v5(preservation, action_limit, working_limit)
     }
 
     pub(crate) fn is_sealed_preservation_candidate(
@@ -9452,6 +10650,21 @@ impl M6StalenessPhaseV5 {
             .saturating_add(id_set_heap(&self.assessment.source_ids))
             .saturating_add(id_set_heap(&self.preservation_candidate_obligation_ids))
             .saturating_add(id_set_heap(&self.m5_dependent_successor_obligation_ids))
+            .saturating_add(self.target_plan_id.allocated_bytes())
+            .saturating_add(self.target_snapshot_id.allocated_bytes())
+            .saturating_add(
+                self.partial_rerun_seeds
+                    .iter()
+                    .fold(0_usize, |total, (id, seed)| {
+                        total
+                            .saturating_add(
+                                std::mem::size_of::<(StableId, PartialRerunActionSeedV5)>(),
+                            )
+                            .saturating_add(128)
+                            .saturating_add(id.allocated_bytes())
+                            .saturating_add(id_set_heap(&seed.stale_source_record_ids))
+                    }),
+            )
     }
 }
 
@@ -9945,6 +11158,9 @@ impl IncrementalStalenessInputV5<'_> {
         let mut completed =
             BTreeMap::<OwnedHistoricalRecordKeyV5, HistoricalRecordAssessmentV5>::new();
         let mut successor_map = BTreeMap::<OwnedHistoricalRecordKeyV5, BTreeSet<StableId>>::new();
+        let mut partial_rerun_seeds = BTreeMap::<StableId, PartialRerunActionSeedV5>::new();
+        let mut partial_row_causality =
+            BTreeMap::<(OwnedHistoricalRecordKeyV5, StableId), BTreeSet<StableId>>::new();
 
         while let Some(key) = ready.pop_first() {
             let node = &source_nodes[&key];
@@ -10006,6 +11222,16 @@ impl IncrementalStalenessInputV5<'_> {
             let mut indirect = false;
             let mut all_rows_removed = !obligation_ids.is_empty();
             let mut successor_record_ids = BTreeSet::new();
+            let record_dependency_changed = dependency_keys.iter().any(|dependency| {
+                completed.get(dependency).is_some_and(|value| {
+                    value.status != HistoricalAssessmentStatusV5::StructurallyPreserved
+                })
+            });
+            let active_human = node.pinned_active_or_current
+                && matches!(
+                    key.kind,
+                    HistoricalSourceRecordKindV4::Decision | HistoricalSourceRecordKindV4::Finding
+                );
             for obligation_id in &obligation_ids {
                 let Some(row) = obligation_rows.get(obligation_id) else {
                     reasons.insert(StaleReasonV5::UnsupportedImpactPolicy);
@@ -10060,7 +11286,19 @@ impl IncrementalStalenessInputV5<'_> {
                     }
                 }
                 all_rows_removed &= row_removed;
-                successor_record_ids.extend(row_successors_v5(
+                let row_dependency_witness_ids = dependency_keys
+                    .iter()
+                    .filter_map(|dependency| {
+                        partial_row_causality.get(&(dependency.clone(), obligation_id.clone()))
+                    })
+                    .flatten()
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let row_dependency_changed = !row_dependency_witness_ids.is_empty();
+                let stale_row_witness_ids = std::iter::once(key.id.clone())
+                    .chain(row_dependency_witness_ids.iter().cloned())
+                    .collect::<BTreeSet<_>>();
+                let row_successors = row_successors_v5(
                     &key,
                     node,
                     Some(obligation_id),
@@ -10068,7 +11306,50 @@ impl IncrementalStalenessInputV5<'_> {
                     &target_nodes,
                     &replacements,
                     &successor_map,
-                )?);
+                )?;
+                let no_actual_row_candidate = exact_target_candidates_for_row_v5(
+                    &key,
+                    Some(obligation_id),
+                    self.correspondence,
+                    &target_nodes,
+                )
+                .is_empty();
+                let row_target_missing = no_actual_row_candidate
+                    || (obligation_ids.len() == 1 && row_successors.is_empty());
+                let emitted_rows = partial_rerun_row_v5(
+                    key.kind,
+                    &stale_row_witness_ids,
+                    obligation_id,
+                    row,
+                    &mapping_ids,
+                    row_target_missing,
+                    row_dependency_changed,
+                    active_human,
+                    self.mapping,
+                    self.correspondence,
+                    self.source.program_space(),
+                    &source_nodes,
+                    &target_nodes,
+                )?;
+                if !emitted_rows.is_empty() {
+                    partial_row_causality
+                        .insert((key.clone(), obligation_id.clone()), stale_row_witness_ids);
+                }
+                for (target, seed) in emitted_rows {
+                    let target_seed = partial_rerun_seeds.entry(target).or_default();
+                    target_seed.require_native_pipeline |= seed.require_native_pipeline;
+                    target_seed.require_human_resolution |= seed.require_human_resolution;
+                    target_seed
+                        .stale_source_record_ids
+                        .extend(seed.stale_source_record_ids);
+                    target_seed.reasons.extend(seed.reasons);
+                    bounded(
+                        target_seed.stale_source_record_ids.len(),
+                        MAX_M6_ACTION_METADATA_IDS,
+                        "M6 action-seed stale records",
+                    )?;
+                }
+                successor_record_ids.extend(row_successors);
                 for mapping in self
                     .mapping
                     .mappings()
@@ -10123,20 +11404,11 @@ impl IncrementalStalenessInputV5<'_> {
                     &successor_map,
                 )?);
             }
-            if dependency_keys.iter().any(|dependency| {
-                completed.get(dependency).is_some_and(|value| {
-                    value.status != HistoricalAssessmentStatusV5::StructurallyPreserved
-                })
-            }) {
+            if record_dependency_changed {
                 reasons.insert(StaleReasonV5::DependencyChanged);
                 indirect = true;
             }
-            if node.pinned_active_or_current
-                && matches!(
-                    key.kind,
-                    HistoricalSourceRecordKindV4::Decision | HistoricalSourceRecordKindV4::Finding
-                )
-            {
+            if active_human {
                 reasons.insert(StaleReasonV5::HumanAuthorityNotCarried);
                 direct = true;
             }
@@ -10218,6 +11490,10 @@ impl IncrementalStalenessInputV5<'_> {
                 "assessment dependency graph did not close",
             ));
         }
+        // Added target obligations have no historical source record from
+        // which the row loop above could emit a seed.  Source-less unresolved
+        // components have the same shape and must remain conservative.
+        add_correspondence_only_partial_seeds_v5(self.correspondence, &mut partial_rerun_seeds);
         let records = completed.into_values().collect::<Vec<_>>();
         let source_attempt = records
             .iter()
@@ -10323,6 +11599,9 @@ impl IncrementalStalenessInputV5<'_> {
             preservation_candidate_obligation_ids: seal_parts.preservation_candidates,
             target_gluing_required,
             m5_dependent_successor_obligation_ids: m5_dependent_successors,
+            partial_rerun_seeds,
+            target_plan_id: self.target.plan().id().clone(),
+            target_snapshot_id: self.target.program_space().snapshot_id().clone(),
             working_bytes: preflight_peak,
         };
         // Capacity-aware second gate covers the actual retained result before
@@ -14780,6 +16059,578 @@ mod tests {
         (record, gluing, seal)
     }
 
+    fn partial_rerun_phase_fixture(
+        seeds: BTreeMap<StableId, PartialRerunActionSeedV5>,
+        preservation_candidates: BTreeSet<StableId>,
+    ) -> M6StalenessPhaseV5 {
+        let (record, gluing, assessment) = staleness_dto_fixture();
+        M6StalenessPhaseV5 {
+            records: vec![record],
+            gluing_freshness: vec![gluing],
+            assessment,
+            preservation_candidate_obligation_ids: preservation_candidates,
+            target_gluing_required: false,
+            m5_dependent_successor_obligation_ids: BTreeSet::new(),
+            partial_rerun_seeds: seeds,
+            target_plan_id: id("plan:target"),
+            target_snapshot_id: id("snapshot:target"),
+            working_bytes: 1,
+        }
+    }
+
+    fn native_seed(source: &str, reason: StaleReasonV5) -> PartialRerunActionSeedV5 {
+        PartialRerunActionSeedV5 {
+            require_native_pipeline: true,
+            require_human_resolution: false,
+            stale_source_record_ids: BTreeSet::from([id(source)]),
+            reasons: BTreeSet::from([reason]),
+        }
+    }
+
+    fn existing_prerequisite(kind: &str, value: usize) -> ActionPrerequisiteV5 {
+        ActionPrerequisiteV5::ExistingTargetRecord {
+            record_id: id(&format!("{kind}:target-{value}")),
+            body_hash: sha(value),
+            event_id: id(&format!("event:target-{value}")),
+        }
+    }
+
+    fn reidentified_unchecked_action(
+        action: PartialRerunActionKindV5,
+        mut prerequisites: Vec<ActionPrerequisiteV5>,
+    ) -> PartialRerunActionV5 {
+        prerequisites.sort();
+        let (_, _, assessment) = staleness_dto_fixture();
+        let subject_ids = BTreeSet::from([id("obligation:target")]);
+        let stale_source_record_ids = BTreeSet::from([id("claim:source")]);
+        let reasons = BTreeSet::from([StaleReasonV5::TargetChanged]);
+        let source_ids = std::iter::once(assessment.id().clone())
+            .chain(subject_ids.iter().cloned())
+            .chain(stale_source_record_ids.iter().cloned())
+            .chain(prerequisites.iter().flat_map(|value| match value {
+                ActionPrerequisiteV5::ScheduledAction { action_id } => vec![action_id.clone()],
+                ActionPrerequisiteV5::ExistingTargetRecord {
+                    record_id,
+                    event_id,
+                    ..
+                } => vec![record_id.clone(), event_id.clone()],
+            }))
+            .collect::<BTreeSet<_>>();
+        let identity = PartialRerunActionIdentityV5 {
+            staleness_assessment_id: assessment.id(),
+            subject_kind: PartialRerunSubjectKindV5::Obligation,
+            subject_ids: &subject_ids,
+            action,
+            prerequisites: &prerequisites,
+            stale_source_record_ids: &stale_source_record_ids,
+            reasons: &reasons,
+        };
+        PartialRerunActionV5 {
+            schema: "reviewgraphen.partial_rerun_action.v5",
+            id: derive("partial-rerun-action-v5", &identity).unwrap(),
+            staleness_assessment_id: assessment.id().clone(),
+            subject_kind: PartialRerunSubjectKindV5::Obligation,
+            subject_ids,
+            action,
+            prerequisites,
+            stale_source_record_ids,
+            reasons,
+            source_ids,
+        }
+    }
+
+    fn seal_partial_rerun_test_plan(
+        mut actions: Vec<PartialRerunActionV5>,
+        selected_target_ids: BTreeSet<StableId>,
+    ) -> M6Result<PartialRerunPlanV5> {
+        actions.sort_by(|left, right| left.id.cmp(&right.id));
+        let (_, _, assessment) = staleness_dto_fixture();
+        PartialRerunPlanV5::seal(PartialRerunPlanPartsV5 {
+            source_closure_id: assessment.source_closure_id().clone(),
+            morphism_id: assessment.morphism_id().clone(),
+            correspondence_id: assessment.correspondence_id().clone(),
+            staleness_assessment_id: assessment.id().clone(),
+            target_plan_id: id("plan:target"),
+            selected_target_ids: &selected_target_ids,
+            actions: &actions,
+            preservation_verifications: &[],
+            required_human_resolution_ids: &BTreeSet::new(),
+        })
+    }
+
+    #[test]
+    fn partial_rerun_dtos_are_strict_and_no_suppression_dag_is_exact() {
+        let target = id("obligation:target");
+        let phase = partial_rerun_phase_fixture(
+            BTreeMap::from([(
+                target.clone(),
+                native_seed("claim:source", StaleReasonV5::ModelPolicyChanged),
+            )]),
+            BTreeSet::new(),
+        );
+        let preservation = M6PreservationPhaseV5::empty(&phase);
+        let (actions, plan) = phase.plan_partial_rerun_v5(&preservation).unwrap();
+        assert_eq!(actions.len(), 3);
+        assert_eq!(plan.action_count(), 3);
+        assert_eq!(plan.selected_target_count(), 1);
+        assert_eq!(plan.required_human_resolution_count(), 0);
+        assert_eq!(plan.target_plan_id(), &id("plan:target"));
+        let by_kind = actions
+            .iter()
+            .map(|action| (action.action(), action))
+            .collect::<BTreeMap<_, _>>();
+        let context = by_kind[&PartialRerunActionKindV5::ReprojectContext];
+        let reviewer = by_kind[&PartialRerunActionKindV5::RerunReviewer];
+        let verifier = by_kind[&PartialRerunActionKindV5::RerunVerifier];
+        assert!(context.prerequisites().is_empty());
+        assert_eq!(
+            reviewer.prerequisites(),
+            &[ActionPrerequisiteV5::ScheduledAction {
+                action_id: context.id().clone()
+            }]
+        );
+        assert_eq!(
+            verifier.prerequisites(),
+            &[ActionPrerequisiteV5::ScheduledAction {
+                action_id: reviewer.id().clone()
+            }]
+        );
+        for action in &actions {
+            assert_eq!(action.subject_ids(), &BTreeSet::from([target.clone()]));
+            assert_eq!(
+                action.stale_source_record_ids(),
+                &BTreeSet::from([id("claim:source")])
+            );
+            assert_eq!(
+                action.reasons(),
+                &BTreeSet::from([StaleReasonV5::ModelPolicyChanged])
+            );
+            assert!(action.source_ids().contains(phase.assessment().id()));
+            assert!(action.source_ids().contains(&target));
+            assert!(action.source_ids().contains(&id("claim:source")));
+            let bytes = crate::canonical_json(action).unwrap();
+            assert_eq!(
+                PartialRerunActionV5::from_json_bytes(&bytes).unwrap(),
+                *action
+            );
+            let mut unknown: Value = serde_json::from_slice(&bytes).unwrap();
+            unknown["unknown"] = Value::Bool(true);
+            assert!(
+                PartialRerunActionV5::from_json_bytes(&crate::canonical_json(&unknown).unwrap())
+                    .is_err()
+            );
+        }
+        let bytes = crate::canonical_json(&plan).unwrap();
+        assert_eq!(
+            PartialRerunPlanV5::from_json_bytes(&bytes, &plan).unwrap(),
+            plan
+        );
+        let mut changed: Value = serde_json::from_slice(&bytes).unwrap();
+        changed["action_count"] = serde_json::json!(4);
+        assert!(
+            PartialRerunPlanV5::from_json_bytes(&crate::canonical_json(&changed).unwrap(), &plan)
+                .is_err()
+        );
+        let mut detached_preservation = preservation.clone();
+        detached_preservation.target_snapshot_id = id("snapshot:other");
+        assert!(matches!(
+            phase.plan_partial_rerun_v5(&detached_preservation),
+            Err(M6Error::PreservationUnsupported(_))
+        ));
+
+        let existing = ExistingTargetRecordV5::new(
+            id("execution:target"),
+            sha(44),
+            id("event:target-execution"),
+        )
+        .unwrap();
+        let existing_bytes = crate::canonical_json(&existing).unwrap();
+        assert_eq!(
+            ExistingTargetRecordV5::from_json_bytes(&existing_bytes).unwrap(),
+            existing
+        );
+        let prerequisite = ActionPrerequisiteV5::ExistingTargetRecord {
+            record_id: existing.record_id().clone(),
+            body_hash: existing.body_hash().clone(),
+            event_id: existing.event_id().clone(),
+        };
+        let prerequisite_bytes = crate::canonical_json(&prerequisite).unwrap();
+        assert_eq!(
+            ActionPrerequisiteV5::from_json_bytes(&prerequisite_bytes).unwrap(),
+            prerequisite
+        );
+        let mut extra: Value = serde_json::from_slice(&prerequisite_bytes).unwrap();
+        extra["extra"] = Value::Bool(true);
+        assert!(
+            ActionPrerequisiteV5::from_json_bytes(&crate::canonical_json(&extra).unwrap()).is_err()
+        );
+    }
+
+    #[test]
+    fn partial_rerun_prerequisite_shapes_and_scheduled_edges_are_closed() {
+        let scheduled_a =
+            ActionPrerequisiteV5::scheduled(id("partial-rerun-action-v5:a")).expect("scheduled A");
+        let scheduled_b =
+            ActionPrerequisiteV5::scheduled(id("partial-rerun-action-v5:b")).expect("scheduled B");
+        let existing_context = existing_prerequisite("context-envelope", 70);
+        let existing_execution = existing_prerequisite("execution", 71);
+        let existing_claim = existing_prerequisite("claim", 72);
+        let second_existing_execution = existing_prerequisite("execution", 73);
+        let second_existing_claim = existing_prerequisite("claim", 74);
+        let existing_verification = existing_prerequisite("verification", 75);
+        for invalid in [
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::ReprojectContext,
+                vec![scheduled_a.clone()],
+            ),
+            reidentified_unchecked_action(PartialRerunActionKindV5::RerunReviewer, vec![]),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunReviewer,
+                vec![scheduled_a.clone(), scheduled_b.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunReviewer,
+                vec![existing_execution.clone(), existing_claim.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunReviewer,
+                vec![existing_execution.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunReviewer,
+                vec![existing_verification.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunReviewer,
+                vec![scheduled_a.clone(), existing_execution.clone()],
+            ),
+            reidentified_unchecked_action(PartialRerunActionKindV5::RerunVerifier, vec![]),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunVerifier,
+                vec![existing_execution.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunVerifier,
+                vec![scheduled_a.clone(), scheduled_b.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunVerifier,
+                vec![scheduled_a.clone(), existing_execution.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunVerifier,
+                vec![existing_execution.clone(), second_existing_execution],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunVerifier,
+                vec![existing_claim.clone(), second_existing_claim],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunVerifier,
+                vec![existing_context.clone(), existing_claim.clone()],
+            ),
+            reidentified_unchecked_action(PartialRerunActionKindV5::RerunHumanDecision, vec![]),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunHumanDecision,
+                vec![existing_execution.clone(), existing_claim.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunHumanDecision,
+                vec![existing_execution.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunHumanDecision,
+                vec![existing_context.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunHumanDecision,
+                vec![scheduled_a.clone(), scheduled_b.clone()],
+            ),
+            reidentified_unchecked_action(
+                PartialRerunActionKindV5::RerunHumanDecision,
+                vec![scheduled_a, existing_execution.clone()],
+            ),
+        ] {
+            let bytes = crate::canonical_json(&invalid).expect("canonical re-ID mutation");
+            assert!(matches!(
+                PartialRerunActionV5::from_json_bytes(&bytes),
+                Err(M6Error::InvalidStalenessAssessment(_))
+            ));
+        }
+
+        let (_, _, assessment) = staleness_dto_fixture();
+        for (action, mut prerequisites) in [
+            (
+                PartialRerunActionKindV5::RerunReviewer,
+                vec![existing_context],
+            ),
+            (
+                PartialRerunActionKindV5::RerunVerifier,
+                vec![existing_execution.clone(), existing_claim],
+            ),
+            (
+                PartialRerunActionKindV5::RerunHumanDecision,
+                vec![existing_verification],
+            ),
+        ] {
+            prerequisites.sort();
+            PartialRerunActionV5::derive(
+                assessment.id().clone(),
+                id("obligation:target"),
+                action,
+                prerequisites,
+                BTreeSet::new(),
+                BTreeSet::new(),
+            )
+            .expect("exact existing-record prerequisite shape");
+        }
+
+        let target_a = id("obligation:a");
+        let target_b = id("obligation:b");
+        let context_a = PartialRerunActionV5::derive(
+            assessment.id().clone(),
+            target_a.clone(),
+            PartialRerunActionKindV5::ReprojectContext,
+            vec![],
+            BTreeSet::new(),
+            BTreeSet::new(),
+        )
+        .unwrap();
+        let dangling = PartialRerunActionV5::derive(
+            assessment.id().clone(),
+            target_a.clone(),
+            PartialRerunActionKindV5::RerunReviewer,
+            vec![ActionPrerequisiteV5::scheduled(id("partial-rerun-action-v5:dangling")).unwrap()],
+            BTreeSet::new(),
+            BTreeSet::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            seal_partial_rerun_test_plan(
+                vec![context_a.clone(), dangling],
+                BTreeSet::from([target_a.clone()])
+            ),
+            Err(M6Error::InvalidStalenessAssessment(_))
+        ));
+
+        let cross_subject = PartialRerunActionV5::derive(
+            assessment.id().clone(),
+            target_b.clone(),
+            PartialRerunActionKindV5::RerunReviewer,
+            vec![ActionPrerequisiteV5::scheduled(context_a.id().clone()).unwrap()],
+            BTreeSet::new(),
+            BTreeSet::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            seal_partial_rerun_test_plan(
+                vec![context_a.clone(), cross_subject],
+                BTreeSet::from([target_a.clone(), target_b]),
+            ),
+            Err(M6Error::InvalidStalenessAssessment(_))
+        ));
+
+        let reviewer_a = PartialRerunActionV5::derive(
+            assessment.id().clone(),
+            target_a.clone(),
+            PartialRerunActionKindV5::RerunReviewer,
+            vec![ActionPrerequisiteV5::scheduled(context_a.id().clone()).unwrap()],
+            BTreeSet::new(),
+            BTreeSet::new(),
+        )
+        .unwrap();
+        let wrong_kind = PartialRerunActionV5::derive(
+            assessment.id().clone(),
+            target_a.clone(),
+            PartialRerunActionKindV5::RerunHumanDecision,
+            vec![ActionPrerequisiteV5::scheduled(reviewer_a.id().clone()).unwrap()],
+            BTreeSet::new(),
+            BTreeSet::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            seal_partial_rerun_test_plan(
+                vec![context_a, reviewer_a, wrong_kind],
+                BTreeSet::from([target_a]),
+            ),
+            Err(M6Error::InvalidStalenessAssessment(_))
+        ));
+    }
+
+    #[test]
+    fn partial_rerun_unions_obligations_and_human_preservation_without_suppression() {
+        let first = id("obligation:a");
+        let second = id("obligation:b");
+        let mut human_seed = native_seed(
+            "decision-v3:source",
+            StaleReasonV5::HumanAuthorityNotCarried,
+        );
+        human_seed.require_human_resolution = true;
+        let phase = partial_rerun_phase_fixture(
+            BTreeMap::from([
+                (
+                    first.clone(),
+                    native_seed("execution:source", StaleReasonV5::TargetChanged),
+                ),
+                (second.clone(), human_seed),
+            ]),
+            BTreeSet::from([first.clone()]),
+        );
+        let preservation = M6PreservationPhaseV5::empty(&phase);
+        let (actions, plan) = phase.plan_partial_rerun_v5(&preservation).unwrap();
+        assert_eq!(actions.len(), 7);
+        assert_eq!(plan.selected_target_count(), 2);
+        assert_eq!(plan.required_human_resolution_count(), 1);
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| action.action() == PartialRerunActionKindV5::RerunHumanDecision)
+                .count(),
+            1
+        );
+        assert!(actions.windows(2).all(|pair| pair[0].id() < pair[1].id()));
+        let reversed = phase.plan_partial_rerun_v5(&preservation).unwrap();
+        assert_eq!(actions, reversed.0);
+        assert_eq!(plan, reversed.1);
+    }
+
+    #[test]
+    fn partial_rerun_removed_and_gluing_only_rows_schedule_nothing() {
+        let phase = partial_rerun_phase_fixture(BTreeMap::new(), BTreeSet::new());
+        let preservation = M6PreservationPhaseV5::empty(&phase);
+        let (actions, plan) = phase.plan_partial_rerun_v5(&preservation).unwrap();
+        assert!(actions.is_empty());
+        assert_eq!(plan.action_count(), 0);
+        assert_eq!(plan.selected_target_count(), 0);
+    }
+
+    #[test]
+    fn partial_rerun_unresolved_and_unsupported_rows_are_conservative() {
+        let (_closure, mappings, source, _target, mut correspondence) = correspondence_phase();
+        let entry = correspondence.entries.first_mut().unwrap();
+        entry.status = MappingStatusV5::Unresolved;
+        let source_obligation = entry.from_obligation_ids.first().unwrap().clone();
+        let target_obligation = entry.to_obligation_ids.first().unwrap().clone();
+        let rows = partial_rerun_row_v5(
+            HistoricalSourceRecordKindV4::Claim,
+            &BTreeSet::from([id("claim:source")]),
+            &source_obligation,
+            &ObligationImpactRowV5 {
+                direct: BTreeSet::new(),
+                indirect: BTreeSet::new(),
+                supported: false,
+            },
+            &BTreeSet::new(),
+            false,
+            false,
+            false,
+            &mappings,
+            &correspondence,
+            source.program(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, target_obligation.clone());
+        assert_eq!(
+            rows[0].1.reasons,
+            BTreeSet::from([
+                StaleReasonV5::MappingUnresolved,
+                StaleReasonV5::UnsupportedImpactPolicy,
+            ])
+        );
+
+        let entry = correspondence.entries.first_mut().unwrap();
+        entry.status = MappingStatusV5::Removed;
+        entry.to_obligation_ids.clear();
+        assert!(
+            partial_rerun_row_v5(
+                HistoricalSourceRecordKindV4::Claim,
+                &BTreeSet::from([id("claim:source")]),
+                &source_obligation,
+                &ObligationImpactRowV5 {
+                    direct: BTreeSet::new(),
+                    indirect: BTreeSet::new(),
+                    supported: true,
+                },
+                &BTreeSet::new(),
+                true,
+                false,
+                false,
+                &mappings,
+                &correspondence,
+                source.program(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+            .unwrap()
+            .is_empty()
+        );
+
+        let entry = correspondence.entries.first_mut().unwrap();
+        entry.status = MappingStatusV5::Added;
+        entry.from_obligation_ids.clear();
+        entry.to_obligation_ids.insert(target_obligation.clone());
+        let mut seeds = BTreeMap::new();
+        add_correspondence_only_partial_seeds_v5(&correspondence, &mut seeds);
+        assert_eq!(
+            seeds[&target_obligation].reasons,
+            BTreeSet::from([StaleReasonV5::TargetChanged])
+        );
+    }
+
+    #[test]
+    fn partial_rerun_limits_are_inclusive_and_overflow_closed() {
+        let target = id("obligation:target");
+        let phase = partial_rerun_phase_fixture(
+            BTreeMap::from([(
+                target.clone(),
+                native_seed("claim:source", StaleReasonV5::TargetChanged),
+            )]),
+            BTreeSet::new(),
+        );
+        let preservation = M6PreservationPhaseV5::empty(&phase);
+        let independently_counted_metadata_ids = 2_usize;
+        let exact_working = 3_usize
+            .checked_mul(std::mem::size_of::<PartialRerunActionV5>() + 1_024)
+            .and_then(|value| {
+                independently_counted_metadata_ids
+                    .checked_mul(std::mem::size_of::<StableId>() + 128)
+                    .and_then(|metadata| value.checked_add(metadata))
+            })
+            .and_then(|value| value.checked_add(MAX_M6_CANONICAL_BYTES))
+            .expect("independent working-byte boundary");
+        let exact = phase
+            .plan_partial_rerun_with_limits_for_test(&preservation, 3, exact_working)
+            .unwrap();
+        assert_eq!(exact.0.len(), 3);
+        assert!(matches!(
+            phase.plan_partial_rerun_with_limits_for_test(&preservation, 3, exact_working - 1),
+            Err(M6Error::Incomplete { .. })
+        ));
+
+        let mut four_action_seed = native_seed("claim:source", StaleReasonV5::TargetChanged);
+        four_action_seed.require_human_resolution = true;
+        let four_action_phase = partial_rerun_phase_fixture(
+            BTreeMap::from([(target, four_action_seed)]),
+            BTreeSet::new(),
+        );
+        let four_action_preservation = M6PreservationPhaseV5::empty(&four_action_phase);
+        assert!(matches!(
+            four_action_phase.plan_partial_rerun_with_limits_for_test(
+                &four_action_preservation,
+                3,
+                MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
+            ),
+            Err(M6Error::Incomplete { .. })
+        ));
+        assert!(matches!(
+            partial_rerun_working_bytes_v5(usize::MAX, usize::MAX, exact_working),
+            Err(M6Error::Incomplete { .. })
+        ));
+    }
+
     #[test]
     fn staleness_dtos_are_strict_canonical_and_body_bound() {
         let (record, gluing, seal) = staleness_dto_fixture();
@@ -15471,6 +17322,9 @@ mod tests {
             preservation_candidate_obligation_ids: BTreeSet::from([id("obligation:target")]),
             target_gluing_required: true,
             m5_dependent_successor_obligation_ids: BTreeSet::from([id("obligation:target")]),
+            partial_rerun_seeds: BTreeMap::new(),
+            target_plan_id: id("plan:target"),
+            target_snapshot_id: id("snapshot:target"),
             working_bytes: 123,
         };
         assert!(phase.retained_bytes() >= std::mem::size_of::<M6StalenessPhaseV5>());

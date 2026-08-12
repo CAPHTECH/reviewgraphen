@@ -333,6 +333,110 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
+    fn actual_reducer_keeps_shared_record_obligation_cones_isolated() {
+        let fixture =
+            PreservationDistinctS0S1StalenessFixture::new().expect("preservation fixture");
+        let phase = fixture.reduce().expect("phase");
+        let preserved_source_obligation_id = fixture
+            .source
+            .passed_fixture_obligation_id()
+            .expect("preserved source obligation");
+        let preserved_assessment = phase
+            .records()
+            .iter()
+            .find(|record| {
+                record.source_record_kind() == crate::HistoricalRecordKindV5::Obligation
+                    && record.source_record_id() == preserved_source_obligation_id
+            })
+            .expect("preserved obligation assessment");
+        assert_eq!(
+            preserved_assessment.status(),
+            crate::HistoricalAssessmentStatusV5::StructurallyPreserved
+        );
+        let preserved_target_obligation_id = preserved_assessment
+            .successor_record_ids()
+            .first()
+            .expect("preserved target obligation");
+        let bundle = fixture
+            .source
+            .preservation_bundle_v5(
+                fixture.target.run_id().clone(),
+                fixture.phases.closure(),
+                fixture.phases.mapping(),
+                fixture.phases.correspondence(),
+                &phase,
+                ContentHash::sha256(b"policy"),
+            )
+            .expect("admitted preservation bundle");
+        let preservation = crate::M6PreservationPhaseV5::from_admitted_bundles(
+            &phase,
+            fixture.phases.correspondence(),
+            std::slice::from_ref(&bundle),
+        )
+        .expect("opaque preservation phase");
+        let (actions, _) = phase.plan_partial_rerun_v5(&preservation).expect("plan");
+        let contexts = actions
+            .iter()
+            .filter(|value| value.action() == crate::PartialRerunActionKindV5::ReprojectContext)
+            .collect::<Vec<_>>();
+        let preserved_o2 = contexts
+            .iter()
+            .copied()
+            .find(|action| {
+                action
+                    .subject_ids()
+                    .contains(preserved_target_obligation_id)
+            })
+            .expect("admitted preserved O2 cone");
+        let (stale_o1, stale_o1_witness_id) = phase
+            .records()
+            .iter()
+            .filter(|record| {
+                record.source_record_kind() == crate::HistoricalRecordKindV5::Obligation
+                    && record.status() == crate::HistoricalAssessmentStatusV5::Stale
+            })
+            .find_map(|record| {
+                contexts
+                    .iter()
+                    .copied()
+                    .find(|action| {
+                        !action
+                            .subject_ids()
+                            .contains(preserved_target_obligation_id)
+                            && action
+                                .stale_source_record_ids()
+                                .contains(record.source_record_id())
+                    })
+                    .filter(|_| {
+                        !preserved_o2
+                            .stale_source_record_ids()
+                            .contains(record.source_record_id())
+                    })
+                    .map(|action| (action, record.source_record_id().clone()))
+            })
+            .expect("actual stale O1 witness outside preserved O2 cone");
+        assert!(
+            stale_o1
+                .stale_source_record_ids()
+                .contains(&stale_o1_witness_id)
+        );
+        assert!(
+            !preserved_o2
+                .stale_source_record_ids()
+                .contains(&stale_o1_witness_id)
+        );
+        for action in &actions {
+            if action.subject_ids() == preserved_o2.subject_ids() {
+                assert!(
+                    !action
+                        .stale_source_record_ids()
+                        .contains(&stale_o1_witness_id)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn distinct_s0_s1_reducer_uses_roots_bound_complete_and_no_m5_prefixes() {
         let fixture = DistinctS0S1StalenessFixture::new().expect("admitted E2E fixture");
         let first = fixture.reduce().expect("S0 -> S1 reducer");
@@ -625,6 +729,31 @@ mod tests {
         let input = crate::PreservationInputV1::from_json_bytes(bundle.input_bytes())
             .expect("strict preservation input");
         assert_eq!(input.source_verification_id(), source_verification.id());
+
+        let preservation = crate::M6PreservationPhaseV5::from_admitted_bundles(
+            &staleness,
+            fixture.phases.correspondence(),
+            std::slice::from_ref(&bundle),
+        )
+        .expect("opaque admitted preservation phase");
+        let (actions, plan) = staleness
+            .plan_partial_rerun_v5(&preservation)
+            .expect("phase-bound partial rerun plan");
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.subject_ids().contains(target_obligation_id))
+        );
+        assert!(actions.iter().any(|action| {
+            action.subject_ids().contains(target_obligation_id)
+                && action.action() == crate::PartialRerunActionKindV5::RerunHumanDecision
+        }));
+        assert_eq!(plan.preservation_verification_count(), 1);
+        let target_plan_id = fixture
+            .target
+            .with_terminal(|target, _| Ok(target.plan().id().clone()))
+            .expect("target plan ID");
+        assert_eq!(plan.target_plan_id(), &target_plan_id);
     }
 
     #[test]
