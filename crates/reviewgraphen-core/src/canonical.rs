@@ -98,6 +98,40 @@ pub(crate) fn compact_json_sha256_streaming<T: Serialize>(value: &T) -> Result<C
     ContentHash::parse(format!("sha256:{:x}", writer.0.finalize()))
 }
 
+struct MatchingWriter<'a> {
+    expected: &'a [u8],
+    offset: usize,
+    differs: bool,
+}
+
+impl Write for MatchingWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let end = self.offset.saturating_add(bytes.len());
+        if end > self.expected.len() || self.expected.get(self.offset..end) != Some(bytes) {
+            self.differs = true;
+        }
+        self.offset = end;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Compares a compact, canonically field-ordered serializer with existing
+/// bytes without materializing either a JSON value tree or an output buffer.
+pub(crate) fn compact_json_eq_streaming<T: Serialize>(value: &T, expected: &[u8]) -> Result<bool> {
+    let mut writer = MatchingWriter {
+        expected,
+        offset: 0,
+        differs: false,
+    };
+    serde_json::to_writer(&mut writer, value)
+        .map_err(|error| DomainError::CanonicalJson(error.to_string()))?;
+    Ok(!writer.differs && writer.offset == expected.len())
+}
+
 /// Hashes a compact JSON array from a fallible iterator without retaining the
 /// array or its members. Each member serializer must already emit object keys
 /// in canonical lexical order.

@@ -11,6 +11,7 @@ use crate::{
     m6::{
         IncrementalStalenessInputV5, M6FixturePhases, m6_distinct_s0_s1_program_fixture,
         m6_fixture_phases_from_exact_prefixes, preservation_distinct_s0_s1_program_fixture,
+        scheduled_reviewer_distinct_s0_s1_program_fixture,
         successful_m5_distinct_s0_s1_program_fixture,
     },
 };
@@ -363,6 +364,42 @@ impl SuccessfulM5DistinctS0S1StalenessFixture {
             self.phases.mapping().morphism().id()
         );
     }
+}
+
+pub(crate) fn with_source_bearing_scheduled_reviewer_fixture<R>(
+    callback: impl FnOnce(
+        &CompleteM5V4Fixture,
+        &NoM5V5Fixture,
+        &M6FixturePhases,
+        &M6StalenessPhaseV5,
+    ) -> M6Result<R>,
+) -> M6Result<R> {
+    let (source_program, target_program, source_bytes, target_bytes) =
+        scheduled_reviewer_distinct_s0_s1_program_fixture()?;
+    let source = CompleteM5V4Fixture::successful_from_program_and_sources(
+        source_program,
+        source_bytes,
+        crate::StableId::parse("run:m6-scheduled-reviewer-s0-fixture")?,
+    )?;
+    let target = NoM5V5Fixture::from_program_and_sources(
+        target_program,
+        target_bytes,
+        crate::StableId::parse("run:m6-scheduled-reviewer-s1-fixture")?,
+    )?;
+    let phases = target.with_terminal(|_, target_actual, _| {
+        m6_fixture_phases_from_exact_prefixes(&source, &target, target_actual)
+    })?;
+    let staleness = target.with_terminal(|target_log, target_actual, _| {
+        IncrementalStalenessInputV5::new(
+            source.log(),
+            phases.closure(),
+            phases.mapping(),
+            phases.correspondence(),
+            target_log,
+        )?
+        .reduce_v5(target_actual, DISTINCT_S0_S1_ASSESSMENT_TIME)
+    })?;
+    callback(&source, &target, &phases, &staleness)
 }
 
 #[cfg(test)]

@@ -4053,11 +4053,7 @@ impl PersistedPayload {
                 .canonical_bytes()
                 .map(|_| ())
                 .map_err(context_domain_error),
-            // The payload-level check is structural. V2--V4 decoders and all
-            // general aggregate paths still apply the frozen 1..16 D2 rule;
-            // V5 needs the zero-claim shape to survive until its exact
-            // scheduled-position cardinality reducer.
-            Self::ReviewExecutionRecorded(recorded) => recorded.validate_shape_for_m6(),
+            Self::ReviewExecutionRecorded(recorded) => recorded.validate_shape(),
         }
     }
 
@@ -4838,6 +4834,13 @@ pub struct EventEnvelope {
 
 impl EventEnvelope {
     fn from_raw(raw: RawEventEnvelope) -> Result<Self> {
+        Self::from_raw_at_v5_position(raw, V5SealedPayloadPosition::General)
+    }
+
+    fn from_raw_at_v5_position(
+        raw: RawEventEnvelope,
+        position: V5SealedPayloadPosition,
+    ) -> Result<Self> {
         let mut envelope = Self {
             schema: raw.schema,
             id: raw.id,
@@ -4853,9 +4856,14 @@ impl EventEnvelope {
             canonical_line_bytes_v4: None,
             canonical_line_bytes_v5: None,
         };
-        envelope.validate()?;
+        envelope.validate_at_v5_position(position)?;
         envelope.set_canonical_line_bytes_v4()?;
-        envelope.set_canonical_line_bytes_v5()?;
+        match position {
+            V5SealedPayloadPosition::General => envelope.set_canonical_line_bytes_v5()?,
+            V5SealedPayloadPosition::ScheduledM6Execution => {
+                envelope.set_canonical_line_bytes_v5_scheduled_execution()?;
+            }
+        }
         Ok(envelope)
     }
 
@@ -4892,7 +4900,44 @@ impl EventEnvelope {
         previous_event_hash: ContentHash,
         payload: PersistedPayload,
     ) -> Result<Self> {
-        payload.validate_shape()?;
+        Self::new_at_v5_position(
+            version,
+            run_id,
+            genesis_hash,
+            sequence,
+            actor,
+            logical_time,
+            previous_event_hash,
+            payload,
+            V5SealedPayloadPosition::General,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_at_v5_position(
+        version: EventContractVersion,
+        run_id: StableId,
+        genesis_hash: ContentHash,
+        sequence: u64,
+        actor: impl Into<String>,
+        logical_time: u64,
+        previous_event_hash: ContentHash,
+        payload: PersistedPayload,
+        position: V5SealedPayloadPosition,
+    ) -> Result<Self> {
+        match position {
+            V5SealedPayloadPosition::General => payload.validate_shape()?,
+            V5SealedPayloadPosition::ScheduledM6Execution => match &payload {
+                PersistedPayload::ReviewExecutionRecorded(recorded) => {
+                    recorded.validate_shape_for_m6()?;
+                }
+                _ => {
+                    return Err(DomainError::EventSequence(
+                        "scheduled M6 execution position requires execution payload".to_owned(),
+                    ));
+                }
+            },
+        }
         let actor = actor.into();
         let payload_bytes = payload_canonical_bytes(&payload)?;
         let payload_hash = ContentHash::sha256(&payload_bytes);
@@ -4933,10 +4978,15 @@ impl EventEnvelope {
             canonical_line_bytes_v4: None,
             canonical_line_bytes_v5: None,
         };
-        envelope.validate()?;
+        envelope.validate_at_v5_position(position)?;
         envelope.set_canonical_line_bytes_v4()?;
-        envelope.set_canonical_line_bytes_v5()?;
-        if envelope.payload_is_d1()? {
+        match position {
+            V5SealedPayloadPosition::General => envelope.set_canonical_line_bytes_v5()?,
+            V5SealedPayloadPosition::ScheduledM6Execution => {
+                envelope.set_canonical_line_bytes_v5_scheduled_execution()?;
+            }
+        }
+        if position == V5SealedPayloadPosition::General && envelope.payload_is_d1()? {
             let _ = envelope.canonical_bytes()?;
         }
         Ok(envelope)
@@ -4988,6 +5038,53 @@ impl EventEnvelope {
                 observed: usize::try_from(line_bytes).unwrap_or(usize::MAX),
             });
         }
+        self.canonical_line_bytes_v5 = Some(line_bytes);
+        Ok(())
+    }
+
+    fn set_canonical_line_bytes_v5_scheduled_execution(&mut self) -> Result<()> {
+        if self.contract_version()? != EventContractVersion::V5 {
+            return Err(DomainError::EventSequence(
+                "scheduled M6 execution line requires V5 envelope".to_owned(),
+            ));
+        }
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            actor: &'a str,
+            event_hash: &'a ContentHash,
+            genesis_hash: &'a ContentHash,
+            id: &'a StableId,
+            logical_time: u64,
+            payload: &'a RawValue,
+            payload_hash: &'a ContentHash,
+            previous_event_hash: &'a ContentHash,
+            run_id: &'a StableId,
+            schema: &'a str,
+            sequence: u64,
+        }
+        let line_bytes = crate::canonical::canonical_json_count_bounded(
+            &Wire {
+                actor: &self.actor,
+                event_hash: &self.event_hash,
+                genesis_hash: &self.genesis_hash,
+                id: &self.id,
+                logical_time: self.logical_time,
+                payload: &self.payload,
+                payload_hash: &self.payload_hash,
+                previous_event_hash: &self.previous_event_hash,
+                run_id: &self.run_id,
+                schema: &self.schema,
+                sequence: self.sequence,
+            },
+            MAX_D1_EVENT_LINE_BYTES - 1,
+            "scheduled M6 canonical event line body",
+        )?
+        .checked_add(1)
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled M6 canonical event line bytes",
+            limit: MAX_D1_EVENT_LINE_BYTES,
+            observed: usize::MAX,
+        })?;
         self.canonical_line_bytes_v5 = Some(line_bytes);
         Ok(())
     }
@@ -5057,6 +5154,24 @@ impl EventEnvelope {
         Self::from_raw(raw)
     }
 
+    fn from_json_slice_at_v5_position(
+        input: &[u8],
+        position: V5SealedPayloadPosition,
+    ) -> Result<Self> {
+        if input.len().saturating_add(1) > MAX_D1_EVENT_LINE_BYTES {
+            return Err(DomainError::Incomplete {
+                operation: "scheduled M6 canonical event JSONL",
+                limit: MAX_D1_EVENT_LINE_BYTES,
+                observed: input.len().saturating_add(1),
+            });
+        }
+        preflight_event_json_structure(input)?;
+        preflight_d2_decode_working(input, MAX_D2_WORKING_BYTES)?;
+        let raw: RawEventEnvelope =
+            serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))?;
+        Self::from_raw_at_v5_position(raw, position)
+    }
+
     /// Index-only bounded import seam. The structural cap is operational and
     /// does not change which historical envelopes are canonical.
     pub fn from_json_slice_for_index(input: &[u8]) -> Result<Self> {
@@ -5067,6 +5182,10 @@ impl EventEnvelope {
     /// Validates deterministic envelope bindings and every nested untrusted
     /// DTO before the record can enter a replay stream.
     pub fn validate(&self) -> Result<()> {
+        self.validate_at_v5_position(V5SealedPayloadPosition::General)
+    }
+
+    fn validate_at_v5_position(&self, position: V5SealedPayloadPosition) -> Result<()> {
         let version = EventContractVersion::parse(&self.schema)?;
         if self.run_id.kind() != "run" || self.sequence == 0 || self.logical_time != self.sequence {
             return Err(DomainError::EventSequence(
@@ -5078,7 +5197,21 @@ impl EventEnvelope {
                 "event actor must be non-empty".to_owned(),
             ));
         }
-        let payload = decode_canonical_payload(version, self.payload.get())?;
+        let payload = match position {
+            V5SealedPayloadPosition::General => {
+                decode_canonical_payload(version, self.payload.get())?
+            }
+            V5SealedPayloadPosition::ScheduledM6Execution
+                if version == EventContractVersion::V5 =>
+            {
+                decode_canonical_scheduled_m6_execution_payload(self.payload.get())?
+            }
+            V5SealedPayloadPosition::ScheduledM6Execution => {
+                return Err(DomainError::EventSequence(
+                    "scheduled M6 execution position requires V5 envelope".to_owned(),
+                ));
+            }
+        };
         if !payload.allowed_in(version) {
             return Err(DomainError::EventSequence(
                 "event stream payload is not admitted by its envelope contract".to_owned(),
@@ -5158,8 +5291,30 @@ impl EventEnvelope {
                 "event hash does not bind its envelope and predecessor".to_owned(),
             ));
         }
-        if payload.is_d1_bounded() {
+        if position == V5SealedPayloadPosition::General && payload.is_d1_bounded() {
             let _ = self.canonical_bytes()?;
+        }
+        Ok(())
+    }
+
+    fn validate_chain_position_at_v5(
+        &self,
+        run_id: &StableId,
+        genesis_hash: &ContentHash,
+        expected_sequence: u64,
+        previous_event_hash: &ContentHash,
+        position: V5SealedPayloadPosition,
+    ) -> Result<()> {
+        self.validate_at_v5_position(position)?;
+        if self.contract_version()? != EventContractVersion::V5
+            || &self.run_id != run_id
+            || &self.genesis_hash != genesis_hash
+            || self.sequence != expected_sequence
+            || &self.previous_event_hash != previous_event_hash
+        {
+            return Err(DomainError::EventSequence(
+                "scheduled V5 event does not form the expected contiguous prefix".to_owned(),
+            ));
         }
         Ok(())
     }
@@ -5268,6 +5423,38 @@ impl EventEnvelope {
             });
         }
         Ok(bytes)
+    }
+
+    #[cfg(test)]
+    fn canonical_bytes_at_v5_position(&self, position: V5SealedPayloadPosition) -> Result<Vec<u8>> {
+        self.validate_at_v5_position(position)?;
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            actor: &'a str,
+            event_hash: &'a ContentHash,
+            genesis_hash: &'a ContentHash,
+            id: &'a StableId,
+            logical_time: u64,
+            payload: &'a RawValue,
+            payload_hash: &'a ContentHash,
+            previous_event_hash: &'a ContentHash,
+            run_id: &'a StableId,
+            schema: &'a str,
+            sequence: u64,
+        }
+        canonical_json(&Wire {
+            actor: &self.actor,
+            event_hash: &self.event_hash,
+            genesis_hash: &self.genesis_hash,
+            id: &self.id,
+            logical_time: self.logical_time,
+            payload: &self.payload,
+            payload_hash: &self.payload_hash,
+            previous_event_hash: &self.previous_event_hash,
+            run_id: &self.run_id,
+            schema: &self.schema,
+            sequence: self.sequence,
+        })
     }
 
     /// Canonical writer used only by the bounded derived-index scanner. The
@@ -19688,6 +19875,12 @@ pub struct EventLogV5 {
     limits: EventReplayLimitsV5,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum V5SealedPayloadPosition {
+    General,
+    ScheduledM6Execution,
+}
+
 static NEXT_V5_LOG_INSTANCE: AtomicU64 = AtomicU64::new(1);
 /// Process-local, non-persisted identity for a live V5 log instance.  This is
 /// deliberately stack-only: it binds opaque sealing/preparation capabilities
@@ -21459,6 +21652,8 @@ pub(crate) struct SealedPartialRerunPhaseV5 {
     plan: crate::PartialRerunPlanV5,
     preservation_evidence: Vec<crate::PreservationEvidenceV5>,
     preservation_verifications: Vec<crate::PreservationVerificationV5>,
+    target_aggregate: ReviewAggregate,
+    target_v3_aggregate: V3RunAggregate,
 }
 
 /// A single non-serializable member minted from a sealed partial-rerun phase.
@@ -21482,6 +21677,500 @@ pub(crate) struct PreparedPartialRerunPhaseAppendV5 {
     phase_digest: ContentHash,
     member_index: usize,
     payload: PersistedPayload,
+}
+
+#[derive(Clone, Debug)]
+enum ScheduledReviewerContextV5 {
+    New,
+    Existing(Box<ReviewContextEnvelope>),
+}
+
+#[derive(Clone, Debug)]
+struct ScheduledReviewerActionV5 {
+    action_id: StableId,
+    obligation_id: StableId,
+    wave_id: StableId,
+    context: ScheduledReviewerContextV5,
+}
+
+impl ScheduledReviewerActionV5 {
+    fn dynamic_bytes(&self) -> usize {
+        self.action_id
+            .allocated_bytes()
+            .saturating_add(self.obligation_id.allocated_bytes())
+            .saturating_add(self.wave_id.allocated_bytes())
+            .saturating_add(match &self.context {
+                ScheduledReviewerContextV5::New => 0,
+                ScheduledReviewerContextV5::Existing(context) => {
+                    size_of::<ReviewContextEnvelope>().saturating_add(context.allocated_bytes())
+                }
+            })
+    }
+}
+
+#[derive(Debug)]
+enum ScheduledReviewerCursorV5 {
+    Planned,
+    InProgress,
+    Context,
+    RawRegistration {
+        context: Box<ReviewContextEnvelope>,
+        attempt: u32,
+    },
+    Execution {
+        context: Box<ReviewContextEnvelope>,
+        attempt: u32,
+        registration: Box<ArtifactRegisteredV3>,
+    },
+    Completed {
+        singleton: crate::execution::M6SingletonClaimClosureV5,
+    },
+    CardinalityUnsupported {
+        execution_id: StableId,
+        execution_event_id: StableId,
+        observed: usize,
+    },
+    Finished,
+}
+
+impl ScheduledReviewerCursorV5 {
+    fn dynamic_bytes(&self) -> usize {
+        match self {
+            Self::RawRegistration { context, .. } => {
+                size_of::<ReviewContextEnvelope>().saturating_add(context.allocated_bytes())
+            }
+            Self::Execution {
+                context,
+                registration,
+                ..
+            } => size_of::<ReviewContextEnvelope>()
+                .saturating_add(context.allocated_bytes())
+                .saturating_add(size_of::<ArtifactRegisteredV3>())
+                .saturating_add(registration.allocated_bytes()),
+            Self::Completed { singleton } => singleton
+                .execution_id()
+                .allocated_bytes()
+                .saturating_add(singleton.execution_body_hash().allocated_bytes())
+                .saturating_add(singleton.claim_id().allocated_bytes())
+                .saturating_add(singleton.claim_body_hash().allocated_bytes()),
+            Self::CardinalityUnsupported {
+                execution_id,
+                execution_event_id,
+                ..
+            } => execution_id
+                .allocated_bytes()
+                .saturating_add(execution_event_id.allocated_bytes()),
+            Self::Planned | Self::InProgress | Self::Context | Self::Finished => 0,
+        }
+    }
+}
+
+/// Opaque post-plan reducer for the reviewer-only portion of an M6 partial
+/// rerun. It owns the exact terminal aggregate and authority cursor; callers
+/// can only mint the first missing event for the current action.
+#[allow(dead_code)]
+pub(crate) struct ReplayedScheduledReviewerPhaseV5 {
+    log_identity: V5LogInstanceIdentity,
+    plan_id: StableId,
+    actions: Vec<ScheduledReviewerActionV5>,
+    action_index: usize,
+    aggregate: ReviewAggregate,
+    v3_aggregate: V3RunAggregate,
+    basis: AuthorityReplayBasisV5,
+    cursor: ScheduledReviewerCursorV5,
+    resident_log_bytes: u64,
+    external_phase_retained_bytes: u64,
+    max_working_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScheduledReviewerPreparedKindV5 {
+    Planned,
+    InProgress,
+    Context,
+    RawRegistration,
+    Execution,
+    Completed,
+}
+
+/// One-use, stack-bound append capability. Context admission and raw-byte
+/// closure cannot be serialized or reconstructed from the event body.
+#[allow(dead_code)]
+pub(crate) struct PreparedScheduledReviewerAppendV5 {
+    log_identity: V5LogInstanceIdentity,
+    basis_digest: ContentHash,
+    predecessor_event_hash: ContentHash,
+    event_sequence: u64,
+    action_id: StableId,
+    kind: ScheduledReviewerPreparedKindV5,
+    payload: PersistedPayload,
+    context_admission: Option<ContextProjectionAdmission>,
+    raw_closure: Option<ReviewerRawClosure>,
+}
+
+#[allow(dead_code)]
+impl ReplayedScheduledReviewerPhaseV5 {
+    fn retained_working_upper_bound(&self) -> Result<u64> {
+        let action_dynamic = self
+            .actions
+            .iter()
+            .try_fold(0_u64, |total, action| {
+                total.checked_add(u64::try_from(action.dynamic_bytes()).unwrap_or(u64::MAX))
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer action ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        u64::try_from(size_of::<Self>())
+            .unwrap_or(u64::MAX)
+            .checked_add(self.external_phase_retained_bytes)
+            .and_then(|value| {
+                value.checked_add(
+                    self.aggregate
+                        .retained_bytes_v3()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<ReviewAggregate>()).ok()?)?,
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    self.v3_aggregate
+                        .retained_bytes()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<V3RunAggregate>()).ok()?)?,
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    self.basis
+                        .retained_bytes()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<AuthorityReplayBasisV5>()).ok()?)?,
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(u64::try_from(self.plan_id.allocated_bytes()).ok()?)
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(self.actions.capacity() * size_of::<ScheduledReviewerActionV5>())
+                        .ok()?,
+                )
+            })
+            .and_then(|value| value.checked_add(action_dynamic))
+            .and_then(|value| value.checked_add(u64::try_from(self.cursor.dynamic_bytes()).ok()?))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer retained ownership",
+                limit: usize::try_from(self.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })
+    }
+
+    fn preflight_additional_working(&self, additional: u64) -> Result<()> {
+        let observed = self
+            .resident_log_bytes
+            .checked_add(self.retained_working_upper_bound()?)
+            .and_then(|value| value.checked_add(additional))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer working ownership",
+                limit: usize::try_from(self.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if observed > self.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled reviewer working ownership",
+                self.max_working_bytes,
+                observed,
+            ));
+        }
+        Ok(())
+    }
+
+    fn action(&self) -> Result<&ScheduledReviewerActionV5> {
+        self.actions.get(self.action_index).ok_or_else(|| {
+            DomainError::EventSequence("scheduled reviewer cursor has no current action".to_owned())
+        })
+    }
+
+    fn execution_input(
+        &self,
+        context: &ReviewContextEnvelope,
+        attempt: u32,
+    ) -> Result<crate::ExecutionRecordInput> {
+        let action = self.action()?;
+        crate::ExecutionRecordInput::fake(
+            self.plan_id.clone(),
+            action.wave_id.clone(),
+            action.obligation_id.clone(),
+            context.id().clone(),
+            self.aggregate.program().snapshot_id().clone(),
+            attempt,
+        )
+    }
+
+    fn prepare_payload(
+        &self,
+        kind: ScheduledReviewerPreparedKindV5,
+        payload: PersistedPayload,
+        context_admission: Option<ContextProjectionAdmission>,
+        raw_closure: Option<ReviewerRawClosure>,
+    ) -> Result<PreparedScheduledReviewerAppendV5> {
+        if self.basis.basis_digest != self.basis.recompute_digest()? {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        Ok(PreparedScheduledReviewerAppendV5 {
+            log_identity: self.log_identity,
+            basis_digest: self.basis.basis_digest.clone(),
+            predecessor_event_hash: self.basis.target_confirmed_tail_hash.clone(),
+            event_sequence: self.basis.target_next_sequence,
+            action_id: self.action()?.action_id.clone(),
+            kind,
+            payload,
+            context_admission,
+            raw_closure,
+        })
+    }
+
+    pub(crate) fn prepare_lifecycle_v5(&self) -> Result<PreparedScheduledReviewerAppendV5> {
+        let action = self.action()?;
+        let (kind, next) = match self.cursor {
+            ScheduledReviewerCursorV5::Planned => (
+                ScheduledReviewerPreparedKindV5::Planned,
+                ObligationLifecycle::Planned,
+            ),
+            ScheduledReviewerCursorV5::InProgress => (
+                ScheduledReviewerPreparedKindV5::InProgress,
+                ObligationLifecycle::InProgress,
+            ),
+            ScheduledReviewerCursorV5::Completed { .. } => (
+                ScheduledReviewerPreparedKindV5::Completed,
+                ObligationLifecycle::Completed,
+            ),
+            _ => {
+                return Err(DomainError::EventSequence(
+                    "scheduled reviewer lifecycle is not the first missing event".to_owned(),
+                ));
+            }
+        };
+        self.prepare_payload(
+            kind,
+            PersistedPayload::ObligationTransition {
+                obligation_id: action.obligation_id.clone(),
+                next,
+            },
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn prepare_context_v5(
+        &self,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<PreparedScheduledReviewerAppendV5> {
+        if !matches!(self.cursor, ScheduledReviewerCursorV5::Context) {
+            return Err(DomainError::EventSequence(
+                "scheduled reviewer context is not the first missing event".to_owned(),
+            ));
+        }
+        self.preflight_additional_working(
+            u64::try_from(crate::execution::MAX_D2_WORKING_BYTES).unwrap_or(u64::MAX),
+        )?;
+        let action = self.action()?;
+        let mut session = crate::prepare_context(&self.aggregate, action.obligation_id.clone())
+            .map_err(context_domain_error)?;
+        while let Some(request) = session
+            .next_source_request()
+            .map_err(context_domain_error)?
+        {
+            let size = usize::try_from(request.expected_length()).map_err(|_| {
+                DomainError::Incomplete {
+                    operation: "scheduled reviewer context CAS bytes",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                }
+            })?;
+            let mut bytes = vec![0_u8; size];
+            resolver.read_exact(request.cas_hash(), &mut bytes)?;
+            session
+                .submit_source(&request, &bytes)
+                .map_err(context_domain_error)?;
+        }
+        let built = session.finish().map_err(context_domain_error)?;
+        let (envelope, admission) = built.into_parts();
+        self.prepare_payload(
+            ScheduledReviewerPreparedKindV5::Context,
+            PersistedPayload::ContextEnvelopeProjected(envelope),
+            Some(admission),
+            None,
+        )
+    }
+
+    pub(crate) fn prepare_raw_registration_v5(
+        &self,
+        raw_bytes: &[u8],
+    ) -> Result<PreparedScheduledReviewerAppendV5> {
+        let ScheduledReviewerCursorV5::RawRegistration { context, attempt } = &self.cursor else {
+            return Err(DomainError::EventSequence(
+                "scheduled reviewer raw registration is not the first missing event".to_owned(),
+            ));
+        };
+        let input = self.execution_input(context, *attempt)?;
+        let execution_id = input.execution_id()?;
+        let registration = ArtifactRegisteredV3::new_validated(
+            self.basis.target_run_id.clone(),
+            ContentHash::sha256(raw_bytes),
+            "application/json",
+            u64::try_from(raw_bytes.len()).map_err(|_| DomainError::Incomplete {
+                operation: "scheduled reviewer raw bytes",
+                limit: crate::execution::MAX_D2_RAW_REVIEWER_BYTES,
+                observed: usize::MAX,
+            })?,
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id,
+                reviewer_id: crate::FAKE_REVIEWER_ID.to_owned(),
+                run_id: self.basis.target_run_id.clone(),
+            },
+        )?;
+        self.prepare_payload(
+            ScheduledReviewerPreparedKindV5::RawRegistration,
+            PersistedPayload::ArtifactRegisteredV3(registration),
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn prepare_execution_v5(
+        &self,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        claim_inputs: Vec<crate::ExecutionClaimInputV2>,
+        outcome: crate::ExecutionOutcome,
+    ) -> Result<PreparedScheduledReviewerAppendV5> {
+        let ScheduledReviewerCursorV5::Execution {
+            context,
+            attempt,
+            registration,
+        } = &self.cursor
+        else {
+            return Err(DomainError::EventSequence(
+                "scheduled reviewer execution is not the first missing event".to_owned(),
+            ));
+        };
+        // This combined 512 MiB gate precedes every raw/source CAS buffer.
+        // The D2 builder's own 16 MiB oracle then checks its exact internal
+        // peak after the bounded reads.
+        self.preflight_additional_working(
+            u64::try_from(crate::execution::MAX_D2_WORKING_BYTES).unwrap_or(u64::MAX),
+        )?;
+        let raw_size =
+            usize::try_from(registration.size()).map_err(|_| DomainError::Incomplete {
+                operation: "scheduled reviewer raw CAS bytes",
+                limit: crate::execution::MAX_D2_RAW_REVIEWER_BYTES,
+                observed: usize::MAX,
+            })?;
+        let mut raw_bytes = vec![0_u8; raw_size];
+        resolver.read_exact(registration.cas_hash(), &mut raw_bytes)?;
+        if ContentHash::sha256(&raw_bytes) != *registration.cas_hash() {
+            return Err(DomainError::Validation(
+                "scheduled reviewer raw CAS hash differs from registration".to_owned(),
+            ));
+        }
+        let mut source_buffers = Vec::new();
+        for source in context.included_sources() {
+            let registration = self
+                .aggregate
+                .resolve_context_source(source.artifact_id())?;
+            let size = usize::try_from(registration.size).map_err(|_| DomainError::Incomplete {
+                operation: "scheduled reviewer source CAS bytes",
+                limit: crate::execution::MAX_D2_RESOLVED_SOURCE_BYTES,
+                observed: usize::MAX,
+            })?;
+            let mut bytes = vec![0_u8; size];
+            resolver.read_exact(source.cas_hash(), &mut bytes)?;
+            if ContentHash::sha256(&bytes) != *source.cas_hash() {
+                return Err(DomainError::Validation(
+                    "scheduled reviewer source CAS hash differs".to_owned(),
+                ));
+            }
+            source_buffers.push(bytes);
+        }
+        let source_refs = source_buffers.iter().collect::<Vec<_>>();
+        let bundle = ValidatedExecutionBundle::fake_v3_for_m6(
+            self.execution_input(context, *attempt)?,
+            registration,
+            raw_bytes,
+            source_refs,
+            claim_inputs,
+            outcome,
+        )?;
+        let (recorded, raw_closure) = bundle.into_parts();
+        self.prepare_payload(
+            ScheduledReviewerPreparedKindV5::Execution,
+            PersistedPayload::ReviewExecutionRecorded(recorded),
+            None,
+            Some(raw_closure),
+        )
+    }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        matches!(self.cursor, ScheduledReviewerCursorV5::Finished)
+    }
+
+    pub(crate) fn cardinality_error(&self) -> Option<crate::M6Error> {
+        match &self.cursor {
+            ScheduledReviewerCursorV5::CardinalityUnsupported {
+                execution_id,
+                execution_event_id: _,
+                observed,
+            } => Some(crate::M6Error::M6ClaimCardinalityUnsupported {
+                execution_id: execution_id.clone(),
+                observed: *observed,
+            }),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn cardinality_obstruction(&self) -> Option<(&StableId, &StableId, usize)> {
+        match &self.cursor {
+            ScheduledReviewerCursorV5::CardinalityUnsupported {
+                execution_id,
+                execution_event_id,
+                observed,
+            } => Some((execution_id, execution_event_id, *observed)),
+            _ => None,
+        }
+    }
+}
+
+impl PreparedScheduledReviewerAppendV5 {
+    fn retained_bytes(&self) -> Result<u64> {
+        let dynamic = self
+            .basis_digest
+            .allocated_bytes()
+            .saturating_add(self.predecessor_event_hash.allocated_bytes())
+            .saturating_add(self.action_id.allocated_bytes())
+            .saturating_add(
+                usize::try_from(self.payload.validation_heap_bytes_v5()?).unwrap_or(usize::MAX),
+            )
+            .saturating_add(
+                self.context_admission
+                    .as_ref()
+                    .map_or(0, ContextProjectionAdmission::allocated_bytes),
+            )
+            .saturating_add(
+                self.raw_closure
+                    .as_ref()
+                    .map_or(0, ReviewerRawClosure::allocated_bytes),
+            );
+        u64::try_from(size_of::<Self>().saturating_add(dynamic)).map_err(|_| {
+            DomainError::Incomplete {
+                operation: "scheduled reviewer prepared ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            }
+        })
+    }
 }
 
 impl PreparedPartialRerunPhaseAppendV5 {
@@ -21570,6 +22259,45 @@ impl PreparedPartialRerunPhaseAppendV5 {
 }
 
 impl SealedPartialRerunPhaseV5 {
+    fn validation_scratch_upper_bound(&self) -> Result<u64> {
+        let records = |count: usize, dynamic: usize| {
+            count
+                .checked_mul(size_of::<crate::IdBodyHashV5>())
+                .and_then(|slots| slots.checked_add(dynamic))
+                // `body_hash` canonicalizes one member while the records
+                // already collected for this validation remain live.
+                .and_then(|value| value.checked_add(crate::m6::MAX_M6_CANONICAL_BYTES))
+                .and_then(|value| u64::try_from(value).ok())
+                .unwrap_or(u64::MAX)
+        };
+        let action_dynamic = self.actions.iter().try_fold(0_usize, |total, action| {
+            total
+                .checked_add(action.id().allocated_bytes())
+                // SHA-256's formatted backing string is bounded by this
+                // reservation independently of allocator growth policy.
+                .and_then(|value| value.checked_add(128))
+        });
+        let preservation_dynamic =
+            self.preservation_verifications
+                .iter()
+                .try_fold(0_usize, |total, verification| {
+                    total
+                        .checked_add(verification.id().allocated_bytes())
+                        .and_then(|value| value.checked_add(128))
+                });
+        action_dynamic
+            .zip(preservation_dynamic)
+            .map(|(actions, preservation)| {
+                records(self.actions.len(), actions)
+                    .max(records(self.preservation_verifications.len(), preservation))
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer phase validation scratch",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+    }
+
     fn preflight_working_bytes(&self, log: &EventLogV5, prepared_bytes: u64) -> Result<()> {
         let observed = log
             .full_resident_bytes_for_structural_store()?
@@ -21646,6 +22374,15 @@ impl SealedPartialRerunPhaseV5 {
         ] {
             total = add(total, value)?;
         }
+        let target_v3_bytes = self.target_v3_aggregate.retained_bytes()?;
+        total = total
+            .checked_add(self.target_aggregate.retained_bytes_v3()?)
+            .and_then(|value| value.checked_add(target_v3_bytes))
+            .ok_or(DomainError::Incomplete {
+                operation: "partial rerun sealed target state ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
         total = total
             .checked_add(
                 u64::try_from(
@@ -21861,6 +22598,7 @@ impl SealedPartialRerunPhaseV5 {
                 "partial rerun plan action digest differs from phase members".to_owned(),
             ));
         }
+        drop(action_records);
         let mut preservation_records = self
             .preservation_verifications
             .iter()
@@ -22083,6 +22821,14 @@ impl<'borrow, 'state> ReplayedV5TerminalPredecessorV5<'borrow, 'state> {
         preservation: &crate::M6PreservationPhaseV5,
     ) -> crate::M6Result<SealedPartialRerunPhaseV5> {
         let (actions, plan) = self.seal_partial_rerun_plan_v5(staleness, preservation)?;
+        let terminal = match &self.inner {
+            ReplayedV5TerminalPredecessorInnerV5::WithoutM5 { terminal, .. } => {
+                ReplayedV5TerminalAuthorityStateRef::WithoutM5(terminal)
+            }
+            ReplayedV5TerminalPredecessorInnerV5::WithM5 { terminal, .. } => {
+                ReplayedV5TerminalAuthorityStateRef::WithM5(terminal)
+            }
+        };
         let value = SealedPartialRerunPhaseV5 {
             log_identity: event_log.instance_identity,
             source_closure_id: staleness.assessment().source_closure_id().clone(),
@@ -22103,6 +22849,8 @@ impl<'borrow, 'state> ReplayedV5TerminalPredecessorV5<'borrow, 'state> {
             plan,
             preservation_evidence: preservation.evidence().to_vec(),
             preservation_verifications: preservation.verifications().to_vec(),
+            target_aggregate: terminal.aggregate().clone(),
+            target_v3_aggregate: terminal.v3().clone(),
         };
         value.validate().map_err(crate::M6Error::from)?;
         Ok(value)
@@ -25045,7 +25793,7 @@ struct PreservationReplayEntryV5 {
 
 /// Normal source-bound V5 authority cursor.  It is non-serializable and can
 /// only be created from a roots-replayed pre-basis plus the durable closure.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)] // The next ADR 0023 slice consumes this crate-private cursor.
 pub(crate) struct AuthorityReplayBasisV5 {
     schema: &'static str,
@@ -25088,6 +25836,103 @@ struct AuthorityReplayBasisDigestV5<'a> {
 
 #[allow(dead_code)]
 impl AuthorityReplayBasisV5 {
+    fn retained_bytes(&self) -> Result<u64> {
+        let mut total = u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX);
+        let add = |total: &mut u64, bytes: usize| -> Result<()> {
+            *total = total
+                .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled reviewer authority basis ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+            Ok(())
+        };
+        for bytes in [
+            self.source_closure_id.allocated_bytes(),
+            self.pre_incremental_basis_digest.allocated_bytes(),
+            self.source_basis_digest.allocated_bytes(),
+            self.source_run_id.allocated_bytes(),
+            self.target_run_id.allocated_bytes(),
+            self.target_genesis_hash.allocated_bytes(),
+            self.target_confirmed_tail_hash.allocated_bytes(),
+            self.policy_revision_hash.allocated_bytes(),
+            self.basis_digest.allocated_bytes(),
+            self.inherited_m4_entries.capacity() * size_of::<AuthorityReplayEntryV3AtV5>(),
+            self.gluing_input_entries.capacity() * size_of::<GluingInputReplayEntryV5>(),
+            self.preservation_registration_entries.capacity()
+                * size_of::<PreservationRegistrationReplayEntryV5>(),
+            self.preservation_verification_entries.capacity()
+                * size_of::<PreservationReplayEntryV5>(),
+        ] {
+            add(&mut total, bytes)?;
+        }
+        for entry in &self.inherited_m4_entries {
+            add(
+                &mut total,
+                entry.event_id.allocated_bytes()
+                    + entry.payload_kind.capacity()
+                    + entry.predecessor_event_hash.allocated_bytes()
+                    + entry.record_body_hash.allocated_bytes()
+                    + entry.record_id.allocated_bytes()
+                    + entry.v3_trust_binding_digest.allocated_bytes()
+                    + entry.v5_position_digest.allocated_bytes(),
+            )?;
+        }
+        for entry in &self.gluing_input_entries {
+            add(
+                &mut total,
+                entry.event_id.allocated_bytes()
+                    + entry.predecessor_event_hash.allocated_bytes()
+                    + entry.registration_body_hash.allocated_bytes()
+                    + entry.registration_id.allocated_bytes()
+                    + entry.trust_binding_digest.allocated_bytes()
+                    + entry.v5_position_digest.allocated_bytes(),
+            )?;
+        }
+        for entry in &self.preservation_registration_entries {
+            add(
+                &mut total,
+                entry.event_id.allocated_bytes()
+                    + entry.registration_id.allocated_bytes()
+                    + entry.registration_body_hash.allocated_bytes()
+                    + entry.target_obligation_id.allocated_bytes()
+                    + entry.source_verification_id.allocated_bytes()
+                    + entry.cas_hash.allocated_bytes()
+                    + entry.media_type.capacity()
+                    + entry.source.allocated_bytes()
+                    + entry.predecessor_event_hash.allocated_bytes()
+                    + entry.trust_binding_digest.allocated_bytes()
+                    + entry.v5_position_digest.allocated_bytes(),
+            )?;
+        }
+        for entry in &self.preservation_verification_entries {
+            add(
+                &mut total,
+                entry.source_closure_id.allocated_bytes()
+                    + entry.source_verification_id.allocated_bytes()
+                    + entry.target_obligation_id.allocated_bytes()
+                    + entry.input_registration_id.allocated_bytes()
+                    + entry.output_registration_id.allocated_bytes()
+                    + entry.evidence_id.allocated_bytes()
+                    + entry.verification_id.allocated_bytes()
+                    + entry.descriptor_id.capacity()
+                    + entry.procedure_version.capacity()
+                    + entry.input_hash.allocated_bytes()
+                    + entry.input_media_type.capacity()
+                    + entry.output_hash.allocated_bytes()
+                    + entry.output_media_type.capacity()
+                    + entry.input_event_id.allocated_bytes()
+                    + entry.output_event_id.allocated_bytes()
+                    + entry.verification_event_id.allocated_bytes()
+                    + entry.predecessor_event_hash.allocated_bytes()
+                    + entry.trust_binding_digest.allocated_bytes()
+                    + entry.v5_position_digest.allocated_bytes(),
+            )?;
+        }
+        Ok(total)
+    }
+
     fn recompute_digest(&self) -> Result<ContentHash> {
         crate::canonical::compact_json_sha256_streaming(&AuthorityReplayBasisDigestV5 {
             gluing_input_entries: &self.gluing_input_entries,
@@ -25987,6 +26832,992 @@ fn preflight_v5_replay_accounting(
 }
 
 impl EventLogV5 {
+    fn validate_scheduled_reviewer_transition_count(
+        new_context_count: u64,
+        reused_context_count: u64,
+    ) -> Result<()> {
+        let transition_count = new_context_count
+            .checked_mul(3)
+            .and_then(|value| value.checked_add(reused_context_count))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer transition count",
+                limit: crate::m6::MAX_M6_PARTIAL_RERUN_ACTIONS - 1,
+                observed: usize::MAX,
+            })?;
+        if transition_count
+            >= u64::try_from(crate::m6::MAX_M6_PARTIAL_RERUN_ACTIONS).unwrap_or(u64::MAX)
+        {
+            return Err(DomainError::Incomplete {
+                operation: "scheduled reviewer transition count",
+                limit: crate::m6::MAX_M6_PARTIAL_RERUN_ACTIONS - 1,
+                observed: usize::try_from(transition_count).unwrap_or(usize::MAX),
+            });
+        }
+        Ok(())
+    }
+
+    fn scheduled_reviewer_cursor_for_action(
+        aggregate: &ReviewAggregate,
+        plan_id: &StableId,
+        action: &ScheduledReviewerActionV5,
+    ) -> Result<ScheduledReviewerCursorV5> {
+        let lifecycle = aggregate
+            .obligations()
+            .find(|value| value.id() == &action.obligation_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "scheduled reviewer action",
+                owner_id: action.action_id.clone(),
+                reference: action.obligation_id.clone(),
+            })?
+            .lifecycle();
+        match &action.context {
+            ScheduledReviewerContextV5::New if lifecycle == ObligationLifecycle::Generated => {
+                Ok(ScheduledReviewerCursorV5::Planned)
+            }
+            ScheduledReviewerContextV5::Existing(context)
+                if lifecycle == ObligationLifecycle::InProgress =>
+            {
+                let attempt = aggregate
+                    .executions()
+                    .filter(|execution| {
+                        execution.plan_id() == plan_id
+                            && execution.wave_id() == &action.wave_id
+                            && execution.obligation_ids().contains(&action.obligation_id)
+                            && execution.envelope_id() == context.id()
+                    })
+                    .map(ExecutionRecord::attempt)
+                    .max()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        DomainError::EventSequence(
+                            "scheduled reviewer existing-context attempt overflow".to_owned(),
+                        )
+                    })?;
+                let input = crate::ExecutionRecordInput::fake(
+                    plan_id.clone(),
+                    action.wave_id.clone(),
+                    action.obligation_id.clone(),
+                    context.id().clone(),
+                    aggregate.program().snapshot_id().clone(),
+                    attempt,
+                )?;
+                let execution_id = input.execution_id()?;
+                match aggregate.fake_attempt_state(&execution_id) {
+                    crate::FakeAttemptState::None => {
+                        Ok(ScheduledReviewerCursorV5::RawRegistration {
+                            context: Box::new(context.as_ref().clone()),
+                            attempt,
+                        })
+                    }
+                    crate::FakeAttemptState::RawRegistered {
+                        registration: crate::RawArtifactRegistration::V3(registration),
+                    } if matches!(
+                        registration.source(),
+                        ArtifactSourceV3::ReviewerExecution {
+                            execution_id: registered_execution,
+                            reviewer_id,
+                            run_id,
+                        } if registered_execution == &execution_id
+                            && reviewer_id == crate::FAKE_REVIEWER_ID
+                            && run_id == registration.run_id()
+                    ) =>
+                    {
+                        Ok(ScheduledReviewerCursorV5::Execution {
+                            context: Box::new(context.as_ref().clone()),
+                            attempt,
+                            registration,
+                        })
+                    }
+                    crate::FakeAttemptState::RawRegistered { .. }
+                    | crate::FakeAttemptState::AmbiguousRawRegistrations
+                    | crate::FakeAttemptState::ExecutionRecorded { .. }
+                    | crate::FakeAttemptState::Completed { .. } => {
+                        Err(DomainError::HistoricalPrefixMismatch(
+                            "scheduled reviewer next attempt progress is ambiguous or mismatched",
+                        ))
+                    }
+                }
+            }
+            ScheduledReviewerContextV5::New => Err(DomainError::EventSequence(
+                "new-context reviewer action requires Generated lifecycle".to_owned(),
+            )),
+            ScheduledReviewerContextV5::Existing(_) => Err(DomainError::EventSequence(
+                "existing-context reviewer action requires InProgress lifecycle".to_owned(),
+            )),
+        }
+    }
+
+    /// Opens the exact reviewer suffix only after the opaque partial plan is
+    /// durably sealed at the current tail.
+    #[allow(dead_code)]
+    pub(crate) fn begin_scheduled_reviewer_phase_v5(
+        &self,
+        phase: &SealedPartialRerunPhaseV5,
+        basis: AuthorityReplayBasisV5,
+    ) -> Result<ReplayedScheduledReviewerPhaseV5> {
+        self.begin_scheduled_reviewer_phase_inner_v5(phase, basis, true)
+    }
+
+    fn begin_scheduled_reviewer_phase_inner_v5(
+        &self,
+        phase: &SealedPartialRerunPhaseV5,
+        basis: AuthorityReplayBasisV5,
+        require_same_instance: bool,
+    ) -> Result<ReplayedScheduledReviewerPhaseV5> {
+        basis.validate_current_log(self)?;
+        let validation_working = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(phase.retained_bytes()?)
+            .and_then(|value| value.checked_add(basis.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(phase.validation_scratch_upper_bound().ok()?))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer phase validation working bytes",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if validation_working > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled reviewer phase validation working bytes",
+                self.limits.max_working_bytes,
+                validation_working,
+            ));
+        }
+        phase.validate()?;
+        if (require_same_instance && self.instance_identity != phase.log_identity)
+            || phase.target_run_id != self.run_id
+            || phase.target_genesis_hash != self.genesis_hash
+            || phase.pre_incremental_basis_digest != basis.pre_incremental_basis_digest
+            || phase.policy_revision_hash != basis.policy_revision_hash
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let (new_context_count, reused_context_count) = phase
+            .actions
+            .iter()
+            .filter(|value| value.action() == crate::PartialRerunActionKindV5::RerunReviewer)
+            .fold((0_u64, 0_u64), |(new, reused), action| {
+                if matches!(
+                    action.prerequisites(),
+                    [crate::ActionPrerequisiteV5::ScheduledAction { .. }]
+                ) {
+                    (new.saturating_add(1), reused)
+                } else {
+                    (new, reused.saturating_add(1))
+                }
+            });
+        Self::validate_scheduled_reviewer_transition_count(
+            new_context_count,
+            reused_context_count,
+        )?;
+        let cloned_state_bytes = phase
+            .target_aggregate
+            .retained_bytes_v3()?
+            .checked_sub(u64::try_from(size_of::<ReviewAggregate>()).unwrap_or(u64::MAX))
+            .and_then(|value| {
+                value.checked_add(
+                    phase
+                        .target_v3_aggregate
+                        .retained_bytes()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<V3RunAggregate>()).ok()?)?,
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    basis
+                        .retained_bytes()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<AuthorityReplayBasisV5>()).ok()?)?,
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer cloned target state",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let reviewer_action_count = phase
+            .actions
+            .iter()
+            .filter(|value| value.action() == crate::PartialRerunActionKindV5::RerunReviewer)
+            .count();
+        let action_bytes = phase
+            .actions
+            .iter()
+            .filter(|value| value.action() == crate::PartialRerunActionKindV5::RerunReviewer)
+            .try_fold(
+                u64::try_from(reviewer_action_count * size_of::<ScheduledReviewerActionV5>())
+                    .unwrap_or(u64::MAX),
+                |total, action| {
+                    let obligation_id = action
+                        .subject_ids()
+                        .first()
+                        .expect("partial action singleton validated");
+                    let wave_bytes = phase
+                        .target_aggregate
+                        .review_plan(phase.plan.target_plan_id())
+                        .and_then(|plan| {
+                            plan.waves()
+                                .iter()
+                                .find(|wave| wave.obligation_ids().contains(obligation_id))
+                        })
+                        .map_or(usize::MAX, |wave| wave.id().allocated_bytes());
+                    let context_bytes = match action.prerequisites() {
+                        [crate::ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }] => {
+                            phase.target_aggregate.context_envelope(record_id).map_or(
+                                usize::MAX,
+                                |context| {
+                                    size_of::<ReviewContextEnvelope>() + context.allocated_bytes()
+                                },
+                            )
+                        }
+                        _ => 0,
+                    };
+                    total.checked_add(
+                        u64::try_from(
+                            action
+                                .id()
+                                .allocated_bytes()
+                                .saturating_add(obligation_id.allocated_bytes())
+                                .saturating_add(wave_bytes)
+                                .saturating_add(context_bytes),
+                        )
+                        .unwrap_or(u64::MAX),
+                    )
+                },
+            )
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer projected action ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let initial_cursor_bytes = phase
+            .actions
+            .iter()
+            .find(|action| action.action() == crate::PartialRerunActionKindV5::RerunReviewer)
+            .and_then(|action| match action.prerequisites() {
+                [crate::ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }] => phase
+                    .target_aggregate
+                    .context_envelope(record_id)
+                    .map(|context| {
+                        u64::try_from(
+                            size_of::<ReviewContextEnvelope>() + context.allocated_bytes(),
+                        )
+                        .unwrap_or(u64::MAX)
+                    }),
+                _ => Some(0),
+            })
+            .unwrap_or(0);
+        let begin_working = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(phase.retained_bytes()?)
+            .and_then(|value| value.checked_add(cloned_state_bytes))
+            .and_then(|value| value.checked_add(action_bytes))
+            .and_then(|value| value.checked_add(initial_cursor_bytes))
+            .and_then(|value| {
+                value
+                    .checked_add(u64::try_from(size_of::<ReplayedScheduledReviewerPhaseV5>()).ok()?)
+            })
+            .and_then(|value| {
+                value
+                    .checked_add(u64::try_from(phase.plan.target_plan_id().allocated_bytes()).ok()?)
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer begin working bytes",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if begin_working > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled reviewer begin working bytes",
+                self.limits.max_working_bytes,
+                begin_working,
+            ));
+        }
+        let tail = self.envelopes.last().ok_or_else(|| {
+            DomainError::EventSequence("scheduled reviewer plan seal is absent".to_owned())
+        })?;
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct BorrowedScheduledPlanPayload<'a> {
+            #[serde(rename = "type", borrow)]
+            kind: &'a str,
+            #[serde(borrow)]
+            data: &'a RawValue,
+        }
+        let durable: BorrowedScheduledPlanPayload<'_> = serde_json::from_str(tail.payload.get())
+            .map_err(|error| DomainError::Json(error.to_string()))?;
+        if durable.kind != "partial_rerun_plan_sealed_v5" {
+            return Err(DomainError::EventSequence(
+                "scheduled reviewer phase must immediately follow the partial plan seal".to_owned(),
+            ));
+        }
+        if !phase
+            .plan
+            .canonical_body_matches(durable.data.get().as_bytes())
+            .map_err(|error| DomainError::Validation(error.to_string()))?
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "scheduled reviewer durable partial plan differs",
+            ));
+        }
+        let target_plan = phase
+            .target_aggregate
+            .review_plan(phase.plan.target_plan_id())
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "scheduled reviewer partial plan",
+                owner_id: phase.plan.id().clone(),
+                reference: phase.plan.target_plan_id().clone(),
+            })?;
+        let mut actions = Vec::new();
+        actions
+            .try_reserve_exact(reviewer_action_count)
+            .map_err(|_| DomainError::Incomplete {
+                operation: "scheduled reviewer action ownership",
+                limit: reviewer_action_count,
+                observed: reviewer_action_count,
+            })?;
+        for action in phase
+            .actions
+            .iter()
+            .filter(|value| value.action() == crate::PartialRerunActionKindV5::RerunReviewer)
+        {
+            let obligation_id = action
+                .subject_ids()
+                .iter()
+                .next()
+                .expect("partial action singleton validated")
+                .clone();
+            let wave_id = target_plan
+                .waves()
+                .iter()
+                .find(|wave| wave.obligation_ids().contains(&obligation_id))
+                .map(|wave| wave.id().clone())
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "scheduled reviewer action wave",
+                    owner_id: action.id().clone(),
+                    reference: obligation_id.clone(),
+                })?;
+            let context = match action.prerequisites() {
+                [crate::ActionPrerequisiteV5::ScheduledAction { action_id }] => {
+                    let valid = phase.actions.iter().any(|candidate| {
+                        candidate.id() == action_id
+                            && candidate.action()
+                                == crate::PartialRerunActionKindV5::ReprojectContext
+                            && candidate.subject_ids() == action.subject_ids()
+                    });
+                    if !valid {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "scheduled reviewer context action prerequisite differs",
+                        ));
+                    }
+                    ScheduledReviewerContextV5::New
+                }
+                [
+                    crate::ActionPrerequisiteV5::ExistingTargetRecord {
+                        record_id,
+                        body_hash,
+                        event_id,
+                    },
+                ] => {
+                    let context_event_index = self
+                        .envelopes
+                        .iter()
+                        .position(|envelope| envelope.id() == event_id)
+                        .ok_or(DomainError::HistoricalPrefixMismatch(
+                            "scheduled reviewer existing context event is absent",
+                        ))?;
+                    if context_event_index
+                        >= usize::try_from(phase.target_predecessor_event_count)
+                            .unwrap_or(usize::MAX)
+                    {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "scheduled reviewer existing context is after the pinned predecessor",
+                        ));
+                    }
+                    let context = phase
+                        .target_aggregate
+                        .context_envelope(record_id)
+                        .ok_or_else(|| DomainError::DanglingReference {
+                            owner: "scheduled reviewer existing context",
+                            owner_id: action.id().clone(),
+                            reference: record_id.clone(),
+                        })?
+                        .clone();
+                    let mut saw_planned = false;
+                    let mut saw_in_progress = false;
+                    let mut saw_context = false;
+                    let mut invalid_later = false;
+                    for envelope in self.envelopes.iter().take(
+                        usize::try_from(phase.target_predecessor_event_count).unwrap_or(usize::MAX),
+                    ) {
+                        let Ok(payload) = decode_canonical_payload(
+                            EventContractVersion::V5,
+                            envelope.payload.get(),
+                        ) else {
+                            invalid_later = true;
+                            break;
+                        };
+                        match payload {
+                            PersistedPayload::ObligationTransition {
+                                obligation_id: candidate,
+                                next: ObligationLifecycle::Planned,
+                            } if candidate == obligation_id && !saw_planned => {
+                                saw_planned = true;
+                            }
+                            PersistedPayload::ObligationTransition {
+                                obligation_id: candidate,
+                                next: ObligationLifecycle::InProgress,
+                            } if candidate == obligation_id && saw_planned && !saw_in_progress => {
+                                saw_in_progress = true;
+                            }
+                            PersistedPayload::ContextEnvelopeProjected(value)
+                                if value.id() == record_id
+                                    && envelope.id() == event_id
+                                    && saw_in_progress
+                                    && !saw_context =>
+                            {
+                                saw_context = true;
+                            }
+                            PersistedPayload::ContextEnvelopeProjected(value)
+                                if value.obligation_ids().contains(&obligation_id) =>
+                            {
+                                invalid_later = true;
+                            }
+                            PersistedPayload::ReviewExecutionRecorded(recorded)
+                                if recorded.execution.obligation_ids().contains(&obligation_id)
+                                    && recorded.execution.outcome().is_structured() =>
+                            {
+                                invalid_later = true;
+                            }
+                            PersistedPayload::ObligationTransition {
+                                obligation_id: candidate,
+                                next: ObligationLifecycle::Completed,
+                            } if candidate == obligation_id => invalid_later = true,
+                            _ => {}
+                        }
+                    }
+                    if ContentHash::sha256(
+                        &context.canonical_bytes().map_err(context_domain_error)?,
+                    ) != *body_hash
+                        || !saw_planned
+                        || !saw_in_progress
+                        || !saw_context
+                        || invalid_later
+                    {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "scheduled reviewer existing context witness differs",
+                        ));
+                    }
+                    ScheduledReviewerContextV5::Existing(Box::new(context))
+                }
+                _ => {
+                    return Err(DomainError::EventSequence(
+                        "scheduled reviewer prerequisite shape is not exact".to_owned(),
+                    ));
+                }
+            };
+            actions.push(ScheduledReviewerActionV5 {
+                action_id: action.id().clone(),
+                obligation_id,
+                wave_id,
+                context,
+            });
+        }
+        if actions
+            .windows(2)
+            .any(|pair| pair[0].action_id >= pair[1].action_id)
+        {
+            return Err(DomainError::EventSequence(
+                "scheduled reviewer actions are not ascending derived-ID order".to_owned(),
+            ));
+        }
+        let cursor = if let Some(action) = actions.first() {
+            Self::scheduled_reviewer_cursor_for_action(
+                &phase.target_aggregate,
+                phase.plan.target_plan_id(),
+                action,
+            )?
+        } else {
+            ScheduledReviewerCursorV5::Finished
+        };
+        Ok(ReplayedScheduledReviewerPhaseV5 {
+            log_identity: self.instance_identity,
+            plan_id: phase.plan.target_plan_id().clone(),
+            actions,
+            action_index: 0,
+            aggregate: phase.target_aggregate.clone(),
+            v3_aggregate: phase.target_v3_aggregate.clone(),
+            basis,
+            cursor,
+            resident_log_bytes: self.full_resident_bytes_for_structural_store()?,
+            external_phase_retained_bytes: phase.retained_bytes()?,
+            max_working_bytes: self.limits.max_working_bytes,
+        })
+    }
+
+    /// Replays the exact post-plan suffix against the same opaque terminal-
+    /// derived plan contract. The contextual zero-claim decoder is selected
+    /// only after the reducer has consumed the matching reviewer registration
+    /// for the current action and attempt.
+    #[allow(dead_code)]
+    pub(crate) fn replay_scheduled_reviewer_suffix_v5(
+        log: EventLogV5,
+        canonical_suffix: &[Vec<u8>],
+        phase: &SealedPartialRerunPhaseV5,
+        basis: AuthorityReplayBasisV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<(EventLogV5, ReplayedScheduledReviewerPhaseV5)> {
+        Self::replay_scheduled_reviewer_suffix_inner_v5(
+            log,
+            canonical_suffix,
+            phase,
+            basis,
+            resolver,
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    fn replay_scheduled_reviewer_suffix_with_limit_for_test(
+        log: EventLogV5,
+        canonical_suffix: &[Vec<u8>],
+        phase: &SealedPartialRerunPhaseV5,
+        basis: AuthorityReplayBasisV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        max_working_bytes: u64,
+    ) -> Result<(EventLogV5, ReplayedScheduledReviewerPhaseV5)> {
+        Self::replay_scheduled_reviewer_suffix_inner_v5(
+            log,
+            canonical_suffix,
+            phase,
+            basis,
+            resolver,
+            Some(max_working_bytes),
+        )
+    }
+
+    fn replay_scheduled_reviewer_suffix_inner_v5(
+        mut log: EventLogV5,
+        canonical_suffix: &[Vec<u8>],
+        phase: &SealedPartialRerunPhaseV5,
+        basis: AuthorityReplayBasisV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        max_working_override: Option<u64>,
+    ) -> Result<(EventLogV5, ReplayedScheduledReviewerPhaseV5)> {
+        let run_id = log.run_id.clone();
+        let genesis_hash = log.genesis_hash.clone();
+        let mut state = log.begin_scheduled_reviewer_phase_v5(phase, basis)?;
+        for (suffix_index, bytes) in canonical_suffix.iter().enumerate() {
+            let position = if matches!(state.cursor, ScheduledReviewerCursorV5::Execution { .. }) {
+                V5SealedPayloadPosition::ScheduledM6Execution
+            } else {
+                V5SealedPayloadPosition::General
+            };
+            let envelope = EventEnvelope::from_json_slice_at_v5_position(bytes, position).map_err(
+                |error| {
+                    DomainError::Validation(format!(
+                        "scheduled reviewer suffix event {suffix_index}: {error}"
+                    ))
+                },
+            )?;
+            let expected_sequence = u64::try_from(log.envelopes.len())
+                .ok()
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| {
+                    DomainError::EventSequence(
+                        "scheduled reviewer replay sequence overflow".to_owned(),
+                    )
+                })?;
+            envelope.validate_chain_position_at_v5(
+                &run_id,
+                &genesis_hash,
+                expected_sequence,
+                log.tail_hash(),
+                position,
+            )?;
+            let payload = match position {
+                V5SealedPayloadPosition::General => {
+                    decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?
+                }
+                V5SealedPayloadPosition::ScheduledM6Execution => {
+                    decode_canonical_scheduled_m6_execution_payload(envelope.payload.get())?
+                }
+            };
+            if matches!(state.cursor, ScheduledReviewerCursorV5::Execution { .. })
+                && let Some(limit) = max_working_override
+            {
+                state.max_working_bytes = limit;
+            }
+            state.preflight_additional_working(
+                u64::try_from(crate::execution::MAX_D2_WORKING_BYTES).unwrap_or(u64::MAX),
+            )?;
+            let context_admission = match &payload {
+                PersistedPayload::ContextEnvelopeProjected(context) => {
+                    let (rebuilt, admission) = rebuild_context_projection_from_cas(
+                        &state.aggregate,
+                        context,
+                        |hash, destination| resolver.read_exact(hash, destination),
+                        |_| Ok(()),
+                    )?;
+                    if rebuilt.canonical_bytes().map_err(context_domain_error)?
+                        != context.canonical_bytes().map_err(context_domain_error)?
+                    {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "scheduled reviewer replay context differs from CAS rebuild",
+                        ));
+                    }
+                    Some(admission)
+                }
+                _ => None,
+            };
+            let raw_closure = match &payload {
+                PersistedPayload::ReviewExecutionRecorded(recorded) => {
+                    let ScheduledReviewerCursorV5::Execution { registration, .. } = &state.cursor
+                    else {
+                        return Err(DomainError::EventSequence(
+                            "scheduled execution appeared outside its exact FSM position"
+                                .to_owned(),
+                        ));
+                    };
+                    let mut bytes = vec![
+                        0_u8;
+                        usize::try_from(registration.size()).map_err(|_| {
+                            DomainError::Incomplete {
+                                operation: "scheduled reviewer replay raw CAS bytes",
+                                limit: crate::execution::MAX_D2_RAW_REVIEWER_BYTES,
+                                observed: usize::MAX,
+                            }
+                        },)?
+                    ];
+                    resolver.read_exact(registration.cas_hash(), &mut bytes)?;
+                    let closure = ReviewerRawClosure::from_bytes(recorded, &bytes)?;
+                    if ContentHash::sha256(&bytes) != *registration.cas_hash()
+                        || !closure.matches(recorded)
+                    {
+                        return Err(DomainError::Validation(
+                            "scheduled reviewer replay raw CAS closure differs".to_owned(),
+                        ));
+                    }
+                    Some(closure)
+                }
+                _ => None,
+            };
+            let prepared = PreparedScheduledReviewerAppendV5 {
+                log_identity: log.instance_identity,
+                basis_digest: state.basis.basis_digest.clone(),
+                predecessor_event_hash: log.tail_hash().clone(),
+                event_sequence: expected_sequence,
+                action_id: state.action()?.action_id.clone(),
+                kind: match state.cursor {
+                    ScheduledReviewerCursorV5::Planned => ScheduledReviewerPreparedKindV5::Planned,
+                    ScheduledReviewerCursorV5::InProgress => {
+                        ScheduledReviewerPreparedKindV5::InProgress
+                    }
+                    ScheduledReviewerCursorV5::Context => ScheduledReviewerPreparedKindV5::Context,
+                    ScheduledReviewerCursorV5::RawRegistration { .. } => {
+                        ScheduledReviewerPreparedKindV5::RawRegistration
+                    }
+                    ScheduledReviewerCursorV5::Execution { .. } => {
+                        ScheduledReviewerPreparedKindV5::Execution
+                    }
+                    ScheduledReviewerCursorV5::Completed { .. } => {
+                        ScheduledReviewerPreparedKindV5::Completed
+                    }
+                    ScheduledReviewerCursorV5::CardinalityUnsupported { .. }
+                    | ScheduledReviewerCursorV5::Finished => {
+                        return Err(DomainError::EventSequence(
+                            "payload follows scheduled reviewer terminal state".to_owned(),
+                        ));
+                    }
+                },
+                payload,
+                context_admission,
+                raw_closure,
+            };
+            // Context is deliberately handled only by live append today; all
+            // other positions use the same reducer as live execution.
+            log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
+        }
+        Ok((log, state))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn append_prepared_scheduled_reviewer_v5(
+        &mut self,
+        prepared: PreparedScheduledReviewerAppendV5,
+        state: &mut ReplayedScheduledReviewerPhaseV5,
+    ) -> Result<()> {
+        state.basis.validate_current_log(self)?;
+        let expected_kind = match state.cursor {
+            ScheduledReviewerCursorV5::Planned => ScheduledReviewerPreparedKindV5::Planned,
+            ScheduledReviewerCursorV5::InProgress => ScheduledReviewerPreparedKindV5::InProgress,
+            ScheduledReviewerCursorV5::Context => ScheduledReviewerPreparedKindV5::Context,
+            ScheduledReviewerCursorV5::RawRegistration { .. } => {
+                ScheduledReviewerPreparedKindV5::RawRegistration
+            }
+            ScheduledReviewerCursorV5::Execution { .. } => {
+                ScheduledReviewerPreparedKindV5::Execution
+            }
+            ScheduledReviewerCursorV5::Completed { .. } => {
+                ScheduledReviewerPreparedKindV5::Completed
+            }
+            ScheduledReviewerCursorV5::CardinalityUnsupported { .. }
+            | ScheduledReviewerCursorV5::Finished => {
+                return Err(DomainError::EventSequence(
+                    "scheduled reviewer terminal state has no append".to_owned(),
+                ));
+            }
+        };
+        if self.instance_identity != state.log_identity
+            || self.instance_identity != prepared.log_identity
+            || prepared.basis_digest != state.basis.basis_digest
+            || prepared.predecessor_event_hash != *self.tail_hash()
+            || prepared.event_sequence != state.basis.target_next_sequence
+            || prepared.action_id != state.action()?.action_id
+            || prepared.kind != expected_kind
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+
+        let reducer_clone_bytes = state
+            .aggregate
+            .retained_bytes_v3()?
+            .checked_add(state.v3_aggregate.retained_bytes()?)
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer append reducer clone",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let prepared_payload_bytes = prepared.payload.validation_heap_bytes_v5()?;
+        let append_working = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(state.retained_working_upper_bound()?)
+            .and_then(|value| value.checked_add(reducer_clone_bytes))
+            .and_then(|value| value.checked_add(prepared.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(prepared_payload_bytes))
+            .and_then(|value| value.checked_add(prepared_payload_bytes))
+            .and_then(|value| {
+                value.checked_add(u64::try_from(MAX_D1_EVENT_LINE_BYTES).unwrap_or(u64::MAX))
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer append working bytes",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if append_working > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled reviewer append working bytes",
+                self.limits.max_working_bytes,
+                append_working,
+            ));
+        }
+
+        let actor = prepared.payload.actor().to_owned();
+        let position = if prepared.kind == ScheduledReviewerPreparedKindV5::Execution {
+            V5SealedPayloadPosition::ScheduledM6Execution
+        } else {
+            V5SealedPayloadPosition::General
+        };
+        let envelope = EventEnvelope::new_at_v5_position(
+            EventContractVersion::V5,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            prepared.event_sequence,
+            actor.clone(),
+            prepared.event_sequence,
+            prepared.predecessor_event_hash.clone(),
+            prepared.payload.clone(),
+            position,
+        )?;
+        let mut aggregate = state.aggregate.clone();
+        let mut v3_aggregate = state.v3_aggregate.clone();
+        let next_cursor = match (&state.cursor, &prepared.payload) {
+            (
+                ScheduledReviewerCursorV5::Planned,
+                PersistedPayload::ObligationTransition {
+                    obligation_id,
+                    next: ObligationLifecycle::Planned,
+                },
+            ) if obligation_id == &state.action()?.obligation_id => {
+                aggregate.transition_obligation(obligation_id, ObligationLifecycle::Planned)?;
+                ScheduledReviewerCursorV5::InProgress
+            }
+            (
+                ScheduledReviewerCursorV5::InProgress,
+                PersistedPayload::ObligationTransition {
+                    obligation_id,
+                    next: ObligationLifecycle::InProgress,
+                },
+            ) if obligation_id == &state.action()?.obligation_id => {
+                aggregate.transition_obligation(obligation_id, ObligationLifecycle::InProgress)?;
+                ScheduledReviewerCursorV5::Context
+            }
+            (
+                ScheduledReviewerCursorV5::Context,
+                PersistedPayload::ContextEnvelopeProjected(context),
+            ) => {
+                let admission = prepared.context_admission.ok_or_else(|| {
+                    DomainError::Validation(
+                        "scheduled reviewer context requires its live builder admission".to_owned(),
+                    )
+                })?;
+                PositionedContextProjectionAdmission::seal(&envelope, context, admission)?;
+                aggregate.record_context_envelope(context.clone())?;
+                ScheduledReviewerCursorV5::RawRegistration {
+                    context: Box::new(context.clone()),
+                    attempt: 1,
+                }
+            }
+            (
+                ScheduledReviewerCursorV5::RawRegistration { context, attempt },
+                PersistedPayload::ArtifactRegisteredV3(registration),
+            ) => {
+                let input = state.execution_input(context, *attempt)?;
+                if !matches!(
+                    registration.source(),
+                    ArtifactSourceV3::ReviewerExecution {
+                        execution_id,
+                        reviewer_id,
+                        run_id,
+                    } if execution_id == &input.execution_id()?
+                        && reviewer_id == crate::FAKE_REVIEWER_ID
+                        && run_id == &self.run_id
+                ) {
+                    return Err(DomainError::Validation(
+                        "scheduled reviewer raw registration binding differs".to_owned(),
+                    ));
+                }
+                v3_aggregate.register_artifact(
+                    &mut aggregate,
+                    &self.run_id,
+                    registration.clone(),
+                    true,
+                )?;
+                ScheduledReviewerCursorV5::Execution {
+                    context: context.clone(),
+                    attempt: *attempt,
+                    registration: Box::new(registration.clone()),
+                }
+            }
+            (
+                ScheduledReviewerCursorV5::Execution {
+                    context,
+                    attempt,
+                    registration,
+                },
+                PersistedPayload::ReviewExecutionRecorded(recorded),
+            ) => {
+                let raw_closure = prepared.raw_closure.as_ref().ok_or_else(|| {
+                    DomainError::Validation(
+                        "scheduled reviewer execution requires raw CAS closure".to_owned(),
+                    )
+                })?;
+                if !raw_closure.matches(recorded)
+                    || recorded.execution.raw_artifact_registration_id()
+                        != registration.registration_id()
+                    || recorded.execution.id()
+                        != &state.execution_input(context, *attempt)?.execution_id()?
+                {
+                    return Err(DomainError::Validation(
+                        "scheduled reviewer execution differs from registered attempt".to_owned(),
+                    ));
+                }
+                recorded.validate_shape_for_m6()?;
+                if !recorded.claims.is_empty() || !recorded.execution.outcome().is_structured() {
+                    apply_for_log(
+                        &mut aggregate,
+                        Some(&mut v3_aggregate),
+                        &prepared.payload,
+                        &actor,
+                        &self.run_id,
+                        &self.genesis_hash,
+                        Some(raw_closure.raw_artifact_size()),
+                        true,
+                    )?;
+                }
+                if recorded.execution.outcome().is_structured() {
+                    match recorded.reduce_exactly_one_for_m6() {
+                        Ok(singleton) => ScheduledReviewerCursorV5::Completed { singleton },
+                        Err(crate::M6Error::M6ClaimCardinalityUnsupported {
+                            execution_id,
+                            observed,
+                        }) => ScheduledReviewerCursorV5::CardinalityUnsupported {
+                            execution_id,
+                            execution_event_id: envelope.id().clone(),
+                            observed,
+                        },
+                        Err(error) => return Err(DomainError::Validation(error.to_string())),
+                    }
+                } else {
+                    ScheduledReviewerCursorV5::RawRegistration {
+                        context: context.clone(),
+                        attempt: attempt.checked_add(1).ok_or_else(|| {
+                            DomainError::EventSequence(
+                                "scheduled reviewer attempt overflow".to_owned(),
+                            )
+                        })?,
+                    }
+                }
+            }
+            (
+                ScheduledReviewerCursorV5::Completed { singleton },
+                PersistedPayload::ObligationTransition {
+                    obligation_id,
+                    next: ObligationLifecycle::Completed,
+                },
+            ) if obligation_id == &state.action()?.obligation_id => {
+                let execution = aggregate
+                    .execution(singleton.execution_id())
+                    .ok_or_else(|| DomainError::DanglingReference {
+                        owner: "scheduled reviewer singleton completion",
+                        owner_id: obligation_id.clone(),
+                        reference: singleton.execution_id().clone(),
+                    })?;
+                let claim = aggregate
+                    .execution_claims()
+                    .find(|value| value.id() == singleton.claim_id())
+                    .ok_or_else(|| DomainError::DanglingReference {
+                        owner: "scheduled reviewer singleton completion",
+                        owner_id: obligation_id.clone(),
+                        reference: singleton.claim_id().clone(),
+                    })?;
+                if execution.body_hash()? != *singleton.execution_body_hash()
+                    || claim.body_hash()? != *singleton.claim_body_hash()
+                {
+                    return Err(DomainError::HistoricalPrefixMismatch(
+                        "scheduled reviewer singleton closure differs before completion",
+                    ));
+                }
+                aggregate.transition_obligation(obligation_id, ObligationLifecycle::Completed)?;
+                state.action_index = state.action_index.checked_add(1).ok_or_else(|| {
+                    DomainError::EventSequence(
+                        "scheduled reviewer action index overflow".to_owned(),
+                    )
+                })?;
+                if let Some(action) = state.actions.get(state.action_index) {
+                    Self::scheduled_reviewer_cursor_for_action(&aggregate, &state.plan_id, action)?
+                } else {
+                    ScheduledReviewerCursorV5::Finished
+                }
+            }
+            _ => {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled reviewer prepared payload is out of order or differently bound",
+                ));
+            }
+        };
+        let mut next_basis = state.basis.clone();
+        next_basis.advance_authority_free_to_event(&envelope)?;
+        self.append_sealed_envelope_at_v5(envelope, position)?;
+        state.aggregate = aggregate;
+        state.v3_aggregate = v3_aggregate;
+        state.basis = next_basis;
+        state.cursor = next_cursor;
+        state.resident_log_bytes = self.full_resident_bytes_for_structural_store()?;
+        Ok(())
+    }
+
     #[allow(dead_code)] // Private until the enclosing V5 session API lands.
     pub(crate) fn mint_trusted_preservation_admission_v5(
         &self,
@@ -28869,6 +30700,14 @@ impl EventLogV5 {
     /// a V5 canonical-state transition.
     #[allow(dead_code)] // Consumed by the V5 authority-session module landing next.
     pub(crate) fn append_sealed_envelope_v5(&mut self, envelope: EventEnvelope) -> Result<()> {
+        self.append_sealed_envelope_at_v5(envelope, V5SealedPayloadPosition::General)
+    }
+
+    fn append_sealed_envelope_at_v5(
+        &mut self,
+        envelope: EventEnvelope,
+        position: V5SealedPayloadPosition,
+    ) -> Result<()> {
         let expected_sequence = u64::try_from(self.envelopes.len())
             .ok()
             .and_then(|value| value.checked_add(1))
@@ -28907,8 +30746,15 @@ impl EventLogV5 {
             self.canonical_prefix_bytes,
             line_bytes,
         )?;
-        envelope.validate()?;
-        let payload = decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+        envelope.validate_at_v5_position(position)?;
+        let payload = match position {
+            V5SealedPayloadPosition::General => {
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?
+            }
+            V5SealedPayloadPosition::ScheduledM6Execution => {
+                decode_canonical_scheduled_m6_execution_payload(envelope.payload.get())?
+            }
+        };
         if envelope.actor() != payload.actor() {
             return Err(DomainError::EventSequence(
                 "sealed V5 envelope actor does not match its closed payload".to_owned(),
@@ -28955,6 +30801,313 @@ impl EventLogV5 {
         self.envelopes.push(envelope);
         self.canonical_prefix_bytes = next_prefix_bytes;
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn scheduled_reviewer_begin_required_working_for_test(
+        &self,
+        phase: &SealedPartialRerunPhaseV5,
+        basis: &AuthorityReplayBasisV5,
+    ) -> Result<u64> {
+        let reviewer_count = phase
+            .actions
+            .iter()
+            .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunReviewer)
+            .count();
+        let action_bytes = phase
+            .actions
+            .iter()
+            .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunReviewer)
+            .try_fold(
+                u64::try_from(reviewer_count * size_of::<ScheduledReviewerActionV5>())
+                    .unwrap_or(u64::MAX),
+                |total, action| {
+                    let obligation_id = action.subject_ids().first()?;
+                    let wave = phase
+                        .target_aggregate
+                        .review_plan(phase.plan.target_plan_id())?
+                        .waves()
+                        .iter()
+                        .find(|wave| wave.obligation_ids().contains(obligation_id))?;
+                    let context = match action.prerequisites() {
+                        [crate::ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }] => {
+                            phase.target_aggregate.context_envelope(record_id).map_or(
+                                usize::MAX,
+                                |value| {
+                                    size_of::<ReviewContextEnvelope>() + value.allocated_bytes()
+                                },
+                            )
+                        }
+                        _ => 0,
+                    };
+                    total.checked_add(
+                        u64::try_from(
+                            action.id().allocated_bytes()
+                                + obligation_id.allocated_bytes()
+                                + wave.id().allocated_bytes()
+                                + context,
+                        )
+                        .ok()?,
+                    )
+                },
+            )
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer independent begin oracle actions",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let begin = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(phase.retained_bytes()?)
+            .and_then(|value| {
+                value.checked_add(
+                    phase
+                        .target_aggregate
+                        .retained_bytes_v3()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<ReviewAggregate>()).ok()?)?,
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    phase
+                        .target_v3_aggregate
+                        .retained_bytes()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<V3RunAggregate>()).ok()?)?,
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    basis
+                        .retained_bytes()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<AuthorityReplayBasisV5>()).ok()?)?,
+                )
+            })
+            .and_then(|value| value.checked_add(action_bytes))
+            .and_then(|value| {
+                value
+                    .checked_add(u64::try_from(size_of::<ReplayedScheduledReviewerPhaseV5>()).ok()?)
+            })
+            .and_then(|value| {
+                value
+                    .checked_add(u64::try_from(phase.plan.target_plan_id().allocated_bytes()).ok()?)
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer test begin working oracle",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let action_validation_dynamic = phase.actions.iter().try_fold(0_usize, |total, action| {
+            total
+                .checked_add(action.id().allocated_bytes())
+                .and_then(|value| value.checked_add(128))
+        });
+        let preservation_validation_dynamic =
+            phase
+                .preservation_verifications
+                .iter()
+                .try_fold(0_usize, |total, verification| {
+                    total
+                        .checked_add(verification.id().allocated_bytes())
+                        .and_then(|value| value.checked_add(128))
+                });
+        let record_scratch = |count: usize, dynamic: usize| {
+            count
+                .checked_mul(size_of::<crate::IdBodyHashV5>())
+                .and_then(|value| value.checked_add(dynamic))
+                .and_then(|value| value.checked_add(crate::m6::MAX_M6_CANONICAL_BYTES))
+                .and_then(|value| u64::try_from(value).ok())
+        };
+        let validation_scratch = action_validation_dynamic
+            .zip(preservation_validation_dynamic)
+            .and_then(|(actions, preservation)| {
+                Some(
+                    record_scratch(phase.actions.len(), actions)?.max(record_scratch(
+                        phase.preservation_verifications.len(),
+                        preservation,
+                    )?),
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer independent validation scratch",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let validation = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(phase.retained_bytes()?)
+            .and_then(|value| value.checked_add(basis.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(validation_scratch))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer independent validation working oracle",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        Ok(begin.max(validation))
+    }
+
+    #[cfg(test)]
+    fn scheduled_reviewer_append_required_working_for_test(
+        &self,
+        state: &ReplayedScheduledReviewerPhaseV5,
+        prepared: &PreparedScheduledReviewerAppendV5,
+    ) -> Result<u64> {
+        let action_dynamic = state
+            .actions
+            .iter()
+            .try_fold(0_u64, |total, action| {
+                let context = match &action.context {
+                    ScheduledReviewerContextV5::New => 0,
+                    ScheduledReviewerContextV5::Existing(context) => {
+                        size_of::<ReviewContextEnvelope>().checked_add(context.allocated_bytes())?
+                    }
+                };
+                total.checked_add(
+                    u64::try_from(
+                        action
+                            .action_id
+                            .allocated_bytes()
+                            .checked_add(action.obligation_id.allocated_bytes())?
+                            .checked_add(action.wave_id.allocated_bytes())?
+                            .checked_add(context)?,
+                    )
+                    .ok()?,
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer independent append oracle actions",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let state_bytes = u64::try_from(size_of::<ReplayedScheduledReviewerPhaseV5>())
+            .unwrap_or(u64::MAX)
+            .checked_add(state.external_phase_retained_bytes)
+            .and_then(|value| {
+                value.checked_add(
+                    state
+                        .aggregate
+                        .retained_bytes_v3()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<ReviewAggregate>()).ok()?)?,
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    state
+                        .v3_aggregate
+                        .retained_bytes()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<V3RunAggregate>()).ok()?)?,
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    state
+                        .basis
+                        .retained_bytes()
+                        .ok()?
+                        .checked_sub(u64::try_from(size_of::<AuthorityReplayBasisV5>()).ok()?)?,
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(u64::try_from(state.plan_id.allocated_bytes()).ok()?)
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(
+                        state.actions.capacity() * size_of::<ScheduledReviewerActionV5>(),
+                    )
+                    .ok()?,
+                )
+            })
+            .and_then(|value| value.checked_add(action_dynamic))
+            .and_then(|value| {
+                let cursor = match &state.cursor {
+                    ScheduledReviewerCursorV5::RawRegistration { context, .. } => {
+                        size_of::<ReviewContextEnvelope>().checked_add(context.allocated_bytes())?
+                    }
+                    ScheduledReviewerCursorV5::Execution {
+                        context,
+                        registration,
+                        ..
+                    } => size_of::<ReviewContextEnvelope>()
+                        .checked_add(context.allocated_bytes())?
+                        .checked_add(size_of::<ArtifactRegisteredV3>())?
+                        .checked_add(registration.allocated_bytes())?,
+                    ScheduledReviewerCursorV5::Completed { singleton } => singleton
+                        .execution_id()
+                        .allocated_bytes()
+                        .checked_add(singleton.execution_body_hash().allocated_bytes())?
+                        .checked_add(singleton.claim_id().allocated_bytes())?
+                        .checked_add(singleton.claim_body_hash().allocated_bytes())?,
+                    ScheduledReviewerCursorV5::CardinalityUnsupported {
+                        execution_id,
+                        execution_event_id,
+                        ..
+                    } => execution_id
+                        .allocated_bytes()
+                        .checked_add(execution_event_id.allocated_bytes())?,
+                    ScheduledReviewerCursorV5::Planned
+                    | ScheduledReviewerCursorV5::InProgress
+                    | ScheduledReviewerCursorV5::Context
+                    | ScheduledReviewerCursorV5::Finished => 0,
+                };
+                value.checked_add(u64::try_from(cursor).ok()?)
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer independent append oracle state",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let payload = match &prepared.payload {
+            PersistedPayload::ObligationTransition { obligation_id, .. } => {
+                u64::try_from(obligation_id.allocated_bytes()).unwrap_or(u64::MAX)
+            }
+            _ => {
+                return Err(DomainError::Validation(
+                    "scheduled reviewer independent append oracle supports lifecycle fixture"
+                        .to_owned(),
+                ));
+            }
+        };
+        if prepared.context_admission.is_some() || prepared.raw_closure.is_some() {
+            return Err(DomainError::Validation(
+                "scheduled reviewer independent append oracle requires empty live closures"
+                    .to_owned(),
+            ));
+        }
+        let prepared_bytes = u64::try_from(
+            size_of::<PreparedScheduledReviewerAppendV5>()
+                .checked_add(prepared.basis_digest.allocated_bytes())
+                .and_then(|value| {
+                    value.checked_add(prepared.predecessor_event_hash.allocated_bytes())
+                })
+                .and_then(|value| value.checked_add(prepared.action_id.allocated_bytes()))
+                .and_then(|value| value.checked_add(usize::try_from(payload).ok()?))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled reviewer independent prepared oracle",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?,
+        )
+        .unwrap_or(u64::MAX);
+        self.full_resident_bytes_for_structural_store()?
+            .checked_add(state_bytes)
+            .and_then(|value| value.checked_add(state.aggregate.retained_bytes_v3().ok()?))
+            .and_then(|value| value.checked_add(state.v3_aggregate.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(prepared_bytes))
+            .and_then(|value| value.checked_add(payload))
+            .and_then(|value| value.checked_add(payload))
+            .and_then(|value| {
+                value.checked_add(u64::try_from(MAX_D1_EVENT_LINE_BYTES).unwrap_or(u64::MAX))
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer test working oracle",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
     }
 
     #[allow(dead_code)]
@@ -38922,6 +41075,49 @@ mod tests {
 
     fn id(value: &str) -> StableId {
         StableId::parse(value).expect("test identifier")
+    }
+
+    fn scheduled_reviewer_claims(
+        state: &ReplayedScheduledReviewerPhaseV5,
+        count: usize,
+    ) -> Result<Vec<crate::ExecutionClaimInputV2>> {
+        let action = state.action()?;
+        let context = match &state.cursor {
+            ScheduledReviewerCursorV5::RawRegistration { context, .. }
+            | ScheduledReviewerCursorV5::Execution { context, .. } => context,
+            _ => {
+                return Err(DomainError::EventSequence(
+                    "scheduled reviewer test claim has no admitted context".to_owned(),
+                ));
+            }
+        };
+        let obligation = state
+            .aggregate
+            .obligation(&action.obligation_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "scheduled reviewer test claim",
+                owner_id: action.action_id.clone(),
+                reference: action.obligation_id.clone(),
+            })?;
+        assert!(!context.normalized_included_source_ids().is_empty());
+        (0..count)
+            .map(|index| {
+                crate::ExecutionClaimInputV2::new(
+                    obligation.property_id(),
+                    obligation.normalized_target_refs().clone(),
+                    if index % 2 == 0 {
+                        ClaimPolarity::IssueAbsent
+                    } else {
+                        ClaimPolarity::IssuePresent
+                    },
+                    format!("scheduled reviewer bounded claim {index}"),
+                    context.normalized_included_source_ids().clone(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    Some(1.0),
+                )
+            })
+            .collect()
     }
 
     fn recompute_v4_basis_digest(basis: &AuthorityReplayBasisV4) -> ContentHash {
@@ -56349,6 +58545,16 @@ mod tests {
                             limit: usize::MAX,
                             observed: usize::MAX,
                         })?;
+                    phase_oracle = phase_oracle
+                        .checked_add(phase.target_aggregate.retained_bytes_v3()?)
+                        .and_then(|value| {
+                            value.checked_add(phase.target_v3_aggregate.retained_bytes().ok()?)
+                        })
+                        .ok_or(DomainError::Incomplete {
+                            operation: "partial rerun test target state ownership",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?;
                     for action in &phase.actions {
                         phase_oracle = phase_oracle
                             .checked_add(dynamic(
@@ -56602,6 +58808,636 @@ mod tests {
             },
         )
         .expect("partial rerun phase one-shot append and recovery");
+    }
+
+    #[test]
+    fn v5_scheduled_reviewer_singleton_restarts_at_every_seam() {
+        crate::m6_test_support::with_source_bearing_scheduled_reviewer_fixture(
+            |_source, target, phases, staleness| {
+                let preservation = crate::M6PreservationPhaseV5::empty(staleness);
+                target.with_terminal_persistence(|mut log, pre_basis| {
+                    let mut basis =
+                        log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                    log.append_program_mapping_phase_v5(
+                        phases.closure(),
+                        phases.mapping().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_obligation_correspondence_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_staleness_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness.clone(),
+                        &mut basis,
+                    )?;
+                    let phase = target.seal_partial_rerun_phase_for_log_v5(
+                        &log,
+                        staleness,
+                        &preservation,
+                    )?;
+                    while let Ok(prepared) =
+                        log.prepare_partial_rerun_phase_append_v5(&phase, staleness, &basis)
+                    {
+                        log.append_prepared_partial_rerun_phase_v5(
+                            prepared, &phase, staleness, &mut basis,
+                        )?;
+                    }
+                    let suffix_start = log.envelopes.len();
+                    let replay_basis = basis.clone();
+                    let original_working = log.limits.max_working_bytes;
+                    let begin_required =
+                        log.scheduled_reviewer_begin_required_working_for_test(&phase, &basis)?;
+                    log.limits.max_working_bytes = begin_required - 1;
+                    assert!(
+                        log.begin_scheduled_reviewer_phase_v5(&phase, basis.clone())
+                            .is_err()
+                    );
+                    log.limits.max_working_bytes = begin_required;
+                    assert!(
+                        log.begin_scheduled_reviewer_phase_v5(&phase, basis.clone())
+                            .is_ok()
+                    );
+                    log.limits.max_working_bytes = original_working;
+                    let mut state = log.begin_scheduled_reviewer_phase_v5(&phase, basis)?;
+                    assert!(!state.actions.is_empty());
+                    assert!(state.actions.iter().all(|action| {
+                        state
+                            .aggregate
+                            .obligation(&action.obligation_id)
+                            .is_some_and(|obligation| {
+                                obligation.property_id() != "reviewgraphen.capability_gap"
+                            })
+                    }));
+                    let completed_obligation_id = state.action()?.obligation_id.clone();
+
+                    struct Resolver(BTreeMap<ContentHash, Vec<u8>>);
+                    impl AuthorityArtifactResolverV5 for Resolver {
+                        fn read_exact(
+                            &self,
+                            hash: &ContentHash,
+                            destination: &mut [u8],
+                        ) -> Result<()> {
+                            let bytes = self.0.get(hash).ok_or_else(|| {
+                                DomainError::Validation(
+                                    "scheduled reviewer test CAS object is absent".to_owned(),
+                                )
+                            })?;
+                            if bytes.len() != destination.len() {
+                                return Err(DomainError::Validation(
+                                    "scheduled reviewer test CAS size differs".to_owned(),
+                                ));
+                            }
+                            destination.copy_from_slice(bytes);
+                            Ok(())
+                        }
+                    }
+                    let mut resolver = Resolver(
+                        target
+                            .sources
+                            .values()
+                            .cloned()
+                            .map(|bytes| (ContentHash::sha256(&bytes), bytes))
+                            .collect(),
+                    );
+
+                    let raw = br#"{"fixture":"m6-singleton"}"#.to_vec();
+                    resolver.0.insert(ContentHash::sha256(&raw), raw.clone());
+                    let planned = state.prepare_lifecycle_v5()?;
+                    let required =
+                        log.scheduled_reviewer_append_required_working_for_test(&state, &planned)?;
+                    log.limits.max_working_bytes =
+                        required.checked_sub(1).ok_or(DomainError::Incomplete {
+                            operation: "scheduled reviewer test exact minus one",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?;
+                    assert!(
+                        log.append_prepared_scheduled_reviewer_v5(planned, &mut state)
+                            .is_err()
+                    );
+                    log.limits.max_working_bytes = required;
+                    let planned = state.prepare_lifecycle_v5()?;
+                    log.append_prepared_scheduled_reviewer_v5(planned, &mut state)?;
+                    log.limits.max_working_bytes = original_working;
+                    let in_progress = state.prepare_lifecycle_v5()?;
+                    log.append_prepared_scheduled_reviewer_v5(in_progress, &mut state)?;
+                    let context = state.prepare_context_v5(&resolver)?;
+                    let PersistedPayload::ContextEnvelopeProjected(projected) = &context.payload
+                    else {
+                        panic!("scheduled context payload")
+                    };
+                    assert!(!projected.included_sources().is_empty());
+                    log.append_prepared_scheduled_reviewer_v5(context, &mut state)?;
+                    let registration = state.prepare_raw_registration_v5(&raw)?;
+                    log.append_prepared_scheduled_reviewer_v5(registration, &mut state)?;
+                    let claims = scheduled_reviewer_claims(&state, 1)?;
+                    let execution = state.prepare_execution_v5(
+                        &resolver,
+                        claims,
+                        crate::ExecutionOutcome::Structured,
+                    )?;
+                    log.append_prepared_scheduled_reviewer_v5(execution, &mut state)?;
+                    assert!(state.cardinality_error().is_none());
+                    let completed = state.prepare_lifecycle_v5()?;
+                    log.append_prepared_scheduled_reviewer_v5(completed, &mut state)?;
+                    assert_eq!(state.action_index, 1);
+                    assert_eq!(
+                        state
+                            .aggregate
+                            .obligation(&completed_obligation_id)
+                            .expect("completed obligation")
+                            .lifecycle(),
+                        ObligationLifecycle::Completed
+                    );
+                    assert_eq!(state.aggregate.executions().count(), 1);
+                    assert_eq!(state.aggregate.execution_claims().count(), 1);
+                    assert_eq!(state.basis.target_confirmed_tail_hash(), log.tail_hash());
+                    assert_eq!(
+                        state.basis.target_confirmed_event_count(),
+                        u64::try_from(log.envelopes.len()).unwrap()
+                    );
+                    let suffix = log.envelopes[suffix_start..]
+                        .iter()
+                        .map(|envelope| {
+                            let position =
+                                if envelope.payload.get().contains("review_execution_recorded") {
+                                    V5SealedPayloadPosition::ScheduledM6Execution
+                                } else {
+                                    V5SealedPayloadPosition::General
+                                };
+                            match position {
+                                V5SealedPayloadPosition::General => envelope.canonical_bytes(),
+                                V5SealedPayloadPosition::ScheduledM6Execution => {
+                                    envelope.canonical_bytes_at_v5_position(position)
+                                }
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    assert_eq!(suffix.len(), 6);
+                    let expected_tail = log.tail_hash().clone();
+                    for persisted in 0..=suffix.len() {
+                        let (base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                            target.run_id().clone(),
+                            target.log.canonical_genesis_bytes.clone(),
+                            log.envelopes[..suffix_start].to_vec(),
+                            log.limits,
+                        )?;
+                        let recovery_phase = target.seal_partial_rerun_phase_for_log_v5(
+                            &base,
+                            staleness,
+                            &preservation,
+                        )?;
+                        let (mut recovered_log, mut replayed) =
+                            EventLogV5::replay_scheduled_reviewer_suffix_v5(
+                                base,
+                                &suffix[..persisted],
+                                &recovery_phase,
+                                replay_basis.clone(),
+                                &resolver,
+                            )?;
+                        while replayed.action_index == 0 {
+                            let prepared = match replayed.cursor {
+                                ScheduledReviewerCursorV5::Planned
+                                | ScheduledReviewerCursorV5::InProgress
+                                | ScheduledReviewerCursorV5::Completed { .. } => {
+                                    replayed.prepare_lifecycle_v5()?
+                                }
+                                ScheduledReviewerCursorV5::Context => {
+                                    replayed.prepare_context_v5(&resolver)?
+                                }
+                                ScheduledReviewerCursorV5::RawRegistration { .. } => {
+                                    replayed.prepare_raw_registration_v5(&raw)?
+                                }
+                                ScheduledReviewerCursorV5::Execution { .. } => {
+                                    let claims = scheduled_reviewer_claims(&replayed, 1)?;
+                                    replayed.prepare_execution_v5(
+                                        &resolver,
+                                        claims,
+                                        crate::ExecutionOutcome::Structured,
+                                    )?
+                                }
+                                ScheduledReviewerCursorV5::CardinalityUnsupported { .. }
+                                | ScheduledReviewerCursorV5::Finished => {
+                                    panic!("first action terminated before exact-one completion")
+                                }
+                            };
+                            recovered_log
+                                .append_prepared_scheduled_reviewer_v5(prepared, &mut replayed)?;
+                        }
+                        assert_eq!(recovered_log.tail_hash(), &expected_tail);
+                        assert_eq!(
+                            replayed
+                                .aggregate
+                                .obligation(&completed_obligation_id)
+                                .expect("recovered completed obligation")
+                                .lifecycle(),
+                            ObligationLifecycle::Completed
+                        );
+                    }
+
+                    // The next independently derived action proves the other
+                    // unsupported structured cardinality without fabricating
+                    // a phase or provenance record. Its durable execution is
+                    // terminal and cannot be followed by Completed.
+                    assert_eq!(state.action_index, 1);
+                    let two_claim_obligation_id = state.action()?.obligation_id.clone();
+                    while !matches!(state.cursor, ScheduledReviewerCursorV5::Execution { .. }) {
+                        let prepared = match state.cursor {
+                            ScheduledReviewerCursorV5::Planned
+                            | ScheduledReviewerCursorV5::InProgress => {
+                                state.prepare_lifecycle_v5()?
+                            }
+                            ScheduledReviewerCursorV5::Context => {
+                                state.prepare_context_v5(&resolver)?
+                            }
+                            ScheduledReviewerCursorV5::RawRegistration { .. } => {
+                                state.prepare_raw_registration_v5(&raw)?
+                            }
+                            _ => panic!("second action did not reach execution in exact order"),
+                        };
+                        log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
+                    }
+                    let claims = scheduled_reviewer_claims(&state, 2)?;
+                    let execution = state.prepare_execution_v5(
+                        &resolver,
+                        claims,
+                        crate::ExecutionOutcome::Structured,
+                    )?;
+                    log.append_prepared_scheduled_reviewer_v5(execution, &mut state)?;
+                    assert!(matches!(
+                        state.cardinality_error(),
+                        Some(crate::M6Error::M6ClaimCardinalityUnsupported { observed: 2, .. })
+                    ));
+                    assert!(state.prepare_lifecycle_v5().is_err());
+                    assert_eq!(
+                        state
+                            .aggregate
+                            .obligation(&two_claim_obligation_id)
+                            .expect("two-claim obligation")
+                            .lifecycle(),
+                        ObligationLifecycle::InProgress
+                    );
+                    let two_suffix = log.envelopes[suffix_start..]
+                        .iter()
+                        .map(|envelope| {
+                            let position =
+                                if envelope.payload.get().contains("review_execution_recorded") {
+                                    V5SealedPayloadPosition::ScheduledM6Execution
+                                } else {
+                                    V5SealedPayloadPosition::General
+                                };
+                            match position {
+                                V5SealedPayloadPosition::General => envelope.canonical_bytes(),
+                                V5SealedPayloadPosition::ScheduledM6Execution => {
+                                    envelope.canonical_bytes_at_v5_position(position)
+                                }
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let (base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(),
+                        target.log.canonical_genesis_bytes.clone(),
+                        log.envelopes[..suffix_start].to_vec(),
+                        log.limits,
+                    )?;
+                    let recovery_phase = target.seal_partial_rerun_phase_for_log_v5(
+                        &base,
+                        staleness,
+                        &preservation,
+                    )?;
+                    let (_, replayed_two) = EventLogV5::replay_scheduled_reviewer_suffix_v5(
+                        base,
+                        &two_suffix,
+                        &recovery_phase,
+                        replay_basis,
+                        &resolver,
+                    )?;
+                    assert!(matches!(
+                        replayed_two.cardinality_error(),
+                        Some(crate::M6Error::M6ClaimCardinalityUnsupported { observed: 2, .. })
+                    ));
+                    Ok(())
+                })
+            },
+        )
+        .expect("scheduled reviewer singleton FSM and every-seam restart");
+    }
+
+    #[test]
+    fn v5_scheduled_existing_context_uses_exact_next_attempt_and_raw_seam() {
+        let (mut log, _, plan, obligation_id, context, sources) = d2_v3_log();
+        let wave_id = plan
+            .waves()
+            .iter()
+            .find(|wave| wave.obligation_ids().contains(&obligation_id))
+            .expect("obligation wave")
+            .id()
+            .clone();
+        let first_input = crate::ExecutionRecordInput::fake(
+            plan.id().clone(),
+            wave_id.clone(),
+            obligation_id.clone(),
+            context.id().clone(),
+            context.snapshot_id().clone(),
+            1,
+        )
+        .expect("first attempt input");
+        let first_raw = br#"{"fixture":"existing-prior-failure"}"#.to_vec();
+        let first_registration = ArtifactRegisteredV3::new_validated(
+            log.run_id().clone(),
+            ContentHash::sha256(&first_raw),
+            "application/json",
+            u64::try_from(first_raw.len()).unwrap(),
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id: first_input.execution_id().expect("first execution ID"),
+                reviewer_id: crate::FAKE_REVIEWER_ID.to_owned(),
+                run_id: log.run_id().clone(),
+            },
+        )
+        .expect("first raw registration");
+        log.append(EventCommand::artifact_registered_v3(
+            first_registration.clone(),
+        ))
+        .expect("first raw event");
+        let first_bundle = ValidatedExecutionBundle::fake_v3(
+            first_input,
+            &first_registration,
+            first_raw,
+            sources.values().collect(),
+            Vec::new(),
+            crate::ExecutionOutcome::ProviderFailure {
+                retryable: true,
+                diagnostic: "retry scheduled".to_owned(),
+            },
+        )
+        .expect("first failure bundle");
+        log.append(EventCommand::review_execution_recorded(first_bundle))
+            .expect("first failure event");
+        let action = ScheduledReviewerActionV5 {
+            action_id: id("partial-rerun-action-v5:existing-context-test"),
+            obligation_id: obligation_id.clone(),
+            wave_id: wave_id.clone(),
+            context: ScheduledReviewerContextV5::Existing(Box::new(context.clone())),
+        };
+        assert!(matches!(
+            EventLogV5::scheduled_reviewer_cursor_for_action(log.aggregate(), plan.id(), &action)
+                .expect("prior failure advances attempt"),
+            ScheduledReviewerCursorV5::RawRegistration { attempt: 2, .. }
+        ));
+
+        let input = crate::ExecutionRecordInput::fake(
+            plan.id().clone(),
+            wave_id,
+            obligation_id,
+            context.id().clone(),
+            context.snapshot_id().clone(),
+            2,
+        )
+        .expect("second attempt input");
+        let raw = br#"{"fixture":"existing-raw-seam"}"#;
+        let registration = ArtifactRegisteredV3::new_validated(
+            log.run_id().clone(),
+            ContentHash::sha256(raw),
+            "application/json",
+            u64::try_from(raw.len()).unwrap(),
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id: input.execution_id().expect("second execution ID"),
+                reviewer_id: crate::FAKE_REVIEWER_ID.to_owned(),
+                run_id: log.run_id().clone(),
+            },
+        )
+        .expect("durable raw registration");
+        let run_id = log.run_id().clone();
+        log.aggregate
+            .register_artifact_v3(&run_id, registration.clone())
+            .expect("register second raw");
+        assert!(matches!(
+            EventLogV5::scheduled_reviewer_cursor_for_action(log.aggregate(), plan.id(), &action)
+                .expect("registration-only seam resumes execution"),
+            ScheduledReviewerCursorV5::Execution {
+                attempt: 2,
+                registration: found,
+                ..
+            } if found.registration_id() == registration.registration_id()
+        ));
+
+        let ambiguous = ArtifactRegistered::reviewer_execution(
+            run_id.clone(),
+            input.execution_id().expect("ambiguous execution ID"),
+            crate::FAKE_REVIEWER_ID,
+            ContentHash::sha256(b"different raw"),
+            "application/json",
+            13,
+        )
+        .expect("ambiguous legacy registration");
+        log.aggregate
+            .register_artifact(&run_id, ambiguous)
+            .expect("second exact execution registration");
+        assert!(
+            EventLogV5::scheduled_reviewer_cursor_for_action(log.aggregate(), plan.id(), &action)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn v5_scheduled_transition_bound_is_exact_4095() {
+        EventLogV5::validate_scheduled_reviewer_transition_count(1_365, 0)
+            .expect("3 * 1365 = 4095 is admitted");
+        assert!(EventLogV5::validate_scheduled_reviewer_transition_count(1_365, 1).is_err());
+    }
+
+    #[test]
+    fn v5_scheduled_zero_claim_is_durable_terminal_and_byte_replayable() {
+        crate::m6_test_support::with_source_bearing_scheduled_reviewer_fixture(
+            |_source, target, phases, staleness| {
+                let preservation = crate::M6PreservationPhaseV5::empty(staleness);
+                target.with_terminal_persistence(|mut log, pre_basis| {
+                    let mut basis =
+                        log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                    log.append_program_mapping_phase_v5(
+                        phases.closure(),
+                        phases.mapping().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_obligation_correspondence_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_staleness_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness.clone(),
+                        &mut basis,
+                    )?;
+                    let phase = target.seal_partial_rerun_phase_for_log_v5(
+                        &log,
+                        staleness,
+                        &preservation,
+                    )?;
+                    while let Ok(prepared) =
+                        log.prepare_partial_rerun_phase_append_v5(&phase, staleness, &basis)
+                    {
+                        log.append_prepared_partial_rerun_phase_v5(
+                            prepared, &phase, staleness, &mut basis,
+                        )?;
+                    }
+                    let suffix_start = log.envelopes.len();
+                    let replay_basis = basis.clone();
+                    let mut state = log.begin_scheduled_reviewer_phase_v5(&phase, basis)?;
+                    struct Resolver(BTreeMap<ContentHash, Vec<u8>>);
+                    impl AuthorityArtifactResolverV5 for Resolver {
+                        fn read_exact(
+                            &self,
+                            hash: &ContentHash,
+                            destination: &mut [u8],
+                        ) -> Result<()> {
+                            let bytes = self.0.get(hash).ok_or_else(|| {
+                                DomainError::Validation("zero-claim CAS miss".to_owned())
+                            })?;
+                            if bytes.len() != destination.len() {
+                                return Err(DomainError::Validation(
+                                    "zero-claim CAS size mismatch".to_owned(),
+                                ));
+                            }
+                            destination.copy_from_slice(bytes);
+                            Ok(())
+                        }
+                    }
+                    let raw = br#"{"fixture":"m6-zero"}"#.to_vec();
+                    let mut objects = target
+                        .sources
+                        .values()
+                        .cloned()
+                        .map(|bytes| (ContentHash::sha256(&bytes), bytes))
+                        .collect::<BTreeMap<_, _>>();
+                    objects.insert(ContentHash::sha256(&raw), raw.clone());
+                    let resolver = Resolver(objects);
+                    let prepared = state.prepare_lifecycle_v5()?;
+                    log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
+                    let prepared = state.prepare_lifecycle_v5()?;
+                    log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
+                    let prepared = state.prepare_context_v5(&resolver)?;
+                    log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
+                    let prepared = state.prepare_raw_registration_v5(&raw)?;
+                    log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
+                    let prepared = state.prepare_execution_v5(
+                        &resolver,
+                        Vec::new(),
+                        crate::ExecutionOutcome::Structured,
+                    )?;
+                    log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
+                    assert!(matches!(
+                        state.cardinality_error(),
+                        Some(crate::M6Error::M6ClaimCardinalityUnsupported { observed: 0, .. })
+                    ));
+                    assert!(state.prepare_lifecycle_v5().is_err());
+                    let suffix = log.envelopes[suffix_start..]
+                        .iter()
+                        .map(|envelope| {
+                            if envelope.payload.get().contains("review_execution_recorded") {
+                                envelope.canonical_bytes_at_v5_position(
+                                    V5SealedPayloadPosition::ScheduledM6Execution,
+                                )
+                            } else {
+                                envelope.canonical_bytes()
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let (base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(),
+                        target.log.canonical_genesis_bytes.clone(),
+                        log.envelopes[..suffix_start].to_vec(),
+                        log.limits,
+                    )?;
+                    let recovery_phase = target.seal_partial_rerun_phase_for_log_v5(
+                        &base,
+                        staleness,
+                        &preservation,
+                    )?;
+                    let (_, replayed) = EventLogV5::replay_scheduled_reviewer_suffix_v5(
+                        base,
+                        &suffix,
+                        &recovery_phase,
+                        replay_basis.clone(),
+                        &resolver,
+                    )?;
+                    assert!(matches!(
+                        replayed.cardinality_error(),
+                        Some(crate::M6Error::M6ClaimCardinalityUnsupported { observed: 0, .. })
+                    ));
+                    struct CountingResolver<'a> {
+                        inner: &'a Resolver,
+                        reads: std::cell::Cell<usize>,
+                    }
+                    impl AuthorityArtifactResolverV5 for CountingResolver<'_> {
+                        fn read_exact(
+                            &self,
+                            hash: &ContentHash,
+                            destination: &mut [u8],
+                        ) -> Result<()> {
+                            self.reads.set(self.reads.get().saturating_add(1));
+                            self.inner.read_exact(hash, destination)
+                        }
+                    }
+                    let expected_context_reads = log.envelopes[suffix_start..]
+                        .iter()
+                        .find_map(|envelope| {
+                            match decode_canonical_payload(
+                                EventContractVersion::V5,
+                                envelope.payload.get(),
+                            )
+                            .ok()?
+                            {
+                                PersistedPayload::ContextEnvelopeProjected(context) => {
+                                    Some(context.included_sources().len())
+                                }
+                                _ => None,
+                            }
+                        })
+                        .expect("scheduled context event");
+                    let counting = CountingResolver {
+                        inner: &resolver,
+                        reads: std::cell::Cell::new(0),
+                    };
+                    let (base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(),
+                        target.log.canonical_genesis_bytes.clone(),
+                        log.envelopes[..suffix_start].to_vec(),
+                        log.limits,
+                    )?;
+                    let recovery_phase = target.seal_partial_rerun_phase_for_log_v5(
+                        &base,
+                        staleness,
+                        &preservation,
+                    )?;
+                    assert!(
+                        EventLogV5::replay_scheduled_reviewer_suffix_with_limit_for_test(
+                            base,
+                            &suffix,
+                            &recovery_phase,
+                            replay_basis,
+                            &counting,
+                            0,
+                        )
+                        .is_err()
+                    );
+                    assert_eq!(counting.reads.get(), expected_context_reads);
+                    Ok(())
+                })
+            },
+        )
+        .expect("scheduled zero-claim durable replay");
     }
 
     #[test]

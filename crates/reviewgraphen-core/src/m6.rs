@@ -542,6 +542,17 @@ pub struct PreservationArtifactV5 {
 }
 
 impl PreservationArtifactV5 {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.kind.capacity()
+            + self.run_id.allocated_bytes()
+            + self.target_snapshot_id.allocated_bytes()
+            + self.target_obligation_id.allocated_bytes()
+            + self.source_run_id.allocated_bytes()
+            + self.source_verification_id.allocated_bytes()
+            + self.descriptor_id.capacity()
+            + self.procedure_version.capacity()
+    }
+
     fn validate(&self) -> M6Result<()> {
         for (id, kind, field) in [
             (&self.run_id, "run", "run_id"),
@@ -2163,6 +2174,30 @@ struct PartialRerunPlanIdentityV5<'a> {
     source_ids: &'a BTreeSet<StableId>,
 }
 
+// Field order is the lexical order produced by `canonical_json`. Keeping this
+// borrowing projection separate lets the event admission boundary compare a
+// durable plan without decoding it or allocating a canonical JSON buffer.
+#[derive(Serialize)]
+struct PartialRerunPlanCanonicalV5<'a> {
+    action_count: u64,
+    action_set_digest: &'a ContentHash,
+    correspondence_id: &'a StableId,
+    id: &'a StableId,
+    morphism_id: &'a StableId,
+    planner_descriptor_id: &'static str,
+    preservation_verification_count: u64,
+    preservation_verification_digest: &'a ContentHash,
+    required_human_resolution_count: u64,
+    required_human_resolution_digest: &'a ContentHash,
+    schema: &'static str,
+    selected_target_count: u64,
+    selected_target_digest: &'a ContentHash,
+    source_closure_id: &'a StableId,
+    source_ids: &'a BTreeSet<StableId>,
+    staleness_assessment_id: &'a StableId,
+    target_plan_id: &'a StableId,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PartialRerunPlanV5 {
     schema: &'static str,
@@ -2219,6 +2254,32 @@ struct PartialRerunPlanPartsV5<'a> {
 }
 
 impl PartialRerunPlanV5 {
+    pub(crate) fn canonical_body_matches(&self, input: &[u8]) -> M6Result<bool> {
+        crate::canonical::compact_json_eq_streaming(
+            &PartialRerunPlanCanonicalV5 {
+                action_count: self.action_count,
+                action_set_digest: &self.action_set_digest,
+                correspondence_id: &self.correspondence_id,
+                id: &self.id,
+                morphism_id: &self.morphism_id,
+                planner_descriptor_id: self.planner_descriptor_id,
+                preservation_verification_count: self.preservation_verification_count,
+                preservation_verification_digest: &self.preservation_verification_digest,
+                required_human_resolution_count: self.required_human_resolution_count,
+                required_human_resolution_digest: &self.required_human_resolution_digest,
+                schema: self.schema,
+                selected_target_count: self.selected_target_count,
+                selected_target_digest: &self.selected_target_digest,
+                source_closure_id: &self.source_closure_id,
+                source_ids: &self.source_ids,
+                staleness_assessment_id: &self.staleness_assessment_id,
+                target_plan_id: &self.target_plan_id,
+            },
+            input,
+        )
+        .map_err(Into::into)
+    }
+
     pub(crate) fn retained_bytes(&self) -> M6Result<usize> {
         [
             std::mem::size_of::<Self>(),
@@ -16355,6 +16416,36 @@ pub(crate) fn successful_m5_distinct_s0_s1_program_fixture() -> M6Result<(
     let source_program = ProgramSpace::from_json_slice(
         &serde_json::to_vec(&source_value)
             .map_err(|error| M6Error::Canonical(error.to_string()))?,
+    )?;
+    let target_program = distinct_s1_program_from(&source_program)?;
+    let target_bytes = source_bytes.clone();
+    Ok((source_program, target_program, source_bytes, target_bytes))
+}
+
+/// Small accepted source-bearing topology for the scheduled-reviewer tests.
+/// It differs from the successful M5 fixture only by declaring every extractor
+/// capability complete, so the derived rerun set contains the concrete payment
+/// obligation rather than source-less capability-gap obligations.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn scheduled_reviewer_distinct_s0_s1_program_fixture() -> M6Result<(
+    ProgramSpace,
+    ProgramSpace,
+    BTreeMap<StableId, Vec<u8>>,
+    BTreeMap<StableId, Vec<u8>>,
+)> {
+    let (source_program, _, source_bytes, _) = successful_m5_distinct_s0_s1_program_fixture()?;
+    let mut source = serde_json::to_value(source_program.streaming_ref())
+        .map_err(|error| M6Error::Canonical(error.to_string()))?;
+    let capabilities = source["extraction"]["capabilities"].as_object_mut().ok_or(
+        M6Error::InvalidHistoricalTopology("scheduled reviewer fixture capabilities are absent"),
+    )?;
+    for capability in capabilities.values_mut() {
+        capability["state"] = Value::String("complete".to_owned());
+    }
+    source["extraction"]["limitations"] = Value::Array(Vec::new());
+    let source_program = ProgramSpace::from_json_slice(
+        &serde_json::to_vec(&source).map_err(|error| M6Error::Canonical(error.to_string()))?,
     )?;
     let target_program = distinct_s1_program_from(&source_program)?;
     let target_bytes = source_bytes.clone();
