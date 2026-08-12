@@ -3542,6 +3542,22 @@ enum PersistedPayload {
     ArtifactRegisteredV4(ArtifactRegistrationV4),
     #[serde(rename = "gluing_bundle_recorded_v4")]
     GluingBundleRecordedV4(Box<RawValue>),
+    #[serde(rename = "incremental_source_bound_v5")]
+    IncrementalSourceBoundV5(Box<RawValue>),
+    #[serde(rename = "program_mapping_recorded_v5")]
+    ProgramMappingRecordedV5(Box<RawValue>),
+    #[serde(rename = "change_morphism_sealed_v5")]
+    ChangeMorphismSealedV5(Box<RawValue>),
+    #[serde(rename = "obligation_correspondence_entry_recorded_v5")]
+    ObligationCorrespondenceEntryRecordedV5(Box<RawValue>),
+    #[serde(rename = "obligation_correspondence_sealed_v5")]
+    ObligationCorrespondenceSealedV5(Box<RawValue>),
+    #[serde(rename = "historical_record_assessed_v5")]
+    HistoricalRecordAssessedV5(Box<RawValue>),
+    #[serde(rename = "gluing_freshness_recorded_v5")]
+    GluingFreshnessRecordedV5(Box<RawValue>),
+    #[serde(rename = "staleness_assessment_sealed_v5")]
+    StalenessAssessmentSealedV5(Box<RawValue>),
     #[serde(rename = "evidence_recorded_v3")]
     EvidenceRecordedV3(EvidenceV3),
     #[serde(rename = "evidence_bound_v3")]
@@ -3558,6 +3574,34 @@ enum PersistedPayload {
     ReviewExecutionRecorded(ReviewExecutionRecorded),
 }
 
+fn validate_m6_raw_payload_v5(
+    raw: &RawValue,
+    expected_schema: &'static str,
+    expected_id_kind: &'static str,
+) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Header {
+        schema: String,
+        id: StableId,
+    }
+    preflight_event_json_structure(raw.get().as_bytes())?;
+    let value: Value =
+        serde_json::from_str(raw.get()).map_err(|error| DomainError::Json(error.to_string()))?;
+    if canonical_json(&value)?.as_slice() != raw.get().as_bytes() {
+        return Err(DomainError::EventSequence(
+            "M6 event body must be exact canonical JSON".to_owned(),
+        ));
+    }
+    let header: Header =
+        serde_json::from_value(value).map_err(|error| DomainError::Json(error.to_string()))?;
+    if header.schema != expected_schema || header.id.kind() != expected_id_kind {
+        return Err(DomainError::Validation(
+            "M6 event body schema or ID kind is outside the closed payload contract".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 impl PersistedPayload {
     fn validation_heap_bytes_v5(&self) -> Result<u64> {
         let bytes = match self {
@@ -3566,6 +3610,14 @@ impl PersistedPayload {
             Self::ArtifactRegisteredV3(value) => value.allocated_bytes(),
             Self::ArtifactRegisteredV4(value) => value.allocated_bytes(),
             Self::GluingBundleRecordedV4(value) => value.get().len(),
+            Self::IncrementalSourceBoundV5(value)
+            | Self::ProgramMappingRecordedV5(value)
+            | Self::ChangeMorphismSealedV5(value)
+            | Self::ObligationCorrespondenceEntryRecordedV5(value)
+            | Self::ObligationCorrespondenceSealedV5(value)
+            | Self::HistoricalRecordAssessedV5(value)
+            | Self::GluingFreshnessRecordedV5(value)
+            | Self::StalenessAssessmentSealedV5(value) => value.get().len(),
             Self::EvidenceRecordedV3(value) => {
                 usize::try_from(value.allocated_bytes().map_err(m4_domain_error)?)
                     .unwrap_or(usize::MAX)
@@ -3642,10 +3694,25 @@ impl PersistedPayload {
         )
     }
 
+    fn is_m6_v5(&self) -> bool {
+        matches!(
+            self,
+            Self::IncrementalSourceBoundV5(_)
+                | Self::ProgramMappingRecordedV5(_)
+                | Self::ChangeMorphismSealedV5(_)
+                | Self::ObligationCorrespondenceEntryRecordedV5(_)
+                | Self::ObligationCorrespondenceSealedV5(_)
+                | Self::HistoricalRecordAssessedV5(_)
+                | Self::GluingFreshnessRecordedV5(_)
+                | Self::StalenessAssessmentSealedV5(_)
+        )
+    }
+
     fn allowed_in(&self, version: EventContractVersion) -> bool {
         match version {
             EventContractVersion::V1 => {
                 !self.is_v2_only()
+                    && !self.is_m6_v5()
                     && !matches!(
                         self,
                         Self::RunGenesisManifestV3(_)
@@ -3660,20 +3727,55 @@ impl PersistedPayload {
                             | Self::GluingBundleRecordedV4(_)
                     )
             }
-            EventContractVersion::V2 => !matches!(
-                self,
-                Self::RunGenesisManifestV3(_)
-                    | Self::ArtifactRegisteredV3(_)
-                    | Self::EvidenceRecordedV3(_)
-                    | Self::EvidenceBoundV3(_)
-                    | Self::VerificationRecordedV3(_)
-                    | Self::DecisionRecordedV3(_)
-                    | Self::FindingRecordedV3(_)
-                    | Self::RunGenesisManifestV4(_)
-                    | Self::ArtifactRegisteredV4(_)
-                    | Self::GluingBundleRecordedV4(_)
-            ),
-            EventContractVersion::V3 => !matches!(
+            EventContractVersion::V2 => {
+                !self.is_m6_v5()
+                    && !matches!(
+                        self,
+                        Self::RunGenesisManifestV3(_)
+                            | Self::ArtifactRegisteredV3(_)
+                            | Self::EvidenceRecordedV3(_)
+                            | Self::EvidenceBoundV3(_)
+                            | Self::VerificationRecordedV3(_)
+                            | Self::DecisionRecordedV3(_)
+                            | Self::FindingRecordedV3(_)
+                            | Self::RunGenesisManifestV4(_)
+                            | Self::ArtifactRegisteredV4(_)
+                            | Self::GluingBundleRecordedV4(_)
+                    )
+            }
+            EventContractVersion::V3 => {
+                !self.is_m6_v5()
+                    && !matches!(
+                        self,
+                        Self::ClaimProposed(_)
+                            | Self::EvidenceRecorded(_)
+                            | Self::EvidenceBound(_)
+                            | Self::VerificationRecorded(_)
+                            | Self::DecisionRecorded(_)
+                            | Self::FindingRecorded(_)
+                            | Self::RunGenesisManifest(_)
+                            | Self::ArtifactRegistered(_)
+                            | Self::RunGenesisManifestV4(_)
+                            | Self::ArtifactRegisteredV4(_)
+                            | Self::GluingBundleRecordedV4(_)
+                    )
+            }
+            EventContractVersion::V4 => {
+                !self.is_m6_v5()
+                    && !matches!(
+                        self,
+                        Self::ClaimProposed(_)
+                            | Self::EvidenceRecorded(_)
+                            | Self::EvidenceBound(_)
+                            | Self::VerificationRecorded(_)
+                            | Self::DecisionRecorded(_)
+                            | Self::FindingRecorded(_)
+                            | Self::RunGenesisManifest(_)
+                            | Self::ArtifactRegistered(_)
+                            | Self::RunGenesisManifestV3(_) // v4-only payloads are admitted only by v4.
+                    )
+            }
+            EventContractVersion::V5 => !matches!(
                 self,
                 Self::ClaimProposed(_)
                     | Self::EvidenceRecorded(_)
@@ -3683,21 +3785,7 @@ impl PersistedPayload {
                     | Self::FindingRecorded(_)
                     | Self::RunGenesisManifest(_)
                     | Self::ArtifactRegistered(_)
-                    | Self::RunGenesisManifestV4(_)
-                    | Self::ArtifactRegisteredV4(_)
-                    | Self::GluingBundleRecordedV4(_)
-            ),
-            EventContractVersion::V4 | EventContractVersion::V5 => !matches!(
-                self,
-                Self::ClaimProposed(_)
-                    | Self::EvidenceRecorded(_)
-                    | Self::EvidenceBound(_)
-                    | Self::VerificationRecorded(_)
-                    | Self::DecisionRecorded(_)
-                    | Self::FindingRecorded(_)
-                    | Self::RunGenesisManifest(_)
-                    | Self::ArtifactRegistered(_)
-                    | Self::RunGenesisManifestV3(_) // v4-only payloads are admitted only by v4.
+                    | Self::RunGenesisManifestV3(_)
             ),
         }
     }
@@ -3718,6 +3806,14 @@ impl PersistedPayload {
                 | Self::RunGenesisManifestV4(_)
                 | Self::ArtifactRegisteredV4(_)
                 | Self::GluingBundleRecordedV4(_)
+                | Self::IncrementalSourceBoundV5(_)
+                | Self::ProgramMappingRecordedV5(_)
+                | Self::ChangeMorphismSealedV5(_)
+                | Self::ObligationCorrespondenceEntryRecordedV5(_)
+                | Self::ObligationCorrespondenceSealedV5(_)
+                | Self::HistoricalRecordAssessedV5(_)
+                | Self::GluingFreshnessRecordedV5(_)
+                | Self::StalenessAssessmentSealedV5(_)
         )
     }
 
@@ -3786,6 +3882,82 @@ impl PersistedPayload {
                 crate::GluingBundleV4::preflight_json_bytes(bundle.get().as_bytes())
                     .map_err(|error| DomainError::Validation(error.to_string()))
             }
+            Self::IncrementalSourceBoundV5(value) => validate_m6_raw_payload_v5(
+                value,
+                "reviewgraphen.incremental_source_closure.v5",
+                "incremental-source-closure-v5",
+            )
+            .and_then(|()| {
+                crate::IncrementalSourceClosureV5::validate_event_wire(value.get().as_bytes())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }),
+            Self::ProgramMappingRecordedV5(value) => {
+                validate_m6_raw_payload_v5(
+                    value,
+                    "reviewgraphen.program_mapping.v5",
+                    "program-mapping-v5",
+                )?;
+                crate::ProgramMappingV5::from_json_bytes(value.get().as_bytes())
+                    .map(|_| ())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }
+            Self::ChangeMorphismSealedV5(value) => validate_m6_raw_payload_v5(
+                value,
+                "reviewgraphen.change_morphism.v5",
+                "change-morphism-v5",
+            )
+            .and_then(|()| {
+                crate::ChangeMorphismV5::validate_event_wire(value.get().as_bytes())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }),
+            Self::ObligationCorrespondenceEntryRecordedV5(value) => {
+                validate_m6_raw_payload_v5(
+                    value,
+                    "reviewgraphen.obligation_correspondence_entry.v5",
+                    "obligation-correspondence-entry-v5",
+                )?;
+                crate::ObligationCorrespondenceEntryV5::from_json_bytes(value.get().as_bytes())
+                    .map(|_| ())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }
+            Self::ObligationCorrespondenceSealedV5(value) => validate_m6_raw_payload_v5(
+                value,
+                "reviewgraphen.obligation_correspondence.v5",
+                "obligation-correspondence-v5",
+            )
+            .and_then(|()| {
+                crate::ObligationCorrespondenceV5::validate_event_wire(value.get().as_bytes())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }),
+            Self::HistoricalRecordAssessedV5(value) => {
+                validate_m6_raw_payload_v5(
+                    value,
+                    "reviewgraphen.historical_record_assessment.v5",
+                    "historical-record-assessment-v5",
+                )?;
+                crate::HistoricalRecordAssessmentV5::from_json_bytes(value.get().as_bytes())
+                    .map(|_| ())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }
+            Self::GluingFreshnessRecordedV5(value) => {
+                validate_m6_raw_payload_v5(
+                    value,
+                    "reviewgraphen.gluing_freshness.v5",
+                    "gluing-freshness-v5",
+                )?;
+                crate::GluingFreshnessV5::from_json_bytes(value.get().as_bytes())
+                    .map(|_| ())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }
+            Self::StalenessAssessmentSealedV5(value) => validate_m6_raw_payload_v5(
+                value,
+                "reviewgraphen.staleness_assessment.v5",
+                "staleness-assessment-v5",
+            )
+            .and_then(|()| {
+                crate::StalenessAssessmentV5::validate_event_wire(value.get().as_bytes())
+                    .map_err(|error| DomainError::Validation(error.to_string()))
+            }),
             Self::EvidenceRecordedV3(evidence) => evidence
                 .canonical_bytes()
                 .map(|_| ())
@@ -8538,7 +8710,15 @@ fn borrowed_projection_payload_ref_v4<'a>(
         | PersistedPayload::FindingRecorded(_)
         | PersistedPayload::RunGenesisManifest(_)
         | PersistedPayload::RunGenesisManifestV3(_)
-        | PersistedPayload::ArtifactRegistered(_) => {
+        | PersistedPayload::ArtifactRegistered(_)
+        | PersistedPayload::IncrementalSourceBoundV5(_)
+        | PersistedPayload::ProgramMappingRecordedV5(_)
+        | PersistedPayload::ChangeMorphismSealedV5(_)
+        | PersistedPayload::ObligationCorrespondenceEntryRecordedV5(_)
+        | PersistedPayload::ObligationCorrespondenceSealedV5(_)
+        | PersistedPayload::HistoricalRecordAssessedV5(_)
+        | PersistedPayload::GluingFreshnessRecordedV5(_)
+        | PersistedPayload::StalenessAssessmentSealedV5(_) => {
             return Err(DomainError::EventSequence(
                 "event-v4 projection encountered a payload outside its closed contract".to_owned(),
             ));
@@ -8593,7 +8773,15 @@ fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
         }
         PersistedPayload::RunGenesisManifestV4(_)
         | PersistedPayload::ArtifactRegisteredV4(_)
-        | PersistedPayload::GluingBundleRecordedV4(_) => {
+        | PersistedPayload::GluingBundleRecordedV4(_)
+        | PersistedPayload::IncrementalSourceBoundV5(_)
+        | PersistedPayload::ProgramMappingRecordedV5(_)
+        | PersistedPayload::ChangeMorphismSealedV5(_)
+        | PersistedPayload::ObligationCorrespondenceEntryRecordedV5(_)
+        | PersistedPayload::ObligationCorrespondenceSealedV5(_)
+        | PersistedPayload::HistoricalRecordAssessedV5(_)
+        | PersistedPayload::GluingFreshnessRecordedV5(_)
+        | PersistedPayload::StalenessAssessmentSealedV5(_) => {
             unreachable!("v4 payloads are not exposed through the legacy EventLog decoder")
         }
     }
@@ -9238,6 +9426,48 @@ fn decode_payload(version: EventContractVersion, input: &str) -> Result<Persiste
                     raw.data.get().as_bytes().to_vec(),
                 )?)
             }
+            "incremental_source_bound_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::IncrementalSourceBoundV5(raw_payload(
+                    raw.data.get().as_bytes().to_vec(),
+                )?)
+            }
+            "program_mapping_recorded_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::ProgramMappingRecordedV5(raw_payload(
+                    raw.data.get().as_bytes().to_vec(),
+                )?)
+            }
+            "change_morphism_sealed_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::ChangeMorphismSealedV5(raw_payload(
+                    raw.data.get().as_bytes().to_vec(),
+                )?)
+            }
+            "obligation_correspondence_entry_recorded_v5"
+                if version == EventContractVersion::V5 =>
+            {
+                PersistedPayload::ObligationCorrespondenceEntryRecordedV5(raw_payload(
+                    raw.data.get().as_bytes().to_vec(),
+                )?)
+            }
+            "obligation_correspondence_sealed_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::ObligationCorrespondenceSealedV5(raw_payload(
+                    raw.data.get().as_bytes().to_vec(),
+                )?)
+            }
+            "historical_record_assessed_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::HistoricalRecordAssessedV5(raw_payload(
+                    raw.data.get().as_bytes().to_vec(),
+                )?)
+            }
+            "gluing_freshness_recorded_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::GluingFreshnessRecordedV5(raw_payload(
+                    raw.data.get().as_bytes().to_vec(),
+                )?)
+            }
+            "staleness_assessment_sealed_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::StalenessAssessmentSealedV5(raw_payload(
+                    raw.data.get().as_bytes().to_vec(),
+                )?)
+            }
             "evidence_recorded_v3" => PersistedPayload::EvidenceRecordedV3(
                 EvidenceV3::from_json_bytes(raw.data.get().as_bytes()).map_err(m4_domain_error)?,
             ),
@@ -9336,6 +9566,9 @@ fn decode_canonical_payload(
         return Err(DomainError::EventSequence(
             "persisted payload is not admitted by this event contract version".to_owned(),
         ));
+    }
+    if payload.is_m6_v5() {
+        payload.validate_shape()?;
     }
     let canonical_raw = input.as_bytes();
     let canonical_typed = payload_canonical_bytes(&payload)?;
@@ -16376,21 +16609,88 @@ impl EventLogV4 {
                 .values()
                 .any(|assessment| assessment.current_finding_id() == Some(value.id()));
         }
-        for value in self.v4_gluing_descriptors.values() {
-            push_record!(
+        let mut gluing_descriptors = self.v4_gluing_descriptors.values();
+        match (
+            gluing_descriptors.next(),
+            gluing_descriptors.next(),
+            gluing_descriptors.next(),
+        ) {
+            (None, None, None) => {}
+            (Some(value), None, None) => push_record!(
                 GluingInputDescriptor,
                 value.id(),
                 value.complete_body_hash()?,
                 value
-            );
+            ),
+            (Some(left), Some(right), None) if left.id() < right.id() => {
+                push_record!(
+                    GluingInputDescriptor,
+                    left.id(),
+                    left.complete_body_hash()?,
+                    left
+                );
+                push_record!(
+                    GluingInputDescriptor,
+                    right.id(),
+                    right.complete_body_hash()?,
+                    right
+                );
+            }
+            (Some(left), Some(right), None) => {
+                push_record!(
+                    GluingInputDescriptor,
+                    right.id(),
+                    right.complete_body_hash()?,
+                    right
+                );
+                push_record!(
+                    GluingInputDescriptor,
+                    left.id(),
+                    left.complete_body_hash()?,
+                    left
+                );
+            }
+            _ => {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "M5 gluing descriptor count exceeds fixed profile",
+                ));
+            }
         }
         let value = bundle.cover();
         push_record!(ContextCover, value.id(), value.complete_body_hash()?, value);
-        for value in bundle.sections() {
-            push_record!(Section, value.id(), value.complete_body_hash()?, value);
+        match bundle.sections() {
+            [] => {}
+            [value] => push_record!(Section, value.id(), value.complete_body_hash()?, value),
+            [left, right] if left.id() < right.id() => {
+                push_record!(Section, left.id(), left.complete_body_hash()?, left);
+                push_record!(Section, right.id(), right.complete_body_hash()?, right);
+            }
+            [left, right] => {
+                push_record!(Section, right.id(), right.complete_body_hash()?, right);
+                push_record!(Section, left.id(), left.complete_body_hash()?, left);
+            }
+            _ => {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "M5 section count exceeds fixed profile",
+                ));
+            }
         }
-        for value in bundle.restrictions() {
-            push_record!(Restriction, value.id(), value.complete_body_hash()?, value);
+        match bundle.restrictions() {
+            [] => {}
+            [value] => push_record!(Restriction, value.id(), value.complete_body_hash()?, value),
+            [left, right] if left.id() < right.id() => {
+                push_record!(Restriction, left.id(), left.complete_body_hash()?, left);
+                push_record!(Restriction, right.id(), right.complete_body_hash()?, right);
+            }
+            [left, right] => {
+                push_record!(Restriction, right.id(), right.complete_body_hash()?, right);
+                push_record!(Restriction, left.id(), left.complete_body_hash()?, left);
+            }
+            _ => {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "M5 restriction count exceeds fixed profile",
+                ));
+            }
         }
         let value = bundle.attempt();
         push_record!(
@@ -20671,18 +20971,61 @@ impl<'a, 'state> TargetActualRecordProjectionV5<'a, 'state> {
             store!(Finding, value.id(), value);
         }
         if let Some(descriptors) = self.terminal.v4_descriptors() {
-            for value in descriptors.values() {
-                store!(GluingInputDescriptor, value.id(), value);
+            let mut values = descriptors.values();
+            match (values.next(), values.next(), values.next()) {
+                (None, None, None) => {}
+                (Some(value), None, None) => store!(GluingInputDescriptor, value.id(), value),
+                (Some(left), Some(right), None) if left.id() < right.id() => {
+                    store!(GluingInputDescriptor, left.id(), left);
+                    store!(GluingInputDescriptor, right.id(), right);
+                }
+                (Some(left), Some(right), None) => {
+                    store!(GluingInputDescriptor, right.id(), right);
+                    store!(GluingInputDescriptor, left.id(), left);
+                }
+                _ => {
+                    return Err(DomainError::HistoricalPrefixMismatch(
+                        "M5 gluing descriptor count exceeds fixed profile",
+                    ));
+                }
             }
         }
         if let Some(bundle) = self.terminal.bundle() {
             let value = bundle.cover();
             store!(ContextCover, value.id(), value);
-            for value in bundle.sections() {
-                store!(Section, value.id(), value);
+            match bundle.sections() {
+                [] => {}
+                [value] => store!(Section, value.id(), value),
+                [left, right] if left.id() < right.id() => {
+                    store!(Section, left.id(), left);
+                    store!(Section, right.id(), right);
+                }
+                [left, right] => {
+                    store!(Section, right.id(), right);
+                    store!(Section, left.id(), left);
+                }
+                _ => {
+                    return Err(DomainError::HistoricalPrefixMismatch(
+                        "M5 section count exceeds fixed profile",
+                    ));
+                }
             }
-            for value in bundle.restrictions() {
-                store!(Restriction, value.id(), value);
+            match bundle.restrictions() {
+                [] => {}
+                [value] => store!(Restriction, value.id(), value),
+                [left, right] if left.id() < right.id() => {
+                    store!(Restriction, left.id(), left);
+                    store!(Restriction, right.id(), right);
+                }
+                [left, right] => {
+                    store!(Restriction, right.id(), right);
+                    store!(Restriction, left.id(), left);
+                }
+                _ => {
+                    return Err(DomainError::HistoricalPrefixMismatch(
+                        "M5 restriction count exceeds fixed profile",
+                    ));
+                }
             }
             let value = bundle.attempt();
             store!(GluingAttempt, value.id(), value);
@@ -22644,6 +22987,447 @@ impl PreIncrementalAuthorityReplayBasisV5 {
             ));
         }
         Ok(())
+    }
+}
+
+// The preservation slices land after the staleness seal.  Keeping their
+// replay-entry arrays present (and necessarily empty) in the normal basis
+// freezes the ADR 0023 digest shape without exposing a premature authority
+// constructor.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[allow(dead_code)] // Reserved by ADR 0023 for the preservation slice after staleness.
+enum PendingPreservationRegistrationReplayEntryV5 {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[allow(dead_code)] // Reserved by ADR 0023 for the preservation slice after staleness.
+enum PendingPreservationReplayEntryV5 {}
+
+/// Normal source-bound V5 authority cursor.  It is non-serializable and can
+/// only be created from a roots-replayed pre-basis plus the durable closure.
+#[derive(Debug)]
+#[allow(dead_code)] // The next ADR 0023 slice consumes this crate-private cursor.
+pub(crate) struct AuthorityReplayBasisV5 {
+    schema: &'static str,
+    source_closure_id: StableId,
+    pre_incremental_basis_digest: ContentHash,
+    source_basis_digest: ContentHash,
+    target_run_id: StableId,
+    target_genesis_hash: ContentHash,
+    target_confirmed_tail_hash: ContentHash,
+    target_confirmed_event_count: u64,
+    target_next_sequence: u64,
+    policy_revision_hash: ContentHash,
+    inherited_m4_entries: Vec<AuthorityReplayEntryV3AtV5>,
+    gluing_input_entries: Vec<GluingInputReplayEntryV5>,
+    preservation_registration_entries: Vec<PendingPreservationRegistrationReplayEntryV5>,
+    preservation_verification_entries: Vec<PendingPreservationReplayEntryV5>,
+    basis_digest: ContentHash,
+}
+
+#[derive(Serialize)]
+#[allow(dead_code)]
+struct AuthorityReplayBasisDigestV5<'a> {
+    gluing_input_entries: &'a [GluingInputReplayEntryV5],
+    inherited_m4_entries: &'a [AuthorityReplayEntryV3AtV5],
+    policy_revision_hash: &'a ContentHash,
+    pre_incremental_basis_digest: &'a ContentHash,
+    preservation_registration_entries: &'a [PendingPreservationRegistrationReplayEntryV5],
+    preservation_verification_entries: &'a [PendingPreservationReplayEntryV5],
+    schema: &'a str,
+    source_basis_digest: &'a ContentHash,
+    source_closure_id: &'a StableId,
+    target_confirmed_event_count: u64,
+    target_confirmed_tail_hash: &'a ContentHash,
+    target_genesis_hash: &'a ContentHash,
+    target_next_sequence: u64,
+    target_run_id: &'a StableId,
+}
+
+#[allow(dead_code)]
+impl AuthorityReplayBasisV5 {
+    fn recompute_digest(&self) -> Result<ContentHash> {
+        crate::canonical::compact_json_sha256_streaming(&AuthorityReplayBasisDigestV5 {
+            gluing_input_entries: &self.gluing_input_entries,
+            inherited_m4_entries: &self.inherited_m4_entries,
+            policy_revision_hash: &self.policy_revision_hash,
+            pre_incremental_basis_digest: &self.pre_incremental_basis_digest,
+            preservation_registration_entries: &self.preservation_registration_entries,
+            preservation_verification_entries: &self.preservation_verification_entries,
+            schema: self.schema,
+            source_basis_digest: &self.source_basis_digest,
+            source_closure_id: &self.source_closure_id,
+            target_confirmed_event_count: self.target_confirmed_event_count,
+            target_confirmed_tail_hash: &self.target_confirmed_tail_hash,
+            target_genesis_hash: &self.target_genesis_hash,
+            target_next_sequence: self.target_next_sequence,
+            target_run_id: &self.target_run_id,
+        })
+    }
+
+    fn from_source_bound(
+        pre: &PreIncrementalAuthorityReplayBasisV5,
+        closure: &crate::IncrementalSourceClosureV5,
+        event: &EventEnvelope,
+    ) -> Result<Self> {
+        pre.validate_source_bound_position(closure, event)?;
+        let mut value = Self {
+            schema: "reviewgraphen.authority_replay_basis.v5",
+            source_closure_id: closure.id().clone(),
+            pre_incremental_basis_digest: pre.basis_digest.clone(),
+            source_basis_digest: closure.source_authority_replay_basis_digest().clone(),
+            target_run_id: pre.target_run_id.clone(),
+            target_genesis_hash: pre.target_genesis_hash.clone(),
+            target_confirmed_tail_hash: event.event_hash().clone(),
+            target_confirmed_event_count: event.sequence(),
+            target_next_sequence: event.sequence().checked_add(1).ok_or_else(|| {
+                DomainError::EventSequence("V5 normal basis sequence overflow".to_owned())
+            })?,
+            policy_revision_hash: pre.policy_revision_hash.clone(),
+            inherited_m4_entries: pre.inherited_m4_entries.clone(),
+            gluing_input_entries: pre.gluing_input_entries.clone(),
+            preservation_registration_entries: Vec::new(),
+            preservation_verification_entries: Vec::new(),
+            basis_digest: ContentHash::sha256(b"pending normal V5 basis"),
+        };
+        value.basis_digest = value.recompute_digest()?;
+        Ok(value)
+    }
+
+    fn validate_current_log(&self, log: &EventLogV5) -> Result<()> {
+        let count = u64::try_from(log.envelopes.len()).unwrap_or(u64::MAX);
+        if self.schema != "reviewgraphen.authority_replay_basis.v5"
+            || self.target_run_id != log.run_id
+            || self.target_genesis_hash != log.genesis_hash
+            || self.target_confirmed_tail_hash != *log.tail_hash()
+            || self.target_confirmed_event_count != count
+            || self.target_next_sequence != count.saturating_add(1)
+            || self.basis_digest != self.recompute_digest()?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        Ok(())
+    }
+
+    fn advance_authority_free(&mut self, log: &EventLogV5) -> Result<()> {
+        if self.target_run_id != log.run_id || self.target_genesis_hash != log.genesis_hash {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        self.target_confirmed_event_count = u64::try_from(log.envelopes.len()).unwrap_or(u64::MAX);
+        self.target_next_sequence = self
+            .target_confirmed_event_count
+            .checked_add(1)
+            .ok_or_else(|| DomainError::EventSequence("V5 basis sequence overflow".to_owned()))?;
+        self.target_confirmed_tail_hash = log.tail_hash().clone();
+        self.basis_digest = self.recompute_digest()?;
+        Ok(())
+    }
+
+    pub(crate) fn source_closure_id(&self) -> &StableId {
+        &self.source_closure_id
+    }
+
+    pub(crate) fn target_confirmed_tail_hash(&self) -> &ContentHash {
+        &self.target_confirmed_tail_hash
+    }
+
+    pub(crate) const fn target_confirmed_event_count(&self) -> u64 {
+        self.target_confirmed_event_count
+    }
+
+    pub(crate) fn basis_digest(&self) -> &ContentHash {
+        &self.basis_digest
+    }
+}
+
+impl PreIncrementalAuthorityReplayBasisV5 {
+    #[allow(dead_code)] // Used by the source-bound transition staged in this slice.
+    fn validate_source_bound_position(
+        &self,
+        closure: &crate::IncrementalSourceClosureV5,
+        event: &EventEnvelope,
+    ) -> Result<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            gluing_input_entries: &'a [GluingInputReplayEntryV5],
+            inherited_m4_entries: &'a [AuthorityReplayEntryV3AtV5],
+            policy_revision_hash: &'a ContentHash,
+            schema: &'a str,
+            target_confirmed_event_count: u64,
+            target_confirmed_tail_hash: &'a ContentHash,
+            target_genesis_hash: &'a ContentHash,
+            target_next_sequence: u64,
+            target_run_id: &'a StableId,
+        }
+        let digest = crate::canonical::compact_json_sha256_streaming(&Body {
+            gluing_input_entries: &self.gluing_input_entries,
+            inherited_m4_entries: &self.inherited_m4_entries,
+            policy_revision_hash: &self.policy_revision_hash,
+            schema: self.schema,
+            target_confirmed_event_count: self.target_confirmed_event_count,
+            target_confirmed_tail_hash: &self.target_confirmed_tail_hash,
+            target_genesis_hash: &self.target_genesis_hash,
+            target_next_sequence: self.target_next_sequence,
+            target_run_id: &self.target_run_id,
+        })?;
+        if self.schema != "reviewgraphen.pre_incremental_authority_replay_basis.v5"
+            || digest != self.basis_digest
+            || closure.target_run_id() != &self.target_run_id
+            || closure.target_genesis_hash() != &self.target_genesis_hash
+            || closure.target_predecessor_tail_hash() != &self.target_confirmed_tail_hash
+            || closure.target_predecessor_event_count() != self.target_confirmed_event_count
+            || closure.target_authority_policy_revision_hash() != &self.policy_revision_hash
+            || closure.target_pre_incremental_authority_replay_basis_digest() != &self.basis_digest
+            || event.run_id() != &self.target_run_id
+            || event.genesis_hash() != &self.target_genesis_hash
+            || event.sequence() != self.target_next_sequence
+            || event.previous_event_hash() != &self.target_confirmed_tail_hash
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Exact crash-recovery cursor for the four pre-review M6 classes.  Member
+/// indices name the first missing canonical member; seals are distinct states.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // Exposed to the following M6 orchestration slice.
+pub(crate) enum M6PersistenceRecoveryStageV5 {
+    PreSourceBound,
+    MappingMembers { next_index: usize },
+    MappingSealed,
+    CorrespondenceMembers { next_index: usize },
+    CorrespondenceSealed,
+    HistoricalMembers { next_index: usize },
+    GluingFreshnessMembers { next_index: usize },
+    StalenessSealed,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)] // Exposed to the following M6 orchestration slice.
+pub(crate) enum RecoveredM6PersistenceV5 {
+    PreIncremental,
+    Incremental {
+        stage: M6PersistenceRecoveryStageV5,
+        basis: Box<AuthorityReplayBasisV5>,
+    },
+}
+
+#[allow(dead_code)]
+struct ExpectedM6PersistenceV5 {
+    payloads: Vec<PersistedPayload>,
+    mapping_start: usize,
+    mapping_seal: usize,
+    correspondence_start: usize,
+    correspondence_seal: usize,
+    historical_start: usize,
+    gluing_start: usize,
+    staleness_seal: usize,
+}
+
+#[allow(dead_code)]
+fn m6_persisted_raw(value: &impl Serialize) -> Result<Box<RawValue>> {
+    raw_payload(canonical_json(value)?)
+}
+
+#[allow(dead_code)]
+impl ExpectedM6PersistenceV5 {
+    fn mapping_prefix(
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+    ) -> Result<Self> {
+        if mapping.morphism().source_closure_id() != closure.id()
+            || mapping
+                .mappings()
+                .windows(2)
+                .any(|pair| pair[0].id() >= pair[1].id())
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "M6 mapping phase is not the canonical phase for this closure",
+            ));
+        }
+        let mut payloads = vec![PersistedPayload::IncrementalSourceBoundV5(
+            m6_persisted_raw(closure)?,
+        )];
+        let mapping_start = payloads.len();
+        for value in mapping.mappings() {
+            payloads.push(PersistedPayload::ProgramMappingRecordedV5(
+                m6_persisted_raw(value)?,
+            ));
+        }
+        let mapping_seal = payloads.len();
+        payloads.push(PersistedPayload::ChangeMorphismSealedV5(m6_persisted_raw(
+            mapping.morphism(),
+        )?));
+        let end = payloads.len();
+        Ok(Self {
+            payloads,
+            mapping_start,
+            mapping_seal,
+            correspondence_start: end,
+            correspondence_seal: end,
+            historical_start: end,
+            gluing_start: end,
+            staleness_seal: end,
+        })
+    }
+
+    fn correspondence_prefix(
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+        correspondence: &crate::M6ObligationCorrespondencePhaseV5,
+    ) -> Result<Self> {
+        if correspondence.correspondence().morphism_id() != mapping.morphism().id()
+            || correspondence
+                .entries()
+                .windows(2)
+                .any(|pair| pair[0].id() >= pair[1].id())
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "M6 correspondence phase is not canonical for this morphism",
+            ));
+        }
+        let mut value = Self::mapping_prefix(closure, mapping)?;
+        value.correspondence_start = value.payloads.len();
+        for entry in correspondence.entries() {
+            value
+                .payloads
+                .push(PersistedPayload::ObligationCorrespondenceEntryRecordedV5(
+                    m6_persisted_raw(entry)?,
+                ));
+        }
+        value.correspondence_seal = value.payloads.len();
+        value
+            .payloads
+            .push(PersistedPayload::ObligationCorrespondenceSealedV5(
+                m6_persisted_raw(correspondence.correspondence())?,
+            ));
+        value.historical_start = value.payloads.len();
+        value.gluing_start = value.payloads.len();
+        value.staleness_seal = value.payloads.len();
+        Ok(value)
+    }
+
+    fn new(
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+        correspondence: &crate::M6ObligationCorrespondencePhaseV5,
+        staleness: &crate::M6StalenessPhaseV5,
+    ) -> Result<Self> {
+        if mapping
+            .mappings()
+            .windows(2)
+            .any(|pair| pair[0].id() >= pair[1].id())
+            || correspondence
+                .entries()
+                .windows(2)
+                .any(|pair| pair[0].id() >= pair[1].id())
+            || staleness.records().windows(2).any(|pair| {
+                (pair[0].source_record_kind(), pair[0].source_record_id())
+                    >= (pair[1].source_record_kind(), pair[1].source_record_id())
+            })
+            || staleness
+                .gluing_freshness()
+                .windows(2)
+                .any(|pair| pair[0].source_attempt_id() >= pair[1].source_attempt_id())
+        {
+            return Err(DomainError::EventSequence(
+                "M6 phase members must be in their closed canonical order".to_owned(),
+            ));
+        }
+        if mapping.morphism().source_closure_id() != closure.id()
+            || correspondence.correspondence().morphism_id() != mapping.morphism().id()
+            || staleness.assessment().source_closure_id() != closure.id()
+            || staleness.assessment().morphism_id() != mapping.morphism().id()
+            || staleness.assessment().correspondence_id() != correspondence.correspondence().id()
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "M6 persistence phases do not form one sealed source-bound topology",
+            ));
+        }
+        let mut payloads = Vec::new();
+        payloads.push(PersistedPayload::IncrementalSourceBoundV5(
+            m6_persisted_raw(closure)?,
+        ));
+        let mapping_start = payloads.len();
+        for value in mapping.mappings() {
+            payloads.push(PersistedPayload::ProgramMappingRecordedV5(
+                m6_persisted_raw(value)?,
+            ));
+        }
+        let mapping_seal = payloads.len();
+        payloads.push(PersistedPayload::ChangeMorphismSealedV5(m6_persisted_raw(
+            mapping.morphism(),
+        )?));
+        let correspondence_start = payloads.len();
+        for value in correspondence.entries() {
+            payloads.push(PersistedPayload::ObligationCorrespondenceEntryRecordedV5(
+                m6_persisted_raw(value)?,
+            ));
+        }
+        let correspondence_seal = payloads.len();
+        payloads.push(PersistedPayload::ObligationCorrespondenceSealedV5(
+            m6_persisted_raw(correspondence.correspondence())?,
+        ));
+        let historical_start = payloads.len();
+        for value in staleness.records() {
+            payloads.push(PersistedPayload::HistoricalRecordAssessedV5(
+                m6_persisted_raw(value)?,
+            ));
+        }
+        let gluing_start = payloads.len();
+        for value in staleness.gluing_freshness() {
+            payloads.push(PersistedPayload::GluingFreshnessRecordedV5(
+                m6_persisted_raw(value)?,
+            ));
+        }
+        let staleness_seal = payloads.len();
+        payloads.push(PersistedPayload::StalenessAssessmentSealedV5(
+            m6_persisted_raw(staleness.assessment())?,
+        ));
+        Ok(Self {
+            payloads,
+            mapping_start,
+            mapping_seal,
+            correspondence_start,
+            correspondence_seal,
+            historical_start,
+            gluing_start,
+            staleness_seal,
+        })
+    }
+
+    fn stage(&self, persisted: usize) -> M6PersistenceRecoveryStageV5 {
+        if persisted == 0 {
+            return M6PersistenceRecoveryStageV5::PreSourceBound;
+        }
+        if persisted <= self.mapping_seal {
+            return M6PersistenceRecoveryStageV5::MappingMembers {
+                next_index: persisted.saturating_sub(self.mapping_start),
+            };
+        }
+        if persisted == self.correspondence_start {
+            return M6PersistenceRecoveryStageV5::MappingSealed;
+        }
+        if persisted <= self.correspondence_seal {
+            return M6PersistenceRecoveryStageV5::CorrespondenceMembers {
+                next_index: persisted.saturating_sub(self.correspondence_start),
+            };
+        }
+        if persisted == self.historical_start {
+            return M6PersistenceRecoveryStageV5::CorrespondenceSealed;
+        }
+        if persisted <= self.gluing_start {
+            return M6PersistenceRecoveryStageV5::HistoricalMembers {
+                next_index: persisted.saturating_sub(self.historical_start),
+            };
+        }
+        if persisted <= self.staleness_seal {
+            return M6PersistenceRecoveryStageV5::GluingFreshnessMembers {
+                next_index: persisted.saturating_sub(self.gluing_start),
+            };
+        }
+        M6PersistenceRecoveryStageV5::StalenessSealed
     }
 }
 
@@ -25283,6 +26067,288 @@ impl EventLogV5 {
         self.envelopes.push(envelope);
         self.canonical_prefix_bytes = next_prefix_bytes;
         Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn m6_candidate_with_payloads(
+        &self,
+        payloads: &[PersistedPayload],
+        max_working_bytes: u64,
+    ) -> Result<(Self, EventReplayAccountingV5)> {
+        let mut envelopes = self.envelopes.clone();
+        envelopes
+            .try_reserve_exact(payloads.len())
+            .map_err(|_| DomainError::Incomplete {
+                operation: "V5 M6 atomic batch envelope reservation",
+                limit: payloads.len(),
+                observed: payloads.len(),
+            })?;
+        let mut predecessor = self.tail_hash().clone();
+        for payload in payloads {
+            let sequence = u64::try_from(envelopes.len())
+                .ok()
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| DomainError::EventSequence("V5 M6 sequence overflow".to_owned()))?;
+            let envelope = EventEnvelope::new(
+                EventContractVersion::V5,
+                self.run_id.clone(),
+                self.genesis_hash.clone(),
+                sequence,
+                payload.actor(),
+                sequence,
+                predecessor,
+                payload.clone(),
+            )?;
+            predecessor = envelope.event_hash().clone();
+            envelopes.push(envelope);
+        }
+        let mut limits = self.limits;
+        limits.max_working_bytes = max_working_bytes.min(self.limits.max_working_bytes);
+        Self::replay_confirmed_v5_prefix(
+            self.run_id.clone(),
+            self.canonical_genesis_bytes.clone(),
+            envelopes,
+            limits,
+        )
+    }
+
+    #[allow(dead_code)]
+    fn append_m6_payloads_atomically(
+        &mut self,
+        payloads: &[PersistedPayload],
+        max_working_bytes: u64,
+    ) -> Result<EventReplayAccountingV5> {
+        let (candidate, accounting) =
+            self.m6_candidate_with_payloads(payloads, max_working_bytes)?;
+        *self = candidate;
+        Ok(accounting)
+    }
+
+    #[allow(dead_code)]
+    fn validate_exact_m6_suffix(
+        &self,
+        closure: &crate::IncrementalSourceClosureV5,
+        expected: &[PersistedPayload],
+    ) -> Result<()> {
+        if closure.target_run_id() != &self.run_id
+            || closure.target_genesis_hash() != &self.genesis_hash
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "M6 closure does not bind this target V5 journal",
+            ));
+        }
+        let predecessor_count = usize::try_from(closure.target_predecessor_event_count())
+            .map_err(|_| DomainError::EventSequence("M6 predecessor count overflow".to_owned()))?;
+        let predecessor = self
+            .envelopes
+            .get(predecessor_count.checked_sub(1).ok_or_else(|| {
+                DomainError::EventSequence("M6 predecessor has no genesis".to_owned())
+            })?)
+            .ok_or_else(|| DomainError::EventSequence("M6 predecessor is absent".to_owned()))?;
+        if predecessor.event_hash() != closure.target_predecessor_tail_hash()
+            || self.envelopes.len() != predecessor_count.saturating_add(expected.len())
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "M6 durable suffix length or predecessor tail mismatch",
+            ));
+        }
+        for (envelope, expected_payload) in self.envelopes[predecessor_count..].iter().zip(expected)
+        {
+            let actual =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            if payload_canonical_bytes(&actual)? != payload_canonical_bytes(expected_payload)?
+                || envelope.actor() != expected_payload.actor()
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "M6 durable member body, kind, order, or actor differs",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Appends the source closure as one atomic class and upgrades the
+    /// consumed pre-basis to the normal source-bound authority cursor.
+    #[allow(dead_code)]
+    pub(crate) fn append_incremental_source_closure_v5(
+        &mut self,
+        closure: &crate::IncrementalSourceClosureV5,
+        pre_basis: PreIncrementalAuthorityReplayBasisV5,
+    ) -> Result<AuthorityReplayBasisV5> {
+        self.validate_exact_m6_suffix(closure, &[])?;
+        if pre_basis.target_confirmed_event_count
+            != u64::try_from(self.envelopes.len()).unwrap_or(u64::MAX)
+            || pre_basis.target_confirmed_tail_hash != *self.tail_hash()
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let payload = PersistedPayload::IncrementalSourceBoundV5(m6_persisted_raw(closure)?);
+        let expected_sequence = pre_basis.target_next_sequence;
+        let (candidate, _) = self.m6_candidate_with_payloads(
+            std::slice::from_ref(&payload),
+            self.limits.max_working_bytes,
+        )?;
+        let event = candidate
+            .envelopes
+            .last()
+            .ok_or_else(|| DomainError::EventSequence("source-bound event is absent".to_owned()))?;
+        if event.sequence() != expected_sequence {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let basis = AuthorityReplayBasisV5::from_source_bound(&pre_basis, closure, event)?;
+        *self = candidate;
+        Ok(basis)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn append_program_mapping_phase_v5(
+        &mut self,
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: crate::M6MappingPhaseV5,
+        basis: &mut AuthorityReplayBasisV5,
+    ) -> Result<()> {
+        basis.validate_current_log(self)?;
+        let expected = ExpectedM6PersistenceV5::mapping_prefix(closure, &mapping)?;
+        self.validate_exact_m6_suffix(closure, &expected.payloads[..1])?;
+        self.append_m6_payloads_atomically(&expected.payloads[1..], self.limits.max_working_bytes)?;
+        basis.advance_authority_free(self)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn append_obligation_correspondence_phase_v5(
+        &mut self,
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+        correspondence: crate::M6ObligationCorrespondencePhaseV5,
+        basis: &mut AuthorityReplayBasisV5,
+    ) -> Result<()> {
+        basis.validate_current_log(self)?;
+        let expected =
+            ExpectedM6PersistenceV5::correspondence_prefix(closure, mapping, &correspondence)?;
+        self.validate_exact_m6_suffix(
+            closure,
+            &expected.payloads[..expected.correspondence_start],
+        )?;
+        self.append_m6_payloads_atomically(
+            &expected.payloads[expected.correspondence_start..],
+            self.limits.max_working_bytes,
+        )?;
+        basis.advance_authority_free(self)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn append_staleness_phase_v5(
+        &mut self,
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+        correspondence: &crate::M6ObligationCorrespondencePhaseV5,
+        staleness: crate::M6StalenessPhaseV5,
+        basis: &mut AuthorityReplayBasisV5,
+    ) -> Result<()> {
+        self.append_staleness_phase_v5_with_limit(
+            closure,
+            mapping,
+            correspondence,
+            &staleness,
+            basis,
+            self.limits.max_working_bytes,
+        )
+    }
+
+    #[allow(dead_code)]
+    fn append_staleness_phase_v5_with_limit(
+        &mut self,
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+        correspondence: &crate::M6ObligationCorrespondencePhaseV5,
+        staleness: &crate::M6StalenessPhaseV5,
+        basis: &mut AuthorityReplayBasisV5,
+        max_working_bytes: u64,
+    ) -> Result<()> {
+        basis.validate_current_log(self)?;
+        let expected = ExpectedM6PersistenceV5::new(closure, mapping, correspondence, staleness)?;
+        self.validate_exact_m6_suffix(closure, &expected.payloads[..expected.historical_start])?;
+        self.append_m6_payloads_atomically(
+            &expected.payloads[expected.historical_start..],
+            max_working_bytes,
+        )?;
+        basis.advance_authority_free(self)
+    }
+
+    #[cfg(test)]
+    fn append_staleness_phase_v5_with_exact_limit_for_test(
+        &mut self,
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+        correspondence: &crate::M6ObligationCorrespondencePhaseV5,
+        staleness: &crate::M6StalenessPhaseV5,
+        basis: &mut AuthorityReplayBasisV5,
+        delta_from_exact: i64,
+    ) -> Result<()> {
+        basis.validate_current_log(self)?;
+        let expected = ExpectedM6PersistenceV5::new(closure, mapping, correspondence, staleness)?;
+        self.validate_exact_m6_suffix(closure, &expected.payloads[..expected.historical_start])?;
+        let (_, accounting) = self.m6_candidate_with_payloads(
+            &expected.payloads[expected.historical_start..],
+            self.limits.max_working_bytes,
+        )?;
+        let exact = accounting.working_bytes;
+        let limit = if delta_from_exact < 0 {
+            exact.saturating_sub(delta_from_exact.unsigned_abs())
+        } else {
+            exact.saturating_add(delta_from_exact as u64)
+        };
+        self.append_staleness_phase_v5_with_limit(
+            closure,
+            mapping,
+            correspondence,
+            staleness,
+            basis,
+            limit,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn recover_m6_persistence_v5(
+        &self,
+        pre_basis: &PreIncrementalAuthorityReplayBasisV5,
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+        correspondence: &crate::M6ObligationCorrespondencePhaseV5,
+        staleness: &crate::M6StalenessPhaseV5,
+    ) -> Result<RecoveredM6PersistenceV5> {
+        let expected = ExpectedM6PersistenceV5::new(closure, mapping, correspondence, staleness)?;
+        let predecessor_count = usize::try_from(closure.target_predecessor_event_count())
+            .map_err(|_| DomainError::EventSequence("M6 predecessor count overflow".to_owned()))?;
+        if self.envelopes.len() < predecessor_count {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "M6 recovery target is shorter than the pinned predecessor",
+            ));
+        }
+        let persisted = self.envelopes.len() - predecessor_count;
+        if persisted > expected.payloads.len() {
+            return Err(DomainError::EventSequence(
+                "payload follows the staleness assessment seal".to_owned(),
+            ));
+        }
+        self.validate_exact_m6_suffix(closure, &expected.payloads[..persisted])?;
+        if persisted == 0 {
+            if pre_basis.target_confirmed_tail_hash != *self.tail_hash()
+                || pre_basis.target_confirmed_event_count
+                    != u64::try_from(self.envelopes.len()).unwrap_or(u64::MAX)
+            {
+                return Err(DomainError::AuthorityReplayBasisMismatch);
+            }
+            return Ok(RecoveredM6PersistenceV5::PreIncremental);
+        }
+        let source_bound = &self.envelopes[predecessor_count];
+        let mut basis =
+            AuthorityReplayBasisV5::from_source_bound(pre_basis, closure, source_bound)?;
+        basis.advance_authority_free(self)?;
+        Ok(RecoveredM6PersistenceV5::Incremental {
+            stage: expected.stage(persisted),
+            basis: Box::new(basis),
+        })
     }
 
     #[must_use]
@@ -33406,7 +34472,15 @@ fn apply(
         | PersistedPayload::EvidenceBoundV3(_)
         | PersistedPayload::VerificationRecordedV3(_)
         | PersistedPayload::DecisionRecordedV3(_)
-        | PersistedPayload::FindingRecordedV3(_) => Err(DomainError::Validation(
+        | PersistedPayload::FindingRecordedV3(_)
+        | PersistedPayload::IncrementalSourceBoundV5(_)
+        | PersistedPayload::ProgramMappingRecordedV5(_)
+        | PersistedPayload::ChangeMorphismSealedV5(_)
+        | PersistedPayload::ObligationCorrespondenceEntryRecordedV5(_)
+        | PersistedPayload::ObligationCorrespondenceSealedV5(_)
+        | PersistedPayload::HistoricalRecordAssessedV5(_)
+        | PersistedPayload::GluingFreshnessRecordedV5(_)
+        | PersistedPayload::StalenessAssessmentSealedV5(_) => Err(DomainError::Validation(
             "event-v3 state requires the versioned aggregate foundation".to_owned(),
         )),
     }
@@ -33521,6 +34595,17 @@ impl CompleteM5V4Fixture {
         run_id: StableId,
     ) -> Result<Self> {
         tests::complete_m5_v4_fixture_from_program_and_sources(program, sources, run_id)
+    }
+
+    /// The compatible M5 branch shares the exact fixture construction and
+    /// replay admission path, changing only the caller-selected pair of
+    /// double-submit assignments.
+    pub(crate) fn successful_from_program_and_sources(
+        program: ProgramSpace,
+        sources: BTreeMap<StableId, Vec<u8>>,
+        run_id: StableId,
+    ) -> Result<Self> {
+        tests::successful_m5_v4_fixture_from_program_and_sources(program, sources, run_id)
     }
 
     pub(crate) fn log(&self) -> &EventLogV4 {
@@ -33763,6 +34848,81 @@ impl NoM5V5Fixture {
             .materialize_inventory_v5()
             .map_err(crate::m6::M6Error::from)?;
         callback(&structural.projection(), &inventory)
+    }
+
+    pub(crate) fn with_terminal_persistence<R>(
+        &self,
+        callback: impl for<'a> FnOnce(
+            EventLogV5,
+            PreIncrementalAuthorityReplayBasisV5,
+        ) -> crate::m6::M6Result<R>,
+    ) -> crate::m6::M6Result<R> {
+        self.with_terminal(|_, _| {
+            struct Resolver<'a>(&'a BTreeMap<StableId, Vec<u8>>);
+            impl AuthorityArtifactResolverV5 for Resolver<'_> {
+                fn read_exact(&self, hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                    let bytes = self
+                        .0
+                        .values()
+                        .find(|bytes| ContentHash::sha256(bytes) == *hash)
+                        .ok_or_else(|| {
+                            DomainError::Validation(
+                                "M6 target fixture CAS object is absent".to_owned(),
+                            )
+                        })?;
+                    if bytes.len() != destination.len() {
+                        return Err(DomainError::Validation(
+                            "M6 target fixture CAS object size differs".to_owned(),
+                        ));
+                    }
+                    destination.copy_from_slice(bytes);
+                    Ok(())
+                }
+            }
+
+            let (log, _) = EventLogV5::replay_confirmed_v5_prefix(
+                self.log.run_id.clone(),
+                self.log.canonical_genesis_bytes.clone(),
+                self.log.envelopes.clone(),
+                self.log.limits,
+            )?;
+            let structural = log.replay_pre_incremental_structural_prefix_for_store(
+                V5StructuralPrefixCoordinates::new(
+                    log.run_id(),
+                    log.genesis_hash(),
+                    log.canonical_prefix_bytes_for_store(),
+                    u64::try_from(log.envelopes.len()).unwrap_or(u64::MAX),
+                    log.tail_hash(),
+                ),
+            )?;
+            let checkpoint = EventLogV5::certify_plan_authority_checkpoint_v5_with_limits(
+                &structural,
+                &Resolver(&self.sources),
+                &self.roots,
+                log.limits.max_retained_bytes,
+                log.limits.max_working_bytes,
+            )?;
+            let d2 = EventLogV5::replay_certified_d2_authority_prefix_v5(
+                &checkpoint,
+                &Resolver(&self.sources),
+                &self.roots,
+            )?;
+            let terminal = EventLogV5::replay_ordered_m4_authority_prefix_v5(
+                d2,
+                &Resolver(&self.sources),
+                &self.roots,
+            )?;
+            let selected = EventLogV5::replay_terminal_pre_incremental_authority_v5(
+                &terminal,
+                &Resolver(&self.sources),
+                &self.roots,
+            )?;
+            let basis = match selected.inner {
+                ReplayedV5TerminalPredecessorInnerV5::WithoutM5 { basis, .. }
+                | ReplayedV5TerminalPredecessorInnerV5::WithM5 { basis, .. } => basis,
+            };
+            callback(log, basis)
+        })
     }
 }
 
@@ -40087,6 +41247,21 @@ mod tests {
         complete_m5_v4_fixture_from_d2(d2_v3_m4_m5_log_from_program(program, sources, run_id)?)
     }
 
+    pub(crate) fn successful_m5_v4_fixture_from_program_and_sources(
+        program: ProgramSpace,
+        sources: BTreeMap<StableId, Vec<u8>>,
+        run_id: StableId,
+    ) -> Result<CompleteM5V4Fixture> {
+        complete_m5_v4_fixture_from_d2_with_assignments(
+            d2_v3_m4_m5_log_from_program(program, sources, run_id)?,
+            M5DoubleSubmitAssignmentsV4::new(
+                crate::AssignmentValueV4::Satisfied,
+                crate::AssignmentValueV4::Satisfied,
+            ),
+            false,
+        )
+    }
+
     #[allow(clippy::type_complexity)]
     fn complete_m5_v4_fixture_from_d2(
         d2: (
@@ -40097,6 +41272,29 @@ mod tests {
             ReviewContextEnvelope,
             BTreeMap<StableId, Vec<u8>>,
         ),
+    ) -> Result<CompleteM5V4Fixture> {
+        complete_m5_v4_fixture_from_d2_with_assignments(
+            d2,
+            M5DoubleSubmitAssignmentsV4::new(
+                crate::AssignmentValueV4::Required,
+                crate::AssignmentValueV4::Satisfied,
+            ),
+            true,
+        )
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn complete_m5_v4_fixture_from_d2_with_assignments(
+        d2: (
+            EventLog,
+            ReviewAggregate,
+            ReviewPlan,
+            StableId,
+            ReviewContextEnvelope,
+            BTreeMap<StableId, Vec<u8>>,
+        ),
+        assignments: M5DoubleSubmitAssignmentsV4,
+        require_cross_context_rejection: bool,
     ) -> Result<CompleteM5V4Fixture> {
         let (mut v3, initial, plan, obligation_id, context, sources) = d2;
         assert_eq!(
@@ -40389,7 +41587,7 @@ mod tests {
             aggregate,
             plan.id(),
             crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
-            crate::AssignmentValueV4::Required,
+            assignments.payment,
             payment_qualification_source_ids.clone(),
             v4_policy.clone(),
         );
@@ -40398,7 +41596,7 @@ mod tests {
             aggregate,
             plan.id(),
             crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
-            crate::AssignmentValueV4::Satisfied,
+            assignments.ui_event,
             BTreeSet::new(),
             v4_policy.clone(),
         );
@@ -40407,7 +41605,7 @@ mod tests {
             aggregate,
             plan.id(),
             crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
-            crate::AssignmentValueV4::Required,
+            assignments.payment,
             payment_qualification_source_ids.clone(),
             v4_policy.clone(),
         );
@@ -40416,7 +41614,7 @@ mod tests {
             aggregate,
             plan.id(),
             crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
-            crate::AssignmentValueV4::Satisfied,
+            assignments.ui_event,
             BTreeSet::new(),
             v4_policy.clone(),
         );
@@ -40556,10 +41754,6 @@ mod tests {
             max_events: 100,
             max_canonical_bytes: 16_777_216,
         };
-        let assignments = M5DoubleSubmitAssignmentsV4::new(
-            crate::AssignmentValueV4::Required,
-            crate::AssignmentValueV4::Satisfied,
-        );
         let exact_event_count = u64::try_from(base_envelopes.len()).unwrap();
         let exact_canonical_bytes = base_envelopes
             .iter()
@@ -40888,8 +42082,8 @@ mod tests {
                 inherited_v4_roots(Vec::new()),
                 limits,
                 M5DoubleSubmitAssignmentsV4::new(
-                    crate::AssignmentValueV4::Satisfied,
-                    crate::AssignmentValueV4::Satisfied,
+                    crate::AssignmentValueV4::Unknown,
+                    crate::AssignmentValueV4::Unknown,
                 ),
             )
             .is_err()
@@ -42283,7 +43477,11 @@ mod tests {
                     .collect::<Vec<_>>()
             );
         }
-        assert_eq!(bundle_receipt.result(), crate::GluingResultV4::Unknown);
+        assert_eq!(
+            bundle_receipt.result(),
+            projected_bundle.attempt().result(),
+            "the replay receipt and opaque durable bundle must agree on the M5 outcome"
+        );
         assert_eq!(
             complete_basis.inherited_m4_entry_count(),
             authority_entries_before_bundle
@@ -42328,8 +43526,16 @@ mod tests {
         assert_eq!(completed.attempt_id(), bundle_receipt.attempt_id());
         assert_eq!(completed.cover_id(), bundle_receipt.cover_id());
         assert_eq!(completed.result(), bundle_receipt.result());
-        assert!(completed.obstruction_id().is_some());
-        assert!(!completed.obstruction_source_ids().is_empty());
+        assert_eq!(
+            completed.obstruction_id().is_some(),
+            projected_bundle.obstruction().is_some(),
+            "completed profile must preserve the opaque bundle obstruction branch"
+        );
+        assert_eq!(
+            completed.obstruction_source_ids().is_empty(),
+            completed.obstruction_id().is_none(),
+            "only an obstruction branch carries obstruction source IDs"
+        );
         assert_eq!(
             completed.confirmed_tail_hash(),
             bundle_receipt.confirmed_tail_hash()
@@ -42552,17 +43758,18 @@ mod tests {
             v4_registration_envelope(&bootstrap, &payment_event, cross_context);
         let mut cross_context_envelopes = base_envelopes.clone();
         cross_context_envelopes.extend([payment_event.clone(), cross_context_event]);
-        assert!(
-            EventLogV4::replay_confirmed_v4_prefix(
-                bootstrap.run_id().clone(),
-                bootstrap.canonical_genesis_bytes(),
-                &cross_context_envelopes,
-                &resolver,
-                &roots,
-                limits,
-            )
-            .is_err(),
-            "a payment claim trace must not qualify the sibling UI context"
+        let cross_context_replayed = EventLogV4::replay_confirmed_v4_prefix(
+            bootstrap.run_id().clone(),
+            bootstrap.canonical_genesis_bytes(),
+            &cross_context_envelopes,
+            &resolver,
+            &roots,
+            limits,
+        );
+        assert_eq!(
+            cross_context_replayed.is_err(),
+            require_cross_context_rejection,
+            "cross-context admission must match this fixture's declared context topology"
         );
 
         let canonical_payment = resolver.objects[payment.cas_hash()].clone();
@@ -50851,5 +52058,350 @@ mod tests {
             assert_eq!(invalid_projection.tail_hash(), &claim_envelope.event_hash);
             assert!(!invalid_projection.is_complete());
         }
+    }
+
+    #[test]
+    fn v5_m6_persistence_is_atomic_ordered_recoverable_and_source_bound() {
+        crate::m6_test_support::with_distinct_s0_s1_persistence_fixture(
+            |_source, target, phases, staleness| {
+                target.with_terminal_persistence(|mut log, pre_basis| {
+                    let predecessor_count = log.envelopes.len();
+                    let expected = ExpectedM6PersistenceV5::new(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness,
+                    )?;
+                    for payload in &expected.payloads {
+                        let bytes = payload_canonical_bytes(payload)?;
+                        let mut unknown: Value = serde_json::from_slice(&bytes)
+                            .map_err(|error| DomainError::Json(error.to_string()))?;
+                        let kind = unknown["type"]
+                            .as_str()
+                            .expect("M6 payload kind")
+                            .to_owned();
+                        unknown["data"]
+                            .as_object_mut()
+                            .expect("M6 payload data")
+                            .insert("unexpected".to_owned(), Value::Bool(true));
+                        let unknown_bytes = canonical_json(&unknown)?;
+                        assert!(
+                            decode_canonical_payload(
+                                EventContractVersion::V5,
+                                std::str::from_utf8(&unknown_bytes)
+                                    .expect("canonical payload UTF-8"),
+                            )
+                            .is_err(),
+                            "M6 V5 DTO {kind} rejects unknown fields"
+                        );
+
+                        let mut wrong_schema: Value = serde_json::from_slice(&bytes)
+                            .map_err(|error| DomainError::Json(error.to_string()))?;
+                        wrong_schema["data"]["schema"] =
+                            Value::String("reviewgraphen.invalid.v5".to_owned());
+                        let wrong_schema_bytes = canonical_json(&wrong_schema)?;
+                        assert!(
+                            decode_canonical_payload(
+                                EventContractVersion::V5,
+                                std::str::from_utf8(&wrong_schema_bytes)
+                                    .expect("canonical payload UTF-8"),
+                            )
+                            .is_err(),
+                            "M6 V5 DTO {kind} rejects the wrong schema"
+                        );
+                    }
+                    assert!(
+                        decode_canonical_payload(
+                            EventContractVersion::V4,
+                            std::str::from_utf8(&payload_canonical_bytes(&expected.payloads[0])?)
+                                .expect("canonical payload UTF-8"),
+                        )
+                        .is_err(),
+                        "M6 kinds are closed to V5"
+                    );
+                    let mut basis =
+                        log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                    assert_eq!(basis.source_closure_id(), phases.closure().id());
+                    log.append_program_mapping_phase_v5(
+                        phases.closure(),
+                        phases.mapping().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_obligation_correspondence_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_staleness_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness.clone(),
+                        &mut basis,
+                    )?;
+                    assert_eq!(
+                        basis.target_confirmed_event_count(),
+                        u64::try_from(log.envelopes.len()).unwrap()
+                    );
+                    assert_eq!(basis.target_confirmed_tail_hash(), log.tail_hash());
+                    assert_eq!(
+                        log.envelopes.len(),
+                        predecessor_count + expected.payloads.len()
+                    );
+                    log.validate_exact_m6_suffix(phases.closure(), &expected.payloads)?;
+
+                    let full_envelopes = log.envelopes.clone();
+                    target.with_terminal_persistence(|_fresh_log, recovery_pre_basis| {
+                        for persisted in 0..=expected.payloads.len() {
+                            let prefix = full_envelopes
+                                [..predecessor_count.saturating_add(persisted)]
+                                .to_vec();
+                            let (replayed, _) = EventLogV5::replay_confirmed_v5_prefix(
+                                target.run_id().clone(),
+                                target.log.canonical_genesis_bytes.clone(),
+                                prefix,
+                                target.log.limits,
+                            )?;
+                            let recovered = replayed.recover_m6_persistence_v5(
+                                &recovery_pre_basis,
+                                phases.closure(),
+                                phases.mapping(),
+                                phases.correspondence(),
+                                staleness,
+                            )?;
+                            match recovered {
+                                RecoveredM6PersistenceV5::PreIncremental => {
+                                    assert_eq!(persisted, 0)
+                                }
+                                RecoveredM6PersistenceV5::Incremental {
+                                    stage,
+                                    basis: recovered_basis,
+                                } => {
+                                    assert_eq!(stage, expected.stage(persisted));
+                                    assert_eq!(
+                                        recovered_basis.target_confirmed_tail_hash(),
+                                        replayed.tail_hash()
+                                    );
+                                    assert_eq!(
+                                        recovered_basis.target_confirmed_event_count(),
+                                        u64::try_from(replayed.envelopes.len()).unwrap()
+                                    );
+                                }
+                            }
+                        }
+                        Ok(())
+                    })?;
+                    Ok(())
+                })
+            },
+        )
+        .expect("complete M6 V5 persistence and every recovery prefix");
+    }
+
+    #[test]
+    fn v5_m6_persistence_refuses_noncanonical_suffix_and_exact_minus_one_atomically() {
+        crate::m6_test_support::with_distinct_s0_s1_persistence_fixture(
+            |_source, target, phases, staleness| {
+                target.with_terminal_persistence(|mut log, pre_basis| {
+                    let mut basis =
+                        log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                    log.append_program_mapping_phase_v5(
+                        phases.closure(),
+                        phases.mapping().clone(),
+                        &mut basis,
+                    )?;
+                    log.append_obligation_correspondence_phase_v5(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence().clone(),
+                        &mut basis,
+                    )?;
+
+                    let before_count = log.envelopes.len();
+                    let before_tail = log.tail_hash().clone();
+                    let before_basis = basis.basis_digest().clone();
+                    assert!(
+                        log.append_staleness_phase_v5_with_exact_limit_for_test(
+                            phases.closure(),
+                            phases.mapping(),
+                            phases.correspondence(),
+                            staleness,
+                            &mut basis,
+                            -1,
+                        )
+                        .is_err()
+                    );
+                    assert_eq!(log.envelopes.len(), before_count);
+                    assert_eq!(log.tail_hash(), &before_tail);
+                    assert_eq!(basis.basis_digest(), &before_basis);
+                    log.append_staleness_phase_v5_with_exact_limit_for_test(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness,
+                        &mut basis,
+                        0,
+                    )?;
+
+                    // A sealed class cannot accept a late, duplicate, or
+                    // interleaved member even when its DTO is individually canonical.
+                    let late = PersistedPayload::HistoricalRecordAssessedV5(m6_persisted_raw(
+                        &staleness.records()[0],
+                    )?);
+                    let mut late_log = EventLogV5::replay_confirmed_prefix_for_store(
+                        log.run_id.clone(),
+                        log.canonical_genesis_bytes.clone(),
+                        log.envelopes.clone(),
+                    )?;
+                    append_v5_payload_for_structural_test(&mut late_log, late);
+                    assert!(
+                        late_log
+                            .validate_exact_m6_suffix(
+                                phases.closure(),
+                                &ExpectedM6PersistenceV5::new(
+                                    phases.closure(),
+                                    phases.mapping(),
+                                    phases.correspondence(),
+                                    staleness,
+                                )?
+                                .payloads,
+                            )
+                            .is_err()
+                    );
+                    Ok(())
+                })?;
+
+                target.with_terminal_persistence(|base, pre_basis| {
+                    let expected = ExpectedM6PersistenceV5::new(
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        staleness,
+                    )?;
+                    assert!(expected.mapping_seal >= expected.mapping_start + 2);
+                    let attacks = [
+                        vec![
+                            expected.payloads[0].clone(),
+                            expected.payloads[expected.mapping_start + 1].clone(),
+                            expected.payloads[expected.mapping_start].clone(),
+                        ],
+                        vec![
+                            expected.payloads[0].clone(),
+                            expected.payloads[expected.mapping_start].clone(),
+                            expected.payloads[expected.mapping_start].clone(),
+                        ],
+                        vec![
+                            expected.payloads[0].clone(),
+                            expected.payloads[expected.historical_start].clone(),
+                        ],
+                    ];
+                    for attack in attacks {
+                        let mut bad_log = EventLogV5::replay_confirmed_prefix_for_store(
+                            base.run_id.clone(),
+                            base.canonical_genesis_bytes.clone(),
+                            base.envelopes.clone(),
+                        )?;
+                        for bad in attack {
+                            append_v5_payload_for_structural_test(&mut bad_log, bad);
+                        }
+                        assert!(
+                            bad_log
+                                .recover_m6_persistence_v5(
+                                    &pre_basis,
+                                    phases.closure(),
+                                    phases.mapping(),
+                                    phases.correspondence(),
+                                    staleness,
+                                )
+                                .is_err()
+                        );
+                    }
+
+                    // Each seal/closure retains its original ID while one
+                    // identity-preimage field changes. Admission must reject
+                    // the collision before an envelope can mutate the log.
+                    let tamper_cases = [
+                        (0, "source_event_count", serde_json::json!(999_u64)),
+                        (
+                            expected.mapping_seal,
+                            "mapping_count",
+                            serde_json::json!(999_u64),
+                        ),
+                        (
+                            expected.correspondence_seal,
+                            "entry_count",
+                            serde_json::json!(999_u64),
+                        ),
+                        (
+                            expected.staleness_seal,
+                            "assessment_time",
+                            serde_json::json!("2099-01-01T00:00:00Z"),
+                        ),
+                    ];
+                    for (payload_index, field, replacement) in tamper_cases {
+                        let canonical = payload_canonical_bytes(&expected.payloads[payload_index])?;
+                        let mut wrapper: Value = serde_json::from_slice(&canonical)
+                            .map_err(|error| DomainError::Json(error.to_string()))?;
+                        let kind = wrapper["type"].as_str().expect("M6 kind").to_owned();
+                        wrapper["data"][field] = replacement;
+                        let body = raw_payload(canonical_json(&wrapper["data"])?)?;
+                        let collision = match kind.as_str() {
+                            "incremental_source_bound_v5" => {
+                                PersistedPayload::IncrementalSourceBoundV5(body)
+                            }
+                            "change_morphism_sealed_v5" => {
+                                PersistedPayload::ChangeMorphismSealedV5(body)
+                            }
+                            "obligation_correspondence_sealed_v5" => {
+                                PersistedPayload::ObligationCorrespondenceSealedV5(body)
+                            }
+                            "staleness_assessment_sealed_v5" => {
+                                PersistedPayload::StalenessAssessmentSealedV5(body)
+                            }
+                            _ => panic!("unexpected M6 preimage-tamper kind {kind}"),
+                        };
+                        assert!(
+                            collision.validate_shape().is_err(),
+                            "{kind} must reject retained-ID/preimage collision at ingress"
+                        );
+                        let count = base.envelopes.len();
+                        let tail = base.tail_hash().clone();
+                        assert!(
+                            base.m6_candidate_with_payloads(
+                                std::slice::from_ref(&collision),
+                                base.limits.max_working_bytes,
+                            )
+                            .is_err(),
+                            "{kind} must fail atomic append admission"
+                        );
+                        assert_eq!(base.envelopes.len(), count);
+                        assert_eq!(base.tail_hash(), &tail);
+                    }
+
+                    let mut basis_log = EventLogV5::replay_confirmed_prefix_for_store(
+                        base.run_id.clone(),
+                        base.canonical_genesis_bytes.clone(),
+                        base.envelopes.clone(),
+                    )?;
+                    let mut basis = basis_log
+                        .append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                    basis.target_confirmed_tail_hash = ContentHash::sha256(b"wrong M6 tail");
+                    let count = basis_log.envelopes.len();
+                    assert!(
+                        basis_log
+                            .append_program_mapping_phase_v5(
+                                phases.closure(),
+                                phases.mapping().clone(),
+                                &mut basis,
+                            )
+                            .is_err()
+                    );
+                    assert_eq!(basis_log.envelopes.len(), count);
+                    Ok(())
+                })
+            },
+        )
+        .expect("M6 V5 negative persistence matrix");
     }
 }

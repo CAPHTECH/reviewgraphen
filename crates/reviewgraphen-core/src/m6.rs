@@ -358,7 +358,7 @@ pub struct IncrementalSourceClosureV5 {
     input: IncrementalStructuralInputV5,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct IncrementalSourceClosureWireV5 {
     schema: String,
@@ -368,11 +368,37 @@ struct IncrementalSourceClosureWireV5 {
 }
 
 impl IncrementalSourceClosureV5 {
-    #[doc(hidden)]
-    pub(crate) fn from_validated_structure(
-        proof: ValidatedIncrementalStructureV5,
-    ) -> M6Result<Self> {
-        let input = proof.input;
+    pub(crate) fn validate_event_wire(input: &[u8]) -> M6Result<()> {
+        preflight_event_line(input.len(), 1)?;
+        bounded(
+            input.len(),
+            MAX_M6_CLOSURE_DTO_BYTES,
+            "M6 closure event JSON bytes",
+        )?;
+        let wire: IncrementalSourceClosureWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        // `deny_unknown_fields` cannot close a flattened serde struct by
+        // itself.  Equality with the normalized wire projection makes any
+        // discarded top-level member an explicit admission failure.
+        let input_value: serde_json::Value = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        let normalized =
+            serde_json::to_value(&wire).map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if input_value != normalized {
+            return Err(M6Error::InvalidWire(
+                "closure event wire contains an unknown or lossy field".to_owned(),
+            ));
+        }
+        let expected_id = Self::validate_input_and_derive_id(&wire.input)?;
+        if wire.schema != "reviewgraphen.incremental_source_closure.v5" || wire.id != expected_id {
+            return Err(M6Error::InvalidWire(
+                "closure event wire has a wrong schema or derived ID".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_input_and_derive_id(input: &IncrementalStructuralInputV5) -> M6Result<StableId> {
         require_kind(&input.repository_id, "repository", "repository_id")?;
         require_kind(&input.source_run_id, "run", "source_run_id")?;
         require_kind(&input.target_run_id, "run", "target_run_id")?;
@@ -380,6 +406,11 @@ impl IncrementalSourceClosureV5 {
         require_kind(&input.target_snapshot_id, "snapshot", "target_snapshot_id")?;
         require_kind(&input.source_universe_id, "universe", "source_universe_id")?;
         require_kind(&input.target_universe_id, "universe", "target_universe_id")?;
+        require_kind(
+            &input.source_gluing_bundle_id,
+            "event",
+            "source_gluing_bundle_id",
+        )?;
         for (field, hash) in [
             ("repository_identity_hash", &input.repository_identity_hash),
             ("source_genesis_hash", &input.source_genesis_hash),
@@ -455,7 +486,15 @@ impl IncrementalSourceClosureV5 {
                 "target base and target commit must differ",
             ));
         }
-        let id = derive("incremental-source-closure-v5", &input)?;
+        derive("incremental-source-closure-v5", input)
+    }
+
+    #[doc(hidden)]
+    pub(crate) fn from_validated_structure(
+        proof: ValidatedIncrementalStructureV5,
+    ) -> M6Result<Self> {
+        let input = proof.input;
+        let id = Self::validate_input_and_derive_id(&input)?;
         let value = Self {
             schema: "reviewgraphen.incremental_source_closure.v5",
             id,
@@ -505,6 +544,22 @@ impl IncrementalSourceClosureV5 {
 
     pub(crate) fn target_predecessor_tail_hash(&self) -> &ContentHash {
         &self.input.target_predecessor_tail_hash
+    }
+
+    pub(crate) fn target_run_id(&self) -> &StableId {
+        &self.input.target_run_id
+    }
+
+    pub(crate) fn target_genesis_hash(&self) -> &ContentHash {
+        &self.input.target_genesis_hash
+    }
+
+    pub(crate) const fn target_predecessor_event_count(&self) -> u64 {
+        self.input.target_predecessor_event_count
+    }
+
+    pub(crate) fn source_authority_replay_basis_digest(&self) -> &ContentHash {
+        &self.input.source_authority_replay_basis_digest
     }
 
     pub(crate) fn source_snapshot_id(&self) -> &StableId {
@@ -878,6 +933,20 @@ impl MappingStatusCountsV5 {
             MappingStatusV5::Merged => self.merged += 1,
             MappingStatusV5::Unresolved => self.unresolved += 1,
         }
+    }
+
+    fn checked_total(&self) -> Option<u64> {
+        [
+            self.preserved,
+            self.modified,
+            self.added,
+            self.removed,
+            self.split,
+            self.merged,
+            self.unresolved,
+        ]
+        .into_iter()
+        .try_fold(0_u64, u64::checked_add)
     }
 }
 
@@ -3798,7 +3867,7 @@ pub struct ChangeMorphismV5 {
     source_ids: BTreeSet<StableId>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ChangeMorphismWireV5 {
     schema: String,
@@ -3820,6 +3889,88 @@ struct ChangeMorphismWireV5 {
 }
 
 impl ChangeMorphismV5 {
+    pub(crate) fn validate_event_wire(input: &[u8]) -> M6Result<()> {
+        preflight_event_line(input.len(), 1)?;
+        bounded(
+            input.len(),
+            MAX_M6_MORPHISM_DTO_BYTES,
+            "M6 morphism event JSON bytes",
+        )?;
+        let wire: ChangeMorphismWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        let input_value: serde_json::Value = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        let normalized =
+            serde_json::to_value(&wire).map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if input_value != normalized {
+            return Err(M6Error::InvalidWire(
+                "morphism event wire contains an unknown, duplicate, or lossy field".to_owned(),
+            ));
+        }
+        if wire.schema != "reviewgraphen.change_morphism.v5"
+            || wire.mapping_policy_descriptor_id != PROGRAM_MAPPING_POLICY_V5
+            || wire.semantic_anchor_descriptor_id != RUST_SYMBOL_ANCHOR_V1
+        {
+            return Err(M6Error::InvalidWire(
+                "morphism event wire has a wrong schema or fixed descriptor".to_owned(),
+            ));
+        }
+        require_kind(
+            &wire.source_closure_id,
+            "incremental-source-closure-v5",
+            "source_closure_id",
+        )?;
+        require_kind(&wire.repository_id, "repository", "repository_id")?;
+        require_kind(&wire.source_snapshot_id, "snapshot", "source_snapshot_id")?;
+        require_kind(&wire.target_snapshot_id, "snapshot", "target_snapshot_id")?;
+        for (field, digest) in [
+            ("mapping_set_digest", &wire.mapping_set_digest),
+            ("source_domain_digest", &wire.source_domain_digest),
+            ("target_domain_digest", &wire.target_domain_digest),
+        ] {
+            full_sha256(field, digest)?;
+        }
+        let expected_source_ids = BTreeSet::from([wire.source_closure_id.clone()]);
+        if wire.mapping_count == 0
+            || wire.mapping_count > MAX_M6_MAPPINGS as u64
+            || wire.source_domain_count == 0
+            || wire.source_domain_count > MAX_M6_PROGRAM_DOMAIN_IDS as u64
+            || wire.target_domain_count == 0
+            || wire.target_domain_count > MAX_M6_PROGRAM_DOMAIN_IDS as u64
+            || wire.status_counts.checked_total() != Some(wire.mapping_count)
+            || wire.source_ids != expected_source_ids
+        {
+            return Err(M6Error::InvalidWire(
+                "morphism event wire has inconsistent counts or source IDs".to_owned(),
+            ));
+        }
+        let expected_id = derive(
+            "change-morphism-v5",
+            &ChangeMorphismIdentityV5 {
+                source_closure_id: &wire.source_closure_id,
+                repository_id: &wire.repository_id,
+                source_snapshot_id: &wire.source_snapshot_id,
+                target_snapshot_id: &wire.target_snapshot_id,
+                mapping_policy_descriptor_id: PROGRAM_MAPPING_POLICY_V5,
+                semantic_anchor_descriptor_id: RUST_SYMBOL_ANCHOR_V1,
+                mapping_count: wire.mapping_count,
+                mapping_set_digest: &wire.mapping_set_digest,
+                source_domain_count: wire.source_domain_count,
+                source_domain_digest: &wire.source_domain_digest,
+                target_domain_count: wire.target_domain_count,
+                target_domain_digest: &wire.target_domain_digest,
+                status_counts: &wire.status_counts,
+                source_ids: &wire.source_ids,
+            },
+        )?;
+        if wire.id != expected_id {
+            return Err(M6Error::InvalidWire(
+                "morphism event wire derived ID does not match its complete body".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Deterministic reservation admitted by Store before any mapping graph is
     /// allocated. The multiplier covers retained node copies, ownership maps,
     /// successor/predecessor IDs, mapping DTOs and seal domains; candidate
@@ -4951,7 +5102,7 @@ impl ObligationCorrespondenceEntryV5 {
         Ok(value)
     }
 
-    fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
+    pub(crate) fn from_json_bytes(input: &[u8]) -> M6Result<Self> {
         preflight_event_line(input.len(), 1)?;
         bounded(
             input.len(),
@@ -5105,7 +5256,7 @@ pub struct ObligationCorrespondenceV5 {
     source_ids: BTreeSet<StableId>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ObligationCorrespondenceWireV5 {
     schema: String,
@@ -5125,6 +5276,83 @@ struct ObligationCorrespondenceWireV5 {
 }
 
 impl ObligationCorrespondenceV5 {
+    pub(crate) fn validate_event_wire(input: &[u8]) -> M6Result<()> {
+        preflight_event_line(input.len(), 1)?;
+        bounded(
+            input.len(),
+            MAX_M6_CORRESPONDENCE_DTO_BYTES,
+            "M6 correspondence seal event JSON bytes",
+        )?;
+        let wire: ObligationCorrespondenceWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        let input_value: serde_json::Value = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        let normalized =
+            serde_json::to_value(&wire).map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if input_value != normalized {
+            return Err(M6Error::InvalidWire(
+                "correspondence seal event wire contains an unknown, duplicate, or lossy field"
+                    .to_owned(),
+            ));
+        }
+        if wire.schema != "reviewgraphen.obligation_correspondence.v5"
+            || wire.policy_descriptor_id != OBLIGATION_CORRESPONDENCE_POLICY_V5
+        {
+            return Err(M6Error::InvalidWire(
+                "correspondence seal event wire has a wrong schema or fixed descriptor".to_owned(),
+            ));
+        }
+        require_kind(&wire.morphism_id, "change-morphism-v5", "morphism_id")?;
+        require_kind(&wire.source_universe_id, "universe", "source_universe_id")?;
+        require_kind(&wire.target_universe_id, "universe", "target_universe_id")?;
+        for (field, digest) in [
+            ("entry_set_digest", &wire.entry_set_digest),
+            ("source_domain_digest", &wire.source_domain_digest),
+            ("target_domain_digest", &wire.target_domain_digest),
+        ] {
+            full_sha256(field, digest)?;
+        }
+        let expected_source_ids = BTreeSet::from([
+            wire.morphism_id.clone(),
+            wire.source_universe_id.clone(),
+            wire.target_universe_id.clone(),
+        ]);
+        if wire.entry_count > MAX_M6_CORRESPONDENCE_ENTRIES as u64
+            || wire.source_domain_count > MAX_M6_OBLIGATIONS_PER_UNIVERSE as u64
+            || wire.target_domain_count > MAX_M6_OBLIGATIONS_PER_UNIVERSE as u64
+            || wire.status_counts.checked_total() != Some(wire.entry_count)
+            || wire.source_ids != expected_source_ids
+        {
+            return Err(M6Error::InvalidWire(
+                "correspondence seal event wire has inconsistent counts or source IDs".to_owned(),
+            ));
+        }
+        let expected_id = derive(
+            "obligation-correspondence-v5",
+            &ObligationCorrespondenceIdentityV5 {
+                morphism_id: &wire.morphism_id,
+                source_universe_id: &wire.source_universe_id,
+                target_universe_id: &wire.target_universe_id,
+                policy_descriptor_id: OBLIGATION_CORRESPONDENCE_POLICY_V5,
+                entry_count: wire.entry_count,
+                entry_set_digest: &wire.entry_set_digest,
+                source_domain_count: wire.source_domain_count,
+                source_domain_digest: &wire.source_domain_digest,
+                target_domain_count: wire.target_domain_count,
+                target_domain_digest: &wire.target_domain_digest,
+                status_counts: &wire.status_counts,
+                source_ids: &wire.source_ids,
+            },
+        )?;
+        if wire.id != expected_id {
+            return Err(M6Error::InvalidWire(
+                "correspondence seal event wire derived ID does not match its complete body"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     fn seal_derived(
         morphism: &ChangeMorphismV5,
         source_universe_id: &StableId,
@@ -5975,7 +6203,7 @@ pub struct StalenessAssessmentV5 {
     source_ids: BTreeSet<StableId>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct StalenessAssessmentWireV5 {
     schema: String,
@@ -6012,6 +6240,95 @@ struct StalenessAssessmentSealPartsV5 {
 }
 
 impl StalenessAssessmentV5 {
+    pub(crate) fn validate_event_wire(input: &[u8]) -> M6Result<()> {
+        preflight_event_line(input.len(), 1)?;
+        bounded(
+            input.len(),
+            MAX_M6_CANONICAL_BYTES,
+            "M6 staleness seal event JSON bytes",
+        )?;
+        let wire: StalenessAssessmentWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        let input_value: serde_json::Value = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        let normalized =
+            serde_json::to_value(&wire).map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        if input_value != normalized {
+            return Err(M6Error::InvalidWire(
+                "staleness seal event wire contains an unknown, duplicate, or lossy field"
+                    .to_owned(),
+            ));
+        }
+        if wire.schema != "reviewgraphen.staleness_assessment.v5"
+            || wire.impact_policy_descriptor_id != MVP_PROPERTY_IMPACT_POLICY_V5
+        {
+            return Err(M6Error::InvalidWire(
+                "staleness seal event wire has a wrong schema or fixed descriptor".to_owned(),
+            ));
+        }
+        require_kind(
+            &wire.source_closure_id,
+            "incremental-source-closure-v5",
+            "source_closure_id",
+        )?;
+        require_kind(&wire.morphism_id, "change-morphism-v5", "morphism_id")?;
+        require_kind(
+            &wire.correspondence_id,
+            "obligation-correspondence-v5",
+            "correspondence_id",
+        )?;
+        validate_assessment_time_v5(&wire.assessment_time)?;
+        for (field, digest) in [
+            ("record_set_digest", &wire.record_set_digest),
+            (
+                "gluing_freshness_set_digest",
+                &wire.gluing_freshness_set_digest,
+            ),
+            ("stale_source_digest", &wire.stale_source_digest),
+            ("superseded_source_digest", &wire.superseded_source_digest),
+            (
+                "preservation_candidate_digest",
+                &wire.preservation_candidate_digest,
+            ),
+            (
+                "m5_dependent_successor_digest",
+                &wire.m5_dependent_successor_digest,
+            ),
+        ] {
+            full_sha256(field, digest)?;
+        }
+        let expected_source_ids = BTreeSet::from([
+            wire.source_closure_id.clone(),
+            wire.morphism_id.clone(),
+            wire.correspondence_id.clone(),
+        ]);
+        if wire.record_count > MAX_M6_HISTORICAL_ASSESSMENTS as u64
+            || wire.gluing_freshness_count != 1
+            || wire.stale_source_count > wire.record_count
+            || wire.superseded_source_count > wire.record_count
+            || wire.preservation_candidate_count > MAX_M6_OBLIGATIONS_PER_UNIVERSE as u64
+            || wire.m5_dependent_successor_count > MAX_M6_OBLIGATIONS_PER_UNIVERSE as u64
+            || wire.source_ids != expected_source_ids
+        {
+            return Err(M6Error::InvalidWire(
+                "staleness seal event wire has inconsistent counts or source IDs".to_owned(),
+            ));
+        }
+        let expected_id = Self::assessment_id(
+            &wire.source_closure_id,
+            &wire.morphism_id,
+            &wire.correspondence_id,
+            &wire.assessment_time,
+        )?;
+        if wire.id != expected_id {
+            return Err(M6Error::InvalidWire(
+                "staleness seal event wire derived ID does not match its identity preimage"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     fn assessment_id(
         source_closure_id: &StableId,
         morphism_id: &StableId,
@@ -12689,6 +13006,48 @@ pub(crate) fn m6_distinct_s0_s1_program_fixture() -> M6Result<(
     let target = distinct_s1_program_fixture_from(&source)?;
     let (source_program, source_bytes) = source.into_parts();
     let (target_program, target_bytes) = target.into_parts();
+    Ok((source_program, target_program, source_bytes, target_bytes))
+}
+
+/// The candidate fixture changes only the accepted S0 context membership that
+/// admits the already-present source artifacts to the fixed UI context.  Its
+/// S1 is derived from that exact S0, keeping the cross-snapshot topology and
+/// source hashes independent from the obstruction fixture.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn successful_m5_distinct_s0_s1_program_fixture() -> M6Result<(
+    ProgramSpace,
+    ProgramSpace,
+    BTreeMap<StableId, Vec<u8>>,
+    BTreeMap<StableId, Vec<u8>>,
+)> {
+    let source = complete_m5_s0_program_fixture()?;
+    let (source_program, source_bytes) = source.into_parts();
+    let mut source_value = serde_json::to_value(source_program.streaming_ref())
+        .map_err(|error| M6Error::Canonical(error.to_string()))?;
+    let ui_members = source_value["contexts"]
+        .as_array_mut()
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "successful fixture contexts are not an array",
+        ))?
+        .iter_mut()
+        .find(|context| context["id"] == crate::DOUBLE_SUBMIT_UI_CONTEXT_ID)
+        .and_then(|context| context["member_ids"].as_array_mut())
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "successful fixture UI context members are absent",
+        ))?;
+    ui_members.extend([
+        Value::String("file:checkout-controller".to_owned()),
+        Value::String("file:payment-repository".to_owned()),
+    ]);
+    ui_members.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+    ui_members.dedup();
+    let source_program = ProgramSpace::from_json_slice(
+        &serde_json::to_vec(&source_value)
+            .map_err(|error| M6Error::Canonical(error.to_string()))?,
+    )?;
+    let target_program = distinct_s1_program_from(&source_program)?;
+    let target_bytes = source_bytes.clone();
     Ok((source_program, target_program, source_bytes, target_bytes))
 }
 

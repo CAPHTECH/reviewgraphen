@@ -10,7 +10,7 @@ use crate::{
     event::{CompleteM5V4Fixture, NoM5V5Fixture},
     m6::{
         IncrementalStalenessInputV5, M6FixturePhases, m6_distinct_s0_s1_program_fixture,
-        m6_fixture_phases_from_exact_prefixes,
+        m6_fixture_phases_from_exact_prefixes, successful_m5_distinct_s0_s1_program_fixture,
     },
 };
 
@@ -149,10 +149,105 @@ impl DistinctS0S1StalenessFixture {
     }
 }
 
+pub(crate) fn with_distinct_s0_s1_persistence_fixture<R>(
+    callback: impl FnOnce(
+        &CompleteM5V4Fixture,
+        &NoM5V5Fixture,
+        &M6FixturePhases,
+        &M6StalenessPhaseV5,
+    ) -> M6Result<R>,
+) -> M6Result<R> {
+    let fixture = DistinctS0S1StalenessFixture::new()?;
+    let staleness = fixture.reduce()?;
+    callback(
+        &fixture.source,
+        &fixture.target,
+        &fixture.phases,
+        &staleness,
+    )
+}
+
+/// The compatible M5 branch over the same distinct S0/S1 topology.  It is
+/// intentionally a second opaque source fixture rather than an in-place
+/// mutation of the obstruction fixture, so an E2E reducer run can only obtain
+/// its candidate through normal roots-bound replay.
+pub(crate) struct SuccessfulM5DistinctS0S1StalenessFixture {
+    source: CompleteM5V4Fixture,
+    target: NoM5V5Fixture,
+    phases: M6FixturePhases,
+}
+
+impl SuccessfulM5DistinctS0S1StalenessFixture {
+    pub(crate) fn new() -> M6Result<Self> {
+        let (source_program, target_program, source_bytes, target_bytes) =
+            successful_m5_distinct_s0_s1_program_fixture()?;
+        let source = CompleteM5V4Fixture::successful_from_program_and_sources(
+            source_program,
+            source_bytes,
+            crate::StableId::parse("run:m6-successful-s0-fixture")?,
+        )?;
+        let target = NoM5V5Fixture::from_program_and_sources(
+            target_program,
+            target_bytes,
+            crate::StableId::parse("run:m6-successful-s1-fixture")?,
+        )?;
+        let phases = target.with_terminal(|_, target_actual| {
+            m6_fixture_phases_from_exact_prefixes(&source, &target, target_actual)
+        })?;
+        let value = Self {
+            source,
+            target,
+            phases,
+        };
+        value.assert_admitted_topology();
+        Ok(value)
+    }
+
+    pub(crate) fn reduce(&self) -> M6Result<M6StalenessPhaseV5> {
+        self.target.with_terminal(|target, target_actual| {
+            let input = IncrementalStalenessInputV5::new(
+                self.source.log(),
+                self.phases.closure(),
+                self.phases.mapping(),
+                self.phases.correspondence(),
+                target,
+            )?;
+            input.reduce_v5(target_actual, DISTINCT_S0_S1_ASSESSMENT_TIME)
+        })
+    }
+
+    fn assert_admitted_topology(&self) {
+        assert_ne!(self.source.run_id(), self.target.run_id());
+        assert_ne!(self.source.snapshot_id(), self.target.snapshot_id());
+        assert!(self.source.has_m5_bundle());
+        assert_eq!(self.source.m5_event_count(), 1);
+        assert_eq!(self.target.m5_event_count(), 0);
+        assert_eq!(
+            self.phases.closure().source_snapshot_id(),
+            self.source.snapshot_id()
+        );
+        assert_eq!(
+            self.phases.closure().target_snapshot_id(),
+            self.target.snapshot_id()
+        );
+        assert_eq!(
+            self.phases.mapping().morphism().source_closure_id(),
+            self.phases.closure().id()
+        );
+        assert_eq!(
+            self.phases.correspondence().correspondence().morphism_id(),
+            self.phases.mapping().morphism().id()
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HistoricalAssessmentStatusV5, StaleReasonV5, event::HistoricalSourceRecordKindV4};
+    use crate::{
+        HistoricalAssessmentStatusV5, HistoricalRecordKindV5, StaleReasonV5,
+        event::HistoricalSourceRecordKindV4,
+    };
     use std::collections::BTreeSet;
 
     #[test]
@@ -254,6 +349,108 @@ mod tests {
         assert_eq!(
             crate::canonical_json(first.assessment()).expect("first seal after -1"),
             crate::canonical_json(after_rejected_limit.assessment()).expect("repeat seal after -1")
+        );
+    }
+
+    #[test]
+    fn successful_m5_candidate_reduces_from_roots_bound_distinct_s0_to_no_m5_s1() {
+        let fixture = SuccessfulM5DistinctS0S1StalenessFixture::new()
+            .expect("admitted successful-candidate E2E fixture");
+        let first = fixture.reduce().expect("successful S0 -> S1 reducer");
+        let second = fixture
+            .reduce()
+            .expect("repeat successful S0 -> S1 reducer");
+
+        let mut source_kinds = BTreeSet::new();
+        let mut attempt_id = None;
+        let mut candidate_id = None;
+        fixture
+            .source
+            .log()
+            .historical_prefix_projection_v4()
+            .expect("successful source historical projection")
+            .try_visit_records(|record| {
+                source_kinds.insert(record.kind());
+                match record.kind() {
+                    HistoricalSourceRecordKindV4::GluingAttempt => {
+                        attempt_id = Some(record.id().clone());
+                    }
+                    HistoricalSourceRecordKindV4::GlobalCandidate => {
+                        candidate_id = Some(record.id().clone());
+                    }
+                    _ => {}
+                }
+                Ok::<(), crate::DomainError>(())
+            })
+            .expect("successful source historical traversal");
+        let attempt_id = attempt_id.expect("one source gluing attempt");
+        assert!(matches!(
+            fixture.source.completed().result(),
+            crate::GluingResultV4::Candidate
+                | crate::GluingResultV4::GluedWithQualification
+                | crate::GluingResultV4::Glued
+        ));
+        let candidate_id = candidate_id.expect("one source global candidate");
+        assert_eq!(source_kinds.len(), 20, "source kinds: {source_kinds:?}");
+        assert!(source_kinds.contains(&HistoricalSourceRecordKindV4::GlobalCandidate));
+        assert!(
+            !source_kinds.contains(&HistoricalSourceRecordKindV4::GluingObstruction),
+            "a successful candidate and obstruction are mutually exclusive"
+        );
+
+        let attempt = first
+            .records()
+            .iter()
+            .find(|record| {
+                record.source_record_kind() == HistoricalRecordKindV5::GluingAttempt
+                    && record.source_record_id() == &attempt_id
+            })
+            .expect("assessed source gluing attempt");
+        let candidate = first
+            .records()
+            .iter()
+            .find(|record| {
+                record.source_record_kind() == HistoricalRecordKindV5::GlobalCandidate
+                    && record.source_record_id() == &candidate_id
+            })
+            .expect("assessed source global candidate");
+        assert!(attempt.successor_record_ids().is_empty());
+        assert!(
+            attempt.dependency_source_ids().contains(&candidate_id),
+            "the attempt's transitive audit closure must retain its candidate"
+        );
+        for record in [attempt, candidate] {
+            assert!(record.status() == HistoricalAssessmentStatusV5::Stale);
+            assert!(!record.mapping_ids().is_empty());
+            assert!(!record.correspondence_entry_ids().is_empty());
+            assert!(!record.dependency_source_ids().is_empty());
+        }
+
+        assert_eq!(first.gluing_freshness().len(), 1);
+        let gluing = &first.gluing_freshness()[0];
+        assert_eq!(gluing.status(), HistoricalAssessmentStatusV5::Stale);
+        assert!(gluing.successor_target_attempt_ids().is_empty());
+        assert!(
+            gluing
+                .reasons()
+                .contains(&StaleReasonV5::GluingInputChanged)
+        );
+        assert_eq!(first.assessment().gluing_freshness_count(), 1);
+        assert_eq!(
+            crate::canonical_json(first.assessment()).expect("first successful seal"),
+            crate::canonical_json(second.assessment()).expect("repeat successful seal")
+        );
+        assert_eq!(
+            first.assessment().record_set_digest(),
+            second.assessment().record_set_digest()
+        );
+        assert_eq!(
+            first.assessment().gluing_freshness_set_digest(),
+            second.assessment().gluing_freshness_set_digest()
+        );
+        assert_eq!(
+            first.assessment().stale_source_digest(),
+            second.assessment().stale_source_digest()
         );
     }
 }
