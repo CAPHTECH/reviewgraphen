@@ -5848,7 +5848,7 @@ impl EventEnvelope {
             manifest.validate_against_genesis(run_id, &snapshot, canonical_genesis_bytes)?;
         }
         let mut max_event_validation_bytes = 0_u64;
-        let mut post_d2 = V5StructuralPostD2Phase::BeforePartialSeal;
+        let mut post_d2 = initial_v5_structural_post_d2_phase();
         for envelope in events {
             let payload =
                 decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
@@ -21841,6 +21841,31 @@ pub(crate) struct PreparedGluingRerunAppendV5 {
     payload: PersistedPayload,
 }
 
+/// Opaque, roots/CAS-replayed admission cursor for the part of an M6 target
+/// stream which follows D2.  It deliberately contains no public payload or
+/// append capability.  The subsequent native-verifier/human/M5 slices must
+/// consume this cursor rather than the raw structural recognizer: the latter
+/// cannot know whether the staleness assessment required the second gluing
+/// seal.
+///
+/// The cursor is minted only after all scheduled D2 actions have reached
+/// their singleton-claim `Completed` witnesses.  When target gluing was
+/// required, its basis is the basis *after* the exact durable action/seal
+/// batch.  When it was not required, it is the basis immediately after D2;
+/// attempting to provide a second phase is refused before any terminal work
+/// is admitted.
+#[allow(dead_code)] // The following terminal append slices consume this cursor.
+pub(crate) struct ReplayedPostD2TerminalPhaseV5 {
+    log_identity: V5LogInstanceIdentity,
+    source_closure_id: StableId,
+    partial_rerun_plan_id: StableId,
+    target_plan_id: StableId,
+    target_gluing_required: bool,
+    basis: AuthorityReplayBasisV5,
+    terminal: V5StructuralPostPlanPhase,
+    v4_registration_ids: BTreeSet<StableId>,
+}
+
 enum GluingRerunMemberRef<'a> {
     Action(&'a crate::GluingRerunActionV5),
     Seal(&'a crate::GluingRerunPlanSealV5),
@@ -23933,9 +23958,285 @@ impl EventLogV5 {
         phase.basis = next_basis;
         Ok(())
     }
+
+    /// Opens the roots/CAS-bound post-D2 terminal gate.  This is intentionally
+    /// a separate operation from the position-only structural replay: raw
+    /// replay can recognize an inherited terminal suffix but cannot establish
+    /// the `target_gluing_required` bit or prove that every scheduled D2
+    /// reviewer action reached its singleton-claim completion witness.
+    ///
+    /// `reviewer`, `partial`, and `gluing` are all private opaque products of
+    /// the preceding authority replays.  Consequently a caller cannot replace
+    /// the D2 result with deserialized DTOs, skip an action, or manufacture a
+    /// null second plan.  No terminal event is appended here; later terminal
+    /// append implementations receive this cursor as their sole authority
+    /// entrance.
+    #[allow(dead_code)]
+    pub(crate) fn open_post_d2_terminal_phase_v5(
+        &self,
+        reviewer: &ReplayedScheduledReviewerPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        gluing: Option<&mut SealedGluingRerunPhaseV5>,
+    ) -> Result<ReplayedPostD2TerminalPhaseV5> {
+        // Select the actual returned cursor basis before the allocation gate.
+        // Required gluing advances the basis across its action/seal suffix, so
+        // charging the pre-gluing reviewer basis here would undercount a
+        // later, differently-sized basis clone.
+        validate_post_d2_gluing_presence(partial.target_gluing_required, gluing.is_some())?;
+        let returned_basis = if partial.target_gluing_required {
+            gluing
+                .as_deref()
+                .ok_or_else(|| {
+                    DomainError::EventSequence(
+                        "post-D2 terminal admission requires the sealed gluing rerun phase"
+                            .to_owned(),
+                    )
+                })?
+                .basis
+                .retained_bytes()?
+        } else {
+            reviewer.basis.retained_bytes()?
+        };
+        let returned_basis_dynamic = returned_basis
+            .checked_sub(u64::try_from(size_of::<AuthorityReplayBasisV5>()).unwrap_or(u64::MAX))
+            .ok_or(DomainError::Incomplete {
+                operation: "post-D2 terminal gate basis dynamic ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        Self::preflight_post_d2_terminal_gate_bytes(
+            self,
+            reviewer,
+            partial,
+            gluing.as_deref(),
+            returned_basis_dynamic,
+        )?;
+
+        // A `Finished` cursor is reachable only by consuming every scheduled
+        // action's exact Completed transition.  Cardinality-obstructed D2
+        // executions cannot advance the cursor to this state.
+        if !reviewer.is_finished()
+            || reviewer.log_identity != partial.log_identity
+            || reviewer.log_identity != self.instance_identity
+            || reviewer.plan_id != *partial.plan.target_plan_id()
+            || reviewer.basis.target_run_id != self.run_id
+            || reviewer.basis.target_genesis_hash != self.genesis_hash
+            || reviewer.basis.policy_revision_hash != partial.policy_revision_hash
+            || reviewer.basis.basis_digest != reviewer.basis.recompute_digest()?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        // On the required route the current tail is deliberately *after* the
+        // reviewer basis: the gluing action/seal suffix advances it.  Recovery
+        // below verifies that exact suffix from `initial_basis`; validating
+        // the pre-gluing basis against the final tail here would reject every
+        // legitimate completed second plan.
+        if !partial.target_gluing_required {
+            reviewer.basis.validate_current_log(self)?;
+        }
+
+        let (seed_terminal, seed_v4_registration_ids) = partial.post_d2_terminal_seed()?;
+        let basis = if partial.target_gluing_required {
+            let gluing = gluing.expect("required gluing prechecked");
+            if gluing.log_identity != self.instance_identity
+                || gluing.source_closure_id != partial.source_closure_id
+                || gluing.partial_rerun_plan_id != *partial.plan.id()
+                || gluing.target_plan_id != reviewer.plan_id
+                || gluing.initial_basis.basis_digest != reviewer.basis.basis_digest
+                || gluing.initial_basis.target_confirmed_tail_hash
+                    != reviewer.basis.target_confirmed_tail_hash
+                || gluing.initial_basis.target_confirmed_event_count
+                    != reviewer.basis.target_confirmed_event_count
+            {
+                return Err(DomainError::AuthorityReplayBasisMismatch);
+            }
+            let persisted = self.recover_gluing_rerun_prefix_v5(gluing)?;
+            let required = gluing.actions.len().checked_add(1).ok_or_else(|| {
+                DomainError::EventSequence("post-D2 gluing member count overflow".to_owned())
+            })?;
+            if persisted != required {
+                return Err(DomainError::EventSequence(
+                    "post-D2 terminal admission requires the complete gluing action/seal suffix"
+                        .to_owned(),
+                ));
+            }
+            gluing.basis.validate_current_log(self)?;
+            gluing.basis.clone()
+        } else {
+            reviewer.basis.clone()
+        };
+
+        Ok(ReplayedPostD2TerminalPhaseV5 {
+            log_identity: self.instance_identity,
+            source_closure_id: partial.source_closure_id.clone(),
+            partial_rerun_plan_id: partial.plan.id().clone(),
+            target_plan_id: reviewer.plan_id.clone(),
+            target_gluing_required: partial.target_gluing_required,
+            basis,
+            terminal: seed_terminal,
+            v4_registration_ids: seed_v4_registration_ids,
+        })
+    }
+
+    /// Input-actual admission before cloning the terminal authority cursor or
+    /// decoding a gluing suffix.  The terms are all live retained objects and
+    /// the one basis clone needed by the returned opaque cursor; no configured
+    /// DTO maximum is used as a substitute for an observed allocation.
+    fn preflight_post_d2_terminal_gate_bytes(
+        &self,
+        reviewer: &ReplayedScheduledReviewerPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        gluing: Option<&SealedGluingRerunPhaseV5>,
+        returned_basis_dynamic_bytes: u64,
+    ) -> Result<()> {
+        let cursor_ids = [
+            partial.source_closure_id.allocated_bytes(),
+            partial.plan.id().allocated_bytes(),
+            reviewer.plan_id.allocated_bytes(),
+        ]
+        .into_iter()
+        .try_fold(
+            u64::try_from(size_of::<ReplayedPostD2TerminalPhaseV5>()).unwrap_or(u64::MAX),
+            |total, bytes| total.checked_add(u64::try_from(bytes).unwrap_or(u64::MAX)),
+        )
+        .ok_or(DomainError::Incomplete {
+            operation: "post-D2 terminal gate cursor ownership",
+            limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+        let gluing_retained = gluing.map_or(Ok(0_u64), SealedGluingRerunPhaseV5::retained_bytes)?;
+        let predecessor_v4_dynamic = partial.post_d2_terminal_seed_dynamic_bytes()?;
+        let observed = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(reviewer.retained_working_upper_bound()?)
+            .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(gluing_retained))
+            .and_then(|value| value.checked_add(cursor_ids))
+            .and_then(|value| value.checked_add(predecessor_v4_dynamic))
+            .and_then(|value| value.checked_add(returned_basis_dynamic_bytes))
+            .ok_or(DomainError::Incomplete {
+                operation: "post-D2 terminal gate preflight ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if observed > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "post-D2 terminal gate preflight ownership",
+                self.limits.max_working_bytes,
+                observed,
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The second-plan presence is a closed semantic condition, distinct from
+/// both raw suffix shape and the later identity checks.  Keeping it factored
+/// makes the no-gluing branch testable without manufacturing an opaque phase:
+/// such a phase can only be minted from a target whose staleness requires it.
+fn validate_post_d2_gluing_presence(target_gluing_required: bool, present: bool) -> Result<()> {
+    match (target_gluing_required, present) {
+        (true, true) | (false, false) => Ok(()),
+        (true, false) => Err(DomainError::EventSequence(
+            "post-D2 terminal admission requires the sealed gluing rerun phase".to_owned(),
+        )),
+        (false, true) => Err(DomainError::EventSequence(
+            "post-D2 gluing phase is forbidden when target gluing is not required".to_owned(),
+        )),
+    }
+}
+
+#[allow(dead_code)]
+impl ReplayedPostD2TerminalPhaseV5 {
+    /// Validates one prospective native terminal payload without turning the
+    /// payload into an append capability.  It is deliberately narrower than
+    /// the raw V5 structural recognizer: D2 lifecycle/context/execution rows
+    /// and every gluing-rerun row are refused after this roots-bound gate.
+    ///
+    /// Later terminal append implementations will consume and advance this
+    /// private cursor only after their own native authority checks.  Keeping
+    /// this method read-only in the staging slice prevents a generic raw
+    /// terminal append API from escaping into Core.
+    fn admit_next_terminal_payload(&self, payload: &PersistedPayload) -> Result<()> {
+        let mut terminal = self.terminal;
+        let mut ids = self.v4_registration_ids.clone();
+        advance_v5_post_d2_terminal_gate(&mut terminal, &mut ids, payload)
+    }
+
+    #[cfg(test)]
+    fn admits_terminal_payload_for_test(&self, payload: &PersistedPayload) -> Result<()> {
+        self.admit_next_terminal_payload(payload)
+    }
 }
 
 impl SealedPartialRerunPhaseV5 {
+    /// Roots/CAS-replayed terminal state with which post-D2 native terminal
+    /// admission starts.  The suppression projection is minted exclusively
+    /// from the terminal authority replay, so these IDs are not inferred from
+    /// raw suffix shape.  A partially suppressed predecessor legitimately
+    /// owns one or two V4 inputs; only a complete historical M5 owns the M5
+    /// terminal state.
+    fn post_d2_terminal_seed(&self) -> Result<(V5StructuralPostPlanPhase, BTreeSet<StableId>)> {
+        self.predecessor_gluing_suppression.validate_seal()?;
+        let count = self.predecessor_gluing_suppression.gluing_inputs.len();
+        let ids = self
+            .predecessor_gluing_suppression
+            .gluing_inputs
+            .iter()
+            .map(|(_, pair)| pair[1].record_id.clone())
+            .collect::<BTreeSet<_>>();
+        if ids.len() != count {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "target gluing-input registrations are not a distinct roots-replayed set",
+            ));
+        }
+        let phase = match (self.target_m5_bundle.is_some(), count) {
+            (true, 2) => V5StructuralPostPlanPhase::M5BundleRecorded,
+            // The predecessor inputs are trusted facts, not a contiguous
+            // post-D2 suffix.  A fresh terminal suffix therefore begins
+            // Idle even after one/two suppressed inputs, so native M4 may
+            // occur before any remaining registration.
+            (false, 0..=2) => V5StructuralPostPlanPhase::Inherited {
+                m4_bundle: V5StructuralM4BundlePhase::Idle,
+            },
+            _ => {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "target M5 input closure does not form a legal 0/1/2 terminal prefix",
+                ));
+            }
+        };
+        Ok((phase, ids))
+    }
+
+    fn post_d2_terminal_seed_dynamic_bytes(&self) -> Result<u64> {
+        // The returned cursor already contains the BTreeSet handle inline.
+        // Reserve only the actual stable-ID backing plus one bounded tree node
+        // per roots-replayed registration; the value slot itself is part of
+        // that node, not the cursor struct.
+        self.predecessor_gluing_suppression
+            .gluing_inputs
+            .iter()
+            .try_fold(0_u64, |total, (_, pair)| {
+                let node = pair[1]
+                    .record_id
+                    .allocated_bytes()
+                    .checked_add(size_of::<StableId>())
+                    .and_then(|value| value.checked_add(128))
+                    .ok_or(DomainError::Incomplete {
+                        operation: "post-D2 terminal gate V4 registration ownership",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                total
+                    .checked_add(u64::try_from(node).unwrap_or(u64::MAX))
+                    .ok_or(DomainError::Incomplete {
+                        operation: "post-D2 terminal gate V4 registration ownership",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })
+            })
+    }
+
     fn validation_scratch_upper_bound(&self) -> Result<u64> {
         let records = |count: usize, dynamic: usize| {
             count
@@ -28346,13 +28647,43 @@ enum V5StructuralM4BundlePhase {
 /// a fact available to this raw structural recognizer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum V5StructuralPostD2Phase {
-    BeforePartialSeal,
-    AfterPartialSeal,
-    GluingActions,
+    BeforePartialSeal {
+        inherited: V5StructuralPostPlanPhase,
+        v4_registration_ids: BTreeSet<StableId>,
+    },
+    AfterPartialSeal {
+        inherited: V5StructuralPostPlanPhase,
+        v4_registration_ids: BTreeSet<StableId>,
+    },
+    GluingActions {
+        inherited: V5StructuralPostPlanPhase,
+        v4_registration_ids: BTreeSet<StableId>,
+    },
     TerminalInherited {
         inherited: V5StructuralPostPlanPhase,
         v4_registration_ids: BTreeSet<StableId>,
     },
+}
+
+fn initial_v5_structural_post_d2_phase() -> V5StructuralPostD2Phase {
+    V5StructuralPostD2Phase::BeforePartialSeal {
+        inherited: V5StructuralPostPlanPhase::Inherited {
+            m4_bundle: V5StructuralM4BundlePhase::Idle,
+        },
+        v4_registration_ids: BTreeSet::new(),
+    }
+}
+
+fn post_d2_terminal_suffix_initial_phase(
+    predecessor: V5StructuralPostPlanPhase,
+) -> V5StructuralPostPlanPhase {
+    if predecessor == V5StructuralPostPlanPhase::M5BundleRecorded {
+        V5StructuralPostPlanPhase::M5BundleRecorded
+    } else {
+        V5StructuralPostPlanPhase::Inherited {
+            m4_bundle: V5StructuralM4BundlePhase::Idle,
+        }
+    }
 }
 
 fn is_post_d2_terminal_inherited(payload: &PersistedPayload) -> bool {
@@ -28368,19 +28699,100 @@ fn is_post_d2_terminal_inherited(payload: &PersistedPayload) -> bool {
     )
 }
 
-fn advance_v5_post_d2_terminal_inherited(
-    inherited: &mut V5StructuralPostPlanPhase,
+/// Semantic vocabulary gate for the authority-bound post-D2 cursor.  The raw
+/// structural replay intentionally admits D2 rows between inherited records
+/// because it has no roots-bound knowledge of the second-plan condition.  Once
+/// `ReplayedPostD2TerminalPhaseV5` exists, that latitude would reopen the
+/// exact bypass ADR 0023 forbids, so this gate permits only terminal-native M4
+/// rows, human records, V4 gluing registrations, and the one M5 bundle.
+fn advance_v5_post_d2_terminal_gate(
+    terminal: &mut V5StructuralPostPlanPhase,
     v4_registration_ids: &mut BTreeSet<StableId>,
     payload: &PersistedPayload,
 ) -> Result<()> {
-    if !matches!(payload, PersistedPayload::ArtifactRegisteredV3(_))
-        && !is_post_d2_terminal_inherited(payload)
-    {
-        return Err(DomainError::EventSequence(
-            "post-D2 terminal suffix admits only native M4/human and V4/M5 records".to_owned(),
-        ));
+    match payload {
+        PersistedPayload::ArtifactRegisteredV3(_)
+        | PersistedPayload::EvidenceRecordedV3(_)
+        | PersistedPayload::EvidenceBoundV3(_)
+        | PersistedPayload::VerificationRecordedV3(_)
+        | PersistedPayload::DecisionRecordedV3(_)
+        | PersistedPayload::FindingRecordedV3(_) => {
+            advance_v5_structural_post_plan(terminal, v4_registration_ids, payload)
+        }
+        PersistedPayload::ArtifactRegisteredV4(registration) => {
+            if *terminal == V5StructuralPostPlanPhase::M5BundleRecorded {
+                return Err(structural_v5_post_plan_error(
+                    "payload follows the sole M5 bundle",
+                ));
+            }
+            if !matches!(
+                terminal,
+                V5StructuralPostPlanPhase::Inherited {
+                    m4_bundle: V5StructuralM4BundlePhase::Idle,
+                } | V5StructuralPostPlanPhase::V4Registrations { .. }
+            ) {
+                return Err(structural_v5_post_plan_error(
+                    "V4 gluing registration must follow a closed native M4 bundle",
+                ));
+            }
+            if v4_registration_ids.contains(registration.id()) {
+                return Err(structural_v5_post_plan_error(
+                    "duplicate V4 gluing registration ID",
+                ));
+            }
+            if v4_registration_ids.len() >= 2 {
+                return Err(structural_v5_post_plan_error(
+                    "third V4 gluing registration",
+                ));
+            }
+            v4_registration_ids.insert(registration.id().clone());
+            // This count describes only registrations durable in the current
+            // contiguous post-D2 suffix.  M5 eligibility below uses the
+            // complete trusted union, including suppressed predecessor IDs.
+            let suffix_count = match terminal {
+                V5StructuralPostPlanPhase::V4Registrations { count } => count
+                    .checked_add(1)
+                    .ok_or_else(|| structural_v5_post_plan_error("V4 registration overflow"))?,
+                V5StructuralPostPlanPhase::Inherited { .. } => 1,
+                V5StructuralPostPlanPhase::M5BundleRecorded => unreachable!(),
+            };
+            *terminal = V5StructuralPostPlanPhase::V4Registrations {
+                count: suffix_count,
+            };
+            Ok(())
+        }
+        PersistedPayload::GluingBundleRecordedV4(_) => {
+            if v4_registration_ids.len() != 2 {
+                return Err(structural_v5_post_plan_error(
+                    "M5 bundle requires exactly two trusted V4 registrations",
+                ));
+            }
+            match terminal {
+                V5StructuralPostPlanPhase::Inherited {
+                    m4_bundle: V5StructuralM4BundlePhase::Idle,
+                }
+                | V5StructuralPostPlanPhase::V4Registrations { .. } => {
+                    *terminal = V5StructuralPostPlanPhase::M5BundleRecorded;
+                    Ok(())
+                }
+                V5StructuralPostPlanPhase::M5BundleRecorded => Err(structural_v5_post_plan_error(
+                    "payload follows the sole M5 bundle",
+                )),
+                V5StructuralPostPlanPhase::Inherited { .. } => Err(structural_v5_post_plan_error(
+                    "M5 bundle cannot interrupt native M4",
+                )),
+            }
+        }
+        PersistedPayload::GluingRerunActionRecordedV5(_)
+        | PersistedPayload::GluingRerunPlanSealedV5(_) => Err(DomainError::EventSequence(
+            "post-D2 terminal gate forbids gluing rerun members after terminal admission"
+                .to_owned(),
+        )),
+        _ => Err(DomainError::EventSequence(
+            "post-D2 terminal gate admits only native M4, human, V4 gluing, and M5 payloads"
+                .to_owned(),
+        )),
     }
-    advance_v5_structural_post_plan(inherited, v4_registration_ids, payload)
 }
 
 fn advance_v5_structural_post_d2(
@@ -28388,28 +28800,53 @@ fn advance_v5_structural_post_d2(
     payload: &PersistedPayload,
 ) -> Result<()> {
     match phase {
-        V5StructuralPostD2Phase::BeforePartialSeal => match payload {
+        V5StructuralPostD2Phase::BeforePartialSeal {
+            inherited,
+            v4_registration_ids,
+        } => match payload {
             PersistedPayload::GluingRerunActionRecordedV5(_)
             | PersistedPayload::GluingRerunPlanSealedV5(_) => Err(DomainError::EventSequence(
                 "post-D2 gluing suffix requires a preceding partial rerun plan seal".to_owned(),
             )),
             PersistedPayload::PartialRerunPlanSealedV5(_) => {
-                *phase = V5StructuralPostD2Phase::AfterPartialSeal;
+                *phase = V5StructuralPostD2Phase::AfterPartialSeal {
+                    inherited: *inherited,
+                    v4_registration_ids: v4_registration_ids.clone(),
+                };
                 Ok(())
+            }
+            PersistedPayload::ArtifactRegisteredV3(_)
+            | PersistedPayload::EvidenceRecordedV3(_)
+            | PersistedPayload::EvidenceBoundV3(_)
+            | PersistedPayload::VerificationRecordedV3(_)
+            | PersistedPayload::DecisionRecordedV3(_)
+            | PersistedPayload::FindingRecordedV3(_)
+            | PersistedPayload::ArtifactRegisteredV4(_)
+            | PersistedPayload::GluingBundleRecordedV4(_) => {
+                // This is position-only preservation, not authority: the
+                // roots/CAS terminal replay separately proves the actual V4
+                // registrations.  Retaining the same 0/1/2 structural state
+                // prevents raw validation from resetting a legal partially
+                // suppressed predecessor when the M6 suffix begins.
+                advance_v5_structural_post_plan(inherited, v4_registration_ids, payload)
             }
             _ => Ok(()),
         },
-        V5StructuralPostD2Phase::AfterPartialSeal => match payload {
+        V5StructuralPostD2Phase::AfterPartialSeal {
+            inherited,
+            v4_registration_ids,
+        } => match payload {
             PersistedPayload::GluingRerunActionRecordedV5(_) => {
-                *phase = V5StructuralPostD2Phase::GluingActions;
+                *phase = V5StructuralPostD2Phase::GluingActions {
+                    inherited: *inherited,
+                    v4_registration_ids: v4_registration_ids.clone(),
+                };
                 Ok(())
             }
             PersistedPayload::GluingRerunPlanSealedV5(_) => {
                 *phase = V5StructuralPostD2Phase::TerminalInherited {
-                    inherited: V5StructuralPostPlanPhase::Inherited {
-                        m4_bundle: V5StructuralM4BundlePhase::Idle,
-                    },
-                    v4_registration_ids: BTreeSet::new(),
+                    inherited: post_d2_terminal_suffix_initial_phase(*inherited),
+                    v4_registration_ids: v4_registration_ids.clone(),
                 };
                 Ok(())
             }
@@ -28418,18 +28855,11 @@ fn advance_v5_structural_post_d2(
             | PersistedPayload::ArtifactRegisteredV3(_)
             | PersistedPayload::ReviewExecutionRecorded(_) => Ok(()),
             payload if is_post_d2_terminal_inherited(payload) => {
-                let mut inherited = V5StructuralPostPlanPhase::Inherited {
-                    m4_bundle: V5StructuralM4BundlePhase::Idle,
-                };
-                let mut v4_registration_ids = BTreeSet::new();
-                advance_v5_post_d2_terminal_inherited(
-                    &mut inherited,
-                    &mut v4_registration_ids,
-                    payload,
-                )?;
+                let mut terminal = post_d2_terminal_suffix_initial_phase(*inherited);
+                advance_v5_post_d2_terminal_gate(&mut terminal, v4_registration_ids, payload)?;
                 *phase = V5StructuralPostD2Phase::TerminalInherited {
-                    inherited,
-                    v4_registration_ids,
+                    inherited: terminal,
+                    v4_registration_ids: v4_registration_ids.clone(),
                 };
                 Ok(())
             }
@@ -28467,14 +28897,15 @@ fn advance_v5_structural_post_d2(
                     .to_owned(),
             )),
         },
-        V5StructuralPostD2Phase::GluingActions => match payload {
+        V5StructuralPostD2Phase::GluingActions {
+            inherited,
+            v4_registration_ids,
+        } => match payload {
             PersistedPayload::GluingRerunActionRecordedV5(_) => Ok(()),
             PersistedPayload::GluingRerunPlanSealedV5(_) => {
                 *phase = V5StructuralPostD2Phase::TerminalInherited {
-                    inherited: V5StructuralPostPlanPhase::Inherited {
-                        m4_bundle: V5StructuralM4BundlePhase::Idle,
-                    },
-                    v4_registration_ids: BTreeSet::new(),
+                    inherited: post_d2_terminal_suffix_initial_phase(*inherited),
+                    v4_registration_ids: v4_registration_ids.clone(),
                 };
                 Ok(())
             }
@@ -28485,7 +28916,7 @@ fn advance_v5_structural_post_d2(
         V5StructuralPostD2Phase::TerminalInherited {
             inherited,
             v4_registration_ids,
-        } => advance_v5_post_d2_terminal_inherited(inherited, v4_registration_ids, payload),
+        } => advance_v5_post_d2_terminal_gate(inherited, v4_registration_ids, payload),
     }
 }
 
@@ -45748,13 +46179,21 @@ mod tests {
         .expect("minimal gluing action");
         let payload = PersistedPayload::GluingRerunActionRecordedV5(action);
 
-        let mut phase = V5StructuralPostD2Phase::BeforePartialSeal;
+        let mut phase = initial_v5_structural_post_d2_phase();
         assert!(advance_v5_structural_post_d2(&mut phase, &payload).is_err());
 
-        phase = V5StructuralPostD2Phase::AfterPartialSeal;
+        phase = V5StructuralPostD2Phase::AfterPartialSeal {
+            inherited: V5StructuralPostPlanPhase::Inherited {
+                m4_bundle: V5StructuralM4BundlePhase::Idle,
+            },
+            v4_registration_ids: BTreeSet::new(),
+        };
         advance_v5_structural_post_d2(&mut phase, &payload)
             .expect("first gluing action follows the partial seal");
-        assert_eq!(phase, V5StructuralPostD2Phase::GluingActions);
+        assert!(matches!(
+            phase,
+            V5StructuralPostD2Phase::GluingActions { .. }
+        ));
         assert!(
             advance_v5_structural_post_d2(
                 &mut phase,
@@ -45766,7 +46205,12 @@ mod tests {
             .is_err()
         );
 
-        phase = V5StructuralPostD2Phase::AfterPartialSeal;
+        phase = V5StructuralPostD2Phase::AfterPartialSeal {
+            inherited: V5StructuralPostPlanPhase::Inherited {
+                m4_bundle: V5StructuralM4BundlePhase::Idle,
+            },
+            v4_registration_ids: BTreeSet::new(),
+        };
         assert!(
             advance_v5_structural_post_d2(
                 &mut phase,
@@ -45840,7 +46284,12 @@ mod tests {
             })
             .expect("native V3 registration");
         for _no_gluing_required in [false, true] {
-            let mut phase = V5StructuralPostD2Phase::AfterPartialSeal;
+            let mut phase = V5StructuralPostD2Phase::AfterPartialSeal {
+                inherited: V5StructuralPostPlanPhase::Inherited {
+                    m4_bundle: V5StructuralM4BundlePhase::Idle,
+                },
+                v4_registration_ids: BTreeSet::new(),
+            };
             // The same terminal vocabulary is deliberately structural-only:
             // roots-bound partial state decides whether the first route had a
             // second seal; raw replay must not infer that authority bit.
@@ -45871,6 +46320,150 @@ mod tests {
                 .is_err()
             );
         }
+
+        // A predecessor's trusted V4 inputs are not contiguous members of
+        // the new post-D2 suffix.  Both one- and two-input predecessor
+        // shapes must therefore restart native M4 at Idle, preserve the
+        // registration union for the eventual M5 count, and reject duplicate
+        // or third registrations by that union rather than suffix count.
+        for (predecessor, fresh) in [
+            (vec![payment.clone()], Some(ui.clone())),
+            (vec![payment.clone(), ui.clone()], None),
+        ] {
+            let mut inherited =
+                post_d2_terminal_suffix_initial_phase(V5StructuralPostPlanPhase::V4Registrations {
+                    count: u8::try_from(predecessor.len()).unwrap(),
+                });
+            let mut ids = predecessor
+                .iter()
+                .map(|registration| registration.id().clone())
+                .collect::<BTreeSet<_>>();
+            advance_v5_post_d2_terminal_gate(
+                &mut inherited,
+                &mut ids,
+                &PersistedPayload::ArtifactRegisteredV3(registration.clone()),
+            )
+            .expect("post-seal native V3 after suppressed inputs");
+            for payload in &native_payloads {
+                advance_v5_post_d2_terminal_gate(&mut inherited, &mut ids, payload)
+                    .expect("post-seal native M4 after suppressed inputs");
+            }
+            if let Some(fresh) = fresh {
+                advance_v5_post_d2_terminal_gate(
+                    &mut inherited,
+                    &mut ids,
+                    &PersistedPayload::ArtifactRegisteredV4(fresh),
+                )
+                .expect("one remaining post-seal V4 input");
+            }
+            advance_v5_post_d2_terminal_gate(&mut inherited, &mut ids, &bundle)
+                .expect("M5 follows exactly two unioned V4 inputs");
+        }
+    }
+
+    #[test]
+    fn v5_post_d2_structural_prefix_preserves_zero_one_two_v4_inputs() {
+        let (v4, _basis, _roots, _resolver, _session, _claim_id, _input_id, _output_id) =
+            static_v4_bundle_base();
+        let plan_id = v4
+            .aggregate
+            .review_plans()
+            .next()
+            .expect("plan")
+            .id()
+            .clone();
+        let (payment, _, _) = v4_gluing_registration(
+            &v4,
+            &v4.aggregate,
+            &plan_id,
+            crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID,
+            crate::AssignmentValueV4::Required,
+            BTreeSet::new(),
+        );
+        let (ui, _, _) = v4_gluing_registration(
+            &v4,
+            &v4.aggregate,
+            &plan_id,
+            crate::DOUBLE_SUBMIT_UI_CONTEXT_ID,
+            crate::AssignmentValueV4::Satisfied,
+            BTreeSet::new(),
+        );
+        for prefix in [
+            Vec::new(),
+            vec![payment.clone()],
+            vec![payment.clone(), ui.clone()],
+        ] {
+            let mut phase = initial_v5_structural_post_d2_phase();
+            for registration in &prefix {
+                advance_v5_structural_post_d2(
+                    &mut phase,
+                    &PersistedPayload::ArtifactRegisteredV4(registration.clone()),
+                )
+                .expect("legal inherited V4 prefix");
+            }
+            let V5StructuralPostD2Phase::BeforePartialSeal {
+                inherited,
+                v4_registration_ids,
+            } = phase
+            else {
+                panic!("pre-partial structural phase must retain inherited input state")
+            };
+            match prefix.len() {
+                0 => assert_eq!(
+                    inherited,
+                    V5StructuralPostPlanPhase::Inherited {
+                        m4_bundle: V5StructuralM4BundlePhase::Idle,
+                    }
+                ),
+                1 | 2 => assert_eq!(
+                    inherited,
+                    V5StructuralPostPlanPhase::V4Registrations {
+                        count: u8::try_from(prefix.len()).unwrap(),
+                    }
+                ),
+                _ => unreachable!(),
+            }
+            assert_eq!(v4_registration_ids.len(), prefix.len());
+        }
+        let mut duplicate = initial_v5_structural_post_d2_phase();
+        advance_v5_structural_post_d2(
+            &mut duplicate,
+            &PersistedPayload::ArtifactRegisteredV4(payment.clone()),
+        )
+        .expect("first V4 input");
+        assert!(
+            advance_v5_structural_post_d2(
+                &mut duplicate,
+                &PersistedPayload::ArtifactRegisteredV4(payment.clone()),
+            )
+            .is_err()
+        );
+        // A fresh two-input prefix exercises the third and bundle-order
+        // rejections without fabricating any roots authority.
+        let mut ordered = initial_v5_structural_post_d2_phase();
+        assert!(
+            advance_v5_structural_post_d2(
+                &mut ordered,
+                &PersistedPayload::GluingBundleRecordedV4(
+                    raw_payload(br#"{}"#.to_vec()).expect("raw M5")
+                ),
+            )
+            .is_err()
+        );
+        advance_v5_structural_post_d2(
+            &mut ordered,
+            &PersistedPayload::ArtifactRegisteredV4(payment.clone()),
+        )
+        .expect("first V4 input");
+        advance_v5_structural_post_d2(&mut ordered, &PersistedPayload::ArtifactRegisteredV4(ui))
+            .expect("second V4 input");
+        assert!(
+            advance_v5_structural_post_d2(
+                &mut ordered,
+                &PersistedPayload::ArtifactRegisteredV4(payment),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -61725,6 +62318,240 @@ mod tests {
     }
 
     #[test]
+    fn v5_post_d2_no_gluing_route_opens_only_without_second_phase() {
+        let (source_program, target_program, source_bytes, target_bytes) =
+            crate::m6::scheduled_reviewer_distinct_s0_s1_program_fixture()
+                .expect("scheduled reviewer programs");
+        let source = CompleteM5V4Fixture::successful_from_program_and_sources(
+            source_program,
+            source_bytes,
+            StableId::parse("run:m6-no-gluing-s0").expect("source run"),
+        )
+        .expect("source M5 fixture");
+        // The target has the same accepted files and extraction facts, but no
+        // target invariant.  ADR 0023 therefore derives the null second-plan
+        // route from roots/CAS replay rather than from a caller flag.
+        let mut target_json =
+            serde_json::to_value(target_program.streaming_ref()).expect("target program JSON");
+        *target_json
+            .get_mut("invariants")
+            .and_then(serde_json::Value::as_array_mut)
+            .expect("target invariants") = Vec::new();
+        let target_program = ProgramSpace::from_json_slice(
+            &serde_json::to_vec(&target_json).expect("target program bytes"),
+        )
+        .expect("target without invariant");
+        let target = NoM5V5Fixture::from_program_and_sources(
+            target_program,
+            target_bytes,
+            StableId::parse("run:m6-no-gluing-s1").expect("target run"),
+        )
+        .expect("target fixture");
+        let phases = target
+            .with_terminal(|_, actual, _| {
+                crate::m6::m6_fixture_phases_from_exact_prefixes(&source, &target, actual)
+            })
+            .expect("exact phases");
+        let staleness = target
+            .with_terminal(|log, actual, _| {
+                crate::m6::IncrementalStalenessInputV5::new(
+                    source.log(),
+                    phases.closure(),
+                    phases.mapping(),
+                    phases.correspondence(),
+                    log,
+                )?
+                .reduce_v5(
+                    actual,
+                    crate::m6_test_support::DISTINCT_S0_S1_ASSESSMENT_TIME,
+                )
+            })
+            .expect("no-gluing staleness");
+        assert!(!staleness.target_gluing_required());
+        let preservation = crate::M6PreservationPhaseV5::empty(&staleness);
+        target
+            .with_terminal_persistence(|mut log, pre_basis| {
+                let mut basis =
+                    log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                log.append_program_mapping_phase_v5(
+                    phases.closure(),
+                    phases.mapping().clone(),
+                    &mut basis,
+                )?;
+                log.append_obligation_correspondence_phase_v5(
+                    phases.closure(),
+                    phases.mapping(),
+                    phases.correspondence().clone(),
+                    &mut basis,
+                )?;
+                log.append_staleness_phase_v5(
+                    phases.closure(),
+                    phases.mapping(),
+                    phases.correspondence(),
+                    staleness.clone(),
+                    &mut basis,
+                )?;
+                let partial =
+                    target.seal_partial_rerun_phase_for_log_v5(&log, &staleness, &preservation)?;
+                while let Ok(prepared) =
+                    log.prepare_partial_rerun_phase_append_v5(&partial, &staleness, &basis)
+                {
+                    log.append_prepared_partial_rerun_phase_v5(
+                        prepared, &partial, &staleness, &mut basis,
+                    )?;
+                }
+                struct Resolver(BTreeMap<ContentHash, Vec<u8>>);
+                impl AuthorityArtifactResolverV5 for Resolver {
+                    fn read_exact(&self, hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                        let bytes = self.0.get(hash).ok_or_else(|| {
+                            DomainError::Validation(
+                                "no-gluing test CAS object is absent".to_owned(),
+                            )
+                        })?;
+                        if bytes.len() != destination.len() {
+                            return Err(DomainError::Validation(
+                                "no-gluing test CAS size differs".to_owned(),
+                            ));
+                        }
+                        destination.copy_from_slice(bytes);
+                        Ok(())
+                    }
+                }
+                let raw = br#"{"fixture":"no-gluing"}"#.to_vec();
+                let mut objects = target
+                    .sources
+                    .values()
+                    .cloned()
+                    .map(|bytes| (ContentHash::sha256(&bytes), bytes))
+                    .collect::<BTreeMap<_, _>>();
+                objects.insert(ContentHash::sha256(&raw), raw.clone());
+                let resolver = Resolver(objects);
+                let mut state = log.begin_scheduled_reviewer_phase_v5(&partial, basis)?;
+                while !state.is_finished() {
+                    let prepared = match state.cursor {
+                        ScheduledReviewerCursorV5::Planned
+                        | ScheduledReviewerCursorV5::InProgress
+                        | ScheduledReviewerCursorV5::Completed { .. } => {
+                            state.prepare_lifecycle_v5()?
+                        }
+                        ScheduledReviewerCursorV5::Context => {
+                            state.prepare_context_v5(&resolver)?
+                        }
+                        ScheduledReviewerCursorV5::RawRegistration { .. } => {
+                            state.prepare_raw_registration_v5(&raw)?
+                        }
+                        ScheduledReviewerCursorV5::Execution { .. } => state.prepare_execution_v5(
+                            &resolver,
+                            scheduled_reviewer_claims(&state, 1)?,
+                            crate::ExecutionOutcome::Structured,
+                        )?,
+                        ScheduledReviewerCursorV5::CardinalityUnsupported { .. } => {
+                            return Err(DomainError::Validation(
+                                "no-gluing reviewer claim cardinality is not singleton".to_owned(),
+                            )
+                            .into());
+                        }
+                        ScheduledReviewerCursorV5::Finished => unreachable!(),
+                    };
+                    log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
+                }
+                assert!(state.seal_gluing_rerun_phase_v5(&partial).is_err());
+                // The no-gluing route must charge the reviewer basis (not a
+                // nonexistent second-plan basis) and leave the opaque D2
+                // state/log untouched when the admission is one byte short.
+                let gate_exact = log
+                    .full_resident_bytes_for_structural_store()?
+                    .checked_add(state.retained_working_upper_bound()?)
+                    .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+                    .and_then(|value| {
+                        value.checked_add(
+                            u64::try_from(size_of::<ReplayedPostD2TerminalPhaseV5>())
+                                .unwrap_or(u64::MAX),
+                        )
+                    })
+                    .and_then(|value| {
+                        [
+                            partial.source_closure_id.allocated_bytes(),
+                            partial.plan.id().allocated_bytes(),
+                            state.plan_id.allocated_bytes(),
+                        ]
+                        .into_iter()
+                        .try_fold(value, |total, bytes| {
+                            total.checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                        })
+                    })
+                    // `ReplayedPostD2TerminalPhaseV5` already contains the
+                    // AuthorityReplayBasisV5 value inline; only its heap
+                    // ownership is newly cloned.
+                    .and_then(|value| {
+                        value.checked_add(state.basis.retained_bytes().ok()?.checked_sub(
+                            u64::try_from(size_of::<AuthorityReplayBasisV5>()).ok()?,
+                        )?)
+                    })
+                    .ok_or(DomainError::Incomplete {
+                        operation: "no-gluing terminal gate test oracle",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                let original_gate_limit = log.limits.max_working_bytes;
+                let before_gate_tail = log.tail_hash().clone();
+                let before_gate_count = log.envelopes.len();
+                let before_reviewer_basis = state.basis.basis_digest.clone();
+                log.limits.max_working_bytes =
+                    gate_exact.checked_add(1).ok_or(DomainError::Incomplete {
+                        operation: "no-gluing terminal gate exact-plus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                assert!(
+                    log.open_post_d2_terminal_phase_v5(&state, &partial, None)
+                        .is_ok()
+                );
+                log.limits.max_working_bytes =
+                    gate_exact.checked_sub(1).ok_or(DomainError::Incomplete {
+                        operation: "no-gluing terminal gate exact-minus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                assert!(
+                    log.open_post_d2_terminal_phase_v5(&state, &partial, None)
+                        .is_err()
+                );
+                assert_eq!(log.tail_hash(), &before_gate_tail);
+                assert_eq!(log.envelopes.len(), before_gate_count);
+                assert_eq!(state.basis.basis_digest, before_reviewer_basis);
+                log.limits.max_working_bytes = gate_exact;
+                let terminal = log.open_post_d2_terminal_phase_v5(&state, &partial, None)?;
+                log.limits.max_working_bytes = original_gate_limit;
+                assert!(
+                    terminal
+                        .admits_terminal_payload_for_test(
+                            &PersistedPayload::GluingRerunActionRecordedV5(
+                                crate::GluingRerunActionV5::derive(
+                                    StableId::parse("gluing-rerun-scope-v5:no-gluing-forbidden")?,
+                                    crate::GluingRerunSubjectKindV5::GluingContext,
+                                    StableId::parse(crate::DOUBLE_SUBMIT_PAYMENT_CONTEXT_ID)?,
+                                    crate::GluingRerunActionKindV5::RegisterGluingInput,
+                                    Vec::new(),
+                                )?,
+                            )
+                        )
+                        .is_err()
+                );
+                Ok(())
+            })
+            .expect("no-gluing terminal gate");
+    }
+
+    #[test]
+    fn v5_post_d2_terminal_gate_presence_condition_is_closed() {
+        assert!(validate_post_d2_gluing_presence(true, true).is_ok());
+        assert!(validate_post_d2_gluing_presence(false, false).is_ok());
+        assert!(validate_post_d2_gluing_presence(true, false).is_err());
+        assert!(validate_post_d2_gluing_presence(false, true).is_err());
+    }
+
+    #[test]
     fn v5_post_d2_gluing_actions_and_seal_recover_every_prefix() {
         let (source_program, target_program, source_bytes, target_bytes) =
             crate::m6::gluing_selected_distinct_s0_s1_program_fixture()
@@ -62418,6 +63245,12 @@ mod tests {
                 // smaller, first-member test reservation.
                 state.max_working_bytes = state.max_working_bytes.max(MAX_V5_REPLAY_WORKING_BYTES);
                 let mut gluing = state.seal_gluing_rerun_phase_v5(&partial)?;
+                // The structural parser alone can enter the inherited tail
+                // here.  The roots-bound gate must refuse that bypass until
+                // every derived gluing action and the seal are durable.
+                assert!(log
+                    .open_post_d2_terminal_phase_v5(&state, &partial, None)
+                    .is_err());
                 log.limits.max_working_bytes = log
                     .limits
                     .max_working_bytes
@@ -62431,6 +63264,102 @@ mod tests {
                 assert_eq!(expected.len(), gluing.actions.len() + 1);
                 assert_eq!(log.envelopes.len(), start + expected.len());
                 assert!(log.prepare_gluing_rerun_append_v5(&mut gluing).is_err());
+                // Independent, input-actual gate oracle.  It intentionally
+                // expands the cursor allocation rather than calling the
+                // production preflight helper being bounded below.
+                let gate_exact = log
+                    .full_resident_bytes_for_structural_store()?
+                    .checked_add(state.retained_working_upper_bound()?)
+                    .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+                    .and_then(|value| value.checked_add(gluing.retained_bytes().ok()?))
+                    .and_then(|value| {
+                        value.checked_add(
+                            u64::try_from(size_of::<ReplayedPostD2TerminalPhaseV5>())
+                                .unwrap_or(u64::MAX),
+                        )
+                    })
+                    .and_then(|value| {
+                        [
+                            partial.source_closure_id.allocated_bytes(),
+                            partial.plan.id().allocated_bytes(),
+                            state.plan_id.allocated_bytes(),
+                        ]
+                        .into_iter()
+                        .try_fold(value, |total, bytes| {
+                            total.checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                        })
+                    })
+                    // The cursor's inline basis is already included in its
+                    // `size_of`; charge only the dynamically retained clone.
+                    .and_then(|value| {
+                        value.checked_add(
+                            gluing
+                                .basis
+                                .retained_bytes()
+                                .ok()?
+                                .checked_sub(
+                                    u64::try_from(size_of::<AuthorityReplayBasisV5>()).ok()?,
+                                )?,
+                        )
+                    })
+                    .ok_or(DomainError::Incomplete {
+                        operation: "post-D2 terminal gate test oracle",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                let original_gate_limit = log.limits.max_working_bytes;
+                let before_gate_tail = log.tail_hash().clone();
+                let before_gate_count = log.envelopes.len();
+                let before_gluing_basis = gluing.basis.basis_digest.clone();
+                // Use a freshly minted phase for +1 so the successful probe
+                // cannot affect the -1/exact phase whose non-mutation is
+                // asserted below.
+                let mut gate_plus_phase = state.seal_gluing_rerun_phase_v5(&partial)?;
+                log.limits.max_working_bytes = gate_exact.checked_add(1).ok_or(
+                    DomainError::Incomplete {
+                        operation: "post-D2 terminal gate exact-plus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    },
+                )?;
+                assert!(log
+                    .open_post_d2_terminal_phase_v5(
+                        &state,
+                        &partial,
+                        Some(&mut gate_plus_phase),
+                    )
+                    .is_ok());
+                log.limits.max_working_bytes = gate_exact.checked_sub(1).ok_or(
+                    DomainError::Incomplete {
+                        operation: "post-D2 terminal gate exact-minus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    },
+                )?;
+                assert!(log
+                    .open_post_d2_terminal_phase_v5(&state, &partial, Some(&mut gluing))
+                    .is_err());
+                assert_eq!(log.tail_hash(), &before_gate_tail);
+                assert_eq!(log.envelopes.len(), before_gate_count);
+                assert_eq!(gluing.basis.basis_digest, before_gluing_basis);
+                log.limits.max_working_bytes = gate_exact;
+                let terminal = log.open_post_d2_terminal_phase_v5(
+                    &state,
+                    &partial,
+                    Some(&mut gluing),
+                )?;
+                log.limits.max_working_bytes = original_gate_limit;
+                assert!(terminal
+                    .admits_terminal_payload_for_test(&PersistedPayload::ObligationTransition {
+                        obligation_id: StableId::parse("obligation:post-d2-gate-forbidden")?,
+                        next: ObligationLifecycle::Completed,
+                    })
+                    .is_err());
+                assert!(terminal
+                    .admits_terminal_payload_for_test(&PersistedPayload::GluingRerunPlanSealedV5(
+                        gluing.seal.clone(),
+                    ))
+                    .is_err());
                 let full_envelopes = log.envelopes.clone();
                 for persisted in 0..=expected.len() {
                     // First independently validate the persisted V5 prefix,
@@ -62689,6 +63618,21 @@ mod tests {
                                 "recovery prefix {persisted} append: {error}"
                             )))?;
                     }
+                    // Each interrupted prefix reconstructs the scheduled D2
+                    // and gluing phases from roots/CAS before reopening the
+                    // gate.  This proves the terminal authority is not an
+                    // in-memory token inherited from the original session.
+                    let recovered_terminal = recovered_log.open_post_d2_terminal_phase_v5(
+                        &recovered_state,
+                        &recovery_partial,
+                        Some(&mut recovered_gluing),
+                    )?;
+                    assert!(recovered_terminal
+                        .admits_terminal_payload_for_test(&PersistedPayload::ObligationTransition {
+                            obligation_id: StableId::parse("obligation:post-d2-recovery-forbidden")?,
+                            next: ObligationLifecycle::Completed,
+                        })
+                        .is_err());
                     assert_eq!(
                         recovered_log
                             .envelopes
@@ -62841,9 +63785,32 @@ mod tests {
                     };
                     log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
                 }
-                let gluing = state.seal_gluing_rerun_phase_v5(&partial)?;
+                let mut gluing = state.seal_gluing_rerun_phase_v5(&partial)?;
                 assert!(gluing.actions.is_empty());
                 assert!(gluing.seal.existing_target_bundle_witness().is_some());
+                let prepared = log.prepare_gluing_rerun_append_v5(&mut gluing)?;
+                log.append_prepared_gluing_rerun_v5(prepared, &mut gluing)?;
+                assert!(log.prepare_gluing_rerun_append_v5(&mut gluing).is_err());
+                let terminal =
+                    log.open_post_d2_terminal_phase_v5(&state, &partial, Some(&mut gluing))?;
+                let existing_m5 = log
+                    .envelopes
+                    .iter()
+                    .find_map(|envelope| {
+                        match decode_canonical_payload(
+                            EventContractVersion::V5,
+                            envelope.payload.get(),
+                        )
+                        .ok()?
+                        {
+                            payload @ PersistedPayload::GluingBundleRecordedV4(_) => Some(payload),
+                            _ => None,
+                        }
+                    })
+                    .expect("existing target M5 payload");
+                assert!(terminal
+                    .admits_terminal_payload_for_test(&existing_m5)
+                    .is_err());
                 Ok(())
             })
             .expect("zero-action existing M5 gluing seal");
