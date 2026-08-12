@@ -2210,6 +2210,20 @@ impl PartialRerunActionV5 {
     pub fn source_ids(&self) -> &BTreeSet<StableId> {
         &self.source_ids
     }
+
+    /// Event-level authority tests need to exercise the native reducer's
+    /// predecessor-witness checks independently of the planner seal.  This
+    /// deliberately leaves the derived ID and source set untouched: it is
+    /// only suitable for testing a private opaque phase after that phase has
+    /// already been minted by the normal planner.
+    #[cfg(test)]
+    pub(crate) fn replace_prerequisites_unchecked_for_test(
+        &mut self,
+        prerequisites: Vec<ActionPrerequisiteV5>,
+    ) {
+        self.prerequisites = prerequisites;
+    }
+
     pub fn body_hash(&self) -> M6Result<ContentHash> {
         body_hash(self)
     }
@@ -11961,6 +11975,49 @@ impl M6StalenessPhaseV5 {
             MAX_M6_PARTIAL_RERUN_ACTIONS,
             MAX_M6_PARTIAL_RERUN_WORKING_BYTES,
         )
+    }
+
+    /// Produces a test-only planning projection of an already sealed
+    /// staleness result.  The assessment, historical records, gluing facts,
+    /// target coordinates, and their canonical seal are retained verbatim;
+    /// this merely narrows the otherwise-unsealed action-seed reduction to
+    /// one actual target obligation.  It exists so Event can exercise a
+    /// single normal M4 action without hand-constructing a partial plan.
+    #[cfg(test)]
+    pub(crate) fn with_only_partial_rerun_subject_for_test(
+        &self,
+        target_obligation_id: &StableId,
+    ) -> M6Result<Self> {
+        let seed = self
+            .partial_rerun_seeds
+            .get(target_obligation_id)
+            .filter(|seed| seed.require_native_pipeline)
+            .cloned()
+            .ok_or(M6Error::InvalidStalenessAssessment(
+                "test planning projection target has no sealed native rerun seed",
+            ))?;
+        Ok(Self {
+            records: self.records.clone(),
+            gluing_freshness: self.gluing_freshness.clone(),
+            assessment: self.assessment.clone(),
+            preservation_candidate_obligation_ids: self
+                .preservation_candidate_obligation_ids
+                .clone(),
+            target_gluing_required: self.target_gluing_required,
+            m5_dependent_successor_obligation_ids: self
+                .m5_dependent_successor_obligation_ids
+                .clone(),
+            partial_rerun_seeds: BTreeMap::from([(target_obligation_id.clone(), seed)]),
+            target_plan_id: self.target_plan_id.clone(),
+            target_snapshot_id: self.target_snapshot_id.clone(),
+            target_run_id: self.target_run_id.clone(),
+            target_genesis_hash: self.target_genesis_hash.clone(),
+            target_tail_hash: self.target_tail_hash.clone(),
+            target_event_count: self.target_event_count,
+            target_policy_revision_hash: self.target_policy_revision_hash.clone(),
+            target_pre_incremental_basis_digest: self.target_pre_incremental_basis_digest.clone(),
+            working_bytes: self.working_bytes,
+        })
     }
 
     pub(crate) fn plan_partial_rerun_with_target_suppression_v5(

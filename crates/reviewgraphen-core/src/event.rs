@@ -1,6 +1,7 @@
 use crate::context::{ContextProjectionAdmission, context_domain_error, context_resource_oracle};
 use crate::execution::{
-    MAX_D2_WORKING_BYTES, ReviewExecutionRecorded, ReviewerRawClosure, preflight_d2_decode_working,
+    MAX_D2_WORKING_BYTES, ReviewExecutionRecorded, ReviewerRawClosure, d2_decode_working_observed,
+    preflight_d2_decode_working,
 };
 use crate::{
     ActionPrerequisiteV5, BuiltContextProjection, ContentHash, Decision, DecisionAdmission,
@@ -10134,6 +10135,10 @@ std::thread_local! {
     static V5_TEST_M4_EXACT_WORKING: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_M4_CONTEXT_SESSION_SEALS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_M4_CONTEXT_SOURCE_REQUESTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_NATIVE_BEGIN_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_NATIVE_RECOVERY_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_NATIVE_PREPARE_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_NATIVE_MATERIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_M4_FORCED_CONTEXT_WORKING_OVERHEAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_APPEND_SHADOW_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_BINDING_APPEND_PEAK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -10152,6 +10157,42 @@ std::thread_local! {
     static V3_TEST_STATIC_EXPECTATION_KIND: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static V3_TEST_STATIC_EXPECTATION_PEAK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_STATIC_EXPECTATION_ALLOCATION_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_scheduled_native_begin_required_working_for_test() {
+    V5_TEST_NATIVE_BEGIN_REQUIRED.with(|value| value.set(0));
+}
+
+#[cfg(test)]
+fn scheduled_native_begin_required_working_for_test() -> u64 {
+    V5_TEST_NATIVE_BEGIN_REQUIRED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn reset_scheduled_native_recovery_required_working_for_test() {
+    V5_TEST_NATIVE_RECOVERY_REQUIRED.with(|value| value.set(0));
+}
+
+#[cfg(test)]
+fn scheduled_native_recovery_required_working_for_test() -> u64 {
+    V5_TEST_NATIVE_RECOVERY_REQUIRED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn reset_scheduled_native_prepare_for_test() {
+    V5_TEST_NATIVE_PREPARE_REQUIRED.with(|value| value.set(0));
+    V5_TEST_NATIVE_MATERIALIZATIONS.with(|value| value.set(0));
+}
+
+#[cfg(test)]
+fn scheduled_native_prepare_required_working_for_test() -> u64 {
+    V5_TEST_NATIVE_PREPARE_REQUIRED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn scheduled_native_materializations_for_test() -> u64 {
+    V5_TEST_NATIVE_MATERIALIZATIONS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -11465,7 +11506,7 @@ fn canonical_gluing_binding(binding: &GluingInputTrustBindingV4) -> Result<Vec<u
 /// This is intentionally not constructible from a V4 replay capability.  The
 /// host must copy the complete immutable source tuple and additionally bind
 /// the actual V5 predecessor and sequence at which it was observed.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GluingInputTrustBindingV4AtV5 {
     policy_revision_hash: ContentHash,
     repository_id: StableId,
@@ -11761,7 +11802,7 @@ pub struct AuthorityTrustRootsV4 {
 // `AuthorityTrustRootsV4`, no V4 basis input, and its eventual digest commits
 // V5 event positions.
 #[allow(dead_code)] // Private V5 authority reducer foundation; no public seam yet.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct AuthorityTrustRootsV5 {
     policy_revision_hash: ContentHash,
     repository_id: StableId,
@@ -11892,6 +11933,207 @@ impl AuthorityTrustRootsV5 {
         self.allowed_preservation_bindings = bindings;
         Ok(self)
     }
+}
+
+fn native_checked_bytes(total: u64, bytes: usize, operation: &'static str) -> Result<u64> {
+    total
+        .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+        .ok_or(DomainError::Incomplete {
+            operation,
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })
+}
+
+fn native_harness_root_retained_bytes(root: &AuthorityHarnessBindingV3Tuple) -> Result<u64> {
+    [
+        root.policy_revision_hash.allocated_bytes(),
+        root.repository_id.allocated_bytes(),
+        root.repository_source_hash.allocated_bytes(),
+        root.harness_id.capacity(),
+        root.harness_revision.capacity(),
+        root.harness_source_hash.allocated_bytes(),
+        root.test_artifact_id.allocated_bytes(),
+        root.descriptor_id.capacity(),
+        root.procedure_version.capacity(),
+        root.result_hash.allocated_bytes(),
+        root.result_media_type.capacity(),
+        root.run_id.allocated_bytes(),
+        root.genesis_hash.allocated_bytes(),
+        root.snapshot_id.allocated_bytes(),
+        root.universe_id.allocated_bytes(),
+        root.property_id.capacity(),
+        root.claim_id.allocated_bytes(),
+        root.claim_body_hash.allocated_bytes(),
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, bytes| {
+        native_checked_bytes(
+            total,
+            bytes,
+            "scheduled native verifier harness root ownership",
+        )
+    })
+}
+
+fn native_human_root_retained_bytes(root: &AuthorityHumanGrantV3Tuple) -> Result<u64> {
+    let mut total = [
+        root.policy_revision_hash.allocated_bytes(),
+        root.actor.capacity(),
+        root.authority_id.capacity(),
+        root.run_id.allocated_bytes(),
+        root.snapshot_id.allocated_bytes(),
+        root.universe_id.allocated_bytes(),
+        root.valid_from.capacity(),
+        root.valid_until.capacity(),
+        root.capabilities.len() * (size_of::<HumanAuthorityCapabilityV3>() + 128),
+        root.property_ids.len() * (size_of::<String>() + 128),
+        root.claim_ids.len() * (size_of::<StableId>() + 128),
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, bytes| {
+        native_checked_bytes(
+            total,
+            bytes,
+            "scheduled native verifier human root ownership",
+        )
+    })?;
+    for property_id in &root.property_ids {
+        total = native_checked_bytes(
+            total,
+            property_id.capacity(),
+            "scheduled native verifier human root ownership",
+        )?;
+    }
+    for claim_id in &root.claim_ids {
+        total = native_checked_bytes(
+            total,
+            claim_id.allocated_bytes(),
+            "scheduled native verifier human root ownership",
+        )?;
+    }
+    Ok(total)
+}
+
+fn native_gluing_root_retained_bytes(root: &GluingInputTrustBindingV4AtV5) -> Result<u64> {
+    [
+        root.policy_revision_hash.allocated_bytes(),
+        root.repository_id.allocated_bytes(),
+        root.repository_source_hash.allocated_bytes(),
+        root.run_id.allocated_bytes(),
+        root.genesis_hash.allocated_bytes(),
+        root.snapshot_id.allocated_bytes(),
+        root.universe_id.allocated_bytes(),
+        root.plan_id.allocated_bytes(),
+        root.profile_descriptor_id.capacity(),
+        root.context_id.allocated_bytes(),
+        root.descriptor_id.allocated_bytes(),
+        root.descriptor_hash.allocated_bytes(),
+        root.descriptor_media_type.capacity(),
+        root.registration_id.allocated_bytes(),
+        root.source.allocated_bytes(),
+        root.predecessor_event_hash.allocated_bytes(),
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, bytes| {
+        native_checked_bytes(
+            total,
+            bytes,
+            "scheduled native verifier gluing root ownership",
+        )
+    })
+}
+
+fn native_preservation_root_retained_bytes(root: &PreservationTrustBindingV5) -> Result<u64> {
+    [
+        root.policy_revision_hash.allocated_bytes(),
+        root.source_closure_id.allocated_bytes(),
+        root.source_run_id.allocated_bytes(),
+        root.source_verification_id.allocated_bytes(),
+        root.target_run_id.allocated_bytes(),
+        root.target_genesis_hash.allocated_bytes(),
+        root.target_snapshot_id.allocated_bytes(),
+        root.target_obligation_id.allocated_bytes(),
+        root.descriptor_id.capacity(),
+        root.procedure_version.capacity(),
+        root.input_hash.allocated_bytes(),
+        root.input_media_type.capacity(),
+        root.output_hash.allocated_bytes(),
+        root.output_media_type.capacity(),
+        root.input_registration_id.allocated_bytes(),
+        root.output_registration_id.allocated_bytes(),
+        root.predecessor_event_hash.allocated_bytes(),
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, bytes| {
+        native_checked_bytes(
+            total,
+            bytes,
+            "scheduled native verifier preservation root ownership",
+        )
+    })
+}
+
+/// Full live host-root ownership. This intentionally includes roots that do
+/// not select a fixture descriptor: they remain borrowed through begin.
+fn native_authority_roots_retained_bytes(roots: &AuthorityTrustRootsV5) -> Result<u64> {
+    let mut total = [
+        roots.policy_revision_hash.allocated_bytes(),
+        roots.repository_id.allocated_bytes(),
+        roots.repository_source_hash.allocated_bytes(),
+        roots.harnesses.capacity() * size_of::<AuthorityHarnessBindingV3Tuple>(),
+        roots.human_grants.capacity() * size_of::<AuthorityHumanGrantV3Tuple>(),
+        roots.allowed_gluing_input_bindings.capacity() * size_of::<GluingInputTrustBindingV4AtV5>(),
+        roots.allowed_preservation_bindings.len() * (size_of::<PreservationTrustBindingV5>() + 128),
+    ]
+    .into_iter()
+    .try_fold(
+        u64::try_from(size_of::<AuthorityTrustRootsV5>()).unwrap_or(u64::MAX),
+        |total, bytes| {
+            native_checked_bytes(
+                total,
+                bytes,
+                "scheduled native verifier authority roots ownership",
+            )
+        },
+    )?;
+    for root in &roots.harnesses {
+        total = total
+            .checked_add(native_harness_root_retained_bytes(root)?)
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier authority roots ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+    }
+    for root in &roots.human_grants {
+        total = total
+            .checked_add(native_human_root_retained_bytes(root)?)
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier authority roots ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+    }
+    for root in &roots.allowed_gluing_input_bindings {
+        total = total
+            .checked_add(native_gluing_root_retained_bytes(root)?)
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier authority roots ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+    }
+    for root in &roots.allowed_preservation_bindings {
+        total = total
+            .checked_add(native_preservation_root_retained_bytes(root)?)
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier authority roots ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+    }
+    Ok(total)
 }
 
 #[allow(dead_code)] // Used by private V5 post-plan replay only.
@@ -22209,28 +22451,36 @@ impl ReplayedScheduledReviewerPhaseV5 {
             raw_registration_id: &'a StableId,
             raw_registration_event_id: &'a StableId,
         }
-        let values = self
-            .completed_receipts
-            .iter()
-            .map(|value| Receipt {
-                action_event_ids: &value.action_event_ids,
-                action_id: &value.action_id,
-                claim_body_hash: &value.claim_body_hash,
-                claim_id: &value.claim_id,
-                completed_event_id: &value.completed_event_id,
-                context_body_hash: &value.context_body_hash,
-                context_branch: &value.context_branch,
-                context_event_id: &value.context_event_id,
-                context_id: &value.context_id,
-                execution_body_hash: &value.execution_body_hash,
-                execution_event_id: &value.execution_event_id,
-                execution_id: &value.execution_id,
-                obligation_id: &value.obligation_id,
-                raw_registration_id: &value.raw_registration_id,
-                raw_registration_event_id: &value.raw_registration_event_id,
-            })
-            .collect::<Vec<_>>();
-        crate::canonical::compact_json_sha256_streaming(&values)
+        struct Receipts<'a>(&'a [ScheduledReviewerCompletionReceiptV5]);
+        impl Serialize for Receipts<'_> {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                let mut values = serializer.serialize_seq(Some(self.0.len()))?;
+                for value in self.0 {
+                    values.serialize_element(&Receipt {
+                        action_event_ids: &value.action_event_ids,
+                        action_id: &value.action_id,
+                        claim_body_hash: &value.claim_body_hash,
+                        claim_id: &value.claim_id,
+                        completed_event_id: &value.completed_event_id,
+                        context_body_hash: &value.context_body_hash,
+                        context_branch: &value.context_branch,
+                        context_event_id: &value.context_event_id,
+                        context_id: &value.context_id,
+                        execution_body_hash: &value.execution_body_hash,
+                        execution_event_id: &value.execution_event_id,
+                        execution_id: &value.execution_id,
+                        obligation_id: &value.obligation_id,
+                        raw_registration_id: &value.raw_registration_id,
+                        raw_registration_event_id: &value.raw_registration_event_id,
+                    })?;
+                }
+                values.end()
+            }
+        }
+        crate::canonical::compact_json_sha256_streaming(&Receipts(&self.completed_receipts))
     }
 
     fn validate_completed_receipts(&self, log: &EventLogV5) -> Result<()> {
@@ -24383,6 +24633,54 @@ impl PreparedGluingRerunAppendV5 {
     }
 }
 
+/// Peak short-lived buffers created by the semantic validation immediately
+/// preceding native fixture preparation. This is intentionally borrow-only:
+/// the matching `body_hash` implementations retain one canonical JSON buffer
+/// plus their returned SHA-256 string at a time.
+fn scheduled_native_prepare_validation_bytes(
+    phase: &ReplayedScheduledNativeVerifierPhaseV5,
+) -> Result<u64> {
+    const SHA256_CAPACITY: u64 = ("sha256:".len() + 64) as u64;
+    let action = phase.current_action()?;
+    let execution = phase
+        .aggregate
+        .execution(&action.execution_id)
+        .ok_or_else(|| DomainError::DanglingReference {
+            owner: "scheduled native verifier execution",
+            owner_id: action.action_id.clone(),
+            reference: action.execution_id.clone(),
+        })?;
+    let claim = phase
+        .aggregate
+        .execution_claims()
+        .find(|claim| claim.id() == &action.claim_id)
+        .ok_or_else(|| DomainError::DanglingReference {
+            owner: "scheduled native verifier claim",
+            owner_id: action.action_id.clone(),
+            reference: action.claim_id.clone(),
+        })?;
+    let execution_body = crate::canonical::canonical_json_count_bounded(
+        execution,
+        usize::MAX,
+        "scheduled native verifier execution validation scratch",
+    )?;
+    let claim_body = crate::canonical::canonical_json_count_bounded(
+        claim,
+        usize::MAX,
+        "scheduled native verifier claim validation scratch",
+    )?;
+    SHA256_CAPACITY
+        .checked_add(execution_body)
+        .and_then(|value| value.checked_add(SHA256_CAPACITY))
+        .and_then(|value| value.checked_add(claim_body))
+        .and_then(|value| value.checked_add(SHA256_CAPACITY))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled native verifier prepare validation ownership",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })
+}
+
 impl EventLogV5 {
     /// Replays only the persisted post-D2 action/seal prefix against a newly
     /// roots/CAS-derived opaque phase.  The phase's basis must have been
@@ -24758,6 +25056,2193 @@ impl ReplayedPostD2TerminalPhaseV5 {
     #[cfg(test)]
     fn admits_terminal_payload_for_test(&self, payload: &PersistedPayload) -> Result<()> {
         self.admit_next_terminal_payload(payload)
+    }
+}
+
+// The native-verifier reducer is deliberately separate from the generic V5
+// structural recognizer.  A `PartialRerunActionV5` is a sealed requirement,
+// not an append capability: this private projection resolves its sole claim
+// either through the finished scheduled-reviewer receipt or through the
+// revalidated predecessor pair before it can mint even the first artifact.
+#[derive(Debug)]
+struct ScheduledNativeVerifierActionV5 {
+    action_id: StableId,
+    obligation_id: StableId,
+    execution_id: StableId,
+    execution_body_hash: ContentHash,
+    claim_id: StableId,
+    claim_body_hash: ContentHash,
+    descriptor: ScheduledNativeVerifierDescriptorV5,
+}
+
+#[derive(Debug)]
+enum ScheduledNativeVerifierDescriptorV5 {
+    Fixture {
+        harness: Box<HarnessTrustRootInputV3>,
+    },
+    // Static support is intentionally a closed refusal until its V5
+    // registration/reconstruction batch is introduced.  In particular, it
+    // must not fall back to the fixture grammar or accept caller bytes.
+    StaticRequiresReconstruction {
+        trust_digest: ContentHash,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct ReplayedScheduledNativeVerifierPhaseV5 {
+    log_identity: V5LogInstanceIdentity,
+    source_closure_id: StableId,
+    partial_rerun_plan_id: StableId,
+    target_plan_id: StableId,
+    reviewer_completion_digest: ContentHash,
+    basis: AuthorityReplayBasisV5,
+    actions: Vec<ScheduledNativeVerifierActionV5>,
+    action_index: usize,
+    member_index: usize,
+    aggregate: ReviewAggregate,
+    v3_aggregate: V3RunAggregate,
+    terminal: V5StructuralPostPlanPhase,
+    v4_registration_ids: BTreeSet<StableId>,
+}
+
+pub(crate) struct PreparedScheduledNativeVerifierAppendV5 {
+    log_identity: V5LogInstanceIdentity,
+    basis_digest: ContentHash,
+    predecessor_event_hash: ContentHash,
+    event_sequence: u64,
+    action_id: StableId,
+    action_index: usize,
+    member_index: usize,
+    phase_digest: ContentHash,
+    payload_hash: ContentHash,
+    payloads: [PersistedPayload; 5],
+}
+
+impl PreparedScheduledNativeVerifierAppendV5 {
+    fn payload(&self) -> Result<&PersistedPayload> {
+        self.payloads.get(self.member_index).ok_or_else(|| {
+            DomainError::EventSequence(
+                "scheduled native verifier prepared member index is invalid".to_owned(),
+            )
+        })
+    }
+
+    fn retained_bytes(&self) -> Result<u64> {
+        let mut total = u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX);
+        for bytes in [
+            self.basis_digest.allocated_bytes(),
+            self.predecessor_event_hash.allocated_bytes(),
+            self.action_id.allocated_bytes(),
+            self.phase_digest.allocated_bytes(),
+            self.payload_hash.allocated_bytes(),
+        ] {
+            total =
+                native_checked_bytes(total, bytes, "scheduled native verifier prepared ownership")?;
+        }
+        for payload in &self.payloads {
+            total = total
+                .checked_add(native_payload_dynamic_bytes(payload)?)
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier prepared ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        Ok(total)
+    }
+}
+
+impl EventLogV5 {
+    /// Opens the native-M4 portion of the post-D2 terminal grammar.  The
+    /// terminal cursor is consumed by reference rather than reconstructed
+    /// from envelope bodies, which keeps the second-plan decision and D2
+    /// completion receipts on the authority path.
+    #[allow(dead_code)]
+    pub(crate) fn begin_scheduled_native_verifier_phase_v5(
+        &self,
+        terminal: &ReplayedPostD2TerminalPhaseV5,
+        reviewer: &ReplayedScheduledReviewerPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<ReplayedScheduledNativeVerifierPhaseV5> {
+        self.begin_scheduled_native_verifier_phase_with_live_bytes_v5(
+            terminal, reviewer, partial, roots, 0,
+        )
+    }
+
+    fn begin_scheduled_native_verifier_phase_with_live_bytes_v5(
+        &self,
+        terminal: &ReplayedPostD2TerminalPhaseV5,
+        reviewer: &ReplayedScheduledReviewerPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+        live_bytes: u64,
+    ) -> Result<ReplayedScheduledNativeVerifierPhaseV5> {
+        if self.instance_identity != terminal.log_identity
+            || reviewer.log_identity != terminal.log_identity
+            || terminal.source_closure_id != partial.source_closure_id
+            || terminal.partial_rerun_plan_id != *partial.plan.id()
+            || terminal.target_plan_id != reviewer.plan_id
+            || !reviewer.is_finished()
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        // `validate_current_log` returns a newly allocated digest.  Admit its
+        // precise short-lived backing before invoking it so an exhausted
+        // budget cannot allocate during the first semantic validation.
+        const SHA256_CAPACITY: u64 = ("sha256:".len() + 64) as u64;
+        let begin_validation_observed = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(reviewer.retained_working_upper_bound()?)
+            .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(terminal.basis.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(native_authority_roots_retained_bytes(roots).ok()?))
+            .and_then(|value| value.checked_add(SHA256_CAPACITY))
+            .and_then(|value| value.checked_add(live_bytes))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier begin validation ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if begin_validation_observed > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled native verifier begin validation ownership",
+                self.limits.max_working_bytes,
+                begin_validation_observed,
+            ));
+        }
+        terminal.basis.validate_current_log(self)?;
+        if roots.policy_revision_hash != terminal.basis.policy_revision_hash
+            || roots.repository_id != *reviewer.aggregate.program().repository_id()
+            || roots.repository_source_hash
+                != *reviewer
+                    .aggregate
+                    .program()
+                    .repository_source()
+                    .content_hash()
+                    .ok_or(DomainError::AuthorityPolicyMismatch)?
+        {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+
+        // First admission is deliberately borrow-only: it bounds the action
+        // vector and the three cloned authority states before any descriptor,
+        // aggregate, V3 aggregate, or basis clone is constructed below.
+        let verifier_count = partial
+            .actions
+            .iter()
+            .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunVerifier)
+            .count();
+        let roots_retained = native_authority_roots_retained_bytes(roots)?;
+        let action_dynamic = partial
+            .actions
+            .iter()
+            .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunVerifier)
+            .try_fold(0_u64, |total, action| {
+                let ids = std::iter::once(action.id())
+                    .chain(action.subject_ids().iter())
+                    .map(StableId::allocated_bytes)
+                    .sum::<usize>();
+                total
+                    .checked_add(u64::try_from(ids).unwrap_or(u64::MAX))
+                    // execution/claim IDs and their two SHA-256 bodies are
+                    // copied from the receipt/prerequisite into the action.
+                    .and_then(|value| value.checked_add(4 * 128))
+                    .ok_or(DomainError::Incomplete {
+                        operation: "scheduled native verifier begin action ownership",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })
+            })?;
+        let descriptor_preclone =
+            native_fixture_descriptor_preclone_bytes(self, terminal, reviewer, partial, roots)?;
+        let v4_set_dynamic = terminal
+            .v4_registration_ids
+            .iter()
+            .try_fold(0_u64, |total, id| {
+                total
+                    .checked_add(
+                        u64::try_from(size_of::<StableId>() + 128 + id.allocated_bytes())
+                            .unwrap_or(u64::MAX),
+                    )
+                    .ok_or(DomainError::Incomplete {
+                        operation: "scheduled native verifier begin V4 registration ownership",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })
+            })?;
+        let terminal_cursor_dynamic = [
+            terminal.source_closure_id.allocated_bytes(),
+            terminal.partial_rerun_plan_id.allocated_bytes(),
+            terminal.target_plan_id.allocated_bytes(),
+            terminal.reviewer_completion_digest.allocated_bytes(),
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, bytes| {
+            total
+                .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier begin terminal cursor ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })
+        })?;
+        let preclone = reviewer
+            .aggregate
+            .retained_bytes_v3()?
+            .checked_add(reviewer.v3_aggregate.retained_bytes()?)
+            .and_then(|value| value.checked_add(terminal.basis.retained_bytes().ok()?))
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(
+                        verifier_count.checked_mul(size_of::<ScheduledNativeVerifierActionV5>())?,
+                    )
+                    .ok()?,
+                )
+            })
+            .and_then(|value| value.checked_add(action_dynamic))
+            .and_then(|value| value.checked_add(v4_set_dynamic))
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(size_of::<ReplayedScheduledNativeVerifierPhaseV5>()).ok()?,
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier begin preclone ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let begin_observed = self
+            .full_resident_bytes_for_structural_store()?
+            // The borrowed authority cursors remain live through all clones.
+            .checked_add(reviewer.retained_working_upper_bound()?)
+            .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(terminal.basis.retained_bytes().ok()?))
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(size_of::<ReplayedPostD2TerminalPhaseV5>()).unwrap_or(u64::MAX),
+                )
+            })
+            .and_then(|value| value.checked_add(terminal_cursor_dynamic))
+            .and_then(|value| value.checked_add(v4_set_dynamic))
+            // Every root remains borrowed through descriptor selection.  The
+            // later phase gate separately charges only selected fixture-root
+            // clones held in boxed descriptors.
+            .and_then(|value| value.checked_add(roots_retained))
+            .and_then(|value| value.checked_add(preclone))
+            .and_then(|value| value.checked_add(descriptor_preclone))
+            // `completed_receipts_digest` retains its returned SHA-256
+            // string while the terminal digest comparison is evaluated.
+            .and_then(|value| value.checked_add(SHA256_CAPACITY))
+            .and_then(|value| value.checked_add(live_bytes))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier begin preclone ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        #[cfg(test)]
+        {
+            V5_TEST_NATIVE_BEGIN_REQUIRED.with(|value| value.set(begin_observed));
+            V5_TEST_NATIVE_RECOVERY_REQUIRED
+                .with(|value| value.set(value.get().max(begin_observed)));
+        }
+        if begin_observed > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled native verifier begin preclone ownership",
+                self.limits.max_working_bytes,
+                begin_observed,
+            ));
+        }
+
+        // Digesting receipts builds the canonical receipt projection.  It is
+        // intentionally delayed until after the borrow-only exact-limit gate
+        // above, so a rejected begin cannot allocate that projection.
+        if terminal.reviewer_completion_digest != reviewer.completed_receipts_digest()? {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+
+        let mut actions = Vec::with_capacity(verifier_count);
+        for action in partial
+            .actions
+            .iter()
+            .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunVerifier)
+        {
+            let obligation_id = action.subject_ids().first().ok_or_else(|| {
+                DomainError::EventSequence("scheduled native verifier has no obligation".to_owned())
+            })?;
+            let (execution_id, execution_body_hash, claim_id, claim_body_hash) =
+                native_verifier_prerequisite_v5(action, reviewer, partial, self)?;
+            let claim = reviewer
+                .aggregate
+                .execution_claims()
+                .find(|claim| claim.id() == &claim_id)
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "scheduled native verifier claim",
+                    owner_id: action.id().clone(),
+                    reference: claim_id.clone(),
+                })?;
+            if claim.body_hash()? != claim_body_hash
+                || !claim.obligation_ids().contains(obligation_id)
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled native verifier claim does not close its obligation",
+                ));
+            }
+            let descriptor = if claim.property_id() == crate::m4::M4_PROPERTY_ID
+                && claim.polarity() == crate::ClaimPolarity::IssuePresent
+            {
+                let expected_fixture =
+                    native_fixture_scope_v5(self, &reviewer.aggregate, &terminal.basis, claim)?;
+                let mut matching_root = None;
+                let mut matching_root_count = 0_usize;
+                for root in roots
+                    .harnesses
+                    .iter()
+                    .filter(|root| native_harness_matches_v5(root, &expected_fixture))
+                {
+                    matching_root_count = matching_root_count.saturating_add(1);
+                    matching_root = Some(root);
+                }
+                let Some(root) = matching_root.filter(|_| matching_root_count == 1) else {
+                    return Err(if matching_root_count == 0 {
+                        DomainError::HarnessTrustRootMissing
+                    } else {
+                        DomainError::Validation(
+                            "scheduled native fixture requires one exact V5 harness root"
+                                .to_owned(),
+                        )
+                    });
+                };
+                ScheduledNativeVerifierDescriptorV5::Fixture {
+                    harness: Box::new(harness_binding_v4_as_v3(root)),
+                }
+            } else {
+                ScheduledNativeVerifierDescriptorV5::StaticRequiresReconstruction {
+                    trust_digest: static_trust_digest(roots)?,
+                }
+            };
+            actions.push(ScheduledNativeVerifierActionV5 {
+                action_id: action.id().clone(),
+                obligation_id: obligation_id.clone(),
+                execution_id,
+                execution_body_hash,
+                claim_id,
+                claim_body_hash,
+                descriptor,
+            });
+        }
+        if actions
+            .windows(2)
+            .any(|pair| pair[0].action_id >= pair[1].action_id)
+        {
+            return Err(DomainError::EventSequence(
+                "scheduled native verifier actions are not ascending derived-ID order".to_owned(),
+            ));
+        }
+        let phase = ReplayedScheduledNativeVerifierPhaseV5 {
+            log_identity: self.instance_identity,
+            source_closure_id: terminal.source_closure_id.clone(),
+            partial_rerun_plan_id: terminal.partial_rerun_plan_id.clone(),
+            target_plan_id: terminal.target_plan_id.clone(),
+            reviewer_completion_digest: terminal.reviewer_completion_digest.clone(),
+            basis: terminal.basis.clone(),
+            actions,
+            action_index: 0,
+            member_index: 0,
+            aggregate: reviewer.aggregate.clone(),
+            v3_aggregate: reviewer.v3_aggregate.clone(),
+            terminal: terminal.terminal,
+            v4_registration_ids: terminal.v4_registration_ids.clone(),
+        };
+        let after_descriptor_observed = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(reviewer.retained_working_upper_bound()?)
+            .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(terminal.basis.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(roots_retained))
+            .and_then(|value| value.checked_add(phase.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(live_bytes))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier begin descriptor ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        #[cfg(test)]
+        {
+            V5_TEST_NATIVE_BEGIN_REQUIRED
+                .with(|value| value.set(value.get().max(after_descriptor_observed)));
+            V5_TEST_NATIVE_RECOVERY_REQUIRED
+                .with(|value| value.set(value.get().max(after_descriptor_observed)));
+        }
+        if after_descriptor_observed > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled native verifier begin descriptor ownership",
+                self.limits.max_working_bytes,
+                after_descriptor_observed,
+            ));
+        }
+        Ok(phase)
+    }
+}
+
+fn scheduled_native_working_preflight(
+    log: &EventLogV5,
+    phase: &ReplayedScheduledNativeVerifierPhaseV5,
+    extra: u64,
+    operation: &'static str,
+) -> Result<()> {
+    let observed = log
+        .full_resident_bytes_for_structural_store()?
+        .checked_add(phase.retained_bytes()?)
+        .and_then(|value| value.checked_add(extra))
+        .ok_or(DomainError::Incomplete {
+            operation,
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+    if observed > log.limits.max_working_bytes {
+        return Err(replay_incomplete(
+            operation,
+            log.limits.max_working_bytes,
+            observed,
+        ));
+    }
+    #[cfg(test)]
+    {
+        V5_TEST_NATIVE_BEGIN_REQUIRED.with(|value| value.set(value.get().max(observed)));
+        V5_TEST_NATIVE_RECOVERY_REQUIRED.with(|value| value.set(value.get().max(observed)));
+    }
+    Ok(())
+}
+
+/// The caller-owned durable suffix remains borrowed for the complete replay,
+/// not merely for the row currently decoded. Account for every `Vec` slot and
+/// for each row's retained capacity at every recovery gate.
+fn scheduled_native_suffix_retained_bytes(canonical_suffix: &[Vec<u8>]) -> Result<u64> {
+    let slots = u64::try_from(size_of_val(canonical_suffix)).unwrap_or(u64::MAX);
+    canonical_suffix.iter().try_fold(slots, |total, row| {
+        total
+            .checked_add(u64::try_from(row.capacity()).unwrap_or(u64::MAX))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier suffix retained ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+    })
+}
+
+/// Recursive heap retained by one payload whose enum slot is already owned by
+/// the enclosing fixed five-member array. This never canonicalizes a payload:
+/// canonical wire length is not retained ownership.
+fn native_payload_dynamic_bytes(payload: &PersistedPayload) -> Result<u64> {
+    let bytes = match payload {
+        PersistedPayload::ArtifactRegisteredV3(value) => {
+            u64::try_from(value.allocated_bytes()).unwrap_or(u64::MAX)
+        }
+        PersistedPayload::EvidenceRecordedV3(value) => {
+            value.allocated_bytes().map_err(m4_domain_error)?
+        }
+        PersistedPayload::EvidenceBoundV3(value) => {
+            value.allocated_bytes().map_err(m4_domain_error)?
+        }
+        PersistedPayload::VerificationRecordedV3(value) => {
+            value.allocated_bytes().map_err(m4_domain_error)?
+        }
+        _ => {
+            return Err(DomainError::EventSequence(
+                "scheduled native verifier materializer produced a non-fixture payload".to_owned(),
+            ));
+        }
+    };
+    Ok(bytes)
+}
+
+fn native_fixture_payloads_dynamic_bytes(payloads: &[PersistedPayload; 5]) -> Result<u64> {
+    payloads.iter().try_fold(0_u64, |total, payload| {
+        total
+            .checked_add(native_payload_dynamic_bytes(payload)?)
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier fixture payload ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+    })
+}
+
+/// Borrow-only retained-ownership oracle for the closed fixture bundle. All
+/// derived IDs/hashes use the fixed `sha256:` + 64-hex backing capacity; this
+/// mirrors the concrete constructors without constructing any DTO, JSON, or
+/// fixture result buffer.
+fn native_fixture_payloads_predicted_dynamic_bytes(
+    phase: &ReplayedScheduledNativeVerifierPhaseV5,
+) -> Result<u64> {
+    const SHA256_CAPACITY: usize = "sha256:".len() + 64;
+    const REGISTRATION_ID_CAPACITY: usize = "registration:".len() + SHA256_CAPACITY;
+    const EVIDENCE_ID_CAPACITY: usize = "evidence:".len() + SHA256_CAPACITY;
+    const BINDING_ID_CAPACITY: usize = "binding:".len() + SHA256_CAPACITY;
+    const VERIFICATION_ID_CAPACITY: usize = "verification:".len() + SHA256_CAPACITY;
+    let action = phase.current_action()?;
+    let ScheduledNativeVerifierDescriptorV5::Fixture { harness } = &action.descriptor else {
+        return Err(DomainError::EventSequence(
+            "scheduled static verifier requires closed V5 M4 reconstruction".to_owned(),
+        ));
+    };
+    let claim = phase
+        .aggregate
+        .execution_claims()
+        .find(|claim| claim.id() == &action.claim_id)
+        .ok_or(DomainError::VerificationBundleMismatch)?;
+    if claim.property_id() != harness.property_id
+        || claim.polarity() != crate::ClaimPolarity::IssuePresent
+    {
+        return Err(DomainError::HistoricalPrefixMismatch(
+            "scheduled fixture verifier claim closure differs",
+        ));
+    }
+    // The frozen fixture scope's target vector reserves the exact subject
+    // count before adding the fixed test artifact, so the resulting vector
+    // retains its actual subject count rather than a wire-length proxy.
+    let subject_capacity =
+        claim
+            .target_refs()
+            .len()
+            .checked_add(1)
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native fixture subject ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+    let input_source = [
+        harness.claim_body_hash.allocated_bytes(),
+        harness.claim_id.allocated_bytes(),
+        harness.descriptor_id.capacity(),
+        harness.genesis_hash.allocated_bytes(),
+        harness.harness_id.capacity(),
+        harness.harness_revision.capacity(),
+        harness.harness_source_hash.allocated_bytes(),
+        harness.policy_revision_hash.allocated_bytes(),
+        harness.procedure_version.capacity(),
+        harness.property_id.capacity(),
+        harness.repository_id.allocated_bytes(),
+        harness.repository_source_hash.allocated_bytes(),
+        harness.run_id.allocated_bytes(),
+        harness.snapshot_id.allocated_bytes(),
+        harness.test_artifact_id.allocated_bytes(),
+        harness.universe_id.allocated_bytes(),
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, bytes| {
+        native_checked_bytes(total, bytes, "scheduled native fixture input ownership")
+    })?;
+    let input = input_source
+        .checked_add(
+            u64::try_from(
+                phase.basis.target_run_id.allocated_bytes()
+                    + REGISTRATION_ID_CAPACITY
+                    + harness.result_hash.allocated_bytes()
+                    + harness.result_media_type.capacity(),
+            )
+            .unwrap_or(u64::MAX),
+        )
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled native fixture input ownership",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })?;
+    let output = u64::try_from(
+        phase.basis.target_run_id.allocated_bytes()
+            + phase.basis.target_run_id.allocated_bytes()
+            + REGISTRATION_ID_CAPACITY
+            + SHA256_CAPACITY
+            + FIXTURE_OUTPUT_MEDIA_TYPE.len()
+            + action.claim_id.allocated_bytes()
+            + FIXTURE_DESCRIPTOR_ID.len()
+            + FIXTURE_PROCEDURE_ID.len(),
+    )
+    .unwrap_or(u64::MAX);
+    let evidence = u64::try_from(
+        "reviewgraphen.evidence.v3".len()
+            + EVIDENCE_ID_CAPACITY
+            + phase.aggregate.program().snapshot_id().allocated_bytes()
+            + REGISTRATION_ID_CAPACITY * 2
+            + subject_capacity * size_of::<StableId>()
+            + claim
+                .target_refs()
+                .iter()
+                .map(StableId::allocated_bytes)
+                .sum::<usize>()
+            + FIXTURE_TEST_ARTIFACT_ID.len(),
+    )
+    .unwrap_or(u64::MAX);
+    let binding = u64::try_from(
+        "reviewgraphen.evidence_binding.v3".len()
+            + BINDING_ID_CAPACITY
+            + action.claim_id.allocated_bytes()
+            + EVIDENCE_ID_CAPACITY
+            + M4_PROPERTY_ID.len(),
+    )
+    .unwrap_or(u64::MAX);
+    let verification = u64::try_from(
+        "reviewgraphen.verification.v3".len()
+            + VERIFICATION_ID_CAPACITY
+            + action.claim_id.allocated_bytes()
+            + REGISTRATION_ID_CAPACITY * 2
+            + size_of::<StableId>()
+            + EVIDENCE_ID_CAPACITY,
+    )
+    .unwrap_or(u64::MAX);
+    [input, output, evidence, binding, verification]
+        .into_iter()
+        .try_fold(0_u64, |total, value| {
+            total.checked_add(value).ok_or(DomainError::Incomplete {
+                operation: "scheduled native fixture payload ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+        })
+}
+
+/// Computes the complete append-only working requirement after a prepared
+/// native member has passed its identity gate.  Keeping this calculation pure
+/// makes the atomic append admission use the same complete ownership model in
+/// production and its independently reconstructed boundary probes.
+fn scheduled_native_append_required_working_bytes(
+    log: &EventLogV5,
+    phase: &ReplayedScheduledNativeVerifierPhaseV5,
+    prepared: &PreparedScheduledNativeVerifierAppendV5,
+    live_bytes: u64,
+) -> Result<u64> {
+    let payload = prepared.payload()?;
+    let envelope_dynamic = log
+        .run_id
+        .allocated_bytes()
+        .checked_add(log.genesis_hash.allocated_bytes())
+        .and_then(|value| value.checked_add(payload.actor().len()))
+        .and_then(|value| value.checked_add(3 * 128))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled native verifier append envelope ownership",
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+    let authority_dynamic = prepared
+        .action_id
+        .allocated_bytes()
+        .checked_add(prepared.predecessor_event_hash.allocated_bytes())
+        .and_then(|value| value.checked_add(5 * 128))
+        .and_then(|value| value.checked_add("artifact_registered_v3".len()))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled native verifier append authority ownership",
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+    let v4_clone_dynamic = phase
+        .v4_registration_ids
+        .iter()
+        .try_fold(0_u64, |total, id| {
+            total
+                .checked_add(
+                    u64::try_from(size_of::<StableId>() + 128 + id.allocated_bytes())
+                        .unwrap_or(u64::MAX),
+                )
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier append V4 clone ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })
+        })?;
+    let extra = phase
+        .aggregate
+        .retained_bytes_v3()?
+        .checked_add(phase.v3_aggregate.retained_bytes()?)
+        .and_then(|value| value.checked_add(phase.basis.retained_bytes().ok()?))
+        .and_then(|value| value.checked_add(v3_payload_staging_bytes(payload).ok()?))
+        .and_then(|value| value.checked_add(v3_reducer_growth_upper_bound(payload).ok()?))
+        .and_then(|value| {
+            value.checked_add(u64::try_from(size_of::<EventEnvelope>()).unwrap_or(u64::MAX))
+        })
+        .and_then(|value| value.checked_add(u64::try_from(envelope_dynamic).ok()?))
+        .and_then(|value| {
+            value.checked_add(
+                u64::try_from(size_of::<AuthorityReplayEntryV3AtV5>()).unwrap_or(u64::MAX),
+            )
+        })
+        .and_then(|value| value.checked_add(u64::try_from(authority_dynamic).ok()?))
+        .and_then(|value| value.checked_add(v4_clone_dynamic))
+        .and_then(|value| value.checked_add(prepared.retained_bytes().ok()?))
+        .and_then(|value| value.checked_add(live_bytes))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled native verifier append prospective ownership",
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+    log.full_resident_bytes_for_structural_store()?
+        .checked_add(phase.retained_bytes()?)
+        .and_then(|value| value.checked_add(extra))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled native verifier append preflight ownership",
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })
+}
+
+/// Exact byte count for the fixed fixture result without constructing its
+/// JSON or a CAS buffer. All contributing identifiers are StableIds (whose
+/// grammar excludes JSON escapes), and every other string is a fixed ASCII
+/// protocol literal.
+fn fixture_result_canonical_len_v5(claim: &ExecutionClaimV2) -> Result<u64> {
+    let subjects = claim
+        .target_refs()
+        .iter()
+        .map(StableId::as_str)
+        .chain(std::iter::once(FIXTURE_TEST_ARTIFACT_ID))
+        .enumerate()
+        .try_fold(2_usize, |total, (index, id)| {
+            total
+                .checked_add(usize::from(index != 0))
+                .and_then(|value| value.checked_add(2 + id.len()))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native fixture subject JSON bytes",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })
+        })?;
+    let fields = [
+        ("claim_id", claim.id().as_str().len()),
+        ("descriptor_id", FIXTURE_DESCRIPTOR_ID.len()),
+        ("outcome", "passed".len()),
+        ("procedure_version", FIXTURE_PROCEDURE_ID.len()),
+        ("property_id", M4_PROPERTY_ID.len()),
+        ("schema", "reviewgraphen.fixture_test_result.v1".len()),
+        ("witness_hash", FIXTURE_WITNESS_HASH.len()),
+    ];
+    let field_bytes = fields
+        .into_iter()
+        .try_fold(0_usize, |total, (key, value)| {
+            total
+                .checked_add(key.len() + value + 5)
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native fixture result JSON bytes",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })
+        })?;
+    let total = field_bytes
+        .checked_add("subject_ids".len() + 3 + subjects)
+        .and_then(|value| value.checked_add(2 + 7))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled native fixture result JSON bytes",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })?;
+    u64::try_from(total).map_err(|_| DomainError::Incomplete {
+        operation: "scheduled native fixture result JSON bytes",
+        limit: usize::MAX,
+        observed: usize::MAX,
+    })
+}
+
+fn native_fixture_scope_v5(
+    log: &EventLogV5,
+    aggregate: &ReviewAggregate,
+    basis: &AuthorityReplayBasisV5,
+    claim: &crate::ExecutionClaimV2,
+) -> Result<HarnessTrustRootInputV3> {
+    let test_artifact_id = StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?;
+    if !aggregate.program().known_ids().contains(&test_artifact_id)
+        || !claim
+            .target_refs()
+            .iter()
+            .all(|id| aggregate.program().known_ids().contains(id))
+    {
+        return Err(DomainError::VerificationBundleMismatch);
+    }
+    Ok(HarnessTrustRootInputV3 {
+        policy_revision_hash: basis.policy_revision_hash.clone(),
+        repository_id: aggregate.program().repository_id().clone(),
+        repository_source_hash: aggregate
+            .program()
+            .repository_source()
+            .content_hash()
+            .ok_or(DomainError::AuthorityPolicyMismatch)?
+            .clone(),
+        harness_id: FIXTURE_HARNESS_ID.to_owned(),
+        harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+        harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH)?,
+        test_artifact_id,
+        descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+        procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+        result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH)?,
+        result_size: FIXTURE_WITNESS_SIZE,
+        result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+        result_sensitivity: ArtifactSensitivity::CanonicalState,
+        run_id: log.run_id.clone(),
+        genesis_hash: log.genesis_hash.clone(),
+        snapshot_id: aggregate.program().snapshot_id().clone(),
+        universe_id: aggregate.universe().id().clone(),
+        property_id: claim.property_id().to_owned(),
+        claim_id: claim.id().clone(),
+        claim_body_hash: claim.body_hash()?,
+    })
+}
+
+/// Exact preclone peak for descriptor selection. The concrete selector first
+/// owns one expected fixture scope (including the claim body's canonical
+/// scratch) and then retains one boxed harness copy for each fixture action.
+/// This helper performs only borrowed comparisons, so begin can reject before
+/// either object is allocated.
+fn native_fixture_descriptor_preclone_bytes(
+    log: &EventLogV5,
+    terminal: &ReplayedPostD2TerminalPhaseV5,
+    reviewer: &ReplayedScheduledReviewerPhaseV5,
+    partial: &SealedPartialRerunPhaseV5,
+    roots: &AuthorityTrustRootsV5,
+) -> Result<u64> {
+    let mut retained_roots = 0_u64;
+    let mut expected_peak = 0_u64;
+    for action in partial
+        .actions
+        .iter()
+        .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunVerifier)
+    {
+        let (claim_id, claim_body_hash) =
+            native_verifier_claim_prerequisite_borrowed(action, reviewer)?;
+        let claim = reviewer
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == claim_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        if claim.property_id() != crate::m4::M4_PROPERTY_ID
+            || claim.polarity() != crate::ClaimPolarity::IssuePresent
+        {
+            let claim_body = crate::canonical::canonical_json_count_bounded(
+                claim,
+                usize::MAX,
+                "scheduled native verifier static claim validation scratch",
+            )?;
+            expected_peak = expected_peak.max(
+                claim_body
+                    .checked_add(("sha256:".len() + 64) as u64)
+                    .ok_or(DomainError::Incomplete {
+                        operation: "scheduled native verifier static claim validation ownership",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?,
+            );
+            retained_roots = retained_roots
+                .checked_add(("sha256:".len() + 64) as u64)
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier static descriptor ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+            continue;
+        }
+        let expected_dynamic = native_fixture_scope_preclone_bytes(log, reviewer, terminal, claim)?;
+        expected_peak = expected_peak.max(expected_dynamic);
+        let matching = roots
+            .harnesses
+            .iter()
+            .filter(|root| {
+                native_harness_matches_fixture_borrowed(
+                    root,
+                    log,
+                    reviewer,
+                    terminal,
+                    claim,
+                    claim_body_hash,
+                )
+            })
+            .count();
+        if matching == 1 {
+            let root = roots
+                .harnesses
+                .iter()
+                .find(|root| {
+                    native_harness_matches_fixture_borrowed(
+                        root,
+                        log,
+                        reviewer,
+                        terminal,
+                        claim,
+                        claim_body_hash,
+                    )
+                })
+                .ok_or(DomainError::HarnessTrustRootMissing)?;
+            retained_roots = retained_roots
+                .checked_add(
+                    u64::try_from(size_of::<HarnessTrustRootInputV3>()).unwrap_or(u64::MAX),
+                )
+                .and_then(|value| value.checked_add(native_harness_root_retained_bytes(root).ok()?))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier descriptor root ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+    }
+    retained_roots
+        .checked_add(expected_peak)
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled native verifier descriptor preclone ownership",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })
+}
+
+fn native_fixture_scope_preclone_bytes(
+    log: &EventLogV5,
+    reviewer: &ReplayedScheduledReviewerPhaseV5,
+    terminal: &ReplayedPostD2TerminalPhaseV5,
+    claim: &crate::ExecutionClaimV2,
+) -> Result<u64> {
+    let claim_body = crate::canonical::canonical_json_count_bounded(
+        claim,
+        usize::MAX,
+        "scheduled native verifier expected fixture claim scratch",
+    )?;
+    let fields = [
+        terminal.basis.policy_revision_hash.allocated_bytes(),
+        reviewer
+            .aggregate
+            .program()
+            .repository_id()
+            .allocated_bytes(),
+        reviewer
+            .aggregate
+            .program()
+            .repository_source()
+            .content_hash()
+            .ok_or(DomainError::AuthorityPolicyMismatch)?
+            .allocated_bytes(),
+        FIXTURE_HARNESS_ID.len(),
+        FIXTURE_HARNESS_REVISION.len(),
+        FIXTURE_HARNESS_SOURCE_HASH.len(),
+        FIXTURE_TEST_ARTIFACT_ID.len(),
+        FIXTURE_DESCRIPTOR_ID.len(),
+        FIXTURE_PROCEDURE_ID.len(),
+        FIXTURE_WITNESS_HASH.len(),
+        FIXTURE_MEDIA_TYPE.len(),
+        log.run_id.allocated_bytes(),
+        log.genesis_hash.allocated_bytes(),
+        reviewer.aggregate.program().snapshot_id().allocated_bytes(),
+        reviewer.aggregate.universe().id().allocated_bytes(),
+        claim.property_id().len(),
+        claim.id().allocated_bytes(),
+        ("sha256:".len() + 64),
+    ];
+    fields
+        .into_iter()
+        .try_fold(
+            u64::try_from(size_of::<HarnessTrustRootInputV3>()).unwrap_or(u64::MAX),
+            |total, bytes| {
+                native_checked_bytes(
+                    total,
+                    bytes,
+                    "scheduled native verifier expected fixture ownership",
+                )
+            },
+        )?
+        .checked_add(claim_body)
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled native verifier expected fixture ownership",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })
+}
+
+fn native_harness_matches_fixture_borrowed(
+    root: &AuthorityHarnessBindingV3Tuple,
+    log: &EventLogV5,
+    reviewer: &ReplayedScheduledReviewerPhaseV5,
+    terminal: &ReplayedPostD2TerminalPhaseV5,
+    claim: &crate::ExecutionClaimV2,
+    claim_body_hash: &ContentHash,
+) -> bool {
+    root.policy_revision_hash == terminal.basis.policy_revision_hash
+        && root.repository_id == *reviewer.aggregate.program().repository_id()
+        && root.repository_source_hash
+            == *reviewer
+                .aggregate
+                .program()
+                .repository_source()
+                .content_hash()
+                .unwrap_or(&root.repository_source_hash)
+        && root.harness_id == FIXTURE_HARNESS_ID
+        && root.harness_revision == FIXTURE_HARNESS_REVISION
+        && root.harness_source_hash.as_str() == FIXTURE_HARNESS_SOURCE_HASH
+        && root.test_artifact_id.as_str() == FIXTURE_TEST_ARTIFACT_ID
+        && root.descriptor_id == FIXTURE_DESCRIPTOR_ID
+        && root.procedure_version == FIXTURE_PROCEDURE_ID
+        && root.result_hash.as_str() == FIXTURE_WITNESS_HASH
+        && root.result_size == FIXTURE_WITNESS_SIZE
+        && root.result_media_type == FIXTURE_MEDIA_TYPE
+        && root.result_sensitivity == ArtifactSensitivity::CanonicalState
+        && root.run_id == log.run_id
+        && root.genesis_hash == log.genesis_hash
+        && root.snapshot_id == *reviewer.aggregate.program().snapshot_id()
+        && root.universe_id == *reviewer.aggregate.universe().id()
+        && root.property_id == claim.property_id()
+        && root.claim_id == *claim.id()
+        && root.claim_body_hash == *claim_body_hash
+}
+
+fn native_verifier_claim_prerequisite_borrowed<'a>(
+    action: &'a crate::PartialRerunActionV5,
+    reviewer: &'a ReplayedScheduledReviewerPhaseV5,
+) -> Result<(&'a StableId, &'a ContentHash)> {
+    match action.prerequisites() {
+        [crate::ActionPrerequisiteV5::ScheduledAction { action_id }] => reviewer
+            .completed_receipts
+            .iter()
+            .find(|receipt| receipt.action_id == *action_id)
+            .map(|receipt| (&receipt.claim_id, &receipt.claim_body_hash))
+            .ok_or(DomainError::HistoricalPrefixMismatch(
+                "scheduled native verifier lacks its exact reviewer completion receipt",
+            )),
+        [
+            crate::ActionPrerequisiteV5::ExistingTargetRecord {
+                record_id: first_id,
+                body_hash: first_hash,
+                ..
+            },
+            crate::ActionPrerequisiteV5::ExistingTargetRecord {
+                record_id: second_id,
+                body_hash: second_hash,
+                ..
+            },
+        ] => match (first_id.kind(), second_id.kind()) {
+            ("claim", "execution") => Ok((first_id, first_hash)),
+            ("execution", "claim") => Ok((second_id, second_hash)),
+            _ => Err(DomainError::EventSequence(
+                "existing native-verifier prerequisites must contain one execution and one claim"
+                    .to_owned(),
+            )),
+        },
+        _ => Err(DomainError::EventSequence(
+            "scheduled native verifier prerequisites are not closed".to_owned(),
+        )),
+    }
+}
+
+fn native_harness_matches_v5(
+    root: &AuthorityHarnessBindingV3Tuple,
+    expected: &HarnessTrustRootInputV3,
+) -> bool {
+    root.policy_revision_hash == expected.policy_revision_hash
+        && root.repository_id == expected.repository_id
+        && root.repository_source_hash == expected.repository_source_hash
+        && root.harness_id == expected.harness_id
+        && root.harness_revision == expected.harness_revision
+        && root.harness_source_hash == expected.harness_source_hash
+        && root.test_artifact_id == expected.test_artifact_id
+        && root.descriptor_id == expected.descriptor_id
+        && root.procedure_version == expected.procedure_version
+        && root.result_hash == expected.result_hash
+        && root.result_size == expected.result_size
+        && root.result_media_type == expected.result_media_type
+        && root.result_sensitivity == expected.result_sensitivity
+        && root.run_id == expected.run_id
+        && root.genesis_hash == expected.genesis_hash
+        && root.snapshot_id == expected.snapshot_id
+        && root.universe_id == expected.universe_id
+        && root.property_id == expected.property_id
+        && root.claim_id == expected.claim_id
+        && root.claim_body_hash == expected.claim_body_hash
+}
+
+impl ReplayedScheduledNativeVerifierPhaseV5 {
+    fn retained_bytes(&self) -> Result<u64> {
+        let mut total = u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX);
+        let add = |total: u64, value: usize| {
+            total
+                .checked_add(u64::try_from(value).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier phase retained ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })
+        };
+        let dynamic = [
+            self.aggregate
+                .retained_bytes_v3()?
+                .checked_sub(u64::try_from(size_of_val(&self.aggregate)).unwrap_or(u64::MAX)),
+            self.v3_aggregate
+                .retained_bytes()?
+                .checked_sub(u64::try_from(size_of_val(&self.v3_aggregate)).unwrap_or(u64::MAX)),
+            self.basis
+                .retained_bytes()?
+                .checked_sub(u64::try_from(size_of_val(&self.basis)).unwrap_or(u64::MAX)),
+        ];
+        for value in dynamic {
+            total = total
+                .checked_add(value.ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier inline retained ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?)
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier phase retained aggregates",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        total = add(total, self.source_closure_id.allocated_bytes())?;
+        total = add(total, self.partial_rerun_plan_id.allocated_bytes())?;
+        total = add(total, self.target_plan_id.allocated_bytes())?;
+        total = add(total, self.reviewer_completion_digest.allocated_bytes())?;
+        total = add(
+            total,
+            self.actions
+                .capacity()
+                .checked_mul(size_of::<ScheduledNativeVerifierActionV5>())
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier action slots",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?,
+        )?;
+        for action in &self.actions {
+            for id in [
+                &action.action_id,
+                &action.obligation_id,
+                &action.execution_id,
+                &action.claim_id,
+            ] {
+                total = add(total, id.allocated_bytes())?;
+            }
+            total = add(total, action.execution_body_hash.allocated_bytes())?;
+            total = add(total, action.claim_body_hash.allocated_bytes())?;
+            total = total
+                .checked_add(
+                    u64::try_from(match &action.descriptor {
+                        ScheduledNativeVerifierDescriptorV5::Fixture { harness } => [
+                            harness.policy_revision_hash.allocated_bytes(),
+                            harness.repository_id.allocated_bytes(),
+                            harness.repository_source_hash.allocated_bytes(),
+                            harness.harness_id.capacity(),
+                            harness.harness_revision.capacity(),
+                            harness.harness_source_hash.allocated_bytes(),
+                            harness.test_artifact_id.allocated_bytes(),
+                            harness.descriptor_id.capacity(),
+                            harness.procedure_version.capacity(),
+                            harness.result_hash.allocated_bytes(),
+                            harness.result_media_type.capacity(),
+                            harness.run_id.allocated_bytes(),
+                            harness.genesis_hash.allocated_bytes(),
+                            harness.snapshot_id.allocated_bytes(),
+                            harness.universe_id.allocated_bytes(),
+                            harness.property_id.capacity(),
+                            harness.claim_id.allocated_bytes(),
+                            harness.claim_body_hash.allocated_bytes(),
+                        ]
+                        .into_iter()
+                        .try_fold(size_of::<HarnessTrustRootInputV3>(), usize::checked_add)
+                        .ok_or(DomainError::Incomplete {
+                            operation: "scheduled native fixture descriptor ownership",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?,
+                        ScheduledNativeVerifierDescriptorV5::StaticRequiresReconstruction {
+                            trust_digest,
+                        } => trust_digest.allocated_bytes(),
+                    })
+                    .unwrap_or(u64::MAX),
+                )
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier descriptor ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        total = add(
+            total,
+            self.v4_registration_ids
+                .iter()
+                .map(|id| size_of::<StableId>() + 128 + id.allocated_bytes())
+                .sum(),
+        )?;
+        Ok(total)
+    }
+
+    fn digest(&self) -> Result<ContentHash> {
+        #[derive(Serialize)]
+        struct Action<'a> {
+            action_id: &'a StableId,
+            claim_body_hash: &'a ContentHash,
+            claim_id: &'a StableId,
+            execution_body_hash: &'a ContentHash,
+            execution_id: &'a StableId,
+            obligation_id: &'a StableId,
+        }
+        #[derive(Serialize)]
+        struct Body<'a> {
+            actions: Actions<'a>,
+            partial_rerun_plan_id: &'a StableId,
+            reviewer_completion_digest: &'a ContentHash,
+            source_closure_id: &'a StableId,
+            target_plan_id: &'a StableId,
+        }
+        struct Actions<'a>(&'a [ScheduledNativeVerifierActionV5]);
+        impl Serialize for Actions<'_> {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                let mut values = serializer.serialize_seq(Some(self.0.len()))?;
+                for action in self.0 {
+                    values.serialize_element(&Action {
+                        action_id: &action.action_id,
+                        claim_body_hash: &action.claim_body_hash,
+                        claim_id: &action.claim_id,
+                        execution_body_hash: &action.execution_body_hash,
+                        execution_id: &action.execution_id,
+                        obligation_id: &action.obligation_id,
+                    })?;
+                }
+                values.end()
+            }
+        }
+        crate::canonical::compact_json_sha256_streaming(&Body {
+            actions: Actions(&self.actions),
+            partial_rerun_plan_id: &self.partial_rerun_plan_id,
+            reviewer_completion_digest: &self.reviewer_completion_digest,
+            source_closure_id: &self.source_closure_id,
+            target_plan_id: &self.target_plan_id,
+        })
+    }
+
+    fn validate_current_action_closure(&self) -> Result<()> {
+        let action = self.current_action()?;
+        let execution = self
+            .aggregate
+            .execution(&action.execution_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "scheduled native verifier execution",
+                owner_id: action.action_id.clone(),
+                reference: action.execution_id.clone(),
+            })?;
+        let claim = self
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == &action.claim_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "scheduled native verifier claim",
+                owner_id: action.action_id.clone(),
+                reference: action.claim_id.clone(),
+            })?;
+        if execution.body_hash()? != action.execution_body_hash
+            || claim.body_hash()? != action.claim_body_hash
+            || !claim.obligation_ids().contains(&action.obligation_id)
+            || !execution.obligation_ids().contains(&action.obligation_id)
+            || execution.parsed_claim_ids() != &BTreeSet::from([action.claim_id.clone()])
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "scheduled native verifier execution/claim closure differs",
+            ));
+        }
+        Ok(())
+    }
+    fn current_action(&self) -> Result<&ScheduledNativeVerifierActionV5> {
+        self.actions.get(self.action_index).ok_or_else(|| {
+            DomainError::EventSequence("scheduled native verifier phase is complete".to_owned())
+        })
+    }
+
+    fn materialize_fixture_payloads(&self) -> Result<[PersistedPayload; 5]> {
+        let action = self.current_action()?;
+        let ScheduledNativeVerifierDescriptorV5::Fixture { harness } = &action.descriptor else {
+            return Err(DomainError::EventSequence(
+                "scheduled static verifier requires closed V5 M4 reconstruction".to_owned(),
+            ));
+        };
+        let claim = self
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == &action.claim_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "scheduled fixture verifier",
+                owner_id: action.action_id.clone(),
+                reference: action.claim_id.clone(),
+            })?;
+        if claim.body_hash()? != action.claim_body_hash
+            || claim.property_id() != harness.property_id
+            || claim.polarity() != crate::ClaimPolarity::IssuePresent
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "scheduled fixture verifier claim closure differs",
+            ));
+        }
+        let (_, output_bytes, output_hash) =
+            deterministic_fixture_result_for_claim(&self.aggregate, claim, harness)?;
+        let input = ArtifactRegisteredV3::new_validated(
+            self.basis.target_run_id.clone(),
+            harness.result_hash.clone(),
+            harness.result_media_type.clone(),
+            harness.result_size,
+            harness.result_sensitivity,
+            ArtifactSourceV3::ExternalHarnessWitness {
+                policy_revision_hash: harness.policy_revision_hash.clone(),
+                repository_id: harness.repository_id.clone(),
+                repository_source_hash: harness.repository_source_hash.clone(),
+                run_id: harness.run_id.clone(),
+                genesis_hash: harness.genesis_hash.clone(),
+                snapshot_id: harness.snapshot_id.clone(),
+                universe_id: harness.universe_id.clone(),
+                property_id: harness.property_id.clone(),
+                claim_id: harness.claim_id.clone(),
+                claim_body_hash: harness.claim_body_hash.clone(),
+                harness_id: harness.harness_id.clone(),
+                harness_revision: harness.harness_revision.clone(),
+                harness_source_hash: harness.harness_source_hash.clone(),
+                test_artifact_id: harness.test_artifact_id.clone(),
+                descriptor_id: harness.descriptor_id.clone(),
+                procedure_version: harness.procedure_version.clone(),
+            },
+        )?;
+        let output = ArtifactRegisteredV3::new_validated(
+            self.basis.target_run_id.clone(),
+            output_hash,
+            FIXTURE_OUTPUT_MEDIA_TYPE,
+            u64::try_from(output_bytes.len()).unwrap_or(u64::MAX),
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::VerifierArtifact {
+                run_id: self.basis.target_run_id.clone(),
+                claim_id: action.claim_id.clone(),
+                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                role: VerifierArtifactRoleV3::Output,
+            },
+        )?;
+        let result =
+            validate_fixture_result_for_root(&self.aggregate, harness.as_ref(), &output_bytes)?;
+        let scope = self
+            .v3_aggregate
+            .assessment_scopes
+            .get(&action.claim_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let proposal = crate::m4::materialize_fixture_replay_v1(
+            scope,
+            &result,
+            input.registration_id().clone(),
+            output.registration_id().clone(),
+        )
+        .map_err(m4_domain_error)?;
+        Ok([
+            PersistedPayload::ArtifactRegisteredV3(input),
+            PersistedPayload::ArtifactRegisteredV3(output),
+            PersistedPayload::EvidenceRecordedV3(proposal.evidence),
+            PersistedPayload::EvidenceBoundV3(proposal.binding),
+            PersistedPayload::VerificationRecordedV3(proposal.verification),
+        ])
+    }
+
+    #[allow(dead_code)] // Closed V5 refusal; retained for the later reconstruction batch.
+    fn static_payloads(&self) -> Result<Vec<PersistedPayload>> {
+        let action = self.current_action()?;
+        let claim = self
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == &action.claim_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let obligation = self
+            .aggregate
+            .obligation(&action.obligation_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let evaluation =
+            crate::evaluate_static_fact_v1(self.aggregate.program(), obligation, claim)
+                .map_err(m4_domain_error)?;
+        let input_bytes = evaluation
+            .input()
+            .canonical_bytes()
+            .map_err(m4_domain_error)?;
+        let output_bytes = evaluation
+            .result()
+            .canonical_bytes()
+            .map_err(m4_domain_error)?;
+        let input = ArtifactRegisteredV3::new_validated(
+            self.basis.target_run_id.clone(),
+            ContentHash::sha256(&input_bytes),
+            STATIC_INPUT_MEDIA_TYPE,
+            u64::try_from(input_bytes.len()).unwrap_or(u64::MAX),
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::VerifierArtifact {
+                run_id: self.basis.target_run_id.clone(),
+                claim_id: action.claim_id.clone(),
+                descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+                procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+                role: VerifierArtifactRoleV3::Input,
+            },
+        )?;
+        let output = ArtifactRegisteredV3::new_validated(
+            self.basis.target_run_id.clone(),
+            ContentHash::sha256(&output_bytes),
+            STATIC_OUTPUT_MEDIA_TYPE,
+            u64::try_from(output_bytes.len()).unwrap_or(u64::MAX),
+            ArtifactSensitivity::CanonicalState,
+            ArtifactSourceV3::VerifierArtifact {
+                run_id: self.basis.target_run_id.clone(),
+                claim_id: action.claim_id.clone(),
+                descriptor_id: STATIC_DESCRIPTOR_ID.to_owned(),
+                procedure_version: STATIC_PROCEDURE_ID.to_owned(),
+                role: VerifierArtifactRoleV3::Output,
+            },
+        )?;
+        // A V-only static result is not a legal M6 native bundle.  The
+        // refusal is deliberate: it never widens the terminal grammar.
+        let input_dto =
+            crate::StaticFactInputV1::from_json_bytes(&input_bytes).map_err(m4_domain_error)?;
+        let proposal = crate::m4::materialize_static_from_durable_input_v1(
+            self.aggregate.program(),
+            obligation,
+            claim,
+            input_dto,
+            input.registration_id().clone(),
+            output.registration_id().clone(),
+        )
+        .map_err(m4_domain_error)?;
+        let (Some(evidence), Some(binding)) = (proposal.evidence(), proposal.binding()) else {
+            return Err(DomainError::EventSequence(
+                "scheduled static verifier does not reconstruct Evidence-to-Binding-to-Verification".to_owned(),
+            ));
+        };
+        Ok(vec![
+            PersistedPayload::ArtifactRegisteredV3(input),
+            PersistedPayload::ArtifactRegisteredV3(output),
+            PersistedPayload::EvidenceRecordedV3(evidence.clone()),
+            PersistedPayload::EvidenceBoundV3(binding.clone()),
+            PersistedPayload::VerificationRecordedV3(proposal.verification().clone()),
+        ])
+    }
+
+    fn materialize_payloads(&self) -> Result<[PersistedPayload; 5]> {
+        match &self.current_action()?.descriptor {
+            ScheduledNativeVerifierDescriptorV5::Fixture { .. } => {
+                self.materialize_fixture_payloads()
+            }
+            ScheduledNativeVerifierDescriptorV5::StaticRequiresReconstruction { .. } => {
+                Err(DomainError::EventSequence(
+                    "scheduled static verifier requires closed V5 M4 reconstruction".to_owned(),
+                ))
+            }
+        }
+    }
+}
+
+impl EventLogV5 {
+    #[allow(dead_code)]
+    pub(crate) fn prepare_next_scheduled_native_verifier_append_v5(
+        &self,
+        phase: &ReplayedScheduledNativeVerifierPhaseV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<PreparedScheduledNativeVerifierAppendV5> {
+        self.prepare_next_scheduled_native_verifier_append_with_live_bytes_v5(phase, resolver, 0)
+    }
+
+    /// `live_bytes` is owned by a caller which must survive the preparation
+    /// (native suffix recovery keeps its decoded observed envelope until it
+    /// compares the independently rebuilt result).  Keeping it explicit
+    /// prevents two individually-valid gates from understating that combined
+    /// peak.
+    fn prepare_next_scheduled_native_verifier_append_with_live_bytes_v5(
+        &self,
+        phase: &ReplayedScheduledNativeVerifierPhaseV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        live_bytes: u64,
+    ) -> Result<PreparedScheduledNativeVerifierAppendV5> {
+        if self.instance_identity != phase.log_identity {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        // All three validations below return an owned hash; the two body
+        // checks additionally retain their canonical JSON buffer until the
+        // hash is minted. Count those buffers without materializing them and
+        // gate before the first validation allocation.
+        let validation_bytes = scheduled_native_prepare_validation_bytes(phase)?;
+        scheduled_native_working_preflight(
+            self,
+            phase,
+            validation_bytes
+                .checked_add(live_bytes)
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier prepare validation ownership",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled native verifier prepare validation ownership",
+        )?;
+        phase.basis.validate_current_log(self)?;
+        phase.validate_current_action_closure()?;
+        // Tier one is borrow-only. It must reject before constructing the
+        // fixture JSON, five DTOs, digest strings, or either CAS buffer.
+        let action = phase.current_action()?;
+        let ScheduledNativeVerifierDescriptorV5::Fixture { harness } = &action.descriptor else {
+            return Err(DomainError::EventSequence(
+                "scheduled static verifier requires closed V5 M4 reconstruction".to_owned(),
+            ));
+        };
+        let payload_dynamic = native_fixture_payloads_predicted_dynamic_bytes(phase)?;
+        let fixture_result_bytes = fixture_result_canonical_len_v5(
+            phase
+                .aggregate
+                .execution_claims()
+                .find(|claim| claim.id() == &action.claim_id)
+                .ok_or(DomainError::VerificationBundleMismatch)?,
+        )?;
+        let cas_bytes = harness
+            .result_size
+            .checked_add(fixture_result_bytes)
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier CAS buffers",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        // The two streaming digest calls each allocate their returned
+        // `ContentHash` backing. One remains stored in the capability and
+        // the second is simultaneously live while it is minted.
+        const SHA256_CAPACITY: usize = "sha256:".len() + 64;
+        let prepared_metadata_dynamic = phase.basis.basis_digest.allocated_bytes()
+            + self.tail_hash().allocated_bytes()
+            + phase.current_action()?.action_id.allocated_bytes()
+            + SHA256_CAPACITY * 2;
+        let prospective = payload_dynamic
+            .checked_add(cas_bytes)
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(size_of::<PreparedScheduledNativeVerifierAppendV5>())
+                        .unwrap_or(u64::MAX),
+                )
+            })
+            .and_then(|value| value.checked_add(u64::try_from(prepared_metadata_dynamic).ok()?))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled native verifier exact prepare ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        scheduled_native_working_preflight(
+            self,
+            phase,
+            prospective
+                .checked_add(live_bytes)
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier exact prepare live ownership",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled native verifier exact prepare ownership",
+        )?;
+        #[cfg(test)]
+        V5_TEST_NATIVE_PREPARE_REQUIRED.with(|value| {
+            value.set(
+                self.full_resident_bytes_for_structural_store()
+                    .and_then(|total| {
+                        total
+                            .checked_add(phase.retained_bytes().unwrap_or(u64::MAX))
+                            .ok_or(DomainError::Incomplete {
+                                operation: "scheduled native verifier test prepare ownership",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })
+                    })
+                    .and_then(|total| {
+                        total
+                            .checked_add(prospective)
+                            .ok_or(DomainError::Incomplete {
+                                operation: "scheduled native verifier test prepare ownership",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })
+                    })
+                    .unwrap_or(u64::MAX),
+            )
+        });
+
+        // Tier two materializes once after the borrow-only gate. Its actual
+        // retained heap must exactly match the closed oracle before CAS I/O.
+        #[cfg(test)]
+        V5_TEST_NATIVE_MATERIALIZATIONS.with(|value| value.set(value.get().saturating_add(1)));
+        let payloads = phase.materialize_payloads()?;
+        let actual_payload_dynamic = native_fixture_payloads_dynamic_bytes(&payloads)?;
+        if actual_payload_dynamic != payload_dynamic {
+            let values = payloads
+                .iter()
+                .map(native_payload_dynamic_bytes)
+                .collect::<Result<Vec<_>>>()?;
+            return Err(DomainError::Validation(format!(
+                "scheduled native fixture ownership actual={actual_payload_dynamic} predicted={payload_dynamic} parts={values:?}"
+            )));
+        }
+        let output = match &payloads[1] {
+            PersistedPayload::ArtifactRegisteredV3(value) => value,
+            _ => return Err(DomainError::VerificationBundleMismatch),
+        };
+        let input = match &payloads[0] {
+            PersistedPayload::ArtifactRegisteredV3(value) => value,
+            _ => return Err(DomainError::VerificationBundleMismatch),
+        };
+        if input.size() != harness.result_size || output.size() != fixture_result_bytes {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "scheduled native fixture CAS lengths differ from borrow-only oracle",
+            ));
+        }
+        let phase_digest = phase.digest()?;
+        let payload_hash = crate::canonical::compact_json_sha256_streaming(
+            payloads
+                .get(phase.member_index)
+                .ok_or(DomainError::VerificationBundleMismatch)?,
+        )?;
+        let mut output_bytes = vec![0_u8; usize::try_from(output.size()).unwrap_or(usize::MAX)];
+        resolver.read_exact(output.cas_hash(), &mut output_bytes)?;
+        if ContentHash::sha256(&output_bytes) != *output.cas_hash() {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        let mut input_bytes = vec![0_u8; usize::try_from(input.size()).unwrap_or(usize::MAX)];
+        resolver.read_exact(input.cas_hash(), &mut input_bytes)?;
+        if ContentHash::sha256(&input_bytes) != *input.cas_hash() {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        if let ScheduledNativeVerifierDescriptorV5::Fixture { harness } =
+            &phase.current_action()?.descriptor
+            && (input_bytes.as_slice() != FIXTURE_WITNESS_BYTES
+                || input.cas_hash() != &harness.result_hash
+                || validate_fixture_result_for_root(
+                    &phase.aggregate,
+                    harness.as_ref(),
+                    &output_bytes,
+                )?
+                .claim_id()
+                    != &phase.current_action()?.claim_id)
+        {
+            return Err(DomainError::WitnessAdmissionMismatch);
+        }
+        Ok(PreparedScheduledNativeVerifierAppendV5 {
+            log_identity: self.instance_identity,
+            basis_digest: phase.basis.basis_digest.clone(),
+            predecessor_event_hash: self.tail_hash().clone(),
+            event_sequence: phase.basis.target_next_sequence,
+            action_id: phase.current_action()?.action_id.clone(),
+            action_index: phase.action_index,
+            member_index: phase.member_index,
+            phase_digest,
+            payload_hash,
+            payloads,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn append_prepared_scheduled_native_verifier_v5(
+        &mut self,
+        prepared: PreparedScheduledNativeVerifierAppendV5,
+        phase: &mut ReplayedScheduledNativeVerifierPhaseV5,
+    ) -> Result<()> {
+        self.append_prepared_scheduled_native_verifier_with_live_bytes_v5(prepared, phase, 0)
+    }
+
+    fn append_prepared_scheduled_native_verifier_with_live_bytes_v5(
+        &mut self,
+        prepared: PreparedScheduledNativeVerifierAppendV5,
+        phase: &mut ReplayedScheduledNativeVerifierPhaseV5,
+        live_bytes: u64,
+    ) -> Result<()> {
+        // A prepared capability owns its one fixed materialization. The
+        // initial gate therefore charges that exact retained array and never
+        // rebuilds a current payload for an identity comparison.
+        // The two identity digests below are freshly allocated SHA-256
+        // strings. Admit them before either digest call; neither is retained
+        // after the comparison completes.
+        const SHA256_CAPACITY: u64 = ("sha256:".len() + 64) as u64;
+        let validation_bytes = scheduled_native_prepare_validation_bytes(phase)?;
+        scheduled_native_working_preflight(
+            self,
+            phase,
+            prepared
+                .retained_bytes()?
+                .checked_add(SHA256_CAPACITY.saturating_mul(2))
+                .and_then(|value| value.checked_add(validation_bytes))
+                .and_then(|value| value.checked_add(live_bytes))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier append initial ownership",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled native verifier append initial ownership",
+        )?;
+        if self.instance_identity != prepared.log_identity
+            || self.instance_identity != phase.log_identity
+            || prepared.basis_digest != phase.basis.basis_digest
+            || prepared.predecessor_event_hash != *self.tail_hash()
+            || prepared.event_sequence != phase.basis.target_next_sequence
+            || prepared.action_index != phase.action_index
+            || prepared.member_index != phase.member_index
+            || prepared.phase_digest != phase.digest()?
+            || prepared.action_id != phase.current_action()?.action_id
+            || prepared.payload_hash
+                != crate::canonical::compact_json_sha256_streaming(prepared.payload()?)?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        phase.basis.validate_current_log(self)?;
+        phase.validate_current_action_closure()?;
+        let required =
+            scheduled_native_append_required_working_bytes(self, phase, &prepared, live_bytes)?;
+        #[cfg(test)]
+        V5_TEST_NATIVE_RECOVERY_REQUIRED.with(|value| value.set(value.get().max(required)));
+        if required > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled native verifier append preflight ownership",
+                self.limits.max_working_bytes,
+                required,
+            ));
+        }
+        let mut next_terminal = phase.terminal;
+        let mut next_v4_ids = phase.v4_registration_ids.clone();
+        let payload = prepared.payload()?;
+        advance_v5_post_d2_terminal_gate(&mut next_terminal, &mut next_v4_ids, payload)?;
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            prepared.event_sequence,
+            payload.actor().to_owned(),
+            prepared.event_sequence,
+            prepared.predecessor_event_hash.clone(),
+            payload.clone(),
+        )?;
+        let mut aggregate = phase.aggregate.clone();
+        let mut v3 = phase.v3_aggregate.clone();
+        apply_for_log(
+            &mut aggregate,
+            Some(&mut v3),
+            payload,
+            payload.actor(),
+            &self.run_id,
+            &self.genesis_hash,
+            None,
+            true,
+        )?;
+        let mut basis = phase.basis.clone();
+        if let Some((payload_kind, record_id, record_body_hash)) =
+            authority_record_identity(payload)?
+        {
+            let trust = match &phase.current_action()?.descriptor {
+                ScheduledNativeVerifierDescriptorV5::Fixture { harness } => {
+                    trust_digest_for_harness(harness.as_ref())?
+                }
+                ScheduledNativeVerifierDescriptorV5::StaticRequiresReconstruction {
+                    trust_digest,
+                } => trust_digest.clone(),
+            };
+            let position = v5_authority_position_digest(
+                &self.run_id,
+                &self.genesis_hash,
+                envelope.id(),
+                envelope.sequence(),
+                envelope.previous_event_hash(),
+                &trust,
+            )?;
+            basis.inherited_m4_entries.push(AuthorityReplayEntryV3AtV5 {
+                event_id: envelope.id().clone(),
+                event_sequence: envelope.sequence(),
+                payload_kind: payload_kind.to_owned(),
+                predecessor_event_hash: envelope.previous_event_hash().clone(),
+                record_body_hash,
+                record_id,
+                v3_trust_binding_digest: trust,
+                v5_position_digest: position,
+            });
+        }
+        basis.advance_authority_free_to_event(&envelope)?;
+        self.append_sealed_envelope_at_v5(envelope, V5SealedPayloadPosition::General)?;
+        phase.aggregate = aggregate;
+        phase.v3_aggregate = v3;
+        phase.basis = basis;
+        phase.terminal = next_terminal;
+        phase.v4_registration_ids = next_v4_ids;
+        if phase.member_index == 4 {
+            phase.action_index = phase.action_index.checked_add(1).ok_or_else(|| {
+                DomainError::EventSequence("scheduled native verifier action overflow".to_owned())
+            })?;
+            phase.member_index = 0;
+        } else {
+            phase.member_index = phase.member_index.checked_add(1).ok_or_else(|| {
+                DomainError::EventSequence("scheduled native verifier member overflow".to_owned())
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Rebuilds a native-verifier cursor from its terminal authority anchor
+    /// and the durable suffix.  The suffix is not a plan: every observed row
+    /// is compared with the one current roots/CAS-derived member and recovery
+    /// returns after the first missing member.  Thus an interrupted five-row
+    /// fixture has exactly five legal prefixes and no caller-selected resume
+    /// point.
+    #[allow(dead_code)]
+    pub(crate) fn replay_scheduled_native_verifier_suffix_v5(
+        mut log: EventLogV5,
+        canonical_suffix: &[Vec<u8>],
+        terminal: &ReplayedPostD2TerminalPhaseV5,
+        reviewer: &ReplayedScheduledReviewerPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<(EventLogV5, ReplayedScheduledNativeVerifierPhaseV5)> {
+        let phase = Self::replay_scheduled_native_verifier_suffix_inner_v5(
+            &mut log,
+            canonical_suffix,
+            terminal,
+            reviewer,
+            partial,
+            roots,
+            resolver,
+        )?;
+        Ok((log, phase))
+    }
+
+    fn replay_scheduled_native_verifier_suffix_inner_v5(
+        log: &mut EventLogV5,
+        canonical_suffix: &[Vec<u8>],
+        terminal: &ReplayedPostD2TerminalPhaseV5,
+        reviewer: &ReplayedScheduledReviewerPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<ReplayedScheduledNativeVerifierPhaseV5> {
+        let suffix_retained = scheduled_native_suffix_retained_bytes(canonical_suffix)?;
+        let mut phase = log.begin_scheduled_native_verifier_phase_with_live_bytes_v5(
+            terminal,
+            reviewer,
+            partial,
+            roots,
+            suffix_retained,
+        )?;
+        for (index, bytes) in canonical_suffix.iter().enumerate() {
+            let recovery_extra = u64::try_from(bytes.len())
+                .unwrap_or(u64::MAX)
+                .checked_add(suffix_retained)
+                .and_then(|value| {
+                    value.checked_add(u64::try_from(size_of::<EventEnvelope>()).unwrap_or(u64::MAX))
+                })
+                .and_then(|value| {
+                    value.checked_add(
+                        u64::try_from(size_of::<PreparedScheduledNativeVerifierAppendV5>())
+                            .unwrap_or(u64::MAX),
+                    )
+                })
+                // The decoded envelope and the independently rebuilt expected
+                // envelope retain no unbounded field outside their two
+                // canonical input/output lines.
+                .and_then(|value| {
+                    value.checked_add(
+                        u64::try_from(bytes.len())
+                            .unwrap_or(u64::MAX)
+                            .checked_mul(2)?,
+                    )
+                })
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier recovery pre-decode ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?;
+            // The decoded durable row remains live through the exact
+            // materialization gate below. That gate owns the fixed payload
+            // array and rejects before either CAS read.
+            #[cfg(test)]
+            {
+                let recovery_required = log
+                    .full_resident_bytes_for_structural_store()?
+                    .checked_add(phase.retained_bytes()?)
+                    .and_then(|value| value.checked_add(recovery_extra))
+                    .ok_or(DomainError::Incomplete {
+                        operation: "scheduled native verifier recovery pre-decode ownership",
+                        limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                        observed: usize::MAX,
+                    })?;
+                V5_TEST_NATIVE_RECOVERY_REQUIRED
+                    .with(|value| value.set(value.get().max(recovery_required)));
+            }
+            scheduled_native_working_preflight(
+                log,
+                &phase,
+                recovery_extra,
+                "scheduled native verifier recovery pre-decode ownership",
+            )?;
+            if phase.action_index >= phase.actions.len() {
+                return Err(DomainError::EventSequence(
+                    "native verifier suffix follows completed action set".to_owned(),
+                ));
+            }
+            let observed = EventEnvelope::from_json_slice_at_v5_position(
+                bytes,
+                V5SealedPayloadPosition::General,
+            )
+            .map_err(|error| {
+                DomainError::Validation(format!(
+                    "scheduled native verifier suffix event {index}: {error}"
+                ))
+            })?;
+            observed.validate_chain_position_at_v5(
+                &log.run_id,
+                &log.genesis_hash,
+                phase.basis.target_next_sequence,
+                log.tail_hash(),
+                V5SealedPayloadPosition::General,
+            )?;
+            let prepared = log.prepare_next_scheduled_native_verifier_append_with_live_bytes_v5(
+                &phase,
+                resolver,
+                recovery_extra,
+            )?;
+            let expected = EventEnvelope::new(
+                EventContractVersion::V5,
+                log.run_id.clone(),
+                log.genesis_hash.clone(),
+                prepared.event_sequence,
+                prepared.payload()?.actor().to_owned(),
+                prepared.event_sequence,
+                prepared.predecessor_event_hash.clone(),
+                prepared.payload()?.clone(),
+            )?;
+            if observed.id() != expected.id()
+                || observed.event_hash() != expected.event_hash()
+                || observed.canonical_bytes()? != expected.canonical_bytes()?
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled native verifier durable member differs from roots/CAS replay",
+                ));
+            }
+            let recovery_live = u64::try_from(size_of::<EventEnvelope>())
+                .unwrap_or(u64::MAX)
+                .checked_add(suffix_retained)
+                .and_then(|value| {
+                    value.checked_add(u64::try_from(observed.allocated_bytes()).unwrap_or(u64::MAX))
+                })
+                .and_then(|value| {
+                    value.checked_add(u64::try_from(expected.allocated_bytes()).unwrap_or(u64::MAX))
+                })
+                .and_then(|value| {
+                    value.checked_add(
+                        u64::try_from(bytes.len())
+                            .unwrap_or(u64::MAX)
+                            .checked_mul(2)?,
+                    )
+                })
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier recovery append live ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?;
+            log.append_prepared_scheduled_native_verifier_with_live_bytes_v5(
+                prepared,
+                &mut phase,
+                recovery_live,
+            )?;
+        }
+        Ok(phase)
+    }
+
+    #[cfg(test)]
+    fn replay_scheduled_native_verifier_suffix_in_place_for_test(
+        log: &mut EventLogV5,
+        canonical_suffix: &[Vec<u8>],
+        terminal: &ReplayedPostD2TerminalPhaseV5,
+        reviewer: &ReplayedScheduledReviewerPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<ReplayedScheduledNativeVerifierPhaseV5> {
+        Self::replay_scheduled_native_verifier_suffix_inner_v5(
+            log,
+            canonical_suffix,
+            terminal,
+            reviewer,
+            partial,
+            roots,
+            resolver,
+        )
+    }
+}
+
+fn native_verifier_prerequisite_v5(
+    action: &crate::PartialRerunActionV5,
+    reviewer: &ReplayedScheduledReviewerPhaseV5,
+    partial: &SealedPartialRerunPhaseV5,
+    log: &EventLogV5,
+) -> Result<(StableId, ContentHash, StableId, ContentHash)> {
+    match action.prerequisites() {
+        [crate::ActionPrerequisiteV5::ScheduledAction { action_id }] => {
+            let receipt = reviewer
+                .completed_receipts
+                .iter()
+                .find(|receipt| receipt.action_id == *action_id)
+                .ok_or({
+                    DomainError::HistoricalPrefixMismatch(
+                        "scheduled native verifier lacks its exact reviewer completion receipt",
+                    )
+                })?;
+            Ok((
+                receipt.execution_id.clone(),
+                receipt.execution_body_hash.clone(),
+                receipt.claim_id.clone(),
+                receipt.claim_body_hash.clone(),
+            ))
+        }
+        [
+            crate::ActionPrerequisiteV5::ExistingTargetRecord {
+                record_id: first_id,
+                body_hash: first_hash,
+                event_id: first_event_id,
+            },
+            crate::ActionPrerequisiteV5::ExistingTargetRecord {
+                record_id: second_id,
+                body_hash: second_hash,
+                event_id: second_event_id,
+            },
+        ] => {
+            let (
+                (execution_id, execution_body_hash, execution_event_id),
+                (claim_id, claim_body_hash, claim_event_id),
+            ) = match (first_id.kind(), second_id.kind()) {
+                ("execution", "claim") => (
+                    (first_id, first_hash, first_event_id),
+                    (second_id, second_hash, second_event_id),
+                ),
+                ("claim", "execution") => (
+                    (second_id, second_hash, second_event_id),
+                    (first_id, first_hash, first_event_id),
+                ),
+                _ => {
+                    return Err(DomainError::EventSequence(
+                            "existing native-verifier prerequisites must contain one execution and one claim"
+                                .to_owned(),
+                        ));
+                }
+            };
+            let before =
+                usize::try_from(partial.target_predecessor_event_count).unwrap_or(usize::MAX);
+            let execution_event = log
+                .envelopes
+                .iter()
+                .take(before)
+                .find(|event| event.id() == execution_event_id);
+            let claim_event = log
+                .envelopes
+                .iter()
+                .take(before)
+                .find(|event| event.id() == claim_event_id);
+            let Some(execution_event) = execution_event else {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "existing native-verifier execution prerequisite is after the pinned predecessor",
+                ));
+            };
+            // D2 records execution and all parsed claims atomically in one
+            // payload; the plan's two witnesses must therefore cite that
+            // same envelope, rather than arbitrary earlier event IDs.
+            if claim_event.is_none() || claim_event_id != execution_event_id {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "existing native-verifier prerequisites do not cite one atomic execution event",
+                ));
+            }
+            // This route has no completed-reviewer receipt, so the atomic D2
+            // witness must be decoded from the pinned predecessor itself.
+            // Admit the raw canonical line and its independently decoded
+            // payload while the borrowed reviewer/partial cursors remain
+            // live; otherwise a suppressed-reviewer action could allocate
+            // beyond the begin gate before it is rejected.
+            // Reuse the production D2 structural/nested working oracle;
+            // never substitute a local byte heuristic for its bounded decode
+            // contract.  Its published limit is charged while the decoder's
+            // temporary collection is live with the borrowed V5 cursors.
+            preflight_d2_decode_working(
+                execution_event.payload.get().as_bytes(),
+                MAX_D2_WORKING_BYTES,
+            )?;
+            let decode_working = d2_decode_working_observed(
+                execution_event.payload.get().as_bytes(),
+                MAX_D2_WORKING_BYTES,
+            )?;
+            let decode_extra = u64::try_from(decode_working)
+                .unwrap_or(u64::MAX)
+                .checked_add(u64::try_from(size_of::<PersistedPayload>()).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier predecessor decode ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?;
+            let decode_observed = log
+                .full_resident_bytes_for_structural_store()?
+                .checked_add(reviewer.retained_working_upper_bound()?)
+                .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+                .and_then(|value| value.checked_add(decode_extra))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier predecessor decode ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?;
+            if decode_observed > log.limits.max_working_bytes {
+                return Err(replay_incomplete(
+                    "scheduled native verifier predecessor decode ownership",
+                    log.limits.max_working_bytes,
+                    decode_observed,
+                ));
+            }
+            #[cfg(test)]
+            {
+                V5_TEST_NATIVE_BEGIN_REQUIRED
+                    .with(|value| value.set(value.get().max(decode_observed)));
+                V5_TEST_NATIVE_RECOVERY_REQUIRED
+                    .with(|value| value.set(value.get().max(decode_observed)));
+            }
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, execution_event.payload.get())?;
+            let PersistedPayload::ReviewExecutionRecorded(recorded) = payload else {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "existing native-verifier execution witness event has wrong payload",
+                ));
+            };
+            if recorded.execution.id() != execution_id
+                || recorded.execution.body_hash()? != *execution_body_hash
+                || recorded.claims.len() != 1
+                || recorded.claims[0].id() != claim_id
+                || recorded.claims[0].body_hash()? != *claim_body_hash
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "existing native-verifier event witness differs from execution/claim prerequisite",
+                ));
+            }
+            let execution = partial
+                .target_aggregate
+                .execution(execution_id)
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "existing native verifier execution",
+                    owner_id: action.id().clone(),
+                    reference: execution_id.clone(),
+                })?;
+            let claim = partial
+                .target_aggregate
+                .execution_claims()
+                .find(|claim| claim.id() == claim_id)
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "existing native verifier claim",
+                    owner_id: action.id().clone(),
+                    reference: claim_id.clone(),
+                })?;
+            if execution.body_hash()? != *execution_body_hash
+                || claim.body_hash()? != *claim_body_hash
+                || !execution.parsed_claim_ids().contains(claim_id)
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "existing native-verifier prerequisite body differs",
+                ));
+            }
+            Ok((
+                execution_id.clone(),
+                execution_body_hash.clone(),
+                claim_id.clone(),
+                claim_body_hash.clone(),
+            ))
+        }
+        _ => Err(DomainError::EventSequence(
+            "scheduled native verifier prerequisite shape is not exact".to_owned(),
+        )),
     }
 }
 
@@ -35768,6 +38253,10 @@ fn deterministic_fixture_result_for_claim(
         "subject_ids": subject_ids,
         "witness_hash": FIXTURE_WITNESS_HASH,
     }))?;
+    debug_assert_eq!(
+        fixture_result_canonical_len_v5(claim).ok(),
+        Some(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+    );
     let result = validate_fixture_result_for_root(aggregate, root, &bytes)?;
     if result.subject_ids() != subject_ids {
         return Err(DomainError::VerificationBundleMismatch);
@@ -44505,6 +46994,44 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn fixture_reviewer_claims(
+        state: &ReplayedScheduledReviewerPhaseV5,
+    ) -> Result<Vec<crate::ExecutionClaimInputV2>> {
+        let action = state.action()?;
+        let context = match &state.cursor {
+            ScheduledReviewerCursorV5::RawRegistration { context, .. }
+            | ScheduledReviewerCursorV5::Execution { context, .. } => context,
+            _ => {
+                return Err(DomainError::EventSequence(
+                    "fixture reviewer claim has no admitted context".to_owned(),
+                ));
+            }
+        };
+        let obligation = state
+            .aggregate
+            .obligation(&action.obligation_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "fixture reviewer claim",
+                owner_id: action.action_id.clone(),
+                reference: action.obligation_id.clone(),
+            })?;
+        if obligation.property_id() != M4_PROPERTY_ID {
+            return Err(DomainError::Validation(
+                "fixture reviewer action is not the M4 obligation".to_owned(),
+            ));
+        }
+        Ok(vec![crate::ExecutionClaimInputV2::new(
+            M4_PROPERTY_ID,
+            obligation.normalized_target_refs().clone(),
+            ClaimPolarity::IssuePresent,
+            "fixture verifier singleton claim",
+            context.normalized_included_source_ids().clone(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            Some(1.0),
+        )?])
     }
 
     /// The positive post-D2 gluing fixture executes every stale reviewer
@@ -63229,7 +65756,7 @@ mod tests {
         let (source_program, target_program, source_bytes, target_bytes) =
             crate::m6::scheduled_reviewer_distinct_s0_s1_program_fixture()
                 .expect("scheduled reviewer programs");
-        let source = CompleteM5V4Fixture::successful_from_program_and_sources(
+        let source = CompleteM5V4Fixture::selected_source_from_program_and_sources(
             source_program,
             source_bytes,
             StableId::parse("run:m6-no-gluing-s0").expect("source run"),
@@ -63583,6 +66110,27 @@ mod tests {
                     terminal.reviewer_completion_digest,
                     reviewer_completion_digest
                 );
+                // The singleton scheduled verifier is derived solely from
+                // the finished reviewer receipt.  This fixture has no V5
+                // harness root for its non-fixture claim, so the closed
+                // static path must refuse its V-only reconstruction rather
+                // than selecting a fixture descriptor or allowing a raw M4
+                // append.
+                let native = log.begin_scheduled_native_verifier_phase_v5(
+                    &terminal,
+                    &state,
+                    &partial,
+                    &target.roots,
+                )?;
+                assert!(!native.actions.is_empty());
+                assert!(matches!(
+                    native.actions.first().map(|action| &action.descriptor),
+                    Some(ScheduledNativeVerifierDescriptorV5::StaticRequiresReconstruction { .. })
+                ));
+                assert!(
+                    log.prepare_next_scheduled_native_verifier_append_v5(&native, &resolver)
+                        .is_err()
+                );
                 assert!(
                     terminal
                         .admits_terminal_payload_for_test(
@@ -63609,6 +66157,1190 @@ mod tests {
         assert!(validate_post_d2_gluing_presence(false, false).is_ok());
         assert!(validate_post_d2_gluing_presence(true, false).is_err());
         assert!(validate_post_d2_gluing_presence(false, true).is_err());
+    }
+
+    #[test]
+    fn v5_scheduled_native_existing_target_witnesses_are_atomic_and_pinned() {
+        let (source_program, target_program, source_bytes, target_bytes) =
+            crate::m6::gluing_selected_distinct_s0_s1_program_fixture()
+                .expect("selected gluing programs");
+        let target_native = CompleteM5V4Fixture::selected_source_from_program_and_sources(
+            target_program.clone(),
+            target_bytes,
+            id("run:m6-existing-native-s1"),
+        )
+        .expect("target native fixture");
+        let source = CompleteM5V4Fixture::selected_source_from_program_and_sources(
+            source_program,
+            source_bytes,
+            id("run:m6-existing-native-s0"),
+        )
+        .expect("source fixture");
+        let target = NoM5V5Fixture::from_native_m4_fixture_through(
+            target_native,
+            target_program,
+            NoM5V5FixtureTerminalStage::ReviewerCompleted,
+        )
+        .expect("target predecessor through completed reviewer");
+        let phases = target
+            .with_terminal(|_, actual, _| {
+                crate::m6::m6_fixture_phases_from_exact_prefixes(&source, &target, actual)
+            })
+            .expect("incremental phases");
+        let full_staleness = target
+            .with_terminal(|log, actual, _| {
+                crate::m6::IncrementalStalenessInputV5::new(
+                    source.log(),
+                    phases.closure(),
+                    phases.mapping(),
+                    phases.correspondence(),
+                    log,
+                )?
+                .reduce_v5(
+                    actual,
+                    crate::m6_test_support::DISTINCT_S0_S1_ASSESSMENT_TIME,
+                )
+            })
+            .expect("staleness");
+        let source_obligation = source
+            .passed_fixture_obligation_id()
+            .expect("passed source native obligation");
+        let target_obligation = full_staleness
+            .records()
+            .iter()
+            .find(|record| {
+                record.source_record_kind() == crate::HistoricalRecordKindV5::Obligation
+                    && record.source_record_id() == source_obligation
+            })
+            .and_then(|record| record.successor_record_ids().first())
+            .expect("preserved target obligation")
+            .clone();
+        let staleness = full_staleness
+            .with_only_partial_rerun_subject_for_test(&target_obligation)
+            .expect("single native target staleness");
+        let preservation = crate::M6PreservationPhaseV5::empty(&staleness);
+        target
+            .with_terminal_persistence(|mut log, pre_basis| {
+                let mut basis =
+                    log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                log.append_program_mapping_phase_v5(
+                    phases.closure(),
+                    phases.mapping().clone(),
+                    &mut basis,
+                )?;
+                log.append_obligation_correspondence_phase_v5(
+                    phases.closure(),
+                    phases.mapping(),
+                    phases.correspondence().clone(),
+                    &mut basis,
+                )?;
+                log.append_staleness_phase_v5(
+                    phases.closure(),
+                    phases.mapping(),
+                    phases.correspondence(),
+                    staleness.clone(),
+                    &mut basis,
+                )?;
+                let mut partial =
+                    target.seal_partial_rerun_phase_for_log_v5(&log, &staleness, &preservation)?;
+                let verifier_index = partial
+                    .actions
+                    .iter()
+                    .position(|action| {
+                        action.action() == crate::PartialRerunActionKindV5::RerunVerifier
+                    })
+                    .expect("one remaining native verifier");
+                assert_eq!(partial.actions.len(), 2);
+                assert!(partial.actions.iter().all(|action| {
+                    !matches!(
+                        action.action(),
+                        crate::PartialRerunActionKindV5::RerunReviewer
+                    )
+                }));
+                assert!(
+                    partial.actions[verifier_index]
+                        .prerequisites()
+                        .iter()
+                        .all(|value| {
+                            matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { .. })
+                        })
+                );
+                while let Ok(prepared) =
+                    log.prepare_partial_rerun_phase_append_v5(&partial, &staleness, &basis)
+                {
+                    log.append_prepared_partial_rerun_phase_v5(
+                        prepared, &partial, &staleness, &mut basis,
+                    )?;
+                }
+                let reviewer = log.begin_scheduled_reviewer_phase_v5(&partial, basis)?;
+                assert!(reviewer.is_finished());
+                assert!(reviewer.actions.is_empty());
+                assert!(full_staleness.target_gluing_required());
+                let mut gluing = reviewer.seal_gluing_rerun_phase_v5(&partial)?;
+                assert!(!gluing.actions.is_empty());
+                let gluing_member_count = gluing.actions.len() + 1;
+                for _ in 0..gluing_member_count {
+                    let prepared = log.prepare_gluing_rerun_append_v5(&mut gluing)?;
+                    log.append_prepared_gluing_rerun_v5(prepared, &mut gluing)?;
+                }
+                assert!(log.prepare_gluing_rerun_append_v5(&mut gluing).is_err());
+                let terminal =
+                    log.open_post_d2_terminal_phase_v5(&reviewer, &partial, Some(&mut gluing))?;
+
+                let assert_rejected_without_log_mutation =
+                    |log: &EventLogV5, partial: &SealedPartialRerunPhaseV5| -> Result<()> {
+                        let tail = log.tail_hash().clone();
+                        let count = log.envelopes.len();
+                        assert!(
+                            log.begin_scheduled_native_verifier_phase_v5(
+                                &terminal,
+                                &reviewer,
+                                partial,
+                                &target.roots,
+                            )
+                            .is_err()
+                        );
+                        assert_eq!(log.tail_hash(), &tail);
+                        assert_eq!(log.envelopes.len(), count);
+                        Ok(())
+                    };
+
+                // Planner canonical order is not semantic order: the reducer
+                // accepts either exact execution/claim order while preserving
+                // the same one atomic D2 witness.
+                let original = partial.actions[verifier_index].prerequisites().to_vec();
+                assert_eq!(original.len(), 2);
+                let execution_witness = original
+                    .iter()
+                    .find(|value| {
+                        matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }
+                            if record_id.kind() == "execution")
+                    })
+                    .expect("one existing execution witness");
+                let claim_witness = original
+                    .iter()
+                    .find(|value| {
+                        matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }
+                            if record_id.kind() == "claim")
+                    })
+                    .expect("one existing claim witness");
+                let (
+                    ActionPrerequisiteV5::ExistingTargetRecord {
+                        event_id: execution_event_id,
+                        ..
+                    },
+                    ActionPrerequisiteV5::ExistingTargetRecord {
+                        event_id: claim_event_id,
+                        ..
+                    },
+                ) = (execution_witness, claim_witness)
+                else {
+                    unreachable!("existing native verifier prerequisites are records")
+                };
+                assert_eq!(execution_event_id, claim_event_id);
+                let mut reversed = original.clone();
+                reversed.reverse();
+                partial.actions[verifier_index].replace_prerequisites_unchecked_for_test(reversed);
+                assert!(
+                    log.begin_scheduled_native_verifier_phase_v5(
+                        &terminal,
+                        &reviewer,
+                        &partial,
+                        &target.roots,
+                    )
+                    .is_ok()
+                );
+                partial.actions[verifier_index]
+                    .replace_prerequisites_unchecked_for_test(original.clone());
+
+                let mut atomic_mismatch = original.clone();
+                let alternate_event = log.envelopes[0].id().clone();
+                atomic_mismatch
+                    .iter_mut()
+                    .find_map(|value| match value {
+                        ActionPrerequisiteV5::ExistingTargetRecord {
+                            record_id,
+                            event_id,
+                            ..
+                        } if record_id.kind() == "claim" => Some(event_id),
+                        _ => None,
+                    })
+                    .expect("claim witness for atomic mismatch")
+                    .clone_from(&alternate_event);
+                partial.actions[verifier_index]
+                    .replace_prerequisites_unchecked_for_test(atomic_mismatch);
+                assert_rejected_without_log_mutation(&log, &partial)?;
+                partial.actions[verifier_index]
+                    .replace_prerequisites_unchecked_for_test(original.clone());
+
+                let mut body_mismatch = original.clone();
+                *body_mismatch
+                    .iter_mut()
+                    .find_map(|value| match value {
+                        ActionPrerequisiteV5::ExistingTargetRecord {
+                            record_id,
+                            body_hash,
+                            ..
+                        } if record_id.kind() == "claim" => Some(body_hash),
+                        _ => None,
+                    })
+                    .expect("claim witness for body mismatch") =
+                    ContentHash::sha256(b"existing-native-mutated-body");
+                partial.actions[verifier_index]
+                    .replace_prerequisites_unchecked_for_test(body_mismatch);
+                assert_rejected_without_log_mutation(&log, &partial)?;
+                partial.actions[verifier_index]
+                    .replace_prerequisites_unchecked_for_test(original.clone());
+
+                let execution_event_id = original
+                    .iter()
+                    .find_map(|value| match value {
+                        ActionPrerequisiteV5::ExistingTargetRecord {
+                            record_id,
+                            event_id,
+                            ..
+                        } if record_id.kind() == "execution" => Some(event_id.clone()),
+                        _ => None,
+                    })
+                    .expect("execution witness event");
+                let execution_index = log
+                    .envelopes
+                    .iter()
+                    .position(|event| event.id() == &execution_event_id)
+                    .expect("execution event index");
+                let original_predecessor_count = partial.target_predecessor_event_count;
+                partial.target_predecessor_event_count =
+                    u64::try_from(execution_index).expect("event index fits");
+                assert_rejected_without_log_mutation(&log, &partial)?;
+                partial.target_predecessor_event_count = original_predecessor_count;
+
+                reset_scheduled_native_begin_required_working_for_test();
+                assert!(
+                    log.begin_scheduled_native_verifier_phase_v5(
+                        &terminal,
+                        &reviewer,
+                        &partial,
+                        &target.roots,
+                    )
+                    .is_ok()
+                );
+                let exact = scheduled_native_begin_required_working_for_test();
+                assert_ne!(exact, 0);
+                let original_limit = log.limits.max_working_bytes;
+                let tail = log.tail_hash().clone();
+                let count = log.envelopes.len();
+                log.limits.max_working_bytes =
+                    exact.checked_sub(1).ok_or(DomainError::Incomplete {
+                        operation: "existing native begin exact-minus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                assert!(
+                    log.begin_scheduled_native_verifier_phase_v5(
+                        &terminal,
+                        &reviewer,
+                        &partial,
+                        &target.roots,
+                    )
+                    .is_err()
+                );
+                assert_eq!(log.tail_hash(), &tail);
+                assert_eq!(log.envelopes.len(), count);
+                for limit in [
+                    exact,
+                    exact.checked_add(1).ok_or(DomainError::Incomplete {
+                        operation: "existing native begin exact-plus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?,
+                ] {
+                    log.limits.max_working_bytes = limit;
+                    assert!(
+                        log.begin_scheduled_native_verifier_phase_v5(
+                            &terminal,
+                            &reviewer,
+                            &partial,
+                            &target.roots,
+                        )
+                        .is_ok()
+                    );
+                }
+                log.limits.max_working_bytes = original_limit;
+                Ok(())
+            })
+            .expect("existing native verifier witness matrix");
+    }
+
+    #[test]
+    fn v5_scheduled_native_fixture_bundle_appends_and_recovers_every_prefix() {
+        let (mut source_program, _initial_target_program, sources, target_sources) =
+            crate::m6::scheduled_reviewer_distinct_s0_s1_program_fixture()
+                .expect("incremental M4 programs");
+        fn retain_only_m4_property(value: &mut Value) {
+            match value {
+                Value::Array(values) => values.iter_mut().for_each(retain_only_m4_property),
+                Value::Object(values) => {
+                    if values
+                        .get("property_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| id != M4_PROPERTY_ID)
+                    {
+                        values.remove("property_id");
+                    }
+                    values.values_mut().for_each(retain_only_m4_property);
+                }
+                _ => {}
+            }
+        }
+        let mut source_value =
+            serde_json::to_value(source_program.streaming_ref()).expect("source JSON");
+        retain_only_m4_property(&mut source_value);
+        source_program = ProgramSpace::from_json_slice(
+            &serde_json::to_vec(&source_value).expect("source JSON bytes"),
+        )
+        .expect("source only M4 property");
+        let mut target_program =
+            crate::m6::distinct_s1_program_from(&source_program).expect("M4 target program");
+        let mut target_value =
+            serde_json::to_value(target_program.streaming_ref()).expect("target JSON");
+        *target_value["invariants"]
+            .as_array_mut()
+            .expect("invariants") = Vec::new();
+        target_program = ProgramSpace::from_json_slice(
+            &serde_json::to_vec(&target_value).expect("target JSON bytes"),
+        )
+        .expect("target without gluing invariant");
+        let source = complete_m5_v4_fixture_from_d2_with_assignments(
+            d2_v3_m4_m5_log_from_program(source_program, sources, id("run:m6-native-fixture-s0"))
+                .expect("source D2 fixture"),
+            M5DoubleSubmitAssignmentsV4::new(
+                crate::AssignmentValueV4::Required,
+                crate::AssignmentValueV4::Satisfied,
+            ),
+            false,
+            true,
+        )
+        .expect("source M5 fixture");
+        let target = NoM5V5Fixture::from_program_and_sources(
+            target_program,
+            target_sources,
+            id("run:m6-native-fixture-s1"),
+        )
+        .expect("target fixture");
+        let phases = target
+            .with_terminal(|_, actual, _| {
+                crate::m6::m6_fixture_phases_from_exact_prefixes(&source, &target, actual)
+            })
+            .expect("phases");
+        let full_staleness = target
+            .with_terminal(|log, actual, _| {
+                crate::m6::IncrementalStalenessInputV5::new(
+                    source.log(),
+                    phases.closure(),
+                    phases.mapping(),
+                    phases.correspondence(),
+                    log,
+                )?
+                .reduce_v5(
+                    actual,
+                    crate::m6_test_support::DISTINCT_S0_S1_ASSESSMENT_TIME,
+                )
+            })
+            .expect("staleness");
+        let m4_obligation_id = crate::MvpRulePack::synthesize(target.program())
+            .expect("target M4 obligations")
+            .obligations()
+            .iter()
+            .find(|obligation| obligation.property_id() == M4_PROPERTY_ID)
+            .map(|obligation| obligation.id().clone())
+            .expect("single M4 target obligation");
+        let staleness = full_staleness
+            .with_only_partial_rerun_subject_for_test(&m4_obligation_id)
+            .expect("single M4 staleness planning projection");
+        let preservation = crate::M6PreservationPhaseV5::empty(&staleness);
+        target
+            .with_terminal_persistence(|mut log, pre_basis| {
+                let mut basis =
+                    log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
+                log.append_program_mapping_phase_v5(
+                    phases.closure(),
+                    phases.mapping().clone(),
+                    &mut basis,
+                )?;
+                log.append_obligation_correspondence_phase_v5(
+                    phases.closure(),
+                    phases.mapping(),
+                    phases.correspondence().clone(),
+                    &mut basis,
+                )?;
+                log.append_staleness_phase_v5(
+                    phases.closure(),
+                    phases.mapping(),
+                    phases.correspondence(),
+                    staleness.clone(),
+                    &mut basis,
+                )?;
+                let partial =
+                    target.seal_partial_rerun_phase_for_log_v5(&log, &staleness, &preservation)?;
+                while let Ok(prepared) =
+                    log.prepare_partial_rerun_phase_append_v5(&partial, &staleness, &basis)
+                {
+                    log.append_prepared_partial_rerun_phase_v5(
+                        prepared, &partial, &staleness, &mut basis,
+                    )?;
+                }
+                struct Resolver {
+                    objects: BTreeMap<ContentHash, Vec<u8>>,
+                    reads: std::cell::Cell<u64>,
+                }
+                impl AuthorityArtifactResolverV5 for Resolver {
+                    fn read_exact(&self, hash: &ContentHash, destination: &mut [u8]) -> Result<()> {
+                        self.reads.set(self.reads.get().saturating_add(1));
+                        let bytes = self.objects.get(hash).ok_or_else(|| {
+                            DomainError::Validation(
+                                "native fixture CAS object is absent".to_owned(),
+                            )
+                        })?;
+                        if bytes.len() != destination.len() {
+                            return Err(DomainError::Validation(
+                                "native fixture CAS size differs".to_owned(),
+                            ));
+                        }
+                        destination.copy_from_slice(bytes);
+                        Ok(())
+                    }
+                }
+                let raw = br#"{"fixture":"native-m4"}"#.to_vec();
+                let mut objects = target
+                    .sources
+                    .values()
+                    .cloned()
+                    .map(|bytes| (ContentHash::sha256(&bytes), bytes))
+                    .collect::<BTreeMap<_, _>>();
+                objects.insert(ContentHash::sha256(&raw), raw.clone());
+                let scheduled_start = log.envelopes.len();
+                let mut reviewer = log.begin_scheduled_reviewer_phase_v5(&partial, basis)?;
+                while !reviewer.is_finished() {
+                    let prepared = match reviewer.cursor {
+                        ScheduledReviewerCursorV5::Planned
+                        | ScheduledReviewerCursorV5::InProgress
+                        | ScheduledReviewerCursorV5::Completed { .. } => {
+                            reviewer.prepare_lifecycle_v5()?
+                        }
+                        ScheduledReviewerCursorV5::Context => {
+                            reviewer.prepare_context_v5(&Resolver {
+                                objects: objects.clone(),
+                                reads: std::cell::Cell::new(0),
+                            })?
+                        }
+                        ScheduledReviewerCursorV5::RawRegistration { .. } => {
+                            reviewer.prepare_raw_registration_v5(&raw)?
+                        }
+                        ScheduledReviewerCursorV5::Execution { .. } => {
+                            let property = reviewer
+                                .aggregate
+                                .obligation(&reviewer.action()?.obligation_id)
+                                .expect("obligation")
+                                .property_id();
+                            reviewer.prepare_execution_v5(
+                                &Resolver {
+                                    objects: objects.clone(),
+                                    reads: std::cell::Cell::new(0),
+                                },
+                                if property == M4_PROPERTY_ID {
+                                    fixture_reviewer_claims(&reviewer)?
+                                } else {
+                                    scheduled_reviewer_claims(&reviewer, 1)?
+                                },
+                            crate::ExecutionOutcome::Structured,
+                            )?
+                        }
+                        ScheduledReviewerCursorV5::CardinalityUnsupported { .. } => {
+                            panic!("fixture reviewer cardinality")
+                        }
+                        ScheduledReviewerCursorV5::Finished => unreachable!(),
+                    };
+                    log.append_prepared_scheduled_reviewer_v5(prepared, &mut reviewer)?;
+                }
+                let terminal = log.open_post_d2_terminal_phase_v5(&reviewer, &partial, None)?;
+                let mut harnesses = Vec::new();
+                for receipt in &reviewer.completed_receipts {
+                    let claim = reviewer
+                        .aggregate
+                        .execution_claims()
+                        .find(|claim| claim.id() == &receipt.claim_id)
+                        .expect("claim");
+                    if claim.property_id() != M4_PROPERTY_ID {
+                        continue;
+                    }
+                    let scope =
+                        native_fixture_scope_v5(&log, &reviewer.aggregate, &terminal.basis, claim)?;
+                    let (_, result_bytes, result_hash) =
+                        deterministic_fixture_result_for_claim(&reviewer.aggregate, claim, &scope)?;
+                    objects.insert(scope.result_hash.clone(), FIXTURE_WITNESS_BYTES.to_vec());
+                    objects.insert(result_hash.clone(), result_bytes);
+                    harnesses.push(AuthorityHarnessBindingV3Tuple {
+                        policy_revision_hash: scope.policy_revision_hash,
+                        repository_id: scope.repository_id,
+                        repository_source_hash: scope.repository_source_hash,
+                        harness_id: scope.harness_id,
+                        harness_revision: scope.harness_revision,
+                        harness_source_hash: scope.harness_source_hash,
+                        test_artifact_id: scope.test_artifact_id,
+                        descriptor_id: scope.descriptor_id,
+                        procedure_version: scope.procedure_version,
+                        result_hash: scope.result_hash,
+                        result_size: scope.result_size,
+                        result_media_type: scope.result_media_type,
+                        result_sensitivity: scope.result_sensitivity,
+                        run_id: scope.run_id,
+                        genesis_hash: scope.genesis_hash,
+                        snapshot_id: scope.snapshot_id,
+                        universe_id: scope.universe_id,
+                        property_id: scope.property_id,
+                        claim_id: scope.claim_id,
+                        claim_body_hash: scope.claim_body_hash,
+                    });
+                }
+                assert!(!harnesses.is_empty());
+                let roots = AuthorityTrustRootsV5::new(
+                    terminal.basis.policy_revision_hash.clone(),
+                    reviewer.aggregate.program().repository_id().clone(),
+                    reviewer
+                        .aggregate
+                        .program()
+                        .repository_source()
+                        .content_hash()
+                        .expect("source hash")
+                        .clone(),
+                    harnesses,
+                    Vec::new(),
+                    Vec::new(),
+                )?;
+                let resolver = Resolver {
+                    objects: objects.clone(),
+                    reads: std::cell::Cell::new(0),
+                };
+                let start = log.envelopes.len();
+                let scheduled_suffix = log.envelopes[scheduled_start..start]
+                    .iter()
+                    .map(EventEnvelope::canonical_bytes)
+                    .collect::<Result<Vec<_>>>()?;
+                let missing_fixture_root = AuthorityTrustRootsV5::new(
+                    terminal.basis.policy_revision_hash.clone(),
+                    reviewer.aggregate.program().repository_id().clone(),
+                    reviewer
+                        .aggregate
+                        .program()
+                        .repository_source()
+                        .content_hash()
+                        .expect("source hash")
+                        .clone(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )?;
+                assert!(
+                    log.begin_scheduled_native_verifier_phase_v5(
+                        &terminal,
+                        &reviewer,
+                        &partial,
+                        &missing_fixture_root,
+                    )
+                        .is_err()
+                );
+                let mut duplicate_roots = roots.clone();
+                duplicate_roots.harnesses.push(roots.harnesses[0].clone());
+                assert!(
+                    log.begin_scheduled_native_verifier_phase_v5(
+                        &terminal,
+                        &reviewer,
+                        &partial,
+                        &duplicate_roots,
+                    )
+                        .is_err()
+                );
+                let mut descriptor_mismatch_roots = roots.clone();
+                descriptor_mismatch_roots.harnesses[0].descriptor_id =
+                    "native-hostile-descriptor".to_owned();
+                assert!(
+                    log.begin_scheduled_native_verifier_phase_v5(
+                        &terminal,
+                        &reviewer,
+                        &partial,
+                        &descriptor_mismatch_roots,
+                    )
+                        .is_err()
+                );
+                reset_scheduled_native_begin_required_working_for_test();
+                assert!(
+                    log.begin_scheduled_native_verifier_phase_v5(
+                        &terminal, &reviewer, &partial, &roots
+                    )
+                    .is_ok()
+                );
+                let begin_required = scheduled_native_begin_required_working_for_test();
+                assert_ne!(begin_required, 0);
+                let begin_limit = log.limits.max_working_bytes;
+                let begin_tail = log.tail_hash().clone();
+                let begin_count = log.envelopes.len();
+                log.limits.max_working_bytes =
+                    begin_required
+                        .checked_sub(1)
+                        .ok_or(DomainError::Incomplete {
+                            operation: "native verifier begin exact-minus-one",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?;
+                assert!(
+                    log.begin_scheduled_native_verifier_phase_v5(
+                        &terminal, &reviewer, &partial, &roots
+                    )
+                        .is_err()
+                );
+                assert_eq!(log.tail_hash(), &begin_tail);
+                assert_eq!(log.envelopes.len(), begin_count);
+                for limit in [
+                    begin_required,
+                    begin_required
+                        .checked_add(1)
+                        .ok_or(DomainError::Incomplete {
+                            operation: "native verifier begin exact-plus-one",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?,
+                ] {
+                    log.limits.max_working_bytes = limit;
+                assert!(
+                        log.begin_scheduled_native_verifier_phase_v5(
+                            &terminal, &reviewer, &partial, &roots
+                        )
+                        .is_ok()
+                );
+                }
+                log.limits.max_working_bytes = begin_limit;
+                let mut phase = log.begin_scheduled_native_verifier_phase_v5(
+                    &terminal, &reviewer, &partial, &roots,
+                )?;
+                assert!(
+                    phase.actions.iter().any(|action| matches!(
+                        action.descriptor,
+                        ScheduledNativeVerifierDescriptorV5::Fixture { .. }
+                    )),
+                    "native phase descriptors: {:?}",
+                    phase.actions
+                );
+                assert_eq!(phase.actions.len(), 1);
+                let native_payloads = phase.materialize_payloads()?;
+                let native_output = match &native_payloads[1] {
+                    PersistedPayload::ArtifactRegisteredV3(value) => value,
+                    _ => return Err(DomainError::VerificationBundleMismatch.into()),
+                };
+                let native_input = match &native_payloads[0] {
+                    PersistedPayload::ArtifactRegisteredV3(value) => value,
+                    _ => return Err(DomainError::VerificationBundleMismatch.into()),
+                };
+                let mut corrupt_objects = objects.clone();
+                corrupt_objects.insert(native_input.cas_hash().clone(), b"native-corrupt-cas".to_vec());
+                let corrupt_resolver = Resolver {
+                    objects: corrupt_objects,
+                    reads: std::cell::Cell::new(0),
+                };
+                let phase_before_corrupt = phase.digest()?;
+                let tail_before_corrupt = log.tail_hash().clone();
+                let corrupt_attempt = log
+                    .prepare_next_scheduled_native_verifier_append_v5(&phase, &corrupt_resolver);
+                assert!(corrupt_attempt.is_err(), "corrupt native prepare unexpectedly succeeded");
+                let corrupt_error = corrupt_attempt.err();
+                assert!(
+                    corrupt_resolver.reads.get() > 0,
+                    "corrupt native prepare rejected before CAS: {corrupt_error:?}"
+                );
+                assert_eq!(log.tail_hash(), &tail_before_corrupt);
+                assert_eq!(phase.digest()?, phase_before_corrupt);
+                let exact_native_prepare = log
+                    .full_resident_bytes_for_structural_store()?
+                    .checked_add(phase.retained_bytes()?)
+                    .ok_or(DomainError::Incomplete {
+                        operation: "native verifier exact prepare test base",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                let prepared_metadata_dynamic = phase.basis.basis_digest.allocated_bytes()
+                    + log.tail_hash().allocated_bytes()
+                    + phase.current_action()?.action_id.allocated_bytes()
+                    + phase.digest()?.allocated_bytes()
+                    + ContentHash::sha256(b"native-fixture-payload").allocated_bytes();
+                let exact_native_prepare = exact_native_prepare
+                    .checked_add(native_fixture_payloads_dynamic_bytes(&native_payloads)?)
+                    .and_then(|value| value.checked_add(native_input.size()))
+                    .and_then(|value| value.checked_add(native_output.size()))
+                    .and_then(|value| {
+                        value.checked_add(
+                            u64::try_from(size_of::<PreparedScheduledNativeVerifierAppendV5>())
+                                .unwrap_or(u64::MAX),
+                        )
+                    })
+                    .and_then(|value| {
+                        value.checked_add(
+                            u64::try_from(prepared_metadata_dynamic).unwrap_or(u64::MAX),
+                        )
+                    })
+                    .ok_or(DomainError::Incomplete {
+                        operation: "native verifier exact prepare test oracle",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                let original_limit = log.limits.max_working_bytes;
+                log.limits.max_working_bytes =
+                    exact_native_prepare
+                        .checked_sub(1)
+                        .ok_or(DomainError::Incomplete {
+                            operation: "native verifier exact-minus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                let tail_before_native_prepare = log.tail_hash().clone();
+                let count_before_native_prepare = log.envelopes.len();
+                let phase_before_native_prepare = phase.digest()?;
+                resolver.reads.set(0);
+                assert!(
+                    log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)
+                        .is_err()
+                );
+                assert_eq!(resolver.reads.get(), 0);
+                assert_eq!(log.tail_hash(), &tail_before_native_prepare);
+                assert_eq!(log.envelopes.len(), count_before_native_prepare);
+                assert_eq!(phase.digest()?, phase_before_native_prepare);
+                // Calibrate the production borrow-only admission, then prove
+                // its exact-minus-one path cannot materialize or read CAS.
+                log.limits.max_working_bytes = original_limit;
+                reset_scheduled_native_prepare_for_test();
+                assert!(log
+                    .prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)
+                    .is_ok());
+                let production_prepare_required =
+                    scheduled_native_prepare_required_working_for_test();
+                assert_ne!(production_prepare_required, 0);
+                assert_eq!(scheduled_native_materializations_for_test(), 1);
+                log.limits.max_working_bytes = production_prepare_required
+                    .checked_sub(1)
+                    .ok_or(DomainError::Incomplete {
+                        operation: "native verifier production exact-minus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                reset_scheduled_native_prepare_for_test();
+                resolver.reads.set(0);
+                assert!(log
+                    .prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)
+                    .is_err());
+                assert_eq!(scheduled_native_materializations_for_test(), 0);
+                assert_eq!(resolver.reads.get(), 0);
+                assert_eq!(log.tail_hash(), &tail_before_native_prepare);
+                assert_eq!(log.envelopes.len(), count_before_native_prepare);
+                log.limits.max_working_bytes = exact_native_prepare;
+                assert!(
+                    log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)
+                        .is_ok()
+                );
+                log.limits.max_working_bytes = original_limit;
+                // Prepared append capabilities are single-use, exact anchors.
+                // Each hostile mutation is made from a fresh preparation and
+                // must leave both the durable log and opaque phase unchanged.
+                let reject_mutated_prepared = |prepared: PreparedScheduledNativeVerifierAppendV5,
+                                               log: &mut EventLogV5,
+                                               phase: &mut ReplayedScheduledNativeVerifierPhaseV5|
+                 -> Result<()> {
+                    let tail = log.tail_hash().clone();
+                    let count = log.envelopes.len();
+                    let digest = phase.digest()?;
+                    let basis = phase.basis.basis_digest.clone();
+                    let authority_entries = phase.basis.inherited_m4_entries.len();
+                    let cursor = (phase.action_index, phase.member_index, phase.terminal);
+                    let v4_ids = phase.v4_registration_ids.clone();
+                    let aggregate_retained = phase.aggregate.retained_bytes_v3()?;
+                    let aggregate_counts = (
+                        phase.aggregate.verifications().count(),
+                        phase.aggregate.bindings().count(),
+                    );
+                    let v3_counts = (
+                        phase.v3_aggregate.registrations.len(),
+                        phase.v3_aggregate.evidence.len(),
+                        phase.v3_aggregate.bindings.len(),
+                        phase.v3_aggregate.verifications.len(),
+                    );
+                    assert!(log
+                        .append_prepared_scheduled_native_verifier_v5(prepared, phase)
+                        .is_err());
+                    assert_eq!(log.tail_hash(), &tail);
+                    assert_eq!(log.envelopes.len(), count);
+                    assert_eq!(phase.digest()?, digest);
+                    assert_eq!(phase.basis.basis_digest, basis);
+                    assert_eq!(phase.basis.inherited_m4_entries.len(), authority_entries);
+                    assert_eq!((phase.action_index, phase.member_index, phase.terminal), cursor);
+                    assert_eq!(phase.v4_registration_ids, v4_ids);
+                    assert_eq!(phase.aggregate.retained_bytes_v3()?, aggregate_retained);
+                assert_eq!(
+                        (phase.aggregate.verifications().count(), phase.aggregate.bindings().count()),
+                        aggregate_counts
+                );
+                    assert_eq!(
+                        (
+                            phase.v3_aggregate.registrations.len(),
+                            phase.v3_aggregate.evidence.len(),
+                            phase.v3_aggregate.bindings.len(),
+                            phase.v3_aggregate.verifications.len(),
+                        ),
+                        v3_counts
+                    );
+                    Ok(())
+                };
+                let mut bad = log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)?;
+                bad.basis_digest = ContentHash::sha256(b"native-bad-basis");
+                reject_mutated_prepared(bad, &mut log, &mut phase)?;
+                let mut bad = log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)?;
+                bad.predecessor_event_hash = ContentHash::sha256(b"native-bad-tail");
+                reject_mutated_prepared(bad, &mut log, &mut phase)?;
+                let mut bad = log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)?;
+                bad.event_sequence = bad.event_sequence.checked_add(1).ok_or(DomainError::Incomplete {
+                    operation: "native hostile event sequence", limit: usize::MAX, observed: usize::MAX,
+                })?;
+                reject_mutated_prepared(bad, &mut log, &mut phase)?;
+                let mut bad = log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)?;
+                bad.action_id = StableId::parse("partial-rerun-action:native-hostile")?;
+                reject_mutated_prepared(bad, &mut log, &mut phase)?;
+                let mut bad = log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)?;
+                bad.member_index = bad.member_index.checked_add(1).ok_or(DomainError::Incomplete {
+                    operation: "native hostile member index", limit: usize::MAX, observed: usize::MAX,
+                })?;
+                reject_mutated_prepared(bad, &mut log, &mut phase)?;
+                let mut bad = log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)?;
+                bad.phase_digest = ContentHash::sha256(b"native-bad-phase");
+                reject_mutated_prepared(bad, &mut log, &mut phase)?;
+                let mut bad = log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)?;
+                bad.payload_hash = ContentHash::sha256(b"native-bad-payload");
+                reject_mutated_prepared(bad, &mut log, &mut phase)?;
+                // Every boundary attempt starts from a new roots-bound
+                // reconstruction.  A successful append updates aggregate,
+                // V3 aggregate, basis and cursor, so reusing it would hide
+                // retained state from the next capacity probe.
+                let fresh_native_append_inputs = || -> Result<_> {
+                    let (fresh_base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(),
+                        target.log.canonical_genesis_bytes.clone(),
+                        log.envelopes[..scheduled_start].to_vec(),
+                        log.limits,
+                    )?;
+                    let fresh_partial = target
+                        .seal_partial_rerun_phase_for_log_v5(
+                            &fresh_base,
+                            &staleness,
+                            &preservation,
+                            )
+                        .map_err(|error| DomainError::Validation(error.to_string()))?;
+                    let fresh_pre_basis = target
+                        .with_terminal_persistence(|_, basis| Ok(basis))
+                        .map_err(|error| DomainError::Validation(error.to_string()))?;
+                    let RecoveredM6PersistenceV5::Incremental {
+                        stage: M6PersistenceRecoveryStageV5::PartialRerunSealed,
+                        basis: fresh_basis,
+                    } = fresh_base.recover_partial_rerun_phase_v5(
+                        &fresh_pre_basis,
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        &staleness,
+                        PreservationRecoveryInputV5 {
+                            closure: phases.closure(),
+                            mapping: phases.mapping(),
+                            correspondence: phases.correspondence(),
+                            staleness: &staleness,
+                            bundles: &[],
+                            resolver: &resolver,
+                            roots: &target.roots,
+                        },
+                        &fresh_partial,
+                    )? else {
+                        return Err(DomainError::Validation(
+                            "native append probe must recover the sealed partial phase".to_owned(),
+                        ));
+                    };
+                    let (fresh_log, fresh_reviewer) =
+                        EventLogV5::replay_scheduled_reviewer_suffix_v5(
+                            fresh_base,
+                            &scheduled_suffix,
+                            &fresh_partial,
+                            *fresh_basis,
+                            &resolver,
+                        )?;
+                    let fresh_terminal = fresh_log.open_post_d2_terminal_phase_v5(
+                        &fresh_reviewer,
+                        &fresh_partial,
+                        None,
+                    )?;
+                    let fresh_phase = fresh_log.begin_scheduled_native_verifier_phase_v5(
+                        &fresh_terminal,
+                        &fresh_reviewer,
+                        &fresh_partial,
+                        &roots,
+                    )?;
+                    Ok((fresh_log, fresh_phase))
+                };
+                for offset in [-1_i8, 0, 1] {
+                    let (mut fresh_log, mut fresh_phase) = fresh_native_append_inputs()?;
+                    let prepared = fresh_log
+                        .prepare_next_scheduled_native_verifier_append_v5(&fresh_phase, &resolver)?;
+                    let fresh_append_exact = scheduled_native_append_required_working_bytes(
+                        &fresh_log,
+                        &fresh_phase,
+                        &prepared,
+                        0,
+                    )?;
+                    let limit = match offset {
+                        -1 => fresh_append_exact.checked_sub(1).ok_or(DomainError::Incomplete {
+                            operation: "native verifier append exact-minus-one",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?,
+                        0 => fresh_append_exact,
+                        1 => fresh_append_exact.checked_add(1).ok_or(DomainError::Incomplete {
+                            operation: "native verifier append exact-plus-one",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?,
+                        _ => unreachable!(),
+                    };
+                    fresh_log.limits.max_working_bytes = limit;
+                    let tail = fresh_log.tail_hash().clone();
+                    let count = fresh_log.envelopes.len();
+                    let digest = fresh_phase.digest()?;
+                    let attempt = fresh_log.append_prepared_scheduled_native_verifier_v5(
+                        prepared,
+                        &mut fresh_phase,
+                    );
+                    if offset < 0 {
+                        assert!(attempt.is_err());
+                        assert_eq!(fresh_log.tail_hash(), &tail);
+                        assert_eq!(fresh_log.envelopes.len(), count);
+                        assert_eq!(fresh_phase.digest()?, digest);
+                    } else {
+                        assert!(attempt.is_ok(), "native append must admit {offset:+} boundary");
+                    }
+                }
+                let prepared =
+                    log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)?;
+                log.append_prepared_scheduled_native_verifier_v5(prepared, &mut phase)?;
+                while phase.action_index == 0 {
+                    let prepared =
+                        log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)?;
+                    log.append_prepared_scheduled_native_verifier_v5(prepared, &mut phase)?;
+                }
+                let suffix = log.envelopes[start..]
+                    .iter()
+                    .map(EventEnvelope::canonical_bytes)
+                    .collect::<Result<Vec<_>>>()?;
+                assert_eq!(suffix.len(), 5);
+                for count in 0..=suffix.len() {
+                    let (base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(),
+                        target.log.canonical_genesis_bytes.clone(),
+                        log.envelopes[..scheduled_start].to_vec(),
+                        log.limits,
+                    )?;
+                    let recovery_partial = target.seal_partial_rerun_phase_for_log_v5(
+                        &base,
+                        &staleness,
+                        &preservation,
+                    )?;
+                    let recovery_pre_basis =
+                        target.with_terminal_persistence(|_, pre_basis| Ok(pre_basis))?;
+                    let RecoveredM6PersistenceV5::Incremental {
+                        stage: M6PersistenceRecoveryStageV5::PartialRerunSealed,
+                        basis: fresh_scheduled_basis,
+                    } = base.recover_partial_rerun_phase_v5(
+                        &recovery_pre_basis,
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        &staleness,
+                        PreservationRecoveryInputV5 {
+                            closure: phases.closure(),
+                            mapping: phases.mapping(),
+                            correspondence: phases.correspondence(),
+                            staleness: &staleness,
+                            bundles: &[],
+                            resolver: &resolver,
+                            roots: &target.roots,
+                        },
+                        &recovery_partial,
+                    )?
+                    else {
+                        return Err(DomainError::Validation(
+                            "native recovery must stop at the sealed partial phase".to_owned(),
+                        )
+                        .into());
+                    };
+                    let (replayed_base, replayed_reviewer) =
+                        EventLogV5::replay_scheduled_reviewer_suffix_v5(
+                            base,
+                            &scheduled_suffix,
+                            &recovery_partial,
+                            *fresh_scheduled_basis,
+                            &resolver,
+                        )?;
+                    let replayed_terminal = replayed_base.open_post_d2_terminal_phase_v5(
+                        &replayed_reviewer,
+                        &recovery_partial,
+                        None,
+                    )?;
+                    if count == 1 {
+                        reset_scheduled_native_recovery_required_working_for_test();
+                    }
+                    let (mut replayed_log, mut replayed) =
+                        EventLogV5::replay_scheduled_native_verifier_suffix_v5(
+                            replayed_base,
+                            &suffix[..count],
+                            &replayed_terminal,
+                            &replayed_reviewer,
+                            &recovery_partial,
+                            &roots,
+                            &resolver,
+                        )?;
+                    if count == 1 {
+                        assert_ne!(scheduled_native_recovery_required_working_for_test(), 0);
+                        // Each boundary probe reconstructs the authority
+                        // cursors from the durable predecessor.  Reusing the
+                        // successful cursor would hide retained state from a
+                        // later exact-limit attempt.
+                        let fresh_native_inputs = || -> Result<_> {
+                            let (fresh_base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                                target.run_id().clone(),
+                                target.log.canonical_genesis_bytes.clone(),
+                                log.envelopes[..scheduled_start].to_vec(),
+                                log.limits,
+                            )?;
+                            let fresh_partial = target.seal_partial_rerun_phase_for_log_v5(
+                                &fresh_base,
+                                &staleness,
+                                &preservation,
+                            ).map_err(|error| DomainError::Validation(error.to_string()))?;
+                            let fresh_pre_basis =
+                                target.with_terminal_persistence(|_, basis| Ok(basis))
+                                    .map_err(|error| DomainError::Validation(error.to_string()))?;
+                            let RecoveredM6PersistenceV5::Incremental {
+                                stage: M6PersistenceRecoveryStageV5::PartialRerunSealed,
+                                basis: fresh_basis,
+                            } = fresh_base.recover_partial_rerun_phase_v5(
+                                &fresh_pre_basis,
+                                phases.closure(),
+                                phases.mapping(),
+                                phases.correspondence(),
+                                &staleness,
+                                PreservationRecoveryInputV5 {
+                                    closure: phases.closure(),
+                                    mapping: phases.mapping(),
+                                    correspondence: phases.correspondence(),
+                                    staleness: &staleness,
+                                    bundles: &[],
+                                    resolver: &resolver,
+                                    roots: &target.roots,
+                                },
+                                &fresh_partial,
+                            )? else {
+                                return Err(DomainError::Validation(
+                                    "native recovery probe must stop at sealed partial".to_owned(),
+                                ));
+                            };
+                            let (fresh_log, fresh_reviewer) =
+                                EventLogV5::replay_scheduled_reviewer_suffix_v5(
+                                    fresh_base,
+                                    &scheduled_suffix,
+                                    &fresh_partial,
+                                    *fresh_basis,
+                                    &resolver,
+                                )?;
+                            let fresh_terminal = fresh_log.open_post_d2_terminal_phase_v5(
+                                &fresh_reviewer,
+                                &fresh_partial,
+                                None,
+                            )?;
+                            Ok((fresh_log, fresh_terminal, fresh_reviewer, fresh_partial))
+                        };
+                        for offset in [-1_i8, 0, 1] {
+                            // Capacity is an input-actual property.  Calibrate
+                            // each independently reconstructed authority
+                            // state, then reconstruct once more for the
+                            // boundary attempt; do not import a peak from the
+                            // earlier prefix replay above.
+                            let (mut calibration_log, calibration_terminal, calibration_reviewer, calibration_partial) =
+                                fresh_native_inputs()?;
+                            reset_scheduled_native_recovery_required_working_for_test();
+                            let _ = EventLogV5::replay_scheduled_native_verifier_suffix_in_place_for_test(
+                                &mut calibration_log,
+                                &suffix[..count],
+                                &calibration_terminal,
+                                &calibration_reviewer,
+                                &calibration_partial,
+                                &roots,
+                                &resolver,
+                            )?;
+                            let calibrated = scheduled_native_recovery_required_working_for_test();
+                            assert_ne!(calibrated, 0);
+                            let limit = match offset {
+                                -1 => calibrated.checked_sub(1).ok_or(DomainError::Incomplete {
+                                    operation: "native recovery exact-minus-one",
+                                    limit: usize::MAX,
+                                    observed: usize::MAX,
+                                })?,
+                                0 => calibrated,
+                                1 => calibrated.checked_add(1).ok_or(DomainError::Incomplete {
+                                    operation: "native recovery exact-plus-one",
+                                    limit: usize::MAX,
+                                    observed: usize::MAX,
+                                })?,
+                                _ => unreachable!(),
+                            };
+                            let (mut fresh_log, fresh_terminal, fresh_reviewer, fresh_partial) =
+                                fresh_native_inputs()?;
+                            fresh_log.limits.max_working_bytes = limit;
+                            let fresh_tail = fresh_log.tail_hash().clone();
+                            let fresh_count = fresh_log.envelopes.len();
+                            resolver.reads.set(0);
+                            let attempt = EventLogV5::replay_scheduled_native_verifier_suffix_in_place_for_test(
+                                &mut fresh_log,
+                                &suffix[..count],
+                                &fresh_terminal,
+                                &fresh_reviewer,
+                                &fresh_partial,
+                                &roots,
+                                &resolver,
+                );
+                            if offset >= 0 {
+                                assert!(attempt.is_ok(), "native recovery must admit exact boundary: {attempt:?}");
+                            } else {
+                                assert!(attempt.is_err());
+                                assert_eq!(resolver.reads.get(), 0);
+                                assert_eq!(fresh_log.tail_hash(), &fresh_tail);
+                                assert_eq!(fresh_log.envelopes.len(), fresh_count);
+                            }
+                        }
+                    }
+                    while replayed.action_index == 0 {
+                        let prepared = replayed_log
+                            .prepare_next_scheduled_native_verifier_append_v5(
+                                &replayed, &resolver,
+                            )?;
+                        replayed_log.append_prepared_scheduled_native_verifier_v5(
+                            prepared,
+                            &mut replayed,
+                        )?;
+                    }
+                    assert_eq!(replayed_log.tail_hash(), log.tail_hash());
+                }
+                Ok(())
+            })
+            .expect("native fixture V5 action/recovery");
     }
 
     #[test]
