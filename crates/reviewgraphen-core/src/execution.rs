@@ -791,6 +791,24 @@ impl ExecutionRecord {
         parsed_claim_ids: BTreeSet<StableId>,
         outcome: ExecutionOutcome,
     ) -> Result<Self> {
+        Self::from_input_with_m6_cardinality(
+            input,
+            registration_id,
+            raw_hash,
+            parsed_claim_ids,
+            outcome,
+            false,
+        )
+    }
+
+    fn from_input_with_m6_cardinality(
+        input: ExecutionRecordInput,
+        registration_id: &StableId,
+        raw_hash: ContentHash,
+        parsed_claim_ids: BTreeSet<StableId>,
+        outcome: ExecutionOutcome,
+        allow_empty_structured: bool,
+    ) -> Result<Self> {
         let id = input.execution_id()?;
         let record = Self {
             attempt: input.attempt,
@@ -815,11 +833,29 @@ impl ExecutionRecord {
             tool_policy_version: NO_TOOLS_POLICY_VERSION.to_owned(),
             wave_id: input.wave_id,
         };
-        record.validate_shape()?;
+        if allow_empty_structured {
+            record.validate_shape_for_m6()?;
+        } else {
+            record.validate_shape()?;
+        }
         Ok(record)
     }
 
     pub(crate) fn validate_shape(&self) -> Result<()> {
+        self.validate_shape_with_m6_cardinality(false)
+    }
+
+    /// Structural validation used only while replaying the closed V5 M6
+    /// scheduled-reviewer suffix.  It differs from general D2 in one respect:
+    /// a structured execution may retain an empty parsed-claim set for the
+    /// future M6 scheduled-position decoder. This is structural validation
+    /// only; no event append or accepted aggregate path admits it yet. All
+    /// V2--V4 and normal aggregate paths call `validate_shape` above.
+    pub(crate) fn validate_shape_for_m6(&self) -> Result<()> {
+        self.validate_shape_with_m6_cardinality(true)
+    }
+
+    fn validate_shape_with_m6_cardinality(&self, allow_empty_structured: bool) -> Result<()> {
         if self.id.kind() != "execution"
             || self.plan_id.kind() != "plan"
             || self.wave_id.kind() != "schedule-wave"
@@ -845,7 +881,10 @@ impl ExecutionRecord {
         }
         validate_trace_map(&self.inference_settings)?;
         self.outcome.validate()?;
-        if self.outcome.is_structured() == self.parsed_claim_ids.is_empty() {
+        if (!allow_empty_structured
+            && self.outcome.is_structured() == self.parsed_claim_ids.is_empty())
+            || (!self.outcome.is_structured() && !self.parsed_claim_ids.is_empty())
+        {
             return Err(DomainError::Validation(
                 "structured D2 execution requires claims and every failure outcome forbids them"
                     .to_owned(),
@@ -1076,6 +1115,33 @@ pub(crate) struct ReviewExecutionRecorded {
     pub(crate) execution: ExecutionRecord,
 }
 
+/// Opaque result of the M6 exactly-one reduction.  It is deliberately not
+/// serializable and carries both body hashes so later verifier/human minting
+/// cannot replace the sole claim by ID, order, polarity, or confidence.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct M6SingletonClaimClosureV5 {
+    execution_id: StableId,
+    execution_body_hash: ContentHash,
+    claim_id: StableId,
+    claim_body_hash: ContentHash,
+}
+
+#[allow(dead_code)] // Consumed by verifier/human preparation after the reviewer FSM lands.
+impl M6SingletonClaimClosureV5 {
+    pub(crate) fn execution_id(&self) -> &StableId {
+        &self.execution_id
+    }
+    pub(crate) fn execution_body_hash(&self) -> &ContentHash {
+        &self.execution_body_hash
+    }
+    pub(crate) fn claim_id(&self) -> &StableId {
+        &self.claim_id
+    }
+    pub(crate) fn claim_body_hash(&self) -> &ContentHash {
+        &self.claim_body_hash
+    }
+}
+
 impl ReviewExecutionRecorded {
     pub(crate) fn allocated_bytes(&self) -> usize {
         self.execution
@@ -1094,9 +1160,26 @@ impl ReviewExecutionRecorded {
     }
 
     pub(crate) fn validate_shape(&self) -> Result<()> {
-        self.execution.validate_shape()?;
+        self.validate_shape_with_m6_cardinality(false)
+    }
+
+    pub(crate) fn validate_shape_for_m6(&self) -> Result<()> {
+        self.validate_shape_with_m6_cardinality(true)
+    }
+
+    fn validate_shape_with_m6_cardinality(&self, allow_empty_structured: bool) -> Result<()> {
+        if allow_empty_structured {
+            self.execution.validate_shape_for_m6()?;
+        } else {
+            self.execution.validate_shape()?;
+        }
         let expected_count = if self.execution.outcome.is_structured() {
-            require_count(self.claims.len(), 1, MAX_D2_CLAIMS, "D2 execution claims")?;
+            require_count(
+                self.claims.len(),
+                usize::from(!allow_empty_structured),
+                MAX_D2_CLAIMS,
+                "D2 execution claims",
+            )?;
             self.claims.len()
         } else {
             require_count(self.claims.len(), 0, 0, "D2 failure execution claims")?;
@@ -1135,6 +1218,95 @@ impl ReviewExecutionRecorded {
             ));
         }
         Ok(())
+    }
+
+    /// V5-M6 structural decoder contract. It preserves the existing
+    /// `review_execution_recorded` wire shape and canonical bytes. It does not
+    /// append an event or enter accepted aggregate state; the later
+    /// source/basis/position-bound FSM must do that before classification.
+    #[allow(dead_code)] // Consumed by the scheduled-position recovery FSM in the next unit.
+    pub(crate) fn from_event_bytes_for_m6(input: &[u8]) -> Result<Self> {
+        preflight_d2_decode_working(input, MAX_D2_WORKING_BYTES)?;
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawRecorded {
+            claims: Vec<ExecutionClaimV2>,
+            execution: serde_json::Value,
+        }
+        let raw: RawRecorded =
+            serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))?;
+        let execution_raw: RawExecutionRecord = serde_json::from_value(raw.execution)
+            .map_err(|error| DomainError::Json(error.to_string()))?;
+        let execution = ExecutionRecord {
+            attempt: execution_raw.attempt,
+            envelope_id: execution_raw.envelope_id,
+            id: execution_raw.id,
+            inference_settings: execution_raw.inference_settings,
+            model: execution_raw.model.ok_or_else(|| {
+                DomainError::Validation("missing execution model field".to_owned())
+            })?,
+            model_revision: execution_raw.model_revision.ok_or_else(|| {
+                DomainError::Validation("missing execution model_revision field".to_owned())
+            })?,
+            obligation_ids: strict_sorted_ids(
+                execution_raw.obligation_ids,
+                "D2 execution obligation_ids",
+            )?,
+            outcome: execution_raw.outcome,
+            parsed_claim_ids: strict_sorted_ids(
+                execution_raw.parsed_claim_ids,
+                "D2 execution parsed_claim_ids",
+            )?,
+            plan_id: execution_raw.plan_id,
+            prompt_template_version: execution_raw.prompt_template_version,
+            provider: execution_raw.provider.ok_or_else(|| {
+                DomainError::Validation("missing execution provider field".to_owned())
+            })?,
+            raw_artifact_hash: execution_raw.raw_artifact_hash,
+            raw_artifact_registration_id: execution_raw.raw_artifact_registration_id,
+            reviewer_id: execution_raw.reviewer_id,
+            reviewer_kind: execution_raw.reviewer_kind,
+            snapshot_id: execution_raw.snapshot_id,
+            system_prompt_version: execution_raw.system_prompt_version,
+            tool_calls: execution_raw.tool_calls,
+            tool_policy_version: execution_raw.tool_policy_version,
+            wave_id: execution_raw.wave_id,
+        };
+        let recorded = Self {
+            claims: raw.claims,
+            execution,
+        };
+        recorded.validate_shape_for_m6()?;
+        if recorded.canonical_bytes()? != input {
+            return Err(DomainError::Validation(
+                "M6 execution event must be exact canonical JSON".to_owned(),
+            ));
+        }
+        recorded.validate_decode_working(input.len())?;
+        Ok(recorded)
+    }
+
+    #[allow(dead_code)] // Consumed after the scheduled-position FSM durably appends the execution.
+    pub(crate) fn reduce_exactly_one_for_m6(
+        &self,
+    ) -> crate::m6::M6Result<M6SingletonClaimClosureV5> {
+        self.validate_shape_for_m6()
+            .map_err(crate::m6::M6Error::from)?;
+        let [claim] = self.claims.as_slice() else {
+            return Err(crate::m6::M6Error::M6ClaimCardinalityUnsupported {
+                execution_id: self.execution.id().clone(),
+                observed: self.claims.len(),
+            });
+        };
+        Ok(M6SingletonClaimClosureV5 {
+            execution_id: self.execution.id().clone(),
+            execution_body_hash: self
+                .execution
+                .body_hash()
+                .map_err(crate::m6::M6Error::from)?,
+            claim_id: claim.id().clone(),
+            claim_body_hash: claim.body_hash().map_err(crate::m6::M6Error::from)?,
+        })
     }
 
     pub(crate) fn canonical_bytes(&self) -> Result<Vec<u8>> {
@@ -1814,6 +1986,39 @@ impl ValidatedExecutionBundle {
             accounting,
             claim_inputs,
             outcome,
+            false,
+            MAX_D2_WORKING_BYTES,
+        )
+    }
+
+    /// Crate-private M6 construction contract. The result retains the frozen
+    /// D2 wire shape while permitting a structured empty claim set for tests
+    /// and the future scheduled-position FSM. It is not append authority and
+    /// cannot currently become a durable event.
+    #[allow(dead_code)] // Consumed by the private scheduled reviewer mint path in the next unit.
+    pub(crate) fn fake_v3_for_m6(
+        input: ExecutionRecordInput,
+        registration: &ArtifactRegisteredV3,
+        raw_reviewer_bytes: Vec<u8>,
+        resolved_source_buffers: Vec<&Vec<u8>>,
+        claim_inputs: Vec<ExecutionClaimInputV2>,
+        outcome: ExecutionOutcome,
+    ) -> Result<Self> {
+        let mut accounting = Vec::with_capacity(resolved_source_buffers.capacity());
+        for source in resolved_source_buffers {
+            accounting.push(ResolvedSourceBufferAccounting::new(
+                source.len(),
+                source.capacity(),
+            )?);
+        }
+        Self::fake_with_limit(
+            input,
+            ReviewerRegistrationRef::V3(registration),
+            raw_reviewer_bytes,
+            accounting,
+            claim_inputs,
+            outcome,
+            true,
             MAX_D2_WORKING_BYTES,
         )
     }
@@ -1836,6 +2041,7 @@ impl ValidatedExecutionBundle {
             resolved_source_buffers,
             claim_inputs,
             outcome,
+            false,
             MAX_D2_WORKING_BYTES,
         )
     }
@@ -1848,6 +2054,7 @@ impl ValidatedExecutionBundle {
         resolved_source_buffers: Vec<ResolvedSourceBufferAccounting>,
         claim_inputs: Vec<ExecutionClaimInputV2>,
         outcome: ExecutionOutcome,
+        allow_empty_structured: bool,
         working_limit: usize,
     ) -> Result<Self> {
         require_len(
@@ -1874,7 +2081,12 @@ impl ValidatedExecutionBundle {
         input.validate()?;
         outcome.validate()?;
         if outcome.is_structured() {
-            require_count(claim_inputs.len(), 1, MAX_D2_CLAIMS, "D2 execution claims")?;
+            require_count(
+                claim_inputs.len(),
+                usize::from(!allow_empty_structured),
+                MAX_D2_CLAIMS,
+                "D2 execution claims",
+            )?;
         } else if !claim_inputs.is_empty() {
             return Err(DomainError::Validation(
                 "non-structured D2 outcomes cannot carry claims".to_owned(),
@@ -1908,15 +2120,30 @@ impl ValidatedExecutionBundle {
         claims.sort_by(|left, right| left.id().cmp(right.id()));
         let parsed_claim_ids = claims.iter().map(|claim| claim.id().clone()).collect();
         let raw_hash = ContentHash::sha256(&raw_reviewer_bytes);
-        let execution = ExecutionRecord::from_input(
-            input,
-            registration.registration_id(),
-            raw_hash,
-            parsed_claim_ids,
-            outcome,
-        )?;
+        let execution = if allow_empty_structured {
+            ExecutionRecord::from_input_with_m6_cardinality(
+                input,
+                registration.registration_id(),
+                raw_hash,
+                parsed_claim_ids,
+                outcome,
+                true,
+            )?
+        } else {
+            ExecutionRecord::from_input(
+                input,
+                registration.registration_id(),
+                raw_hash,
+                parsed_claim_ids,
+                outcome,
+            )?
+        };
         let bundle = ReviewExecutionRecorded { claims, execution };
-        bundle.validate_shape()?;
+        if allow_empty_structured {
+            bundle.validate_shape_for_m6()?;
+        } else {
+            bundle.validate_shape()?;
+        }
         let raw_closure = ReviewerRawClosure::from_bytes(&bundle, &raw_reviewer_bytes)?;
         let execution_bytes = bundle.execution.canonical_bytes()?;
         let mut claim_bytes = Vec::new();
@@ -2323,6 +2550,22 @@ mod tests {
         .unwrap()
     }
 
+    fn raw_registration_v3(input: &ExecutionRecordInput, raw: &[u8]) -> ArtifactRegisteredV3 {
+        ArtifactRegisteredV3::new(
+            id("run:d2-execution"),
+            ContentHash::sha256(raw),
+            "application/json",
+            u64::try_from(raw.len()).unwrap(),
+            ArtifactSensitivity::Sensitive,
+            ArtifactSourceV3::ReviewerExecution {
+                execution_id: input.execution_id().unwrap(),
+                reviewer_id: FAKE_REVIEWER_ID.to_owned(),
+                run_id: id("run:d2-execution"),
+            },
+        )
+        .unwrap()
+    }
+
     fn structured(attempt: u32, confidence: Option<f64>) -> ValidatedExecutionBundle {
         let input = fixture_input(attempt);
         let raw = br#"{"claims":[{"fixture":true}]}"#;
@@ -2352,6 +2595,92 @@ mod tests {
         assert!(text.contains("\"tool_calls\":[]"));
         assert!(text.contains("\"outcome\":{\"kind\":\"structured\"}"));
         assert_eq!(first.execution().tool_call_count(), 0);
+    }
+
+    #[test]
+    fn m6_contextual_cardinality_preserves_general_d2_and_exactly_one_reduction() {
+        let raw = br#"{"claims":[]}"#;
+        let source = b"source".to_vec();
+        let zero_input = fixture_input(1);
+        let zero_registration = raw_registration_v3(&zero_input, raw);
+        assert!(
+            ValidatedExecutionBundle::fake_v3(
+                zero_input.clone(),
+                &zero_registration,
+                raw.to_vec(),
+                vec![&source],
+                Vec::new(),
+                ExecutionOutcome::Structured,
+            )
+            .is_err(),
+            "the public/general D2 seam remains 1..16"
+        );
+        let zero = ValidatedExecutionBundle::fake_v3_for_m6(
+            zero_input,
+            &zero_registration,
+            raw.to_vec(),
+            vec![&source],
+            Vec::new(),
+            ExecutionOutcome::Structured,
+        )
+        .unwrap();
+        let zero_bytes = zero.parts().0.canonical_bytes().unwrap();
+        assert!(serde_json::from_slice::<ReviewExecutionRecorded>(&zero_bytes).is_err());
+        let zero_replayed = ReviewExecutionRecorded::from_event_bytes_for_m6(&zero_bytes).unwrap();
+        assert!(matches!(
+            zero_replayed.reduce_exactly_one_for_m6(),
+            Err(crate::m6::M6Error::M6ClaimCardinalityUnsupported { observed: 0, .. })
+        ));
+        let zero_payload = format!(
+            "{{\"data\":{},\"type\":\"review_execution_recorded\"}}",
+            String::from_utf8(zero_bytes).unwrap()
+        );
+        assert!(
+            crate::event::generic_v5_payload_rejects_for_test(&zero_payload),
+            "generic V5 decode remains frozen general D2"
+        );
+        crate::event::decode_scheduled_m6_payload_for_test(&zero_payload)
+            .expect("only the private scheduled M6 position accepts zero structurally");
+
+        let one = structured(2, Some(0.5));
+        let singleton = one.parts().0.reduce_exactly_one_for_m6().unwrap();
+        assert_eq!(singleton.execution_id(), one.execution().id());
+        assert_eq!(singleton.claim_id(), one.claims()[0].id());
+        assert_eq!(
+            singleton.execution_body_hash(),
+            &one.execution().body_hash().unwrap()
+        );
+        assert_eq!(
+            singleton.claim_body_hash(),
+            &one.claims()[0].body_hash().unwrap()
+        );
+
+        let two_input = fixture_input(3);
+        let two_registration = raw_registration_v3(&two_input, raw);
+        let second = ExecutionClaimInputV2::new(
+            "property.fixture",
+            BTreeSet::from([id("file:a"), id("file:b")]),
+            ClaimPolarity::IssueAbsent,
+            "second fixture claim",
+            BTreeSet::from([id("file:a")]),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            Some(1.0),
+        )
+        .unwrap();
+        let two = ValidatedExecutionBundle::fake_v3_for_m6(
+            two_input,
+            &two_registration,
+            raw.to_vec(),
+            vec![&source],
+            vec![claim(None), second],
+            ExecutionOutcome::Structured,
+        )
+        .unwrap();
+        assert!(matches!(
+            two.parts().0.reduce_exactly_one_for_m6(),
+            Err(crate::m6::M6Error::M6ClaimCardinalityUnsupported { observed: 2, .. })
+        ));
     }
 
     #[test]

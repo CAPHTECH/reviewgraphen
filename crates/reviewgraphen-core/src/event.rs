@@ -4053,7 +4053,11 @@ impl PersistedPayload {
                 .canonical_bytes()
                 .map(|_| ())
                 .map_err(context_domain_error),
-            Self::ReviewExecutionRecorded(recorded) => recorded.validate_shape(),
+            // The payload-level check is structural. V2--V4 decoders and all
+            // general aggregate paths still apply the frozen 1..16 D2 rule;
+            // V5 needs the zero-claim shape to survive until its exact
+            // scheduled-position cardinality reducer.
+            Self::ReviewExecutionRecorded(recorded) => recorded.validate_shape_for_m6(),
         }
     }
 
@@ -9690,6 +9694,40 @@ fn decode_canonical_payload(
         ));
     }
     Ok(payload)
+}
+
+/// Private contextual decoder contract for the future single atomic execution
+/// position of a sealed scheduled M6 reviewer action. It performs no append.
+/// Every general replay/index/offline caller continues to use
+/// `decode_canonical_payload` and therefore rejects structured zero-claim
+/// records under frozen D2 policy.
+#[allow(dead_code)] // Consumed by the scheduled-position recovery FSM in the next unit.
+fn decode_canonical_scheduled_m6_execution_payload(input: &str) -> Result<PersistedPayload> {
+    let raw: RawPayloadHeader<'_> =
+        serde_json::from_str(input).map_err(|error| DomainError::Json(error.to_string()))?;
+    if raw.kind != "review_execution_recorded" {
+        return Err(DomainError::EventSequence(
+            "scheduled M6 execution position requires review_execution_recorded".to_owned(),
+        ));
+    }
+    let recorded = ReviewExecutionRecorded::from_event_bytes_for_m6(raw.data.get().as_bytes())?;
+    let payload = PersistedPayload::ReviewExecutionRecorded(recorded);
+    if input.as_bytes() != payload_canonical_bytes(&payload)? {
+        return Err(DomainError::EventSequence(
+            "scheduled M6 execution payload is not canonical".to_owned(),
+        ));
+    }
+    Ok(payload)
+}
+
+#[cfg(test)]
+pub(crate) fn decode_scheduled_m6_payload_for_test(input: &str) -> Result<()> {
+    decode_canonical_scheduled_m6_execution_payload(input).map(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) fn generic_v5_payload_rejects_for_test(input: &str) -> bool {
+    decode_payload(EventContractVersion::V5, input).is_err()
 }
 
 /// A validated immutable event. Its payload remains private; consumers may
@@ -20885,6 +20923,16 @@ impl TargetReviewerSuppressionClosureV5 {
     }
     pub(crate) const fn closure_exact(&self) -> bool {
         self.closure_exact
+    }
+
+    /// Reused Completed executions are classified before the ordinary exact-
+    /// closure mismatch. The classified tuple remains eventless and cannot be
+    /// reduced to verifier or human input unless it is the singleton case.
+    pub(crate) fn m6_cardinality_error(&self) -> Option<crate::M6Error> {
+        (self.claims.len() != 1).then(|| crate::M6Error::M6ClaimCardinalityUnsupported {
+            execution_id: self.execution.record_id.clone(),
+            observed: self.claims.len(),
+        })
     }
 }
 

@@ -10866,6 +10866,7 @@ impl M6StalenessPhaseV5 {
             )>,
             verification: Option<TargetSuppressionRecordWitnessV5>,
             human: bool,
+            reused_cardinality_unsupported: Option<(StableId, usize)>,
         }
         let mut decisions = BTreeMap::new();
         let mut action_count = 0_usize;
@@ -10878,17 +10879,33 @@ impl M6StalenessPhaseV5 {
                 if let Some(reviewer) = reviewer {
                     let observed = reviewer.claims().len();
                     if observed != 1 {
-                        return Err(M6Error::M6ClaimCardinalityUnsupported {
-                            execution_id: reviewer.execution().record_id().clone(),
-                            observed,
-                        });
+                        // A reused Completed execution is immutable history.
+                        // Seal an actionless requirement and classify it
+                        // eventlessly later; never reopen lifecycle or mint
+                        // verifier/human authority from a caller-selected
+                        // claim. Zero-claim Completed is rejected by frozen D2
+                        // replay before a suppression projection can exist.
+                        if lifecycle == Some(ObligationLifecycle::Completed)
+                            && reviewer.closure_exact()
+                            && context.is_some()
+                        {
+                            decision.context = context.clone();
+                            decision.reused_cardinality_unsupported =
+                                Some((reviewer.execution().record_id().clone(), observed));
+                        } else {
+                            return Err(M6Error::CompletedReviewerClosureMismatch {
+                                obligation_id: target.clone(),
+                            });
+                        }
                     }
-                    if reviewer.closure_exact() && context.is_some() {
+                    if observed == 1 && reviewer.closure_exact() && context.is_some() {
                         decision.reviewer =
                             Some((reviewer.execution().clone(), reviewer.claims()[0].clone()));
                     }
                 }
-                if lifecycle == Some(ObligationLifecycle::Completed) && decision.reviewer.is_none()
+                if lifecycle == Some(ObligationLifecycle::Completed)
+                    && decision.reviewer.is_none()
+                    && decision.reused_cardinality_unsupported.is_none()
                 {
                     return Err(M6Error::CompletedReviewerClosureMismatch {
                         obligation_id: target.clone(),
@@ -10905,19 +10922,25 @@ impl M6StalenessPhaseV5 {
                     && suppression.human_exact(target)
                     && seed.require_human_resolution;
             }
-            let subject_actions = usize::from(decision.context.is_none())
-                .checked_add(usize::from(decision.reviewer.is_none()))
-                .and_then(|count| count.checked_add(usize::from(decision.verification.is_none())))
-                .and_then(|count| {
-                    count.checked_add(usize::from(
-                        seed.require_human_resolution && !decision.human,
-                    ))
-                })
-                .ok_or(M6Error::Incomplete {
-                    operation: "M6 partial rerun action count",
-                    limit: action_limit,
-                    observed: usize::MAX,
-                })?;
+            let subject_actions = if decision.reused_cardinality_unsupported.is_some() {
+                0
+            } else {
+                usize::from(decision.context.is_none())
+                    .checked_add(usize::from(decision.reviewer.is_none()))
+                    .and_then(|count| {
+                        count.checked_add(usize::from(decision.verification.is_none()))
+                    })
+                    .and_then(|count| {
+                        count.checked_add(usize::from(
+                            seed.require_human_resolution && !decision.human,
+                        ))
+                    })
+                    .ok_or(M6Error::Incomplete {
+                        operation: "M6 partial rerun action count",
+                        limit: action_limit,
+                        observed: usize::MAX,
+                    })?
+            };
             action_count =
                 action_count
                     .checked_add(subject_actions)
@@ -10951,6 +10974,12 @@ impl M6StalenessPhaseV5 {
         let mut required_human_resolution_ids = BTreeSet::new();
         for (target, seed) in &seeds {
             let decision = &decisions[target];
+            if seed.require_human_resolution {
+                required_human_resolution_ids.insert(target.clone());
+            }
+            if decision.reused_cardinality_unsupported.is_some() {
+                continue;
+            }
             let context = if decision.context.is_none() {
                 Some(PartialRerunActionV5::derive(
                     self.assessment.id.clone(),
@@ -11019,28 +11048,25 @@ impl M6StalenessPhaseV5 {
             if let Some(verifier) = &verifier {
                 actions.push(verifier.clone());
             }
-            if seed.require_human_resolution {
-                required_human_resolution_ids.insert(target.clone());
-                if !decision.human {
-                    let prerequisites = if let Some(verifier) = &verifier {
-                        vec![ActionPrerequisiteV5::scheduled(verifier.id.clone())?]
-                    } else {
-                        vec![existing_target_prerequisite_v5(
-                            decision
-                                .verification
-                                .as_ref()
-                                .expect("suppressed native verification witness"),
-                        )]
-                    };
-                    actions.push(PartialRerunActionV5::derive(
-                        self.assessment.id.clone(),
-                        target.clone(),
-                        PartialRerunActionKindV5::RerunHumanDecision,
-                        prerequisites,
-                        seed.stale_source_record_ids.clone(),
-                        seed.reasons.clone(),
-                    )?);
-                }
+            if seed.require_human_resolution && !decision.human {
+                let prerequisites = if let Some(verifier) = &verifier {
+                    vec![ActionPrerequisiteV5::scheduled(verifier.id.clone())?]
+                } else {
+                    vec![existing_target_prerequisite_v5(
+                        decision
+                            .verification
+                            .as_ref()
+                            .expect("suppressed native verification witness"),
+                    )]
+                };
+                actions.push(PartialRerunActionV5::derive(
+                    self.assessment.id.clone(),
+                    target.clone(),
+                    PartialRerunActionKindV5::RerunHumanDecision,
+                    prerequisites,
+                    seed.stale_source_record_ids.clone(),
+                    seed.reasons.clone(),
+                )?);
             }
         }
         actions.sort_by(|left, right| left.id.cmp(&right.id));

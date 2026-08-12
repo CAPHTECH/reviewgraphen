@@ -513,28 +513,35 @@ mod tests {
     }
 
     #[test]
-    fn target_predecessor_suppression_rejects_zero_and_two_claims_before_completed_mismatch() {
+    fn target_predecessor_suppression_classifies_reused_two_eventlessly() {
         let (fixture, staleness, preservation, target_obligation_id) = suppression_case();
-        for observed in [0_usize, 2] {
-            let error = fixture
-                .target
-                .with_terminal(|_, _, suppression| {
-                    let mut mutated = suppression.clone();
-                    mutated.set_reviewer_claim_count_for_test(&target_obligation_id, observed);
-                    mutated.set_reviewer_closure_exact_for_test(&target_obligation_id, false);
-                    staleness
-                        .plan_partial_rerun_with_target_suppression_v5(&preservation, &mutated)
-                        .map(|_| ())
-                })
-                .expect_err("unsupported claim cardinality");
-            assert!(matches!(
-                error,
-                crate::M6Error::M6ClaimCardinalityUnsupported {
-                    observed: actual,
-                    ..
-                } if actual == observed
-            ));
-        }
+        fixture
+            .target
+            .with_terminal(|_, _, suppression| {
+                let mut mutated = suppression.clone();
+                mutated.set_reviewer_claim_count_for_test(&target_obligation_id, 2);
+                let classification = mutated
+                    .reviewer_closure(&target_obligation_id)
+                    .and_then(|reviewer| reviewer.m6_cardinality_error());
+                assert!(matches!(
+                    classification,
+                    Some(crate::M6Error::M6ClaimCardinalityUnsupported { observed: 2, .. })
+                ));
+                let (actions, plan) = staleness
+                    .plan_partial_rerun_with_target_suppression_v5(&preservation, &mutated)?;
+                assert!(
+                    actions
+                        .iter()
+                        .all(|action| !action.subject_ids().contains(&target_obligation_id)),
+                    "a Completed reused-two closure is never reopened"
+                );
+                assert_eq!(
+                    plan.action_count(),
+                    u64::try_from(actions.len()).expect("bounded action count")
+                );
+                Ok(())
+            })
+            .expect("reused two-claim plan seals before eventless classification");
     }
 
     #[test]
