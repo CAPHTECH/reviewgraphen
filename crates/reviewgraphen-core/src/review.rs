@@ -3535,6 +3535,29 @@ impl ReviewAggregate {
         self.executions.insert(execution.id().clone(), execution);
     }
 
+    #[cfg(test)]
+    pub(crate) fn clear_execution_claim_closure_for_test(
+        &mut self,
+        id: &StableId,
+    ) -> BTreeSet<StableId> {
+        self.executions
+            .get_mut(id)
+            .expect("test execution")
+            .clear_parsed_claims_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn restore_execution_claim_closure_for_test(
+        &mut self,
+        id: &StableId,
+        claims: BTreeSet<StableId>,
+    ) {
+        self.executions
+            .get_mut(id)
+            .expect("test execution")
+            .restore_parsed_claims_for_test(claims);
+    }
+
     pub(crate) const fn execution_claim_map(&self) -> &BTreeMap<StableId, ExecutionClaimV2> {
         &self.execution_claims
     }

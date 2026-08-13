@@ -159,6 +159,35 @@ const MAX_RATIONALE_BYTES: usize = 8_192;
 pub(crate) const MAX_RETAINED_WORKING_BYTES: u64 = 16_777_216;
 const MAX_M4_OBJECT_MEMBERS: usize = 64;
 
+/// Size of the Vec backing retained by a materialized decision source list.
+/// Kept separate from source discovery so overflow is rejected before any
+/// materialization gate is crossed.
+fn predicted_decision_source_vec_bytes_from_parts(count: usize, bytes: usize) -> Result<u64> {
+    let slots = count
+        .checked_mul(size_of::<StableId>())
+        .ok_or(M4Error::Incomplete {
+            operation: "V5 predicted human decision source slots",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })?;
+    u64::try_from(slots)
+        .map_err(|_| M4Error::Incomplete {
+            operation: "V5 predicted human decision source slots",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })?
+        .checked_add(u64::try_from(bytes).map_err(|_| M4Error::Incomplete {
+            operation: "V5 predicted human decision sources",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })?)
+        .ok_or(M4Error::Incomplete {
+            operation: "V5 predicted human decision sources",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })
+}
+
 #[cfg(test)]
 std::thread_local! {
     static M4_SERDE_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -166,6 +195,7 @@ std::thread_local! {
     static M4_TEST_RETAINED_OVERRIDE: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     static M4_LAST_WORKING_PEAK: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     static M4_WORKING_PREFLIGHTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static M4_TEST_FINDING_ACTUAL: std::cell::RefCell<Option<FindingProjectionPredictionV5>> = const { std::cell::RefCell::new(None) };
 }
 
 #[derive(Clone, Copy)]
@@ -3551,6 +3581,46 @@ impl VerificationV3 {
     pub fn output_registration_id(&self) -> &StableId {
         &self.output_registration_id
     }
+    /// Test-only aggregate fixture seam.  It creates a distinct, historical
+    /// Passed record with the same claim closure without granting a way for
+    /// production callers to fabricate verification identities.
+    #[cfg(test)]
+    pub(crate) fn historical_clone_with_id_for_test(&self, id: StableId) -> Result<Self> {
+        require_kind(&id, "verification", "historical verification ID")?;
+        let mut clone = self.clone();
+        clone.id = id;
+        Ok(clone)
+    }
+    /// Builds a schema-valid hostile verification for the Event existing-
+    /// target test matrix.  Production constructors remain the only runtime
+    /// minting path; this seam exists solely to prove that downstream closure
+    /// checks run after a valid record has crossed identity validation.
+    #[cfg(test)]
+    pub(crate) fn hostile_rederived_for_test(
+        &self,
+        claim_id: Option<StableId>,
+        evidence_ids: Option<BTreeSet<StableId>>,
+        static_inconclusive: bool,
+    ) -> Result<Self> {
+        let mut value = self.clone();
+        if let Some(claim_id) = claim_id {
+            require_kind(&claim_id, "claim", "hostile verification claim")?;
+            value.claim_id = claim_id;
+        }
+        if let Some(evidence_ids) = evidence_ids {
+            value.evidence_ids = evidence_ids.into_iter().collect();
+        }
+        if static_inconclusive {
+            value.descriptor = VerifierDescriptorV3::StaticFactV1;
+            value.procedure = VerifierProcedureV3::StaticProjectionV1;
+            value.outcome = VerificationOutcomeV3::Inconclusive;
+            value.evidence_ids.clear();
+            value.limitations = vec!["declared invariant is not an observed violation".to_owned()];
+        }
+        value.id = derived_id("verification", &value.identity())?;
+        value.validate()?;
+        Ok(value)
+    }
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
         bounded_bytes(self, "VerificationV3")
     }
@@ -4519,6 +4589,36 @@ pub(crate) fn predicted_initial_claim_assessment_backing_v3(
 }
 
 impl ClaimAssessmentScopeV3 {
+    /// Exact fixed backing for a V3 decision.  The caller adds the dynamic
+    /// source vector predicted by `ClaimAssessmentV3` for the requested
+    /// outcome.  This split keeps the scope calculation allocation-free and
+    /// lets the assessment retain ownership of its evidence-derived policy.
+    pub(crate) fn predicted_terminal_decision_retained_bytes(
+        &self,
+        policy_revision_hash: &ContentHash,
+        source_bytes: u64,
+    ) -> Result<u64> {
+        let mut total = u64::try_from(size_of::<DecisionV3>()).unwrap_or(u64::MAX);
+        // `String::from`/derived IDs allocate exactly these byte backings.
+        for bytes in [
+            "reviewgraphen.human_decision.v3".len(),
+            "decision:sha256:".len() + 64,
+            policy_revision_hash.allocated_bytes(),
+            self.run_id.allocated_bytes(),
+            self.universe_id.allocated_bytes(),
+            self.claim_id.allocated_bytes(),
+            self.property_id.len(),
+            self.snapshot_id.allocated_bytes(),
+        ] {
+            checked_memory_add(&mut total, bytes)?;
+        }
+        total.checked_add(source_bytes).ok_or(M4Error::Incomplete {
+            operation: "V5 predicted human decision retained bytes",
+            limit: MAX_RETAINED_WORKING_BYTES as usize,
+            observed: usize::MAX,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         run_id: StableId,
@@ -4629,6 +4729,15 @@ pub struct ClaimAssessmentV3 {
     findings: Vec<FindingV3>,
     #[serde(skip)]
     last_finding_id: Option<StableId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FindingProjectionPredictionV5 {
+    pub(crate) source_vec: u64,
+    pub(crate) finding_retained: u64,
+    pub(crate) canonical_scratch: u64,
+    pub(crate) id_temp: u64,
+    pub(crate) peak: u64,
 }
 #[allow(dead_code)]
 impl ClaimAssessmentV3 {
@@ -5559,6 +5668,112 @@ impl ClaimAssessmentV3 {
         self.exact_sources(outcome)
     }
 
+    /// Allocation-free retained backing prediction for the source vector
+    /// produced by `exact_sources` for every legal decision outcome.  The
+    /// set's values are already retained by this assessment; a Decision owns
+    /// only a sorted Vec clone of the selected IDs.
+    pub(crate) fn predicted_decision_source_vec_bytes(
+        &self,
+        outcome: DecisionOutcomeV3,
+    ) -> Result<u64> {
+        // No temporary set: this runs before the V5 materialisation gate.
+        // Record IDs have disjoint kinds, and duplicate evidence IDs are
+        // suppressed by scanning only earlier matching entries.
+        let mut count = 1_usize;
+        let mut bytes = self.claim_id.allocated_bytes();
+        let mut add = |id: &StableId| -> Result<()> {
+            count = count.checked_add(1).ok_or(M4Error::Incomplete {
+                operation: "V5 predicted human decision source slots",
+                limit: MAX_RETAINED_WORKING_BYTES as usize,
+                observed: usize::MAX,
+            })?;
+            bytes = bytes
+                .checked_add(id.allocated_bytes())
+                .ok_or(M4Error::Incomplete {
+                    operation: "V5 predicted human decision sources",
+                    limit: MAX_RETAINED_WORKING_BYTES as usize,
+                    observed: usize::MAX,
+                })?;
+            Ok(())
+        };
+        match outcome {
+            DecisionOutcomeV3::Accept => {
+                for binding in self
+                    .bindings
+                    .iter()
+                    .filter(|binding| binding.relation == EvidenceRelationV3::Reproduces)
+                {
+                    add(&binding.id)?;
+                    let prior_binding = self
+                        .bindings
+                        .iter()
+                        .take_while(|candidate| candidate.id != binding.id)
+                        .any(|candidate| {
+                            candidate.relation == EvidenceRelationV3::Reproduces
+                                && candidate.evidence_id == binding.evidence_id
+                        });
+                    if !prior_binding {
+                        add(&binding.evidence_id)?;
+                    }
+                    for verification in self.verifications.iter().filter(|verification| {
+                        verification.outcome == VerificationOutcomeV3::Passed
+                            && verification.evidence_ids.contains(&binding.evidence_id)
+                    }) {
+                        let prior_binding = self
+                            .bindings
+                            .iter()
+                            .take_while(|candidate| candidate.id != binding.id)
+                            .any(|candidate| {
+                                candidate.relation == EvidenceRelationV3::Reproduces
+                                    && verification.evidence_ids.contains(&candidate.evidence_id)
+                            });
+                        if !prior_binding {
+                            add(&verification.id)?;
+                        }
+                    }
+                }
+                if !self.verifications.iter().any(|verification| {
+                    verification.outcome == VerificationOutcomeV3::Passed
+                        && self.bindings.iter().any(|binding| {
+                            binding.relation == EvidenceRelationV3::Reproduces
+                                && verification.evidence_ids.contains(&binding.evidence_id)
+                        })
+                }) {
+                    return Err(validation("Accept requires a Passed reproducing trace"));
+                }
+            }
+            DecisionOutcomeV3::Reject | DecisionOutcomeV3::Exception => {}
+            DecisionOutcomeV3::Defer => {
+                for verification in self
+                    .verifications
+                    .iter()
+                    .filter(|verification| verification.outcome != VerificationOutcomeV3::Passed)
+                {
+                    add(&verification.id)?;
+                    for evidence_id in &verification.evidence_ids {
+                        let prior = self
+                            .verifications
+                            .iter()
+                            .take_while(|candidate| candidate.id != verification.id)
+                            .filter(|candidate| candidate.outcome != VerificationOutcomeV3::Passed)
+                            .any(|candidate| candidate.evidence_ids.contains(evidence_id));
+                        if !prior {
+                            add(evidence_id)?;
+                            for binding in self
+                                .bindings
+                                .iter()
+                                .filter(|binding| binding.evidence_id == *evidence_id)
+                            {
+                                add(&binding.id)?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        predicted_decision_source_vec_bytes_from_parts(count, bytes)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn mint_decision_from_scope(
         &self,
@@ -5595,6 +5810,170 @@ impl ClaimAssessmentV3 {
     ) -> Result<FindingV3> {
         admission.validate(scope)?;
         self.project_finding_from_scope(&ClaimAssessmentScopeV3::from_authority(scope))
+    }
+
+    /// Allocation-free upper peak for the first half of finding projection.
+    /// The caller uses it to reserve before cloning this assessment and before
+    /// `project_finding_from_scope` constructs its canonical scratch/DTO.
+    pub(crate) fn predicted_finding_projection_v5(&self) -> Result<FindingProjectionPredictionV5> {
+        let has_passed = self
+            .verifications
+            .iter()
+            .any(|value| value.outcome == VerificationOutcomeV3::Passed);
+        let (status, evidence_count, evidence_bytes, verification_count, verification_bytes) =
+            match self.disposition {
+                AssessmentDispositionV3::Accepted => (
+                    FindingStatusV3::Accepted,
+                    self.bindings
+                        .iter()
+                        .filter(|value| value.relation == EvidenceRelationV3::Reproduces)
+                        .count(),
+                    self.bindings
+                        .iter()
+                        .filter(|value| value.relation == EvidenceRelationV3::Reproduces)
+                        .map(|value| value.evidence_id.allocated_bytes())
+                        .sum(),
+                    self.verifications
+                        .iter()
+                        .filter(|value| value.outcome == VerificationOutcomeV3::Passed)
+                        .count(),
+                    self.verifications
+                        .iter()
+                        .filter(|value| value.outcome == VerificationOutcomeV3::Passed)
+                        .map(|value| value.id.allocated_bytes())
+                        .sum(),
+                ),
+                AssessmentDispositionV3::Supported if has_passed => (
+                    FindingStatusV3::VerifiedCandidate,
+                    self.bindings
+                        .iter()
+                        .filter(|value| value.relation == EvidenceRelationV3::Reproduces)
+                        .count(),
+                    self.bindings
+                        .iter()
+                        .filter(|value| value.relation == EvidenceRelationV3::Reproduces)
+                        .map(|value| value.evidence_id.allocated_bytes())
+                        .sum(),
+                    self.verifications
+                        .iter()
+                        .filter(|value| value.outcome == VerificationOutcomeV3::Passed)
+                        .count(),
+                    self.verifications
+                        .iter()
+                        .filter(|value| value.outcome == VerificationOutcomeV3::Passed)
+                        .map(|value| value.id.allocated_bytes())
+                        .sum(),
+                ),
+                AssessmentDispositionV3::Rejected => (FindingStatusV3::Rejected, 0, 0, 0, 0),
+                _ => (
+                    FindingStatusV3::UnverifiedCandidate,
+                    self.evidence.len(),
+                    self.evidence
+                        .iter()
+                        .map(|value| value.id.allocated_bytes())
+                        .sum(),
+                    self.verifications
+                        .iter()
+                        .filter(|value| value.outcome != VerificationOutcomeV3::Passed)
+                        .count(),
+                    self.verifications
+                        .iter()
+                        .filter(|value| value.outcome != VerificationOutcomeV3::Passed)
+                        .map(|value| value.id.allocated_bytes())
+                        .sum(),
+                ),
+            };
+        let previous = self
+            .last_finding_id
+            .as_ref()
+            .and_then(|id| find_sorted_record(&self.findings, id, |value| &value.id));
+        let decision = matches!(
+            status,
+            FindingStatusV3::Accepted | FindingStatusV3::Rejected
+        )
+        .then_some(self.active_decision_id.as_ref())
+        .flatten();
+        let canonical = finding_canonical_request(FindingCanonicalShape {
+            claim_id: &self.claim_id,
+            decision_id: decision,
+            evidence_count,
+            evidence_id_bytes: evidence_bytes,
+            status,
+            supersedes_id: previous.map(|value| &value.id),
+            verification_count,
+            verification_id_bytes: verification_bytes,
+        })?;
+        let ids = u64::try_from(
+            evidence_count
+                .checked_mul(size_of::<StableId>())
+                .ok_or(M4Error::Incomplete {
+                    operation: "V5 finding predictor slots",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?
+                + verification_count
+                    .checked_mul(size_of::<StableId>())
+                    .ok_or(M4Error::Incomplete {
+                        operation: "V5 finding predictor slots",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?
+                + evidence_bytes
+                + verification_bytes,
+        )
+        .unwrap_or(u64::MAX);
+        let fixed = u64::try_from(
+            size_of::<FindingV3>()
+                + "reviewgraphen.finding.v3".len()
+                + "finding:sha256:".len()
+                + 64
+                + FINDING_PROJECTION_ID.len()
+                + self.claim_id.allocated_bytes()
+                + decision.map_or(0, StableId::allocated_bytes)
+                + previous.map_or(0, |value| value.id.allocated_bytes())
+                + canonical,
+        )
+        .unwrap_or(u64::MAX);
+        let id_temp = 2 * u64::try_from("finding:sha256:".len() + 64).unwrap_or(u64::MAX);
+        // Projection keeps clone-ID vectors, the finding DTO, canonical
+        // request and the two mutable pointers alive together.
+        let peak = ids
+            .checked_add(fixed.checked_mul(3).ok_or(M4Error::Incomplete {
+                operation: "V5 finding projection prediction",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?)
+            .and_then(|value| value.checked_add(id_temp))
+            .ok_or(M4Error::Incomplete {
+                operation: "V5 finding projection prediction",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        Ok(FindingProjectionPredictionV5 {
+            source_vec: ids,
+            finding_retained: ids
+                .checked_add(
+                    fixed
+                        .checked_sub(canonical as u64)
+                        .ok_or(M4Error::Incomplete {
+                            operation: "V5 finding projection prediction",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?,
+                )
+                .ok_or(M4Error::Incomplete {
+                    operation: "V5 finding projection prediction",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?,
+            canonical_scratch: u64::try_from(canonical).unwrap_or(u64::MAX),
+            id_temp,
+            peak,
+        })
+    }
+
+    pub(crate) fn predicted_finding_projection_peak_bytes(&self) -> Result<u64> {
+        Ok(self.predicted_finding_projection_v5()?.peak)
     }
 
     pub(crate) fn project_finding_from_scope(
@@ -5738,6 +6117,31 @@ impl ClaimAssessmentV3 {
             previous.map_or(0, |value| value.id.allocated_bytes()),
         ] {
             checked_memory_add(&mut future_allocated, bytes)?;
+        }
+        #[cfg(test)]
+        {
+            let canonical = canonical_request as u64;
+            let source_vec = projection_request;
+            let fixed = u64::try_from(size_of::<FindingV3>())
+                .unwrap_or(u64::MAX)
+                .saturating_add(future_allocated.saturating_sub(source_vec))
+                .saturating_add(canonical);
+            let id_temp = 2 * u64::try_from(future_id_capacity).unwrap_or(u64::MAX);
+            let peak = source_vec
+                .checked_add(fixed.saturating_mul(3))
+                .and_then(|value| value.checked_add(id_temp))
+                .unwrap_or(u64::MAX);
+            M4_TEST_FINDING_ACTUAL.with(|value| {
+                *value.borrow_mut() = Some(FindingProjectionPredictionV5 {
+                    source_vec,
+                    finding_retained: u64::try_from(size_of::<FindingV3>())
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(future_allocated),
+                    canonical_scratch: canonical,
+                    id_temp,
+                    peak,
+                });
+            });
         }
         let mut retained_record_request = future_allocated;
         checked_memory_add(
@@ -7350,5 +7754,177 @@ mod tests {
             verified.project_finding(&s).unwrap().status(),
             FindingStatusV3::VerifiedCandidate
         );
+    }
+
+    #[test]
+    fn scheduled_human_source_prediction_matches_every_outcome_and_deduplicates() {
+        let s = scope();
+        let mut accepted = ClaimAssessmentV3::new(&s);
+        let (e1, b1, v1) = fixture(&s, "prediction-one");
+        let (e2, b2, v2) = fixture(&s, "prediction-two");
+        accepted.record_evidence(&s, e1, b1).unwrap();
+        accepted.record_verification(&s, v1).unwrap();
+        accepted.record_evidence(&s, e2, b2).unwrap();
+        accepted.record_verification(&s, v2).unwrap();
+
+        // Static verification is the legal non-passed path.  The source
+        // predictor must retain its non-empty Defer closure exactly; a second
+        // same-evidence inconclusive result would have the same stable ID and
+        // is rejected before it can become a duplicate assessment entry.
+        let mut deferred = ClaimAssessmentV3::new(&s);
+        let invariant_id = id("invariant", "prediction-static");
+        let static_scope = StaticScopeV3 {
+            candidate_invariant_ids: BTreeSet::from([invariant_id.clone()]),
+            claim_body_hash: s.claim_body_hash.clone(),
+            claim_id: s.claim_id.clone(),
+            descriptor: VerifierDescriptorV3::StaticFactV1,
+            obligation_id: id("obligation", "prediction-static"),
+            procedure: VerifierProcedureV3::StaticProjectionV1,
+            property_id: s.property_id.clone(),
+            selected_invariant_id: Some(invariant_id.clone()),
+            snapshot_id: s.snapshot_id.clone(),
+            source_ids: s.source_ids.iter().cloned().collect(),
+            target_refs: s.target_refs.iter().cloned().collect(),
+        };
+        let subjects = BTreeSet::from([id("artifact", "target"), invariant_id]);
+        let evidence = EvidenceV3::build_static(
+            &static_scope,
+            subjects,
+            id("registration", "static-in"),
+            id("registration", "static-out"),
+        )
+        .unwrap();
+        let binding = EvidenceBindingV3::build_static(&static_scope, &evidence).unwrap();
+        let inconclusive = VerificationV3::build_static(
+            &static_scope,
+            evidence.input_registration_id.clone(),
+            evidence.output_registration_id.clone(),
+            BTreeSet::from([evidence.id.clone()]),
+            VerificationOutcomeV3::Inconclusive,
+            BTreeSet::from(["declared invariant is not an observed violation".to_owned()]),
+        )
+        .unwrap();
+        deferred.evidence_ids = vec![evidence.id.clone()];
+        deferred.binding_ids = vec![binding.id.clone()];
+        deferred.verification_ids = vec![inconclusive.id.clone()];
+        deferred.evidence = vec![evidence];
+        deferred.bindings = vec![binding];
+        deferred.verifications = vec![inconclusive];
+
+        let assert_prediction = |assessment: &ClaimAssessmentV3, outcome| {
+            let expected = assessment.expected_decision_sources(outcome).unwrap();
+            let actual = expected.iter().cloned().collect::<Vec<_>>();
+            let actual_bytes = u64::try_from(size_of_val(actual.as_slice())).unwrap()
+                + u64::try_from(actual.iter().map(StableId::allocated_bytes).sum::<usize>())
+                    .unwrap();
+            assert_eq!(
+                assessment
+                    .predicted_decision_source_vec_bytes(outcome)
+                    .unwrap(),
+                actual_bytes,
+                "{outcome:?} source prediction"
+            );
+        };
+        for outcome in [
+            DecisionOutcomeV3::Accept,
+            DecisionOutcomeV3::Reject,
+            DecisionOutcomeV3::Exception,
+        ] {
+            assert_prediction(&accepted, outcome);
+        }
+        for outcome in [
+            DecisionOutcomeV3::Defer,
+            DecisionOutcomeV3::Reject,
+            DecisionOutcomeV3::Exception,
+        ] {
+            assert_prediction(&deferred, outcome);
+        }
+    }
+
+    #[test]
+    fn scheduled_human_source_prediction_rejects_slot_overflow() {
+        assert!(matches!(
+            predicted_decision_source_vec_bytes_from_parts(usize::MAX, 0),
+            Err(M4Error::Incomplete {
+                operation: "V5 predicted human decision source slots",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn scheduled_human_finding_projection_prediction_covers_each_status() {
+        let s = scope();
+        let mut cases = Vec::new();
+        cases.push(ClaimAssessmentV3::new(&s));
+        let mut verified = ClaimAssessmentV3::new(&s);
+        let (e, b, v) = fixture(&s, "finding-prediction");
+        verified.record_evidence(&s, e, b).unwrap();
+        verified.record_verification(&s, v).unwrap();
+        cases.push(verified);
+        let mut accepted = ClaimAssessmentV3::new(&s);
+        let (e, b, v) = fixture(&s, "finding-prediction-accepted");
+        accepted.record_evidence(&s, e, b).unwrap();
+        accepted.record_verification(&s, v).unwrap();
+        let sources = accepted
+            .expected_decision_sources(DecisionOutcomeV3::Accept)
+            .unwrap();
+        accepted
+            .record_decision(
+                &s,
+                DecisionV3::new(
+                    &s,
+                    DecisionOutcomeV3::Accept,
+                    "human:alice",
+                    "review-board",
+                    sources,
+                    "accept finding projection",
+                    "2026-08-10T00:00:00Z",
+                    None,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        cases.push(accepted);
+        let mut rejected = ClaimAssessmentV3::new(&s);
+        let sources = rejected
+            .expected_decision_sources(DecisionOutcomeV3::Reject)
+            .unwrap();
+        rejected
+            .record_decision(
+                &s,
+                DecisionV3::new(
+                    &s,
+                    DecisionOutcomeV3::Reject,
+                    "human:alice",
+                    "review-board",
+                    sources,
+                    "reject finding projection",
+                    "2026-08-10T00:00:00Z",
+                    None,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        cases.push(rejected);
+        for mut assessment in cases {
+            let predicted = assessment.predicted_finding_projection_v5().unwrap();
+            M4_TEST_FINDING_ACTUAL.with(|value| *value.borrow_mut() = None);
+            let finding = assessment.project_finding(&s).unwrap();
+            let actual_components = M4_TEST_FINDING_ACTUAL
+                .with(|value| value.borrow_mut().take())
+                .expect("projection must capture its exact preallocation components");
+            assert_eq!(predicted, actual_components);
+            let actual = finding.allocated_bytes().unwrap()
+                + u64::try_from(canonical_len(&finding, "finding prediction test").unwrap())
+                    .unwrap()
+                + u64::try_from(size_of::<FindingV3>()).unwrap();
+            assert!(
+                predicted.peak >= actual,
+                "projection prediction must cover live finding"
+            );
+            assert!(predicted.canonical_scratch > 0);
+            assert!(predicted.finding_retained >= finding.allocated_bytes().unwrap());
+        }
     }
 }

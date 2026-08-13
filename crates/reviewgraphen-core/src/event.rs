@@ -10139,6 +10139,12 @@ std::thread_local! {
     static V5_TEST_NATIVE_RECOVERY_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_NATIVE_PREPARE_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_NATIVE_MATERIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_HUMAN_BEGIN_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_HUMAN_ADMISSION_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_HUMAN_PREPARE_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_HUMAN_APPEND_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_HUMAN_RECOVERY_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_HUMAN_MATERIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_M4_FORCED_CONTEXT_WORKING_OVERHEAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_APPEND_SHADOW_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_BINDING_APPEND_PEAK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -10193,6 +10199,46 @@ fn scheduled_native_prepare_required_working_for_test() -> u64 {
 #[cfg(test)]
 fn scheduled_native_materializations_for_test() -> u64 {
     V5_TEST_NATIVE_MATERIALIZATIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn reset_scheduled_human_resource_counters_for_test() {
+    V5_TEST_HUMAN_BEGIN_REQUIRED.with(|value| value.set(0));
+    V5_TEST_HUMAN_ADMISSION_REQUIRED.with(|value| value.set(0));
+    V5_TEST_HUMAN_PREPARE_REQUIRED.with(|value| value.set(0));
+    V5_TEST_HUMAN_APPEND_REQUIRED.with(|value| value.set(0));
+    V5_TEST_HUMAN_RECOVERY_REQUIRED.with(|value| value.set(0));
+    V5_TEST_HUMAN_MATERIALIZATIONS.with(|value| value.set(0));
+}
+
+#[cfg(test)]
+fn scheduled_human_begin_required_working_for_test() -> u64 {
+    V5_TEST_HUMAN_BEGIN_REQUIRED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn scheduled_human_admission_required_working_for_test() -> u64 {
+    V5_TEST_HUMAN_ADMISSION_REQUIRED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn scheduled_human_prepare_required_working_for_test() -> u64 {
+    V5_TEST_HUMAN_PREPARE_REQUIRED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn scheduled_human_append_required_working_for_test() -> u64 {
+    V5_TEST_HUMAN_APPEND_REQUIRED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn scheduled_human_materializations_for_test() -> u64 {
+    V5_TEST_HUMAN_MATERIALIZATIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn scheduled_human_recovery_required_working_for_test() -> u64 {
+    V5_TEST_HUMAN_RECOVERY_REQUIRED.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -25075,6 +25121,14 @@ struct ScheduledNativeVerifierActionV5 {
     descriptor: ScheduledNativeVerifierDescriptorV5,
 }
 
+#[derive(Clone, Debug)]
+struct ScheduledNativeVerificationReceiptV5 {
+    action_id: StableId,
+    verification_id: StableId,
+    verification_body_hash: ContentHash,
+    verification_event_id: StableId,
+}
+
 #[derive(Debug)]
 enum ScheduledNativeVerifierDescriptorV5 {
     Fixture {
@@ -25097,6 +25151,7 @@ pub(crate) struct ReplayedScheduledNativeVerifierPhaseV5 {
     reviewer_completion_digest: ContentHash,
     basis: AuthorityReplayBasisV5,
     actions: Vec<ScheduledNativeVerifierActionV5>,
+    completed_verifications: Vec<ScheduledNativeVerificationReceiptV5>,
     action_index: usize,
     member_index: usize,
     aggregate: ReviewAggregate,
@@ -25245,9 +25300,10 @@ impl EventLogV5 {
                     .sum::<usize>();
                 total
                     .checked_add(u64::try_from(ids).unwrap_or(u64::MAX))
-                    // execution/claim IDs and their two SHA-256 bodies are
-                    // copied from the receipt/prerequisite into the action.
-                    .and_then(|value| value.checked_add(4 * 128))
+                    // execution, claim and verification IDs plus their
+                    // three SHA-256 bodies are copied into the returned
+                    // action.  Each is a closed stable/hash grammar backing.
+                    .and_then(|value| value.checked_add(6 * 128))
                     .ok_or(DomainError::Incomplete {
                         operation: "scheduled native verifier begin action ownership",
                         limit: usize::MAX,
@@ -25447,6 +25503,7 @@ impl EventLogV5 {
             reviewer_completion_digest: terminal.reviewer_completion_digest.clone(),
             basis: terminal.basis.clone(),
             actions,
+            completed_verifications: Vec::new(),
             action_index: 0,
             member_index: 0,
             aggregate: reviewer.aggregate.clone(),
@@ -26256,6 +26313,27 @@ impl ReplayedScheduledNativeVerifierPhaseV5 {
         }
         total = add(
             total,
+            self.completed_verifications
+                .capacity()
+                .checked_mul(size_of::<ScheduledNativeVerificationReceiptV5>())
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled native verifier receipt slots",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?,
+        )?;
+        for receipt in &self.completed_verifications {
+            for value in [
+                receipt.action_id.allocated_bytes(),
+                receipt.verification_id.allocated_bytes(),
+                receipt.verification_body_hash.allocated_bytes(),
+                receipt.verification_event_id.allocated_bytes(),
+            ] {
+                total = add(total, value)?;
+            }
+        }
+        total = add(
+            total,
             self.v4_registration_ids
                 .iter()
                 .map(|id| size_of::<StableId>() + 128 + id.allocated_bytes())
@@ -26277,6 +26355,7 @@ impl ReplayedScheduledNativeVerifierPhaseV5 {
         #[derive(Serialize)]
         struct Body<'a> {
             actions: Actions<'a>,
+            completed_verifications: Receipts<'a>,
             partial_rerun_plan_id: &'a StableId,
             reviewer_completion_digest: &'a ContentHash,
             source_closure_id: &'a StableId,
@@ -26302,8 +26381,27 @@ impl ReplayedScheduledNativeVerifierPhaseV5 {
                 values.end()
             }
         }
+        struct Receipts<'a>(&'a [ScheduledNativeVerificationReceiptV5]);
+        impl Serialize for Receipts<'_> {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                let mut values = serializer.serialize_seq(Some(self.0.len()))?;
+                for receipt in self.0 {
+                    values.serialize_element(&(
+                        &receipt.action_id,
+                        &receipt.verification_id,
+                        &receipt.verification_body_hash,
+                        &receipt.verification_event_id,
+                    ))?;
+                }
+                values.end()
+            }
+        }
         crate::canonical::compact_json_sha256_streaming(&Body {
             actions: Actions(&self.actions),
+            completed_verifications: Receipts(&self.completed_verifications),
             partial_rerun_plan_id: &self.partial_rerun_plan_id,
             reviewer_completion_digest: &self.reviewer_completion_digest,
             source_closure_id: &self.source_closure_id,
@@ -26857,6 +26955,22 @@ impl EventLogV5 {
         phase.terminal = next_terminal;
         phase.v4_registration_ids = next_v4_ids;
         if phase.member_index == 4 {
+            let PersistedPayload::VerificationRecordedV3(verification) = payload else {
+                return Err(DomainError::VerificationBundleMismatch);
+            };
+            phase
+                .completed_verifications
+                .push(ScheduledNativeVerificationReceiptV5 {
+                    action_id: phase.current_action()?.action_id.clone(),
+                    verification_id: verification.id().clone(),
+                    verification_body_hash: verification.body_hash().map_err(m4_domain_error)?,
+                    verification_event_id: self
+                        .envelopes
+                        .last()
+                        .ok_or(DomainError::VerificationBundleMismatch)?
+                        .id()
+                        .clone(),
+                });
             phase.action_index = phase.action_index.checked_add(1).ok_or_else(|| {
                 DomainError::EventSequence("scheduled native verifier action overflow".to_owned())
             })?;
@@ -27058,6 +27172,2570 @@ impl EventLogV5 {
             roots,
             resolver,
         )
+    }
+}
+
+// The human terminal reducer deliberately starts only after the native
+// reducer has consumed every scheduled verifier member.  In particular this
+// is not a convenience wrapper around the V4 decision API: V4 sessions and
+// admissions carry a different position/basis namespace and must never be
+// translated into an incremental decision capability.
+#[allow(dead_code)]
+#[derive(Debug)]
+struct ScheduledHumanResolutionActionV5 {
+    action_id: StableId,
+    obligation_id: StableId,
+    execution_id: StableId,
+    execution_body_hash: ContentHash,
+    claim_id: StableId,
+    claim_body_hash: ContentHash,
+    verification_id: StableId,
+    verification_body_hash: ContentHash,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScheduledHumanResolutionStageV5 {
+    Decision,
+    Finding,
+}
+
+/// An input request is intentionally V5-local.  It binds the human's words
+/// to the current scheduled action when it is admitted below; it cannot be
+/// substituted for a `HumanDecisionRequestV4` at this boundary.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) struct HumanDecisionRequestV5 {
+    claim_id: StableId,
+    input: DecisionInputV3,
+}
+
+#[allow(dead_code)]
+impl HumanDecisionRequestV5 {
+    pub(crate) fn new(claim_id: StableId, input: DecisionInputV3) -> Self {
+        Self { claim_id, input }
+    }
+
+    fn retained_bytes(&self) -> Result<u64> {
+        [
+            self.claim_id.allocated_bytes(),
+            self.input.actor.capacity(),
+            self.input.authority_id.capacity(),
+            self.input.rationale.capacity(),
+            self.input.issued_at.capacity(),
+            self.input.expires_at.as_ref().map_or(0, String::capacity),
+        ]
+        .into_iter()
+        .try_fold(
+            u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX),
+            |total, value| {
+                total
+                    .checked_add(u64::try_from(value).unwrap_or(u64::MAX))
+                    .ok_or(DomainError::Incomplete {
+                        operation: "scheduled human request retained ownership",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })
+            },
+        )
+    }
+}
+
+#[allow(dead_code)]
+fn human_decision_request_digest_v5(
+    action_id: &StableId,
+    request: &HumanDecisionRequestV5,
+) -> Result<ContentHash> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        action_id: &'a StableId,
+        actor: &'a str,
+        authority_id: &'a str,
+        claim_id: &'a StableId,
+        expires_at: &'a Option<String>,
+        issued_at: &'a str,
+        outcome: crate::DecisionOutcomeV3,
+        rationale: &'a str,
+        schema: &'static str,
+    }
+    Ok(ContentHash::sha256(&canonical_json(&Body {
+        schema: "reviewgraphen.scheduled_human_request.v5",
+        action_id,
+        actor: &request.input.actor,
+        authority_id: &request.input.authority_id,
+        claim_id: &request.claim_id,
+        expires_at: &request.input.expires_at,
+        issued_at: &request.input.issued_at,
+        outcome: request.input.outcome,
+        rationale: &request.input.rationale,
+    })?))
+}
+
+fn human_decision_request_canonical_len_v5(
+    action_id: &StableId,
+    request: &HumanDecisionRequestV5,
+) -> Result<u64> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        action_id: &'a StableId,
+        actor: &'a str,
+        authority_id: &'a str,
+        claim_id: &'a StableId,
+        expires_at: &'a Option<String>,
+        issued_at: &'a str,
+        outcome: crate::DecisionOutcomeV3,
+        rationale: &'a str,
+        schema: &'static str,
+    }
+    crate::canonical::canonical_json_count_bounded(
+        &Body {
+            schema: "reviewgraphen.scheduled_human_request.v5",
+            action_id,
+            actor: &request.input.actor,
+            authority_id: &request.input.authority_id,
+            claim_id: &request.claim_id,
+            expires_at: &request.input.expires_at,
+            issued_at: &request.input.issued_at,
+            outcome: request.input.outcome,
+            rationale: &request.input.rationale,
+        },
+        usize::MAX,
+        "scheduled human canonical request",
+    )
+}
+
+/// One-shot, fresh V5 admission.  This has no session/token field shared
+/// with V4: the V5 basis digest, source closure and exact terminal action are
+/// the authority position.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) struct TrustedHumanAdmissionV5 {
+    source_closure_id: StableId,
+    basis_digest: ContentHash,
+    tail_hash: ContentHash,
+    expected_sequence: u64,
+    action_id: StableId,
+    grant: AuthorityHumanGrantV3Tuple,
+    request_digest: ContentHash,
+    trusted_now: String,
+}
+
+#[allow(dead_code)]
+impl TrustedHumanAdmissionV5 {
+    fn retained_bytes(&self) -> Result<u64> {
+        let mut total = u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX);
+        for value in [
+            self.source_closure_id.allocated_bytes(),
+            self.basis_digest.allocated_bytes(),
+            self.tail_hash.allocated_bytes(),
+            self.action_id.allocated_bytes(),
+            self.request_digest.allocated_bytes(),
+            self.trusted_now.capacity(),
+        ] {
+            total = total
+                .checked_add(u64::try_from(value).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human admission retained ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        total
+            .checked_add(u64::try_from(size_of::<AuthorityHumanGrantV3Tuple>()).unwrap_or(u64::MAX))
+            .and_then(|value| {
+                value.checked_add(native_human_root_retained_bytes(&self.grant).ok()?)
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human admission retained ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_trusted_host(
+        grant: AuthorityHumanGrantV3Tuple,
+        request: &HumanDecisionRequestV5,
+        trusted_now: impl AsRef<str>,
+        log: &EventLogV5,
+        phase: &ReplayedScheduledHumanResolutionPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<Self> {
+        let trusted_now_ref = trusted_now.as_ref();
+        let current_action = phase.current_action()?;
+        // This gate precedes timestamp ownership, canonical request digest,
+        // root selection and basis validation.  The request itself is caller
+        // owned at this point, so charge its exact capacities rather than a
+        // protocol maximum.
+        let request_bytes = [
+            size_of::<HumanDecisionRequestV5>(),
+            request.claim_id.allocated_bytes(),
+            request.input.actor.capacity(),
+            request.input.authority_id.capacity(),
+            request.input.rationale.capacity(),
+            request.input.issued_at.capacity(),
+            request
+                .input
+                .expires_at
+                .as_ref()
+                .map_or(0, String::capacity),
+            // `to_owned` below keeps an independently allocated string.
+            trusted_now_ref.len(),
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, value| total.checked_add(value as u64))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled human admission request ownership",
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+        let observed = log
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(phase.retained_bytes()?)
+            .and_then(|value| value.checked_add(native_authority_roots_retained_bytes(roots).ok()?))
+            // Admission retains its own grant copy in addition to the whole
+            // borrowed root set.  `native_human_root_retained_bytes` counts
+            // dynamic members, so include the tuple slot here as well.
+            .and_then(|value| {
+                value.checked_add(u64::try_from(size_of::<AuthorityHumanGrantV3Tuple>()).ok()?)
+            })
+            .and_then(|value| value.checked_add(native_human_root_retained_bytes(&grant).ok()?))
+            .and_then(|value| value.checked_add(("sha256:".len() + 64) as u64))
+            .and_then(|value| value.checked_add(request_bytes))
+            .and_then(|value| {
+                value.checked_add(
+                    human_decision_request_canonical_len_v5(&current_action.action_id, request)
+                        .ok()?,
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human admission preflight ownership",
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        #[cfg(test)]
+        V5_TEST_HUMAN_ADMISSION_REQUIRED.with(|value| value.set(observed));
+        if observed > log.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled human admission preflight ownership",
+                log.limits.max_working_bytes,
+                observed,
+            ));
+        }
+        // `validate_current_log` computes a digest.  Its backing has already
+        // been admitted above, before any semantic validation or canonical
+        // request materialisation occurs.
+        phase.validate_current(log, roots)?;
+        let action = phase.current_action()?;
+        let trusted_now = trusted_now_ref.to_owned();
+        crate::m4::validate_utc_seconds(&trusted_now, "trusted human now")
+            .map_err(m4_domain_error)?;
+        validate_human_grant_v4(&grant.policy_revision_hash, &grant)?;
+        let claim = phase
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == &action.claim_id)
+            .ok_or(DomainError::HumanTrustRootMissing)?;
+        let capability = match request.input.outcome {
+            crate::DecisionOutcomeV3::Accept => HumanAuthorityCapabilityV3::AcceptFinding,
+            crate::DecisionOutcomeV3::Reject => HumanAuthorityCapabilityV3::RejectFinding,
+            crate::DecisionOutcomeV3::Defer => HumanAuthorityCapabilityV3::DeferFinding,
+            crate::DecisionOutcomeV3::Exception => HumanAuthorityCapabilityV3::RecordException,
+        };
+        if request.claim_id != action.claim_id
+            || grant.policy_revision_hash != phase.basis.policy_revision_hash
+            || grant.run_id != log.run_id
+            || grant.snapshot_id != *phase.aggregate.program().snapshot_id()
+            || grant.universe_id != *phase.aggregate.universe().id()
+            || grant.actor != request.input.actor
+            || grant.authority_id != request.input.authority_id
+            || !grant.capabilities.contains(&capability)
+            || !grant.property_ids.contains(claim.property_id())
+            || !grant.claim_ids.contains(&action.claim_id)
+            || request.input.issued_at != trusted_now
+            || grant.valid_from.as_str() > trusted_now.as_str()
+            || trusted_now.as_str() > grant.valid_until.as_str()
+            || request
+                .input
+                .expires_at
+                .as_ref()
+                .is_some_and(|expires| expires > &grant.valid_until)
+            || roots
+                .human_grants
+                .iter()
+                .filter(|root| same_human_grant_v4(root, &grant))
+                .count()
+                != 1
+        {
+            return Err(DomainError::DecisionAdmissionMismatch);
+        }
+        // The request digest is deliberately made only after the gate and all
+        // borrowed-input validation.  Its returned SHA-256 backing was part
+        // of the admission reservation above.
+        Ok(Self {
+            source_closure_id: phase.source_closure_id.clone(),
+            basis_digest: phase.basis.basis_digest.clone(),
+            tail_hash: log.tail_hash().clone(),
+            expected_sequence: phase.basis.target_next_sequence,
+            action_id: action.action_id.clone(),
+            request_digest: human_decision_request_digest_v5(&action.action_id, request)?,
+            grant,
+            trusted_now,
+        })
+    }
+}
+
+/// Opaque native-to-human handoff.  It consumes a completed native cursor and
+/// retains only the current target aggregate, V3 closure, terminal grammar and
+/// authority basis needed to append the two durable human seams.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) struct ReplayedScheduledHumanResolutionPhaseV5 {
+    log_identity: V5LogInstanceIdentity,
+    source_closure_id: StableId,
+    partial_rerun_plan_id: StableId,
+    target_plan_id: StableId,
+    native_completion_digest: ContentHash,
+    basis: AuthorityReplayBasisV5,
+    actions: Vec<ScheduledHumanResolutionActionV5>,
+    action_index: usize,
+    stage: ScheduledHumanResolutionStageV5,
+    aggregate: ReviewAggregate,
+    v3_aggregate: V3RunAggregate,
+    terminal: V5StructuralPostPlanPhase,
+    v4_registration_ids: BTreeSet<StableId>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) struct PreparedScheduledHumanResolutionAppendV5 {
+    log_identity: V5LogInstanceIdentity,
+    basis_digest: ContentHash,
+    predecessor_event_hash: ContentHash,
+    event_sequence: u64,
+    action_id: StableId,
+    action_index: usize,
+    stage: ScheduledHumanResolutionStageV5,
+    payload: PersistedPayload,
+    payload_hash: ContentHash,
+    trust_digest: Option<ContentHash>,
+}
+
+#[allow(dead_code)]
+impl ReplayedScheduledNativeVerifierPhaseV5 {
+    fn is_finished(&self) -> bool {
+        self.action_index == self.actions.len() && self.member_index == 0
+    }
+}
+
+#[allow(dead_code)]
+impl EventLogV5 {
+    pub(crate) fn begin_scheduled_human_resolution_phase_v5(
+        &self,
+        native: &ReplayedScheduledNativeVerifierPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<ReplayedScheduledHumanResolutionPhaseV5> {
+        self.begin_scheduled_human_resolution_phase_with_live_bytes_v5(native, partial, roots, 0)
+    }
+
+    fn begin_scheduled_human_resolution_phase_with_live_bytes_v5(
+        &self,
+        native: &ReplayedScheduledNativeVerifierPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+        live_bytes: u64,
+    ) -> Result<ReplayedScheduledHumanResolutionPhaseV5> {
+        if self.instance_identity != native.log_identity
+            || native.source_closure_id != partial.source_closure_id
+            || native.partial_rerun_plan_id != *partial.plan.id()
+            || native.target_plan_id != *partial.plan.target_plan_id()
+            || !native.is_finished()
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        // Basis validation computes one SHA-256 digest.  Keep all borrowed
+        // inputs live in the first actual-input gate before invoking it.
+        const SHA256_CAPACITY: u64 = ("sha256:".len() + 64) as u64;
+        let validation_observed = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(native.retained_bytes()?)
+            .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(native_authority_roots_retained_bytes(roots).ok()?))
+            .and_then(|value| value.checked_add(SHA256_CAPACITY))
+            .and_then(|value| value.checked_add(live_bytes))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human begin validation ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if validation_observed > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled human begin validation ownership",
+                self.limits.max_working_bytes,
+                validation_observed,
+            ));
+        }
+        native.basis.validate_current_log(self)?;
+        if roots.policy_revision_hash != native.basis.policy_revision_hash
+            || roots.repository_id != *native.aggregate.program().repository_id()
+            || roots.repository_source_hash
+                != *native
+                    .aggregate
+                    .program()
+                    .repository_source()
+                    .content_hash()
+                    .ok_or(DomainError::AuthorityPolicyMismatch)?
+        {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+        // This is the first actual-input gate.  It deliberately includes the
+        // whole borrowed roots object (not merely a prospective grant), the
+        // finished native cursor and sealed partial plan, and the full live
+        // log.  No action, aggregate, basis, or selected grant clone exists
+        // before it succeeds.
+        let action_count = partial
+            .actions
+            .iter()
+            .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunHumanDecision)
+            .count();
+        let action_dynamic = partial
+            .actions
+            .iter()
+            .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunHumanDecision)
+            .try_fold(0_u64, |total, action| {
+                let obligation_id = action.subject_ids().first().ok_or_else(|| {
+                    DomainError::EventSequence(
+                        "scheduled human action has no obligation".to_owned(),
+                    )
+                })?;
+                let (verification_id, verification_body_hash) =
+                    human_verification_prerequisite_v5(action, native, partial, self)?;
+                let verification = native
+                    .v3_aggregate
+                    .verifications
+                    .get(&verification_id)
+                    .ok_or(DomainError::HistoricalPrefixMismatch(
+                        "scheduled human action lacks its exact verification",
+                    ))?;
+                let claim = native
+                    .aggregate
+                    .execution_claims()
+                    .find(|claim| claim.id() == verification.claim_id())
+                    .ok_or(DomainError::HistoricalPrefixMismatch(
+                        "scheduled human action lacks its exact claim",
+                    ))?;
+                let execution = native
+                    .aggregate
+                    .executions()
+                    .find(|execution| {
+                        execution.obligation_ids().contains(obligation_id)
+                            && execution.parsed_claim_ids() == &BTreeSet::from([claim.id().clone()])
+                    })
+                    .ok_or(DomainError::HistoricalPrefixMismatch(
+                        "scheduled human action lacks its exact execution",
+                    ))?;
+                let dynamic = [
+                    action.id().allocated_bytes(),
+                    obligation_id.allocated_bytes(),
+                    execution.id().allocated_bytes(),
+                    execution.body_hash()?.allocated_bytes(),
+                    claim.id().allocated_bytes(),
+                    claim.body_hash()?.allocated_bytes(),
+                    verification_id.allocated_bytes(),
+                    verification_body_hash.allocated_bytes(),
+                ]
+                .into_iter()
+                .try_fold(0_u64, |sum, bytes| {
+                    sum.checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                })
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human begin action ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+                total.checked_add(dynamic).ok_or(DomainError::Incomplete {
+                    operation: "scheduled human begin action ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })
+            })?;
+        let v4_set_dynamic = native
+            .v4_registration_ids
+            .iter()
+            .try_fold(0_u64, |total, id| {
+                total
+                    .checked_add(
+                        u64::try_from(size_of::<StableId>() + 128 + id.allocated_bytes())
+                            .unwrap_or(u64::MAX),
+                    )
+                    .ok_or(DomainError::Incomplete {
+                        operation: "scheduled human begin V4 registration ownership",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })
+            })?;
+        let cursor_bytes = u64::try_from(size_of::<ReplayedScheduledHumanResolutionPhaseV5>())
+            .unwrap_or(u64::MAX)
+            .checked_add(native.source_closure_id.allocated_bytes() as u64)
+            .and_then(|value| {
+                value.checked_add(native.partial_rerun_plan_id.allocated_bytes() as u64)
+            })
+            .and_then(|value| value.checked_add(native.target_plan_id.allocated_bytes() as u64))
+            .and_then(|value| value.checked_add(native.basis.basis_digest.allocated_bytes() as u64))
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(
+                        action_count.checked_mul(size_of::<ScheduledHumanResolutionActionV5>())?,
+                    )
+                    .ok()?,
+                )
+            })
+            .and_then(|value| value.checked_add(action_dynamic))
+            .and_then(|value| value.checked_add(SHA256_CAPACITY))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human begin cursor ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let observed = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(native.retained_bytes()?)
+            .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(native_authority_roots_retained_bytes(roots).ok()?))
+            // All retained fields are cloned from the finished native cursor
+            // after this gate: aggregate, V3 closure, basis, terminal state
+            // and the V4 registration set.
+            .and_then(|value| value.checked_add(native.aggregate.retained_bytes_v3().ok()?))
+            .and_then(|value| value.checked_add(native.v3_aggregate.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(native.basis.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(v4_set_dynamic))
+            .and_then(|value| value.checked_add(cursor_bytes))
+            .and_then(|value| value.checked_add(live_bytes))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human begin preclone ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        #[cfg(test)]
+        {
+            V5_TEST_HUMAN_BEGIN_REQUIRED.with(|value| value.set(observed));
+            V5_TEST_HUMAN_RECOVERY_REQUIRED.with(|value| value.set(value.get().max(observed)));
+        }
+        if observed > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled human begin preclone ownership",
+                self.limits.max_working_bytes,
+                observed,
+            ));
+        }
+        let mut actions = Vec::with_capacity(action_count);
+        for planned in partial
+            .actions
+            .iter()
+            .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunHumanDecision)
+        {
+            let obligation_id = planned.subject_ids().first().ok_or_else(|| {
+                DomainError::EventSequence("scheduled human action has no obligation".to_owned())
+            })?;
+            let (verification_id, verification_body_hash) =
+                human_verification_prerequisite_v5(planned, native, partial, self)?;
+            let verification = native
+                .v3_aggregate
+                .verifications
+                .get(&verification_id)
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "scheduled human verification",
+                    owner_id: planned.id().clone(),
+                    reference: verification_id.clone(),
+                })?;
+            if verification.body_hash().map_err(m4_domain_error)? != verification_body_hash
+                || verification.outcome() != crate::VerificationOutcomeV3::Passed
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human verifier prerequisite differs from native Passed verification",
+                ));
+            }
+            let claim = native
+                .aggregate
+                .execution_claims()
+                .find(|claim| claim.id() == verification.claim_id())
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "scheduled human claim",
+                    owner_id: planned.id().clone(),
+                    reference: verification.claim_id().clone(),
+                })?;
+            let execution = native
+                .aggregate
+                .executions()
+                .filter(|execution| execution.parsed_claim_ids().contains(claim.id()))
+                .find(|execution| execution.obligation_ids().contains(obligation_id))
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human claim has no exact target execution closure",
+                ))?;
+            if !claim.obligation_ids().contains(obligation_id)
+                || execution.parsed_claim_ids().len() != 1
+                || !execution.parsed_claim_ids().contains(claim.id())
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human execution/claim closure differs",
+                ));
+            }
+            actions.push(ScheduledHumanResolutionActionV5 {
+                action_id: planned.id().clone(),
+                obligation_id: obligation_id.clone(),
+                execution_id: execution.id().clone(),
+                execution_body_hash: execution.body_hash()?,
+                claim_id: claim.id().clone(),
+                claim_body_hash: claim.body_hash()?,
+                verification_id,
+                verification_body_hash,
+            });
+        }
+        if actions
+            .windows(2)
+            .any(|pair| pair[0].action_id >= pair[1].action_id)
+        {
+            return Err(DomainError::EventSequence(
+                "scheduled human actions are not ascending derived-ID order".to_owned(),
+            ));
+        }
+        let phase = ReplayedScheduledHumanResolutionPhaseV5 {
+            log_identity: self.instance_identity,
+            source_closure_id: native.source_closure_id.clone(),
+            partial_rerun_plan_id: native.partial_rerun_plan_id.clone(),
+            target_plan_id: native.target_plan_id.clone(),
+            native_completion_digest: native.digest()?,
+            basis: native.basis.clone(),
+            actions,
+            action_index: 0,
+            stage: ScheduledHumanResolutionStageV5::Decision,
+            aggregate: native.aggregate.clone(),
+            v3_aggregate: native.v3_aggregate.clone(),
+            terminal: native.terminal,
+            v4_registration_ids: native.v4_registration_ids.clone(),
+        };
+        let realized = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(native.retained_bytes()?)
+            .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(native_authority_roots_retained_bytes(roots).ok()?))
+            .and_then(|value| value.checked_add(phase.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(live_bytes))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human begin realized ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if realized > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled human begin realized ownership",
+                self.limits.max_working_bytes,
+                realized,
+            ));
+        }
+        Ok(phase)
+    }
+
+    pub(crate) fn prepare_scheduled_human_decision_append_v5(
+        &self,
+        phase: &ReplayedScheduledHumanResolutionPhaseV5,
+        trusted: TrustedHumanAdmissionV5,
+        request: HumanDecisionRequestV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<PreparedScheduledHumanResolutionAppendV5> {
+        let preflight_action = phase.current_action()?;
+        // Tier one is deliberately before `validate_current`: validation and
+        // request hashing both allocate digest backing.  The owned admission
+        // and request remain live through every later DTO construction.
+        phase.preflight(
+            self,
+            native_authority_roots_retained_bytes(roots)?
+                .checked_add(trusted.retained_bytes()?)
+                .and_then(|value| value.checked_add(request.retained_bytes().ok()?))
+                .and_then(|value| {
+                    value.checked_add(
+                        human_decision_request_canonical_len_v5(
+                            &preflight_action.action_id,
+                            &request,
+                        )
+                        .ok()?,
+                    )
+                })
+                .and_then(|value| value.checked_add(("sha256:".len() + 64) as u64))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human decision prepare ownership",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled human decision prepare ownership",
+        )?;
+        phase.validate_current(self, roots)?;
+        if phase.stage != ScheduledHumanResolutionStageV5::Decision {
+            return Err(DomainError::EventSequence(
+                "scheduled human decision does not match current durable seam".to_owned(),
+            ));
+        }
+        let action = phase.current_action()?;
+        if trusted.source_closure_id != phase.source_closure_id
+            || trusted.basis_digest != phase.basis.basis_digest
+            || trusted.tail_hash != *self.tail_hash()
+            || trusted.expected_sequence != phase.basis.target_next_sequence
+            || trusted.action_id != action.action_id
+            || trusted.request_digest
+                != human_decision_request_digest_v5(&action.action_id, &request)?
+            || request.input.issued_at != trusted.trusted_now
+            || !roots
+                .human_grants
+                .iter()
+                .any(|root| same_human_grant_v4(root, &trusted.grant))
+        {
+            return Err(DomainError::DecisionAdmissionMismatch);
+        }
+        let scope = phase
+            .v3_aggregate
+            .assessment_scopes
+            .get(&action.claim_id)
+            .ok_or(DomainError::DecisionAdmissionMismatch)?;
+        let assessment = phase
+            .v3_aggregate
+            .assessments
+            .get(&action.claim_id)
+            .ok_or(DomainError::DecisionAdmissionMismatch)?;
+        // Before moving request strings into the DTO, predict the exact
+        // terminal-decision backing from the borrowed scope.  Reject and
+        // Exception have a closed singleton source set; other outcomes keep
+        // their richer source expansion on the explicit M4 path and cannot
+        // be admitted by this narrow scheduled terminal grammar.
+        let decision_backing = scope
+            .predicted_terminal_decision_retained_bytes(
+                &phase.basis.policy_revision_hash,
+                assessment
+                    .predicted_decision_source_vec_bytes(request.input.outcome)
+                    .map_err(m4_domain_error)?,
+            )
+            .map_err(m4_domain_error)?;
+        let decision_backing = decision_backing
+            .checked_add(u64::try_from(request.input.actor.capacity()).unwrap_or(u64::MAX))
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(request.input.authority_id.capacity()).unwrap_or(u64::MAX),
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(request.input.rationale.capacity()).unwrap_or(u64::MAX),
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(request.input.issued_at.capacity()).unwrap_or(u64::MAX),
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(
+                        request
+                            .input
+                            .expires_at
+                            .as_ref()
+                            .map_or(0, String::capacity),
+                    )
+                    .unwrap_or(u64::MAX),
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human decision backing ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let decision_reducer = decision_backing
+            .checked_mul(5)
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(size_of::<StableId>() * 4 + size_of::<ContentHash>() * 2)
+                        .unwrap_or(u64::MAX),
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human decision reducer ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let request_and_decision = request
+            .retained_bytes()?
+            .checked_add(human_decision_request_canonical_len_v5(
+                &action.action_id,
+                &request,
+            )?)
+            .and_then(|value| value.checked_add(decision_backing))
+            // `mint_decision_from_scope` first expands sources and then
+            // clones the whole assessment to prove the transition.  Its
+            // candidate owns the decision once more while validation hashes
+            // the record, so reserve both retained assessment and decision
+            // backing before invoking the M4 allocator.
+            .and_then(|value| value.checked_add(assessment.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(decision_backing))
+            .and_then(|value| value.checked_add(decision_reducer))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human decision materialization ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        phase.preflight(
+            self,
+            native_authority_roots_retained_bytes(roots)?
+                .checked_add(trusted.retained_bytes()?)
+                .and_then(|value| value.checked_add(request_and_decision))
+                .and_then(|value| value.checked_add(("sha256:".len() + 64) as u64))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human decision materialization ownership",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled human decision materialization ownership",
+        )?;
+        #[cfg(test)]
+        V5_TEST_HUMAN_MATERIALIZATIONS.with(|value| value.set(value.get().saturating_add(1)));
+        let decision = assessment
+            .mint_decision_from_scope(
+                scope,
+                phase.basis.policy_revision_hash.clone(),
+                request.input.outcome,
+                request.input.actor,
+                request.input.authority_id,
+                request.input.rationale,
+                request.input.issued_at,
+                request.input.expires_at,
+            )
+            .map_err(m4_domain_error)?;
+        let selected = roots
+            .human_grants
+            .iter()
+            .find(|grant| same_human_grant_v4(grant, &trusted.grant))
+            .filter(|grant| human_grant_matches_decision_v5(grant, &decision))
+            .ok_or(DomainError::HumanTrustRootMissing)?;
+        if roots
+            .human_grants
+            .iter()
+            .filter(|grant| human_grant_matches_decision_v5(grant, &decision))
+            .count()
+            != 1
+        {
+            return Err(DomainError::DecisionAdmissionMismatch);
+        }
+        let payload = PersistedPayload::DecisionRecordedV3(decision);
+        // Tier two uses the concrete DTO after its single materialisation;
+        // the payload, its canonical hash, selected root and prepared return
+        // value are simultaneously live here.
+        let exact = v3_payload_staging_bytes(&payload)?
+            .checked_add(v3_reducer_growth_upper_bound(&payload)?)
+            .and_then(|value| value.checked_add(("sha256:".len() + 64) as u64))
+            .and_then(|value| value.checked_add(native_human_root_retained_bytes(selected).ok()?))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human decision prepared ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        phase.preflight(self, exact, "scheduled human decision prepared ownership")?;
+        phase.prepare(
+            self,
+            action,
+            ScheduledHumanResolutionStageV5::Decision,
+            payload,
+            Some(trust_digest_for_human(&human_grant_v4_as_v3(selected))?),
+        )
+    }
+
+    pub(crate) fn prepare_scheduled_human_finding_append_v5(
+        &self,
+        phase: &ReplayedScheduledHumanResolutionPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<PreparedScheduledHumanResolutionAppendV5> {
+        phase.preflight(
+            self,
+            native_authority_roots_retained_bytes(roots)?
+                .checked_add(("sha256:".len() + 64) as u64)
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human finding prepare ownership",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled human finding prepare ownership",
+        )?;
+        phase.validate_current(self, roots)?;
+        if phase.stage != ScheduledHumanResolutionStageV5::Finding {
+            return Err(DomainError::EventSequence(
+                "scheduled human finding does not match current durable seam".to_owned(),
+            ));
+        }
+        let action = phase.current_action()?;
+        let scope = phase
+            .v3_aggregate
+            .assessment_scopes
+            .get(&action.claim_id)
+            .ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+        let assessment = phase
+            .v3_aggregate
+            .assessments
+            .get(&action.claim_id)
+            .ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+        // The assessment is cloned by the projection reducer.  Reserve its
+        // exact retained backing while it is still borrowed, before that
+        // clone or the finding DTO can be constructed.
+        phase.preflight(
+            self,
+            assessment
+                .retained_bytes()
+                .map_err(m4_domain_error)?
+                // projection clones the assessment and creates/validates a
+                // finding before the later concrete-payload gate.
+                .checked_add(assessment.retained_bytes().map_err(m4_domain_error)?)
+                .and_then(|value| {
+                    value.checked_add(
+                        assessment
+                            .predicted_finding_projection_peak_bytes()
+                            .map_err(m4_domain_error)
+                            .ok()?,
+                    )
+                })
+                .and_then(|value| {
+                    value.checked_add(native_authority_roots_retained_bytes(roots).ok()?)
+                })
+                .and_then(|value| value.checked_add(("sha256:".len() + 64) as u64))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human finding materialization ownership",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled human finding materialization ownership",
+        )?;
+        #[cfg(test)]
+        V5_TEST_HUMAN_MATERIALIZATIONS.with(|value| value.set(value.get().saturating_add(1)));
+        let mut assessment = assessment.clone();
+        let finding = assessment
+            .project_finding_from_scope(scope)
+            .map_err(m4_domain_error)?;
+        let payload = PersistedPayload::FindingRecordedV3(finding);
+        phase.preflight(
+            self,
+            v3_payload_staging_bytes(&payload)?
+                .checked_add(v3_reducer_growth_upper_bound(&payload)?)
+                .and_then(|value| value.checked_add(("sha256:".len() + 64) as u64))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human finding prepared ownership",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled human finding prepared ownership",
+        )?;
+        phase.prepare(
+            self,
+            action,
+            ScheduledHumanResolutionStageV5::Finding,
+            payload,
+            None,
+        )
+    }
+
+    pub(crate) fn append_prepared_scheduled_human_resolution_v5(
+        &mut self,
+        prepared: PreparedScheduledHumanResolutionAppendV5,
+        phase: &mut ReplayedScheduledHumanResolutionPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<()> {
+        self.append_prepared_scheduled_human_resolution_with_live_bytes_v5(
+            prepared, phase, roots, 0,
+        )
+    }
+
+    fn append_prepared_scheduled_human_resolution_with_live_bytes_v5(
+        &mut self,
+        prepared: PreparedScheduledHumanResolutionAppendV5,
+        phase: &mut ReplayedScheduledHumanResolutionPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+        live_bytes: u64,
+    ) -> Result<()> {
+        // Validation is not allocation-free.  Admit its digest while the
+        // caller-owned prepared token and every root are still borrowed.
+        phase.preflight(
+            self,
+            prepared
+                .retained_bytes()?
+                .checked_add(native_authority_roots_retained_bytes(roots)?)
+                .and_then(|value| value.checked_add(("sha256:".len() + 64) as u64))
+                .and_then(|value| value.checked_add(live_bytes))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human append validation ownership",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled human append validation ownership",
+        )?;
+        phase.validate_current(self, roots)?;
+        let required =
+            scheduled_human_append_required_working_bytes(self, phase, &prepared, live_bytes)?;
+        if required > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled human append preflight ownership",
+                self.limits.max_working_bytes,
+                required,
+            ));
+        }
+        #[cfg(test)]
+        {
+            V5_TEST_HUMAN_APPEND_REQUIRED.with(|value| value.set(value.get().max(required)));
+            V5_TEST_HUMAN_RECOVERY_REQUIRED.with(|value| value.set(value.get().max(required)));
+        }
+        let action = phase.current_action()?;
+        if prepared.log_identity != self.instance_identity
+            || prepared.basis_digest != phase.basis.basis_digest
+            || prepared.predecessor_event_hash != *self.tail_hash()
+            || prepared.event_sequence != phase.basis.target_next_sequence
+            || prepared.action_id != action.action_id
+            || prepared.action_index != phase.action_index
+            || prepared.stage != phase.stage
+            || prepared.payload_hash
+                != crate::canonical::compact_json_sha256_streaming(&prepared.payload)?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        match (phase.stage, &prepared.payload, &prepared.trust_digest) {
+            (
+                ScheduledHumanResolutionStageV5::Decision,
+                PersistedPayload::DecisionRecordedV3(_),
+                Some(_),
+            )
+            | (
+                ScheduledHumanResolutionStageV5::Finding,
+                PersistedPayload::FindingRecordedV3(_),
+                None,
+            ) => {}
+            _ => return Err(DomainError::DecisionAdmissionMismatch),
+        }
+        let mut next_terminal = phase.terminal;
+        let mut next_v4_ids = phase.v4_registration_ids.clone();
+        advance_v5_post_d2_terminal_gate(&mut next_terminal, &mut next_v4_ids, &prepared.payload)?;
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            prepared.event_sequence,
+            prepared.payload.actor().to_owned(),
+            prepared.event_sequence,
+            prepared.predecessor_event_hash.clone(),
+            prepared.payload.clone(),
+        )?;
+        let mut aggregate = phase.aggregate.clone();
+        let mut v3 = phase.v3_aggregate.clone();
+        apply_for_log(
+            &mut aggregate,
+            Some(&mut v3),
+            &prepared.payload,
+            prepared.payload.actor(),
+            &self.run_id,
+            &self.genesis_hash,
+            None,
+            true,
+        )?;
+        let mut basis = phase.basis.clone();
+        if let Some(trust) = prepared.trust_digest {
+            let (payload_kind, record_id, record_body_hash) =
+                authority_record_identity(&prepared.payload)?
+                    .ok_or(DomainError::DecisionAdmissionMismatch)?;
+            let position = v5_authority_position_digest(
+                &self.run_id,
+                &self.genesis_hash,
+                envelope.id(),
+                envelope.sequence(),
+                envelope.previous_event_hash(),
+                &trust,
+            )?;
+            basis.inherited_m4_entries.push(AuthorityReplayEntryV3AtV5 {
+                event_id: envelope.id().clone(),
+                event_sequence: envelope.sequence(),
+                payload_kind: payload_kind.to_owned(),
+                predecessor_event_hash: envelope.previous_event_hash().clone(),
+                record_body_hash,
+                record_id,
+                v3_trust_binding_digest: trust,
+                v5_position_digest: position,
+            });
+        }
+        basis.advance_authority_free_to_event(&envelope)?;
+        self.append_sealed_envelope_at_v5(envelope, V5SealedPayloadPosition::General)?;
+        phase.aggregate = aggregate;
+        phase.v3_aggregate = v3;
+        phase.basis = basis;
+        phase.terminal = next_terminal;
+        phase.v4_registration_ids = next_v4_ids;
+        match phase.stage {
+            ScheduledHumanResolutionStageV5::Decision => {
+                phase.stage = ScheduledHumanResolutionStageV5::Finding;
+            }
+            ScheduledHumanResolutionStageV5::Finding => {
+                phase.action_index = phase.action_index.checked_add(1).ok_or_else(|| {
+                    DomainError::EventSequence("scheduled human action overflow".to_owned())
+                })?;
+                phase.stage = ScheduledHumanResolutionStageV5::Decision;
+            }
+        }
+        Ok(())
+    }
+
+    /// Replays exactly the durable human suffix and stops at its first
+    /// missing seam.  A decision is authority-replayed from its own body and
+    /// one V5 root; a finding is rebuilt only after that decision has entered
+    /// the current assessment.  This makes the only legal prefixes empty,
+    /// `DecisionRecordedV3`, and decision-plus-derived-finding per action.
+    pub(crate) fn replay_scheduled_human_resolution_suffix_v5(
+        mut log: EventLogV5,
+        canonical_suffix: &[Vec<u8>],
+        native: &ReplayedScheduledNativeVerifierPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<(EventLogV5, ReplayedScheduledHumanResolutionPhaseV5)> {
+        let phase = Self::replay_scheduled_human_resolution_suffix_inner_v5(
+            &mut log,
+            canonical_suffix,
+            native,
+            partial,
+            roots,
+        )?;
+        Ok((log, phase))
+    }
+
+    fn replay_scheduled_human_resolution_suffix_inner_v5(
+        log: &mut EventLogV5,
+        canonical_suffix: &[Vec<u8>],
+        native: &ReplayedScheduledNativeVerifierPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<ReplayedScheduledHumanResolutionPhaseV5> {
+        // The caller's complete suffix remains live while the fresh phase is
+        // opened and while every member is compared.  Include outer Vec slots
+        // and each actual backing capacity, not merely byte lengths.
+        let suffix_bytes = canonical_suffix
+            .iter()
+            .try_fold(0_u64, |total, value| {
+                total
+                    .checked_add(u64::try_from(size_of::<Vec<u8>>()).unwrap_or(u64::MAX))
+                    .and_then(|sum| {
+                        sum.checked_add(u64::try_from(value.capacity()).unwrap_or(u64::MAX))
+                    })
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human recovery suffix ownership",
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let mut phase = log.begin_scheduled_human_resolution_phase_with_live_bytes_v5(
+            native,
+            partial,
+            roots,
+            suffix_bytes,
+        )?;
+        // A resource refusal must not leave a durable decision prefix behind
+        // merely because a later finding member needs more working space.
+        // Walk the caller's canonical suffix with borrowed wires first and
+        // reserve its complete maximum before decoding a single envelope or
+        // constructing a decision/finding DTO.
+        let dry_run_required = scheduled_human_recovery_suffix_required_working_bytes(
+            log,
+            &phase,
+            native,
+            partial,
+            roots,
+            canonical_suffix,
+            suffix_bytes,
+        )?;
+        #[cfg(test)]
+        V5_TEST_HUMAN_RECOVERY_REQUIRED.with(|value| value.set(value.get().max(dry_run_required)));
+        if dry_run_required > log.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled human recovery full-suffix ownership",
+                log.limits.max_working_bytes,
+                dry_run_required,
+            ));
+        }
+        for (index, bytes) in canonical_suffix.iter().enumerate() {
+            if phase.action_index == phase.actions.len() {
+                return Err(DomainError::EventSequence(
+                    "scheduled human suffix follows completed action set".to_owned(),
+                ));
+            }
+            // Preserve the raw suffix, decoded durable envelope and rebuilt
+            // expected envelope together through comparison.  This gate is
+            // intentionally before decode/materialization, so exact-minus-one
+            // recovery cannot deserialize or mutate a cursor.
+            let recovery_live = suffix_bytes
+                .checked_add(native.retained_bytes()?)
+                .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+                .and_then(|value| {
+                    value.checked_add(native_authority_roots_retained_bytes(roots).ok()?)
+                })
+                .and_then(|value| {
+                    value.checked_add(u64::try_from(size_of::<EventEnvelope>()).unwrap_or(u64::MAX))
+                })
+                .and_then(|value| {
+                    value.checked_add(
+                        u64::try_from(bytes.len())
+                            .unwrap_or(u64::MAX)
+                            .checked_mul(2)?,
+                    )
+                })
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human recovery pre-decode ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?;
+            let observed = log
+                .full_resident_bytes_for_structural_store()?
+                .checked_add(phase.retained_bytes()?)
+                .and_then(|value| value.checked_add(recovery_live))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human recovery pre-decode ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?;
+            #[cfg(test)]
+            V5_TEST_HUMAN_RECOVERY_REQUIRED.with(|value| value.set(value.get().max(observed)));
+            if observed > log.limits.max_working_bytes {
+                return Err(replay_incomplete(
+                    "scheduled human recovery pre-decode ownership",
+                    log.limits.max_working_bytes,
+                    observed,
+                ));
+            }
+            let observed = EventEnvelope::from_json_slice_at_v5_position(
+                bytes,
+                V5SealedPayloadPosition::General,
+            )
+            .map_err(|error| {
+                DomainError::Validation(format!("scheduled human suffix event {index}: {error}"))
+            })?;
+            observed.validate_chain_position_at_v5(
+                &log.run_id,
+                &log.genesis_hash,
+                phase.basis.target_next_sequence,
+                log.tail_hash(),
+                V5SealedPayloadPosition::General,
+            )?;
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, observed.payload.get())?;
+            let prepared = match (phase.stage, payload) {
+                (
+                    ScheduledHumanResolutionStageV5::Decision,
+                    PersistedPayload::DecisionRecordedV3(decision),
+                ) => {
+                    let action = phase.current_action()?;
+                    if decision.claim_id() != &action.claim_id
+                        || decision.policy_revision_hash() != &phase.basis.policy_revision_hash
+                    {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "scheduled human durable decision does not close current action",
+                        ));
+                    }
+                    let mut grants = roots
+                        .human_grants
+                        .iter()
+                        .filter(|grant| human_grant_matches_decision_v5(grant, &decision));
+                    let grant = grants.next().ok_or(DomainError::HumanTrustRootMissing)?;
+                    if grants.next().is_some() {
+                        return Err(DomainError::Validation(
+                            "scheduled human decision has ambiguous V5 human trust root".to_owned(),
+                        ));
+                    }
+                    phase.prepare(
+                        log,
+                        action,
+                        ScheduledHumanResolutionStageV5::Decision,
+                        PersistedPayload::DecisionRecordedV3(decision),
+                        Some(trust_digest_for_human(&human_grant_v4_as_v3(grant))?),
+                    )?
+                }
+                (
+                    ScheduledHumanResolutionStageV5::Finding,
+                    PersistedPayload::FindingRecordedV3(finding),
+                ) => {
+                    let expected = log.prepare_scheduled_human_finding_append_v5(&phase, roots)?;
+                    if !matches!(&expected.payload, PersistedPayload::FindingRecordedV3(value) if value.id() == finding.id())
+                        || crate::canonical::compact_json_sha256_streaming(&expected.payload)?
+                            != crate::canonical::compact_json_sha256_streaming(
+                                &PersistedPayload::FindingRecordedV3(finding.clone()),
+                            )?
+                    {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "scheduled human durable finding differs from derived current finding",
+                        ));
+                    }
+                    expected
+                }
+                _ => {
+                    return Err(DomainError::EventSequence(
+                        "scheduled human suffix member does not match exact durable seam"
+                            .to_owned(),
+                    ));
+                }
+            };
+            let expected = EventEnvelope::new(
+                EventContractVersion::V5,
+                log.run_id.clone(),
+                log.genesis_hash.clone(),
+                prepared.event_sequence,
+                prepared.payload.actor().to_owned(),
+                prepared.event_sequence,
+                prepared.predecessor_event_hash.clone(),
+                prepared.payload.clone(),
+            )?;
+            if observed.id() != expected.id()
+                || observed.event_hash() != expected.event_hash()
+                || observed.canonical_bytes()? != expected.canonical_bytes()?
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human durable member differs from roots/closure replay",
+                ));
+            }
+            // `observed` and `expected` envelopes have not been dropped at
+            // this call site, so their full canonical backing is charged into
+            // append as recovery-live ownership.
+            let comparison_live = recovery_live
+                .checked_add(u64::try_from(observed.allocated_bytes()).unwrap_or(u64::MAX))
+                .and_then(|value| {
+                    value.checked_add(u64::try_from(expected.allocated_bytes()).unwrap_or(u64::MAX))
+                })
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human recovery append live ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?;
+            log.append_prepared_scheduled_human_resolution_with_live_bytes_v5(
+                prepared,
+                &mut phase,
+                roots,
+                comparison_live,
+            )?;
+        }
+        Ok(phase)
+    }
+
+    #[cfg(test)]
+    fn replay_scheduled_human_resolution_suffix_in_place_for_test(
+        log: &mut EventLogV5,
+        canonical_suffix: &[Vec<u8>],
+        native: &ReplayedScheduledNativeVerifierPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<ReplayedScheduledHumanResolutionPhaseV5> {
+        Self::replay_scheduled_human_resolution_suffix_inner_v5(
+            log,
+            canonical_suffix,
+            native,
+            partial,
+            roots,
+        )
+    }
+}
+
+#[allow(dead_code)]
+impl ReplayedScheduledHumanResolutionPhaseV5 {
+    fn current_action(&self) -> Result<&ScheduledHumanResolutionActionV5> {
+        self.actions.get(self.action_index).ok_or_else(|| {
+            DomainError::EventSequence("scheduled human phase is complete".to_owned())
+        })
+    }
+
+    fn validate_current(&self, log: &EventLogV5, roots: &AuthorityTrustRootsV5) -> Result<()> {
+        if self.log_identity != log.instance_identity
+            || self.basis.target_run_id != log.run_id
+            || self.basis.target_genesis_hash != log.genesis_hash
+            || roots.policy_revision_hash != self.basis.policy_revision_hash
+            || roots.repository_id != *self.aggregate.program().repository_id()
+            || roots.repository_source_hash
+                != *self
+                    .aggregate
+                    .program()
+                    .repository_source()
+                    .content_hash()
+                    .ok_or(DomainError::AuthorityPolicyMismatch)?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        self.basis.validate_current_log(log)
+    }
+
+    fn prepare(
+        &self,
+        log: &EventLogV5,
+        action: &ScheduledHumanResolutionActionV5,
+        stage: ScheduledHumanResolutionStageV5,
+        payload: PersistedPayload,
+        trust_digest: Option<ContentHash>,
+    ) -> Result<PreparedScheduledHumanResolutionAppendV5> {
+        let payload_hash = crate::canonical::compact_json_sha256_streaming(&payload)?;
+        Ok(PreparedScheduledHumanResolutionAppendV5 {
+            log_identity: log.instance_identity,
+            basis_digest: self.basis.basis_digest.clone(),
+            predecessor_event_hash: log.tail_hash().clone(),
+            event_sequence: self.basis.target_next_sequence,
+            action_id: action.action_id.clone(),
+            action_index: self.action_index,
+            stage,
+            payload,
+            payload_hash,
+            trust_digest,
+        })
+    }
+
+    fn retained_bytes(&self) -> Result<u64> {
+        let mut total = u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX);
+        // `Self` already contains these three values inline.  Count only
+        // their heap-owned portion, exactly as the native cursor does.
+        for retained in [
+            self.aggregate
+                .retained_bytes_v3()?
+                .checked_sub(u64::try_from(size_of_val(&self.aggregate)).unwrap_or(u64::MAX)),
+            self.v3_aggregate
+                .retained_bytes()?
+                .checked_sub(u64::try_from(size_of_val(&self.v3_aggregate)).unwrap_or(u64::MAX)),
+            self.basis
+                .retained_bytes()?
+                .checked_sub(u64::try_from(size_of_val(&self.basis)).unwrap_or(u64::MAX)),
+        ] {
+            total = total
+                .checked_add(retained.ok_or(DomainError::Incomplete {
+                    operation: "scheduled human inline retained ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?)
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human phase retained aggregates",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        total = total
+            .checked_add(
+                u64::try_from(
+                    self.actions
+                        .capacity()
+                        .checked_mul(size_of::<ScheduledHumanResolutionActionV5>())
+                        .ok_or(DomainError::Incomplete {
+                            operation: "scheduled human action slots",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?,
+                )
+                .unwrap_or(u64::MAX),
+            )
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human action slots",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        total = total
+            .checked_add(
+                u64::try_from(
+                    self.v4_registration_ids
+                        .iter()
+                        .map(|id| size_of::<StableId>() + 128 + id.allocated_bytes())
+                        .sum::<usize>(),
+                )
+                .unwrap_or(u64::MAX),
+            )
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human V4 registration retained ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        let actions = self.actions.iter().try_fold(total, |total, action| {
+            [
+                action.action_id.allocated_bytes(),
+                action.obligation_id.allocated_bytes(),
+                action.execution_id.allocated_bytes(),
+                action.execution_body_hash.allocated_bytes(),
+                action.claim_id.allocated_bytes(),
+                action.claim_body_hash.allocated_bytes(),
+                action.verification_id.allocated_bytes(),
+                action.verification_body_hash.allocated_bytes(),
+            ]
+            .into_iter()
+            .try_fold(total, |total, bytes| total.checked_add(bytes as u64))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human action ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+        })?;
+        Some(actions)
+            .and_then(|value| value.checked_add(self.source_closure_id.allocated_bytes() as u64))
+            .and_then(|value| {
+                value.checked_add(self.partial_rerun_plan_id.allocated_bytes() as u64)
+            })
+            .and_then(|value| value.checked_add(self.target_plan_id.allocated_bytes() as u64))
+            .and_then(|value| {
+                value.checked_add(self.native_completion_digest.allocated_bytes() as u64)
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human phase retained ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+    }
+
+    fn preflight(&self, log: &EventLogV5, additional: u64, operation: &'static str) -> Result<()> {
+        let observed = log
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(self.retained_bytes()?)
+            .and_then(|value| value.checked_add(additional))
+            .ok_or(DomainError::Incomplete {
+                operation,
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        #[cfg(test)]
+        {
+            V5_TEST_HUMAN_PREPARE_REQUIRED.with(|value| value.set(value.get().max(observed)));
+            V5_TEST_HUMAN_APPEND_REQUIRED.with(|value| value.set(value.get().max(observed)));
+            V5_TEST_HUMAN_RECOVERY_REQUIRED.with(|value| value.set(value.get().max(observed)));
+        }
+        if observed > log.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                operation,
+                log.limits.max_working_bytes,
+                observed,
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl PreparedScheduledHumanResolutionAppendV5 {
+    fn retained_bytes(&self) -> Result<u64> {
+        let payload = v3_payload_staging_bytes(&self.payload)?;
+        u64::try_from(size_of::<Self>())
+            .unwrap_or(u64::MAX)
+            .checked_add(self.basis_digest.allocated_bytes() as u64)
+            .and_then(|value| {
+                value.checked_add(self.predecessor_event_hash.allocated_bytes() as u64)
+            })
+            .and_then(|value| value.checked_add(self.action_id.allocated_bytes() as u64))
+            .and_then(|value| value.checked_add(self.payload_hash.allocated_bytes() as u64))
+            .and_then(|value| {
+                value.checked_add(
+                    self.trust_digest
+                        .as_ref()
+                        .map_or(0, |value| value.allocated_bytes() as u64),
+                )
+            })
+            .and_then(|value| value.checked_add(payload))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human prepared ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })
+    }
+}
+
+/// Allocation-free scanner for the closed, canonical JSON wire used by the
+/// scheduled-human recovery preflight.  `serde_json`'s borrowed forms still
+/// have to decode escaped strings (and can therefore allocate); recovery
+/// must reject an insufficient limit *before* it asks serde to construct any
+/// durable envelope or record.  The scanner deliberately exposes raw field
+/// slices and decoded string lengths only.  Semantic validation remains in
+/// the normal replay path below.
+#[derive(Clone, Copy)]
+struct ScheduledHumanJsonString {
+    decoded_len: usize,
+}
+
+fn scheduled_human_json_error(message: &'static str) -> DomainError {
+    DomainError::Validation(format!("scheduled human canonical JSON: {message}"))
+}
+
+fn scheduled_human_scan_hex(input: &[u8]) -> Option<u16> {
+    if input.len() != 4 {
+        return None;
+    }
+    input.iter().try_fold(0_u16, |value, byte| {
+        let digit = match byte {
+            b'0'..=b'9' => u16::from(byte - b'0'),
+            b'a'..=b'f' => u16::from(byte - b'a' + 10),
+            b'A'..=b'F' => u16::from(byte - b'A' + 10),
+            _ => return None,
+        };
+        value.checked_mul(16)?.checked_add(digit)
+    })
+}
+
+/// Scans one JSON string beginning at `start`, returning its byte-exclusive
+/// end and the actual UTF-8 backing length serde will need for the decoded
+/// `String`.  It validates escaped control characters and surrogate pairs.
+fn scheduled_human_scan_json_string(
+    input: &[u8],
+    start: usize,
+) -> Result<(usize, ScheduledHumanJsonString)> {
+    if input.get(start) != Some(&b'\"') {
+        return Err(scheduled_human_json_error("expected string"));
+    }
+    let mut index = start
+        .checked_add(1)
+        .ok_or_else(|| scheduled_human_json_error("string offset"))?;
+    let mut decoded_len = 0_usize;
+    while let Some(byte) = input.get(index).copied() {
+        match byte {
+            b'\"' => {
+                return Ok((
+                    index
+                        .checked_add(1)
+                        .ok_or_else(|| scheduled_human_json_error("string offset"))?,
+                    ScheduledHumanJsonString { decoded_len },
+                ));
+            }
+            0x00..=0x1f => return Err(scheduled_human_json_error("control byte in string")),
+            b'\\' => {
+                let escaped = *input
+                    .get(
+                        index
+                            .checked_add(1)
+                            .ok_or_else(|| scheduled_human_json_error("escape offset"))?,
+                    )
+                    .ok_or_else(|| scheduled_human_json_error("truncated escape"))?;
+                let scalar_len = match escaped {
+                    b'\"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => 1,
+                    b'u' => {
+                        let digits_start = index
+                            .checked_add(2)
+                            .ok_or_else(|| scheduled_human_json_error("unicode offset"))?;
+                        let digits_end = digits_start
+                            .checked_add(4)
+                            .ok_or_else(|| scheduled_human_json_error("unicode offset"))?;
+                        let first = scheduled_human_scan_hex(
+                            input.get(digits_start..digits_end).ok_or_else(|| {
+                                scheduled_human_json_error("truncated unicode escape")
+                            })?,
+                        )
+                        .ok_or_else(|| scheduled_human_json_error("invalid unicode escape"))?;
+                        index = digits_end;
+                        if (0xd800..=0xdbff).contains(&first) {
+                            if input.get(index) != Some(&b'\\')
+                                || input.get(index + 1) != Some(&b'u')
+                            {
+                                return Err(scheduled_human_json_error("unpaired high surrogate"));
+                            }
+                            let low_start = index + 2;
+                            let low_end = low_start + 4;
+                            let low = scheduled_human_scan_hex(
+                                input.get(low_start..low_end).ok_or_else(|| {
+                                    scheduled_human_json_error("truncated low surrogate")
+                                })?,
+                            )
+                            .ok_or_else(|| scheduled_human_json_error("invalid low surrogate"))?;
+                            if !(0xdc00..=0xdfff).contains(&low) {
+                                return Err(scheduled_human_json_error("unpaired high surrogate"));
+                            }
+                            index = low_end;
+                            4
+                        } else if (0xdc00..=0xdfff).contains(&first) {
+                            return Err(scheduled_human_json_error("unpaired low surrogate"));
+                        } else if first <= 0x7f {
+                            1
+                        } else if first <= 0x7ff {
+                            2
+                        } else {
+                            3
+                        }
+                    }
+                    _ => return Err(scheduled_human_json_error("invalid escape")),
+                };
+                decoded_len = decoded_len
+                    .checked_add(scalar_len)
+                    .ok_or_else(|| scheduled_human_json_error("decoded string length"))?;
+                if escaped != b'u' {
+                    index = index
+                        .checked_add(2)
+                        .ok_or_else(|| scheduled_human_json_error("escape offset"))?;
+                }
+                continue;
+            }
+            _ => {
+                // Canonical JSON is UTF-8.  Count continuation bytes as part
+                // of the retained string backing, while rejecting invalid
+                // leading bytes early rather than letting a later decoder
+                // allocate and fail.
+                let width = if byte < 0x80 {
+                    1
+                } else if (0xc2..=0xdf).contains(&byte) {
+                    2
+                } else if (0xe0..=0xef).contains(&byte) {
+                    3
+                } else if (0xf0..=0xf4).contains(&byte) {
+                    4
+                } else {
+                    return Err(scheduled_human_json_error("invalid UTF-8 leading byte"));
+                };
+                let end = index
+                    .checked_add(width)
+                    .ok_or_else(|| scheduled_human_json_error("UTF-8 offset"))?;
+                let scalar = std::str::from_utf8(
+                    input
+                        .get(index..end)
+                        .ok_or_else(|| scheduled_human_json_error("truncated UTF-8"))?,
+                )
+                .map_err(|_| scheduled_human_json_error("invalid UTF-8"))?;
+                decoded_len = decoded_len
+                    .checked_add(scalar.len())
+                    .ok_or_else(|| scheduled_human_json_error("decoded string length"))?;
+                index = end;
+            }
+        }
+    }
+    Err(scheduled_human_json_error("unterminated string"))
+}
+
+fn scheduled_human_skip_json_value(input: &[u8], start: usize, depth: usize) -> Result<usize> {
+    if depth > MAX_EVENT_JSON_DEPTH {
+        return Err(scheduled_human_json_error("depth limit"));
+    }
+    match input.get(start).copied() {
+        Some(b'\"') => scheduled_human_scan_json_string(input, start).map(|(end, _)| end),
+        Some(b'{') => {
+            let mut index = start + 1;
+            if input.get(index) == Some(&b'}') {
+                return Ok(index + 1);
+            }
+            loop {
+                let (key_end, _) = scheduled_human_scan_json_string(input, index)?;
+                if input.get(key_end) != Some(&b':') {
+                    return Err(scheduled_human_json_error("object missing colon"));
+                }
+                index = scheduled_human_skip_json_value(input, key_end + 1, depth + 1)?;
+                match input.get(index) {
+                    Some(b',') => index += 1,
+                    Some(b'}') => return Ok(index + 1),
+                    _ => return Err(scheduled_human_json_error("object separator")),
+                }
+            }
+        }
+        Some(b'[') => {
+            let mut index = start + 1;
+            if input.get(index) == Some(&b']') {
+                return Ok(index + 1);
+            }
+            loop {
+                index = scheduled_human_skip_json_value(input, index, depth + 1)?;
+                match input.get(index) {
+                    Some(b',') => index += 1,
+                    Some(b']') => return Ok(index + 1),
+                    _ => return Err(scheduled_human_json_error("array separator")),
+                }
+            }
+        }
+        Some(b'-' | b'0'..=b'9') => {
+            let mut index = start;
+            while matches!(
+                input.get(index),
+                Some(b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
+            ) {
+                index += 1;
+            }
+            if index == start {
+                Err(scheduled_human_json_error("number"))
+            } else {
+                Ok(index)
+            }
+        }
+        Some(b't') if input.get(start..start + 4) == Some(b"true") => Ok(start + 4),
+        Some(b'f') if input.get(start..start + 5) == Some(b"false") => Ok(start + 5),
+        Some(b'n') if input.get(start..start + 4) == Some(b"null") => Ok(start + 4),
+        _ => Err(scheduled_human_json_error("value")),
+    }
+}
+
+/// Returns a raw value from a top-level canonical object without allocating.
+fn scheduled_human_object_field<'a>(input: &'a [u8], wanted: &[u8]) -> Result<&'a [u8]> {
+    if input.first() != Some(&b'{') || input.last() != Some(&b'}') {
+        return Err(scheduled_human_json_error("expected object"));
+    }
+    let mut index = 1;
+    let mut result = None;
+    if input.get(index) == Some(&b'}') {
+        return Err(scheduled_human_json_error("missing required field"));
+    }
+    while index < input.len() - 1 {
+        let (key_end, key) = scheduled_human_scan_json_string(input, index)?;
+        if input.get(key_end) != Some(&b':') {
+            return Err(scheduled_human_json_error("object missing colon"));
+        }
+        let value_start = key_end + 1;
+        let value_end = scheduled_human_skip_json_value(input, value_start, 1)?;
+        // Required field names are ASCII and canonical, so the decoded key
+        // length plus the raw spelling makes a comparison allocation-free.
+        if key.decoded_len == wanted.len()
+            && input.get(index + 1..key_end - 1) == Some(wanted)
+            && result.replace(&input[value_start..value_end]).is_some()
+        {
+            return Err(scheduled_human_json_error("duplicate field"));
+        }
+        match input.get(value_end) {
+            Some(b',') => index = value_end + 1,
+            Some(b'}') if value_end + 1 == input.len() => break,
+            _ => return Err(scheduled_human_json_error("object separator")),
+        }
+    }
+    result.ok_or_else(|| scheduled_human_json_error("missing required field"))
+}
+
+fn scheduled_human_json_string_equals(input: &[u8], expected: &[u8]) -> Result<bool> {
+    let (end, scanned) = scheduled_human_scan_json_string(input, 0)?;
+    Ok(end == input.len()
+        && scanned.decoded_len == expected.len()
+        && input.len() == expected.len().saturating_add(2)
+        && input.first() == Some(&b'\"')
+        && input.last() == Some(&b'\"')
+        && input.get(1..input.len().saturating_sub(1)) == Some(expected))
+}
+
+fn scheduled_human_json_string_len(input: &[u8]) -> Result<usize> {
+    let (end, scanned) = scheduled_human_scan_json_string(input, 0)?;
+    if end != input.len() {
+        return Err(scheduled_human_json_error("string trailing bytes"));
+    }
+    Ok(scanned.decoded_len)
+}
+
+fn scheduled_human_json_optional_string_len(input: &[u8]) -> Result<usize> {
+    if input == b"null" {
+        Ok(0)
+    } else {
+        scheduled_human_json_string_len(input)
+    }
+}
+
+fn scheduled_human_json_stable_id_vec_bytes(input: &[u8]) -> Result<u64> {
+    if input.first() != Some(&b'[') || input.last() != Some(&b']') {
+        return Err(scheduled_human_json_error("expected ID array"));
+    }
+    let mut index = 1;
+    let mut count = 0_usize;
+    let mut total = 0_u64;
+    if input.get(index) == Some(&b']') {
+        return Ok(0);
+    }
+    loop {
+        let (end, value) = scheduled_human_scan_json_string(input, index)?;
+        total = total
+            .checked_add(u64::try_from(value.decoded_len).unwrap_or(u64::MAX))
+            .ok_or_else(|| scheduled_human_json_error("ID array bytes"))?;
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| scheduled_human_json_error("ID array count"))?;
+        match input.get(end) {
+            Some(b',') => index = end + 1,
+            Some(b']') if end + 1 == input.len() => break,
+            _ => return Err(scheduled_human_json_error("ID array separator")),
+        }
+    }
+    total
+        .checked_add(
+            u64::try_from(
+                count
+                    .checked_mul(size_of::<StableId>())
+                    .ok_or_else(|| scheduled_human_json_error("ID array slots"))?,
+            )
+            .unwrap_or(u64::MAX),
+        )
+        .ok_or_else(|| scheduled_human_json_error("ID array bytes"))
+}
+
+fn scheduled_human_field_string_len(record: &[u8], field: &[u8]) -> Result<u64> {
+    u64::try_from(scheduled_human_json_string_len(
+        scheduled_human_object_field(record, field)?,
+    )?)
+    .map_err(|_| scheduled_human_json_error("string length"))
+}
+
+/// Exact heap retained by a DecisionV3 or FindingV3 decoded from its canonical
+/// record body.  This mirrors the records' `allocated_bytes` methods but
+/// consumes only scanner views, so it is safe to use before the recovery gate.
+fn scheduled_human_record_allocated_bytes(kind: &[u8], record: &[u8]) -> Result<u64> {
+    let mut total = 0_u64;
+    let fields: &[&[u8]] = if scheduled_human_json_string_equals(kind, b"decision_recorded_v3")? {
+        &[
+            b"schema",
+            b"id",
+            b"policy_revision_hash",
+            b"run_id",
+            b"universe_id",
+            b"claim_id",
+            b"property_id",
+            b"actor",
+            b"authority_id",
+            b"snapshot_id",
+            b"rationale",
+            b"issued_at",
+        ]
+    } else if scheduled_human_json_string_equals(kind, b"finding_recorded_v3")? {
+        &[b"schema", b"id", b"projection_descriptor_id", b"claim_id"]
+    } else {
+        return Err(scheduled_human_json_error("unsupported human record kind"));
+    };
+    for field in fields {
+        total = total
+            .checked_add(scheduled_human_field_string_len(record, field)?)
+            .ok_or_else(|| scheduled_human_json_error("record retained bytes"))?;
+    }
+    if scheduled_human_json_string_equals(kind, b"decision_recorded_v3")? {
+        let expires = u64::try_from(scheduled_human_json_optional_string_len(
+            scheduled_human_object_field(record, b"expires_at")?,
+        )?)
+        .unwrap_or(u64::MAX);
+        let sources = scheduled_human_json_stable_id_vec_bytes(scheduled_human_object_field(
+            record,
+            b"source_ids",
+        )?)?;
+        total = total
+            .checked_add(expires)
+            .and_then(|value| value.checked_add(sources))
+            .ok_or_else(|| scheduled_human_json_error("decision retained bytes"))?;
+    } else {
+        for field in [
+            b"decision_id".as_slice(),
+            b"supersedes_finding_id".as_slice(),
+        ] {
+            total = total
+                .checked_add(
+                    u64::try_from(scheduled_human_json_optional_string_len(
+                        scheduled_human_object_field(record, field)?,
+                    )?)
+                    .unwrap_or(u64::MAX),
+                )
+                .ok_or_else(|| scheduled_human_json_error("finding retained bytes"))?;
+        }
+        for field in [b"evidence_ids".as_slice(), b"verification_ids".as_slice()] {
+            total = total
+                .checked_add(scheduled_human_json_stable_id_vec_bytes(
+                    scheduled_human_object_field(record, field)?,
+                )?)
+                .ok_or_else(|| scheduled_human_json_error("finding retained bytes"))?;
+        }
+    }
+    Ok(total)
+}
+
+fn scheduled_human_observed_envelope_allocated_bytes(bytes: &[u8]) -> Result<u64> {
+    let mut total =
+        u64::try_from(scheduled_human_object_field(bytes, b"payload")?.len()).unwrap_or(u64::MAX);
+    for field in [
+        b"schema".as_slice(),
+        b"id".as_slice(),
+        b"run_id".as_slice(),
+        b"genesis_hash".as_slice(),
+        b"actor".as_slice(),
+        b"payload_hash".as_slice(),
+        b"previous_event_hash".as_slice(),
+        b"event_hash".as_slice(),
+    ] {
+        total = total
+            .checked_add(scheduled_human_field_string_len(bytes, field)?)
+            .ok_or_else(|| scheduled_human_json_error("envelope retained bytes"))?;
+    }
+    Ok(total)
+}
+
+fn scheduled_human_record_id_len(record: &[u8]) -> Result<u64> {
+    scheduled_human_field_string_len(record, b"id")
+}
+
+/// Retained state that becomes live after a successfully appended human
+/// record.  The V3 aggregate owns both its map entry and the claim-local
+/// sorted-vector copy; decisions additionally retain the active pointer and
+/// the V5 authority-replay entry.  This is a virtual state transition for the
+/// recovery gate, not a speculative DTO allocation.
+fn scheduled_human_virtual_state_growth(
+    stage: ScheduledHumanResolutionStageV5,
+    record: &[u8],
+    record_allocated: u64,
+    envelope_allocated: u64,
+) -> Result<u64> {
+    let record_id = scheduled_human_record_id_len(record)?;
+    let record_struct = if stage == ScheduledHumanResolutionStageV5::Decision {
+        u64::try_from(size_of::<DecisionV3>()).unwrap_or(u64::MAX)
+    } else {
+        u64::try_from(size_of::<FindingV3>()).unwrap_or(u64::MAX)
+    };
+    // V3 map key + stored record, then assessment's stored record, its ID
+    // vector slot/copy, and each state pointer it gains from this transition.
+    let map_entry = u64::try_from(size_of::<StableId>())
+        .unwrap_or(u64::MAX)
+        .checked_add(record_id)
+        .and_then(|value| value.checked_add(record_struct))
+        .and_then(|value| value.checked_add(record_allocated))
+        .ok_or_else(|| scheduled_human_json_error("virtual V3 map ownership"))?;
+    let assessment_record = record_struct
+        .checked_add(record_allocated)
+        .and_then(|value| {
+            value.checked_add(u64::try_from(size_of::<StableId>()).unwrap_or(u64::MAX))
+        })
+        .and_then(|value| value.checked_add(record_id))
+        .ok_or_else(|| scheduled_human_json_error("virtual assessment ownership"))?;
+    let pointers = match stage {
+        ScheduledHumanResolutionStageV5::Decision => record_id,
+        ScheduledHumanResolutionStageV5::Finding => record_id
+            .checked_mul(2)
+            .ok_or_else(|| scheduled_human_json_error("virtual finding pointers"))?,
+    };
+    let authority = if stage == ScheduledHumanResolutionStageV5::Decision {
+        // event id, predecessor/body/trust/position digests and decision ID
+        // are all independently owned by the authority replay entry.
+        // The first V5 human entry grows this independently retained Vec to
+        // its deterministic four-entry reservation; later virtual members
+        // reuse those same slots.
+        u64::try_from(size_of::<AuthorityReplayEntryV3AtV5>() * 4)
+            .unwrap_or(u64::MAX)
+            .checked_add(77)
+            .and_then(|value| value.checked_add(71))
+            .and_then(|value| value.checked_add(71))
+            .and_then(|value| value.checked_add(record_id))
+            .and_then(|value| value.checked_add(71))
+            .and_then(|value| value.checked_add(71))
+            .and_then(|value| {
+                value.checked_add(u64::try_from("decision_recorded_v3".len()).unwrap_or(u64::MAX))
+            })
+            .ok_or_else(|| scheduled_human_json_error("virtual authority ownership"))?
+    } else {
+        0
+    };
+    u64::try_from(size_of::<EventEnvelope>())
+        .unwrap_or(u64::MAX)
+        .checked_add(envelope_allocated)
+        .and_then(|value| value.checked_add(map_entry))
+        .and_then(|value| value.checked_add(assessment_record))
+        .and_then(|value| value.checked_add(pointers))
+        .and_then(|value| value.checked_add(authority))
+        .ok_or_else(|| scheduled_human_json_error("virtual scheduled human state ownership"))
+}
+
+fn scheduled_human_prepared_retained_bytes(
+    phase: &ReplayedScheduledHumanResolutionPhaseV5,
+    stage: ScheduledHumanResolutionStageV5,
+    action: &ScheduledHumanResolutionActionV5,
+    payload_staging: u64,
+) -> Result<u64> {
+    let trust = if stage == ScheduledHumanResolutionStageV5::Decision {
+        71
+    } else {
+        0
+    };
+    u64::try_from(size_of::<PreparedScheduledHumanResolutionAppendV5>())
+        .unwrap_or(u64::MAX)
+        .checked_add(u64::try_from(phase.basis.basis_digest.allocated_bytes()).unwrap_or(u64::MAX))
+        .and_then(|value| {
+            value.checked_add(
+                u64::try_from(phase.basis.target_confirmed_tail_hash.allocated_bytes())
+                    .unwrap_or(u64::MAX),
+            )
+        })
+        .and_then(|value| {
+            value.checked_add(u64::try_from(action.action_id.allocated_bytes()).unwrap_or(u64::MAX))
+        })
+        .and_then(|value| value.checked_add(71))
+        .and_then(|value| value.checked_add(trust))
+        .and_then(|value| value.checked_add(payload_staging))
+        .ok_or_else(|| scheduled_human_json_error("prepared retained bytes"))
+}
+
+/// Borrowed preflight for a complete persisted human suffix.  It purposefully
+/// uses only `&str`/`&RawValue` views of canonical JSON: no StableId,
+/// ContentHash, DTO, envelope, or Vec is constructed here.  The arithmetic
+/// retains the raw caller buffers, both later decoded/expected envelopes and
+/// every possible V3 reducer/canonical staging peak.  It is a maximum over
+/// the scalar Decision/Finding alternation, so an exhausted limit is rejected
+/// before the first durable member can be appended.
+fn scheduled_human_recovery_suffix_required_working_bytes(
+    log: &EventLogV5,
+    phase: &ReplayedScheduledHumanResolutionPhaseV5,
+    native: &ReplayedScheduledNativeVerifierPhaseV5,
+    partial: &SealedPartialRerunPhaseV5,
+    roots: &AuthorityTrustRootsV5,
+    canonical_suffix: &[Vec<u8>],
+    suffix_bytes: u64,
+) -> Result<u64> {
+    let mut action_index = phase.action_index;
+    let mut stage = phase.stage;
+    let mut virtual_base = log
+        .full_resident_bytes_for_structural_store()?
+        .checked_add(phase.retained_bytes()?)
+        .and_then(|value| value.checked_add(native.retained_bytes().ok()?))
+        .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+        .and_then(|value| value.checked_add(native_authority_roots_retained_bytes(roots).ok()?))
+        .and_then(|value| value.checked_add(suffix_bytes))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled human recovery full-suffix ownership",
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+    let mut maximum = virtual_base;
+    let mut virtual_phase_growth = 0_u64;
+    for bytes in canonical_suffix {
+        let schema = scheduled_human_object_field(bytes, b"schema")?;
+        let run_id = scheduled_human_object_field(bytes, b"run_id")?;
+        let genesis_hash = scheduled_human_object_field(bytes, b"genesis_hash")?;
+        let payload = scheduled_human_object_field(bytes, b"payload")?;
+        if !scheduled_human_json_string_equals(
+            schema,
+            EventContractVersion::V5.schema().as_bytes(),
+        )? || !scheduled_human_json_string_equals(run_id, log.run_id.as_str().as_bytes())?
+            || !scheduled_human_json_string_equals(
+                genesis_hash,
+                log.genesis_hash.as_str().as_bytes(),
+            )?
+            || action_index >= phase.actions.len()
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "scheduled human borrowed suffix has invalid envelope position",
+            ));
+        }
+        let kind = scheduled_human_object_field(payload, b"type")?;
+        let record = scheduled_human_object_field(payload, b"data")?;
+        let claim_id = scheduled_human_object_field(record, b"claim_id")?;
+        let action = &phase.actions[action_index];
+        let expected_kind = match stage {
+            ScheduledHumanResolutionStageV5::Decision => "decision_recorded_v3",
+            ScheduledHumanResolutionStageV5::Finding => "finding_recorded_v3",
+        };
+        if !scheduled_human_json_string_equals(kind, expected_kind.as_bytes())?
+            || !scheduled_human_json_string_equals(claim_id, action.claim_id.as_str().as_bytes())?
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "scheduled human borrowed suffix does not match scalar seam",
+            ));
+        }
+        // The scanner derives the same DTO heap sizes as the real serde
+        // decode.  Decision/Finding are the only permitted suffix records;
+        // their V3 reducer uses five live record copies, plus its fixed map
+        // lookup identity scratch (the same accounting used by append).
+        let record_allocated = scheduled_human_record_allocated_bytes(kind, record)?;
+        let record_struct = if stage == ScheduledHumanResolutionStageV5::Decision {
+            u64::try_from(size_of::<DecisionV3>()).unwrap_or(u64::MAX)
+        } else {
+            u64::try_from(size_of::<FindingV3>()).unwrap_or(u64::MAX)
+        };
+        let payload_staging = record_struct
+            .checked_add(record_allocated)
+            .ok_or_else(|| scheduled_human_json_error("payload staging bytes"))?;
+        let reducer_growth = payload_staging
+            .checked_mul(5)
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(size_of::<StableId>() * 4 + size_of::<ContentHash>() * 2)
+                        .unwrap_or(u64::MAX),
+                )
+            })
+            .ok_or_else(|| scheduled_human_json_error("reducer growth bytes"))?;
+        let envelope_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        let envelope_allocated = scheduled_human_observed_envelope_allocated_bytes(bytes)?;
+        let canonical_payload = u64::try_from(payload.len()).unwrap_or(u64::MAX);
+        let prepared_retained =
+            scheduled_human_prepared_retained_bytes(phase, stage, action, payload_staging)?;
+        let phase_clone = phase
+            .aggregate
+            .retained_bytes_v3()?
+            .checked_add(phase.v3_aggregate.retained_bytes()?)
+            .and_then(|value| value.checked_add(phase.basis.retained_bytes().ok()?))
+            .and_then(|value| {
+                phase
+                    .v4_registration_ids
+                    .iter()
+                    .try_fold(value, |total, id| {
+                        total.checked_add(
+                            u64::try_from(size_of::<StableId>() + 128 + id.allocated_bytes())
+                                .unwrap_or(u64::MAX),
+                        )
+                    })
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human recovery full-suffix phase clone",
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let phase_clone = phase_clone
+            .checked_add(virtual_phase_growth)
+            .ok_or_else(|| scheduled_human_json_error("virtual phase clone growth"))?;
+        let member_peak = virtual_base
+            // The reducer clones all three current phase aggregates before
+            // applying the member.  The dry-run begins from borrowed phase
+            // state, so this prospective clone must be added separately.
+            .checked_add(phase_clone)
+            .and_then(|value| {
+                value.checked_add(u64::try_from(size_of::<EventEnvelope>() * 2).unwrap_or(u64::MAX))
+            })
+            // The observed envelope (raw payload included) and its rebuilt
+            // expected counterpart coexist through the canonical comparison.
+            .and_then(|value| value.checked_add(envelope_allocated.checked_mul(2)?))
+            .and_then(|value| value.checked_add(envelope_bytes.checked_mul(2)?))
+            .and_then(|value| value.checked_add(payload_staging.checked_mul(2)?))
+            .and_then(|value| value.checked_add(reducer_growth))
+            .and_then(|value| value.checked_add(("sha256:".len() as u64 + 64) * 4))
+            // Event construction performs an independent canonical payload
+            // and JSONL-line validation while the prepared token is live.
+            .and_then(|value| value.checked_add(canonical_payload))
+            .and_then(|value| value.checked_add(envelope_bytes.checked_add(1)?))
+            .and_then(|value| value.checked_add(record_allocated))
+            .and_then(|value| value.checked_add(prepared_retained))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human recovery full-suffix member ownership",
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        maximum = maximum.max(member_peak);
+        let committed_growth = scheduled_human_virtual_state_growth(
+            stage,
+            record,
+            record_allocated,
+            envelope_allocated,
+        )?;
+        virtual_base = virtual_base
+            .checked_add(committed_growth)
+            .ok_or_else(|| scheduled_human_json_error("virtual scheduled human state overflow"))?;
+        let envelope_growth = u64::try_from(size_of::<EventEnvelope>())
+            .unwrap_or(u64::MAX)
+            .checked_add(envelope_allocated)
+            .ok_or_else(|| scheduled_human_json_error("virtual envelope growth"))?;
+        virtual_phase_growth = virtual_phase_growth
+            .checked_add(
+                committed_growth
+                    .checked_sub(envelope_growth)
+                    .ok_or_else(|| scheduled_human_json_error("virtual phase growth"))?,
+            )
+            .ok_or_else(|| scheduled_human_json_error("virtual phase growth"))?;
+        match stage {
+            ScheduledHumanResolutionStageV5::Decision => {
+                stage = ScheduledHumanResolutionStageV5::Finding
+            }
+            ScheduledHumanResolutionStageV5::Finding => {
+                action_index = action_index.checked_add(1).ok_or_else(|| {
+                    DomainError::EventSequence("scheduled human dry-run action overflow".to_owned())
+                })?;
+                stage = ScheduledHumanResolutionStageV5::Decision;
+            }
+        }
+    }
+    Ok(maximum)
+}
+
+/// Full append peak for one durable human seam.  Keep it separate from the
+/// reducer so the same arithmetic is used by normal append and recovery,
+/// where decoded and expected envelopes stay live at the same time.
+fn scheduled_human_append_required_working_bytes(
+    log: &EventLogV5,
+    phase: &ReplayedScheduledHumanResolutionPhaseV5,
+    prepared: &PreparedScheduledHumanResolutionAppendV5,
+    live_bytes: u64,
+) -> Result<u64> {
+    let payload = &prepared.payload;
+    #[derive(Serialize)]
+    struct EnvelopeCount<'a> {
+        actor: &'a str,
+        event_hash: &'a str,
+        genesis_hash: &'a ContentHash,
+        id: &'a str,
+        logical_time: u64,
+        payload: &'a PersistedPayload,
+        payload_hash: &'a str,
+        previous_event_hash: &'a ContentHash,
+        run_id: &'a StableId,
+        schema: &'static str,
+        sequence: u64,
+    }
+    // Event/hash strings have fixed closed grammar lengths; keeping them as
+    // borrowed literals lets the counting writer measure the exact complete
+    // envelope line without constructing an EventEnvelope/RawValue first.
+    const EVENT_ID: &str =
+        "event:sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    const HASH: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    let envelope_line = crate::canonical::canonical_json_count_bounded(
+        &EnvelopeCount {
+            actor: payload.actor(),
+            event_hash: HASH,
+            genesis_hash: &log.genesis_hash,
+            id: EVENT_ID,
+            logical_time: prepared.event_sequence,
+            payload,
+            payload_hash: HASH,
+            previous_event_hash: &prepared.predecessor_event_hash,
+            run_id: &log.run_id,
+            schema: EventContractVersion::V5.schema(),
+            sequence: prepared.event_sequence,
+        },
+        usize::MAX,
+        "scheduled human append canonical envelope",
+    )?
+    .checked_add(1)
+    .ok_or(DomainError::Incomplete {
+        operation: "scheduled human append canonical envelope",
+        limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+        observed: usize::MAX,
+    })?;
+    let envelope_dynamic = log
+        .run_id
+        .allocated_bytes()
+        .checked_add(log.genesis_hash.allocated_bytes())
+        .and_then(|value| value.checked_add(payload.actor().len()))
+        .and_then(|value| value.checked_add(3 * 128))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled human append envelope ownership",
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+    let v4_clone_dynamic = phase
+        .v4_registration_ids
+        .iter()
+        .try_fold(0_u64, |total, id| {
+            total
+                .checked_add(
+                    u64::try_from(size_of::<StableId>() + 128 + id.allocated_bytes())
+                        .unwrap_or(u64::MAX),
+                )
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled human append V4 clone ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })
+        })?;
+    let authority = if prepared.trust_digest.is_some() {
+        u64::try_from(size_of::<AuthorityReplayEntryV3AtV5>())
+            .unwrap_or(u64::MAX)
+            .checked_add(prepared.action_id.allocated_bytes() as u64)
+            .and_then(|value| {
+                value.checked_add(prepared.predecessor_event_hash.allocated_bytes() as u64)
+            })
+            .and_then(|value| value.checked_add(5 * 128))
+            .and_then(|value| value.checked_add("decision_recorded_v3".len() as u64))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled human append authority ownership",
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?
+    } else {
+        0
+    };
+    let canonical = crate::canonical::canonical_json_count_bounded(
+        payload,
+        usize::MAX,
+        "scheduled human append canonical payload",
+    )?;
+    let extra = phase
+        .aggregate
+        .retained_bytes_v3()?
+        .checked_add(phase.v3_aggregate.retained_bytes()?)
+        .and_then(|value| value.checked_add(phase.basis.retained_bytes().ok()?))
+        .and_then(|value| value.checked_add(v4_clone_dynamic))
+        .and_then(|value| value.checked_add(v3_payload_staging_bytes(payload).ok()?))
+        .and_then(|value| value.checked_add(v3_reducer_growth_upper_bound(payload).ok()?))
+        .and_then(|value| {
+            value.checked_add(u64::try_from(size_of::<EventEnvelope>()).unwrap_or(u64::MAX))
+        })
+        .and_then(|value| value.checked_add(u64::try_from(envelope_dynamic).ok()?))
+        .and_then(|value| value.checked_add(canonical))
+        .and_then(|value| value.checked_add(envelope_line))
+        .and_then(|value| value.checked_add(payload.validation_heap_bytes_v5().ok()?))
+        .and_then(|value| value.checked_add(("sha256:".len() + 64) as u64))
+        .and_then(|value| value.checked_add(authority))
+        .and_then(|value| value.checked_add(prepared.retained_bytes().ok()?))
+        .and_then(|value| value.checked_add(live_bytes))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled human append prospective ownership",
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+    log.full_resident_bytes_for_structural_store()?
+        .checked_add(phase.retained_bytes()?)
+        .and_then(|value| value.checked_add(extra))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled human append preflight ownership",
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })
+}
+
+#[allow(dead_code)]
+fn human_grant_matches_decision_v5(
+    grant: &AuthorityHumanGrantV3Tuple,
+    decision: &DecisionV3,
+) -> bool {
+    let capability = match decision.outcome() {
+        crate::DecisionOutcomeV3::Accept => HumanAuthorityCapabilityV3::AcceptFinding,
+        crate::DecisionOutcomeV3::Reject => HumanAuthorityCapabilityV3::RejectFinding,
+        crate::DecisionOutcomeV3::Defer => HumanAuthorityCapabilityV3::DeferFinding,
+        crate::DecisionOutcomeV3::Exception => HumanAuthorityCapabilityV3::RecordException,
+    };
+    grant.policy_revision_hash == *decision.policy_revision_hash()
+        && grant.actor == decision.actor()
+        && grant.authority_id == decision.authority_id()
+        && grant.capabilities.contains(&capability)
+        && grant.run_id == *decision.run_id()
+        && grant.snapshot_id == *decision.snapshot_id()
+        && grant.universe_id == *decision.universe_id()
+        && grant.property_ids.contains(decision.property_id())
+        && grant.claim_ids.contains(decision.claim_id())
+        && grant.valid_from.as_str() <= decision.issued_at()
+        && decision.issued_at() <= grant.valid_until.as_str()
+        && decision
+            .expires_at()
+            .is_none_or(|expires| expires <= grant.valid_until.as_str())
+}
+
+#[allow(dead_code)]
+fn human_verification_prerequisite_v5(
+    action: &crate::PartialRerunActionV5,
+    native: &ReplayedScheduledNativeVerifierPhaseV5,
+    partial: &SealedPartialRerunPhaseV5,
+    log: &EventLogV5,
+) -> Result<(StableId, ContentHash)> {
+    match action.prerequisites() {
+        [crate::ActionPrerequisiteV5::ScheduledAction { action_id }] => {
+            let native_action = native
+                .actions
+                .iter()
+                .find(|candidate| candidate.action_id == *action_id)
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human action lacks its exact native verifier action",
+                ))?;
+            let receipt = native
+                .completed_verifications
+                .iter()
+                .find(|receipt| receipt.action_id == *action_id)
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human action lacks its exact native verification receipt",
+                ))?;
+            if native
+                .completed_verifications
+                .iter()
+                .filter(|candidate| candidate.action_id == *action_id)
+                .count()
+                != 1
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human action has duplicate native verification receipts",
+                ));
+            }
+            let verification = native
+                .v3_aggregate
+                .verifications
+                .get(&receipt.verification_id)
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human verification receipt is not present in native aggregate",
+                ))?;
+            if verification.claim_id() != &native_action.claim_id
+                || verification.outcome() != crate::VerificationOutcomeV3::Passed
+                || verification.body_hash().map_err(m4_domain_error)?
+                    != receipt.verification_body_hash
+                || !log
+                    .envelopes
+                    .iter()
+                    .any(|event| event.id() == &receipt.verification_event_id)
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human native verification receipt closure differs",
+                ));
+            }
+            Ok((
+                receipt.verification_id.clone(),
+                receipt.verification_body_hash.clone(),
+            ))
+        }
+        [
+            crate::ActionPrerequisiteV5::ExistingTargetRecord {
+                record_id,
+                body_hash,
+                event_id,
+            },
+        ] => {
+            if record_id.kind() != "verification" {
+                return Err(DomainError::EventSequence(
+                    "existing human prerequisite must be one verification".to_owned(),
+                ));
+            }
+            let before =
+                usize::try_from(partial.target_predecessor_event_count).unwrap_or(usize::MAX);
+            let event = log
+                .envelopes
+                .iter()
+                .take(before)
+                .find(|event| event.id() == event_id)
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "existing human verification prerequisite is after the pinned predecessor",
+                ))?;
+            let PersistedPayload::VerificationRecordedV3(verification) =
+                decode_canonical_payload(EventContractVersion::V5, event.payload.get())?
+            else {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "existing human verification witness has wrong payload",
+                ));
+            };
+            if verification.id() != record_id
+                || verification.body_hash().map_err(m4_domain_error)? != *body_hash
+                || verification.outcome() != crate::VerificationOutcomeV3::Passed
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "existing human verification witness differs from prerequisite",
+                ));
+            }
+            let obligation_id = action.subject_ids().first().ok_or_else(|| {
+                DomainError::EventSequence("existing human action has no obligation".to_owned())
+            })?;
+            let claim = partial
+                .target_aggregate
+                .execution_claims()
+                .find(|claim| claim.id() == verification.claim_id())
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "existing human verification lacks its target claim",
+                ))?;
+            let execution = partial
+                .target_aggregate
+                .executions()
+                .find(|execution| {
+                    execution.obligation_ids().contains(obligation_id)
+                        && execution.parsed_claim_ids() == &BTreeSet::from([claim.id().clone()])
+                })
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "existing human verification lacks atomic execution/claim closure",
+                ))?;
+            if !claim.obligation_ids().contains(obligation_id)
+                || verification.evidence_ids().len() != 1
+                || !partial
+                    .target_v3_aggregate
+                    .evidence
+                    .contains_key(&verification.evidence_ids()[0])
+                || !partial
+                    .target_v3_aggregate
+                    .bindings
+                    .values()
+                    .any(|binding| {
+                        binding.claim_id() == claim.id()
+                            && binding.evidence_id() == &verification.evidence_ids()[0]
+                            && binding.relation() == crate::EvidenceRelationV3::Reproduces
+                    })
+                || !partial
+                    .target_v3_aggregate
+                    .registrations
+                    .contains_key(verification.input_registration_id())
+                || !partial
+                    .target_v3_aggregate
+                    .registrations
+                    .contains_key(verification.output_registration_id())
+                || execution.parsed_claim_ids().len() != 1
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "existing human verification does not close E-B-V target evidence",
+                ));
+            }
+            Ok((record_id.clone(), body_hash.clone()))
+        }
+        _ => Err(DomainError::EventSequence(
+            "scheduled human prerequisite shape is not exact".to_owned(),
+        )),
     }
 }
 
@@ -66179,7 +68857,7 @@ mod tests {
         let target = NoM5V5Fixture::from_native_m4_fixture_through(
             target_native,
             target_program,
-            NoM5V5FixtureTerminalStage::ReviewerCompleted,
+            NoM5V5FixtureTerminalStage::NativeVerification,
         )
         .expect("target predecessor through completed reviewer");
         let phases = target
@@ -66243,22 +68921,15 @@ mod tests {
                 )?;
                 let mut partial =
                     target.seal_partial_rerun_phase_for_log_v5(&log, &staleness, &preservation)?;
-                let verifier_index = partial
+                let human_index = partial
                     .actions
                     .iter()
                     .position(|action| {
-                        action.action() == crate::PartialRerunActionKindV5::RerunVerifier
+                        action.action() == crate::PartialRerunActionKindV5::RerunHumanDecision
                     })
-                    .expect("one remaining native verifier");
-                assert_eq!(partial.actions.len(), 2);
-                assert!(partial.actions.iter().all(|action| {
-                    !matches!(
-                        action.action(),
-                        crate::PartialRerunActionKindV5::RerunReviewer
-                    )
-                }));
+                    .expect("one ExistingTarget human action");
                 assert!(
-                    partial.actions[verifier_index]
+                    partial.actions[human_index]
                         .prerequisites()
                         .iter()
                         .all(|value| {
@@ -66287,133 +68958,8 @@ mod tests {
                 let terminal =
                     log.open_post_d2_terminal_phase_v5(&reviewer, &partial, Some(&mut gluing))?;
 
-                let assert_rejected_without_log_mutation =
-                    |log: &EventLogV5, partial: &SealedPartialRerunPhaseV5| -> Result<()> {
-                        let tail = log.tail_hash().clone();
-                        let count = log.envelopes.len();
-                        assert!(
-                            log.begin_scheduled_native_verifier_phase_v5(
-                                &terminal,
-                                &reviewer,
-                                partial,
-                                &target.roots,
-                            )
-                            .is_err()
-                        );
-                        assert_eq!(log.tail_hash(), &tail);
-                        assert_eq!(log.envelopes.len(), count);
-                        Ok(())
-                    };
-
-                // Planner canonical order is not semantic order: the reducer
-                // accepts either exact execution/claim order while preserving
-                // the same one atomic D2 witness.
-                let original = partial.actions[verifier_index].prerequisites().to_vec();
-                assert_eq!(original.len(), 2);
-                let execution_witness = original
-                    .iter()
-                    .find(|value| {
-                        matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }
-                            if record_id.kind() == "execution")
-                    })
-                    .expect("one existing execution witness");
-                let claim_witness = original
-                    .iter()
-                    .find(|value| {
-                        matches!(value, ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }
-                            if record_id.kind() == "claim")
-                    })
-                    .expect("one existing claim witness");
-                let (
-                    ActionPrerequisiteV5::ExistingTargetRecord {
-                        event_id: execution_event_id,
-                        ..
-                    },
-                    ActionPrerequisiteV5::ExistingTargetRecord {
-                        event_id: claim_event_id,
-                        ..
-                    },
-                ) = (execution_witness, claim_witness)
-                else {
-                    unreachable!("existing native verifier prerequisites are records")
-                };
-                assert_eq!(execution_event_id, claim_event_id);
-                let mut reversed = original.clone();
-                reversed.reverse();
-                partial.actions[verifier_index].replace_prerequisites_unchecked_for_test(reversed);
-                assert!(
-                    log.begin_scheduled_native_verifier_phase_v5(
-                        &terminal,
-                        &reviewer,
-                        &partial,
-                        &target.roots,
-                    )
-                    .is_ok()
-                );
-                partial.actions[verifier_index]
-                    .replace_prerequisites_unchecked_for_test(original.clone());
-
-                let mut atomic_mismatch = original.clone();
-                let alternate_event = log.envelopes[0].id().clone();
-                atomic_mismatch
-                    .iter_mut()
-                    .find_map(|value| match value {
-                        ActionPrerequisiteV5::ExistingTargetRecord {
-                            record_id,
-                            event_id,
-                            ..
-                        } if record_id.kind() == "claim" => Some(event_id),
-                        _ => None,
-                    })
-                    .expect("claim witness for atomic mismatch")
-                    .clone_from(&alternate_event);
-                partial.actions[verifier_index]
-                    .replace_prerequisites_unchecked_for_test(atomic_mismatch);
-                assert_rejected_without_log_mutation(&log, &partial)?;
-                partial.actions[verifier_index]
-                    .replace_prerequisites_unchecked_for_test(original.clone());
-
-                let mut body_mismatch = original.clone();
-                *body_mismatch
-                    .iter_mut()
-                    .find_map(|value| match value {
-                        ActionPrerequisiteV5::ExistingTargetRecord {
-                            record_id,
-                            body_hash,
-                            ..
-                        } if record_id.kind() == "claim" => Some(body_hash),
-                        _ => None,
-                    })
-                    .expect("claim witness for body mismatch") =
-                    ContentHash::sha256(b"existing-native-mutated-body");
-                partial.actions[verifier_index]
-                    .replace_prerequisites_unchecked_for_test(body_mismatch);
-                assert_rejected_without_log_mutation(&log, &partial)?;
-                partial.actions[verifier_index]
-                    .replace_prerequisites_unchecked_for_test(original.clone());
-
-                let execution_event_id = original
-                    .iter()
-                    .find_map(|value| match value {
-                        ActionPrerequisiteV5::ExistingTargetRecord {
-                            record_id,
-                            event_id,
-                            ..
-                        } if record_id.kind() == "execution" => Some(event_id.clone()),
-                        _ => None,
-                    })
-                    .expect("execution witness event");
-                let execution_index = log
-                    .envelopes
-                    .iter()
-                    .position(|event| event.id() == &execution_event_id)
-                    .expect("execution event index");
-                let original_predecessor_count = partial.target_predecessor_event_count;
-                partial.target_predecessor_event_count =
-                    u64::try_from(execution_index).expect("event index fits");
-                assert_rejected_without_log_mutation(&log, &partial)?;
-                partial.target_predecessor_event_count = original_predecessor_count;
-
+                let original = partial.actions[human_index].prerequisites().to_vec();
+                assert!(matches!(original.as_slice(), [ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }] if record_id.kind() == "verification"));
                 reset_scheduled_native_begin_required_working_for_test();
                 assert!(
                     log.begin_scheduled_native_verifier_phase_v5(
@@ -66466,6 +69012,245 @@ mod tests {
                     );
                 }
                 log.limits.max_working_bytes = original_limit;
+                let native = log.begin_scheduled_native_verifier_phase_v5(
+                    &terminal,
+                    &reviewer,
+                    &partial,
+                    &target.roots,
+                )?;
+                assert!(native.is_finished());
+                let claim = native
+                    .aggregate
+                    .execution_claims()
+                    .find(|claim| claim.obligation_ids().contains(&target_obligation))
+                    .expect("ExistingTarget human claim");
+                let grant = AuthorityHumanGrantV3Tuple {
+                    policy_revision_hash: native.basis.policy_revision_hash.clone(),
+                    actor: "human:existing-target".to_owned(),
+                    authority_id: "existing-target-board".to_owned(),
+                    capabilities: BTreeSet::from([HumanAuthorityCapabilityV3::RejectFinding]),
+                    run_id: log.run_id.clone(),
+                    snapshot_id: native.aggregate.program().snapshot_id().clone(),
+                    universe_id: native.aggregate.universe().id().clone(),
+                    property_ids: BTreeSet::from([claim.property_id().to_owned()]),
+                    claim_ids: BTreeSet::from([claim.id().clone()]),
+                    valid_from: "2026-08-01T00:00:00Z".to_owned(),
+                    valid_until: "2026-08-31T00:00:00Z".to_owned(),
+                };
+                let human_roots = AuthorityTrustRootsV5::new(
+                    target.roots.policy_revision_hash.clone(),
+                    target.roots.repository_id.clone(),
+                    target.roots.repository_source_hash.clone(),
+                    target.roots.harnesses.clone(),
+                    vec![grant],
+                    target.roots.allowed_gluing_input_bindings.to_vec(),
+                )?;
+                assert!(log
+                    .begin_scheduled_human_resolution_phase_v5(&native, &partial, &human_roots)
+                    .is_ok());
+                let [ActionPrerequisiteV5::ExistingTargetRecord {
+                    record_id,
+                    body_hash: _,
+                    event_id: verification_event_id,
+                }] = original.as_slice()
+                else {
+                    panic!("one ExistingTarget verification prerequisite")
+                };
+                let verification_event_index = log
+                    .envelopes
+                    .iter()
+                    .position(|event| event.id() == verification_event_id)
+                    .expect("pinned verification event");
+                let verification = partial
+                    .target_v3_aggregate
+                    .verifications
+                    .get(record_id)
+                    .expect("pinned verification aggregate entry")
+                    .clone();
+                let reject_existing_human = |partial: &SealedPartialRerunPhaseV5,
+                                             log: &EventLogV5|
+                 -> Result<()> {
+                    assert!(log
+                        .begin_scheduled_human_resolution_phase_v5(
+                            &native,
+                            partial,
+                            &human_roots,
+                        )
+                        .is_err());
+                    Ok(())
+                };
+                // Prerequisite type and exact ID are both independent from
+                // the event-payload decoder below.
+                let mut hostile = original.clone();
+                if let [ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }] =
+                    hostile.as_mut_slice()
+                {
+                    *record_id = StableId::parse("evidence:wrong-existing-human-kind")?;
+                }
+                partial.actions[human_index].replace_prerequisites_unchecked_for_test(hostile);
+                reject_existing_human(&partial, &log)?;
+                partial.actions[human_index]
+                    .replace_prerequisites_unchecked_for_test(original.clone());
+                let mut hostile = original.clone();
+                if let [ActionPrerequisiteV5::ExistingTargetRecord { record_id, .. }] =
+                    hostile.as_mut_slice()
+                {
+                    *record_id = StableId::parse("verification:wrong-existing-human-id")?;
+                }
+                partial.actions[human_index].replace_prerequisites_unchecked_for_test(hostile);
+                reject_existing_human(&partial, &log)?;
+                partial.actions[human_index]
+                    .replace_prerequisites_unchecked_for_test(original.clone());
+                // A record of the wrong payload class cannot stand in for the
+                // pinned verification, even when the envelope ID is retained.
+                let saved_payload = log.envelopes[verification_event_index].payload.clone();
+                log.envelopes[verification_event_index].payload = log.envelopes[0].payload.clone();
+                reject_existing_human(&partial, &log)?;
+                log.envelopes[verification_event_index].payload = saved_payload.clone();
+                // These are valid, re-derived V3 records.  Each substitute
+                // updates the ExistingTarget prerequisite to its own ID/body
+                // hash so identity validation cannot hide the semantic
+                // outcome, claim, and evidence-cardinality checks below.
+                let mut reject_valid_hostile_verification =
+                    |hostile_verification: VerificationV3| -> Result<()> {
+                        let mut hostile_prerequisite = original.clone();
+                        let body_hash = hostile_verification.body_hash().map_err(m4_domain_error)?;
+                        if let [ActionPrerequisiteV5::ExistingTargetRecord {
+                            record_id,
+                            body_hash: prerequisite_hash,
+                            ..
+                        }] = hostile_prerequisite.as_mut_slice()
+                        {
+                            *record_id = hostile_verification.id().clone();
+                            *prerequisite_hash = body_hash;
+                        }
+                        partial.actions[human_index]
+                            .replace_prerequisites_unchecked_for_test(hostile_prerequisite);
+                        log.envelopes[verification_event_index].payload = raw_payload(
+                            payload_canonical_bytes(&PersistedPayload::VerificationRecordedV3(
+                                hostile_verification,
+                            ))?,
+                        )?;
+                        reject_existing_human(&partial, &log)?;
+                        log.envelopes[verification_event_index].payload = saved_payload.clone();
+                        partial.actions[human_index]
+                            .replace_prerequisites_unchecked_for_test(original.clone());
+                        Ok(())
+                    };
+                reject_valid_hostile_verification(verification.hostile_rederived_for_test(
+                    None,
+                    None,
+                    true,
+                ).map_err(m4_domain_error)?)?;
+                reject_valid_hostile_verification(verification.hostile_rederived_for_test(
+                    Some(StableId::parse("claim:wrong-existing-human-claim")?),
+                    None,
+                    false,
+                ).map_err(m4_domain_error)?)?;
+                reject_valid_hostile_verification(verification.hostile_rederived_for_test(
+                    Some(claim.id().clone()),
+                    Some(BTreeSet::from([
+                        verification.evidence_ids()[0].clone(),
+                        StableId::parse("evidence:second-existing-human-witness")?,
+                    ])),
+                    false,
+                ).map_err(m4_domain_error)?)?;
+                // The execution must be atomic for precisely this claim and
+                // obligation; a matching claim elsewhere is not sufficient.
+                let execution_id = partial
+                    .target_aggregate
+                    .executions()
+                    .find(|execution| {
+                        execution.obligation_ids().contains(&target_obligation)
+                            && execution.parsed_claim_ids()
+                                == &BTreeSet::from([claim.id().clone()])
+                    })
+                    .expect("atomic ExistingTarget execution")
+                    .id()
+                    .clone();
+                let saved_claims = partial
+                    .target_aggregate
+                    .clear_execution_claim_closure_for_test(&execution_id);
+                reject_existing_human(&partial, &log)?;
+                partial
+                    .target_aggregate
+                    .restore_execution_claim_closure_for_test(&execution_id, saved_claims);
+                let evidence_id = verification.evidence_ids()[0].clone();
+                let saved_evidence = partial
+                    .target_v3_aggregate
+                    .evidence
+                    .remove(&evidence_id)
+                    .expect("pinned evidence");
+                reject_existing_human(&partial, &log)?;
+                partial
+                    .target_v3_aggregate
+                    .evidence
+                    .insert(evidence_id.clone(), saved_evidence);
+                let binding_id = partial
+                    .target_v3_aggregate
+                    .bindings
+                    .values()
+                    .find(|binding| {
+                        binding.claim_id() == claim.id()
+                            && binding.evidence_id() == &evidence_id
+                            && binding.relation() == crate::EvidenceRelationV3::Reproduces
+                    })
+                    .expect("pinned Reproduces binding")
+                    .id()
+                    .clone();
+                let saved_binding = partial
+                    .target_v3_aggregate
+                    .bindings
+                    .remove(&binding_id)
+                    .expect("pinned binding");
+                reject_existing_human(&partial, &log)?;
+                partial
+                    .target_v3_aggregate
+                    .bindings
+                    .insert(binding_id, saved_binding);
+                for registration_id in [
+                    verification.input_registration_id().clone(),
+                    verification.output_registration_id().clone(),
+                ] {
+                    let saved_registration = partial
+                        .target_v3_aggregate
+                        .registrations
+                        .remove(&registration_id)
+                        .expect("pinned verification registration");
+                    reject_existing_human(&partial, &log)?;
+                    partial
+                        .target_v3_aggregate
+                        .registrations
+                        .insert(registration_id, saved_registration);
+                }
+                let mut hostile = original.clone();
+                if let [ActionPrerequisiteV5::ExistingTargetRecord { event_id, .. }] =
+                    hostile.as_mut_slice()
+                {
+                    *event_id = log.envelopes[0].id().clone();
+                }
+                partial.actions[human_index].replace_prerequisites_unchecked_for_test(hostile);
+                assert!(log
+                    .begin_scheduled_human_resolution_phase_v5(&native, &partial, &human_roots)
+                    .is_err());
+                partial.actions[human_index].replace_prerequisites_unchecked_for_test(original.clone());
+                let mut hostile = original.clone();
+                if let [ActionPrerequisiteV5::ExistingTargetRecord { body_hash, .. }] =
+                    hostile.as_mut_slice()
+                {
+                    *body_hash = ContentHash::sha256(b"existing-human-mutated-body");
+                }
+                partial.actions[human_index].replace_prerequisites_unchecked_for_test(hostile);
+                assert!(log
+                    .begin_scheduled_human_resolution_phase_v5(&native, &partial, &human_roots)
+                    .is_err());
+                partial.actions[human_index].replace_prerequisites_unchecked_for_test(original);
+                let original_predecessor_count = partial.target_predecessor_event_count;
+                partial.target_predecessor_event_count = 0;
+                assert!(log
+                    .begin_scheduled_human_resolution_phase_v5(&native, &partial, &human_roots)
+                    .is_err());
+                partial.target_predecessor_event_count = original_predecessor_count;
                 Ok(())
             })
             .expect("existing native verifier witness matrix");
@@ -67136,7 +69921,647 @@ mod tests {
                         log.prepare_next_scheduled_native_verifier_append_v5(&phase, &resolver)?;
                     log.append_prepared_scheduled_native_verifier_v5(prepared, &mut phase)?;
                 }
-                let suffix = log.envelopes[start..]
+                assert!(phase.is_finished());
+                let human_action = partial
+                    .actions
+                    .iter()
+                    .find(|action| {
+                        action.action()
+                            == crate::PartialRerunActionKindV5::RerunHumanDecision
+                    })
+                    .expect("source decision schedules target human resolution");
+                let native_claim = phase
+                    .aggregate
+                    .execution_claims()
+                    .find(|claim| claim.obligation_ids() == human_action.subject_ids())
+                    .expect("native claim for scheduled human action");
+                // The handoff binds the exact fresh native receipt selected
+                // for this partial-rerun action rather than looking up a
+                // verification by claim alone.
+                let fresh_native_action = phase
+                    .actions
+                    .iter()
+                    .find(|action| action.claim_id == native_claim.id().clone())
+                    .expect("fresh native action for human claim");
+                let fresh_receipt = phase
+                    .completed_verifications
+                    .iter()
+                    .find(|receipt| receipt.action_id == fresh_native_action.action_id)
+                    .expect("fresh native receipt for human action");
+                assert!(phase
+                    .v3_aggregate
+                    .verifications
+                    .contains_key(&fresh_receipt.verification_id));
+                // The native aggregate deliberately retains an older Passed
+                // verification for this same claim.  Human scheduling must
+                // select the exact completed-action receipt below, never an
+                // arbitrary `find(Passed)` result from that aggregate.
+                let fresh_verification = phase
+                    .v3_aggregate
+                    .verifications
+                    .get(&fresh_receipt.verification_id)
+                    .expect("fresh receipt verification is in the aggregate");
+                let prior_passed = fresh_verification
+                    .historical_clone_with_id_for_test(StableId::parse(
+                        "verification:prior-passed-for-scheduled-human",
+                    )?)
+                    .expect("test historical verification clone");
+                phase
+                    .v3_aggregate
+                    .verifications
+                    .insert(prior_passed.id().clone(), prior_passed.clone());
+                assert!(phase
+                    .v3_aggregate
+                    .verifications
+                    .values()
+                    .any(|verification| {
+                        verification.id() != &fresh_receipt.verification_id
+                            && verification.claim_id() == native_claim.id()
+                            && verification.outcome() == crate::VerificationOutcomeV3::Passed
+                    }));
+                let human_grant = AuthorityHumanGrantV3Tuple {
+                    policy_revision_hash: phase.basis.policy_revision_hash.clone(),
+                    actor: "human:scheduled-fixture".to_owned(),
+                    authority_id: "scheduled-review-board".to_owned(),
+                    capabilities: BTreeSet::from([HumanAuthorityCapabilityV3::RejectFinding]),
+                    run_id: log.run_id.clone(),
+                    snapshot_id: phase.aggregate.program().snapshot_id().clone(),
+                    universe_id: phase.aggregate.universe().id().clone(),
+                    property_ids: BTreeSet::from([native_claim.property_id().to_owned()]),
+                    claim_ids: BTreeSet::from([native_claim.id().clone()]),
+                    valid_from: "2026-08-01T00:00:00Z".to_owned(),
+                    valid_until: "2026-08-31T00:00:00Z".to_owned(),
+                };
+                let human_roots = AuthorityTrustRootsV5::new(
+                    roots.policy_revision_hash.clone(),
+                    roots.repository_id.clone(),
+                    roots.repository_source_hash.clone(),
+                    roots.harnesses.clone(),
+                    vec![human_grant.clone()],
+                    roots.allowed_gluing_input_bindings.to_vec(),
+                )?;
+                let human_start = log.envelopes.len();
+                reset_scheduled_human_resource_counters_for_test();
+                let positive_human = log.begin_scheduled_human_resolution_phase_v5(
+                    &phase,
+                    &partial,
+                    &human_roots,
+                )?;
+                assert_eq!(positive_human.actions.len(), 1);
+                assert_eq!(
+                    positive_human.actions[0].verification_id,
+                    fresh_receipt.verification_id,
+                    "the fresh action receipt wins over a prior same-claim Passed verification"
+                );
+                let receipt_index = phase
+                    .completed_verifications
+                    .iter()
+                    .position(|receipt| receipt.action_id == fresh_native_action.action_id)
+                    .expect("fresh native receipt index");
+                let saved_receipt = phase.completed_verifications[receipt_index].clone();
+                phase.completed_verifications[receipt_index].verification_id = prior_passed.id().clone();
+                assert!(log
+                    .begin_scheduled_human_resolution_phase_v5(&phase, &partial, &human_roots)
+                    .is_err());
+                phase.completed_verifications[receipt_index] = saved_receipt.clone();
+                phase.completed_verifications[receipt_index].verification_body_hash =
+                    ContentHash::sha256(b"mutated fresh receipt body");
+                assert!(log
+                    .begin_scheduled_human_resolution_phase_v5(&phase, &partial, &human_roots)
+                    .is_err());
+                phase.completed_verifications[receipt_index] = saved_receipt.clone();
+                phase.completed_verifications.push(saved_receipt.clone());
+                assert!(log
+                    .begin_scheduled_human_resolution_phase_v5(&phase, &partial, &human_roots)
+                    .is_err());
+                phase.completed_verifications.pop();
+                let human_begin_required = scheduled_human_begin_required_working_for_test();
+                assert_ne!(human_begin_required, 0);
+                let human_original_limit = log.limits.max_working_bytes;
+                let human_tail_before_begin = log.tail_hash().clone();
+                let human_count_before_begin = log.envelopes.len();
+                log.limits.max_working_bytes = human_begin_required.checked_sub(1).ok_or(
+                    DomainError::Incomplete {
+                        operation: "scheduled human begin exact-minus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    },
+                )?;
+                assert!(log
+                    .begin_scheduled_human_resolution_phase_v5(&phase, &partial, &human_roots)
+                    .is_err());
+                assert_eq!(log.tail_hash(), &human_tail_before_begin);
+                assert_eq!(log.envelopes.len(), human_count_before_begin);
+                for limit in [
+                    human_begin_required,
+                    human_begin_required.checked_add(1).ok_or(DomainError::Incomplete {
+                        operation: "scheduled human begin exact-plus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?,
+                ] {
+                    log.limits.max_working_bytes = limit;
+                    assert!(log
+                        .begin_scheduled_human_resolution_phase_v5(
+                            &phase,
+                            &partial,
+                            &human_roots,
+                        )
+                        .is_ok());
+                }
+                log.limits.max_working_bytes = human_original_limit;
+                let mut human = log.begin_scheduled_human_resolution_phase_v5(
+                    &phase,
+                    &partial,
+                    &human_roots,
+                )?;
+                assert_eq!(human.actions.len(), 1);
+                let request = HumanDecisionRequestV5::new(
+                    native_claim.id().clone(),
+                    DecisionInputV3::new(
+                        crate::DecisionOutcomeV3::Reject,
+                        "human:scheduled-fixture",
+                        "scheduled-review-board",
+                        "fixture rejects the reproduced issue",
+                        "2026-08-11T12:00:00Z",
+                        None,
+                    ),
+                );
+                let admission = TrustedHumanAdmissionV5::from_trusted_host(
+                    human_grant.clone(),
+                    &request,
+                    "2026-08-11T12:00:00Z",
+                    &log,
+                    &human,
+                    &human_roots,
+                )?;
+                let hostile_request = HumanDecisionRequestV5::new(
+                    native_claim.id().clone(),
+                    DecisionInputV3::new(
+                        crate::DecisionOutcomeV3::Reject,
+                        "human:scheduled-fixture",
+                        "scheduled-review-board",
+                        "substituted request rationale",
+                        "2026-08-11T12:00:00Z",
+                        None,
+                    ),
+                );
+                assert!(matches!(
+                    log.prepare_scheduled_human_decision_append_v5(
+                        &human,
+                        admission,
+                        hostile_request,
+                        &human_roots,
+                    ),
+                    Err(DomainError::DecisionAdmissionMismatch)
+                ));
+                let fresh_admission = |log: &EventLogV5,
+                                       human: &ReplayedScheduledHumanResolutionPhaseV5|
+                 -> Result<TrustedHumanAdmissionV5> {
+                    TrustedHumanAdmissionV5::from_trusted_host(
+                        human_grant.clone(),
+                        &request,
+                        "2026-08-11T12:00:00Z",
+                        log,
+                        human,
+                        &human_roots,
+                    )
+                };
+                // Admission itself has an independent actual-input gate.
+                reset_scheduled_human_resource_counters_for_test();
+                let _ = fresh_admission(&log, &human)?;
+                let admission_required = scheduled_human_admission_required_working_for_test();
+                assert_ne!(admission_required, 0);
+                let admission_limit = log.limits.max_working_bytes;
+                for offset in [-1_i8, 0, 1] {
+                    log.limits.max_working_bytes = match offset {
+                        -1 => admission_required.checked_sub(1).ok_or(DomainError::Incomplete {
+                            operation: "scheduled human admission exact-minus-one",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?,
+                        0 => admission_required,
+                        1 => admission_required.checked_add(1).ok_or(DomainError::Incomplete {
+                            operation: "scheduled human admission exact-plus-one",
+                            limit: usize::MAX,
+                            observed: usize::MAX,
+                        })?,
+                        _ => unreachable!(),
+                    };
+                    reset_scheduled_human_resource_counters_for_test();
+                    let attempt = fresh_admission(&log, &human);
+                    if offset < 0 {
+                        assert!(attempt.is_err());
+                        assert_eq!(scheduled_human_materializations_for_test(), 0);
+                    } else {
+                        assert!(attempt.is_ok(), "human admission must admit {offset:+}");
+                    }
+                }
+                log.limits.max_working_bytes = admission_limit;
+                // Every authority dimension is independently closed by the
+                // V5 admission, even when a hostile host supplies a matching
+                // (but incorrectly scoped) root collection.
+                let assert_hostile_grant =
+                    |grant: AuthorityHumanGrantV3Tuple| -> Result<()> {
+                        let mut hostile_roots = human_roots.clone();
+                        hostile_roots.human_grants = vec![grant.clone()];
+                        assert!(TrustedHumanAdmissionV5::from_trusted_host(
+                            grant,
+                            &request,
+                            "2026-08-11T12:00:00Z",
+                            &log,
+                            &human,
+                            &hostile_roots,
+                        )
+                        .is_err());
+                        Ok(())
+                    };
+                let mut hostile = human_grant.clone();
+                hostile.actor = "human:wrong-scheduled-fixture".to_owned();
+                assert_hostile_grant(hostile)?;
+                let mut hostile = human_grant.clone();
+                hostile.authority_id = "wrong-scheduled-review-board".to_owned();
+                assert_hostile_grant(hostile)?;
+                let mut hostile = human_grant.clone();
+                hostile.capabilities.clear();
+                assert_hostile_grant(hostile)?;
+                let mut hostile = human_grant.clone();
+                hostile.property_ids.clear();
+                assert_hostile_grant(hostile)?;
+                let mut hostile = human_grant.clone();
+                hostile.claim_ids.clear();
+                assert_hostile_grant(hostile)?;
+                let mut hostile = human_grant.clone();
+                hostile.valid_from = "2026-08-11T12:00:01Z".to_owned();
+                assert_hostile_grant(hostile)?;
+                let mut hostile = human_grant.clone();
+                hostile.valid_until = "2026-08-11T11:59:59Z".to_owned();
+                assert_hostile_grant(hostile)?;
+                let mut hostile = human_grant.clone();
+                hostile.policy_revision_hash = ContentHash::sha256(b"wrong-human-policy");
+                assert_hostile_grant(hostile)?;
+                let mut hostile = human_grant.clone();
+                hostile.run_id = StableId::parse("run:wrong-human-scope")?;
+                assert_hostile_grant(hostile)?;
+                let mut hostile = human_grant.clone();
+                hostile.snapshot_id = StableId::parse("snapshot:wrong-human-scope")?;
+                assert_hostile_grant(hostile)?;
+                let mut hostile = human_grant.clone();
+                hostile.universe_id = StableId::parse("universe:wrong-human-scope")?;
+                assert_hostile_grant(hostile)?;
+                let mut duplicate_roots = human_roots.clone();
+                duplicate_roots.human_grants = vec![human_grant.clone(), human_grant.clone()];
+                assert!(TrustedHumanAdmissionV5::from_trusted_host(
+                    human_grant.clone(),
+                    &request,
+                    "2026-08-11T12:00:00Z",
+                    &log,
+                    &human,
+                    &duplicate_roots,
+                )
+                .is_err());
+                let expired_request = HumanDecisionRequestV5::new(
+                    native_claim.id().clone(),
+                    DecisionInputV3::new(
+                        crate::DecisionOutcomeV3::Exception,
+                        "human:scheduled-fixture",
+                        "scheduled-review-board",
+                        "exception beyond grant window",
+                        "2026-08-11T12:00:00Z",
+                        Some("2026-08-12T12:00:00Z".to_owned()),
+                    ),
+                );
+                assert!(TrustedHumanAdmissionV5::from_trusted_host(
+                    human_grant.clone(),
+                    &expired_request,
+                    "2026-08-11T12:00:00Z",
+                    &log,
+                    &human,
+                    &human_roots,
+                )
+                .is_err());
+                // A near-maximum human rationale is charged from its actual
+                // request backing before admission/decision materialization.
+                let large_request = || {
+                    HumanDecisionRequestV5::new(
+                        native_claim.id().clone(),
+                        DecisionInputV3::new(
+                            crate::DecisionOutcomeV3::Reject,
+                            "human:scheduled-fixture",
+                            "scheduled-review-board",
+                            "r".repeat(8_192),
+                            "2026-08-11T12:00:00Z",
+                            None,
+                        ),
+                    )
+                };
+                reset_scheduled_human_resource_counters_for_test();
+                let request = large_request();
+                assert!(log
+                    .prepare_scheduled_human_decision_append_v5(
+                        &human,
+                        TrustedHumanAdmissionV5::from_trusted_host(
+                            human_grant.clone(),
+                            &request,
+                            "2026-08-11T12:00:00Z",
+                            &log,
+                            &human,
+                            &human_roots,
+                        )?,
+                        request,
+                        &human_roots,
+                    )
+                    .is_ok());
+                let large_required = scheduled_human_prepare_required_working_for_test();
+                let saved_limit = log.limits.max_working_bytes;
+                log.limits.max_working_bytes = large_required.checked_sub(1).ok_or(
+                    DomainError::Incomplete {
+                        operation: "large scheduled human rationale exact-minus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    },
+                )?;
+                reset_scheduled_human_resource_counters_for_test();
+                let request = large_request();
+                assert!(log
+                    .prepare_scheduled_human_decision_append_v5(
+                        &human,
+                        TrustedHumanAdmissionV5::from_trusted_host(
+                            human_grant.clone(),
+                            &request,
+                            "2026-08-11T12:00:00Z",
+                            &log,
+                            &human,
+                            &human_roots,
+                        )?,
+                        request,
+                        &human_roots,
+                    )
+                    .is_err());
+                assert_eq!(scheduled_human_materializations_for_test(), 0);
+                log.limits.max_working_bytes = large_required;
+                let request = large_request();
+                assert!(log
+                    .prepare_scheduled_human_decision_append_v5(
+                        &human,
+                        TrustedHumanAdmissionV5::from_trusted_host(
+                            human_grant.clone(),
+                            &request,
+                            "2026-08-11T12:00:00Z",
+                            &log,
+                            &human,
+                            &human_roots,
+                        )?,
+                        request,
+                        &human_roots,
+                    )
+                    .is_ok());
+                log.limits.max_working_bytes = saved_limit;
+                reset_scheduled_human_resource_counters_for_test();
+                assert!(log
+                    .prepare_scheduled_human_decision_append_v5(
+                        &human,
+                        fresh_admission(&log, &human)?,
+                        HumanDecisionRequestV5::new(
+                            native_claim.id().clone(),
+                            DecisionInputV3::new(
+                                crate::DecisionOutcomeV3::Reject,
+                                "human:scheduled-fixture",
+                                "scheduled-review-board",
+                                "fixture rejects the reproduced issue",
+                                "2026-08-11T12:00:00Z",
+                                None,
+                            ),
+                        ),
+                        &human_roots,
+                    )
+                    .is_ok());
+                let human_decision_prepare_required = scheduled_human_prepare_required_working_for_test();
+                assert_ne!(human_decision_prepare_required, 0);
+                log.limits.max_working_bytes = human_decision_prepare_required
+                    .checked_sub(1)
+                    .ok_or(DomainError::Incomplete {
+                        operation: "scheduled human decision prepare exact-minus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                reset_scheduled_human_resource_counters_for_test();
+                assert!(log
+                    .prepare_scheduled_human_decision_append_v5(
+                        &human,
+                        fresh_admission(&log, &human)?,
+                        HumanDecisionRequestV5::new(
+                            native_claim.id().clone(),
+                            DecisionInputV3::new(
+                                crate::DecisionOutcomeV3::Reject,
+                                "human:scheduled-fixture",
+                                "scheduled-review-board",
+                                "fixture rejects the reproduced issue",
+                                "2026-08-11T12:00:00Z",
+                                None,
+                            ),
+                        ),
+                        &human_roots,
+                    )
+                    .is_err());
+                assert_eq!(scheduled_human_materializations_for_test(), 0);
+                log.limits.max_working_bytes = human_decision_prepare_required;
+                assert!(log
+                    .prepare_scheduled_human_decision_append_v5(
+                        &human,
+                        fresh_admission(&log, &human)?,
+                        HumanDecisionRequestV5::new(
+                            native_claim.id().clone(),
+                            DecisionInputV3::new(
+                                crate::DecisionOutcomeV3::Reject,
+                                "human:scheduled-fixture",
+                                "scheduled-review-board",
+                                "fixture rejects the reproduced issue",
+                                "2026-08-11T12:00:00Z",
+                                None,
+                            ),
+                        ),
+                        &human_roots,
+                    )
+                    .is_ok());
+                log.limits.max_working_bytes = human_original_limit;
+                let mut bad = log.prepare_scheduled_human_decision_append_v5(
+                    &human,
+                    fresh_admission(&log, &human)?,
+                    HumanDecisionRequestV5::new(
+                        native_claim.id().clone(),
+                        DecisionInputV3::new(
+                            crate::DecisionOutcomeV3::Reject,
+                            "human:scheduled-fixture",
+                            "scheduled-review-board",
+                            "fixture rejects the reproduced issue",
+                            "2026-08-11T12:00:00Z",
+                            None,
+                        ),
+                    ),
+                    &human_roots,
+                )?;
+                bad.basis_digest = ContentHash::sha256(b"hostile-human-basis");
+                let human_tail = log.tail_hash().clone();
+                let human_count = log.envelopes.len();
+                assert!(log
+                    .append_prepared_scheduled_human_resolution_v5(
+                        bad,
+                        &mut human,
+                        &human_roots,
+                    )
+                    .is_err());
+                assert_eq!(log.tail_hash(), &human_tail);
+                assert_eq!(log.envelopes.len(), human_count);
+                let reject_prepared_human =
+                    |prepared: PreparedScheduledHumanResolutionAppendV5,
+                     log: &mut EventLogV5,
+                     human: &mut ReplayedScheduledHumanResolutionPhaseV5|
+                     -> Result<()> {
+                        let tail = log.tail_hash().clone();
+                        let count = log.envelopes.len();
+                        assert!(log
+                            .append_prepared_scheduled_human_resolution_v5(
+                                prepared,
+                                human,
+                                &human_roots,
+                            )
+                            .is_err());
+                        assert_eq!(log.tail_hash(), &tail);
+                        assert_eq!(log.envelopes.len(), count);
+                        Ok(())
+                    };
+                let fresh_prepared = |log: &EventLogV5,
+                                      human: &ReplayedScheduledHumanResolutionPhaseV5|
+                 -> Result<PreparedScheduledHumanResolutionAppendV5> {
+                    log.prepare_scheduled_human_decision_append_v5(
+                        human,
+                        fresh_admission(log, human)?,
+                        HumanDecisionRequestV5::new(
+                            native_claim.id().clone(),
+                            DecisionInputV3::new(
+                                crate::DecisionOutcomeV3::Reject,
+                                "human:scheduled-fixture",
+                                "scheduled-review-board",
+                                "fixture rejects the reproduced issue",
+                                "2026-08-11T12:00:00Z",
+                                None,
+                            ),
+                        ),
+                        &human_roots,
+                    )
+                };
+                let mut bad = fresh_prepared(&log, &human)?;
+                bad.action_id = StableId::parse("scheduled-human-action-v5:wrong")?;
+                reject_prepared_human(bad, &mut log, &mut human)?;
+                let mut bad = fresh_prepared(&log, &human)?;
+                bad.action_index = bad.action_index.saturating_add(1);
+                reject_prepared_human(bad, &mut log, &mut human)?;
+                let mut bad = fresh_prepared(&log, &human)?;
+                bad.event_sequence = bad.event_sequence.saturating_add(1);
+                reject_prepared_human(bad, &mut log, &mut human)?;
+                let mut bad = fresh_prepared(&log, &human)?;
+                bad.predecessor_event_hash = ContentHash::sha256(b"wrong-human-tail");
+                reject_prepared_human(bad, &mut log, &mut human)?;
+                let mut bad = fresh_prepared(&log, &human)?;
+                bad.stage = ScheduledHumanResolutionStageV5::Finding;
+                reject_prepared_human(bad, &mut log, &mut human)?;
+                let mut bad = fresh_prepared(&log, &human)?;
+                bad.trust_digest = None;
+                reject_prepared_human(bad, &mut log, &mut human)?;
+                let decision = log.prepare_scheduled_human_decision_append_v5(
+                    &human,
+                    fresh_admission(&log, &human)?,
+                    HumanDecisionRequestV5::new(
+                        native_claim.id().clone(),
+                        DecisionInputV3::new(
+                            crate::DecisionOutcomeV3::Reject,
+                            "human:scheduled-fixture",
+                            "scheduled-review-board",
+                            "fixture rejects the reproduced issue",
+                            "2026-08-11T12:00:00Z",
+                            None,
+                        ),
+                    ),
+                    &human_roots,
+                )?;
+                let authority_count = human.basis.inherited_m4_entries.len();
+                let decision_append_required = scheduled_human_append_required_working_bytes(
+                    &log, &human, &decision, 0,
+                )?;
+                let decision_tail = log.tail_hash().clone();
+                let decision_count = log.envelopes.len();
+                log.limits.max_working_bytes = decision_append_required
+                    .checked_sub(1)
+                    .ok_or(DomainError::Incomplete {
+                        operation: "scheduled human decision append exact-minus-one",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+                reset_scheduled_human_resource_counters_for_test();
+                assert!(log.append_prepared_scheduled_human_resolution_v5(
+                    decision,
+                    &mut human,
+                    &human_roots,
+                ).is_err());
+                assert_eq!(log.tail_hash(), &decision_tail);
+                assert_eq!(log.envelopes.len(), decision_count);
+                log.limits.max_working_bytes = human_original_limit;
+                let decision = log.prepare_scheduled_human_decision_append_v5(
+                    &human,
+                    fresh_admission(&log, &human)?,
+                    HumanDecisionRequestV5::new(
+                        native_claim.id().clone(),
+                        DecisionInputV3::new(crate::DecisionOutcomeV3::Reject, "human:scheduled-fixture", "scheduled-review-board", "fixture rejects the reproduced issue", "2026-08-11T12:00:00Z", None),
+                    ),
+                    &human_roots,
+                )?;
+                // The exact admission boundary succeeds after the
+                // exact-minus-one refusal; the token is freshly minted.
+                log.limits.max_working_bytes = decision_append_required
+                    ;
+                log.append_prepared_scheduled_human_resolution_v5(decision, &mut human, &human_roots)?;
+                log.limits.max_working_bytes = human_original_limit;
+                assert_ne!(scheduled_human_append_required_working_for_test(), 0);
+                assert_eq!(human.basis.inherited_m4_entries.len(), authority_count + 1);
+                reset_scheduled_human_resource_counters_for_test();
+                let _finding = log.prepare_scheduled_human_finding_append_v5(&human, &human_roots)?;
+                let finding_prepare_required = scheduled_human_prepare_required_working_for_test();
+                let finding_tail = log.tail_hash().clone();
+                let finding_count = log.envelopes.len();
+                log.limits.max_working_bytes = finding_prepare_required.checked_sub(1).ok_or(DomainError::Incomplete {
+                    operation: "scheduled human finding prepare exact-minus-one", limit: usize::MAX, observed: usize::MAX,
+                })?;
+                reset_scheduled_human_resource_counters_for_test();
+                assert!(log.prepare_scheduled_human_finding_append_v5(&human, &human_roots).is_err());
+                assert_eq!(scheduled_human_materializations_for_test(), 0);
+                assert_eq!(log.tail_hash(), &finding_tail);
+                assert_eq!(log.envelopes.len(), finding_count);
+                log.limits.max_working_bytes = finding_prepare_required;
+                let finding = log.prepare_scheduled_human_finding_append_v5(&human, &human_roots)?;
+                assert_ne!(scheduled_human_prepare_required_working_for_test(), 0);
+                let finding_append_required = scheduled_human_append_required_working_bytes(
+                    &log, &human, &finding, 0,
+                )?;
+                log.limits.max_working_bytes = finding_append_required.checked_sub(1).ok_or(DomainError::Incomplete { operation: "scheduled human finding append exact-minus-one", limit: usize::MAX, observed: usize::MAX })?;
+                assert!(log.append_prepared_scheduled_human_resolution_v5(finding, &mut human, &human_roots).is_err());
+                assert_eq!(log.tail_hash(), &finding_tail);
+                log.limits.max_working_bytes = human_original_limit;
+                let finding = log.prepare_scheduled_human_finding_append_v5(&human, &human_roots)?;
+                log.limits.max_working_bytes = finding_append_required;
+                log.append_prepared_scheduled_human_resolution_v5(finding, &mut human, &human_roots)?;
+                log.limits.max_working_bytes = human_original_limit;
+                assert_eq!(human.basis.inherited_m4_entries.len(), authority_count + 1);
+                assert_eq!(human.action_index, human.actions.len());
+                assert!(log.envelopes[human_start]
+                    .payload
+                    .get()
+                    .contains("decision_recorded_v3"));
+                assert!(log.envelopes[human_start + 1]
+                    .payload
+                    .get()
+                    .contains("finding_recorded_v3"));
+                let suffix = log.envelopes[start..human_start]
                     .iter()
                     .map(EventEnvelope::canonical_bytes)
                     .collect::<Result<Vec<_>>>()?;
@@ -67336,7 +70761,255 @@ mod tests {
                             &mut replayed,
                         )?;
                     }
-                    assert_eq!(replayed_log.tail_hash(), log.tail_hash());
+                    assert_eq!(
+                        replayed_log.tail_hash(),
+                        log.envelopes[human_start - 1].event_hash()
+                    );
+                }
+                let human_suffix = log.envelopes[human_start..]
+                    .iter()
+                    .map(EventEnvelope::canonical_bytes)
+                    .collect::<Result<Vec<_>>>()?;
+                assert_eq!(human_suffix.len(), 2);
+                for persisted in 0..=human_suffix.len() {
+                    if persisted == 1 {
+                        reset_scheduled_human_resource_counters_for_test();
+                    }
+                    let (base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(),
+                        target.log.canonical_genesis_bytes.clone(),
+                        log.envelopes[..scheduled_start].to_vec(),
+                        log.limits,
+                    )?;
+                    let recovery_partial = target.seal_partial_rerun_phase_for_log_v5(
+                        &base,
+                        &staleness,
+                        &preservation,
+                    )?;
+                    let recovery_pre_basis =
+                        target.with_terminal_persistence(|_, pre_basis| Ok(pre_basis))?;
+                    let RecoveredM6PersistenceV5::Incremental {
+                        stage: M6PersistenceRecoveryStageV5::PartialRerunSealed,
+                        basis: recovered_basis,
+                    } = base.recover_partial_rerun_phase_v5(
+                        &recovery_pre_basis,
+                        phases.closure(),
+                        phases.mapping(),
+                        phases.correspondence(),
+                        &staleness,
+                        PreservationRecoveryInputV5 {
+                            closure: phases.closure(),
+                            mapping: phases.mapping(),
+                            correspondence: phases.correspondence(),
+                            staleness: &staleness,
+                            bundles: &[],
+                            resolver: &resolver,
+                            roots: &target.roots,
+                        },
+                        &recovery_partial,
+                    )? else {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "human recovery did not reach sealed partial phase",
+                        )
+                        .into());
+                    };
+                    let (replayed_base, replayed_reviewer) =
+                        EventLogV5::replay_scheduled_reviewer_suffix_v5(
+                            base,
+                            &scheduled_suffix,
+                            &recovery_partial,
+                            *recovered_basis,
+                            &resolver,
+                        )?;
+                    let replayed_terminal = replayed_base.open_post_d2_terminal_phase_v5(
+                        &replayed_reviewer,
+                        &recovery_partial,
+                        None,
+                    )?;
+                    let (native_base, native_phase) =
+                        EventLogV5::replay_scheduled_native_verifier_suffix_v5(
+                            replayed_base,
+                            &suffix,
+                            &replayed_terminal,
+                            &replayed_reviewer,
+                            &recovery_partial,
+                            &roots,
+                            &resolver,
+                        )?;
+                    let (replayed_human_log, replayed_human) =
+                        EventLogV5::replay_scheduled_human_resolution_suffix_v5(
+                            native_base,
+                            &human_suffix[..persisted],
+                            &native_phase,
+                            &recovery_partial,
+                            &human_roots,
+                        )?;
+                    if persisted == 1 {
+                        assert_ne!(scheduled_human_recovery_required_working_for_test(), 0);
+                    }
+                    // Recovery owns the complete caller suffix.  Calibrate
+                    // every legal prefix independently, then reconstruct
+                    // once again for each boundary attempt: an earlier
+                    // successful decision/finding must never supply an
+                    // already-advanced cursor to a later exact-limit probe.
+                    let fresh_human_recovery_inputs = || -> Result<_> {
+                        let (fresh_base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                            target.run_id().clone(),
+                            target.log.canonical_genesis_bytes.clone(),
+                            log.envelopes[..scheduled_start].to_vec(),
+                            log.limits,
+                        )?;
+                        let fresh_partial = target
+                            .seal_partial_rerun_phase_for_log_v5(
+                                &fresh_base,
+                                &staleness,
+                                &preservation,
+                            )
+                            .map_err(|error| DomainError::Validation(error.to_string()))?;
+                        let fresh_pre_basis = target
+                            .with_terminal_persistence(|_, basis| Ok(basis))
+                            .map_err(|error| DomainError::Validation(error.to_string()))?;
+                        let RecoveredM6PersistenceV5::Incremental {
+                            stage: M6PersistenceRecoveryStageV5::PartialRerunSealed,
+                            basis: fresh_basis,
+                        } = fresh_base.recover_partial_rerun_phase_v5(
+                            &fresh_pre_basis,
+                            phases.closure(),
+                            phases.mapping(),
+                            phases.correspondence(),
+                            &staleness,
+                            PreservationRecoveryInputV5 {
+                                closure: phases.closure(),
+                                mapping: phases.mapping(),
+                                correspondence: phases.correspondence(),
+                                staleness: &staleness,
+                                bundles: &[],
+                                resolver: &resolver,
+                                roots: &target.roots,
+                            },
+                            &fresh_partial,
+                        )? else {
+                            return Err(DomainError::Validation(
+                                "human recovery probe must stop at sealed partial".to_owned(),
+                            ));
+                        };
+                        let (fresh_base, fresh_reviewer) =
+                            EventLogV5::replay_scheduled_reviewer_suffix_v5(
+                                fresh_base,
+                                &scheduled_suffix,
+                                &fresh_partial,
+                                *fresh_basis,
+                                &resolver,
+                            )?;
+                        let fresh_terminal = fresh_base.open_post_d2_terminal_phase_v5(
+                            &fresh_reviewer,
+                            &fresh_partial,
+                            None,
+                        )?;
+                        let (fresh_log, fresh_native) =
+                            EventLogV5::replay_scheduled_native_verifier_suffix_v5(
+                                fresh_base,
+                                &suffix,
+                                &fresh_terminal,
+                                &fresh_reviewer,
+                                &fresh_partial,
+                                &roots,
+                                &resolver,
+                            )?;
+                        Ok((fresh_log, fresh_native, fresh_partial))
+                    };
+                    for offset in [-1_i8, 0, 1] {
+                        let (mut calibration_log, calibration_native, calibration_partial) =
+                            fresh_human_recovery_inputs()?;
+                        reset_scheduled_human_resource_counters_for_test();
+                        let calibration =
+                            EventLogV5::replay_scheduled_human_resolution_suffix_in_place_for_test(
+                                &mut calibration_log,
+                                &human_suffix[..persisted],
+                                &calibration_native,
+                                &calibration_partial,
+                                &human_roots,
+                            )?;
+                        calibration.validate_current(&calibration_log, &human_roots)?;
+                        let calibrated = scheduled_human_recovery_required_working_for_test();
+                        assert_ne!(calibrated, 0);
+                        let limit = match offset {
+                            -1 => calibrated.checked_sub(1).ok_or(DomainError::Incomplete {
+                                operation: "scheduled human recovery exact-minus-one",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?,
+                            0 => calibrated,
+                            1 => calibrated.checked_add(1).ok_or(DomainError::Incomplete {
+                                operation: "scheduled human recovery exact-plus-one",
+                                limit: usize::MAX,
+                                observed: usize::MAX,
+                            })?,
+                            _ => unreachable!(),
+                        };
+                        let (mut fresh_log, fresh_native, fresh_partial) =
+                            fresh_human_recovery_inputs()?;
+                        fresh_log.limits.max_working_bytes = limit;
+                        let fresh_tail = fresh_log.tail_hash().clone();
+                        let fresh_count = fresh_log.envelopes.len();
+                        let fresh_native_digest = fresh_native.digest()?;
+                        let fresh_native_basis = fresh_native.basis.basis_digest.clone();
+                        let fresh_partial_plan = fresh_partial.plan.id().clone();
+                        resolver.reads.set(0);
+                        reset_scheduled_human_resource_counters_for_test();
+                        let attempt =
+                            EventLogV5::replay_scheduled_human_resolution_suffix_in_place_for_test(
+                                &mut fresh_log,
+                                &human_suffix[..persisted],
+                                &fresh_native,
+                                &fresh_partial,
+                                &human_roots,
+                            );
+                        if offset < 0 {
+                            assert!(attempt.is_err());
+                            assert_eq!(resolver.reads.get(), 0);
+                            assert_eq!(scheduled_human_materializations_for_test(), 0);
+                            assert_eq!(fresh_log.tail_hash(), &fresh_tail);
+                            assert_eq!(fresh_log.envelopes.len(), fresh_count);
+                            assert_eq!(fresh_native.digest()?, fresh_native_digest);
+                            assert_eq!(fresh_native.basis.basis_digest, fresh_native_basis);
+                            assert_eq!(fresh_partial.plan.id(), &fresh_partial_plan);
+                        } else {
+                            let recovered = attempt.expect(
+                                "human recovery must admit exact and exact-plus-one boundaries",
+                            );
+                            assert_eq!(
+                                recovered.action_index,
+                                usize::from(persisted == human_suffix.len()),
+                            );
+                            assert_eq!(
+                                recovered.stage,
+                                if persisted == 1 {
+                                    ScheduledHumanResolutionStageV5::Finding
+                                } else {
+                                    ScheduledHumanResolutionStageV5::Decision
+                                },
+                            );
+                            recovered.validate_current(&fresh_log, &human_roots)?;
+                            assert_eq!(
+                                fresh_log.tail_hash(),
+                                if persisted == 0 {
+                                    log.envelopes[human_start - 1].event_hash()
+                                } else {
+                                    log.envelopes[human_start + persisted - 1].event_hash()
+                                }
+                            );
+                        }
+                    }
+                    assert_eq!(replayed_human.action_index, usize::from(persisted == 2));
+                    assert_eq!(
+                        replayed_human_log.tail_hash(),
+                        if persisted == 0 {
+                            log.envelopes[human_start - 1].event_hash()
+                        } else {
+                            log.envelopes[human_start + persisted - 1].event_hash()
+                        }
+                    );
                 }
                 Ok(())
             })

@@ -719,6 +719,16 @@ impl<'a> ExecutionIdentity<'a> {
 
 impl ExecutionRecord {
     #[cfg(test)]
+    pub(crate) fn clear_parsed_claims_for_test(&mut self) -> BTreeSet<StableId> {
+        std::mem::take(&mut self.parsed_claim_ids)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn restore_parsed_claims_for_test(&mut self, claims: BTreeSet<StableId>) {
+        self.parsed_claim_ids = claims;
+    }
+
+    #[cfg(test)]
     pub(crate) fn corrupt_fake_descriptor_for_test(&mut self, field: &str) {
         match field {
             "provider" => self.provider = Some("provider:real".to_owned()),
