@@ -3575,6 +3575,11 @@ enum PersistedPayload {
     GluingRerunActionRecordedV5(crate::GluingRerunActionV5),
     #[serde(rename = "gluing_rerun_plan_sealed_v5")]
     GluingRerunPlanSealedV5(crate::GluingRerunPlanSealV5),
+    /// Final sealed terminal receipt. This raw canonical DTO is private to
+    /// the M5 cursor; its decoder/grammar admission is added with the terminal
+    /// persistence slice rather than exposed as a generic append command.
+    #[serde(rename = "terminal_completed_v5")]
+    TerminalCompletedV5(Box<RawValue>),
     #[serde(rename = "evidence_recorded_v3")]
     EvidenceRecordedV3(EvidenceV3),
     #[serde(rename = "evidence_bound_v3")]
@@ -3664,6 +3669,7 @@ impl PersistedPayload {
                 )?)
                 .unwrap_or(usize::MAX)
             }
+            Self::TerminalCompletedV5(value) => value.get().len(),
             Self::EvidenceRecordedV3(value) => {
                 usize::try_from(value.allocated_bytes().map_err(m4_domain_error)?)
                     .unwrap_or(usize::MAX)
@@ -3757,6 +3763,7 @@ impl PersistedPayload {
                 | Self::PartialRerunPlanSealedV5(_)
                 | Self::GluingRerunActionRecordedV5(_)
                 | Self::GluingRerunPlanSealedV5(_)
+                | Self::TerminalCompletedV5(_)
         )
     }
 
@@ -3913,6 +3920,7 @@ impl PersistedPayload {
             | Self::PartialRerunPlanSealedV5(_)
             | Self::GluingRerunActionRecordedV5(_)
             | Self::GluingRerunPlanSealedV5(_) => SYSTEM_ACTOR,
+            Self::TerminalCompletedV5(_) => "engine:reviewgraphen.m5_terminal@1",
             _ => SYSTEM_ACTOR,
         }
     }
@@ -4064,6 +4072,16 @@ impl PersistedPayload {
                 crate::GluingRerunPlanSealV5::from_event_json_bytes(&canonical_json(plan)?)
                     .map(|_| ())
                     .map_err(|error| DomainError::Validation(error.to_string()))
+            }
+            Self::TerminalCompletedV5(value) => {
+                validate_m6_raw_payload_v5(
+                    value,
+                    "reviewgraphen.terminal_completed.v5",
+                    "terminal-completed-v5",
+                )?;
+                let marker: TerminalCompletedWireV5 = serde_json::from_str(value.get())
+                    .map_err(|error| DomainError::Json(error.to_string()))?;
+                marker.validate()
             }
             Self::EvidenceRecordedV3(evidence) => evidence
                 .canonical_bytes()
@@ -6524,6 +6542,7 @@ pub enum BorrowedProjectionPayloadRefV4<'a> {
     DecisionRecordedV3(BorrowedDecisionProjectionV3<'a>),
     FindingRecordedV3(BorrowedFindingProjectionV3<'a>),
     ArtifactRegisteredV4(BorrowedArtifactRegistrationProjectionV4<'a>),
+    GluingInputDescriptorV4(BorrowedGluingInputDescriptorProjectionV4<'a>),
     GluingBundleRecordedV4(BorrowedGluingBundleProjectionV4<'a>),
 }
 
@@ -6551,6 +6570,10 @@ enum BorrowedReviewExecutionSourceV4<'a> {
     Aggregate {
         execution: &'a ExecutionRecord,
         claims: &'a BTreeMap<StableId, ExecutionClaimV2>,
+    },
+    Slice {
+        execution: &'a ExecutionRecord,
+        claims: &'a [ExecutionClaimV2],
     },
 }
 /// Opaque evidence projection: no complete DTO or canonical-byte producer is exposed.
@@ -8004,6 +8027,7 @@ impl<'a> BorrowedReviewExecutionProjectionV4<'a> {
         match self.source {
             BorrowedReviewExecutionSourceV4::Persisted(value) => &value.execution,
             BorrowedReviewExecutionSourceV4::Aggregate { execution, .. } => execution,
+            BorrowedReviewExecutionSourceV4::Slice { execution, .. } => execution,
         }
     }
     pub fn identity_body_hash(&self) -> crate::Result<ContentHash> {
@@ -8115,6 +8139,9 @@ impl<'a> BorrowedReviewExecutionProjectionV4<'a> {
                     inner: claims.values(),
                     execution_id: execution.id(),
                 }
+            }
+            BorrowedReviewExecutionSourceV4::Slice { claims, .. } => {
+                BorrowedExecutionClaimIterInnerV4::Slice(claims.iter())
             }
         };
         BorrowedExecutionClaimIterV4 { inner }
@@ -9053,7 +9080,8 @@ fn borrowed_projection_payload_ref_v4<'a>(
         | PersistedPayload::PartialRerunActionRecordedV5(_)
         | PersistedPayload::PartialRerunPlanSealedV5(_)
         | PersistedPayload::GluingRerunActionRecordedV5(_)
-        | PersistedPayload::GluingRerunPlanSealedV5(_) => {
+        | PersistedPayload::GluingRerunPlanSealedV5(_)
+        | PersistedPayload::TerminalCompletedV5(_) => {
             return Err(DomainError::EventSequence(
                 "event-v4 projection encountered a payload outside its closed contract".to_owned(),
             ));
@@ -9122,7 +9150,8 @@ fn decoded_payload(payload: PersistedPayload) -> DecodedPayload {
         | PersistedPayload::PartialRerunActionRecordedV5(_)
         | PersistedPayload::PartialRerunPlanSealedV5(_)
         | PersistedPayload::GluingRerunActionRecordedV5(_)
-        | PersistedPayload::GluingRerunPlanSealedV5(_) => {
+        | PersistedPayload::GluingRerunPlanSealedV5(_)
+        | PersistedPayload::TerminalCompletedV5(_) => {
             unreachable!("v4 payloads are not exposed through the legacy EventLog decoder")
         }
     }
@@ -9852,6 +9881,11 @@ fn decode_payload(version: EventContractVersion, input: &str) -> Result<Persiste
                     crate::GluingRerunPlanSealV5::from_event_json_bytes(raw.data.get().as_bytes())
                         .map_err(|error| DomainError::Validation(error.to_string()))?,
                 )
+            }
+            "terminal_completed_v5" if version == EventContractVersion::V5 => {
+                PersistedPayload::TerminalCompletedV5(raw_payload(
+                    raw.data.get().as_bytes().to_vec(),
+                )?)
             }
             "evidence_recorded_v3" => PersistedPayload::EvidenceRecordedV3(
                 EvidenceV3::from_json_bytes(raw.data.get().as_bytes()).map_err(m4_domain_error)?,
@@ -11577,6 +11611,109 @@ fn canonical_gluing_binding(binding: &GluingInputTrustBindingV4) -> Result<Vec<u
     })
 }
 
+/// Host-supplied, non-serializable V5-positioned trust input for one frozen
+/// V4 gluing descriptor. Validation happens before it is converted into the
+/// private replay binding, so callers never receive a V5 append capability.
+pub struct V5GluingInputTrustInput {
+    policy_revision_hash: ContentHash,
+    repository_id: StableId,
+    repository_source_hash: ContentHash,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    snapshot_id: StableId,
+    universe_id: StableId,
+    plan_id: StableId,
+    profile_descriptor_id: String,
+    context_id: StableId,
+    descriptor_id: StableId,
+    descriptor_hash: ContentHash,
+    descriptor_size: u64,
+    descriptor_media_type: String,
+    descriptor_sensitivity: ArtifactSensitivity,
+    source: ArtifactSourceV4,
+    predecessor_event_hash: ContentHash,
+    event_sequence: u64,
+}
+
+impl V5GluingInputTrustInput {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        policy_revision_hash: ContentHash,
+        repository_id: StableId,
+        repository_source_hash: ContentHash,
+        run_id: StableId,
+        genesis_hash: ContentHash,
+        snapshot_id: StableId,
+        universe_id: StableId,
+        plan_id: StableId,
+        profile_descriptor_id: impl Into<String>,
+        context_id: StableId,
+        descriptor_id: StableId,
+        descriptor_hash: ContentHash,
+        descriptor_size: u64,
+        descriptor_media_type: impl Into<String>,
+        descriptor_sensitivity: ArtifactSensitivity,
+        source: ArtifactSourceV4,
+        predecessor_event_hash: ContentHash,
+        event_sequence: u64,
+    ) -> Result<Self> {
+        let value = Self {
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            run_id,
+            genesis_hash,
+            snapshot_id,
+            universe_id,
+            plan_id,
+            profile_descriptor_id: profile_descriptor_id.into(),
+            context_id,
+            descriptor_id,
+            descriptor_hash,
+            descriptor_size,
+            descriptor_media_type: descriptor_media_type.into(),
+            descriptor_sensitivity,
+            source,
+            predecessor_event_hash,
+            event_sequence,
+        };
+        value.private_binding()?.validate()?;
+        Ok(value)
+    }
+
+    fn private_binding(&self) -> Result<GluingInputTrustBindingV4AtV5> {
+        let registration_id = ArtifactRegistrationV4::derived_id(
+            &self.run_id,
+            &self.descriptor_hash,
+            &self.descriptor_media_type,
+            self.descriptor_size,
+            self.descriptor_sensitivity,
+            &self.source,
+        )?;
+        Ok(GluingInputTrustBindingV4AtV5 {
+            policy_revision_hash: self.policy_revision_hash.clone(),
+            repository_id: self.repository_id.clone(),
+            repository_source_hash: self.repository_source_hash.clone(),
+            run_id: self.run_id.clone(),
+            genesis_hash: self.genesis_hash.clone(),
+            snapshot_id: self.snapshot_id.clone(),
+            universe_id: self.universe_id.clone(),
+            plan_id: self.plan_id.clone(),
+            profile_descriptor_id: self.profile_descriptor_id.clone(),
+            context_id: self.context_id.clone(),
+            descriptor_id: self.descriptor_id.clone(),
+            descriptor_hash: self.descriptor_hash.clone(),
+            descriptor_size: self.descriptor_size,
+            descriptor_media_type: self.descriptor_media_type.clone(),
+            descriptor_sensitivity: self.descriptor_sensitivity,
+            registration_id,
+            source: self.source.clone(),
+            predecessor_event_hash: self.predecessor_event_hash.clone(),
+            event_sequence: self.event_sequence,
+        })
+    }
+}
+
 /// Exact V5-positioned host trust root for one frozen V4 gluing input.
 ///
 /// This is intentionally not constructible from a V4 replay capability.  The
@@ -11877,9 +12014,8 @@ pub struct AuthorityTrustRootsV4 {
 // it has no conversion to
 // `AuthorityTrustRootsV4`, no V4 basis input, and its eventual digest commits
 // V5 event positions.
-#[allow(dead_code)] // Private V5 authority reducer foundation; no public seam yet.
 #[derive(Clone, Debug)]
-pub(crate) struct AuthorityTrustRootsV5 {
+pub struct AuthorityTrustRootsV5 {
     policy_revision_hash: ContentHash,
     repository_id: StableId,
     repository_source_hash: ContentHash,
@@ -11892,14 +12028,116 @@ pub(crate) struct AuthorityTrustRootsV5 {
 /// Private, workspace-scoped CAS seam reserved for V5 authority replay. It
 /// intentionally is a distinct trait from the V4 resolver, preventing a V4
 /// replay capability from being passed as a V5 session input by type.
-#[allow(dead_code)] // Consumed by the private V5 authority reducer.
-pub(crate) trait AuthorityArtifactResolverV5 {
+pub trait AuthorityArtifactResolverV5 {
     fn read_exact(&self, cas_hash: &ContentHash, destination: &mut [u8]) -> Result<()>;
 }
 
 impl AuthorityTrustRootsV5 {
+    /// Consumes this root and adds one host-provided native harness tuple.
+    /// The tuple is revalidated as part of rebuilding the private V5 root;
+    /// it grants no append capability.
+    pub fn with_added_harness(self, harness: AuthorityHarnessBindingV3Tuple) -> Result<Self> {
+        let mut harnesses = self.harnesses;
+        harnesses.push(harness);
+        let mut next = Self::new(
+            self.policy_revision_hash,
+            self.repository_id,
+            self.repository_source_hash,
+            harnesses,
+            self.human_grants,
+            self.allowed_gluing_input_bindings,
+        )?;
+        next.allowed_preservation_bindings = self.allowed_preservation_bindings;
+        Ok(next)
+    }
+
+    /// Consumes this root and adds one host-provided human grant. As with the
+    /// harness seam, Core validates it against the exact scheduled decision
+    /// before any durable human record can be appended.
+    pub fn with_added_human_grant(self, grant: AuthorityHumanGrantV3Tuple) -> Result<Self> {
+        let mut grants = self.human_grants;
+        grants.push(grant);
+        let mut next = Self::new(
+            self.policy_revision_hash,
+            self.repository_id,
+            self.repository_source_hash,
+            self.harnesses,
+            grants,
+            self.allowed_gluing_input_bindings,
+        )?;
+        next.allowed_preservation_bindings = self.allowed_preservation_bindings;
+        Ok(next)
+    }
+
+    /// Creates the host-owned V5 roots for a target that has no positioned
+    /// V5 gluing-input authority.  This is deliberately not a conversion
+    /// from a V3/V4 replay capability: callers must provide fresh host-root
+    /// values for the new V5 event coordinate space.
+    pub fn new_without_gluing(
+        policy_revision_hash: ContentHash,
+        repository_id: StableId,
+        repository_source_hash: ContentHash,
+        harnesses: Vec<AuthorityHarnessBindingV3Tuple>,
+        human_grants: Vec<AuthorityHumanGrantV3Tuple>,
+    ) -> Result<Self> {
+        Self::new(
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            Vec::new(),
+        )
+    }
+
+    /// Converts validated host inputs into the private positioned roots used
+    /// by the locked V5 replay. This is not a V4-capability translation and
+    /// does not expose registrations, descriptors, or append authority.
+    pub fn new_with_gluing(
+        policy_revision_hash: ContentHash,
+        repository_id: StableId,
+        repository_source_hash: ContentHash,
+        harnesses: Vec<AuthorityHarnessBindingV3Tuple>,
+        human_grants: Vec<AuthorityHumanGrantV3Tuple>,
+        gluing_inputs: Vec<V5GluingInputTrustInput>,
+    ) -> Result<Self> {
+        let mut bindings = Vec::with_capacity(gluing_inputs.len());
+        for input in gluing_inputs {
+            bindings.push(input.private_binding()?);
+        }
+        Self::new(
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            bindings,
+        )
+    }
+
+    /// Adds one freshly observed, V5-positioned gluing descriptor binding to
+    /// an existing host root.  This is intentionally a consuming operation:
+    /// the caller cannot retain a pre-admission root and later combine it
+    /// with an arbitrary binding set.  It supports the required sequential
+    /// M5 protocol, where the second descriptor's predecessor is the first
+    /// registration event rather than a speculative future coordinate.
+    pub fn with_added_gluing_input(self, gluing_input: V5GluingInputTrustInput) -> Result<Self> {
+        let mut bindings = self.allowed_gluing_input_bindings;
+        bindings.push(gluing_input.private_binding()?);
+        let mut next = Self::new(
+            self.policy_revision_hash,
+            self.repository_id,
+            self.repository_source_hash,
+            self.harnesses,
+            self.human_grants,
+            bindings,
+        )?;
+        next.allowed_preservation_bindings = self.allowed_preservation_bindings;
+        Ok(next)
+    }
+
     #[allow(dead_code)] // Connected when the private V5 authority reducer lands.
-    pub(crate) fn new(
+    fn new(
         policy_revision_hash: ContentHash,
         repository_id: StableId,
         repository_source_hash: ContentHash,
@@ -20275,6 +20513,1427 @@ pub struct EventLogV5 {
     limits: EventReplayLimitsV5,
 }
 
+/// Versioned, read-only metadata for one V5 event as consumed by a derived
+/// store projection.  This deliberately contains neither the payload JSON nor
+/// an append/replay capability.  `record_ids` is plural because the frozen
+/// preservation event durably carries an evidence/verification pair.
+///
+/// The contract is intentionally descriptive: it is not an authority proof,
+/// does not make claims accepted, and does not collapse facts, claims,
+/// evidence, verification, or human decisions.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V5IndexProjectionRecord {
+    pub schema: String,
+    pub sequence: u64,
+    pub event_id: StableId,
+    pub event_hash: ContentHash,
+    pub payload_hash: ContentHash,
+    pub payload_kind: String,
+    pub actor: String,
+    pub logical_time: u64,
+    pub record_ids: Vec<StableId>,
+    pub body_hash: ContentHash,
+    pub source_ids: Vec<StableId>,
+}
+
+/// Immutable V5 envelope provenance for Store projections.  This is a
+/// read-only witness, not an append handle or an authority cursor.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V5ProjectionEventWitness {
+    pub sequence: u64,
+    pub event_id: StableId,
+    pub event_hash: ContentHash,
+    pub payload_hash: ContentHash,
+    pub body_hash: ContentHash,
+    /// Exact envelope metadata retained with the typed DTO.  Store must not
+    /// invent a projection actor or logical time while materializing SQLite.
+    pub actor: String,
+    pub logical_time: u64,
+}
+
+/// Read-only terminal-marker body for a derived index.  This has no replay,
+/// append, or acceptance authority; it is the fully typed descriptive form of
+/// the one durable `terminal_completed_v5` event.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalCompletedProjectionV5 {
+    pub schema: String,
+    pub id: StableId,
+    pub source_closure_id: StableId,
+    pub partial_rerun_plan_id: StableId,
+    pub target_plan_id: StableId,
+    pub gluing_required: bool,
+    pub gluing_plan_seal_id: Option<StableId>,
+    pub gluing_plan_seal_body_hash: Option<ContentHash>,
+    pub m4_completion_digest: ContentHash,
+    pub m5_completion_kind: String,
+    pub m5_completion_attempt_id: Option<StableId>,
+    pub m5_member_event_ids: Vec<StableId>,
+    pub final_cursor_basis_digest: ContentHash,
+    pub body_hash: ContentHash,
+}
+
+/// Complete frozen V3/V4 payload bodies from a validated V5 prefix.  Unlike
+/// `V5TypedProjectionRecord`'s historical metadata rows, this is an owned,
+/// strict DTO projection intended for a terminal report reducer.  It contains
+/// no payload JSON, parser, journal cursor, or authority capability.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum V5InheritedReportProjection {
+    RunGenesisManifest {
+        witness: V5ProjectionEventWitness,
+        value: RunGenesisManifestV4,
+        source_ids: Vec<StableId>,
+    },
+    ArtifactRegistered {
+        witness: V5ProjectionEventWitness,
+        value: ArtifactRegisteredV3,
+        source_ids: Vec<StableId>,
+    },
+    SnapshotSourcesRecorded {
+        witness: V5ProjectionEventWitness,
+        value: SnapshotSourcesRecorded,
+        source_ids: Vec<StableId>,
+    },
+    ReviewPlanRecorded {
+        witness: V5ProjectionEventWitness,
+        value: ReviewPlan,
+        source_ids: Vec<StableId>,
+    },
+    ContextEnvelopeProjected {
+        witness: V5ProjectionEventWitness,
+        value: ReviewContextEnvelope,
+        source_ids: Vec<StableId>,
+    },
+    ObligationTransition {
+        witness: V5ProjectionEventWitness,
+        obligation_id: StableId,
+        next: ObligationLifecycle,
+        source_ids: Vec<StableId>,
+    },
+    ReviewExecutionRecorded {
+        witness: V5ProjectionEventWitness,
+        execution: ExecutionRecord,
+        claims: Vec<ExecutionClaimV2>,
+        source_ids: Vec<StableId>,
+    },
+    EvidenceRecordedV3 {
+        witness: V5ProjectionEventWitness,
+        value: EvidenceV3,
+        source_ids: Vec<StableId>,
+    },
+    EvidenceBoundV3 {
+        witness: V5ProjectionEventWitness,
+        value: EvidenceBindingV3,
+        source_ids: Vec<StableId>,
+    },
+    VerificationRecordedV3 {
+        witness: V5ProjectionEventWitness,
+        value: VerificationV3,
+        source_ids: Vec<StableId>,
+    },
+    DecisionRecordedV3 {
+        witness: V5ProjectionEventWitness,
+        value: DecisionV3,
+        source_ids: Vec<StableId>,
+    },
+    FindingRecordedV3 {
+        witness: V5ProjectionEventWitness,
+        value: FindingV3,
+        source_ids: Vec<StableId>,
+    },
+    ArtifactRegisteredV4 {
+        witness: V5ProjectionEventWitness,
+        value: ArtifactRegistrationV4,
+        source_ids: Vec<StableId>,
+    },
+    /// The descriptor is roots/CAS-derived from a completed M5 cursor and is
+    /// attached to its already durable V4 registration witness by Store.
+    /// It is never decoded from an arbitrary journal payload.
+    GluingInputDescriptorV4 {
+        witness: V5ProjectionEventWitness,
+        value: crate::GluingInputDescriptorV4,
+        source_ids: Vec<StableId>,
+    },
+    GluingBundleRecordedV4 {
+        witness: V5ProjectionEventWitness,
+        value: Box<crate::GluingBundleV4>,
+        source_ids: Vec<StableId>,
+    },
+}
+
+impl V5InheritedReportProjection {
+    /// Event witness for this complete inherited report row.  The typed value
+    /// remains owned by the closed enum; Store may use this only to populate
+    /// the matching durable event tuple.
+    #[must_use]
+    pub const fn witness(&self) -> &V5ProjectionEventWitness {
+        match self {
+            Self::RunGenesisManifest { witness, .. }
+            | Self::ArtifactRegistered { witness, .. }
+            | Self::SnapshotSourcesRecorded { witness, .. }
+            | Self::ReviewPlanRecorded { witness, .. }
+            | Self::ContextEnvelopeProjected { witness, .. }
+            | Self::ObligationTransition { witness, .. }
+            | Self::ReviewExecutionRecorded { witness, .. }
+            | Self::EvidenceRecordedV3 { witness, .. }
+            | Self::EvidenceBoundV3 { witness, .. }
+            | Self::VerificationRecordedV3 { witness, .. }
+            | Self::DecisionRecordedV3 { witness, .. }
+            | Self::FindingRecordedV3 { witness, .. }
+            | Self::ArtifactRegisteredV4 { witness, .. }
+            | Self::GluingInputDescriptorV4 { witness, .. }
+            | Self::GluingBundleRecordedV4 { witness, .. } => witness,
+        }
+    }
+
+    /// Borrowed frozen-V4 presentation view of this already decoded,
+    /// roots-bound inherited record. It carries no replay, append, or JSON
+    /// decoding capability; Store uses it only while materializing a terminal
+    /// report snapshot under the proof-validated dual lock.
+    #[must_use]
+    pub fn report_view_v4(&self) -> BorrowedProjectionPayloadRefV4<'_> {
+        match self {
+            Self::RunGenesisManifest { value, .. } => {
+                BorrowedProjectionPayloadRefV4::RunGenesisManifestV4(
+                    BorrowedRunGenesisManifestProjectionV4 { value },
+                )
+            }
+            Self::ArtifactRegistered { value, .. } => {
+                BorrowedProjectionPayloadRefV4::ArtifactRegisteredV3(
+                    BorrowedArtifactRegistrationProjectionV3 { value },
+                )
+            }
+            Self::SnapshotSourcesRecorded { value, .. } => {
+                BorrowedProjectionPayloadRefV4::SnapshotSourcesRecorded(
+                    BorrowedSnapshotSourcesProjectionV4 { value },
+                )
+            }
+            Self::ReviewPlanRecorded { value, .. } => {
+                BorrowedProjectionPayloadRefV4::ReviewPlanRecorded(BorrowedReviewPlanProjectionV4 {
+                    value,
+                })
+            }
+            Self::ContextEnvelopeProjected { value, .. } => {
+                BorrowedProjectionPayloadRefV4::ContextEnvelopeProjected(
+                    BorrowedContextEnvelopeProjectionV4 { value },
+                )
+            }
+            Self::ObligationTransition {
+                obligation_id,
+                next,
+                ..
+            } => BorrowedProjectionPayloadRefV4::ObligationTransition(
+                BorrowedObligationTransitionProjectionV4 {
+                    obligation_id,
+                    next: *next,
+                },
+            ),
+            Self::ReviewExecutionRecorded {
+                execution, claims, ..
+            } => BorrowedProjectionPayloadRefV4::ReviewExecutionRecorded(
+                BorrowedReviewExecutionProjectionV4 {
+                    source: BorrowedReviewExecutionSourceV4::Slice { execution, claims },
+                },
+            ),
+            Self::EvidenceRecordedV3 { value, .. } => {
+                BorrowedProjectionPayloadRefV4::EvidenceRecordedV3(BorrowedEvidenceProjectionV3 {
+                    value,
+                })
+            }
+            Self::EvidenceBoundV3 { value, .. } => BorrowedProjectionPayloadRefV4::EvidenceBoundV3(
+                BorrowedEvidenceBindingProjectionV3 { value },
+            ),
+            Self::VerificationRecordedV3 { value, .. } => {
+                BorrowedProjectionPayloadRefV4::VerificationRecordedV3(
+                    BorrowedVerificationProjectionV3 { value },
+                )
+            }
+            Self::DecisionRecordedV3 { value, .. } => {
+                BorrowedProjectionPayloadRefV4::DecisionRecordedV3(BorrowedDecisionProjectionV3 {
+                    value,
+                })
+            }
+            Self::FindingRecordedV3 { value, .. } => {
+                BorrowedProjectionPayloadRefV4::FindingRecordedV3(BorrowedFindingProjectionV3 {
+                    value,
+                })
+            }
+            Self::ArtifactRegisteredV4 { value, .. } => {
+                BorrowedProjectionPayloadRefV4::ArtifactRegisteredV4(
+                    BorrowedArtifactRegistrationProjectionV4 {
+                        value,
+                        descriptor: None,
+                    },
+                )
+            }
+            Self::GluingInputDescriptorV4 { value, .. } => {
+                BorrowedProjectionPayloadRefV4::GluingInputDescriptorV4(
+                    BorrowedGluingInputDescriptorProjectionV4 { value },
+                )
+            }
+            Self::GluingBundleRecordedV4 { value, .. } => {
+                BorrowedProjectionPayloadRefV4::GluingBundleRecordedV4(
+                    BorrowedGluingBundleProjectionV4 { value },
+                )
+            }
+        }
+    }
+
+    /// Rebinds a roots/CAS-derived descriptor to its exact durable V4
+    /// registration body for typed index materialization. The descriptor is
+    /// not read from journal JSON and a mismatched registration ID is refused.
+    pub fn registration_report_view_v4_with_descriptor<'a>(
+        &'a self,
+        descriptor: &'a crate::GluingInputDescriptorV4,
+    ) -> Result<BorrowedProjectionPayloadRefV4<'a>> {
+        let Self::ArtifactRegisteredV4 { value, .. } = self else {
+            return Err(DomainError::Validation(
+                "descriptor can only bind a V4 registration projection".to_owned(),
+            ));
+        };
+        Ok(BorrowedProjectionPayloadRefV4::ArtifactRegisteredV4(
+            BorrowedArtifactRegistrationProjectionV4 {
+                value,
+                descriptor: Some(descriptor),
+            },
+        ))
+    }
+}
+
+/// A closed, raw-prose-free Store projection row.  Every variant is one
+/// durable V5 family, so consumers cannot relabel an evidence/verification or
+/// an M6 seal as a claim merely by moving a generic metadata record between
+/// arrays.  `record_ids` remains plural only for atomic preservation bundles.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum V5TypedProjectionRecord {
+    RunGenesisManifest {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    ArtifactRegistered {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    SnapshotSourcesRecorded {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    ReviewPlanRecorded {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    ContextEnvelopeProjected {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    ObligationTransition {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    ReviewExecutionRecorded {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    FindingRecordedV3 {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    EvidenceRecordedV3 {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    EvidenceBoundV3 {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    VerificationRecordedV3 {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    DecisionRecordedV3 {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    ArtifactRegisteredV4 {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    GluingBundleRecordedV4 {
+        witness: V5ProjectionEventWitness,
+        record_ids: Vec<StableId>,
+        source_ids: Vec<StableId>,
+    },
+    IncrementalSourceBoundV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::IncrementalSourceClosureV5,
+        source_ids: Vec<StableId>,
+    },
+    ProgramMappingRecordedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::ProgramMappingV5,
+        source_ids: Vec<StableId>,
+    },
+    ChangeMorphismSealedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::ChangeMorphismV5,
+        source_ids: Vec<StableId>,
+    },
+    ObligationCorrespondenceEntryRecordedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::ObligationCorrespondenceEntryV5,
+        source_ids: Vec<StableId>,
+    },
+    ObligationCorrespondenceSealedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::ObligationCorrespondenceV5,
+        source_ids: Vec<StableId>,
+    },
+    HistoricalRecordAssessedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::HistoricalRecordAssessmentV5,
+        source_ids: Vec<StableId>,
+    },
+    GluingFreshnessRecordedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::GluingFreshnessV5,
+        source_ids: Vec<StableId>,
+    },
+    StalenessAssessmentSealedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::StalenessAssessmentV5,
+        source_ids: Vec<StableId>,
+    },
+    ArtifactRegisteredV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::ArtifactRegistrationV5,
+        source_ids: Vec<StableId>,
+    },
+    PreservationVerifiedV5 {
+        witness: V5ProjectionEventWitness,
+        evidence: crate::PreservationEvidenceV5,
+        verification: crate::PreservationVerificationV5,
+        source_ids: Vec<StableId>,
+    },
+    PartialRerunActionRecordedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::PartialRerunActionV5,
+        source_ids: Vec<StableId>,
+    },
+    PartialRerunPlanSealedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::PartialRerunPlanV5,
+        source_ids: Vec<StableId>,
+    },
+    GluingRerunActionRecordedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::GluingRerunActionV5,
+        source_ids: Vec<StableId>,
+    },
+    GluingRerunPlanSealedV5 {
+        witness: V5ProjectionEventWitness,
+        value: crate::GluingRerunPlanSealV5,
+        source_ids: Vec<StableId>,
+    },
+    TerminalCompletedV5 {
+        witness: V5ProjectionEventWitness,
+        value: TerminalCompletedProjectionV5,
+        source_ids: Vec<StableId>,
+    },
+}
+
+impl V5TypedProjectionRecord {
+    #[must_use]
+    pub const fn is_m6(&self) -> bool {
+        matches!(
+            self,
+            Self::IncrementalSourceBoundV5 { .. }
+                | Self::ProgramMappingRecordedV5 { .. }
+                | Self::ChangeMorphismSealedV5 { .. }
+                | Self::ObligationCorrespondenceEntryRecordedV5 { .. }
+                | Self::ObligationCorrespondenceSealedV5 { .. }
+                | Self::HistoricalRecordAssessedV5 { .. }
+                | Self::GluingFreshnessRecordedV5 { .. }
+                | Self::StalenessAssessmentSealedV5 { .. }
+                | Self::ArtifactRegisteredV5 { .. }
+                | Self::PreservationVerifiedV5 { .. }
+                | Self::PartialRerunActionRecordedV5 { .. }
+                | Self::PartialRerunPlanSealedV5 { .. }
+                | Self::GluingRerunActionRecordedV5 { .. }
+                | Self::GluingRerunPlanSealedV5 { .. }
+                | Self::TerminalCompletedV5 { .. }
+        )
+    }
+
+    pub fn witness(&self) -> &V5ProjectionEventWitness {
+        macro_rules! witness { ($($variant:ident),+ $(,)?) => { match self { $(Self::$variant { witness, .. } => witness,)+ } }; }
+        witness!(
+            RunGenesisManifest,
+            ArtifactRegistered,
+            SnapshotSourcesRecorded,
+            ReviewPlanRecorded,
+            ContextEnvelopeProjected,
+            ObligationTransition,
+            ReviewExecutionRecorded,
+            FindingRecordedV3,
+            EvidenceRecordedV3,
+            EvidenceBoundV3,
+            VerificationRecordedV3,
+            DecisionRecordedV3,
+            ArtifactRegisteredV4,
+            GluingBundleRecordedV4,
+            IncrementalSourceBoundV5,
+            ProgramMappingRecordedV5,
+            ChangeMorphismSealedV5,
+            ObligationCorrespondenceEntryRecordedV5,
+            ObligationCorrespondenceSealedV5,
+            HistoricalRecordAssessedV5,
+            GluingFreshnessRecordedV5,
+            StalenessAssessmentSealedV5,
+            ArtifactRegisteredV5,
+            PreservationVerifiedV5,
+            PartialRerunActionRecordedV5,
+            PartialRerunPlanSealedV5,
+            GluingRerunActionRecordedV5,
+            GluingRerunPlanSealedV5,
+            TerminalCompletedV5
+        )
+    }
+
+    pub fn record_ids(&self) -> Vec<StableId> {
+        macro_rules! inherited { ($($variant:ident),+ $(,)?) => { match self { $(Self::$variant { record_ids, .. } => record_ids.clone(),)+ _ => unreachable!("M6 rows have concrete typed bodies") } }; }
+        match self {
+            Self::IncrementalSourceBoundV5 { value, .. } => vec![value.id().clone()],
+            Self::ProgramMappingRecordedV5 { value, .. } => vec![value.id().clone()],
+            Self::ChangeMorphismSealedV5 { value, .. } => vec![value.id().clone()],
+            Self::ObligationCorrespondenceEntryRecordedV5 { value, .. } => vec![value.id().clone()],
+            Self::ObligationCorrespondenceSealedV5 { value, .. } => vec![value.id().clone()],
+            Self::HistoricalRecordAssessedV5 { value, .. } => vec![value.id().clone()],
+            Self::GluingFreshnessRecordedV5 { value, .. } => vec![value.id().clone()],
+            Self::StalenessAssessmentSealedV5 { value, .. } => vec![value.id().clone()],
+            Self::ArtifactRegisteredV5 { value, .. } => vec![value.id().clone()],
+            Self::PreservationVerifiedV5 {
+                evidence,
+                verification,
+                ..
+            } => vec![evidence.id().clone(), verification.id().clone()],
+            Self::PartialRerunActionRecordedV5 { value, .. } => vec![value.id().clone()],
+            Self::PartialRerunPlanSealedV5 { value, .. } => vec![value.id().clone()],
+            Self::GluingRerunActionRecordedV5 { value, .. } => vec![value.id().clone()],
+            Self::GluingRerunPlanSealedV5 { value, .. } => vec![value.id().clone()],
+            Self::TerminalCompletedV5 { value, .. } => vec![value.id.clone()],
+            _ => inherited!(
+                RunGenesisManifest,
+                ArtifactRegistered,
+                SnapshotSourcesRecorded,
+                ReviewPlanRecorded,
+                ContextEnvelopeProjected,
+                ObligationTransition,
+                ReviewExecutionRecorded,
+                FindingRecordedV3,
+                EvidenceRecordedV3,
+                EvidenceBoundV3,
+                VerificationRecordedV3,
+                DecisionRecordedV3,
+                ArtifactRegisteredV4,
+                GluingBundleRecordedV4
+            ),
+        }
+    }
+
+    pub fn source_ids(&self) -> Vec<StableId> {
+        macro_rules! inherited { ($($variant:ident),+ $(,)?) => { match self { $(Self::$variant { source_ids, .. } => source_ids.clone(),)+ _ => unreachable!("M6 rows retain their validated source IDs") } }; }
+        match self {
+            Self::IncrementalSourceBoundV5 { source_ids, .. }
+            | Self::ProgramMappingRecordedV5 { source_ids, .. }
+            | Self::ChangeMorphismSealedV5 { source_ids, .. }
+            | Self::ObligationCorrespondenceEntryRecordedV5 { source_ids, .. }
+            | Self::ObligationCorrespondenceSealedV5 { source_ids, .. }
+            | Self::HistoricalRecordAssessedV5 { source_ids, .. }
+            | Self::GluingFreshnessRecordedV5 { source_ids, .. }
+            | Self::StalenessAssessmentSealedV5 { source_ids, .. }
+            | Self::ArtifactRegisteredV5 { source_ids, .. }
+            | Self::PreservationVerifiedV5 { source_ids, .. }
+            | Self::PartialRerunActionRecordedV5 { source_ids, .. }
+            | Self::PartialRerunPlanSealedV5 { source_ids, .. }
+            | Self::GluingRerunActionRecordedV5 { source_ids, .. }
+            | Self::GluingRerunPlanSealedV5 { source_ids, .. }
+            | Self::TerminalCompletedV5 { source_ids, .. } => source_ids.clone(),
+            _ => inherited!(
+                RunGenesisManifest,
+                ArtifactRegistered,
+                SnapshotSourcesRecorded,
+                ReviewPlanRecorded,
+                ContextEnvelopeProjected,
+                ObligationTransition,
+                ReviewExecutionRecorded,
+                FindingRecordedV3,
+                EvidenceRecordedV3,
+                EvidenceBoundV3,
+                VerificationRecordedV3,
+                DecisionRecordedV3,
+                ArtifactRegisteredV4,
+                GluingBundleRecordedV4
+            ),
+        }
+    }
+
+    fn from_metadata(record: V5IndexProjectionRecord) -> Result<Self> {
+        let witness = V5ProjectionEventWitness {
+            sequence: record.sequence,
+            event_id: record.event_id,
+            event_hash: record.event_hash,
+            payload_hash: record.payload_hash,
+            body_hash: record.body_hash,
+            actor: record.actor,
+            logical_time: record.logical_time,
+        };
+        let ids = record.record_ids;
+        let sources = record.source_ids;
+        macro_rules! row {
+            ($variant:ident) => {
+                Ok(Self::$variant {
+                    witness,
+                    record_ids: ids,
+                    source_ids: sources,
+                })
+            };
+        }
+        match record.payload_kind.as_str() {
+            "run_genesis_manifest" => row!(RunGenesisManifest),
+            "artifact_registered" => row!(ArtifactRegistered),
+            "snapshot_sources_recorded" => row!(SnapshotSourcesRecorded),
+            "review_plan_recorded" => row!(ReviewPlanRecorded),
+            "context_envelope_projected" => row!(ContextEnvelopeProjected),
+            "obligation_transition" => row!(ObligationTransition),
+            "review_execution_recorded" => row!(ReviewExecutionRecorded),
+            "finding_recorded_v3" => row!(FindingRecordedV3),
+            "evidence_recorded_v3" => row!(EvidenceRecordedV3),
+            "evidence_bound_v3" => row!(EvidenceBoundV3),
+            "verification_recorded_v3" => row!(VerificationRecordedV3),
+            "decision_recorded_v3" => row!(DecisionRecordedV3),
+            "artifact_registered_v4" => row!(ArtifactRegisteredV4),
+            "gluing_bundle_recorded_v4" => row!(GluingBundleRecordedV4),
+            "incremental_source_bound_v5"
+            | "program_mapping_recorded_v5"
+            | "change_morphism_sealed_v5"
+            | "obligation_correspondence_entry_recorded_v5"
+            | "obligation_correspondence_sealed_v5"
+            | "historical_record_assessed_v5"
+            | "gluing_freshness_recorded_v5"
+            | "staleness_assessment_sealed_v5"
+            | "artifact_registered_v5"
+            | "preservation_verified_v5"
+            | "partial_rerun_action_recorded_v5"
+            | "partial_rerun_plan_sealed_v5"
+            | "gluing_rerun_action_recorded_v5"
+            | "gluing_rerun_plan_sealed_v5" => Err(DomainError::EventSequence(
+                "M6 index rows require the typed projection visitor".to_owned(),
+            )),
+            "terminal_completed_v5" => Err(DomainError::EventSequence(
+                "terminal index rows require the typed projection visitor".to_owned(),
+            )),
+            _ => Err(DomainError::EventSequence(
+                "unknown V5 typed projection payload kind".to_owned(),
+            )),
+        }
+    }
+}
+
+fn typed_m6_projection_record_v5(
+    payload: &PersistedPayload,
+    witness: V5ProjectionEventWitness,
+    source_ids: Vec<StableId>,
+) -> Result<Option<V5TypedProjectionRecord>> {
+    let m6 = |error: crate::M6Error| DomainError::Validation(error.to_string());
+    let row = match payload {
+        PersistedPayload::IncrementalSourceBoundV5(value) => {
+            V5TypedProjectionRecord::IncrementalSourceBoundV5 {
+                witness,
+                value: crate::IncrementalSourceClosureV5::from_projection_event_json(
+                    value.get().as_bytes(),
+                )
+                .map_err(m6)?,
+                source_ids,
+            }
+        }
+        PersistedPayload::ProgramMappingRecordedV5(value) => {
+            V5TypedProjectionRecord::ProgramMappingRecordedV5 {
+                witness,
+                value: crate::ProgramMappingV5::from_json_bytes(value.get().as_bytes())
+                    .map_err(m6)?,
+                source_ids,
+            }
+        }
+        PersistedPayload::ChangeMorphismSealedV5(value) => {
+            V5TypedProjectionRecord::ChangeMorphismSealedV5 {
+                witness,
+                value: crate::ChangeMorphismV5::from_projection_event_json(value.get().as_bytes())
+                    .map_err(m6)?,
+                source_ids,
+            }
+        }
+        PersistedPayload::ObligationCorrespondenceEntryRecordedV5(value) => {
+            V5TypedProjectionRecord::ObligationCorrespondenceEntryRecordedV5 {
+                witness,
+                value: crate::ObligationCorrespondenceEntryV5::from_json_bytes(
+                    value.get().as_bytes(),
+                )
+                .map_err(m6)?,
+                source_ids,
+            }
+        }
+        PersistedPayload::ObligationCorrespondenceSealedV5(value) => {
+            V5TypedProjectionRecord::ObligationCorrespondenceSealedV5 {
+                witness,
+                value: crate::ObligationCorrespondenceV5::from_projection_event_json(
+                    value.get().as_bytes(),
+                )
+                .map_err(m6)?,
+                source_ids,
+            }
+        }
+        PersistedPayload::HistoricalRecordAssessedV5(value) => {
+            V5TypedProjectionRecord::HistoricalRecordAssessedV5 {
+                witness,
+                value: crate::HistoricalRecordAssessmentV5::from_json_bytes(value.get().as_bytes())
+                    .map_err(m6)?,
+                source_ids,
+            }
+        }
+        PersistedPayload::GluingFreshnessRecordedV5(value) => {
+            V5TypedProjectionRecord::GluingFreshnessRecordedV5 {
+                witness,
+                value: crate::GluingFreshnessV5::from_json_bytes(value.get().as_bytes())
+                    .map_err(m6)?,
+                source_ids,
+            }
+        }
+        PersistedPayload::StalenessAssessmentSealedV5(value) => {
+            V5TypedProjectionRecord::StalenessAssessmentSealedV5 {
+                witness,
+                value: crate::StalenessAssessmentV5::from_projection_event_json(
+                    value.get().as_bytes(),
+                )
+                .map_err(m6)?,
+                source_ids,
+            }
+        }
+        PersistedPayload::ArtifactRegisteredV5(value) => {
+            V5TypedProjectionRecord::ArtifactRegisteredV5 {
+                witness,
+                value: value.clone(),
+                source_ids,
+            }
+        }
+        PersistedPayload::PreservationVerifiedV5 {
+            evidence,
+            verification,
+        } => V5TypedProjectionRecord::PreservationVerifiedV5 {
+            witness,
+            evidence: evidence.clone(),
+            verification: verification.clone(),
+            source_ids,
+        },
+        PersistedPayload::PartialRerunActionRecordedV5(value) => {
+            V5TypedProjectionRecord::PartialRerunActionRecordedV5 {
+                witness,
+                value: value.clone(),
+                source_ids,
+            }
+        }
+        PersistedPayload::PartialRerunPlanSealedV5(value) => {
+            V5TypedProjectionRecord::PartialRerunPlanSealedV5 {
+                witness,
+                value: value.clone(),
+                source_ids,
+            }
+        }
+        PersistedPayload::GluingRerunActionRecordedV5(value) => {
+            V5TypedProjectionRecord::GluingRerunActionRecordedV5 {
+                witness,
+                value: value.clone(),
+                source_ids,
+            }
+        }
+        PersistedPayload::GluingRerunPlanSealedV5(value) => {
+            V5TypedProjectionRecord::GluingRerunPlanSealedV5 {
+                witness,
+                value: value.clone(),
+                source_ids,
+            }
+        }
+        PersistedPayload::TerminalCompletedV5(value) => {
+            let value: TerminalCompletedWireV5 = serde_json::from_str(value.get())
+                .map_err(|error| DomainError::Json(error.to_string()))?;
+            value.validate()?;
+            let body_hash = ContentHash::sha256(&canonical_json(&value)?);
+            let projection = TerminalCompletedProjectionV5 {
+                schema: value.schema,
+                id: value.id,
+                source_closure_id: value.source_closure_id,
+                partial_rerun_plan_id: value.partial_rerun_plan_id,
+                target_plan_id: value.target_plan_id,
+                gluing_required: value.gluing_required,
+                gluing_plan_seal_id: value.gluing_plan_seal_id,
+                gluing_plan_seal_body_hash: value.gluing_plan_seal_body_hash,
+                m4_completion_digest: value.m4_completion_digest,
+                m5_completion_kind: value.m5_completion_kind,
+                m5_completion_attempt_id: value.m5_completion_attempt_id,
+                m5_member_event_ids: value.m5_member_event_ids,
+                final_cursor_basis_digest: value.final_cursor_basis_digest,
+                body_hash,
+            };
+            V5TypedProjectionRecord::TerminalCompletedV5 {
+                witness,
+                value: projection,
+                source_ids,
+            }
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(row))
+}
+
+/// Content-addressed, non-authorizing witness that a private V5 terminal M5
+/// cursor reached its only legal completion.  It deliberately records only
+/// identities and exact journal coordinates; raw reviewer/model prose and
+/// authority capabilities never cross this boundary.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TerminalProofV5 {
+    schema: String,
+    id: StableId,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    tail_hash: ContentHash,
+    event_count: u64,
+    /// The roots/CAS-replayed predecessor basis which the source-bound event
+    /// itself carries and which is independently witnessed by its durable
+    /// closure body.
+    authority_replay_basis_digest: ContentHash,
+    /// Non-authorizing observation of the completed private M5 cursor's
+    /// evolving basis.  Consumers must verify the preceding durable authority
+    /// basis above; this field is an exact cursor witness, not a substitute
+    /// for roots/CAS replay authority.
+    terminal_cursor_witness_digest: ContentHash,
+    policy_revision_hash: ContentHash,
+    source_closure_id: StableId,
+    partial_rerun_plan_id: StableId,
+    target_plan_id: StableId,
+    completion_kind: String,
+    completion_attempt_id: Option<StableId>,
+    member_event_ids: Vec<StableId>,
+    body_hash: ContentHash,
+}
+
+/// Complete terminal review closure rebuilt by the composite roots/CAS replay.
+///
+/// This is intentionally an opaque descriptive boundary.  Its rows retain
+/// their exact same-run event witnesses and source IDs, while the aggregate
+/// claim assessments are exposed only through the borrowed projection used by
+/// Store's typed index adapter.  It neither grants append authority nor lets a
+/// caller supply replacement review state.
+pub struct V5TerminalReviewClosure {
+    inherited_rows: Vec<V5InheritedReportProjection>,
+    assessments: Vec<crate::ClaimAssessmentV3>,
+}
+
+impl V5TerminalReviewClosure {
+    #[must_use]
+    pub fn inherited_rows(&self) -> &[V5InheritedReportProjection] {
+        &self.inherited_rows
+    }
+
+    /// Lends the complete terminal assessment closure in stable claim-ID
+    /// order.  The values are reconstructed only by the proof-bound terminal
+    /// replay, never from a caller DTO or a generic event payload decoder.
+    pub fn visit_claim_assessments_for_store(
+        &self,
+        visitor: &mut dyn FnMut(BorrowedClaimAssessmentProjectionV4<'_>) -> Result<()>,
+    ) -> Result<()> {
+        for value in &self.assessments {
+            visitor(BorrowedClaimAssessmentProjectionV4 { value })?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalProofWireV5 {
+    schema: String,
+    id: StableId,
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    tail_hash: ContentHash,
+    event_count: u64,
+    authority_replay_basis_digest: ContentHash,
+    terminal_cursor_witness_digest: ContentHash,
+    policy_revision_hash: ContentHash,
+    source_closure_id: StableId,
+    partial_rerun_plan_id: StableId,
+    target_plan_id: StableId,
+    completion_kind: String,
+    completion_attempt_id: Option<StableId>,
+    member_event_ids: Vec<StableId>,
+    body_hash: ContentHash,
+}
+
+/// The only durable terminal authority marker.  This remains an event-layer
+/// DTO: a proof is merely a projection receipt for this marker, never a
+/// substitute for it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalCompletedWireV5 {
+    schema: String,
+    id: StableId,
+    source_closure_id: StableId,
+    partial_rerun_plan_id: StableId,
+    target_plan_id: StableId,
+    gluing_required: bool,
+    gluing_plan_seal_id: Option<StableId>,
+    gluing_plan_seal_body_hash: Option<ContentHash>,
+    m4_completion_digest: ContentHash,
+    m5_completion_kind: String,
+    m5_completion_attempt_id: Option<StableId>,
+    m5_member_event_ids: Vec<StableId>,
+    final_cursor_basis_digest: ContentHash,
+}
+
+impl TerminalCompletedWireV5 {
+    fn validate(&self) -> Result<()> {
+        if self.schema != "reviewgraphen.terminal_completed.v5"
+            || self.id.kind() != "terminal-completed-v5"
+            || !matches!(
+                self.m5_completion_kind.as_str(),
+                "no_gluing_required" | "gluing_bundle_recorded"
+            )
+            || (self.m5_completion_kind == "no_gluing_required")
+                != self.m5_completion_attempt_id.is_none()
+            || self.gluing_required != self.gluing_plan_seal_id.is_some()
+            || self.gluing_required != self.gluing_plan_seal_body_hash.is_some()
+            || self
+                .m5_member_event_ids
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != self.m5_member_event_ids.len()
+        {
+            return Err(DomainError::Validation(
+                "invalid V5 terminal completed marker shape".to_owned(),
+            ));
+        }
+        let mut identity =
+            serde_json::to_value(self).map_err(|error| DomainError::Json(error.to_string()))?;
+        let object = identity.as_object_mut().ok_or_else(|| {
+            DomainError::Validation("terminal marker identity must be an object".to_owned())
+        })?;
+        object.remove("schema");
+        object.remove("id");
+        let expected = ContentHash::sha256(&canonical_json(&identity)?);
+        if self.id.as_str() != format!("terminal-completed-v5:{expected}") {
+            return Err(DomainError::Validation(
+                "V5 terminal completed marker identity mismatch".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl From<TerminalProofWireV5> for TerminalProofV5 {
+    fn from(value: TerminalProofWireV5) -> Self {
+        Self {
+            schema: value.schema,
+            id: value.id,
+            run_id: value.run_id,
+            genesis_hash: value.genesis_hash,
+            tail_hash: value.tail_hash,
+            event_count: value.event_count,
+            authority_replay_basis_digest: value.authority_replay_basis_digest,
+            terminal_cursor_witness_digest: value.terminal_cursor_witness_digest,
+            policy_revision_hash: value.policy_revision_hash,
+            source_closure_id: value.source_closure_id,
+            partial_rerun_plan_id: value.partial_rerun_plan_id,
+            target_plan_id: value.target_plan_id,
+            completion_kind: value.completion_kind,
+            completion_attempt_id: value.completion_attempt_id,
+            member_event_ids: value.member_event_ids,
+            body_hash: value.body_hash,
+        }
+    }
+}
+
+/// Read-only terminal-index inputs reconstructed only after a terminal proof
+/// has bound the complete V5 log.  These are accepted genesis facts, not a
+/// replay cursor, authority basis, or event-append capability.
+#[derive(Clone, Debug)]
+pub struct V5TerminalIndexFacts {
+    pub program_space: ProgramSpace,
+    pub universe: UniverseDescriptor,
+    /// The exact accepted denominator bodies rebuilt with the terminal-bound
+    /// genesis.  Store uses these only for its private report snapshot; no
+    /// lifecycle or acceptance state is carried by this clone.
+    pub obligations: Vec<Obligation>,
+}
+
+/// Opaque terminal receipt issued only after Core has replayed the final
+/// durable marker. It deliberately exposes no append capability or mutable
+/// terminal proof DTO.
+#[derive(Clone, Debug)]
+pub struct VerifiedTerminalReceiptV5 {
+    proof: TerminalProofV5,
+}
+
+/// Closed terminal M6 row locator derived only from a complete durable V5
+/// stream.  It is deliberately private: it is the handoff between structural
+/// terminal discovery and the roots/CAS replay factory, not a caller supplied
+/// set of replay boundaries.
+#[derive(Clone, Debug)]
+struct TerminalM6AuthorityRowsV5 {
+    source_closure_position: usize,
+    change_morphism_position: usize,
+    correspondence_position: usize,
+    staleness_position: usize,
+    partial_plan_position: usize,
+}
+
+/// Canonical durable M6 bodies selected from the one closed authority chain.
+/// These bytes are not authority on their own: the roots/CAS factory must
+/// recompute and compare them before it can mint a terminal receipt.
+#[derive(Clone, Debug)]
+struct TerminalM6AuthorityBodiesV5 {
+    closure: Vec<u8>,
+    morphism: Vec<u8>,
+    correspondence: Vec<u8>,
+    staleness: Vec<u8>,
+}
+
+impl VerifiedTerminalReceiptV5 {
+    #[must_use]
+    pub fn proof_id(&self) -> &StableId {
+        self.proof.id()
+    }
+    pub fn canonical_proof_bytes(&self) -> Result<Vec<u8>> {
+        self.proof.canonical_bytes()
+    }
+    #[doc(hidden)]
+    pub fn proof_for_verified_projection(&self) -> &TerminalProofV5 {
+        &self.proof
+    }
+}
+
+/// One-shot terminal-marker append capability.  Core derives it only from a
+/// complete, marker-free V5 terminal grammar and keeps both the marker body
+/// and envelope private.  Store may durably append the borrowed envelope, but
+/// cannot deserialize, replace, or mutate the terminal marker.
+#[derive(Debug)]
+pub struct PreparedTerminalCompletedV5 {
+    log_identity: V5LogInstanceIdentity,
+    predecessor_tail_hash: ContentHash,
+    next_sequence: u64,
+    envelope: EventEnvelope,
+}
+
+/// Borrowed, terminal-marker-only write capability. It deliberately does not
+/// expose an [`EventEnvelope`], payload, ID, or generic append operation.
+/// Store may stream the exact canonical JSONL line to its durable writer; the
+/// caller cannot turn this token into authority for any other event family.
+pub struct TerminalMarkerAppendV5<'a> {
+    envelope: &'a EventEnvelope,
+}
+
+impl TerminalMarkerAppendV5<'_> {
+    /// Writes the exact LF-terminated canonical terminal line. The marker
+    /// bytes are a narrow durable representation, not a mutable event DTO.
+    pub fn write_canonical_line(&self, output: &mut impl std::io::Write) -> Result<()> {
+        output
+            .write_all(&self.envelope.canonical_bytes()?)
+            .and_then(|()| output.write_all(b"\n"))
+            .map_err(|error| {
+                DomainError::Validation(format!("terminal marker write failed: {error}"))
+            })
+    }
+}
+
+impl PreparedTerminalCompletedV5 {
+    /// Consumes the opaque, one-shot marker capability through Store's exact
+    /// durable-append callback. The callback receives only a borrowed,
+    /// terminal-marker-specific line writer; callers cannot obtain an
+    /// envelope, construct a replacement, or reuse it as generic append
+    /// authority. Core
+    /// confirmation remains a separate consuming step so Store can prove the
+    /// write happened before the in-memory terminal cursor advances.
+    #[doc(hidden)]
+    pub fn append_to_store<T, E>(
+        self,
+        durable_append: impl for<'a> FnOnce(TerminalMarkerAppendV5<'a>) -> std::result::Result<T, E>,
+    ) -> std::result::Result<(Self, T), E> {
+        let receipt = durable_append(TerminalMarkerAppendV5 {
+            envelope: &self.envelope,
+        })?;
+        Ok((self, receipt))
+    }
+}
+
+#[derive(Serialize)]
+struct TerminalProofIdentityV5<'a> {
+    schema: &'a str,
+    run_id: &'a StableId,
+    genesis_hash: &'a ContentHash,
+    tail_hash: &'a ContentHash,
+    event_count: u64,
+    authority_replay_basis_digest: &'a ContentHash,
+    terminal_cursor_witness_digest: &'a ContentHash,
+    policy_revision_hash: &'a ContentHash,
+    source_closure_id: &'a StableId,
+    partial_rerun_plan_id: &'a StableId,
+    target_plan_id: &'a StableId,
+    completion_kind: &'a str,
+    completion_attempt_id: &'a Option<StableId>,
+    member_event_ids: &'a [StableId],
+}
+
+impl TerminalProofV5 {
+    fn identity(&self) -> TerminalProofIdentityV5<'_> {
+        TerminalProofIdentityV5 {
+            schema: &self.schema,
+            run_id: &self.run_id,
+            genesis_hash: &self.genesis_hash,
+            tail_hash: &self.tail_hash,
+            event_count: self.event_count,
+            authority_replay_basis_digest: &self.authority_replay_basis_digest,
+            terminal_cursor_witness_digest: &self.terminal_cursor_witness_digest,
+            policy_revision_hash: &self.policy_revision_hash,
+            source_closure_id: &self.source_closure_id,
+            partial_rerun_plan_id: &self.partial_rerun_plan_id,
+            target_plan_id: &self.target_plan_id,
+            completion_kind: &self.completion_kind,
+            completion_attempt_id: &self.completion_attempt_id,
+            member_event_ids: &self.member_event_ids,
+        }
+    }
+
+    fn from_completed_phase(
+        log: &EventLogV5,
+        phase: &ReplayedScheduledM5GluingPhaseV5,
+    ) -> Result<Self> {
+        // The M5 cursor is deliberately anchored immediately before the
+        // terminal marker.  Replaying that exact predecessor proves the
+        // cursor has not been transplanted, while the final marker remains
+        // bound to the full durable stream below.
+        let predecessor = log.terminal_marker_predecessor_v5()?;
+        phase.validate_pre_terminal_marker(&predecessor)?;
+        let (completion_kind, completion_attempt_id) = match phase.completion()? {
+            M5TerminalCompletionV5::NoGluingRequired { .. } => {
+                ("no_gluing_required".to_owned(), None)
+            }
+            M5TerminalCompletionV5::GluingBundleRecorded { attempt_id, .. } => {
+                ("gluing_bundle_recorded".to_owned(), Some(attempt_id))
+            }
+        };
+        let marker = log
+            .envelopes
+            .last()
+            .ok_or_else(|| {
+                DomainError::EventSequence(
+                    "V5 terminal proof requires a final terminal completed marker".to_owned(),
+                )
+            })
+            .and_then(|event| {
+                let payload =
+                    decode_canonical_payload(EventContractVersion::V5, event.payload.get())?;
+                let PersistedPayload::TerminalCompletedV5(raw) = payload else {
+                    return Err(DomainError::EventSequence(
+                        "V5 terminal proof requires terminal_completed_v5 as the final event"
+                            .to_owned(),
+                    ));
+                };
+                let marker: TerminalCompletedWireV5 = serde_json::from_str(raw.get())
+                    .map_err(|error| DomainError::Json(error.to_string()))?;
+                marker.validate()?;
+                Ok(marker)
+            })?;
+        if marker.source_closure_id != phase.source_closure_id
+            || marker.partial_rerun_plan_id != phase.partial_rerun_plan_id
+            || marker.target_plan_id != phase.target_plan_id
+            || marker.gluing_required != phase.gluing_required
+            || marker.gluing_plan_seal_id != phase.gluing_plan_seal_id
+            || marker.gluing_plan_seal_body_hash != phase.gluing_plan_seal_body_hash
+            || marker.m4_completion_digest != phase.m4_completion_digest
+            || marker.final_cursor_basis_digest != terminal_v5_final_cursor_basis_digest(log)?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let member_event_ids = log
+            .envelopes
+            .iter()
+            .map(|event| event.id().clone())
+            .collect::<Vec<_>>();
+        let mut proof = Self {
+            schema: "reviewgraphen.terminal_proof.v5".to_owned(),
+            id: StableId::parse("terminal-proof-v5:pending")?,
+            run_id: log.run_id.clone(),
+            genesis_hash: log.genesis_hash.clone(),
+            tail_hash: log.tail_hash().clone(),
+            event_count: u64::try_from(log.envelopes.len()).map_err(|_| {
+                DomainError::EventSequence("V5 terminal proof event count overflow".to_owned())
+            })?,
+            authority_replay_basis_digest: phase.basis.pre_incremental_basis_digest.clone(),
+            terminal_cursor_witness_digest: ContentHash::sha256(&canonical_json(&marker)?),
+            policy_revision_hash: phase.basis.policy_revision_hash.clone(),
+            source_closure_id: phase.source_closure_id.clone(),
+            partial_rerun_plan_id: phase.partial_rerun_plan_id.clone(),
+            target_plan_id: phase.target_plan_id.clone(),
+            completion_kind,
+            completion_attempt_id,
+            member_event_ids,
+            body_hash: ContentHash::sha256(b"pending"),
+        };
+        let identity = canonical_json(&proof.identity())?;
+        let hash = ContentHash::sha256(&identity);
+        proof.id = StableId::parse(format!("terminal-proof-v5:{hash}"))?;
+        proof.body_hash = hash;
+        proof.validate()?;
+        Ok(proof)
+    }
+
+    /// Reconstructs the sole canonical proof for a durably appended terminal
+    /// marker.  This is intentionally a recovery-only projection: it grants
+    /// neither a terminal cursor nor M5 authority.  The complete V5 chain is
+    /// revalidated before returning, so a marker written immediately before a
+    /// process crash can be republished to CAS without treating caller bytes
+    /// as a proof.
+    #[doc(hidden)]
+    pub fn recover_from_terminal_log_for_store(log: &EventLogV5) -> Result<Self> {
+        EventEnvelope::validate_v5_stream(
+            &log.run_id,
+            &log.canonical_genesis_bytes,
+            &log.envelopes,
+        )?;
+        let marker = log
+            .envelopes
+            .last()
+            .ok_or(DomainError::HistoricalPrefixMismatch(
+                "V5 terminal proof recovery has no final marker",
+            ))
+            .and_then(|event| {
+                let payload =
+                    decode_canonical_payload(EventContractVersion::V5, event.payload.get())?;
+                let PersistedPayload::TerminalCompletedV5(raw) = payload else {
+                    return Err(DomainError::HistoricalPrefixMismatch(
+                        "V5 terminal proof recovery requires terminal_completed_v5",
+                    ));
+                };
+                let marker: TerminalCompletedWireV5 = serde_json::from_str(raw.get())
+                    .map_err(|error| DomainError::Json(error.to_string()))?;
+                marker.validate()?;
+                Ok(marker)
+            })?;
+        let authority_replay_basis_digest = log
+            .envelopes
+            .iter()
+            .find_map(|event| {
+                let payload =
+                    decode_canonical_payload(EventContractVersion::V5, event.payload.get()).ok()?;
+                let PersistedPayload::IncrementalSourceBoundV5(raw) = payload else {
+                    return None;
+                };
+                let body = terminal_proof_v5_raw_object(raw.get().as_bytes()).ok()?;
+                (terminal_proof_v5_stable_id(&body, "id").ok()? == marker.source_closure_id)
+                    .then(|| {
+                        terminal_proof_v5_content_hash(
+                            &body,
+                            "target_pre_incremental_authority_replay_basis_digest",
+                        )
+                        .ok()
+                    })
+                    .flatten()
+            })
+            .ok_or(DomainError::HistoricalPrefixMismatch(
+                "V5 terminal proof recovery cannot locate its source closure basis",
+            ))?;
+        let genesis =
+            RunGenesisSnapshot::from_canonical_v4_bytes_for_store(&log.canonical_genesis_bytes)?;
+        let policy_revision_hash = target_policy_revision_hash_v5(genesis.program_space())?;
+        let member_event_ids = log
+            .envelopes
+            .iter()
+            .map(|event| event.id().clone())
+            .collect::<Vec<_>>();
+        let mut proof = Self {
+            schema: "reviewgraphen.terminal_proof.v5".to_owned(),
+            id: StableId::parse("terminal-proof-v5:pending")?,
+            run_id: log.run_id.clone(),
+            genesis_hash: log.genesis_hash.clone(),
+            tail_hash: log.tail_hash().clone(),
+            event_count: u64::try_from(log.envelopes.len()).map_err(|_| {
+                DomainError::EventSequence(
+                    "V5 terminal proof recovery event count overflow".to_owned(),
+                )
+            })?,
+            authority_replay_basis_digest,
+            terminal_cursor_witness_digest: ContentHash::sha256(&canonical_json(&marker)?),
+            policy_revision_hash,
+            source_closure_id: marker.source_closure_id,
+            partial_rerun_plan_id: marker.partial_rerun_plan_id,
+            target_plan_id: marker.target_plan_id,
+            completion_kind: marker.m5_completion_kind,
+            completion_attempt_id: marker.m5_completion_attempt_id,
+            member_event_ids,
+            body_hash: ContentHash::sha256(b"pending"),
+        };
+        let identity = canonical_json(&proof.identity())?;
+        let hash = ContentHash::sha256(&identity);
+        proof.id = StableId::parse(format!("terminal-proof-v5:{hash}"))?;
+        proof.body_hash = hash;
+        // Keep this final check independent from reconstruction: it ties all
+        // marker fields, source closure and final M5 grammar to the exact
+        // full durable prefix.
+        log.verify_terminal_proof_v5(&proof)?;
+        Ok(proof)
+    }
+
+    /// Validates the content-addressed proof DTO independently of a journal.
+    pub fn validate(&self) -> Result<()> {
+        if self.schema != "reviewgraphen.terminal_proof.v5"
+            || self.id.kind() != "terminal-proof-v5"
+            || self.run_id.kind() != "run"
+            || self.member_event_ids.is_empty()
+            || self.member_event_ids.iter().collect::<BTreeSet<_>>().len()
+                != self.member_event_ids.len()
+            || !matches!(
+                self.completion_kind.as_str(),
+                "no_gluing_required" | "gluing_bundle_recorded"
+            )
+            || (self.completion_kind == "no_gluing_required")
+                != self.completion_attempt_id.is_none()
+        {
+            return Err(DomainError::Validation(
+                "invalid V5 terminal proof shape".to_owned(),
+            ));
+        }
+        let identity = canonical_json(&self.identity())?;
+        let expected = ContentHash::sha256(&identity);
+        if self.body_hash != expected || self.id.as_str() != format!("terminal-proof-v5:{expected}")
+        {
+            return Err(DomainError::Validation(
+                "V5 terminal proof identity mismatch".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        canonical_json(self)
+    }
+
+    /// Decodes only the canonical terminal-proof artifact form.  This is a
+    /// persistence recovery boundary: whitespace, reordered fields, unknown
+    /// members, and a self-consistent but noncanonical JSON encoding are all
+    /// refused before the proof can be compared to a journal.
+    pub fn from_canonical_bytes(input: &[u8]) -> Result<Self> {
+        let proof = TerminalProofV5::from(
+            serde_json::from_slice::<TerminalProofWireV5>(input)
+                .map_err(|error| DomainError::Json(error.to_string()))?,
+        );
+        proof.validate()?;
+        if proof.canonical_bytes()? != input {
+            return Err(DomainError::Validation(
+                "V5 terminal proof artifact is not canonical".to_owned(),
+            ));
+        }
+        Ok(proof)
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+    #[must_use]
+    pub fn genesis_hash(&self) -> &ContentHash {
+        &self.genesis_hash
+    }
+    #[must_use]
+    pub fn tail_hash(&self) -> &ContentHash {
+        &self.tail_hash
+    }
+    #[must_use]
+    pub const fn event_count(&self) -> u64 {
+        self.event_count
+    }
+    #[must_use]
+    pub fn authority_replay_basis_digest(&self) -> &ContentHash {
+        &self.authority_replay_basis_digest
+    }
+    #[must_use]
+    pub fn terminal_cursor_witness_digest(&self) -> &ContentHash {
+        &self.terminal_cursor_witness_digest
+    }
+    #[must_use]
+    pub fn policy_revision_hash(&self) -> &ContentHash {
+        &self.policy_revision_hash
+    }
+    #[must_use]
+    pub fn source_closure_id(&self) -> &StableId {
+        &self.source_closure_id
+    }
+    #[must_use]
+    pub fn partial_rerun_plan_id(&self) -> &StableId {
+        &self.partial_rerun_plan_id
+    }
+    #[must_use]
+    pub fn target_plan_id(&self) -> &StableId {
+        &self.target_plan_id
+    }
+    #[must_use]
+    pub fn completion_kind(&self) -> &str {
+        &self.completion_kind
+    }
+    #[must_use]
+    pub fn completion_attempt_id(&self) -> Option<&StableId> {
+        self.completion_attempt_id.as_ref()
+    }
+    #[must_use]
+    pub fn member_event_ids(&self) -> &[StableId] {
+        &self.member_event_ids
+    }
+    #[must_use]
+    pub fn body_hash(&self) -> &ContentHash {
+        &self.body_hash
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)] // retained for canonical-wire adversarial tests.
+    fn rederive_identity_for_test(&mut self) -> Result<()> {
+        let hash = ContentHash::sha256(&canonical_json(&self.identity())?);
+        self.id = StableId::parse(format!("terminal-proof-v5:{hash}"))?;
+        self.body_hash = hash;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum V5SealedPayloadPosition {
     General,
@@ -22070,6 +23729,1874 @@ pub(crate) struct ReplayedV5TerminalPredecessorV5<'borrow, 'state> {
     inner: ReplayedV5TerminalPredecessorInnerV5<'borrow, 'state>,
 }
 
+/// Opaque result of replaying a roots/CAS-authorized V5 target terminal and
+/// reducing all M6 inputs from that exact replay.  It is intentionally a
+/// typed, borrowed-accessor boundary: consumers may compare or persist the
+/// DTOs, but cannot replace the authority replay with generic JSON.
+pub struct RecomputedTerminalM6V5 {
+    pre_basis: PreIncrementalAuthorityReplayBasisV5,
+    closure: crate::IncrementalSourceClosureV5,
+    mapping: crate::M6MappingPhaseV5,
+    correspondence: crate::M6ObligationCorrespondencePhaseV5,
+    staleness: crate::M6StalenessPhaseV5,
+    preservation: crate::M6PreservationPhaseV5,
+    partial_actions: Vec<crate::PartialRerunActionV5>,
+    partial_plan: crate::PartialRerunPlanV5,
+    partial_phase: SealedPartialRerunPhaseV5,
+}
+
+/// One-use, opaque durable append of the deterministic M6 prefix through the
+/// staleness seal.  Store may write its canonical lines but cannot inspect or
+/// replace the enclosed basis/phases; confirmation swaps in the exact Core
+/// candidate only after durable publication succeeds.
+pub struct PreparedPreD2M6AppendV5 {
+    candidate: EventLogV5,
+    first_new_event: usize,
+    session: PreD2M6SessionV5,
+}
+
+pub struct PreD2M6AppendLinesV5<'a> {
+    envelopes: &'a [EventEnvelope],
+}
+
+/// Opaque continuation after the closure-to-staleness prefix is durably
+/// confirmed.  It retains only Core-minted phase/basis state; Store supplies
+/// the lock-held log at each next-step append and cannot inspect the fields.
+pub struct PreD2M6SessionV5 {
+    staleness: crate::M6StalenessPhaseV5,
+    partial: SealedPartialRerunPhaseV5,
+    basis: AuthorityReplayBasisV5,
+}
+
+/// One exact next member of the sealed partial-rerun phase.  It is
+/// non-serializable and has no raw payload accessor.
+pub struct PreparedPartialM6AppendV5 {
+    prepared: PreparedPartialRerunPhaseAppendV5,
+}
+
+pub struct PartialM6AppendLineV5<'a> {
+    envelope: &'a EventEnvelope,
+}
+
+/// The next bounded runtime input needed by the opaque post-partial reviewer
+/// cursor.  It intentionally contains no claim, plan, context, or authority
+/// DTO: Core derives all of those from the sealed partial phase.
+/// Descriptive runtime contract for one fixed fake-reviewer invocation. This
+/// is not an execution record, parsed claim, raw-artifact registration, or
+/// append capability: all of those remain validated against the private
+/// cursor when the runtime returns.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct M6ReviewerRuntimeRequestV5 {
+    execution_id: StableId,
+    plan_id: StableId,
+    wave_id: StableId,
+    obligation_id: StableId,
+    context_envelope_id: StableId,
+    snapshot_id: StableId,
+    attempt: u32,
+    property_id: String,
+    allowed_target_refs: BTreeSet<StableId>,
+    allowed_source_ids: BTreeSet<StableId>,
+}
+
+impl M6ReviewerRuntimeRequestV5 {
+    #[must_use]
+    pub fn execution_id(&self) -> &StableId {
+        &self.execution_id
+    }
+    #[must_use]
+    pub fn plan_id(&self) -> &StableId {
+        &self.plan_id
+    }
+    #[must_use]
+    pub fn wave_id(&self) -> &StableId {
+        &self.wave_id
+    }
+    #[must_use]
+    pub fn obligation_id(&self) -> &StableId {
+        &self.obligation_id
+    }
+    #[must_use]
+    pub fn context_envelope_id(&self) -> &StableId {
+        &self.context_envelope_id
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+    #[must_use]
+    pub const fn attempt(&self) -> u32 {
+        self.attempt
+    }
+    #[must_use]
+    pub fn property_id(&self) -> &str {
+        &self.property_id
+    }
+    #[must_use]
+    pub fn allowed_target_refs(&self) -> &BTreeSet<StableId> {
+        &self.allowed_target_refs
+    }
+    #[must_use]
+    pub fn allowed_source_ids(&self) -> &BTreeSet<StableId> {
+        &self.allowed_source_ids
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum M6ReviewerWorkRequestV5 {
+    /// Core can derive and append the next lifecycle/context member itself.
+    Automatic,
+    /// Runtime must provide the bounded raw reviewer response bytes.
+    RawReviewerResponse(M6ReviewerRuntimeRequestV5),
+    /// Runtime must provide the structured review result for the already
+    /// fixed execution identity and context.
+    StructuredReviewerResult(M6ReviewerRuntimeRequestV5),
+    Complete,
+}
+
+/// The closed `reviewgraphen.reviewer_output.v1` structured wire accepted by
+/// the fixed MVP route.  This deliberately mirrors the fake-reviewer parser's
+/// public wire rather than introducing a second, authority-bearing result
+/// format.  The capability retains the raw-artifact hash and the parsed claim;
+/// its use is still bound to the private scheduled cursor below.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FixedM6ReviewerOutputWireV5 {
+    abstention: Option<FixedM6ReviewerAbstentionWireV5>,
+    claims: Vec<FixedM6ReviewerClaimWireV5>,
+    execution_id: StableId,
+    schema: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FixedM6ReviewerAbstentionWireV5 {
+    detail: String,
+    reason: crate::AbstentionReason,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FixedM6ReviewerClaimWireV5 {
+    assumptions: Vec<String>,
+    candidate_confidence: Option<f64>,
+    polarity: crate::ClaimPolarity,
+    property_id: String,
+    requested_evidence: Vec<String>,
+    source_ids: Vec<StableId>,
+    summary: String,
+    target_refs: Vec<StableId>,
+}
+
+/// Validated actual reviewer output for the fixed MVP runtime. It is opaque:
+/// callers cannot select claims, outcomes, or scope after parsing the raw
+/// artifact.  Runtime must register this same raw artifact first; Core checks
+/// that hash and the private action cursor before recording an execution.
+pub struct ValidatedFixedM6ReviewerResultV5 {
+    raw_hash: ContentHash,
+    execution_id: StableId,
+    result: FixedM6ReviewerResultKindV5,
+}
+
+enum FixedM6ReviewerResultKindV5 {
+    Structured {
+        property_id: String,
+        target_refs: BTreeSet<StableId>,
+        polarity: crate::ClaimPolarity,
+        summary: String,
+        source_ids: BTreeSet<StableId>,
+        assumptions: BTreeSet<String>,
+        requested_evidence: BTreeSet<String>,
+        candidate_confidence: Option<f64>,
+    },
+    Abstained {
+        reason: crate::AbstentionReason,
+        detail: String,
+    },
+}
+
+impl ValidatedFixedM6ReviewerResultV5 {
+    /// Strictly parses one canonical structured `reviewer_output.v1` result.
+    /// This is intentionally the same canonical wire emitted and parsed by the
+    /// fixed reviewer route. It accepts either one scoped structured claim or an
+    /// exact claimless abstention, and rejects provider, malformed, mixed,
+    /// duplicate/unsorted collection, and noncanonical forms.
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > crate::execution::MAX_D2_RAW_REVIEWER_BYTES {
+            return Err(DomainError::Incomplete {
+                operation: "fixed M6 reviewer raw bytes",
+                limit: crate::execution::MAX_D2_RAW_REVIEWER_BYTES,
+                observed: bytes.len(),
+            });
+        }
+        let decoded: FixedM6ReviewerOutputWireV5 = serde_json::from_slice(bytes).map_err(|_| {
+            DomainError::Validation(
+                "fixed M6 reviewer output does not match reviewer_output.v1".to_owned(),
+            )
+        })?;
+        if canonical_json(&decoded)? != bytes {
+            return Err(DomainError::Validation(
+                "fixed M6 reviewer output is not canonical reviewer_output.v1 JSON".to_owned(),
+            ));
+        }
+        if decoded.schema != "reviewgraphen.reviewer_output.v1" {
+            return Err(DomainError::Validation(
+                "fixed M6 reviewer output must be reviewer_output.v1".to_owned(),
+            ));
+        }
+        if let Some(abstention) = decoded.abstention {
+            if !decoded.claims.is_empty()
+                || abstention.detail.is_empty()
+                || abstention.detail.len() > crate::execution::MAX_D2_OUTCOME_TEXT_BYTES
+            {
+                return Err(DomainError::Validation(
+                    "fixed M6 reviewer abstention must be claimless with bounded detail".to_owned(),
+                ));
+            }
+            return Ok(Self {
+                raw_hash: ContentHash::sha256(bytes),
+                execution_id: decoded.execution_id,
+                result: FixedM6ReviewerResultKindV5::Abstained {
+                    reason: abstention.reason,
+                    detail: abstention.detail,
+                },
+            });
+        }
+        if decoded.claims.len() != 1 {
+            return Err(DomainError::Validation(
+                "fixed M6 reviewer output must be one structured reviewer_output.v1 claim"
+                    .to_owned(),
+            ));
+        }
+        let claim = decoded.claims.into_iter().next().expect("length checked");
+        let target_refs = strict_fixed_m6_ids(claim.target_refs, "fixed M6 reviewer target refs")?;
+        let source_ids = strict_fixed_m6_ids(claim.source_ids, "fixed M6 reviewer source IDs")?;
+        let assumptions =
+            strict_fixed_m6_strings(claim.assumptions, "fixed M6 reviewer assumptions")?;
+        let requested_evidence = strict_fixed_m6_strings(
+            claim.requested_evidence,
+            "fixed M6 reviewer requested evidence",
+        )?;
+        if claim
+            .candidate_confidence
+            .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+        {
+            return Err(DomainError::Validation(
+                "fixed M6 reviewer confidence is outside [0, 1]".to_owned(),
+            ));
+        }
+        Ok(Self {
+            raw_hash: ContentHash::sha256(bytes),
+            execution_id: decoded.execution_id,
+            result: FixedM6ReviewerResultKindV5::Structured {
+                property_id: claim.property_id,
+                target_refs,
+                polarity: claim.polarity,
+                summary: claim.summary,
+                source_ids,
+                assumptions,
+                requested_evidence,
+                candidate_confidence: claim.candidate_confidence,
+            },
+        })
+    }
+}
+
+fn strict_fixed_m6_ids(
+    values: Vec<StableId>,
+    operation: &'static str,
+) -> Result<BTreeSet<StableId>> {
+    if values.is_empty() || values.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(DomainError::Validation(format!(
+            "{operation} must be nonempty, unique, and canonically ordered"
+        )));
+    }
+    Ok(values.into_iter().collect())
+}
+
+fn strict_fixed_m6_strings(
+    values: Vec<String>,
+    operation: &'static str,
+) -> Result<BTreeSet<String>> {
+    if values.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(DomainError::Validation(format!(
+            "{operation} must be unique and canonically ordered"
+        )));
+    }
+    Ok(values.into_iter().collect())
+}
+
+/// Opaque continuation after the partial rerun plan has sealed. It owns the
+/// terminal-derived partial phase and the private scheduled reviewer cursor;
+/// neither may be replaced with caller JSON.
+pub struct PostPartialM6ContinuationV5 {
+    _partial: SealedPartialRerunPhaseV5,
+    reviewer: ReplayedScheduledReviewerPhaseV5,
+}
+
+/// Opaque continuation for the required post-D2 gluing-plan suffix.  The
+/// selected claims, action DAG, and seal remain Core-derived; Store can only
+/// persist the next canonical envelope and confirm that exact capability.
+pub struct GluingM6ContinuationV5 {
+    partial: SealedPartialRerunPhaseV5,
+    reviewer: ReplayedScheduledReviewerPhaseV5,
+    gluing: SealedGluingRerunPhaseV5,
+}
+
+/// One-use canonical post-D2 gluing action or seal append.  It contains no
+/// public DTO or raw-payload accessor, so callers cannot substitute plans or
+/// selected claims at the Store boundary.
+pub struct PreparedGluingM6AppendV5 {
+    prepared: PreparedGluingRerunAppendV5,
+    envelope: EventEnvelope,
+}
+
+pub struct GluingM6AppendLineV5<'a> {
+    envelope: &'a EventEnvelope,
+}
+
+/// Non-authorizing host work request for one fresh target M5 descriptor.
+/// It exposes only the immutable descriptor contract and exact V5 append
+/// coordinates; it cannot select claims, construct a gluing plan, or append
+/// an event. The host still stores its descriptor in CAS and submits a
+/// separately validated [`V5GluingInputTrustInput`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct M5GluingWorkRequestV5 {
+    run_id: StableId,
+    genesis_hash: ContentHash,
+    snapshot_id: StableId,
+    universe_id: StableId,
+    plan_id: StableId,
+    context_id: StableId,
+    profile_descriptor_id: &'static str,
+    descriptor_media_type: &'static str,
+    descriptor_sensitivity: ArtifactSensitivity,
+    predecessor_event_hash: ContentHash,
+    event_sequence: u64,
+    selected_claim_id: Option<StableId>,
+    selected_obligation_id: Option<StableId>,
+}
+
+impl M5GluingWorkRequestV5 {
+    #[must_use]
+    pub fn run_id(&self) -> &StableId {
+        &self.run_id
+    }
+    #[must_use]
+    pub fn genesis_hash(&self) -> &ContentHash {
+        &self.genesis_hash
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+    #[must_use]
+    pub fn universe_id(&self) -> &StableId {
+        &self.universe_id
+    }
+    #[must_use]
+    pub fn plan_id(&self) -> &StableId {
+        &self.plan_id
+    }
+    #[must_use]
+    pub fn context_id(&self) -> &StableId {
+        &self.context_id
+    }
+    #[must_use]
+    pub const fn profile_descriptor_id(&self) -> &'static str {
+        self.profile_descriptor_id
+    }
+    #[must_use]
+    pub const fn descriptor_media_type(&self) -> &'static str {
+        self.descriptor_media_type
+    }
+    #[must_use]
+    pub const fn descriptor_sensitivity(&self) -> ArtifactSensitivity {
+        self.descriptor_sensitivity
+    }
+    #[must_use]
+    pub fn predecessor_event_hash(&self) -> &ContentHash {
+        &self.predecessor_event_hash
+    }
+    #[must_use]
+    pub const fn event_sequence(&self) -> u64 {
+        self.event_sequence
+    }
+    #[must_use]
+    pub fn selected_claim_id(&self) -> Option<&StableId> {
+        self.selected_claim_id.as_ref()
+    }
+    #[must_use]
+    pub fn selected_obligation_id(&self) -> Option<&StableId> {
+        self.selected_obligation_id.as_ref()
+    }
+}
+
+/// Opaque fixed-route native verifier continuation. It is available only
+/// after the reviewer has finished and after Core has opened the exact
+/// post-D2 terminal gate from the sealed partial phase.
+pub struct NativeM6ContinuationV5 {
+    _partial: SealedPartialRerunPhaseV5,
+    _reviewer: ReplayedScheduledReviewerPhaseV5,
+    _terminal: ReplayedPostD2TerminalPhaseV5,
+    native: ReplayedScheduledNativeVerifierPhaseV5,
+    gluing: Option<SealedGluingRerunPhaseV5>,
+}
+
+/// Descriptive contract for the fixed native fixture harness needed by the
+/// current verifier action. It is derived only after D2 and contains no
+/// registration, verification, predecessor, or append authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct M6NativeHarnessWorkRequestV5 {
+    claim_id: StableId,
+    claim_body_hash: ContentHash,
+    property_id: String,
+    output_bytes: Vec<u8>,
+    output_hash: ContentHash,
+}
+
+/// Non-authorizing contract for one deterministic static-M4 reconstruction.
+/// The host may transport only bytes matching these exact Core-derived
+/// hashes; it cannot choose an action, claim, descriptor, or outcome.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct M6StaticWorkRequestV5 {
+    action_id: StableId,
+    obligation_id: StableId,
+    claim_id: StableId,
+    claim_body_hash: ContentHash,
+    property_id: String,
+    input_bytes: Vec<u8>,
+    input_hash: ContentHash,
+    input_size: u64,
+    output_hash: ContentHash,
+    output_size: u64,
+}
+
+impl M6StaticWorkRequestV5 {
+    #[must_use]
+    pub fn action_id(&self) -> &StableId {
+        &self.action_id
+    }
+    #[must_use]
+    pub fn obligation_id(&self) -> &StableId {
+        &self.obligation_id
+    }
+    #[must_use]
+    pub fn claim_id(&self) -> &StableId {
+        &self.claim_id
+    }
+    #[must_use]
+    pub fn claim_body_hash(&self) -> &ContentHash {
+        &self.claim_body_hash
+    }
+    #[must_use]
+    pub fn property_id(&self) -> &str {
+        &self.property_id
+    }
+    #[must_use]
+    pub fn input_bytes(&self) -> &[u8] {
+        &self.input_bytes
+    }
+    #[must_use]
+    pub fn input_hash(&self) -> &ContentHash {
+        &self.input_hash
+    }
+    #[must_use]
+    pub const fn input_size(&self) -> u64 {
+        self.input_size
+    }
+    #[must_use]
+    pub fn output_hash(&self) -> &ContentHash {
+        &self.output_hash
+    }
+    #[must_use]
+    pub const fn output_size(&self) -> u64 {
+        self.output_size
+    }
+}
+
+/// Opaque host transport result for a Core-derived static reconstruction.
+pub struct ValidatedM6StaticResultV5 {
+    input_bytes: Vec<u8>,
+    output_bytes: Vec<u8>,
+}
+impl ValidatedM6StaticResultV5 {
+    pub fn from_canonical_bytes(input_bytes: &[u8], output_bytes: &[u8]) -> Result<Self> {
+        let input =
+            crate::StaticFactInputV1::from_json_bytes(input_bytes).map_err(m4_domain_error)?;
+        let output =
+            crate::StaticFactResultV1::from_json_bytes(output_bytes).map_err(m4_domain_error)?;
+        if input.canonical_bytes().map_err(m4_domain_error)?.as_slice() != input_bytes
+            || output
+                .canonical_bytes()
+                .map_err(m4_domain_error)?
+                .as_slice()
+                != output_bytes
+        {
+            return Err(DomainError::Validation(
+                "static host result must use canonical M4 JSON".to_owned(),
+            ));
+        }
+        Ok(Self {
+            input_bytes: input_bytes.to_vec(),
+            output_bytes: output_bytes.to_vec(),
+        })
+    }
+
+    #[must_use]
+    pub fn input_bytes(&self) -> &[u8] {
+        &self.input_bytes
+    }
+
+    #[must_use]
+    pub fn output_bytes(&self) -> &[u8] {
+        &self.output_bytes
+    }
+}
+
+impl M6NativeHarnessWorkRequestV5 {
+    #[must_use]
+    pub fn claim_id(&self) -> &StableId {
+        &self.claim_id
+    }
+    #[must_use]
+    pub fn claim_body_hash(&self) -> &ContentHash {
+        &self.claim_body_hash
+    }
+    #[must_use]
+    pub fn property_id(&self) -> &str {
+        &self.property_id
+    }
+    #[must_use]
+    pub fn output_bytes(&self) -> &[u8] {
+        &self.output_bytes
+    }
+    #[must_use]
+    pub fn output_hash(&self) -> &ContentHash {
+        &self.output_hash
+    }
+}
+
+/// A host-provided human decision is data, not an append capability. Core
+/// derives the scheduled claim and validates the supplied grant against the
+/// retained V5 roots at the exact current cursor.
+pub struct FixedHumanDecisionV5 {
+    grant: AuthorityHumanGrantV3Tuple,
+    input: DecisionInputV3,
+}
+
+impl FixedHumanDecisionV5 {
+    #[must_use]
+    pub fn new(grant: AuthorityHumanGrantV3Tuple, input: DecisionInputV3) -> Self {
+        Self { grant, input }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum M6HumanWorkRequestV5 {
+    Decision,
+    DerivedFinding,
+    Complete,
+}
+
+/// Opaque native-to-human continuation. When target gluing was required, it
+/// retains the sealed second-plan cursor through the human/M5 boundary.
+pub struct HumanM6ContinuationV5 {
+    _partial: SealedPartialRerunPhaseV5,
+    native: ReplayedScheduledNativeVerifierPhaseV5,
+    human: ReplayedScheduledHumanResolutionPhaseV5,
+    gluing: Option<SealedGluingRerunPhaseV5>,
+}
+
+pub struct PreparedHumanM6AppendV5 {
+    prepared: PreparedScheduledHumanResolutionAppendV5,
+    envelope: EventEnvelope,
+}
+
+pub struct HumanM6AppendLineV5<'a> {
+    envelope: &'a EventEnvelope,
+}
+
+/// Completed M5 cursor. Its phase is either the legal no-gluing terminal or
+/// the sealed target-gluing route; the terminal marker and proof remain Core
+/// minted and Store may only persist their exact bytes.
+pub struct M5M6ContinuationV5 {
+    m5: ReplayedScheduledM5GluingPhaseV5,
+}
+
+/// One opaque native M5 gluing-input registration or complete bundle append.
+/// The registration descriptor and atomic bundle are derived from the sealed
+/// target plan and roots/CAS replay, never supplied by the caller.
+pub struct PreparedM5M6AppendV5 {
+    prepared: PreparedScheduledM5GluingAppendV5,
+    envelope: EventEnvelope,
+}
+
+pub struct M5M6AppendLineV5<'a> {
+    envelope: &'a EventEnvelope,
+}
+
+pub struct PreparedNativeM6AppendV5 {
+    prepared: PreparedScheduledNativeVerifierAppendV5,
+    envelope: EventEnvelope,
+}
+
+pub struct NativeM6AppendLineV5<'a> {
+    envelope: &'a EventEnvelope,
+}
+
+/// One exact post-partial reviewer envelope. Store can write its canonical
+/// JSONL line and then confirm it, but cannot inspect or substitute payloads.
+pub struct PreparedPostPartialM6AppendV5 {
+    prepared: PreparedScheduledReviewerAppendV5,
+    envelope: EventEnvelope,
+}
+
+pub struct PostPartialM6AppendLineV5<'a> {
+    envelope: &'a EventEnvelope,
+}
+
+impl PreD2M6AppendLinesV5<'_> {
+    pub fn write_canonical_lines(&self, writer: &mut impl std::io::Write) -> Result<()> {
+        for envelope in self.envelopes {
+            writer
+                .write_all(&envelope.canonical_bytes()?)
+                .map_err(|error| DomainError::Validation(error.to_string()))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|error| DomainError::Validation(error.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
+impl PartialM6AppendLineV5<'_> {
+    pub fn write_canonical_line(&self, writer: &mut impl std::io::Write) -> Result<()> {
+        writer
+            .write_all(&self.envelope.canonical_bytes()?)
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|error| DomainError::Validation(error.to_string()))
+    }
+}
+
+impl PostPartialM6AppendLineV5<'_> {
+    pub fn write_canonical_line(&self, writer: &mut impl std::io::Write) -> Result<()> {
+        writer
+            .write_all(&self.envelope.canonical_bytes()?)
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|error| DomainError::Validation(error.to_string()))
+    }
+}
+
+impl NativeM6AppendLineV5<'_> {
+    pub fn write_canonical_line(&self, writer: &mut impl std::io::Write) -> Result<()> {
+        writer
+            .write_all(&self.envelope.canonical_bytes()?)
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|error| DomainError::Validation(error.to_string()))
+    }
+}
+
+impl HumanM6AppendLineV5<'_> {
+    pub fn write_canonical_line(&self, writer: &mut impl std::io::Write) -> Result<()> {
+        writer
+            .write_all(&self.envelope.canonical_bytes()?)
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|error| DomainError::Validation(error.to_string()))
+    }
+}
+
+impl PreD2M6SessionV5 {
+    pub fn prepare_partial_append(&self, log: &EventLogV5) -> Result<PreparedPartialM6AppendV5> {
+        Ok(PreparedPartialM6AppendV5 {
+            prepared: log.prepare_partial_rerun_phase_append_v5(
+                &self.partial,
+                &self.staleness,
+                &self.basis,
+            )?,
+        })
+    }
+
+    /// Opens the private scheduled reviewer cursor only after every sealed
+    /// partial member is durable. The roots/CAS resolver is supplied by the
+    /// Store-owned dual-lock session on subsequent prepare calls.
+    pub fn begin_post_partial(self, log: &EventLogV5) -> Result<PostPartialM6ContinuationV5> {
+        if self.prepare_partial_append(log).is_ok() {
+            return Err(DomainError::EventSequence(
+                "post-partial continuation requires the sealed partial rerun plan".to_owned(),
+            ));
+        }
+        let reviewer = log.begin_scheduled_reviewer_phase_v5(&self.partial, self.basis)?;
+        Ok(PostPartialM6ContinuationV5 {
+            _partial: self.partial,
+            reviewer,
+        })
+    }
+}
+
+impl PreparedPartialM6AppendV5 {
+    pub fn append_to_store<E>(
+        self,
+        write: impl for<'a> FnOnce(PartialM6AppendLineV5<'a>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(Self, ()), E> {
+        write(PartialM6AppendLineV5 {
+            envelope: &self.prepared.envelope,
+        })?;
+        Ok((self, ()))
+    }
+
+    pub fn confirm(self, log: &mut EventLogV5, session: &mut PreD2M6SessionV5) -> Result<()> {
+        log.append_prepared_partial_rerun_phase_v5(
+            self.prepared,
+            &session.partial,
+            &session.staleness,
+            &mut session.basis,
+        )
+    }
+}
+
+impl PostPartialM6ContinuationV5 {
+    fn reviewer_runtime_request(
+        &self,
+        context: &ReviewContextEnvelope,
+        attempt: u32,
+    ) -> Result<M6ReviewerRuntimeRequestV5> {
+        let action = self.reviewer.action()?;
+        let obligation = self
+            .reviewer
+            .aggregate
+            .obligation(&action.obligation_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "fixed M6 reviewer runtime request",
+                owner_id: action.action_id.clone(),
+                reference: action.obligation_id.clone(),
+            })?;
+        let execution = self.reviewer.execution_input(context, attempt)?;
+        Ok(M6ReviewerRuntimeRequestV5 {
+            execution_id: execution.execution_id()?,
+            plan_id: self.reviewer.plan_id.clone(),
+            wave_id: action.wave_id.clone(),
+            obligation_id: action.obligation_id.clone(),
+            context_envelope_id: context.id().clone(),
+            snapshot_id: self.reviewer.aggregate.program().snapshot_id().clone(),
+            attempt,
+            property_id: obligation.property_id().to_owned(),
+            allowed_target_refs: obligation.normalized_target_refs().clone(),
+            allowed_source_ids: context.normalized_included_source_ids().clone(),
+        })
+    }
+
+    /// Opens the second, target-gluing-required plan only after the scheduled
+    /// reviewer phase is complete.  Core derives both bindings and every
+    /// action from the durable target D2 closure.
+    pub fn begin_gluing(self) -> crate::M6Result<GluingM6ContinuationV5> {
+        if !self.reviewer.is_finished() {
+            return Err(crate::M6Error::Canonical(
+                "gluing M6 continuation requires completed scheduled reviewer work".to_owned(),
+            ));
+        }
+        let gluing = self.reviewer.seal_gluing_rerun_phase_v5(&self._partial)?;
+        Ok(GluingM6ContinuationV5 {
+            partial: self._partial,
+            reviewer: self.reviewer,
+            gluing,
+        })
+    }
+
+    pub fn begin_native(
+        self,
+        log: &EventLogV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<NativeM6ContinuationV5> {
+        if !self.reviewer.is_finished() {
+            return Err(DomainError::EventSequence(
+                "native M6 continuation requires completed scheduled reviewer work".to_owned(),
+            ));
+        }
+        // No post-D2 gluing cursor is supplied here. Core accepts this route
+        // only for the no-gluing sealed partial plan; required gluing remains
+        // an explicit future opaque continuation rather than an implicit skip.
+        let terminal = log.open_post_d2_terminal_phase_v5(&self.reviewer, &self._partial, None)?;
+        let native = log.begin_scheduled_native_verifier_phase_v5(
+            &terminal,
+            &self.reviewer,
+            &self._partial,
+            roots,
+        )?;
+        Ok(NativeM6ContinuationV5 {
+            _partial: self._partial,
+            _reviewer: self.reviewer,
+            _terminal: terminal,
+            native,
+            gluing: None,
+        })
+    }
+    pub fn next_reviewer_work(&self) -> Result<M6ReviewerWorkRequestV5> {
+        match &self.reviewer.cursor {
+            ScheduledReviewerCursorV5::Planned
+            | ScheduledReviewerCursorV5::InProgress
+            | ScheduledReviewerCursorV5::Context
+            | ScheduledReviewerCursorV5::Completed { .. } => Ok(M6ReviewerWorkRequestV5::Automatic),
+            ScheduledReviewerCursorV5::RawRegistration { context, attempt } => {
+                Ok(M6ReviewerWorkRequestV5::RawReviewerResponse(
+                    self.reviewer_runtime_request(context, *attempt)?,
+                ))
+            }
+            ScheduledReviewerCursorV5::Execution {
+                context, attempt, ..
+            } => Ok(M6ReviewerWorkRequestV5::StructuredReviewerResult(
+                self.reviewer_runtime_request(context, *attempt)?,
+            )),
+            ScheduledReviewerCursorV5::CardinalityUnsupported { .. }
+            | ScheduledReviewerCursorV5::Finished => Ok(M6ReviewerWorkRequestV5::Complete),
+        }
+    }
+
+    pub fn prepare_automatic(
+        &self,
+        log: &EventLogV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<PreparedPostPartialM6AppendV5> {
+        let prepared = match self.reviewer.cursor {
+            ScheduledReviewerCursorV5::Planned
+            | ScheduledReviewerCursorV5::InProgress
+            | ScheduledReviewerCursorV5::Completed { .. } => {
+                self.reviewer.prepare_lifecycle_v5()?
+            }
+            ScheduledReviewerCursorV5::Context => self.reviewer.prepare_context_v5(resolver)?,
+            _ => {
+                return Err(DomainError::EventSequence(
+                    "post-partial reviewer requires runtime work rather than an automatic step"
+                        .to_owned(),
+                ));
+            }
+        };
+        PreparedPostPartialM6AppendV5::from_reviewer(log, prepared)
+    }
+
+    pub fn prepare_reviewer_raw(
+        &self,
+        log: &EventLogV5,
+        raw_bytes: &[u8],
+    ) -> Result<PreparedPostPartialM6AppendV5> {
+        PreparedPostPartialM6AppendV5::from_reviewer(
+            log,
+            self.reviewer.prepare_raw_registration_v5(raw_bytes)?,
+        )
+    }
+
+    pub fn prepare_fixed_reviewer_execution(
+        &self,
+        log: &EventLogV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        result: ValidatedFixedM6ReviewerResultV5,
+    ) -> Result<PreparedPostPartialM6AppendV5> {
+        let ScheduledReviewerCursorV5::Execution {
+            context,
+            attempt,
+            registration,
+        } = &self.reviewer.cursor
+        else {
+            return Err(DomainError::EventSequence(
+                "fixed M6 reviewer result is not the first missing event".to_owned(),
+            ));
+        };
+        let action = self.reviewer.action()?;
+        let obligation = self
+            .reviewer
+            .aggregate
+            .obligation(&action.obligation_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "fixed M6 reviewer result",
+                owner_id: action.action_id.clone(),
+                reference: action.obligation_id.clone(),
+            })?;
+        let expected_execution_id = self
+            .reviewer
+            .execution_input(context, *attempt)?
+            .execution_id()?;
+        if result.raw_hash != *registration.cas_hash()
+            || result.execution_id != expected_execution_id
+        {
+            return Err(DomainError::Validation(
+                "fixed M6 reviewer output does not bind to its registered raw artifact and scheduled cursor"
+                    .to_owned(),
+            ));
+        }
+        let (claim_inputs, outcome) = match result.result {
+            FixedM6ReviewerResultKindV5::Structured {
+                property_id,
+                target_refs,
+                polarity,
+                summary,
+                source_ids,
+                assumptions,
+                requested_evidence,
+                candidate_confidence,
+            } => {
+                if property_id != obligation.property_id()
+                    || target_refs.is_empty()
+                    || !target_refs.is_subset(obligation.normalized_target_refs())
+                    || source_ids.is_empty()
+                    || !source_ids.is_subset(context.normalized_included_source_ids())
+                {
+                    return Err(DomainError::Validation(
+                        "fixed M6 reviewer claim exceeds its scheduled scope".to_owned(),
+                    ));
+                }
+                if requested_evidence.iter().any(|value| {
+                    value
+                        .strip_prefix("evidence:source:")
+                        .and_then(|id| StableId::parse(id).ok())
+                        .is_none_or(|id| !context.normalized_included_source_ids().contains(&id))
+                }) {
+                    return Err(DomainError::Validation(
+                        "fixed M6 reviewer requested evidence exceeds the scheduled source scope"
+                            .to_owned(),
+                    ));
+                }
+                (
+                    vec![crate::ExecutionClaimInputV2::new(
+                        property_id,
+                        target_refs,
+                        polarity,
+                        summary,
+                        source_ids,
+                        assumptions,
+                        requested_evidence,
+                        candidate_confidence,
+                    )?],
+                    crate::ExecutionOutcome::Structured,
+                )
+            }
+            FixedM6ReviewerResultKindV5::Abstained { reason, detail } => (
+                Vec::new(),
+                crate::ExecutionOutcome::Abstained { reason, detail },
+            ),
+        };
+        PreparedPostPartialM6AppendV5::from_reviewer(
+            log,
+            self.reviewer
+                .prepare_execution_v5(resolver, claim_inputs, outcome)?,
+        )
+    }
+}
+
+impl GluingM6ContinuationV5 {
+    /// Exact bounded number of post-D2 gluing members: every derived action
+    /// followed by its one mandatory plan seal. This is descriptive only;
+    /// callers still obtain each append capability from Core in order.
+    #[must_use]
+    pub fn gluing_member_count(&self) -> usize {
+        self.gluing.actions.len().saturating_add(1)
+    }
+
+    /// Returns every fixture-harness contract after the complete gluing
+    /// suffix is durably sealed, but before harness roots are required to
+    /// open the native cursor. This lets the host bind every exact derived
+    /// claim rather than guessing claim-body hashes from untrusted DTOs.
+    pub fn harness_work_requests(
+        &mut self,
+        log: &EventLogV5,
+    ) -> Result<Vec<M6NativeHarnessWorkRequestV5>> {
+        let _terminal = log.open_post_d2_terminal_phase_v5(
+            &self.reviewer,
+            &self.partial,
+            Some(&mut self.gluing),
+        )?;
+        let mut requests = Vec::new();
+        let mut claim_ids = BTreeSet::new();
+        for action in self
+            .partial
+            .actions
+            .iter()
+            .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunVerifier)
+        {
+            let obligation_id = action.subject_ids().first().ok_or_else(|| {
+                DomainError::EventSequence(
+                    "gluing native harness action has no obligation".to_owned(),
+                )
+            })?;
+            if self
+                .reviewer
+                .abstained_receipts
+                .iter()
+                .any(|receipt| receipt.obligation_id == *obligation_id)
+            {
+                continue;
+            }
+            if let [crate::ActionPrerequisiteV5::ScheduledAction { action_id }] =
+                action.prerequisites()
+                && self
+                    .reviewer
+                    .abstained_receipts
+                    .iter()
+                    .any(|receipt| receipt.action_id == *action_id)
+            {
+                continue;
+            }
+            let (_, _, claim_id, claim_body_hash) =
+                native_verifier_prerequisite_v5(action, &self.reviewer, &self.partial, log)?;
+            let claim = self
+                .reviewer
+                .aggregate
+                .execution_claims()
+                .find(|claim| claim.id() == &claim_id)
+                .ok_or_else(|| DomainError::DanglingReference {
+                    owner: "gluing native harness work request",
+                    owner_id: action.id().clone(),
+                    reference: claim_id.clone(),
+                })?;
+            if claim.property_id() == crate::m4::M4_PROPERTY_ID
+                && claim.polarity() == crate::ClaimPolarity::IssuePresent
+            {
+                if !claim_ids.insert(claim_id.clone()) {
+                    return Err(DomainError::Validation(
+                        "gluing native harness requests contain a duplicate claim".to_owned(),
+                    ));
+                }
+                let mut subject_ids = claim.target_refs().iter().cloned().collect::<Vec<_>>();
+                subject_ids.push(StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?);
+                subject_ids.sort_unstable();
+                let output_bytes = canonical_json(&serde_json::json!({
+                    "claim_id": claim.id(),
+                    "descriptor_id": FIXTURE_DESCRIPTOR_ID,
+                    "outcome": "passed",
+                    "procedure_version": FIXTURE_PROCEDURE_ID,
+                    "property_id": M4_PROPERTY_ID,
+                    "schema": "reviewgraphen.fixture_test_result.v1",
+                    "subject_ids": subject_ids,
+                    "witness_hash": FIXTURE_WITNESS_HASH,
+                }))?;
+                let output_hash = ContentHash::sha256(&output_bytes);
+                requests.push(M6NativeHarnessWorkRequestV5 {
+                    claim_id,
+                    claim_body_hash,
+                    property_id: claim.property_id().to_owned(),
+                    output_bytes,
+                    output_hash,
+                });
+            }
+        }
+        requests.sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
+        if requests.len() > 64 {
+            return Err(DomainError::Incomplete {
+                operation: "gluing native harness work requests",
+                limit: 64,
+                observed: requests.len(),
+            });
+        }
+        Ok(requests)
+    }
+
+    /// Returns the first fixed-context descriptor contract after the second
+    /// plan has sealed. Calling before that point is refused rather than
+    /// leaking prospective claim bindings or V5 coordinates. The second
+    /// request is deliberately unavailable here: its predecessor is the
+    /// first registration event, so minting it early would authorize a
+    /// speculative coordinate.
+    pub fn next_m5_work_request(&mut self, log: &EventLogV5) -> Result<M5GluingWorkRequestV5> {
+        let terminal = log.open_post_d2_terminal_phase_v5(
+            &self.reviewer,
+            &self.partial,
+            Some(&mut self.gluing),
+        )?;
+        let binding = &self.gluing.seal.claim_bindings()[0];
+        let request = |binding: &crate::GluingClaimBindingV5| M5GluingWorkRequestV5 {
+            run_id: log.run_id.clone(),
+            genesis_hash: log.genesis_hash.clone(),
+            snapshot_id: self.gluing.aggregate.program().snapshot_id().clone(),
+            universe_id: self.gluing.aggregate.universe().id().clone(),
+            plan_id: self.gluing.target_plan_id.clone(),
+            context_id: binding.context_id().clone(),
+            profile_descriptor_id: crate::DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID,
+            descriptor_media_type: GLUING_INPUT_MEDIA_TYPE_V4,
+            descriptor_sensitivity: ArtifactSensitivity::CanonicalState,
+            predecessor_event_hash: terminal.basis.target_confirmed_tail_hash.clone(),
+            event_sequence: terminal.basis.target_next_sequence,
+            selected_claim_id: binding.claim_id().cloned(),
+            selected_obligation_id: binding.obligation_id().cloned(),
+        };
+        Ok(request(binding))
+    }
+
+    /// Mints the exact first missing gluing action or plan-seal event.
+    pub fn prepare_next(&mut self, log: &EventLogV5) -> Result<PreparedGluingM6AppendV5> {
+        let prepared = log.prepare_gluing_rerun_append_v5(&mut self.gluing)?;
+        let envelope = EventEnvelope::new_at_v5_position(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            prepared.event_sequence,
+            prepared.payload.actor().to_owned(),
+            prepared.event_sequence,
+            prepared.predecessor_event_hash.clone(),
+            prepared.payload.clone(),
+            V5SealedPayloadPosition::GluingRerun,
+        )?;
+        Ok(PreparedGluingM6AppendV5 { prepared, envelope })
+    }
+
+    /// Opens the native verifier only after the Core-derived gluing suffix is
+    /// durably complete.  A missing seal remains a typed sequence refusal.
+    pub fn begin_native(
+        mut self,
+        log: &EventLogV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<NativeM6ContinuationV5> {
+        let terminal = log.open_post_d2_terminal_phase_v5(
+            &self.reviewer,
+            &self.partial,
+            Some(&mut self.gluing),
+        )?;
+        let native = log.begin_scheduled_native_verifier_phase_v5(
+            &terminal,
+            &self.reviewer,
+            &self.partial,
+            roots,
+        )?;
+        Ok(NativeM6ContinuationV5 {
+            _partial: self.partial,
+            _reviewer: self.reviewer,
+            _terminal: terminal,
+            native,
+            gluing: Some(self.gluing),
+        })
+    }
+}
+
+impl PreparedGluingM6AppendV5 {
+    pub fn append_to_store<E>(
+        self,
+        write: impl for<'a> FnOnce(GluingM6AppendLineV5<'a>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(Self, ()), E> {
+        write(GluingM6AppendLineV5 {
+            envelope: &self.envelope,
+        })?;
+        Ok((self, ()))
+    }
+
+    pub fn confirm(
+        self,
+        log: &mut EventLogV5,
+        continuation: &mut GluingM6ContinuationV5,
+    ) -> Result<()> {
+        let expected = EventEnvelope::new_at_v5_position(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            self.prepared.event_sequence,
+            self.prepared.payload.actor().to_owned(),
+            self.prepared.event_sequence,
+            self.prepared.predecessor_event_hash.clone(),
+            self.prepared.payload.clone(),
+            V5SealedPayloadPosition::GluingRerun,
+        )?;
+        if expected.canonical_bytes()? != self.envelope.canonical_bytes()? {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        log.append_prepared_gluing_rerun_v5(self.prepared, &mut continuation.gluing)
+    }
+}
+
+impl GluingM6AppendLineV5<'_> {
+    pub fn write_canonical_line(&self, writer: &mut impl std::io::Write) -> Result<()> {
+        writer
+            .write_all(&self.envelope.canonical_bytes()?)
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|error| DomainError::Validation(error.to_string()))
+    }
+}
+
+impl NativeM6ContinuationV5 {
+    pub fn next_static_work_request(&self) -> Result<Option<M6StaticWorkRequestV5>> {
+        if self.native.is_finished() {
+            return Ok(None);
+        }
+        let action = self.native.current_action()?;
+        if !matches!(
+            action.descriptor,
+            ScheduledNativeVerifierDescriptorV5::StaticRequiresReconstruction { .. }
+        ) {
+            return Ok(None);
+        }
+        let (input_bytes, output_bytes) = self.native.static_expected_bytes()?;
+        let claim = self
+            .native
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == &action.claim_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "native static work request",
+                owner_id: action.action_id.clone(),
+                reference: action.claim_id.clone(),
+            })?;
+        Ok(Some(M6StaticWorkRequestV5 {
+            action_id: action.action_id.clone(),
+            obligation_id: action.obligation_id.clone(),
+            claim_id: action.claim_id.clone(),
+            claim_body_hash: action.claim_body_hash.clone(),
+            property_id: claim.property_id().to_owned(),
+            input_hash: ContentHash::sha256(&input_bytes),
+            input_size: u64::try_from(input_bytes.len()).unwrap_or(u64::MAX),
+            output_hash: ContentHash::sha256(&output_bytes),
+            output_size: u64::try_from(output_bytes.len()).unwrap_or(u64::MAX),
+            input_bytes,
+        }))
+    }
+
+    pub fn prepare_static(
+        &self,
+        log: &EventLogV5,
+        result: &ValidatedM6StaticResultV5,
+    ) -> Result<PreparedNativeM6AppendV5> {
+        let prepared =
+            log.prepare_static_scheduled_native_verifier_append_v5(&self.native, result)?;
+        let payload = prepared.payload()?;
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            prepared.event_sequence,
+            payload.actor().to_owned(),
+            prepared.event_sequence,
+            prepared.predecessor_event_hash.clone(),
+            payload.clone(),
+        )?;
+        Ok(PreparedNativeM6AppendV5 { prepared, envelope })
+    }
+
+    pub fn next_harness_work_request(&self) -> Result<Option<M6NativeHarnessWorkRequestV5>> {
+        if self.native.is_finished() {
+            return Ok(None);
+        }
+        let action = self.native.current_action()?;
+        match action.descriptor {
+            ScheduledNativeVerifierDescriptorV5::Fixture { .. } => {
+                let claim = self
+                    .native
+                    .aggregate
+                    .execution_claims()
+                    .find(|claim| claim.id() == &action.claim_id)
+                    .ok_or_else(|| DomainError::DanglingReference {
+                        owner: "native harness work request",
+                        owner_id: action.action_id.clone(),
+                        reference: action.claim_id.clone(),
+                    })?;
+                let mut subject_ids = claim.target_refs().iter().cloned().collect::<Vec<_>>();
+                subject_ids.push(StableId::parse(FIXTURE_TEST_ARTIFACT_ID)?);
+                subject_ids.sort_unstable();
+                let output_bytes = canonical_json(&serde_json::json!({
+                    "claim_id": claim.id(),
+                    "descriptor_id": FIXTURE_DESCRIPTOR_ID,
+                    "outcome": "passed",
+                    "procedure_version": FIXTURE_PROCEDURE_ID,
+                    "property_id": M4_PROPERTY_ID,
+                    "schema": "reviewgraphen.fixture_test_result.v1",
+                    "subject_ids": subject_ids,
+                    "witness_hash": FIXTURE_WITNESS_HASH,
+                }))?;
+                let output_hash = ContentHash::sha256(&output_bytes);
+                Ok(Some(M6NativeHarnessWorkRequestV5 {
+                    claim_id: action.claim_id.clone(),
+                    claim_body_hash: action.claim_body_hash.clone(),
+                    property_id: claim.property_id().to_owned(),
+                    output_bytes,
+                    output_hash,
+                }))
+            }
+            ScheduledNativeVerifierDescriptorV5::StaticRequiresReconstruction { .. } => Ok(None),
+        }
+    }
+
+    pub fn begin_human(
+        self,
+        log: &EventLogV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<HumanM6ContinuationV5> {
+        if !self.native.is_finished() {
+            return Err(DomainError::EventSequence(
+                "human M6 continuation requires completed native verifier work".to_owned(),
+            ));
+        }
+        let human =
+            log.begin_scheduled_human_resolution_phase_v5(&self.native, &self._partial, roots)?;
+        Ok(HumanM6ContinuationV5 {
+            _partial: self._partial,
+            native: self.native,
+            human,
+            gluing: self.gluing,
+        })
+    }
+
+    pub fn prepare_next(
+        &self,
+        log: &EventLogV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<PreparedNativeM6AppendV5> {
+        let prepared =
+            log.prepare_next_scheduled_native_verifier_append_v5(&self.native, resolver)?;
+        let payload = prepared.payload()?;
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            prepared.event_sequence,
+            payload.actor().to_owned(),
+            prepared.event_sequence,
+            prepared.predecessor_event_hash.clone(),
+            payload.clone(),
+        )?;
+        Ok(PreparedNativeM6AppendV5 { prepared, envelope })
+    }
+}
+
+impl HumanM6ContinuationV5 {
+    #[must_use]
+    pub fn next_human_work(&self) -> M6HumanWorkRequestV5 {
+        if self.human.is_finished() {
+            M6HumanWorkRequestV5::Complete
+        } else if self.human.stage == ScheduledHumanResolutionStageV5::Decision {
+            M6HumanWorkRequestV5::Decision
+        } else {
+            M6HumanWorkRequestV5::DerivedFinding
+        }
+    }
+
+    pub fn prepare_decision(
+        &self,
+        log: &EventLogV5,
+        roots: &AuthorityTrustRootsV5,
+        decision: FixedHumanDecisionV5,
+    ) -> Result<PreparedHumanM6AppendV5> {
+        let action = self.human.current_action()?;
+        let request = HumanDecisionRequestV5::new(action.claim_id.clone(), decision.input);
+        let trusted_now = request.input.issued_at.clone();
+        let admission = TrustedHumanAdmissionV5::from_trusted_host(
+            decision.grant,
+            &request,
+            &trusted_now,
+            log,
+            &self.human,
+            roots,
+        )?;
+        PreparedHumanM6AppendV5::from_human(
+            log,
+            log.prepare_scheduled_human_decision_append_v5(&self.human, admission, request, roots)?,
+        )
+    }
+
+    pub fn prepare_derived_finding(
+        &self,
+        log: &EventLogV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<PreparedHumanM6AppendV5> {
+        PreparedHumanM6AppendV5::from_human(
+            log,
+            log.prepare_scheduled_human_finding_append_v5(&self.human, roots)?,
+        )
+    }
+
+    pub fn begin_m5(
+        self,
+        log: &EventLogV5,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<M5M6ContinuationV5> {
+        if !self.human.is_finished() {
+            return Err(DomainError::EventSequence(
+                "M5 continuation requires completed human resolution work".to_owned(),
+            ));
+        }
+        let m5 = log.begin_scheduled_m5_gluing_phase_v5(
+            Box::new(self.native),
+            Box::new(self.human),
+            &self._partial,
+            self.gluing.map(Box::new),
+            roots,
+            resolver,
+        )?;
+        Ok(M5M6ContinuationV5 { m5 })
+    }
+}
+
+impl PreparedHumanM6AppendV5 {
+    fn from_human(
+        log: &EventLogV5,
+        prepared: PreparedScheduledHumanResolutionAppendV5,
+    ) -> Result<Self> {
+        if prepared.log_identity != log.instance_identity
+            || prepared.predecessor_event_hash != *log.tail_hash()
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            prepared.event_sequence,
+            prepared.payload.actor().to_owned(),
+            prepared.event_sequence,
+            prepared.predecessor_event_hash.clone(),
+            prepared.payload.clone(),
+        )?;
+        Ok(Self { prepared, envelope })
+    }
+
+    pub fn append_to_store<E>(
+        self,
+        write: impl for<'a> FnOnce(HumanM6AppendLineV5<'a>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(Self, ()), E> {
+        write(HumanM6AppendLineV5 {
+            envelope: &self.envelope,
+        })?;
+        Ok((self, ()))
+    }
+
+    pub fn confirm(
+        self,
+        log: &mut EventLogV5,
+        continuation: &mut HumanM6ContinuationV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<()> {
+        let expected = EventEnvelope::new(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            self.prepared.event_sequence,
+            self.prepared.payload.actor().to_owned(),
+            self.prepared.event_sequence,
+            self.prepared.predecessor_event_hash.clone(),
+            self.prepared.payload.clone(),
+        )?;
+        if expected.canonical_bytes()? != self.envelope.canonical_bytes()? {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        log.append_prepared_scheduled_human_resolution_v5(
+            self.prepared,
+            &mut continuation.human,
+            roots,
+        )
+    }
+}
+
+impl M5M6ContinuationV5 {
+    /// Materializes the terminal report closure from this still-live
+    /// roots/CAS-derived cursor. The supplied proof is rechecked against the
+    /// exact final log before any descriptive row is exposed.
+    #[doc(hidden)]
+    pub fn terminal_review_closure_for_store(
+        &self,
+        log: &EventLogV5,
+        proof: &TerminalProofV5,
+    ) -> Result<V5TerminalReviewClosure> {
+        log.verify_terminal_proof_v5(proof)?;
+        let bundle = self.m5.completed_bundle_for_report(log)?;
+        let inputs = self.m5.completed_gluing_inputs_for_report(log)?;
+        terminal_review_closure_from_replayed_parts_v5(log, bundle, inputs, &self.m5.v3_aggregate)
+    }
+
+    /// Returns the completed M5 bundle only from this live roots/CAS-derived
+    /// terminal cursor.  It is descriptive report input, not a raw payload
+    /// decoder, append capability, or substitute for replay authority.
+    pub fn completed_bundle_for_report(
+        &self,
+        log: &EventLogV5,
+    ) -> Result<Option<crate::GluingBundleV4>> {
+        self.m5.completed_bundle_for_report(log)
+    }
+
+    /// Returns completed typed M5 inputs only from the same live terminal
+    /// cursor which minted the terminal proof. This is descriptive report
+    /// data, not a raw-payload decoder or append capability.
+    pub fn completed_gluing_inputs_for_report(
+        &self,
+        log: &EventLogV5,
+    ) -> Result<Vec<(ArtifactRegistrationV4, crate::GluingInputDescriptorV4)>> {
+        self.m5.completed_gluing_inputs_for_report(log)
+    }
+
+    /// Returns the one descriptor contract that is legal at the current
+    /// durable target tail.  A later fixed-context descriptor cannot be
+    /// issued until this registration has advanced the V5 predecessor.
+    pub fn next_gluing_work_request(
+        &self,
+        log: &EventLogV5,
+    ) -> Result<Option<M5GluingWorkRequestV5>> {
+        self.m5.validate_current(log)?;
+        let Some(bindings) = self.m5.bindings.as_ref() else {
+            return Ok(None);
+        };
+        let Some(binding) = bindings
+            .iter()
+            .find(|binding| !self.m5.descriptors.contains_key(binding.context_id()))
+        else {
+            return Ok(None);
+        };
+        Ok(Some(M5GluingWorkRequestV5 {
+            run_id: log.run_id.clone(),
+            genesis_hash: log.genesis_hash.clone(),
+            snapshot_id: self.m5.aggregate.program().snapshot_id().clone(),
+            universe_id: self.m5.aggregate.universe().id().clone(),
+            plan_id: self.m5.target_plan_id.clone(),
+            context_id: binding.context_id().clone(),
+            profile_descriptor_id: crate::DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID,
+            descriptor_media_type: GLUING_INPUT_MEDIA_TYPE_V4,
+            descriptor_sensitivity: ArtifactSensitivity::CanonicalState,
+            predecessor_event_hash: log.tail_hash().clone(),
+            event_sequence: self.m5.basis.target_next_sequence,
+            selected_claim_id: binding.claim_id().cloned(),
+            selected_obligation_id: binding.obligation_id().cloned(),
+        }))
+    }
+
+    /// Returns the next Core-derived target M5 registration or bundle.  None
+    /// means the sealed M5 phase is complete and only the terminal marker may
+    /// follow.
+    pub fn prepare_next(
+        &self,
+        log: &EventLogV5,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<Option<PreparedM5M6AppendV5>> {
+        let Some(prepared) =
+            log.prepare_scheduled_m5_gluing_append_v5(&self.m5, roots, resolver)?
+        else {
+            return Ok(None);
+        };
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            prepared.event_sequence,
+            prepared.payload.actor().to_owned(),
+            prepared.event_sequence,
+            prepared.predecessor_event_hash.clone(),
+            prepared.payload.clone(),
+        )?;
+        Ok(Some(PreparedM5M6AppendV5 { prepared, envelope }))
+    }
+
+    pub fn confirm_next(
+        &mut self,
+        log: &mut EventLogV5,
+        prepared: PreparedM5M6AppendV5,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<()> {
+        let expected = EventEnvelope::new(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            prepared.prepared.event_sequence,
+            prepared.prepared.payload.actor().to_owned(),
+            prepared.prepared.event_sequence,
+            prepared.prepared.predecessor_event_hash.clone(),
+            prepared.prepared.payload.clone(),
+        )?;
+        if expected.canonical_bytes()? != prepared.envelope.canonical_bytes()? {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        log.append_prepared_scheduled_m5_gluing_v5(prepared.prepared, &mut self.m5, roots, resolver)
+    }
+
+    pub fn prepare_terminal_marker(&self, log: &EventLogV5) -> Result<PreparedTerminalCompletedV5> {
+        self.m5.prepare_terminal_completed_v5(log)
+    }
+
+    pub fn confirm_terminal_marker(
+        &self,
+        log: &mut EventLogV5,
+        prepared: PreparedTerminalCompletedV5,
+    ) -> Result<TerminalProofV5> {
+        self.m5.confirm_terminal_completed_v5(log, prepared)?;
+        self.m5.terminal_proof_v5(log)
+    }
+}
+
+impl PreparedM5M6AppendV5 {
+    pub fn append_to_store<E>(
+        self,
+        write: impl for<'a> FnOnce(M5M6AppendLineV5<'a>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(Self, ()), E> {
+        write(M5M6AppendLineV5 {
+            envelope: &self.envelope,
+        })?;
+        Ok((self, ()))
+    }
+}
+
+impl M5M6AppendLineV5<'_> {
+    pub fn write_canonical_line(&self, writer: &mut impl std::io::Write) -> Result<()> {
+        writer
+            .write_all(&self.envelope.canonical_bytes()?)
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|error| DomainError::Validation(error.to_string()))
+    }
+}
+
+impl PreparedNativeM6AppendV5 {
+    pub fn append_to_store<E>(
+        self,
+        write: impl for<'a> FnOnce(NativeM6AppendLineV5<'a>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(Self, ()), E> {
+        write(NativeM6AppendLineV5 {
+            envelope: &self.envelope,
+        })?;
+        Ok((self, ()))
+    }
+
+    pub fn confirm(self, log: &mut EventLogV5, native: &mut NativeM6ContinuationV5) -> Result<()> {
+        let payload = self.prepared.payload()?;
+        let expected = EventEnvelope::new(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            self.prepared.event_sequence,
+            payload.actor().to_owned(),
+            self.prepared.event_sequence,
+            self.prepared.predecessor_event_hash.clone(),
+            payload.clone(),
+        )?;
+        if expected.canonical_bytes()? != self.envelope.canonical_bytes()? {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        log.append_prepared_scheduled_native_verifier_v5(self.prepared, &mut native.native)
+    }
+}
+
+impl PreparedPostPartialM6AppendV5 {
+    fn from_reviewer(
+        log: &EventLogV5,
+        prepared: PreparedScheduledReviewerAppendV5,
+    ) -> Result<Self> {
+        if prepared.log_identity != log.instance_identity
+            || prepared.predecessor_event_hash != *log.tail_hash()
+            || prepared.event_sequence
+                != u64::try_from(log.envelopes.len())
+                    .ok()
+                    .and_then(|value| value.checked_add(1))
+                    .ok_or_else(|| {
+                        DomainError::EventSequence(
+                            "post-partial reviewer sequence overflow".to_owned(),
+                        )
+                    })?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let position = if prepared.kind == ScheduledReviewerPreparedKindV5::Execution {
+            V5SealedPayloadPosition::ScheduledM6Execution
+        } else {
+            V5SealedPayloadPosition::General
+        };
+        let envelope = EventEnvelope::new_at_v5_position(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            prepared.event_sequence,
+            prepared.payload.actor().to_owned(),
+            prepared.event_sequence,
+            prepared.predecessor_event_hash.clone(),
+            prepared.payload.clone(),
+            position,
+        )?;
+        Ok(Self { prepared, envelope })
+    }
+
+    pub fn append_to_store<E>(
+        self,
+        write: impl for<'a> FnOnce(PostPartialM6AppendLineV5<'a>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(Self, ()), E> {
+        write(PostPartialM6AppendLineV5 {
+            envelope: &self.envelope,
+        })?;
+        Ok((self, ()))
+    }
+
+    pub fn confirm(
+        self,
+        log: &mut EventLogV5,
+        continuation: &mut PostPartialM6ContinuationV5,
+    ) -> Result<()> {
+        if self.envelope.run_id() != &log.run_id
+            || self.envelope.genesis_hash() != &log.genesis_hash
+            || self.envelope.sequence() != self.prepared.event_sequence
+            || self.envelope.previous_event_hash() != &self.prepared.predecessor_event_hash
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let position = if self.prepared.kind == ScheduledReviewerPreparedKindV5::Execution {
+            V5SealedPayloadPosition::ScheduledM6Execution
+        } else {
+            V5SealedPayloadPosition::General
+        };
+        let expected = EventEnvelope::new_at_v5_position(
+            EventContractVersion::V5,
+            log.run_id.clone(),
+            log.genesis_hash.clone(),
+            self.prepared.event_sequence,
+            self.prepared.payload.actor().to_owned(),
+            self.prepared.event_sequence,
+            self.prepared.predecessor_event_hash.clone(),
+            self.prepared.payload.clone(),
+            position,
+        )?;
+        if expected.canonical_bytes()? != self.envelope.canonical_bytes()? {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        log.append_prepared_scheduled_reviewer_v5(self.prepared, &mut continuation.reviewer)
+    }
+}
+
+impl RecomputedTerminalM6V5 {
+    pub fn prepare_pre_d2_append(self, log: &EventLogV5) -> Result<PreparedPreD2M6AppendV5> {
+        let (mut candidate, _) = EventLogV5::replay_confirmed_v5_prefix(
+            log.run_id.clone(),
+            log.canonical_genesis_bytes.clone(),
+            log.envelopes.clone(),
+            log.limits,
+        )?;
+        let pre_basis = self.pre_basis;
+        let closure = self.closure;
+        let mapping = self.mapping;
+        let correspondence = self.correspondence;
+        let staleness = self.staleness;
+        let partial_phase = self.partial_phase;
+        let mut basis = candidate.append_incremental_source_closure_v5(&closure, pre_basis)?;
+        candidate.append_program_mapping_phase_v5(&closure, &mapping, &mut basis)?;
+        candidate.append_obligation_correspondence_phase_v5(
+            &closure,
+            &mapping,
+            &correspondence,
+            &mut basis,
+        )?;
+        candidate.append_staleness_phase_v5(
+            &closure,
+            &mapping,
+            &correspondence,
+            &staleness,
+            &mut basis,
+        )?;
+        // All append capabilities below will be confirmed into `candidate`.
+        // Bind the sealed post-D2 cursor only after those Core operations are
+        // complete: internal candidate moves may refresh its process-local
+        // identity, while the durable semantic coordinates remain stable.
+        let partial_phase = partial_phase.rebind_replayed_log_identity(candidate.instance_identity);
+        Ok(PreparedPreD2M6AppendV5 {
+            first_new_event: log.envelopes.len(),
+            candidate,
+            session: PreD2M6SessionV5 {
+                staleness,
+                partial: partial_phase,
+                basis,
+            },
+        })
+    }
+    #[must_use]
+    pub const fn closure(&self) -> &crate::IncrementalSourceClosureV5 {
+        &self.closure
+    }
+
+    #[must_use]
+    pub const fn mapping(&self) -> &crate::M6MappingPhaseV5 {
+        &self.mapping
+    }
+
+    #[must_use]
+    pub const fn correspondence(&self) -> &crate::M6ObligationCorrespondencePhaseV5 {
+        &self.correspondence
+    }
+
+    #[must_use]
+    pub const fn staleness(&self) -> &crate::M6StalenessPhaseV5 {
+        &self.staleness
+    }
+
+    #[must_use]
+    pub const fn preservation(&self) -> &crate::M6PreservationPhaseV5 {
+        &self.preservation
+    }
+
+    #[must_use]
+    pub fn partial_actions(&self) -> &[crate::PartialRerunActionV5] {
+        &self.partial_actions
+    }
+
+    #[must_use]
+    pub const fn partial_plan(&self) -> &crate::PartialRerunPlanV5 {
+        &self.partial_plan
+    }
+
+    /// Verifies the durable M6 authority rows against this exact recomputed
+    /// reduction.  This is a comparison seam only: it does not replay roots,
+    /// append an event, or promote a durable row to authority on its own.
+    pub fn validate_durable_authority_rows(&self, log: &EventLogV5) -> Result<()> {
+        log.validate_terminal_m6_authority_against_expected_v5(
+            &self.closure,
+            &self.mapping,
+            &self.correspondence,
+            &self.staleness,
+            &self.partial_plan,
+        )
+    }
+}
+
+impl PreparedPreD2M6AppendV5 {
+    /// Descriptive coordinates for Store's locked-writer preflight. They do
+    /// not expose a payload or an append capability.
+    #[must_use]
+    pub fn first_sequence(&self) -> u64 {
+        self.candidate.envelopes[self.first_new_event].sequence()
+    }
+
+    #[must_use]
+    pub fn predecessor_event_hash(&self) -> &ContentHash {
+        self.candidate.envelopes[self.first_new_event].previous_event_hash()
+    }
+
+    pub fn append_to_store<E>(
+        self,
+        write: impl for<'a> FnOnce(PreD2M6AppendLinesV5<'a>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(Self, ()), E> {
+        write(PreD2M6AppendLinesV5 {
+            envelopes: &self.candidate.envelopes[self.first_new_event..],
+        })?;
+        Ok((self, ()))
+    }
+
+    pub fn confirm(self, log: &mut EventLogV5) -> Result<PreD2M6SessionV5> {
+        if log.run_id != self.candidate.run_id
+            || log.genesis_hash != self.candidate.genesis_hash
+            || log.envelopes.len() != self.first_new_event
+            || log.tail_hash() != self.candidate.envelopes[self.first_new_event - 1].event_hash()
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        *log = self.candidate;
+        let mut session = self.session;
+        // Moving the confirmed candidate through Store is the capability
+        // hand-off point. Bind the process-local sealed cursor to the exact
+        // live log now owned by the lock-held session; none of its semantic
+        // coordinates or durable digests change.
+        session.partial = session
+            .partial
+            .rebind_replayed_log_identity(log.instance_identity);
+        Ok(session)
+    }
+}
+
 /// Opaque, roots/CAS-derived partial-rerun phase.  Its members never cross a
 /// public DTO boundary: the terminal predecessor is the sole production mint
 /// path and append consumes the complete phase in one atomic batch.
@@ -22124,7 +25651,10 @@ pub(crate) struct PreparedPartialRerunPhaseAppendV5 {
     staleness_body_hash: ContentHash,
     phase_digest: ContentHash,
     member_index: usize,
-    payload: PersistedPayload,
+    // The envelope is minted at prepare time and is the sole object Store may
+    // durably write.  Confirm consumes this exact object; it never remints a
+    // payload after publication.
+    envelope: EventEnvelope,
 }
 
 /// Opaque post-D2 M5 plan.  It retains the terminal replay state and the
@@ -22306,6 +25836,25 @@ struct ScheduledReviewerCompletionReceiptV5 {
     action_event_ids: Vec<StableId>,
 }
 
+/// Private terminal witness for a claimless reviewer execution. It records
+/// that the scheduled action was visited without laundering abstention into a
+/// claim, lifecycle completion, or verifier prerequisite.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ScheduledReviewerAbstentionReceiptV5 {
+    action_id: StableId,
+    obligation_id: StableId,
+    execution_id: StableId,
+    execution_body_hash: ContentHash,
+    execution_event_id: StableId,
+    raw_registration_id: StableId,
+    raw_registration_event_id: StableId,
+    context_id: StableId,
+    context_body_hash: ContentHash,
+    context_event_id: StableId,
+    context_branch: ScheduledReviewerReceiptContextBranchV5,
+    action_event_ids: Vec<StableId>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ScheduledReviewerReceiptContextBranchV5 {
@@ -22411,6 +25960,7 @@ pub(crate) struct ReplayedScheduledReviewerPhaseV5 {
     cursor: ScheduledReviewerCursorV5,
     current_action_event_ids: Vec<StableId>,
     completed_receipts: Vec<ScheduledReviewerCompletionReceiptV5>,
+    abstained_receipts: Vec<ScheduledReviewerAbstentionReceiptV5>,
     resident_log_bytes: u64,
     external_phase_retained_bytes: u64,
     max_working_bytes: u64,
@@ -22527,8 +26077,8 @@ impl ReplayedScheduledReviewerPhaseV5 {
             raw_registration_id: &'a StableId,
             raw_registration_event_id: &'a StableId,
         }
-        struct Receipts<'a>(&'a [ScheduledReviewerCompletionReceiptV5]);
-        impl Serialize for Receipts<'_> {
+        struct StructuredReceipts<'a>(&'a [ScheduledReviewerCompletionReceiptV5]);
+        impl Serialize for StructuredReceipts<'_> {
             fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
             where
                 S: serde::Serializer,
@@ -22556,18 +26106,84 @@ impl ReplayedScheduledReviewerPhaseV5 {
                 values.end()
             }
         }
-        crate::canonical::compact_json_sha256_streaming(&Receipts(&self.completed_receipts))
+        #[derive(Serialize)]
+        struct AbstainedReceipt<'a> {
+            action_event_ids: &'a [StableId],
+            action_id: &'a StableId,
+            obligation_id: &'a StableId,
+            execution_id: &'a StableId,
+            execution_body_hash: &'a ContentHash,
+            execution_event_id: &'a StableId,
+            raw_registration_id: &'a StableId,
+            raw_registration_event_id: &'a StableId,
+            context_id: &'a StableId,
+            context_body_hash: &'a ContentHash,
+            context_event_id: &'a StableId,
+            context_branch: &'a ScheduledReviewerReceiptContextBranchV5,
+        }
+        struct AbstainedReceipts<'a>(&'a [ScheduledReviewerAbstentionReceiptV5]);
+        impl Serialize for AbstainedReceipts<'_> {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                let mut values = serializer.serialize_seq(Some(self.0.len()))?;
+                for value in self.0 {
+                    values.serialize_element(&AbstainedReceipt {
+                        action_event_ids: &value.action_event_ids,
+                        action_id: &value.action_id,
+                        obligation_id: &value.obligation_id,
+                        execution_id: &value.execution_id,
+                        execution_body_hash: &value.execution_body_hash,
+                        execution_event_id: &value.execution_event_id,
+                        raw_registration_id: &value.raw_registration_id,
+                        raw_registration_event_id: &value.raw_registration_event_id,
+                        context_id: &value.context_id,
+                        context_body_hash: &value.context_body_hash,
+                        context_event_id: &value.context_event_id,
+                        context_branch: &value.context_branch,
+                    })?;
+                }
+                values.end()
+            }
+        }
+        #[derive(Serialize)]
+        struct TerminalReceipts<'a> {
+            structured: StructuredReceipts<'a>,
+            abstained: AbstainedReceipts<'a>,
+        }
+        crate::canonical::compact_json_sha256_streaming(&TerminalReceipts {
+            structured: StructuredReceipts(&self.completed_receipts),
+            abstained: AbstainedReceipts(&self.abstained_receipts),
+        })
     }
 
     fn validate_completed_receipts(&self, log: &EventLogV5) -> Result<()> {
-        if self.completed_receipts.len() != self.actions.len()
-            || !self.current_action_event_ids.is_empty()
-        {
+        if !self.current_action_event_ids.is_empty() {
             return Err(DomainError::HistoricalPrefixMismatch(
                 "finished scheduled reviewer phase lacks one receipt per action",
             ));
         }
-        for (action, receipt) in self.actions.iter().zip(&self.completed_receipts) {
+        // The receipt vector is an ordered durable-prefix witness, not an
+        // unordered set.  Its order must remain the sealed scheduled-action
+        // order so a caller cannot substitute a reordered first-phase result
+        // while opening the post-D2 branch (including the no-gluing route).
+        let mut previous_action_index = None;
+        for receipt in &self.completed_receipts {
+            let (action_index, action) = self
+                .actions
+                .iter()
+                .enumerate()
+                .find(|(_, action)| action.action_id == receipt.action_id)
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "scheduled reviewer completion receipt action is foreign",
+                ))?;
+            if previous_action_index.is_some_and(|previous| previous >= action_index) {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled reviewer completion receipts are not in sealed action order",
+                ));
+            }
+            previous_action_index = Some(action_index);
             let expected_count = match &receipt.context_branch {
                 ScheduledReviewerReceiptContextBranchV5::New => 6,
                 ScheduledReviewerReceiptContextBranchV5::Existing { .. } => 3,
@@ -22960,6 +26576,38 @@ impl ReplayedScheduledReviewerPhaseV5 {
                 limit: usize::MAX,
                 observed: usize::MAX,
             })?;
+        let abstention_dynamic = self
+            .abstained_receipts
+            .iter()
+            .try_fold(0_u64, |total, value| {
+                let fixed = [
+                    value.action_id.allocated_bytes(),
+                    value.obligation_id.allocated_bytes(),
+                    value.execution_id.allocated_bytes(),
+                    value.execution_body_hash.allocated_bytes(),
+                    value.execution_event_id.allocated_bytes(),
+                    value.raw_registration_id.allocated_bytes(),
+                    value.raw_registration_event_id.allocated_bytes(),
+                    value.context_id.allocated_bytes(),
+                    value.context_body_hash.allocated_bytes(),
+                    value.context_event_id.allocated_bytes(),
+                ]
+                .into_iter()
+                .try_fold(0_usize, usize::checked_add)?;
+                let events = value.action_event_ids.iter().try_fold(
+                    value
+                        .action_event_ids
+                        .capacity()
+                        .checked_mul(size_of::<StableId>())?,
+                    |sum, id| sum.checked_add(id.allocated_bytes()),
+                )?;
+                total.checked_add(u64::try_from(fixed.checked_add(events)?).ok()?)
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled reviewer abstention receipt ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
         u64::try_from(size_of::<Self>())
             .unwrap_or(u64::MAX)
             .checked_add(self.external_phase_retained_bytes)
@@ -23020,6 +26668,16 @@ impl ReplayedScheduledReviewerPhaseV5 {
                 )
             })
             .and_then(|value| value.checked_add(receipt_dynamic))
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(
+                        self.abstained_receipts.capacity()
+                            * size_of::<ScheduledReviewerAbstentionReceiptV5>(),
+                    )
+                    .ok()?,
+                )
+            })
+            .and_then(|value| value.checked_add(abstention_dynamic))
             .and_then(|value| value.checked_add(u64::try_from(self.cursor.dynamic_bytes()).ok()?))
             .ok_or(DomainError::Incomplete {
                 operation: "scheduled reviewer retained ownership",
@@ -23733,25 +27391,10 @@ impl PreparedPartialRerunPhaseAppendV5 {
     }
 
     fn retained_bytes(&self) -> Result<u64> {
-        let payload_bytes = match &self.payload {
-            PersistedPayload::PartialRerunActionRecordedV5(action) => action
-                .retained_bytes()
-                .map_err(|error| DomainError::Validation(error.to_string()))?
-                .checked_sub(size_of::<crate::PartialRerunActionV5>()),
-            PersistedPayload::PartialRerunPlanSealedV5(plan) => plan
-                .retained_bytes()
-                .map_err(|error| DomainError::Validation(error.to_string()))?
-                .checked_sub(size_of::<crate::PartialRerunPlanV5>()),
-            _ => None,
-        }
-        .ok_or(DomainError::Incomplete {
-            operation: "partial rerun prepared payload inline ownership",
-            limit: usize::MAX,
-            observed: usize::MAX,
-        })?;
         Self::retained_bytes_with_parts([
             size_of::<Self>(),
-            payload_bytes,
+            size_of::<EventEnvelope>(),
+            self.envelope.allocated_bytes(),
             self.session_identity.0.allocated_bytes(),
             self.source_closure_id.allocated_bytes(),
             self.policy_revision_hash.allocated_bytes(),
@@ -23858,6 +27501,10 @@ fn select_gluing_claim_binding_v5(
 
 #[allow(dead_code)] // Staged opaque post-D2 session seam; production caller lands next slice.
 impl SealedGluingRerunPhaseV5 {
+    fn bind_replayed_log_identity(&mut self, log_identity: V5LogInstanceIdentity) {
+        self.log_identity = log_identity;
+    }
+
     /// Rebinds an already sealed, immutable second-plan cursor to a freshly
     /// reconstructed V5 log instance. This changes only the process-local
     /// capability identity; all sealed action, plan, aggregate and basis
@@ -24779,6 +28426,982 @@ fn scheduled_native_prepare_validation_bytes(
 }
 
 impl EventLogV5 {
+    /// Replays the exact durable prefix which preceded a final terminal
+    /// marker. This keeps the private M5 cursor's basis separate from the
+    /// marker it authorized, rather than treating the marker as evidence that
+    /// the cursor was current after its own append.
+    fn terminal_marker_predecessor_v5(&self) -> Result<Self> {
+        let marker = self.envelopes.last().ok_or_else(|| {
+            DomainError::EventSequence(
+                "V5 terminal proof requires a final terminal completed marker".to_owned(),
+            )
+        })?;
+        if !matches!(
+            decode_canonical_payload(EventContractVersion::V5, marker.payload.get())?,
+            PersistedPayload::TerminalCompletedV5(_)
+        ) {
+            return Err(DomainError::EventSequence(
+                "V5 terminal proof requires terminal_completed_v5 as the final event".to_owned(),
+            ));
+        }
+        Self::replay_confirmed_v5_prefix(
+            self.run_id.clone(),
+            self.canonical_genesis_bytes.clone(),
+            self.envelopes[..self.envelopes.len().saturating_sub(1)].to_vec(),
+            self.limits,
+        )
+        .map(|(log, _)| log)
+    }
+
+    /// Finds the unique durable M6 authority chain without accepting caller
+    /// coordinates.  The subsequent roots/CAS replay factory consumes this
+    /// locator; a duplicate, missing, or out-of-order closed payload is
+    /// refused before any phase or suffix is materialised.
+    fn terminal_m6_authority_rows_v5(&self) -> Result<TerminalM6AuthorityRowsV5> {
+        let mut closure = None;
+        let mut morphism = None;
+        let mut correspondence = None;
+        let mut staleness = None;
+        let mut partial = None;
+        for (position, envelope) in self.envelopes.iter().enumerate() {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            let slot = match payload {
+                PersistedPayload::IncrementalSourceBoundV5(_) => &mut closure,
+                PersistedPayload::ChangeMorphismSealedV5(_) => &mut morphism,
+                PersistedPayload::ObligationCorrespondenceSealedV5(_) => &mut correspondence,
+                PersistedPayload::StalenessAssessmentSealedV5(_) => &mut staleness,
+                PersistedPayload::PartialRerunPlanSealedV5(_) => &mut partial,
+                _ => continue,
+            };
+            if slot.replace(position).is_some() {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "terminal M6 authority family is not unique",
+                ));
+            }
+        }
+        let rows = TerminalM6AuthorityRowsV5 {
+            source_closure_position: closure.ok_or(DomainError::HistoricalPrefixMismatch(
+                "terminal source closure is absent",
+            ))?,
+            change_morphism_position: morphism.ok_or(DomainError::HistoricalPrefixMismatch(
+                "terminal change morphism is absent",
+            ))?,
+            correspondence_position: correspondence.ok_or(
+                DomainError::HistoricalPrefixMismatch(
+                    "terminal obligation correspondence is absent",
+                ),
+            )?,
+            staleness_position: staleness.ok_or(DomainError::HistoricalPrefixMismatch(
+                "terminal staleness assessment is absent",
+            ))?,
+            partial_plan_position: partial.ok_or(DomainError::HistoricalPrefixMismatch(
+                "terminal partial rerun plan is absent",
+            ))?,
+        };
+        if !(rows.source_closure_position < rows.change_morphism_position
+            && rows.change_morphism_position < rows.correspondence_position
+            && rows.correspondence_position < rows.staleness_position
+            && rows.staleness_position < rows.partial_plan_position)
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal M6 authority families are out of canonical order",
+            ));
+        }
+        Ok(rows)
+    }
+
+    /// Decodes only the four seal bodies selected by
+    /// `terminal_m6_authority_rows_v5`.  Recanonicalization is mandatory so
+    /// a syntactically valid but noncanonical raw payload cannot reach the
+    /// later roots/CAS authority replay.
+    fn terminal_m6_authority_bodies_v5(&self) -> Result<TerminalM6AuthorityBodiesV5> {
+        let rows = self.terminal_m6_authority_rows_v5()?;
+        let body_at = |position: usize| -> Result<Vec<u8>> {
+            let envelope =
+                self.envelopes
+                    .get(position)
+                    .ok_or(DomainError::HistoricalPrefixMismatch(
+                        "terminal M6 authority locator is outside the durable prefix",
+                    ))?;
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            let raw = match payload {
+                PersistedPayload::IncrementalSourceBoundV5(raw)
+                | PersistedPayload::ChangeMorphismSealedV5(raw)
+                | PersistedPayload::ObligationCorrespondenceSealedV5(raw)
+                | PersistedPayload::StalenessAssessmentSealedV5(raw) => raw,
+                _ => {
+                    return Err(DomainError::HistoricalPrefixMismatch(
+                        "terminal M6 authority locator selects the wrong payload family",
+                    ));
+                }
+            };
+            let value: Value = serde_json::from_str(raw.get())
+                .map_err(|error| DomainError::Json(error.to_string()))?;
+            let canonical = canonical_json(&value)?;
+            if canonical.as_slice() != raw.get().as_bytes() {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "terminal M6 authority body is not canonical",
+                ));
+            }
+            Ok(canonical)
+        };
+        Ok(TerminalM6AuthorityBodiesV5 {
+            closure: body_at(rows.source_closure_position)?,
+            morphism: body_at(rows.change_morphism_position)?,
+            correspondence: body_at(rows.correspondence_position)?,
+            staleness: body_at(rows.staleness_position)?,
+        })
+    }
+
+    /// First typed admission for a durable terminal M6 chain.  Only the
+    /// closure can be self-validating; the three seals intentionally require
+    /// a freshly roots/CAS-derived expected phase, which is checked by the
+    /// authority replay factory rather than trusting their durable presence.
+    fn validate_terminal_m6_durable_dtos_v5(bodies: &TerminalM6AuthorityBodiesV5) -> Result<()> {
+        crate::IncrementalSourceClosureV5::validate_event_wire(&bodies.closure)
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        for (body, schema, label) in [
+            (
+                &bodies.morphism,
+                "reviewgraphen.change_morphism.v5",
+                "change morphism",
+            ),
+            (
+                &bodies.correspondence,
+                "reviewgraphen.obligation_correspondence.v5",
+                "correspondence",
+            ),
+            (
+                &bodies.staleness,
+                "reviewgraphen.staleness_assessment.v5",
+                "staleness",
+            ),
+        ] {
+            let value: Value = serde_json::from_slice(body)
+                .map_err(|error| DomainError::Json(error.to_string()))?;
+            if value.get("schema").and_then(Value::as_str) != Some(schema)
+                || value.get("id").and_then(Value::as_str).is_none()
+            {
+                let _ = label;
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "terminal durable M6 seal has the wrong closed schema",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Compares durable terminal M6 seals with roots/CAS-recomputed expected
+    /// phases. This is intentionally separate from DTO decoding: canonical
+    /// event presence never establishes authority by itself.
+    #[allow(dead_code)] // consumed by the staged roots/CAS terminal factory.
+    fn validate_terminal_m6_authority_against_expected_v5(
+        &self,
+        closure: &crate::IncrementalSourceClosureV5,
+        mapping: &crate::M6MappingPhaseV5,
+        correspondence: &crate::M6ObligationCorrespondencePhaseV5,
+        staleness: &crate::M6StalenessPhaseV5,
+        partial: &crate::PartialRerunPlanV5,
+    ) -> Result<()> {
+        let bodies = self.terminal_m6_authority_bodies_v5()?;
+        Self::validate_terminal_m6_durable_dtos_v5(&bodies)?;
+        let rows = self.terminal_m6_authority_rows_v5()?;
+        let partial_envelope = self.envelopes.get(rows.partial_plan_position).ok_or(
+            DomainError::HistoricalPrefixMismatch("terminal partial plan locator is absent"),
+        )?;
+        let actual_partial = match decode_canonical_payload(
+            EventContractVersion::V5,
+            partial_envelope.payload.get(),
+        )? {
+            PersistedPayload::PartialRerunPlanSealedV5(value) => canonical_json(&value)?,
+            _ => unreachable!("closed terminal locator selected a partial plan"),
+        };
+        let closure_matches = canonical_json(closure)? == bodies.closure;
+        let matches = closure_matches
+            && mapping
+                .morphism()
+                .canonical_body_matches(&bodies.morphism)
+                .map_err(|error| DomainError::Validation(error.to_string()))?
+            && correspondence
+                .correspondence()
+                .canonical_body_matches(&bodies.correspondence)
+                .map_err(|error| DomainError::Validation(error.to_string()))?
+            && staleness
+                .assessment()
+                .canonical_body_matches(&bodies.staleness)
+                .map_err(|error| DomainError::Validation(error.to_string()))?
+            && partial
+                .canonical_body_matches(&actual_partial)
+                .map_err(|error| DomainError::Validation(error.to_string()))?;
+        if !matches {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        Ok(())
+    }
+
+    /// Replays the complete terminal suffix from immutable source/target
+    /// journals, fresh V5 roots and CAS.  This is the crash-recovery seam for
+    /// report material: durable M6/M5 rows are comparison inputs only, while
+    /// every cursor is rebuilt from roots/CAS before its bytes are accepted.
+    ///
+    /// It intentionally does not return a continuation or any append token.
+    /// Target-only proof recovery remains separate because a terminal marker
+    /// alone cannot establish the V4 source baseline or V5 host trust.
+    #[doc(hidden)]
+    pub fn terminal_review_closure_for_store(
+        &self,
+        source_log: &EventLogV4,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+        proof: &TerminalProofV5,
+    ) -> Result<V5TerminalReviewClosure> {
+        self.verify_terminal_proof_v5(proof)?;
+        let marker = self
+            .envelopes
+            .last()
+            .ok_or(DomainError::HistoricalPrefixMismatch(
+                "terminal composite recovery has no marker",
+            ))
+            .and_then(|event| {
+                match decode_canonical_payload(EventContractVersion::V5, event.payload.get())? {
+                    PersistedPayload::TerminalCompletedV5(raw) => {
+                        let marker: TerminalCompletedWireV5 = serde_json::from_str(raw.get())
+                            .map_err(|error| DomainError::Json(error.to_string()))?;
+                        marker.validate()?;
+                        Ok(marker)
+                    }
+                    _ => Err(DomainError::HistoricalPrefixMismatch(
+                        "terminal composite recovery requires a final marker",
+                    )),
+                }
+            })?;
+        let bodies = self.terminal_m6_authority_bodies_v5()?;
+        Self::validate_terminal_m6_durable_dtos_v5(&bodies)?;
+        let closure =
+            crate::IncrementalSourceClosureV5::from_projection_event_json(&bodies.closure)
+                .map_err(|error| DomainError::Validation(error.to_string()))?;
+        if closure.id() != proof.source_closure_id() {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal source closure does not equal the proof witness",
+            ));
+        }
+        let morphism = crate::ChangeMorphismV5::from_projection_event_json(&bodies.morphism)
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        let structural_mapping =
+            crate::M6MappingPhaseV5::from_durable_morphism_for_recovery(morphism)
+                .map_err(|error| DomainError::Validation(error.to_string()))?;
+        let assessment =
+            crate::StalenessAssessmentV5::from_projection_event_json(&bodies.staleness)
+                .map_err(|error| DomainError::Validation(error.to_string()))?;
+        let recomputed = self
+            .recompute_terminal_m6_no_gluing_v5(
+                source_log,
+                &closure,
+                &structural_mapping,
+                resolver,
+                roots,
+                assessment.assessment_time(),
+            )
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        recomputed.validate_durable_authority_rows(self)?;
+
+        // The sealed partial plan bounds the end of the first replayable
+        // suffix. Never take a caller count: the unique terminal locator has
+        // already verified ordering and this exact event is rechecked below.
+        let rows = self.terminal_m6_authority_rows_v5()?;
+        let partial_end = rows.partial_plan_position;
+        let partial_log = Self::replay_terminal_prefix_for_composite_recovery(
+            self,
+            partial_end
+                .checked_add(1)
+                .ok_or(DomainError::EventSequence(
+                    "terminal partial suffix index overflow".to_owned(),
+                ))?,
+        )?;
+        let partial_phase = recomputed
+            .partial_phase
+            .rebind_replayed_log_identity(partial_log.instance_identity);
+        let recovered = partial_log
+            .recover_partial_rerun_phase_v5(
+                &recomputed.pre_basis,
+                &recomputed.closure,
+                &recomputed.mapping,
+                &recomputed.correspondence,
+                &recomputed.staleness,
+                PreservationRecoveryInputV5 {
+                    closure: &recomputed.closure,
+                    mapping: &recomputed.mapping,
+                    correspondence: &recomputed.correspondence,
+                    staleness: &recomputed.staleness,
+                    bundles: &[],
+                    resolver,
+                    roots,
+                },
+                &partial_phase,
+            )
+            .map_err(|error| {
+                DomainError::Validation(format!("terminal composite partial replay: {error}"))
+            })?;
+        let RecoveredM6PersistenceV5::Incremental {
+            stage: M6PersistenceRecoveryStageV5::PartialRerunSealed,
+            basis: reviewer_basis,
+        } = recovered
+        else {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal composite recovery did not reach the sealed partial phase",
+            ));
+        };
+
+        let suffix = Self::terminal_suffix_bytes_for_composite_recovery(self, partial_end + 1)?;
+        let (reviewer_log, reviewer, reviewer_count) =
+            Self::recover_longest_reviewer_suffix_for_composite_recovery(
+                self,
+                partial_end + 1,
+                &suffix,
+                &partial_phase,
+                *reviewer_basis,
+                resolver,
+            )
+            .map_err(|error| {
+                DomainError::Validation(format!("terminal composite reviewer replay: {error}"))
+            })?;
+        let partial_phase =
+            partial_phase.rebind_replayed_log_identity(reviewer_log.instance_identity);
+
+        let (post_d2_log, terminal, gluing) = if marker.gluing_required {
+            let mut gluing = reviewer
+                .seal_gluing_rerun_phase_v5(&partial_phase)
+                .map_err(|error| DomainError::Validation(error.to_string()))?;
+            let gluing_start = partial_end
+                .checked_add(1)
+                .and_then(|value| value.checked_add(reviewer_count))
+                .ok_or(DomainError::EventSequence(
+                    "terminal gluing suffix index overflow".to_owned(),
+                ))?;
+            let gluing_end = self.envelopes[gluing_start..]
+                .iter()
+                .position(|event| {
+                    matches!(
+                        decode_canonical_payload(EventContractVersion::V5, event.payload.get()),
+                        Ok(PersistedPayload::GluingRerunPlanSealedV5(_))
+                    )
+                })
+                .and_then(|relative| gluing_start.checked_add(relative))
+                .ok_or(DomainError::HistoricalPrefixMismatch(
+                    "terminal gluing branch has no sealed rerun plan",
+                ))?;
+            let gluing_log =
+                Self::replay_terminal_prefix_for_composite_recovery(self, gluing_end + 1)?;
+            gluing.bind_replayed_log_identity(gluing_log.instance_identity);
+            gluing_log
+                .recover_gluing_rerun_prefix_v5(&mut gluing)
+                .map_err(|error| {
+                    DomainError::Validation(format!("terminal composite gluing replay: {error}"))
+                })?;
+            let terminal = gluing_log
+                .open_post_d2_terminal_phase_inner_v5(
+                    &reviewer,
+                    &partial_phase,
+                    Some(&mut gluing),
+                    false,
+                )
+                .map_err(|error| {
+                    DomainError::Validation(format!("terminal composite gluing terminal: {error}"))
+                })?;
+            (gluing_log, terminal, Some(gluing))
+        } else {
+            let terminal = reviewer_log
+                .open_post_d2_terminal_phase_v5(&reviewer, &partial_phase, None)
+                .map_err(|error| {
+                    DomainError::Validation(format!(
+                        "terminal composite no-gluing terminal: {error}"
+                    ))
+                })?;
+            (reviewer_log, terminal, None)
+        };
+
+        let native_start = post_d2_log.envelopes.len();
+        let remaining = Self::terminal_suffix_bytes_for_composite_recovery(self, native_start)?;
+        let (native_log, mut native, native_count) =
+            Self::recover_longest_native_suffix_for_composite_recovery(
+                self,
+                native_start,
+                &remaining,
+                &terminal,
+                &reviewer,
+                &partial_phase,
+                roots,
+                resolver,
+            )
+            .map_err(|error| {
+                DomainError::Validation(format!("terminal composite native replay: {error}"))
+            })?;
+        let human_start =
+            native_start
+                .checked_add(native_count)
+                .ok_or(DomainError::EventSequence(
+                    "terminal human suffix index overflow".to_owned(),
+                ))?;
+        if native_log.envelopes.len() != human_start {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal composite native replay did not end at the human prefix",
+            ));
+        }
+        // The longest-prefix selector has now fixed the complete native
+        // suffix boundary. Only here may recovery reconstruct the opaque
+        // cursor's process-local identity and current basis: every covered
+        // member has already passed the roots/CAS byte-equality replay above.
+        native
+            .rebind_exact_recovered_prefix(&native_log)
+            .map_err(|error| {
+                DomainError::Validation(format!(
+                    "terminal composite native-to-human cursor handoff: {error}"
+                ))
+            })?;
+        let remaining = Self::terminal_suffix_bytes_for_composite_recovery(self, human_start)?;
+        let (human_log, human, human_count) =
+            Self::recover_longest_human_suffix_for_composite_recovery(
+                self,
+                human_start,
+                &remaining,
+                &native,
+                &partial_phase,
+                roots,
+            )
+            .map_err(|error| {
+                DomainError::Validation(format!("terminal composite human replay: {error}"))
+            })?;
+        let m5_start = human_start
+            .checked_add(human_count)
+            .ok_or(DomainError::EventSequence(
+                "terminal M5 suffix index overflow".to_owned(),
+            ))?;
+        let marker_position = self
+            .envelopes
+            .len()
+            .checked_sub(1)
+            .ok_or(DomainError::HistoricalPrefixMismatch(
+                "terminal marker position underflow",
+            ))
+            .map_err(|error| {
+                DomainError::Validation(format!("terminal composite M5 replay: {error}"))
+            })?;
+        let m5_suffix = Self::terminal_suffix_bytes_range_for_composite_recovery(
+            self,
+            m5_start,
+            marker_position,
+        )?;
+        if m5_suffix.len() != marker.m5_member_event_ids.len() {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal M5 suffix count does not equal marker member count",
+            ));
+        }
+        let (mut m5_log, m5) = Self::replay_scheduled_m5_gluing_suffix_v5(
+            human_log,
+            &m5_suffix,
+            ScheduledM5GluingRecoveryInputV5 {
+                native: Box::new(native),
+                human: Box::new(human),
+                partial: &partial_phase,
+                gluing: gluing.map(Box::new),
+                roots,
+                resolver,
+            },
+        )
+        .map_err(|error| {
+            DomainError::Validation(format!("terminal composite M5 replay suffix: {error}"))
+        })?;
+        let final_marker = self.envelopes[marker_position].clone();
+        m5_log
+            .append_sealed_envelope_at_v5(final_marker, V5SealedPayloadPosition::General)
+            .map_err(|error| {
+                DomainError::Validation(format!("terminal composite marker replay: {error}"))
+            })?;
+        let completed_bundle = m5.completed_bundle_for_report(&m5_log).map_err(|error| {
+            DomainError::Validation(format!("terminal composite completed M5 bundle: {error}"))
+        })?;
+        let completed_gluing_inputs =
+            m5.completed_gluing_inputs_for_report(&m5_log)
+                .map_err(|error| {
+                    DomainError::Validation(format!(
+                        "terminal composite completed M5 inputs: {error}"
+                    ))
+                })?;
+        terminal_review_closure_from_replayed_parts_v5(
+            self,
+            completed_bundle,
+            completed_gluing_inputs,
+            &m5.v3_aggregate,
+        )
+    }
+
+    fn replay_terminal_prefix_for_composite_recovery(
+        source: &EventLogV5,
+        count: usize,
+    ) -> Result<EventLogV5> {
+        if count == 0 || count > source.envelopes.len() {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal composite recovery prefix is outside the durable journal",
+            ));
+        }
+        Self::replay_confirmed_v5_prefix(
+            source.run_id.clone(),
+            source.canonical_genesis_bytes.clone(),
+            source.envelopes[..count].to_vec(),
+            source.limits,
+        )
+        .map(|(log, _)| log)
+    }
+
+    fn terminal_suffix_bytes_range_for_composite_recovery(
+        source: &EventLogV5,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<Vec<u8>>> {
+        if start > end || end > source.envelopes.len() {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal composite recovery suffix range is outside the durable journal",
+            ));
+        }
+        source.envelopes[start..end]
+            .iter()
+            .map(EventEnvelope::canonical_bytes)
+            .collect()
+    }
+
+    fn terminal_suffix_bytes_for_composite_recovery(
+        source: &EventLogV5,
+        start: usize,
+    ) -> Result<Vec<Vec<u8>>> {
+        Self::terminal_suffix_bytes_range_for_composite_recovery(
+            source,
+            start,
+            source.envelopes.len(),
+        )
+    }
+
+    fn recover_longest_reviewer_suffix_for_composite_recovery(
+        source: &EventLogV5,
+        start: usize,
+        suffix: &[Vec<u8>],
+        partial: &SealedPartialRerunPhaseV5,
+        basis: AuthorityReplayBasisV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<(EventLogV5, ReplayedScheduledReviewerPhaseV5, usize)> {
+        let mut last = None;
+        let mut first_error = None;
+        for count in 0..=suffix.len() {
+            let base = Self::replay_terminal_prefix_for_composite_recovery(source, start)?;
+            match Self::replay_scheduled_reviewer_suffix_v5(
+                base,
+                &suffix[..count],
+                partial,
+                basis.clone(),
+                resolver,
+            ) {
+                Ok((log, phase)) => last = Some((log, phase, count)),
+                Err(error) => {
+                    first_error = Some(error);
+                    break;
+                }
+            }
+        }
+        last.ok_or_else(|| {
+            first_error.unwrap_or(DomainError::HistoricalPrefixMismatch(
+                "terminal composite recovery cannot replay its reviewer suffix",
+            ))
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recover_longest_native_suffix_for_composite_recovery(
+        source: &EventLogV5,
+        start: usize,
+        suffix: &[Vec<u8>],
+        terminal: &ReplayedPostD2TerminalPhaseV5,
+        reviewer: &ReplayedScheduledReviewerPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<(EventLogV5, ReplayedScheduledNativeVerifierPhaseV5, usize)> {
+        let mut last = None;
+        let mut first_error = None;
+        for count in 0..=suffix.len() {
+            let base = Self::replay_terminal_prefix_for_composite_recovery(source, start)?;
+            match Self::replay_scheduled_native_verifier_suffix_v5(
+                base,
+                &suffix[..count],
+                terminal,
+                reviewer,
+                partial,
+                roots,
+                resolver,
+            ) {
+                Ok((log, phase)) => last = Some((log, phase, count)),
+                Err(error) => {
+                    first_error = Some(error);
+                    break;
+                }
+            }
+        }
+        let (log, phase, count) = match last {
+            Some(value) => value,
+            None => {
+                return Err(first_error.unwrap_or(DomainError::HistoricalPrefixMismatch(
+                    "terminal composite recovery cannot replay its native suffix",
+                )));
+            }
+        };
+        if !phase.is_finished() {
+            let first_error =
+                first_error.map_or_else(|| "none".to_owned(), |error| error.to_string());
+            return Err(DomainError::Validation(format!(
+                "terminal composite native replay stopped incomplete at suffix count {count}: action_index={}, member_index={}, action_count={}, first_error={first_error}",
+                phase.action_index,
+                phase.member_index,
+                phase.actions.len(),
+            )));
+        }
+        Ok((log, phase, count))
+    }
+
+    fn recover_longest_human_suffix_for_composite_recovery(
+        source: &EventLogV5,
+        start: usize,
+        suffix: &[Vec<u8>],
+        native: &ReplayedScheduledNativeVerifierPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<(EventLogV5, ReplayedScheduledHumanResolutionPhaseV5, usize)> {
+        let mut last = None;
+        let mut first_error = None;
+        for count in 0..=suffix.len() {
+            let base = Self::replay_terminal_prefix_for_composite_recovery(source, start)?;
+            match Self::replay_scheduled_human_resolution_suffix_v5(
+                base,
+                &suffix[..count],
+                native,
+                partial,
+                roots,
+            ) {
+                Ok((log, phase)) => last = Some((log, phase, count)),
+                Err(error) => {
+                    first_error = Some(error);
+                    break;
+                }
+            }
+        }
+        last.ok_or_else(|| {
+            first_error.unwrap_or(DomainError::HistoricalPrefixMismatch(
+                "terminal composite recovery cannot replay its human suffix",
+            ))
+        })
+    }
+
+    /// Prepares the final marker from the only two complete terminal shapes:
+    /// a partial plan whose no-gluing branch is the tail, or a partial plan
+    /// followed by its gluing seal, two V4 registrations, and one bundle.
+    /// This is deliberately a grammar-derived capability rather than a raw
+    /// marker DTO or a caller-provided proof.
+    #[doc(hidden)]
+    #[allow(clippy::collapsible_match)] // the explicit arms retain distinct terminal witnesses.
+    fn prepare_terminal_completed_v5_from_completed_m5(
+        &self,
+        m4_completion_digest: &ContentHash,
+    ) -> Result<PreparedTerminalCompletedV5> {
+        let authority_rows = self.terminal_m6_authority_rows_v5()?;
+        let authority_bodies = self.terminal_m6_authority_bodies_v5()?;
+        Self::validate_terminal_m6_durable_dtos_v5(&authority_bodies)?;
+        // Keep all selected raw bodies alive through structural admission; a
+        // future roots/CAS factory consumes these exact bytes rather than
+        // reopening event JSON by caller-selected indexes.
+        if authority_bodies.closure.is_empty()
+            || authority_bodies.morphism.is_empty()
+            || authority_bodies.correspondence.is_empty()
+            || authority_bodies.staleness.is_empty()
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal M6 authority body is empty",
+            ));
+        }
+        EventEnvelope::validate_v5_stream(
+            &self.run_id,
+            &self.canonical_genesis_bytes,
+            &self.envelopes,
+        )?;
+        if self.envelopes.last().is_some_and(|event| {
+            decode_canonical_payload(EventContractVersion::V5, event.payload.get())
+                .is_ok_and(|payload| matches!(payload, PersistedPayload::TerminalCompletedV5(_)))
+        }) {
+            return Err(DomainError::EventSequence(
+                "V5 terminal completed marker is already durable".to_owned(),
+            ));
+        }
+        let partials = self
+            .envelopes
+            .iter()
+            .enumerate()
+            .filter_map(|(position, event)| {
+                let payload =
+                    decode_canonical_payload(EventContractVersion::V5, event.payload.get()).ok()?;
+                let PersistedPayload::PartialRerunPlanSealedV5(partial) = payload else {
+                    return None;
+                };
+                Some((position, partial))
+            })
+            .collect::<Vec<_>>();
+        let [(partial_position, partial)] = partials.as_slice() else {
+            return Err(DomainError::EventSequence(
+                "V5 terminal marker requires exactly one partial rerun plan seal".to_owned(),
+            ));
+        };
+        if *partial_position != authority_rows.partial_plan_position {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal partial plan locator differs from the closed M6 authority chain",
+            ));
+        }
+        let source_closure_id = partial.source_closure_id().clone();
+        let target_plan_id = partial.target_plan_id().clone();
+        let mut source_closure_position = None;
+        let mut target_plan_position = None;
+        for (position, event) in self.envelopes.iter().enumerate() {
+            let payload = decode_canonical_payload(EventContractVersion::V5, event.payload.get())?;
+            match payload {
+                PersistedPayload::IncrementalSourceBoundV5(raw)
+                    if terminal_proof_v5_stable_id(
+                        &terminal_proof_v5_raw_object(raw.get().as_bytes())?,
+                        "id",
+                    )? == source_closure_id =>
+                {
+                    if source_closure_position.replace(position).is_some() {
+                        return Err(DomainError::EventSequence(
+                            "V5 terminal marker source closure is not unique".to_owned(),
+                        ));
+                    }
+                }
+                PersistedPayload::ReviewPlanRecorded(plan) if plan.id() == &target_plan_id => {
+                    if target_plan_position.replace(position).is_some() {
+                        return Err(DomainError::EventSequence(
+                            "V5 terminal marker target plan is not unique".to_owned(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !matches!(
+            (target_plan_position, source_closure_position),
+            (Some(target), Some(source)) if target < source && source < *partial_position
+        ) {
+            return Err(DomainError::EventSequence(
+                "V5 terminal marker witnesses are not in target-plan/source-closure/partial order"
+                    .to_owned(),
+            ));
+        }
+
+        let suffix = &self.envelopes[partial_position + 1..];
+        let (
+            gluing_plan_seal_id,
+            gluing_plan_seal_body_hash,
+            completion_kind,
+            completion_attempt_id,
+            m5_member_event_ids,
+        ) = if !partial.target_gluing_required() {
+            if !suffix.is_empty() {
+                return Err(DomainError::EventSequence(
+                    "V5 no-gluing terminal marker requires the partial plan seal as the tail"
+                        .to_owned(),
+                ));
+            }
+            (
+                None,
+                None,
+                "no_gluing_required".to_owned(),
+                None,
+                Vec::new(),
+            )
+        } else {
+            // The target may contain historical gluing material. Select only
+            // the last durable second-plan seal bound to this exact closure,
+            // partial plan and target plan.
+            let seal_position = suffix
+                .iter()
+                .rposition(|event| {
+                    matches!(
+                        decode_canonical_payload(EventContractVersion::V5, event.payload.get()),
+                        Ok(PersistedPayload::GluingRerunPlanSealedV5(seal))
+                            if seal.source_closure_id() == &source_closure_id
+                                && seal.partial_rerun_plan_id() == partial.id()
+                                && seal.target_plan_id() == &target_plan_id
+                    )
+                })
+                .ok_or_else(|| {
+                    DomainError::EventSequence(
+                        "V5 gluing terminal marker requires a gluing plan seal".to_owned(),
+                    )
+                })?;
+            let m5_start = suffix.len().checked_sub(3).ok_or_else(|| {
+                DomainError::EventSequence(
+                    "V5 gluing terminal marker requires two registrations and a bundle".to_owned(),
+                )
+            })?;
+            if m5_start <= seal_position {
+                return Err(DomainError::EventSequence(
+                    "V5 gluing terminal marker requires its M5 suffix after the sealed plan"
+                        .to_owned(),
+                ));
+            }
+            let seal = match decode_canonical_payload(
+                EventContractVersion::V5,
+                suffix[seal_position].payload.get(),
+            )? {
+                PersistedPayload::GluingRerunPlanSealedV5(seal) => seal,
+                _ => unreachable!("sealed terminal suffix was selected above"),
+            };
+            if seal.source_closure_id() != &source_closure_id
+                || seal.partial_rerun_plan_id() != partial.id()
+                || seal.target_plan_id() != &target_plan_id
+                || !matches!(
+                    decode_canonical_payload(
+                        EventContractVersion::V5,
+                        suffix[m5_start].payload.get()
+                    )?,
+                    PersistedPayload::ArtifactRegisteredV4(_)
+                )
+                || !matches!(
+                    decode_canonical_payload(
+                        EventContractVersion::V5,
+                        suffix[m5_start + 1].payload.get()
+                    )?,
+                    PersistedPayload::ArtifactRegisteredV4(_)
+                )
+            {
+                return Err(DomainError::EventSequence(
+                    "V5 gluing terminal marker suffix does not match its sealed plan".to_owned(),
+                ));
+            }
+            let attempt = match decode_canonical_payload(
+                EventContractVersion::V5,
+                suffix[m5_start + 2].payload.get(),
+            )? {
+                PersistedPayload::GluingBundleRecordedV4(raw) => {
+                    terminal_proof_v5_nested_stable_id(
+                        &terminal_proof_v5_raw_object(raw.get().as_bytes())?,
+                        "attempt",
+                        "id",
+                    )?
+                }
+                _ => {
+                    return Err(DomainError::EventSequence(
+                        "V5 gluing terminal marker requires a final gluing bundle".to_owned(),
+                    ));
+                }
+            };
+            (
+                Some(seal.id().clone()),
+                Some(ContentHash::sha256(&canonical_json(&seal)?)),
+                "gluing_bundle_recorded".to_owned(),
+                Some(attempt),
+                suffix[m5_start..]
+                    .iter()
+                    .map(|event| event.id().clone())
+                    .collect(),
+            )
+        };
+        let next_sequence = self
+            .envelopes
+            .last()
+            .ok_or_else(|| {
+                DomainError::EventSequence(
+                    "V5 terminal marker requires a nonempty prefix".to_owned(),
+                )
+            })?
+            .sequence()
+            .checked_add(1)
+            .ok_or_else(|| {
+                DomainError::EventSequence("V5 terminal marker sequence overflow".to_owned())
+            })?;
+        let mut marker = TerminalCompletedWireV5 {
+            schema: "reviewgraphen.terminal_completed.v5".to_owned(),
+            id: StableId::parse("terminal-completed-v5:pending")?,
+            source_closure_id,
+            partial_rerun_plan_id: partial.id().clone(),
+            target_plan_id,
+            gluing_required: partial.target_gluing_required(),
+            gluing_plan_seal_id,
+            gluing_plan_seal_body_hash,
+            // This value is the private completed scheduled-native receipt.
+            // Never infer it by scanning E/B/V event families: that loses the
+            // action, context, claim and registration closure which made the
+            // native verifier result admissible.
+            m4_completion_digest: m4_completion_digest.clone(),
+            m5_completion_kind: completion_kind,
+            m5_completion_attempt_id: completion_attempt_id,
+            m5_member_event_ids,
+            final_cursor_basis_digest: terminal_v5_final_cursor_basis_digest(self)?,
+        };
+        let mut identity =
+            serde_json::to_value(&marker).map_err(|error| DomainError::Json(error.to_string()))?;
+        let object = identity.as_object_mut().ok_or_else(|| {
+            DomainError::Validation("terminal marker identity must be an object".to_owned())
+        })?;
+        object.remove("schema");
+        object.remove("id");
+        let hash = ContentHash::sha256(&canonical_json(&identity)?);
+        marker.id = StableId::parse(format!("terminal-completed-v5:{hash}"))?;
+        marker.validate()?;
+        let payload = PersistedPayload::TerminalCompletedV5(raw_payload(canonical_json(&marker)?)?);
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            next_sequence,
+            payload.actor().to_owned(),
+            next_sequence,
+            self.tail_hash().clone(),
+            payload,
+        )?;
+        Ok(PreparedTerminalCompletedV5 {
+            log_identity: self.instance_identity,
+            predecessor_tail_hash: self.tail_hash().clone(),
+            next_sequence,
+            envelope,
+        })
+    }
+
+    /// Confirms that Store appended this exact one-shot terminal capability at
+    /// the same tail from which Core prepared it. Any duplicate, stale tail,
+    /// or substituted envelope is refused before the in-memory log advances.
+    #[doc(hidden)]
+    fn confirm_terminal_completed_v5(
+        &mut self,
+        prepared: PreparedTerminalCompletedV5,
+    ) -> Result<()> {
+        if self.instance_identity != prepared.log_identity
+            || self.tail_hash() != &prepared.predecessor_tail_hash
+            || self
+                .envelopes
+                .last()
+                .map(EventEnvelope::sequence)
+                .and_then(|sequence| sequence.checked_add(1))
+                != Some(prepared.next_sequence)
+        {
+            return Err(DomainError::EventSequence(format!(
+                "terminal marker confirmation basis mismatch: identity={} tail={} sequence={}",
+                self.instance_identity == prepared.log_identity,
+                self.tail_hash() == &prepared.predecessor_tail_hash,
+                self.envelopes
+                    .last()
+                    .map(EventEnvelope::sequence)
+                    .and_then(|sequence| sequence.checked_add(1))
+                    == Some(prepared.next_sequence),
+            )));
+        }
+        self.append_sealed_envelope_at_v5(prepared.envelope, V5SealedPayloadPosition::General)
+    }
+
     /// Replays only the persisted post-D2 action/seal prefix against a newly
     /// roots/CAS-derived opaque phase.  The phase's basis must have been
     /// minted from this exact live log; no deserialized action or retained
@@ -24942,6 +29565,16 @@ impl EventLogV5 {
         partial: &SealedPartialRerunPhaseV5,
         gluing: Option<&mut SealedGluingRerunPhaseV5>,
     ) -> Result<ReplayedPostD2TerminalPhaseV5> {
+        self.open_post_d2_terminal_phase_inner_v5(reviewer, partial, gluing, true)
+    }
+
+    fn open_post_d2_terminal_phase_inner_v5(
+        &self,
+        reviewer: &ReplayedScheduledReviewerPhaseV5,
+        partial: &SealedPartialRerunPhaseV5,
+        gluing: Option<&mut SealedGluingRerunPhaseV5>,
+        require_same_instance: bool,
+    ) -> Result<ReplayedPostD2TerminalPhaseV5> {
         // Select the actual returned cursor basis before the allocation gate.
         // Required gluing advances the basis across its action/seal suffix, so
         // charging the pre-gluing reviewer basis here would undercount a
@@ -24980,8 +29613,9 @@ impl EventLogV5 {
         // action's exact Completed transition.  Cardinality-obstructed D2
         // executions cannot advance the cursor to this state.
         if !reviewer.is_finished()
-            || reviewer.log_identity != partial.log_identity
-            || reviewer.log_identity != self.instance_identity
+            || (require_same_instance
+                && (reviewer.log_identity != partial.log_identity
+                    || reviewer.log_identity != self.instance_identity))
             || reviewer.plan_id != *partial.plan.target_plan_id()
             || reviewer.basis.target_run_id != self.run_id
             || reviewer.basis.target_genesis_hash != self.genesis_hash
@@ -24990,23 +29624,43 @@ impl EventLogV5 {
         {
             return Err(DomainError::AuthorityReplayBasisMismatch);
         }
-        if reviewer.completed_receipts.len() != reviewer.actions.len()
+        if reviewer
+            .completed_receipts
+            .len()
+            .checked_add(reviewer.abstained_receipts.len())
+            != Some(reviewer.actions.len())
             || !reviewer.current_action_event_ids.is_empty()
-            || reviewer
-                .actions
-                .iter()
-                .zip(&reviewer.completed_receipts)
-                .any(|(action, receipt)| {
-                    action.action_id != receipt.action_id
-                        || action.obligation_id != receipt.obligation_id
-                        || receipt.action_event_ids.last() != Some(&receipt.completed_event_id)
-                        || !receipt
-                            .action_event_ids
-                            .contains(&receipt.execution_event_id)
-                })
         {
             return Err(DomainError::HistoricalPrefixMismatch(
                 "finished scheduled reviewer phase lacks exact completion receipts",
+            ));
+        }
+        let mut terminal_action_ids = reviewer
+            .completed_receipts
+            .iter()
+            .map(|receipt| receipt.action_id.clone())
+            .chain(
+                reviewer
+                    .abstained_receipts
+                    .iter()
+                    .map(|receipt| receipt.action_id.clone()),
+            )
+            .collect::<Vec<_>>();
+        terminal_action_ids.sort();
+        if terminal_action_ids
+            .windows(2)
+            .any(|pair| pair[0] == pair[1])
+            || terminal_action_ids
+                != reviewer
+                    .actions
+                    .iter()
+                    .map(|action| action.action_id.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "finished scheduled reviewer phase has missing, duplicate, or foreign terminal receipts",
             ));
         }
         reviewer.validate_completed_receipts(self)?;
@@ -25023,7 +29677,7 @@ impl EventLogV5 {
         let (seed_terminal, seed_v4_registration_ids) = partial.post_d2_terminal_seed()?;
         let basis = if partial.target_gluing_required {
             let gluing = gluing.expect("required gluing prechecked");
-            if gluing.log_identity != self.instance_identity
+            if (require_same_instance && gluing.log_identity != self.instance_identity)
                 || gluing.source_closure_id != partial.source_closure_id
                 || gluing.partial_rerun_plan_id != *partial.plan.id()
                 || gluing.target_plan_id != reviewer.plan_id
@@ -25107,11 +29761,6 @@ impl EventLogV5 {
                 observed: usize::MAX,
             })?;
         if observed > self.limits.max_working_bytes {
-            #[cfg(test)]
-            eprintln!(
-                "begin refuse limit={} observed={observed}",
-                self.limits.max_working_bytes
-            );
             return Err(replay_incomplete(
                 "post-D2 terminal gate preflight ownership",
                 self.limits.max_working_bytes,
@@ -25226,7 +29875,7 @@ pub(crate) struct PreparedScheduledNativeVerifierAppendV5 {
     member_index: usize,
     phase_digest: ContentHash,
     payload_hash: ContentHash,
-    payloads: [PersistedPayload; 5],
+    payloads: Vec<PersistedPayload>,
 }
 
 impl PreparedScheduledNativeVerifierAppendV5 {
@@ -25277,7 +29926,7 @@ impl EventLogV5 {
         roots: &AuthorityTrustRootsV5,
     ) -> Result<ReplayedScheduledNativeVerifierPhaseV5> {
         self.begin_scheduled_native_verifier_phase_with_live_bytes_v5(
-            terminal, reviewer, partial, roots, 0,
+            terminal, reviewer, partial, roots, 0, true,
         )
     }
 
@@ -25288,9 +29937,11 @@ impl EventLogV5 {
         partial: &SealedPartialRerunPhaseV5,
         roots: &AuthorityTrustRootsV5,
         live_bytes: u64,
+        require_same_instance: bool,
     ) -> Result<ReplayedScheduledNativeVerifierPhaseV5> {
-        if self.instance_identity != terminal.log_identity
-            || reviewer.log_identity != terminal.log_identity
+        if (require_same_instance
+            && (self.instance_identity != terminal.log_identity
+                || reviewer.log_identity != terminal.log_identity))
             || terminal.source_closure_id != partial.source_closure_id
             || terminal.partial_rerun_plan_id != *partial.plan.id()
             || terminal.target_plan_id != reviewer.plan_id
@@ -25482,6 +30133,33 @@ impl EventLogV5 {
             let obligation_id = action.subject_ids().first().ok_or_else(|| {
                 DomainError::EventSequence("scheduled native verifier has no obligation".to_owned())
             })?;
+            if reviewer
+                .abstained_receipts
+                .iter()
+                .any(|receipt| receipt.obligation_id == *obligation_id)
+            {
+                continue;
+            }
+            if let [crate::ActionPrerequisiteV5::ScheduledAction { action_id }] =
+                action.prerequisites()
+                && !reviewer
+                    .completed_receipts
+                    .iter()
+                    .any(|receipt| receipt.action_id == *action_id)
+            {
+                if reviewer
+                    .abstained_receipts
+                    .iter()
+                    .any(|receipt| receipt.action_id == *action_id)
+                {
+                    // A terminal abstention has no claim and therefore no M4
+                    // verifier input. It is durable visited state only.
+                    continue;
+                }
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled native verifier has no terminal reviewer receipt",
+                ));
+            }
             let (execution_id, execution_body_hash, claim_id, claim_body_hash) =
                 native_verifier_prerequisite_v5(action, reviewer, partial, self)?;
             let claim = reviewer
@@ -25670,7 +30348,7 @@ fn native_payload_dynamic_bytes(payload: &PersistedPayload) -> Result<u64> {
     Ok(bytes)
 }
 
-fn native_fixture_payloads_dynamic_bytes(payloads: &[PersistedPayload; 5]) -> Result<u64> {
+fn native_fixture_payloads_dynamic_bytes(payloads: &[PersistedPayload]) -> Result<u64> {
     payloads.iter().try_fold(0_u64, |total, payload| {
         total
             .checked_add(native_payload_dynamic_bytes(payload)?)
@@ -26017,6 +30695,14 @@ fn native_fixture_descriptor_preclone_bytes(
         .iter()
         .filter(|action| action.action() == crate::PartialRerunActionKindV5::RerunVerifier)
     {
+        if action.subject_ids().first().is_some_and(|obligation_id| {
+            reviewer
+                .abstained_receipts
+                .iter()
+                .any(|receipt| receipt.obligation_id == *obligation_id)
+        }) {
+            continue;
+        }
         let (claim_id, claim_body_hash) =
             native_verifier_claim_prerequisite_borrowed(action, reviewer)?;
         let claim = reviewer
@@ -26502,7 +31188,7 @@ impl ReplayedScheduledNativeVerifierPhaseV5 {
         })
     }
 
-    fn materialize_fixture_payloads(&self) -> Result<[PersistedPayload; 5]> {
+    fn materialize_fixture_payloads(&self) -> Result<Vec<PersistedPayload>> {
         let action = self.current_action()?;
         let ScheduledNativeVerifierDescriptorV5::Fixture { harness } = &action.descriptor else {
             return Err(DomainError::EventSequence(
@@ -26581,7 +31267,7 @@ impl ReplayedScheduledNativeVerifierPhaseV5 {
             output.registration_id().clone(),
         )
         .map_err(m4_domain_error)?;
-        Ok([
+        Ok(vec![
             PersistedPayload::ArtifactRegisteredV3(input),
             PersistedPayload::ArtifactRegisteredV3(output),
             PersistedPayload::EvidenceRecordedV3(proposal.evidence),
@@ -26590,8 +31276,7 @@ impl ReplayedScheduledNativeVerifierPhaseV5 {
         ])
     }
 
-    #[allow(dead_code)] // Closed V5 refusal; retained for the later reconstruction batch.
-    fn static_payloads(&self) -> Result<Vec<PersistedPayload>> {
+    fn static_expected_bytes(&self) -> Result<(Vec<u8>, Vec<u8>)> {
         let action = self.current_action()?;
         let claim = self
             .aggregate
@@ -26605,14 +31290,30 @@ impl ReplayedScheduledNativeVerifierPhaseV5 {
         let evaluation =
             crate::evaluate_static_fact_v1(self.aggregate.program(), obligation, claim)
                 .map_err(m4_domain_error)?;
-        let input_bytes = evaluation
-            .input()
-            .canonical_bytes()
-            .map_err(m4_domain_error)?;
-        let output_bytes = evaluation
-            .result()
-            .canonical_bytes()
-            .map_err(m4_domain_error)?;
+        Ok((
+            evaluation
+                .input()
+                .canonical_bytes()
+                .map_err(m4_domain_error)?,
+            evaluation
+                .result()
+                .canonical_bytes()
+                .map_err(m4_domain_error)?,
+        ))
+    }
+
+    fn static_payloads(&self) -> Result<Vec<PersistedPayload>> {
+        let action = self.current_action()?;
+        let claim = self
+            .aggregate
+            .execution_claims()
+            .find(|claim| claim.id() == &action.claim_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let obligation = self
+            .aggregate
+            .obligation(&action.obligation_id)
+            .ok_or(DomainError::VerificationBundleMismatch)?;
+        let (input_bytes, output_bytes) = self.static_expected_bytes()?;
         let input = ArtifactRegisteredV3::new_validated(
             self.basis.target_run_id.clone(),
             ContentHash::sha256(&input_bytes),
@@ -26654,21 +31355,25 @@ impl ReplayedScheduledNativeVerifierPhaseV5 {
             output.registration_id().clone(),
         )
         .map_err(m4_domain_error)?;
-        let (Some(evidence), Some(binding)) = (proposal.evidence(), proposal.binding()) else {
-            return Err(DomainError::EventSequence(
-                "scheduled static verifier does not reconstruct Evidence-to-Binding-to-Verification".to_owned(),
-            ));
-        };
-        Ok(vec![
+        let mut payloads = vec![
             PersistedPayload::ArtifactRegisteredV3(input),
             PersistedPayload::ArtifactRegisteredV3(output),
-            PersistedPayload::EvidenceRecordedV3(evidence.clone()),
-            PersistedPayload::EvidenceBoundV3(binding.clone()),
-            PersistedPayload::VerificationRecordedV3(proposal.verification().clone()),
-        ])
+        ];
+        match (proposal.evidence(), proposal.binding()) {
+            (Some(evidence), Some(binding)) => {
+                payloads.push(PersistedPayload::EvidenceRecordedV3(evidence.clone()));
+                payloads.push(PersistedPayload::EvidenceBoundV3(binding.clone()));
+            }
+            (None, None) => {}
+            _ => return Err(DomainError::VerificationBundleMismatch),
+        }
+        payloads.push(PersistedPayload::VerificationRecordedV3(
+            proposal.verification().clone(),
+        ));
+        Ok(payloads)
     }
 
-    fn materialize_payloads(&self) -> Result<[PersistedPayload; 5]> {
+    fn materialize_payloads(&self) -> Result<Vec<PersistedPayload>> {
         match &self.current_action()?.descriptor {
             ScheduledNativeVerifierDescriptorV5::Fixture { .. } => {
                 self.materialize_fixture_payloads()
@@ -26683,6 +31388,83 @@ impl ReplayedScheduledNativeVerifierPhaseV5 {
 }
 
 impl EventLogV5 {
+    /// Verifies an opaque host reconstruction against the one static result
+    /// Core derives from the sealed action.  The caller supplies no payload
+    /// identifiers, authority, or outcome; all five appended records remain
+    /// Core materialized after this byte-for-byte comparison.
+    pub(crate) fn prepare_static_scheduled_native_verifier_append_v5(
+        &self,
+        phase: &ReplayedScheduledNativeVerifierPhaseV5,
+        result: &ValidatedM6StaticResultV5,
+    ) -> Result<PreparedScheduledNativeVerifierAppendV5> {
+        if self.instance_identity != phase.log_identity {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        phase.basis.validate_current_log(self)?;
+        phase.validate_current_action_closure()?;
+        let action = phase.current_action()?;
+        if !matches!(
+            action.descriptor,
+            ScheduledNativeVerifierDescriptorV5::StaticRequiresReconstruction { .. }
+        ) {
+            return Err(DomainError::EventSequence(
+                "static host result does not match the scheduled native action".to_owned(),
+            ));
+        }
+
+        let (expected_input, expected_output) = phase.static_expected_bytes()?;
+        if result.input_bytes != expected_input || result.output_bytes != expected_output {
+            return Err(DomainError::VerificationBundleMismatch);
+        }
+        let payloads = phase.static_payloads()?;
+        let payload_dynamic = native_fixture_payloads_dynamic_bytes(&payloads)?;
+        let result_bytes = u64::try_from(result.input_bytes.len())
+            .unwrap_or(u64::MAX)
+            .checked_add(u64::try_from(result.output_bytes.len()).unwrap_or(u64::MAX))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled static verifier host result bytes",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let prospective = payload_dynamic
+            .checked_add(result_bytes)
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(size_of::<PreparedScheduledNativeVerifierAppendV5>())
+                        .unwrap_or(u64::MAX),
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled static verifier preparation ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        scheduled_native_working_preflight(
+            self,
+            phase,
+            prospective,
+            "scheduled static verifier preparation ownership",
+        )?;
+        let phase_digest = phase.digest()?;
+        let payload_hash = crate::canonical::compact_json_sha256_streaming(
+            payloads
+                .get(phase.member_index)
+                .ok_or(DomainError::VerificationBundleMismatch)?,
+        )?;
+        Ok(PreparedScheduledNativeVerifierAppendV5 {
+            log_identity: self.instance_identity,
+            basis_digest: phase.basis.basis_digest.clone(),
+            predecessor_event_hash: self.tail_hash().clone(),
+            event_sequence: phase.basis.target_next_sequence,
+            action_id: action.action_id.clone(),
+            action_index: phase.action_index,
+            member_index: phase.member_index,
+            phase_digest,
+            payload_hash,
+            payloads,
+        })
+    }
+
     #[allow(dead_code)]
     pub(crate) fn prepare_next_scheduled_native_verifier_append_v5(
         &self,
@@ -27010,7 +31792,7 @@ impl EventLogV5 {
         phase.basis = basis;
         phase.terminal = next_terminal;
         phase.v4_registration_ids = next_v4_ids;
-        if phase.member_index == 4 {
+        if phase.member_index.checked_add(1) == Some(prepared.payloads.len()) {
             let PersistedPayload::VerificationRecordedV3(verification) = payload else {
                 return Err(DomainError::VerificationBundleMismatch);
             };
@@ -27083,6 +31865,7 @@ impl EventLogV5 {
             partial,
             roots,
             suffix_retained,
+            false,
         )?;
         for (index, bytes) in canonical_suffix.iter().enumerate() {
             let recovery_extra = u64::try_from(bytes.len())
@@ -27156,11 +31939,27 @@ impl EventLogV5 {
                 log.tail_hash(),
                 V5SealedPayloadPosition::General,
             )?;
-            let prepared = log.prepare_next_scheduled_native_verifier_append_with_live_bytes_v5(
-                &phase,
-                resolver,
-                recovery_extra,
-            )?;
+            let prepared = match &phase.current_action()?.descriptor {
+                ScheduledNativeVerifierDescriptorV5::Fixture { .. } => log
+                    .prepare_next_scheduled_native_verifier_append_with_live_bytes_v5(
+                        &phase,
+                        resolver,
+                        recovery_extra,
+                    )?,
+                ScheduledNativeVerifierDescriptorV5::StaticRequiresReconstruction { .. } => {
+                    // Static replay has no caller-selected result: rebuild the
+                    // sole canonical input/output pair from the sealed action,
+                    // then run the same closed admission used by the live
+                    // host path. The observed durable row remains only a
+                    // byte-equality witness below.
+                    let (input_bytes, output_bytes) = phase.static_expected_bytes()?;
+                    let result = ValidatedM6StaticResultV5::from_canonical_bytes(
+                        &input_bytes,
+                        &output_bytes,
+                    )?;
+                    log.prepare_static_scheduled_native_verifier_append_v5(&phase, &result)?
+                }
+            };
             let expected = EventEnvelope::new(
                 EventContractVersion::V5,
                 log.run_id.clone(),
@@ -27582,6 +32381,19 @@ impl ReplayedScheduledNativeVerifierPhaseV5 {
     fn is_finished(&self) -> bool {
         self.action_index == self.actions.len() && self.member_index == 0
     }
+
+    /// Private composite-recovery handoff after the longest exact native
+    /// prefix has been selected. It is not available to public append APIs.
+    fn rebind_exact_recovered_prefix(&mut self, log: &EventLogV5) -> Result<()> {
+        if !self.is_finished() {
+            return Err(DomainError::Validation(
+                "terminal composite native cursor is not complete".to_owned(),
+            ));
+        }
+        self.basis.rebind_exact_replayed_tail_to_log(log)?;
+        self.log_identity = log.instance_identity;
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]
@@ -27592,7 +32404,9 @@ impl EventLogV5 {
         partial: &SealedPartialRerunPhaseV5,
         roots: &AuthorityTrustRootsV5,
     ) -> Result<ReplayedScheduledHumanResolutionPhaseV5> {
-        self.begin_scheduled_human_resolution_phase_with_live_bytes_v5(native, partial, roots, 0)
+        self.begin_scheduled_human_resolution_phase_with_live_bytes_v5(
+            native, partial, roots, 0, true,
+        )
     }
 
     fn begin_scheduled_human_resolution_phase_with_live_bytes_v5(
@@ -27601,8 +32415,9 @@ impl EventLogV5 {
         partial: &SealedPartialRerunPhaseV5,
         roots: &AuthorityTrustRootsV5,
         live_bytes: u64,
+        require_same_instance: bool,
     ) -> Result<ReplayedScheduledHumanResolutionPhaseV5> {
-        if self.instance_identity != native.log_identity
+        if (require_same_instance && self.instance_identity != native.log_identity)
             || native.source_closure_id != partial.source_closure_id
             || native.partial_rerun_plan_id != *partial.plan.id()
             || native.target_plan_id != *partial.plan.target_plan_id()
@@ -28390,6 +33205,7 @@ impl EventLogV5 {
             partial,
             roots,
             suffix_bytes,
+            false,
         )?;
         // A resource refusal must not leave a durable decision prefix behind
         // merely because a later finding member needs more working space.
@@ -28791,6 +33607,10 @@ pub(crate) struct ReplayedScheduledM5GluingPhaseV5 {
     descriptors: BTreeMap<StableId, crate::GluingInputDescriptorV4>,
     registrations: BTreeMap<StableId, ArtifactRegistrationV4>,
     completed_bundle: Option<crate::GluingBundleV4>,
+    gluing_required: bool,
+    gluing_plan_seal_id: Option<StableId>,
+    gluing_plan_seal_body_hash: Option<ContentHash>,
+    m4_completion_digest: ContentHash,
 }
 
 /// One-shot exact next-member admission.  The payload remains private to the
@@ -28866,6 +33686,19 @@ struct ScheduledM5GluingRecoveryInputV5<'a> {
     resolver: &'a dyn AuthorityArtifactResolverV5,
 }
 
+/// Private input bundle shared by the strict live opener and its exact
+/// recovery replay. Keeping the identity requirement here makes the sole
+/// recovery exception explicit without widening the public M5 API.
+struct ScheduledM5GluingPhaseInputV5<'a> {
+    native: Box<ReplayedScheduledNativeVerifierPhaseV5>,
+    human: Box<ReplayedScheduledHumanResolutionPhaseV5>,
+    partial: &'a SealedPartialRerunPhaseV5,
+    gluing: Option<Box<SealedGluingRerunPhaseV5>>,
+    roots: &'a AuthorityTrustRootsV5,
+    resolver: &'a dyn AuthorityArtifactResolverV5,
+    require_same_instance: bool,
+}
+
 #[allow(dead_code)]
 pub(crate) enum M5TerminalCompletionV5 {
     NoGluingRequired {
@@ -28896,7 +33729,31 @@ impl EventLogV5 {
         roots: &AuthorityTrustRootsV5,
         resolver: &dyn AuthorityArtifactResolverV5,
     ) -> Result<ReplayedScheduledM5GluingPhaseV5> {
-        if self.instance_identity != native.log_identity
+        self.begin_scheduled_m5_gluing_phase_inner_v5(ScheduledM5GluingPhaseInputV5 {
+            native,
+            human,
+            partial,
+            gluing,
+            roots,
+            resolver,
+            require_same_instance: true,
+        })
+    }
+
+    fn begin_scheduled_m5_gluing_phase_inner_v5(
+        &self,
+        input: ScheduledM5GluingPhaseInputV5<'_>,
+    ) -> Result<ReplayedScheduledM5GluingPhaseV5> {
+        let ScheduledM5GluingPhaseInputV5 {
+            native,
+            human,
+            partial,
+            gluing,
+            roots,
+            resolver,
+            require_same_instance,
+        } = input;
+        if (require_same_instance && self.instance_identity != native.log_identity)
             || self.instance_identity != human.log_identity
             || !native.is_finished()
             || !human.is_finished()
@@ -28942,10 +33799,22 @@ impl EventLogV5 {
                             && root.universe_id == *human.aggregate.universe().id()
                             && root.plan_id == human.target_plan_id
                             && root.policy_revision_hash == human.basis.policy_revision_hash
+                            // This preflight may see later or superseded
+                            // host roots during durable recovery. Only the
+                            // one at the current sealed M5 coordinate is a
+                            // candidate; a root for another predecessor is
+                            // neither ambiguous nor admissible yet.
+                            && root.predecessor_event_hash == *self.tail_hash()
+                            && root.event_sequence == human.basis.target_next_sequence
                     });
-                    let root = matches
-                        .next()
-                        .ok_or(DomainError::GluingInputAdmissionMismatch)?;
+                    let Some(root) = matches.next() else {
+                        // The second positioned descriptor is deliberately
+                        // withheld until the first registration establishes
+                        // its predecessor. Its trust binding is therefore
+                        // supplied only before that later append, not when
+                        // this M5 cursor opens.
+                        return Ok(total);
+                    };
                     if matches.next().is_some() {
                         return Err(DomainError::GluingInputAdmissionMismatch);
                     }
@@ -29083,6 +33952,10 @@ impl EventLogV5 {
                 descriptors: BTreeMap::new(),
                 registrations: BTreeMap::new(),
                 completed_bundle: None,
+                gluing_required: false,
+                gluing_plan_seal_id: None,
+                gluing_plan_seal_body_hash: None,
+                m4_completion_digest: native.digest()?,
             });
         }
         let seal = seal.ok_or_else(|| {
@@ -29099,7 +33972,7 @@ impl EventLogV5 {
             return Err(DomainError::AuthorityReplayBasisMismatch);
         }
         let gluing = gluing.ok_or(DomainError::AuthorityReplayBasisMismatch)?;
-        if gluing.log_identity != self.instance_identity
+        if (require_same_instance && gluing.log_identity != self.instance_identity)
             || gluing.source_closure_id != human.source_closure_id
             || gluing.partial_rerun_plan_id != human.partial_rerun_plan_id
             || gluing.target_plan_id != human.target_plan_id
@@ -29123,6 +33996,10 @@ impl EventLogV5 {
             descriptors: BTreeMap::new(),
             registrations: BTreeMap::new(),
             completed_bundle: None,
+            gluing_required: true,
+            gluing_plan_seal_id: Some(seal.id().clone()),
+            gluing_plan_seal_body_hash: Some(ContentHash::sha256(&canonical_json(&seal)?)),
+            m4_completion_digest: native.digest()?,
         };
         phase.reconstruct_existing_inputs(self, roots, resolver)?;
         if let Some(bundle) = phase.completed_bundle.as_ref() {
@@ -29576,14 +34453,16 @@ impl EventLogV5 {
         // this suffix. Keeping it in place avoids a second full journal
         // materialization and makes this gate reflect actual live ownership.
         let mut log = log;
-        let mut phase = log.begin_scheduled_m5_gluing_phase_v5(
-            input.native,
-            input.human,
-            input.partial,
-            input.gluing,
-            input.roots,
-            input.resolver,
-        )?;
+        let mut phase =
+            log.begin_scheduled_m5_gluing_phase_inner_v5(ScheduledM5GluingPhaseInputV5 {
+                native: input.native,
+                human: input.human,
+                partial: input.partial,
+                gluing: input.gluing,
+                roots: input.roots,
+                resolver: input.resolver,
+                require_same_instance: false,
+            })?;
         // The caller's complete suffix remains borrowed. At each replay seam
         // its observed envelope and a freshly rebuilt expected envelope are
         // live together, alongside the one prepared capability. Reserve the
@@ -29859,6 +34738,75 @@ fn scheduled_m5_bundle_prepare_predictor(phase: &ReplayedScheduledM5GluingPhaseV
 
 #[allow(dead_code)]
 impl ReplayedScheduledM5GluingPhaseV5 {
+    /// Returns an owned descriptive copy only after the roots/CAS replay that
+    /// built this phase has validated the current tail.  It is intentionally
+    /// not an append capability and is the only admissible source for a
+    /// terminal report's inherited M5 bundle body.
+    pub(crate) fn completed_bundle_for_report(
+        &self,
+        log: &EventLogV5,
+    ) -> Result<Option<crate::GluingBundleV4>> {
+        // The terminal marker is the legal successor of this cursor, not a
+        // member of the M5 phase it closes.  Rebuild precisely that
+        // predecessor before checking the opaque cursor so a report cannot
+        // mistake the post-marker log identity for the M5 authority basis.
+        let predecessor = log.terminal_marker_predecessor_v5()?;
+        self.validate_pre_terminal_marker(&predecessor)?;
+        Ok(self.completed_bundle.clone())
+    }
+
+    /// Returns the completed roots/CAS-derived descriptor/registration pairs
+    /// for a terminal report.  The registration remains durable while the
+    /// descriptor is the exact validated CAS body retained by this cursor.
+    pub(crate) fn completed_gluing_inputs_for_report(
+        &self,
+        log: &EventLogV5,
+    ) -> Result<Vec<(ArtifactRegistrationV4, crate::GluingInputDescriptorV4)>> {
+        // See `completed_bundle_for_report`: these retained values are
+        // descriptive terminal-projection inputs and may be exposed only
+        // after the marker's exact predecessor revalidates this cursor.
+        let predecessor = log.terminal_marker_predecessor_v5()?;
+        self.validate_pre_terminal_marker(&predecessor)?;
+        if self.completed_bundle.is_none() {
+            return Ok(Vec::new());
+        }
+        let mut values = Vec::with_capacity(self.descriptors.len());
+        for (context_id, descriptor) in &self.descriptors {
+            let registration = self.registrations.values().find(|registration| {
+                matches!(registration.source(), ArtifactSourceV4::GluingInput { context_id: source_context, .. } if source_context == context_id)
+            }).ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+            values.push((registration.clone(), descriptor.clone()));
+        }
+        Ok(values)
+    }
+
+    /// Mints the sole marker capability from a roots/CAS-replayed completed
+    /// M5 phase.  The exact native verifier completion receipt was retained
+    /// across the native → human → M5 handoff and is copied verbatim into the
+    /// marker; a structural event scan is not an admissible substitute.
+    pub(crate) fn prepare_terminal_completed_v5(
+        &self,
+        log: &EventLogV5,
+    ) -> Result<PreparedTerminalCompletedV5> {
+        self.validate_current(log)?;
+        log.prepare_terminal_completed_v5_from_completed_m5(&self.m4_completion_digest)
+    }
+
+    /// Completes the one-shot marker only after Store has durably appended
+    /// the exact opaque capability at the same locked tail.
+    pub(crate) fn confirm_terminal_completed_v5(
+        &self,
+        log: &mut EventLogV5,
+        prepared: PreparedTerminalCompletedV5,
+    ) -> Result<()> {
+        // `prepare_terminal_completed_v5` validated this immutable M5 cursor
+        // against the pre-marker tail. Store has now durably written the
+        // exact prepared marker, so re-running that pre-marker check would
+        // necessarily reject the legal successor tail. The one-use prepared
+        // marker binds the old tail and `log.confirm...` checks it exactly.
+        log.confirm_terminal_completed_v5(prepared)
+    }
+
     fn retained_bytes(&self) -> Result<u64> {
         let mut total = u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX);
         for bytes in [
@@ -29972,10 +34920,20 @@ impl ReplayedScheduledM5GluingPhaseV5 {
         ))
     }
 
+    /// Emits the sole durable-proof DTO from a completed private cursor. The
+    /// caller receives no roots, resolver, prepared append, or cursor state.
+    pub(crate) fn terminal_proof_v5(&self, log: &EventLogV5) -> Result<TerminalProofV5> {
+        TerminalProofV5::from_completed_phase(log, self)
+    }
+
     fn validate_current(&self, log: &EventLogV5) -> Result<()> {
         if self.log_identity != log.instance_identity {
             return Err(DomainError::AuthorityReplayBasisMismatch);
         }
+        self.basis.validate_current_log(log)
+    }
+
+    fn validate_pre_terminal_marker(&self, log: &EventLogV5) -> Result<()> {
         self.basis.validate_current_log(log)
     }
 
@@ -30004,14 +34962,59 @@ impl ReplayedScheduledM5GluingPhaseV5 {
                     && binding.predecessor_event_hash == *log.tail_hash()
                     && binding.event_sequence == self.basis.target_next_sequence
             });
-        let value = matches
-            .next()
-            .ok_or(DomainError::GluingInputAdmissionMismatch)?;
+        let value = matches.next().ok_or_else(|| {
+            DomainError::Validation(format!(
+                "scheduled M5 gluing input has no exact sealed coordinate: {}",
+                self.gluing_binding_position_diagnostic(log, roots, context_id)
+            ))
+        })?;
         if matches.next().is_some() {
             return Err(DomainError::GluingInputAdmissionMismatch);
         }
         value.validate()?;
         Ok(value)
+    }
+
+    fn gluing_binding_position_diagnostic(
+        &self,
+        log: &EventLogV5,
+        roots: &AuthorityTrustRootsV5,
+        context_id: &StableId,
+    ) -> String {
+        let mut candidates = 0_usize;
+        let mut run = 0_usize;
+        let mut genesis = 0_usize;
+        let mut snapshot = 0_usize;
+        let mut universe = 0_usize;
+        let mut plan = 0_usize;
+        let mut policy = 0_usize;
+        let mut predecessor = 0_usize;
+        let mut sequence = 0_usize;
+        for binding in &roots.allowed_gluing_input_bindings {
+            if binding.context_id != *context_id
+                || !self.bindings.as_ref().is_some_and(|bindings| {
+                    bindings
+                        .iter()
+                        .any(|candidate| candidate.context_id() == context_id)
+                })
+            {
+                continue;
+            }
+            candidates = candidates.saturating_add(1);
+            run += usize::from(binding.run_id == log.run_id);
+            genesis += usize::from(binding.genesis_hash == log.genesis_hash);
+            snapshot += usize::from(binding.snapshot_id == *self.aggregate.program().snapshot_id());
+            universe += usize::from(binding.universe_id == *self.aggregate.universe().id());
+            plan += usize::from(binding.plan_id == self.target_plan_id);
+            policy += usize::from(binding.policy_revision_hash == self.basis.policy_revision_hash);
+            predecessor += usize::from(binding.predecessor_event_hash == *log.tail_hash());
+            sequence += usize::from(binding.event_sequence == self.basis.target_next_sequence);
+        }
+        format!(
+            "context_candidates={candidates}, matching(run/genesis/snapshot/universe/plan/policy/predecessor/sequence)=({run}/{genesis}/{snapshot}/{universe}/{plan}/{policy}/{predecessor}/{sequence}), expected_predecessor={}, expected_sequence={}",
+            log.tail_hash(),
+            self.basis.target_next_sequence,
+        )
     }
 
     fn context_for_registration<'a>(
@@ -31123,17 +36126,29 @@ fn human_verification_prerequisite_v5(
                 .ok_or(DomainError::HistoricalPrefixMismatch(
                     "scheduled human verification receipt is not present in native aggregate",
                 ))?;
-            if verification.claim_id() != &native_action.claim_id
-                || verification.outcome() != crate::VerificationOutcomeV3::Passed
-                || verification.body_hash().map_err(m4_domain_error)?
-                    != receipt.verification_body_hash
-                || !log
-                    .envelopes
-                    .iter()
-                    .any(|event| event.id() == &receipt.verification_event_id)
+            if verification.claim_id() != &native_action.claim_id {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human native verification claim differs",
+                ));
+            }
+            if verification.outcome() != crate::VerificationOutcomeV3::Passed {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human native verification did not pass",
+                ));
+            }
+            if verification.body_hash().map_err(m4_domain_error)? != receipt.verification_body_hash
             {
                 return Err(DomainError::HistoricalPrefixMismatch(
-                    "scheduled human native verification receipt closure differs",
+                    "scheduled human native verification body differs",
+                ));
+            }
+            if !log
+                .envelopes
+                .iter()
+                .any(|event| event.id() == &receipt.verification_event_id)
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled human native verification event is absent",
                 ));
             }
             Ok((
@@ -31421,6 +36436,36 @@ fn native_verifier_prerequisite_v5(
 }
 
 impl SealedPartialRerunPhaseV5 {
+    /// Rebinds immutable, terminal-derived partial-plan state to the freshly
+    /// replayed log used by the one-use pre-D2 append candidate. Only the
+    /// process-local capability identity changes; every sealed semantic field
+    /// is cloned unchanged and is still checked against the durable prefix.
+    fn rebind_replayed_log_identity(&self, log_identity: V5LogInstanceIdentity) -> Self {
+        Self {
+            log_identity,
+            source_closure_id: self.source_closure_id.clone(),
+            pre_incremental_basis_digest: self.pre_incremental_basis_digest.clone(),
+            policy_revision_hash: self.policy_revision_hash.clone(),
+            target_run_id: self.target_run_id.clone(),
+            target_genesis_hash: self.target_genesis_hash.clone(),
+            target_predecessor_tail_hash: self.target_predecessor_tail_hash.clone(),
+            target_predecessor_event_count: self.target_predecessor_event_count,
+            staleness_assessment_id: self.staleness_assessment_id.clone(),
+            staleness_body_hash: self.staleness_body_hash.clone(),
+            target_gluing_required: self.target_gluing_required,
+            actions: self.actions.clone(),
+            plan: self.plan.clone(),
+            preservation_evidence: self.preservation_evidence.clone(),
+            preservation_verifications: self.preservation_verifications.clone(),
+            predecessor_gluing_suppression: self.predecessor_gluing_suppression.clone(),
+            target_v4_registrations: self.target_v4_registrations.clone(),
+            target_v4_gluing_descriptors: self.target_v4_gluing_descriptors.clone(),
+            target_m5_bundle: self.target_m5_bundle.clone(),
+            target_aggregate: self.target_aggregate.clone(),
+            target_v3_aggregate: self.target_v3_aggregate.clone(),
+        }
+    }
+
     /// Roots/CAS-replayed terminal state with which post-D2 native terminal
     /// admission starts.  The suppression projection is minted exclusively
     /// from the terminal authority replay, so these IDs are not inferred from
@@ -31914,6 +36959,11 @@ impl SealedPartialRerunPhaseV5 {
                 "partial rerun phase actions are not exact derived-ID order".to_owned(),
             ));
         }
+        if self.plan.target_gluing_required() != self.target_gluing_required {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "partial rerun plan gluing decision differs from sealed staleness reduction",
+            ));
+        }
         let action_records = self
             .actions
             .iter()
@@ -32106,6 +37156,108 @@ impl SealedPartialRerunPhaseV5 {
 
 #[allow(dead_code)]
 impl<'borrow, 'state> ReplayedV5TerminalPredecessorV5<'borrow, 'state> {
+    /// Recomputes the complete M6 closure-to-partial-plan reduction from this
+    /// exact roots/CAS-replayed terminal predecessor.  The structural mapping
+    /// supplied by Store is checked only as the pre-authority proposal: the
+    /// returned closure and every downstream phase are rebound to the
+    /// terminal authority basis before use.
+    fn recompute_terminal_m6_v5(
+        self,
+        source_log: &EventLogV4,
+        structural_closure: &crate::IncrementalSourceClosureV5,
+        structural_mapping: &crate::M6MappingPhaseV5,
+        assessment_time: &str,
+    ) -> crate::M6Result<RecomputedTerminalM6V5> {
+        if structural_mapping.morphism().source_closure_id() != structural_closure.id()
+            || structural_mapping.morphism().source_snapshot_id()
+                != structural_closure.source_snapshot_id()
+            || structural_mapping.morphism().target_snapshot_id()
+                != structural_closure.target_snapshot_id()
+        {
+            return Err(crate::M6Error::InvalidMapping(
+                "Store mapping proposal is not bound to its structural closure",
+            ));
+        }
+        let target_projection = self
+            .target_actual_record_projection_v5()
+            .map_err(crate::M6Error::from)?;
+        let target_actual = target_projection
+            .materialize_inventory_v5()
+            .map_err(crate::M6Error::from)?;
+        let closure = structural_closure.bind_terminal_target_authority_v5(&target_actual)?;
+
+        let source_genesis = RunGenesisSnapshot::from_canonical_v4_bytes_for_store(
+            source_log.canonical_genesis_bytes(),
+        )
+        .map_err(crate::M6Error::from)?;
+        let source_program = source_genesis.program_space_for_store();
+        let target_program = match &self.inner {
+            ReplayedV5TerminalPredecessorInnerV5::WithoutM5 { terminal, .. } => {
+                terminal.aggregate.program()
+            }
+            ReplayedV5TerminalPredecessorInnerV5::WithM5InputPrefix { terminal, .. } => {
+                terminal.aggregate.program()
+            }
+        };
+        let accepted = |program: &ProgramSpace| -> crate::M6Result<ReviewAggregate> {
+            let (universe, obligations) = MvpRulePack::synthesize(program)
+                .map_err(crate::M6Error::from)?
+                .into_parts();
+            ReviewAggregate::new(program.clone(), universe, obligations)
+                .map_err(crate::M6Error::from)
+        };
+        let source_aggregate = accepted(source_program)?;
+        let target_aggregate = accepted(target_program)?;
+        let mapping = crate::ChangeMorphismV5::derive_from_accepted_program_facts(
+            &closure,
+            source_program,
+            target_program,
+        )?;
+        let correspondence = crate::ObligationCorrespondenceV5::derive_from_accepted_universes(
+            &closure,
+            &mapping,
+            &source_aggregate,
+            &target_aggregate,
+        )?;
+        let structural = match &self.inner {
+            ReplayedV5TerminalPredecessorInnerV5::WithoutM5 { terminal, .. } => {
+                terminal.plan_checkpoint.structural
+            }
+            ReplayedV5TerminalPredecessorInnerV5::WithM5InputPrefix { terminal, .. } => {
+                terminal.plan_checkpoint.structural
+            }
+        };
+        let structural_projection = structural.projection();
+        let staleness_input = crate::m6::IncrementalStalenessInputV5::new(
+            source_log,
+            &closure,
+            &mapping,
+            &correspondence,
+            &structural_projection,
+        )?;
+        let staleness = staleness_input.reduce_v5(&target_actual, assessment_time)?;
+        let preservation = crate::M6PreservationPhaseV5::empty(&staleness);
+        let (partial_actions, partial_plan) =
+            self.seal_partial_rerun_plan_v5(&staleness, &preservation)?;
+        let partial_phase =
+            self.seal_partial_rerun_phase_v5(structural.event_log, &staleness, &preservation)?;
+        let pre_basis = match self.inner {
+            ReplayedV5TerminalPredecessorInnerV5::WithoutM5 { basis, .. }
+            | ReplayedV5TerminalPredecessorInnerV5::WithM5InputPrefix { basis, .. } => basis,
+        };
+        Ok(RecomputedTerminalM6V5 {
+            pre_basis,
+            closure,
+            mapping,
+            correspondence,
+            staleness,
+            preservation,
+            partial_actions,
+            partial_plan,
+            partial_phase,
+        })
+    }
+
     pub(crate) fn basis(&self) -> &PreIncrementalAuthorityReplayBasisV5 {
         match self {
             Self {
@@ -35401,6 +40553,42 @@ impl AuthorityReplayBasisV5 {
         Ok(())
     }
 
+    /// Moves only the positional fields to an already reconstructed durable
+    /// prefix. This is private to exact suffix replay; each covered row must
+    /// have been independently derived and admitted before this method runs.
+    fn rebind_exact_replayed_tail_to_log(&mut self, log: &EventLogV5) -> Result<()> {
+        if self.schema != "reviewgraphen.authority_replay_basis.v5" {
+            return Err(DomainError::Validation(
+                "terminal composite native basis has an unexpected schema".to_owned(),
+            ));
+        }
+        if self.target_run_id != log.run_id {
+            return Err(DomainError::Validation(
+                "terminal composite native basis targets another run".to_owned(),
+            ));
+        }
+        if self.target_genesis_hash != log.genesis_hash {
+            return Err(DomainError::Validation(
+                "terminal composite native basis targets another genesis".to_owned(),
+            ));
+        }
+        if self.basis_digest != self.recompute_digest()? {
+            return Err(DomainError::Validation(
+                "terminal composite native basis digest is inconsistent".to_owned(),
+            ));
+        }
+        self.target_confirmed_event_count = u64::try_from(log.envelopes.len()).unwrap_or(u64::MAX);
+        self.target_next_sequence = self
+            .target_confirmed_event_count
+            .checked_add(1)
+            .ok_or_else(|| {
+                DomainError::EventSequence("V5 replay basis sequence overflow".to_owned())
+            })?;
+        self.target_confirmed_tail_hash = log.tail_hash().clone();
+        self.basis_digest = self.recompute_digest()?;
+        Ok(())
+    }
+
     pub(crate) fn source_closure_id(&self) -> &StableId {
         &self.source_closure_id
     }
@@ -35914,6 +41102,7 @@ enum V5StructuralPostD2Phase {
         inherited: V5StructuralPostPlanPhase,
         v4_registration_ids: BTreeSet<StableId>,
     },
+    TerminalCompleted,
 }
 
 fn initial_v5_structural_post_d2_phase() -> V5StructuralPostD2Phase {
@@ -36087,6 +41276,10 @@ fn advance_v5_structural_post_d2(
             inherited,
             v4_registration_ids,
         } => match payload {
+            PersistedPayload::TerminalCompletedV5(_) => {
+                *phase = V5StructuralPostD2Phase::TerminalCompleted;
+                Ok(())
+            }
             PersistedPayload::GluingRerunActionRecordedV5(_) => {
                 *phase = V5StructuralPostD2Phase::GluingActions {
                     inherited: *inherited,
@@ -36167,7 +41360,16 @@ fn advance_v5_structural_post_d2(
         V5StructuralPostD2Phase::TerminalInherited {
             inherited,
             v4_registration_ids,
-        } => advance_v5_post_d2_terminal_gate(inherited, v4_registration_ids, payload),
+        } => match payload {
+            PersistedPayload::TerminalCompletedV5(_) => {
+                *phase = V5StructuralPostD2Phase::TerminalCompleted;
+                Ok(())
+            }
+            _ => advance_v5_post_d2_terminal_gate(inherited, v4_registration_ids, payload),
+        },
+        V5StructuralPostD2Phase::TerminalCompleted => Err(DomainError::EventSequence(
+            "V5 terminal completed marker must be the final event".to_owned(),
+        )),
     }
 }
 
@@ -36226,6 +41428,15 @@ fn advance_v5_structural_post_plan(
                 *m4_bundle = V5StructuralM4BundlePhase::Idle;
                 Ok(())
             }
+            // Static M4 has no evidence/binding when applicability is
+            // absent, ambiguous, or unsupported. The semantic native cursor
+            // binds its exact three-member bundle; this structural layer only
+            // recognizes the legal no-evidence terminal shape.
+            PersistedPayload::VerificationRecordedV3(_)
+                if *m4_bundle == V5StructuralM4BundlePhase::Idle =>
+            {
+                Ok(())
+            }
             PersistedPayload::ArtifactRegisteredV4(registration)
                 if *m4_bundle == V5StructuralM4BundlePhase::Idle =>
             {
@@ -36242,9 +41453,6 @@ fn advance_v5_structural_post_plan(
             )),
             PersistedPayload::EvidenceBoundV3(_) => Err(structural_v5_post_plan_error(
                 "M4 binding must immediately follow inherited evidence",
-            )),
-            PersistedPayload::VerificationRecordedV3(_) => Err(structural_v5_post_plan_error(
-                "M4 verification must immediately close inherited evidence bundle",
             )),
             PersistedPayload::EvidenceRecordedV3(_) => Err(structural_v5_post_plan_error(
                 "M4 evidence cannot begin before the previous bundle closes",
@@ -36619,7 +41827,11 @@ impl EventLogV5 {
         basis: AuthorityReplayBasisV5,
         require_same_instance: bool,
     ) -> Result<ReplayedScheduledReviewerPhaseV5> {
-        basis.validate_current_log(self)?;
+        basis.validate_current_log(self).map_err(|_| {
+            DomainError::EventSequence(
+                "partial rerun confirmation basis does not name the pre-append log".to_owned(),
+            )
+        })?;
         let validation_working = self
             .full_resident_bytes_for_structural_store()?
             .checked_add(phase.retained_bytes()?)
@@ -37011,6 +42223,7 @@ impl EventLogV5 {
             cursor,
             current_action_event_ids: Vec::new(),
             completed_receipts: Vec::new(),
+            abstained_receipts: Vec::new(),
             resident_log_bytes: self.full_resident_bytes_for_structural_store()?,
             external_phase_retained_bytes: phase.retained_bytes()?,
             max_working_bytes: self.limits.max_working_bytes,
@@ -37068,7 +42281,10 @@ impl EventLogV5 {
     ) -> Result<(EventLogV5, ReplayedScheduledReviewerPhaseV5)> {
         let run_id = log.run_id.clone();
         let genesis_hash = log.genesis_hash.clone();
-        let mut state = log.begin_scheduled_reviewer_phase_v5(phase, basis)?;
+        // Recovery necessarily reconstructs a fresh in-memory log identity.
+        // The durable run/genesis/tail/basis checks below remain exact; only
+        // the non-serializable same-instance guard is inapplicable here.
+        let mut state = log.begin_scheduled_reviewer_phase_inner_v5(phase, basis, false)?;
         for (suffix_index, bytes) in canonical_suffix.iter().enumerate() {
             let position = if matches!(state.cursor, ScheduledReviewerCursorV5::Execution { .. }) {
                 V5SealedPayloadPosition::ScheduledM6Execution
@@ -37273,6 +42489,7 @@ impl EventLogV5 {
             })?;
         next_action_event_ids.push(appended_event_id.clone());
         let mut next_completed_receipts = state.completed_receipts.clone();
+        let mut next_abstained_receipts = state.abstained_receipts.clone();
         let mut completed_receipt = match (&state.cursor, &prepared.payload) {
             (
                 ScheduledReviewerCursorV5::Completed {
@@ -37357,6 +42574,73 @@ impl EventLogV5 {
                 })?;
             next_completed_receipts.push(receipt.clone());
         }
+        let mut abstained_receipt = match (&state.cursor, &prepared.payload) {
+            (
+                ScheduledReviewerCursorV5::Execution { .. },
+                PersistedPayload::ReviewExecutionRecorded(recorded),
+            ) if !recorded.execution.outcome().is_structured() => {
+                let (context_body_hash, context_event_id, context_branch, raw_event_index) =
+                    match &current_action.context {
+                        ScheduledReviewerContextV5::New => {
+                            let context_event_id = state.current_action_event_ids[2].clone();
+                            let context = state
+                                .aggregate
+                                .context_envelope(recorded.execution.envelope_id())
+                                .ok_or(DomainError::HistoricalPrefixMismatch(
+                                    "new scheduled reviewer context is absent",
+                                ))?;
+                            (
+                                ContentHash::sha256(
+                                    &context.canonical_bytes().map_err(context_domain_error)?,
+                                ),
+                                context_event_id,
+                                ScheduledReviewerReceiptContextBranchV5::New,
+                                3,
+                            )
+                        }
+                        ScheduledReviewerContextV5::Existing {
+                            context_body_hash,
+                            context_event_id,
+                            predecessor_event_count,
+                            ..
+                        } => (
+                            context_body_hash.clone(),
+                            context_event_id.clone(),
+                            ScheduledReviewerReceiptContextBranchV5::Existing {
+                                predecessor_event_count: *predecessor_event_count,
+                            },
+                            0,
+                        ),
+                    };
+                Some(ScheduledReviewerAbstentionReceiptV5 {
+                    action_id: current_action.action_id.clone(),
+                    obligation_id: current_action.obligation_id.clone(),
+                    execution_id: recorded.execution.id().clone(),
+                    execution_body_hash: recorded.execution.body_hash()?,
+                    execution_event_id: appended_event_id.clone(),
+                    raw_registration_id: recorded.execution.raw_artifact_registration_id().clone(),
+                    raw_registration_event_id: state.current_action_event_ids[raw_event_index]
+                        .clone(),
+                    context_id: recorded.execution.envelope_id().clone(),
+                    context_body_hash,
+                    context_event_id,
+                    context_branch,
+                    action_event_ids: Vec::new(),
+                })
+            }
+            _ => None,
+        };
+        if let Some(receipt) = abstained_receipt.as_mut() {
+            receipt.action_event_ids = std::mem::take(&mut next_action_event_ids);
+            next_abstained_receipts
+                .try_reserve_exact(1)
+                .map_err(|_| DomainError::Incomplete {
+                    operation: "scheduled reviewer abstention receipt reservation",
+                    limit: 1,
+                    observed: 1,
+                })?;
+            next_abstained_receipts.push(receipt.clone());
+        }
         let current_collection_bytes =
             ReplayedScheduledReviewerPhaseV5::receipt_collection_retained_bytes(
                 &state.current_action_event_ids,
@@ -37367,13 +42651,12 @@ impl EventLogV5 {
                 &next_action_event_ids,
                 &next_completed_receipts,
             )?;
-        let pending_append_retained_bytes = prospective_collection_bytes
-            .checked_sub(current_collection_bytes)
-            .ok_or(DomainError::Incomplete {
-                operation: "scheduled reviewer prospective receipt collection growth",
-                limit: usize::MAX,
-                observed: usize::MAX,
-            })?;
+        // Completing an action moves its accumulated IDs into a receipt and
+        // can reduce Vec capacity.  Only positive growth contributes to the
+        // live append peak; treating that legal shrink as arithmetic overflow
+        // rejects an otherwise canonical cursor transition.
+        let pending_append_retained_bytes =
+            prospective_collection_bytes.saturating_sub(current_collection_bytes);
         let reducer_clone_bytes = state
             .aggregate
             .retained_bytes_v3()?
@@ -37531,13 +42814,27 @@ impl EventLogV5 {
                         Err(error) => return Err(DomainError::Validation(error.to_string())),
                     }
                 } else {
-                    ScheduledReviewerCursorV5::RawRegistration {
-                        context: context.clone(),
-                        attempt: attempt.checked_add(1).ok_or_else(|| {
-                            DomainError::EventSequence(
-                                "scheduled reviewer attempt overflow".to_owned(),
-                            )
-                        })?,
+                    // An abstention/malformed/provider-failure execution is
+                    // a durable terminal outcome for this *scheduled action*.
+                    // Retrying it here creates an unbounded same-action loop
+                    // and incorrectly treats a visited obligation as though
+                    // it had never been executed.  Do not emit a Completed
+                    // lifecycle transition (only the singleton structured
+                    // closure may do that); instead advance to the next
+                    // reviewer action and leave this obligation InProgress.
+                    next_action_index = state.action_index.checked_add(1).ok_or_else(|| {
+                        DomainError::EventSequence(
+                            "scheduled reviewer action index overflow".to_owned(),
+                        )
+                    })?;
+                    if let Some(action) = state.actions.get(next_action_index) {
+                        Self::scheduled_reviewer_cursor_for_action(
+                            &aggregate,
+                            &state.plan_id,
+                            action,
+                        )?
+                    } else {
+                        ScheduledReviewerCursorV5::Finished
                     }
                 }
             }
@@ -37590,6 +42887,14 @@ impl EventLogV5 {
         };
         let mut next_basis = state.basis.clone();
         next_basis.advance_authority_free_to_event(&envelope)?;
+        let action_advanced = next_action_index != state.action_index;
+        if action_advanced {
+            // A non-structured terminal execution has no singleton receipt,
+            // but its action-local event list must not bleed into the next
+            // action.  It remains durable in the journal and the obligation
+            // remains InProgress for coverage/reporting.
+            next_action_event_ids.clear();
+        }
         self.append_sealed_envelope_at_v5(envelope, position)?;
         state.aggregate = aggregate;
         state.v3_aggregate = v3_aggregate;
@@ -37598,6 +42903,7 @@ impl EventLogV5 {
         state.action_index = next_action_index;
         state.current_action_event_ids = next_action_event_ids;
         state.completed_receipts = next_completed_receipts;
+        state.abstained_receipts = next_abstained_receipts;
         state.resident_log_bytes = self.full_resident_bytes_for_structural_store()?;
         Ok(())
     }
@@ -37611,7 +42917,11 @@ impl EventLogV5 {
         roots: &AuthorityTrustRootsV5,
         basis: &AuthorityReplayBasisV5,
     ) -> Result<TrustedPreservationAdmissionV5> {
-        basis.validate_current_log(self)?;
+        basis.validate_current_log(self).map_err(|_| {
+            DomainError::EventSequence(
+                "partial rerun prepare basis does not name the current log".to_owned(),
+            )
+        })?;
         if roots.policy_revision_hash != basis.policy_revision_hash {
             return Err(DomainError::AuthorityPolicyMismatch);
         }
@@ -37855,7 +43165,9 @@ impl EventLogV5 {
             || predecessor_event_hash != *self.tail_hash()
             || event_sequence != basis.target_next_sequence
         {
-            return Err(DomainError::AuthorityReplayBasisMismatch);
+            return Err(DomainError::EventSequence(
+                "partial rerun prepare sealed phase does not match the current basis".to_owned(),
+            ));
         }
         let trust_binding_digest = binding.digest()?;
         let payload = PersistedPayload::ArtifactRegisteredV5((*registration).clone());
@@ -37916,7 +43228,9 @@ impl EventLogV5 {
             event_sequence,
         } = admission
         else {
-            return Err(DomainError::AuthorityReplayBasisMismatch);
+            return Err(DomainError::EventSequence(
+                "partial rerun prepare staleness body differs from sealed phase".to_owned(),
+            ));
         };
         if session_identity.0 != OpaquePreservationSessionIdentityV5::for_basis(basis)?.0
             || source_closure_id != basis.source_closure_id
@@ -38055,16 +43369,45 @@ impl EventLogV5 {
         // First gate: no basis validation, digesting, canonicalization, or
         // payload decode has occurred before this allocation-free peak check.
         phase.preflight_working_bytes(self, phase.future_prepared_peak_bytes()?)?;
-        basis.validate_current_log(self)?;
-        if self.instance_identity != phase.log_identity
-            || phase.source_closure_id != basis.source_closure_id
-            || phase.pre_incremental_basis_digest != basis.pre_incremental_basis_digest
-            || phase.policy_revision_hash != basis.policy_revision_hash
-            || phase.target_run_id != self.run_id
-            || phase.target_genesis_hash != self.genesis_hash
-            || phase.staleness_assessment_id != *staleness.assessment().id()
-        {
-            return Err(DomainError::AuthorityReplayBasisMismatch);
+        basis.validate_current_log(self).map_err(|_| {
+            DomainError::EventSequence(
+                "partial rerun prepare basis does not name the current log".to_owned(),
+            )
+        })?;
+        if self.instance_identity != phase.log_identity {
+            return Err(DomainError::EventSequence(
+                "partial rerun prepare phase names another live log".to_owned(),
+            ));
+        }
+        if phase.source_closure_id != basis.source_closure_id {
+            return Err(DomainError::EventSequence(
+                "partial rerun prepare source closure differs".to_owned(),
+            ));
+        }
+        if phase.pre_incremental_basis_digest != basis.pre_incremental_basis_digest {
+            return Err(DomainError::EventSequence(
+                "partial rerun prepare pre-incremental digest differs".to_owned(),
+            ));
+        }
+        if phase.policy_revision_hash != basis.policy_revision_hash {
+            return Err(DomainError::EventSequence(
+                "partial rerun prepare policy revision differs".to_owned(),
+            ));
+        }
+        if phase.target_run_id != self.run_id {
+            return Err(DomainError::EventSequence(
+                "partial rerun prepare target run differs".to_owned(),
+            ));
+        }
+        if phase.target_genesis_hash != self.genesis_hash {
+            return Err(DomainError::EventSequence(
+                "partial rerun prepare target genesis differs".to_owned(),
+            ));
+        }
+        if phase.staleness_assessment_id != *staleness.assessment().id() {
+            return Err(DomainError::EventSequence(
+                "partial rerun prepare staleness identity differs".to_owned(),
+            ));
         }
         phase.validate()?;
         phase.validate_durable_preservation(self, basis)?;
@@ -38198,6 +43541,17 @@ impl EventLogV5 {
                 "partial rerun plan is already sealed".to_owned(),
             ));
         }
+        let payload = phase.payload_at(member_index)?;
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            basis.target_next_sequence,
+            payload.actor().to_owned(),
+            basis.target_next_sequence,
+            basis.target_confirmed_tail_hash.clone(),
+            payload.clone(),
+        )?;
         Ok(PreparedPartialRerunPhaseAppendV5 {
             log_identity: self.instance_identity,
             session_identity: OpaquePreservationSessionIdentityV5::for_basis(basis)?,
@@ -38213,7 +43567,7 @@ impl EventLogV5 {
             staleness_body_hash,
             phase_digest: phase.digest()?,
             member_index,
-            payload: phase.payload_at(member_index)?,
+            envelope,
         })
     }
 
@@ -38228,34 +43582,58 @@ impl EventLogV5 {
         // The prepared value is already live at append entry, so include its
         // exact recursive ownership in the first working preflight.
         phase.preflight_working_bytes(self, prepared.retained_bytes()?)?;
-        basis.validate_current_log(self)?;
+        basis.validate_current_log(self).map_err(|_| {
+            DomainError::EventSequence(
+                "partial rerun confirmation basis does not name the pre-append log".to_owned(),
+            )
+        })?;
         if self.instance_identity != prepared.log_identity
             || self.instance_identity != phase.log_identity
-            || prepared.session_identity.0
-                != OpaquePreservationSessionIdentityV5::for_basis(basis)?.0
+        {
+            return Err(DomainError::EventSequence(
+                "partial rerun prepared capability names another live V5 log".to_owned(),
+            ));
+        }
+        if prepared.session_identity.0 != OpaquePreservationSessionIdentityV5::for_basis(basis)?.0
             || prepared.source_closure_id != basis.source_closure_id
             || prepared.policy_revision_hash != basis.policy_revision_hash
             || prepared.target_run_id != self.run_id
             || prepared.target_genesis_hash != self.genesis_hash
-            || phase.source_closure_id != basis.source_closure_id
+        {
+            return Err(DomainError::EventSequence(
+                "partial rerun prepared capability does not match its authority basis".to_owned(),
+            ));
+        }
+        if phase.source_closure_id != basis.source_closure_id
             || phase.pre_incremental_basis_digest != basis.pre_incremental_basis_digest
             || phase.policy_revision_hash != basis.policy_revision_hash
             || phase.target_run_id != self.run_id
             || phase.target_genesis_hash != self.genesis_hash
             || phase.staleness_assessment_id != *staleness.assessment().id()
-            || prepared.basis_digest != basis.basis_digest
+        {
+            return Err(DomainError::EventSequence(
+                "partial rerun sealed phase does not match its authority basis".to_owned(),
+            ));
+        }
+        if prepared.basis_digest != basis.basis_digest
             || prepared.predecessor_event_hash != *self.tail_hash()
             || prepared.event_count != basis.target_confirmed_event_count
             || prepared.event_sequence != basis.target_next_sequence
             || prepared.phase_digest != phase.digest()?
         {
-            return Err(DomainError::AuthorityReplayBasisMismatch);
+            return Err(DomainError::EventSequence(
+                "partial rerun prepared coordinates differ from the pre-append log".to_owned(),
+            ));
         }
         let durable_staleness = self
             .envelopes
             .iter()
             .find(|envelope| envelope.id() == &prepared.staleness_event_id)
-            .ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+            .ok_or_else(|| {
+                DomainError::EventSequence(
+                    "partial rerun confirmation cannot find its staleness seal".to_owned(),
+                )
+            })?;
         if prepared.staleness_body_hash != phase.staleness_body_hash
             || prepared.staleness_event_id != durable_staleness.id().clone()
             || !durable_staleness
@@ -38263,20 +43641,26 @@ impl EventLogV5 {
                 .get()
                 .contains("staleness_assessment")
         {
-            return Err(DomainError::AuthorityReplayBasisMismatch);
+            return Err(DomainError::EventSequence(
+                "partial rerun confirmation staleness witness differs".to_owned(),
+            ));
         }
-        let actor = prepared.payload.actor().to_owned();
-        let envelope = EventEnvelope::new(
-            EventContractVersion::V5,
-            self.run_id.clone(),
-            self.genesis_hash.clone(),
-            prepared.event_sequence,
-            actor,
-            prepared.event_sequence,
-            prepared.predecessor_event_hash.clone(),
-            prepared.payload,
-        )?;
-        self.append_sealed_envelope_v5(envelope)?;
+        if prepared.envelope.contract_version()? != EventContractVersion::V5
+            || prepared.envelope.run_id() != &self.run_id
+            || prepared.envelope.genesis_hash() != &self.genesis_hash
+            || prepared.envelope.sequence() != prepared.event_sequence
+            || prepared.envelope.previous_event_hash() != &prepared.predecessor_event_hash
+            || prepared.envelope.actor() != phase.payload_at(prepared.member_index)?.actor()
+            || payload_canonical_bytes(&decode_canonical_payload(
+                EventContractVersion::V5,
+                prepared.envelope.payload.get(),
+            )?)? != payload_canonical_bytes(&phase.payload_at(prepared.member_index)?)?
+        {
+            return Err(DomainError::EventSequence(
+                "partial rerun confirmation envelope differs from its prepared member".to_owned(),
+            ));
+        }
+        self.append_sealed_envelope_v5(prepared.envelope)?;
         basis.advance_authority_free(self)
     }
 
@@ -40396,6 +45780,68 @@ impl EventLogV5 {
         Ok((state, basis))
     }
 
+    /// Replays an M4-complete, no-M5-input V5 terminal using fresh V5 host
+    /// roots and deterministically rebuilds the closure-to-partial M6 plan.
+    ///
+    /// This is the production bridge for the MVP no-gluing predecessor.  A
+    /// target containing positioned V5 gluing-input registrations is refused
+    /// here: that branch needs the separate explicit V5 gluing-binding host
+    /// adapter and must never inherit a V4 capability.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recompute_terminal_m6_no_gluing_v5(
+        &self,
+        source_log: &EventLogV4,
+        structural_closure: &crate::IncrementalSourceClosureV5,
+        structural_mapping: &crate::M6MappingPhaseV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+        roots: &AuthorityTrustRootsV5,
+        assessment_time: &str,
+    ) -> crate::M6Result<RecomputedTerminalM6V5> {
+        if self.run_id() != structural_closure.target_run_id()
+            || self.genesis_hash() != structural_closure.target_genesis_hash()
+            || source_log.run_id() != structural_closure.source_run_id()
+            || source_log.tail_hash() != structural_closure.source_tail_hash()
+        {
+            return Err(crate::M6Error::InvalidSourceClosure(
+                "source/target journals do not equal the structural closure coordinates",
+            ));
+        }
+        let structural = self
+            .replay_pre_incremental_structural_prefix_for_store(V5StructuralPrefixCoordinates::new(
+                self.run_id(),
+                self.genesis_hash(),
+                structural_closure.target_predecessor_offset(),
+                structural_closure.target_predecessor_event_count(),
+                structural_closure.target_predecessor_tail_hash(),
+            ))
+            .map_err(crate::M6Error::from)?;
+        let checkpoint = Self::certify_plan_authority_checkpoint_v5_with_limits(
+            &structural,
+            resolver,
+            roots,
+            self.limits.max_retained_bytes,
+            self.limits.max_working_bytes,
+        )
+        .map_err(crate::M6Error::from)?;
+        let d2 = Self::replay_certified_d2_authority_prefix_v5(&checkpoint, resolver, roots)
+            .map_err(crate::M6Error::from)?;
+        let m4 = Self::replay_ordered_m4_authority_prefix_v5(d2, resolver, roots)
+            .map_err(crate::M6Error::from)?;
+        if m4.consumed_through_event != structural.predecessor_event_count {
+            return Err(crate::M6Error::InvalidHistoricalTopology(
+                "no-gluing terminal factory refuses positioned V5 M5 input events",
+            ));
+        }
+        let terminal = Self::replay_terminal_pre_incremental_authority_v5(&m4, resolver, roots)
+            .map_err(crate::M6Error::from)?;
+        terminal.recompute_terminal_m6_v5(
+            source_log,
+            structural_closure,
+            structural_mapping,
+            assessment_time,
+        )
+    }
+
     /// Reopens only a confirmed homogeneous V5 prefix.  This structural
     /// admission validates exact canonical envelopes, hash-chain continuity,
     /// genesis bindings, and the closed frozen inherited vocabulary.  V5
@@ -41150,11 +46596,11 @@ impl EventLogV5 {
     pub(crate) fn append_program_mapping_phase_v5(
         &mut self,
         closure: &crate::IncrementalSourceClosureV5,
-        mapping: crate::M6MappingPhaseV5,
+        mapping: &crate::M6MappingPhaseV5,
         basis: &mut AuthorityReplayBasisV5,
     ) -> Result<()> {
         basis.validate_current_log(self)?;
-        let expected = ExpectedM6PersistenceV5::mapping_prefix(closure, &mapping)?;
+        let expected = ExpectedM6PersistenceV5::mapping_prefix(closure, mapping)?;
         self.validate_exact_m6_suffix(closure, &expected.payloads[..1])?;
         self.append_m6_payloads_atomically(&expected.payloads[1..], self.limits.max_working_bytes)?;
         basis.advance_authority_free(self)
@@ -41165,12 +46611,12 @@ impl EventLogV5 {
         &mut self,
         closure: &crate::IncrementalSourceClosureV5,
         mapping: &crate::M6MappingPhaseV5,
-        correspondence: crate::M6ObligationCorrespondencePhaseV5,
+        correspondence: &crate::M6ObligationCorrespondencePhaseV5,
         basis: &mut AuthorityReplayBasisV5,
     ) -> Result<()> {
         basis.validate_current_log(self)?;
         let expected =
-            ExpectedM6PersistenceV5::correspondence_prefix(closure, mapping, &correspondence)?;
+            ExpectedM6PersistenceV5::correspondence_prefix(closure, mapping, correspondence)?;
         self.validate_exact_m6_suffix(
             closure,
             &expected.payloads[..expected.correspondence_start],
@@ -41188,14 +46634,14 @@ impl EventLogV5 {
         closure: &crate::IncrementalSourceClosureV5,
         mapping: &crate::M6MappingPhaseV5,
         correspondence: &crate::M6ObligationCorrespondencePhaseV5,
-        staleness: crate::M6StalenessPhaseV5,
+        staleness: &crate::M6StalenessPhaseV5,
         basis: &mut AuthorityReplayBasisV5,
     ) -> Result<()> {
         self.append_staleness_phase_v5_with_limit(
             closure,
             mapping,
             correspondence,
-            &staleness,
+            staleness,
             basis,
             self.limits.max_working_bytes,
         )
@@ -41628,6 +47074,664 @@ impl EventLogV5 {
     pub fn canonical_genesis_bytes(&self) -> &[u8] {
         &self.canonical_genesis_bytes
     }
+
+    /// Produces a lossless-for-identity, raw-prose-free projection input for
+    /// Store's schema-v6 index.  The complete V5 chain is revalidated before
+    /// any metadata is returned.  This is deliberately a read-only seam: it
+    /// neither replays authority nor exposes an opaque cursor or append path.
+    #[doc(hidden)]
+    pub fn index_projection_records_for_store(&self) -> Result<Vec<V5IndexProjectionRecord>> {
+        EventEnvelope::validate_v5_stream(
+            &self.run_id,
+            &self.canonical_genesis_bytes,
+            &self.envelopes,
+        )?;
+        let mut records = Vec::new();
+        records
+            .try_reserve_exact(self.envelopes.len())
+            .map_err(|_| DomainError::Incomplete {
+                operation: "V5 index projection record ownership",
+                limit: self.envelopes.len(),
+                observed: self.envelopes.len(),
+            })?;
+        for envelope in &self.envelopes {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            let bytes = payload_canonical_bytes(&payload)?;
+            let value: Value = serde_json::from_slice(&bytes)
+                .map_err(|error| DomainError::Json(error.to_string()))?;
+            let kind = value
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| DomainError::EventSequence("V5 payload has no type".to_owned()))?;
+            let data = value.get("data").unwrap_or(&Value::Null);
+            let mut record_ids = Vec::new();
+            collect_v5_projection_ids(data, "id", &mut record_ids)?;
+            record_ids.sort();
+            record_ids.dedup();
+            let mut source_ids = Vec::new();
+            collect_v5_projection_ids(data, "source_ids", &mut source_ids)?;
+            source_ids.sort();
+            source_ids.dedup();
+            records.push(V5IndexProjectionRecord {
+                schema: "reviewgraphen.v5_index_projection_record.v1".to_owned(),
+                sequence: envelope.sequence(),
+                event_id: envelope.id().clone(),
+                event_hash: envelope.event_hash().clone(),
+                payload_hash: envelope.payload_hash().clone(),
+                payload_kind: kind.to_owned(),
+                actor: envelope.actor().to_owned(),
+                logical_time: envelope.logical_time(),
+                record_ids,
+                body_hash: ContentHash::sha256(&bytes),
+                source_ids,
+            });
+        }
+        Ok(records)
+    }
+
+    /// Streams the closed V5 Store projection vocabulary after complete chain
+    /// validation.  It exposes no payload JSON, parser, append command, or
+    /// authority state.  A Store consumer receives immutable typed family
+    /// rows with the exact event witness that justified each row.
+    #[doc(hidden)]
+    pub fn visit_typed_index_projection_v5_for_store(
+        &self,
+        visitor: &mut dyn FnMut(V5TypedProjectionRecord) -> Result<()>,
+    ) -> Result<()> {
+        let records = self.index_projection_records_for_store()?;
+        for (envelope, record) in self.envelopes.iter().zip(records) {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            let witness = V5ProjectionEventWitness {
+                sequence: record.sequence,
+                event_id: record.event_id.clone(),
+                event_hash: record.event_hash.clone(),
+                payload_hash: record.payload_hash.clone(),
+                body_hash: record.body_hash.clone(),
+                actor: record.actor.clone(),
+                logical_time: record.logical_time,
+            };
+            let row = match typed_m6_projection_record_v5(
+                &payload,
+                witness,
+                record.source_ids.clone(),
+            )? {
+                Some(row) => row,
+                None => {
+                    let kind = record.payload_kind.clone();
+                    V5TypedProjectionRecord::from_metadata(record).map_err(|error| {
+                        DomainError::EventSequence(format!(
+                            "typed projection fallback failed for {kind}: {error}"
+                        ))
+                    })?
+                }
+            };
+            visitor(row)?;
+        }
+        Ok(())
+    }
+
+    /// Returns complete inherited V3/V4 DTOs only after validating the exact
+    /// V5 chain.  This closes the historical-report gap without letting Store
+    /// decode generic JSON or retain callback-scoped V4 borrowed views.
+    #[doc(hidden)]
+    pub fn inherited_report_projection_v5_for_store(
+        &self,
+    ) -> Result<Vec<V5InheritedReportProjection>> {
+        let records = self.index_projection_records_for_store()?;
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(records.len())
+            .map_err(|_| DomainError::Incomplete {
+                operation: "V5 inherited report projection ownership",
+                limit: records.len(),
+                observed: records.len(),
+            })?;
+        for (envelope, record) in self.envelopes.iter().zip(records) {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            let witness = V5ProjectionEventWitness {
+                sequence: record.sequence,
+                event_id: record.event_id,
+                event_hash: record.event_hash,
+                payload_hash: record.payload_hash,
+                body_hash: record.body_hash,
+                actor: record.actor,
+                logical_time: record.logical_time,
+            };
+            let source_ids = record.source_ids;
+            let row = match payload {
+                PersistedPayload::RunGenesisManifestV4(value) => {
+                    Some(V5InheritedReportProjection::RunGenesisManifest {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::ArtifactRegisteredV3(value) => {
+                    Some(V5InheritedReportProjection::ArtifactRegistered {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::SnapshotSourcesRecorded(value) => {
+                    Some(V5InheritedReportProjection::SnapshotSourcesRecorded {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::ReviewPlanRecorded(value) => {
+                    Some(V5InheritedReportProjection::ReviewPlanRecorded {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::ContextEnvelopeProjected(value) => {
+                    Some(V5InheritedReportProjection::ContextEnvelopeProjected {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::ObligationTransition {
+                    obligation_id,
+                    next,
+                } => Some(V5InheritedReportProjection::ObligationTransition {
+                    witness,
+                    obligation_id,
+                    next,
+                    source_ids,
+                }),
+                PersistedPayload::ReviewExecutionRecorded(value) => {
+                    Some(V5InheritedReportProjection::ReviewExecutionRecorded {
+                        witness,
+                        execution: value.execution,
+                        claims: value.claims,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::EvidenceRecordedV3(value) => {
+                    Some(V5InheritedReportProjection::EvidenceRecordedV3 {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::EvidenceBoundV3(value) => {
+                    Some(V5InheritedReportProjection::EvidenceBoundV3 {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::VerificationRecordedV3(value) => {
+                    Some(V5InheritedReportProjection::VerificationRecordedV3 {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::DecisionRecordedV3(value) => {
+                    Some(V5InheritedReportProjection::DecisionRecordedV3 {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::FindingRecordedV3(value) => {
+                    Some(V5InheritedReportProjection::FindingRecordedV3 {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                PersistedPayload::ArtifactRegisteredV4(value) => {
+                    Some(V5InheritedReportProjection::ArtifactRegisteredV4 {
+                        witness,
+                        value,
+                        source_ids,
+                    })
+                }
+                // The V4 bundle is deliberately decoded only by the
+                // roots-bound V4 replay; EventLogV5 retains its canonical
+                // payload solely for chain validation.  Do not deserialize it
+                // here as generic JSON and accidentally turn a raw payload
+                // into an admitted report DTO.
+                PersistedPayload::GluingBundleRecordedV4(_) => None,
+                _ => None,
+            };
+            if let Some(row) = row {
+                output.push(row);
+            }
+        }
+        Ok(output)
+    }
+
+    /// Verifies a content-addressed terminal proof against this exact durable
+    /// V5 prefix.  This is intentionally a proof-verification seam, not a
+    /// replay-authority constructor: roots and CAS authority remain required
+    /// when minting a proof from the private terminal cursor.
+    #[doc(hidden)]
+    #[allow(clippy::collapsible_match)] // matching IDs must retain their stream position.
+    pub fn verify_terminal_proof_v5(&self, proof: &TerminalProofV5) -> Result<()> {
+        proof.validate()?;
+        EventEnvelope::validate_v5_stream(
+            &self.run_id,
+            &self.canonical_genesis_bytes,
+            &self.envelopes,
+        )?;
+        let member_ids = self
+            .envelopes
+            .iter()
+            .map(|event| event.id().clone())
+            .collect::<Vec<_>>();
+        if proof.run_id != self.run_id
+            || proof.genesis_hash != self.genesis_hash
+            || proof.tail_hash != *self.tail_hash()
+            || proof.event_count != u64::try_from(self.envelopes.len()).unwrap_or(u64::MAX)
+            || proof.member_event_ids != member_ids
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "V5 terminal proof does not bind the current exact journal prefix",
+            ));
+        }
+        let final_marker = self
+            .envelopes
+            .last()
+            .ok_or(DomainError::HistoricalPrefixMismatch(
+                "V5 terminal proof has no final marker",
+            ))
+            .and_then(|event| {
+                let payload =
+                    decode_canonical_payload(EventContractVersion::V5, event.payload.get())?;
+                let PersistedPayload::TerminalCompletedV5(raw) = payload else {
+                    return Err(DomainError::HistoricalPrefixMismatch(
+                        "V5 terminal proof requires terminal_completed_v5 as the final event",
+                    ));
+                };
+                let marker: TerminalCompletedWireV5 = serde_json::from_str(raw.get())
+                    .map_err(|error| DomainError::Json(error.to_string()))?;
+                marker.validate()?;
+                Ok(marker)
+            })?;
+        if proof.terminal_cursor_witness_digest
+            != ContentHash::sha256(&canonical_json(&final_marker)?)
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "V5 terminal proof is not a receipt for the final terminal marker",
+            ));
+        }
+        if final_marker.final_cursor_basis_digest != terminal_v5_final_cursor_basis_digest(self)? {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "V5 final marker receipt digests do not match the durable terminal cursor",
+            ));
+        }
+        // The final M5 suffix is intentionally outside the narrow
+        // pre-incremental structural projection. Rebuild only the immutable
+        // accepted ProgramSpace from genesis to recompute the policy witness;
+        // no post-plan claim, evidence, or authority state is promoted here.
+        let genesis =
+            RunGenesisSnapshot::from_canonical_v4_bytes_for_store(&self.canonical_genesis_bytes)?;
+        let aggregate = genesis.rebuild_aggregate()?;
+        let policy_revision_hash = target_policy_revision_hash_v5(aggregate.program())?;
+        if proof.policy_revision_hash != policy_revision_hash {
+            return Err(DomainError::AuthorityPolicyMismatch);
+        }
+
+        let mut target_plan_position = None;
+        let mut source_closure_position = None;
+        let mut partial_plan_position = None;
+        let mut terminal_bundle_attempt = None;
+        let mut gluing_seal = None;
+        let mut partial_gluing_required = None;
+        for (position, envelope) in self.envelopes.iter().enumerate() {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            match payload {
+                PersistedPayload::ReviewPlanRecorded(plan)
+                    if plan.id() == &proof.target_plan_id =>
+                {
+                    if target_plan_position.replace(position).is_some() {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "terminal proof target plan is not unique in the V5 journal",
+                        ));
+                    }
+                }
+                PersistedPayload::IncrementalSourceBoundV5(raw) => {
+                    let body = terminal_proof_v5_raw_object(raw.get().as_bytes())?;
+                    if terminal_proof_v5_stable_id(&body, "id")? != proof.source_closure_id {
+                        continue;
+                    }
+                    if source_closure_position.replace(position).is_some()
+                        || terminal_proof_v5_stable_id(&body, "target_run_id")? != proof.run_id
+                        || terminal_proof_v5_content_hash(&body, "target_genesis_hash")?
+                            != proof.genesis_hash
+                        || terminal_proof_v5_content_hash(
+                            &body,
+                            "target_authority_policy_revision_hash",
+                        )? != proof.policy_revision_hash
+                        || terminal_proof_v5_content_hash(
+                            &body,
+                            "target_pre_incremental_authority_replay_basis_digest",
+                        )? != proof.authority_replay_basis_digest
+                    {
+                        return Err(DomainError::AuthorityReplayBasisMismatch);
+                    }
+                }
+                PersistedPayload::PartialRerunPlanSealedV5(plan)
+                    if plan.id() == &proof.partial_rerun_plan_id =>
+                {
+                    if partial_plan_position.replace(position).is_some()
+                        || plan.target_plan_id() != &proof.target_plan_id
+                        || plan.source_closure_id() != &proof.source_closure_id
+                    {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "terminal proof partial rerun plan does not bind its closure and target plan",
+                        ));
+                    }
+                    partial_gluing_required = Some(plan.target_gluing_required());
+                }
+                PersistedPayload::GluingRerunPlanSealedV5(seal)
+                    if partial_plan_position.is_some() =>
+                {
+                    let hash = ContentHash::sha256(&canonical_json(&seal)?);
+                    if gluing_seal.replace((seal.id().clone(), hash)).is_some() {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "terminal V5 suffix records more than one gluing plan seal",
+                        ));
+                    }
+                }
+                PersistedPayload::GluingBundleRecordedV4(raw)
+                    if partial_plan_position.is_some() =>
+                {
+                    let body = terminal_proof_v5_raw_object(raw.get().as_bytes())?;
+                    let attempt = terminal_proof_v5_nested_stable_id(&body, "attempt", "id")?;
+                    if terminal_bundle_attempt.replace(attempt).is_some() {
+                        return Err(DomainError::HistoricalPrefixMismatch(
+                            "terminal V5 suffix records more than one M5 gluing bundle",
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let (
+            Some(target_plan_position),
+            Some(source_closure_position),
+            Some(partial_plan_position),
+        ) = (
+            target_plan_position,
+            source_closure_position,
+            partial_plan_position,
+        )
+        else {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal proof is missing its target plan, source closure, or partial plan witness",
+            ));
+        };
+        if target_plan_position >= source_closure_position
+            || source_closure_position >= partial_plan_position
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal proof witnesses are not in the required V5 terminal order",
+            ));
+        }
+        let expected_m5_member_ids = if final_marker.gluing_required {
+            self.envelopes
+                .iter()
+                .rev()
+                .skip(1)
+                .take(3)
+                .map(|event| event.id().clone())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if final_marker.source_closure_id != proof.source_closure_id
+            || final_marker.partial_rerun_plan_id != proof.partial_rerun_plan_id
+            || final_marker.target_plan_id != proof.target_plan_id
+            || final_marker.m5_completion_kind != proof.completion_kind
+            || final_marker.m5_completion_attempt_id != proof.completion_attempt_id
+            || partial_gluing_required != Some(final_marker.gluing_required)
+            || final_marker.gluing_required != gluing_seal.is_some()
+            || (final_marker.gluing_required
+                && gluing_seal
+                    != Some((
+                        final_marker
+                            .gluing_plan_seal_id
+                            .clone()
+                            .ok_or(DomainError::AuthorityReplayBasisMismatch)?,
+                        final_marker
+                            .gluing_plan_seal_body_hash
+                            .clone()
+                            .ok_or(DomainError::AuthorityReplayBasisMismatch)?,
+                    )))
+            || (!final_marker.gluing_required
+                && (final_marker.gluing_plan_seal_id.is_some()
+                    || final_marker.gluing_plan_seal_body_hash.is_some()))
+            || final_marker.m5_member_event_ids != expected_m5_member_ids
+            || (final_marker.gluing_required && terminal_bundle_attempt.is_none())
+            || (!final_marker.gluing_required && terminal_bundle_attempt.is_some())
+        {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "V5 final marker does not bind the semantic terminal grammar",
+            ));
+        }
+        match (proof.completion_kind.as_str(), terminal_bundle_attempt) {
+            ("gluing_bundle_recorded", Some(attempt))
+                if proof.completion_attempt_id.as_ref() == Some(&attempt) =>
+            {
+                Ok(())
+            }
+            ("no_gluing_required", None) => Ok(()),
+            _ => Err(DomainError::HistoricalPrefixMismatch(
+                "V5 terminal proof completion does not match the durable post-partial M5 suffix",
+            )),
+        }
+    }
+
+    /// Returns the immutable accepted facts usable by a terminal index only
+    /// after `verify_terminal_proof_v5` validates the full suffix.
+    #[doc(hidden)]
+    pub fn terminal_index_facts_for_store(
+        &self,
+        proof: &TerminalProofV5,
+    ) -> Result<V5TerminalIndexFacts> {
+        self.verify_terminal_proof_v5(proof)?;
+        let genesis =
+            RunGenesisSnapshot::from_canonical_v4_bytes_for_store(&self.canonical_genesis_bytes)?;
+        Ok(V5TerminalIndexFacts {
+            program_space: genesis.program_space().clone(),
+            universe: genesis.universe().clone(),
+            obligations: genesis.obligations().to_vec(),
+        })
+    }
+}
+
+fn terminal_review_closure_from_replayed_parts_v5(
+    log: &EventLogV5,
+    completed_bundle: Option<crate::GluingBundleV4>,
+    completed_gluing_inputs: Vec<(ArtifactRegistrationV4, crate::GluingInputDescriptorV4)>,
+    v3_aggregate: &V3RunAggregate,
+) -> Result<V5TerminalReviewClosure> {
+    let mut inherited_rows = log.inherited_report_projection_v5_for_store()?;
+    let mut typed_rows = Vec::new();
+    log.visit_typed_index_projection_v5_for_store(&mut |row| {
+        typed_rows.push(row);
+        Ok(())
+    })?;
+    match (
+        completed_bundle,
+        typed_rows
+            .iter()
+            .find(|row| matches!(row, V5TypedProjectionRecord::GluingBundleRecordedV4 { .. })),
+    ) {
+        (Some(bundle), Some(row)) => {
+            inherited_rows.push(V5InheritedReportProjection::GluingBundleRecordedV4 {
+                witness: row.witness().clone(),
+                value: Box::new(bundle),
+                source_ids: row.source_ids(),
+            })
+        }
+        (None, None) => {}
+        _ => {
+            return Err(DomainError::HistoricalPrefixMismatch(
+                "terminal M5 bundle replay and durable target event disagree",
+            ));
+        }
+    }
+    for (registration, descriptor) in completed_gluing_inputs {
+        let row = inherited_rows.iter().find(|row| {
+            matches!(row, V5InheritedReportProjection::ArtifactRegisteredV4 { value, .. } if value.id() == registration.id())
+        }).ok_or(DomainError::HistoricalPrefixMismatch(
+            "terminal M5 descriptor replay has no matching durable V4 registration",
+        ))?;
+        let (witness, source_ids) = match row {
+            V5InheritedReportProjection::ArtifactRegisteredV4 {
+                witness,
+                source_ids,
+                ..
+            } => (witness.clone(), source_ids.clone()),
+            _ => unreachable!("the registration match above fixes the row variant"),
+        };
+        inherited_rows.push(V5InheritedReportProjection::GluingInputDescriptorV4 {
+            witness,
+            value: descriptor,
+            source_ids,
+        });
+    }
+    Ok(V5TerminalReviewClosure {
+        inherited_rows,
+        assessments: v3_aggregate
+            .historical_assessments()
+            .values()
+            .cloned()
+            .collect(),
+    })
+}
+
+fn terminal_proof_v5_raw_object(input: &[u8]) -> Result<serde_json::Map<String, Value>> {
+    match serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))? {
+        Value::Object(value) => Ok(value),
+        _ => Err(DomainError::Validation(
+            "V5 terminal-proof witness body must be a JSON object".to_owned(),
+        )),
+    }
+}
+
+fn terminal_proof_v5_stable_id(
+    value: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<StableId> {
+    let value = value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        DomainError::Validation(format!("V5 terminal-proof witness has no string {field}"))
+    })?;
+    StableId::parse(value)
+}
+
+fn terminal_proof_v5_content_hash(
+    value: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<ContentHash> {
+    let value = value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        DomainError::Validation(format!("V5 terminal-proof witness has no string {field}"))
+    })?;
+    ContentHash::parse(value)
+}
+
+fn terminal_proof_v5_nested_stable_id(
+    value: &serde_json::Map<String, Value>,
+    parent: &str,
+    field: &str,
+) -> Result<StableId> {
+    let value = value
+        .get(parent)
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            DomainError::Validation(format!("V5 terminal-proof witness has no object {parent}"))
+        })?;
+    terminal_proof_v5_stable_id(value, field)
+}
+
+#[derive(Serialize)]
+struct TerminalV5CursorWitness<'a> {
+    schema: &'static str,
+    run_id: &'a StableId,
+    genesis_hash: &'a ContentHash,
+    event_count: u64,
+    tail_hash: &'a ContentHash,
+}
+
+fn terminal_v5_final_cursor_basis_digest(log: &EventLogV5) -> Result<ContentHash> {
+    let terminal_marker = log.envelopes.last().is_some_and(|event| {
+        decode_canonical_payload(EventContractVersion::V5, event.payload.get())
+            .is_ok_and(|payload| matches!(payload, PersistedPayload::TerminalCompletedV5(_)))
+    });
+    let cursor_events = if terminal_marker {
+        &log.envelopes[..log.envelopes.len().saturating_sub(1)]
+    } else {
+        &log.envelopes[..]
+    };
+    let count = u64::try_from(cursor_events.len()).map_err(|_| {
+        DomainError::EventSequence("V5 terminal cursor event count overflow".to_owned())
+    })?;
+    let tail_hash = cursor_events.last().map_or_else(
+        || event_chain_genesis_hash(&log.run_id, &log.genesis_hash),
+        |event| Ok(event.event_hash().clone()),
+    )?;
+    Ok(ContentHash::sha256(&canonical_json(
+        &TerminalV5CursorWitness {
+            schema: "reviewgraphen.terminal_cursor_basis.v5",
+            run_id: &log.run_id,
+            genesis_hash: &log.genesis_hash,
+            event_count: count,
+            tail_hash: &tail_hash,
+        },
+    )?))
+}
+
+fn collect_v5_projection_ids(value: &Value, field: &str, output: &mut Vec<StableId>) -> Result<()> {
+    match value {
+        Value::Object(object) => {
+            if let Some(candidate) = object.get(field) {
+                match candidate {
+                    Value::String(value) if field == "id" => output.push(StableId::parse(value)?),
+                    Value::Array(values) if field == "source_ids" => {
+                        for value in values {
+                            let value = value.as_str().ok_or_else(|| {
+                                DomainError::Validation(
+                                    "V5 index source_ids must contain StableId strings".to_owned(),
+                                )
+                            })?;
+                            output.push(StableId::parse(value)?);
+                        }
+                    }
+                    _ => {
+                        return Err(DomainError::Validation(
+                            "V5 index projection record field has an invalid shape".to_owned(),
+                        ));
+                    }
+                }
+            }
+            for child in object.values() {
+                collect_v5_projection_ids(child, field, output)?;
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                collect_v5_projection_ids(child, field, output)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn retained_envelope_vector_bytes_for_store(envelopes: &Vec<EventEnvelope>) -> Result<u64> {
@@ -49740,7 +55844,8 @@ fn apply(
         | PersistedPayload::PartialRerunActionRecordedV5(_)
         | PersistedPayload::PartialRerunPlanSealedV5(_)
         | PersistedPayload::GluingRerunActionRecordedV5(_)
-        | PersistedPayload::GluingRerunPlanSealedV5(_) => Err(DomainError::Validation(
+        | PersistedPayload::GluingRerunPlanSealedV5(_)
+        | PersistedPayload::TerminalCompletedV5(_) => Err(DomainError::Validation(
             "event-v3 state requires the versioned aggregate foundation".to_owned(),
         )),
     }
@@ -51125,6 +57230,23 @@ mod tests {
 
     fn id(value: &str) -> StableId {
         StableId::parse(value).expect("test identifier")
+    }
+
+    #[test]
+    fn fixed_m6_reviewer_result_is_closed_and_canonical() {
+        let canonical = br#"{"abstention":null,"claims":[{"assumptions":[],"candidate_confidence":1.0,"polarity":"issue_present","property_id":"fixture.property","requested_evidence":[],"source_ids":["artifact:fixed-source"],"summary":"fixture issue present","target_refs":["artifact:fixed-target"]}],"execution_id":"execution:fixed-m6","schema":"reviewgraphen.reviewer_output.v1"}"#;
+        assert!(ValidatedFixedM6ReviewerResultV5::from_canonical_bytes(canonical).is_ok());
+        let abstention = br#"{"abstention":{"detail":"fixture lacks admitted sources","reason":"insufficient_context"},"claims":[],"execution_id":"execution:fixed-m6","schema":"reviewgraphen.reviewer_output.v1"}"#;
+        assert!(ValidatedFixedM6ReviewerResultV5::from_canonical_bytes(abstention).is_ok());
+        for hostile in [
+            br#"{}"#.as_slice(),
+            br#"{"abstention":null,"claims":[{"assumptions":[],"candidate_confidence":1.0,"polarity":"issue_present","property_id":"fixture.property","requested_evidence":[],"source_ids":["artifact:fixed-source"],"summary":"fixture issue present","target_refs":["artifact:fixed-target"]},{"assumptions":[],"candidate_confidence":1.0,"polarity":"issue_present","property_id":"fixture.property","requested_evidence":[],"source_ids":["artifact:fixed-source"],"summary":"second claim","target_refs":["artifact:fixed-target"]}],"execution_id":"execution:fixed-m6","schema":"reviewgraphen.reviewer_output.v1"}"#,
+            br#"{"abstention":null,"claims":[{"assumptions":[],"candidate_confidence":1.0,"polarity":"issue_present","property_id":"fixture.property","requested_evidence":[],"source_ids":["artifact:fixed-source"],"summary":"fixture issue present","target_refs":["artifact:fixed-target"]}],"execution_id":"execution:fixed-m6","schema":"reviewgraphen.reviewer_output.v1","unknown":true}"#,
+            br#" {"abstention":null,"claims":[{"assumptions":[],"candidate_confidence":1.0,"polarity":"issue_present","property_id":"fixture.property","requested_evidence":[],"source_ids":["artifact:fixed-source"],"summary":"fixture issue present","target_refs":["artifact:fixed-target"]}],"execution_id":"execution:fixed-m6","schema":"reviewgraphen.reviewer_output.v1"}"#,
+            br#"{"abstention":{"detail":"fixture lacks admitted sources","reason":"insufficient_context"},"claims":[{"assumptions":[],"candidate_confidence":1.0,"polarity":"issue_present","property_id":"fixture.property","requested_evidence":[],"source_ids":["artifact:fixed-source"],"summary":"fixture issue present","target_refs":["artifact:fixed-target"]}],"execution_id":"execution:fixed-m6","schema":"reviewgraphen.reviewer_output.v1"}"#,
+        ] {
+            assert!(ValidatedFixedM6ReviewerResultV5::from_canonical_bytes(hostile).is_err());
+        }
     }
 
     fn scheduled_reviewer_claims(
@@ -68911,20 +75033,20 @@ mod tests {
                     assert_eq!(basis.source_closure_id(), phases.closure().id());
                     log.append_program_mapping_phase_v5(
                         phases.closure(),
-                        phases.mapping().clone(),
+                        phases.mapping(),
                         &mut basis,
                     )?;
                     log.append_obligation_correspondence_phase_v5(
                         phases.closure(),
                         phases.mapping(),
-                        phases.correspondence().clone(),
+                        phases.correspondence(),
                         &mut basis,
                     )?;
                     log.append_staleness_phase_v5(
                         phases.closure(),
                         phases.mapping(),
                         phases.correspondence(),
-                        staleness.clone(),
+                        staleness,
                         &mut basis,
                     )?;
                     assert_eq!(
@@ -69013,20 +75135,20 @@ mod tests {
                         log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                     log.append_program_mapping_phase_v5(
                         phases.closure(),
-                        phases.mapping().clone(),
+                        phases.mapping(),
                         &mut basis,
                     )?;
                     log.append_obligation_correspondence_phase_v5(
                         phases.closure(),
                         phases.mapping(),
-                        phases.correspondence().clone(),
+                        phases.correspondence(),
                         &mut basis,
                     )?;
                     log.append_staleness_phase_v5(
                         phases.closure(),
                         phases.mapping(),
                         phases.correspondence(),
-                        staleness.clone(),
+                        staleness,
                         &mut basis,
                     )?;
                     phase = target.seal_partial_rerun_phase_for_log_v5(
@@ -69407,20 +75529,20 @@ mod tests {
                         log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                     log.append_program_mapping_phase_v5(
                         phases.closure(),
-                        phases.mapping().clone(),
+                        phases.mapping(),
                         &mut basis,
                     )?;
                     log.append_obligation_correspondence_phase_v5(
                         phases.closure(),
                         phases.mapping(),
-                        phases.correspondence().clone(),
+                        phases.correspondence(),
                         &mut basis,
                     )?;
                     log.append_staleness_phase_v5(
                         phases.closure(),
                         phases.mapping(),
                         phases.correspondence(),
-                        staleness.clone(),
+                        staleness,
                         &mut basis,
                     )?;
                     let phase = target.seal_partial_rerun_phase_for_log_v5(
@@ -69815,20 +75937,20 @@ mod tests {
                         log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                     log.append_program_mapping_phase_v5(
                         phases.closure(),
-                        phases.mapping().clone(),
+                        phases.mapping(),
                         &mut basis,
                     )?;
                     log.append_obligation_correspondence_phase_v5(
                         phases.closure(),
                         phases.mapping(),
-                        phases.correspondence().clone(),
+                        phases.correspondence(),
                         &mut basis,
                     )?;
                     log.append_staleness_phase_v5(
                         phases.closure(),
                         phases.mapping(),
                         phases.correspondence(),
-                        staleness.clone(),
+                        staleness,
                         &mut basis,
                     )?;
                     let partial = target.seal_partial_rerun_phase_for_log_v5(
@@ -69983,20 +76105,20 @@ mod tests {
                     log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                 log.append_program_mapping_phase_v5(
                     phases.closure(),
-                    phases.mapping().clone(),
+                    phases.mapping(),
                     &mut basis,
                 )?;
                 log.append_obligation_correspondence_phase_v5(
                     phases.closure(),
                     phases.mapping(),
-                    phases.correspondence().clone(),
+                    phases.correspondence(),
                     &mut basis,
                 )?;
                 log.append_staleness_phase_v5(
                     phases.closure(),
                     phases.mapping(),
                     phases.correspondence(),
-                    staleness.clone(),
+                    &staleness,
                     &mut basis,
                 )?;
                 let partial =
@@ -70399,20 +76521,20 @@ mod tests {
                     log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                 log.append_program_mapping_phase_v5(
                     phases.closure(),
-                    phases.mapping().clone(),
+                    phases.mapping(),
                     &mut basis,
                 )?;
                 log.append_obligation_correspondence_phase_v5(
                     phases.closure(),
                     phases.mapping(),
-                    phases.correspondence().clone(),
+                    phases.correspondence(),
                     &mut basis,
                 )?;
                 log.append_staleness_phase_v5(
                     phases.closure(),
                     phases.mapping(),
                     phases.correspondence(),
-                    staleness.clone(),
+                    &staleness,
                     &mut basis,
                 )?;
                 let mut partial =
@@ -70845,20 +76967,20 @@ mod tests {
                     log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                 log.append_program_mapping_phase_v5(
                     phases.closure(),
-                    phases.mapping().clone(),
+                    phases.mapping(),
                     &mut basis,
                 )?;
                 log.append_obligation_correspondence_phase_v5(
                     phases.closure(),
                     phases.mapping(),
-                    phases.correspondence().clone(),
+                    phases.correspondence(),
                     &mut basis,
                 )?;
                 log.append_staleness_phase_v5(
                     phases.closure(),
                     phases.mapping(),
                     phases.correspondence(),
-                    staleness.clone(),
+                    &staleness,
                     &mut basis,
                 )?;
                 let partial =
@@ -72579,20 +78701,20 @@ mod tests {
                     log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                 log.append_program_mapping_phase_v5(
                     phases.closure(),
-                    phases.mapping().clone(),
+                    phases.mapping(),
                     &mut basis,
                 )?;
                 log.append_obligation_correspondence_phase_v5(
                     phases.closure(),
                     phases.mapping(),
-                    phases.correspondence().clone(),
+                    phases.correspondence(),
                     &mut basis,
                 )?;
                 log.append_staleness_phase_v5(
                     phases.closure(),
                     phases.mapping(),
                     phases.correspondence(),
-                    staleness.clone(),
+                    &staleness,
                     &mut basis,
                 )?;
                 let partial =
@@ -74354,6 +80476,51 @@ mod tests {
                         ));
                     }
                 }
+                // The production Store bridge durably appends the opaque
+                // prepared marker between these two Core calls.  This unit
+                // seam deliberately uses a no-op durable callback so the
+                // terminal grammar, one-shot capability and exact confirm
+                // path are exercised without exposing a generic append API.
+                let prepared = m5.prepare_terminal_completed_v5(&log)?;
+                let (prepared, ()) = prepared.append_to_store(|_marker| Ok::<_, DomainError>(()))?;
+                m5.confirm_terminal_completed_v5(&mut log, prepared)?;
+                let terminal_proof = m5.terminal_proof_v5(&log)?;
+                assert_eq!(terminal_proof.event_count(), log.envelopes.len() as u64);
+                assert_eq!(terminal_proof.tail_hash(), log.tail_hash());
+                log.verify_terminal_proof_v5(&terminal_proof)?;
+                let mut noncanonical_proof = terminal_proof.canonical_bytes()?;
+                noncanonical_proof.push(b' ');
+                assert!(TerminalProofV5::from_canonical_bytes(&noncanonical_proof).is_err());
+                for mutation in [
+                    "tail_hash",
+                    "authority_replay_basis_digest",
+                    "policy_revision_hash",
+                    "source_closure_id",
+                    "partial_rerun_plan_id",
+                    "target_plan_id",
+                    "completion_kind",
+                ] {
+                    let mut hostile = terminal_proof.clone();
+                    match mutation {
+                        "tail_hash" => hostile.tail_hash = ContentHash::sha256(b"hostile tail"),
+                        "authority_replay_basis_digest" => hostile.authority_replay_basis_digest = ContentHash::sha256(b"hostile basis"),
+                        "policy_revision_hash" => hostile.policy_revision_hash = ContentHash::sha256(b"hostile policy"),
+                        "source_closure_id" => hostile.source_closure_id = StableId::parse("incremental-source-closure-v5:hostile")?,
+                        "partial_rerun_plan_id" => hostile.partial_rerun_plan_id = StableId::parse("partial-rerun-plan-v5:hostile")?,
+                        "target_plan_id" => hostile.target_plan_id = StableId::parse("plan:hostile")?,
+                        "completion_kind" => {
+                            hostile.completion_kind = "no_gluing_required".to_owned();
+                            hostile.completion_attempt_id = None;
+                        }
+                        _ => unreachable!(),
+                    }
+                    hostile.rederive_identity_for_test()?;
+                    assert!(log.verify_terminal_proof_v5(&hostile).is_err(), "{mutation}");
+                }
+                let mut hostile = terminal_proof.clone();
+                hostile.member_event_ids[0] = StableId::parse("event:hostile")?;
+                hostile.rederive_identity_for_test()?;
+                assert!(log.verify_terminal_proof_v5(&hostile).is_err());
                 Ok(())
             })
             .expect("post-D2 gluing append");
@@ -74407,20 +80574,20 @@ mod tests {
                     log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                 log.append_program_mapping_phase_v5(
                     phases.closure(),
-                    phases.mapping().clone(),
+                    phases.mapping(),
                     &mut basis,
                 )?;
                 log.append_obligation_correspondence_phase_v5(
                     phases.closure(),
                     phases.mapping(),
-                    phases.correspondence().clone(),
+                    phases.correspondence(),
                     &mut basis,
                 )?;
                 log.append_staleness_phase_v5(
                     phases.closure(),
                     phases.mapping(),
                     phases.correspondence(),
-                    staleness.clone(),
+                    &staleness,
                     &mut basis,
                 )?;
                 let partial =
@@ -74814,7 +80981,7 @@ mod tests {
     }
 
     #[test]
-    fn v5_scheduled_zero_claim_is_durable_terminal_and_byte_replayable() {
+    fn v5_scheduled_abstention_advances_action_without_completing_obligation_and_replays() {
         crate::m6_test_support::with_source_bearing_scheduled_reviewer_fixture(
             |_source, target, phases, staleness| {
                 let preservation = crate::M6PreservationPhaseV5::empty(staleness);
@@ -74823,20 +80990,20 @@ mod tests {
                         log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                     log.append_program_mapping_phase_v5(
                         phases.closure(),
-                        phases.mapping().clone(),
+                        phases.mapping(),
                         &mut basis,
                     )?;
                     log.append_obligation_correspondence_phase_v5(
                         phases.closure(),
                         phases.mapping(),
-                        phases.correspondence().clone(),
+                        phases.correspondence(),
                         &mut basis,
                     )?;
                     log.append_staleness_phase_v5(
                         phases.closure(),
                         phases.mapping(),
                         phases.correspondence(),
-                        staleness.clone(),
+                        staleness,
                         &mut basis,
                     )?;
                     let phase = target.seal_partial_rerun_phase_for_log_v5(
@@ -74882,6 +81049,8 @@ mod tests {
                         .collect::<BTreeMap<_, _>>();
                     objects.insert(ContentHash::sha256(&raw), raw.clone());
                     let resolver = Resolver(objects);
+                    let abstained_action_id = state.action()?.action_id.clone();
+                    let abstained_obligation_id = state.action()?.obligation_id.clone();
                     let prepared = state.prepare_lifecycle_v5()?;
                     log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
                     let prepared = state.prepare_lifecycle_v5()?;
@@ -74893,14 +81062,33 @@ mod tests {
                     let prepared = state.prepare_execution_v5(
                         &resolver,
                         Vec::new(),
-                        crate::ExecutionOutcome::Structured,
+                        crate::ExecutionOutcome::Abstained {
+                            reason: crate::AbstentionReason::InsufficientContext,
+                            detail: "fixture abstention".to_owned(),
+                        },
                     )?;
                     log.append_prepared_scheduled_reviewer_v5(prepared, &mut state)?;
-                    assert!(matches!(
-                        state.cardinality_error(),
-                        Some(crate::M6Error::M6ClaimCardinalityUnsupported { observed: 0, .. })
-                    ));
-                    assert!(state.prepare_lifecycle_v5().is_err());
+                    assert_eq!(state.action_index, 1);
+                    assert_ne!(state.action()?.action_id, abstained_action_id);
+                    assert!(state.completed_receipts.is_empty());
+                    assert!(state.current_action_event_ids.is_empty());
+                    assert_eq!(
+                        state
+                            .aggregate
+                            .obligation(&abstained_obligation_id)
+                            .expect("abstained obligation remains present")
+                            .lifecycle(),
+                        ObligationLifecycle::InProgress
+                    );
+                    assert!(state.aggregate.executions().any(|execution| {
+                        execution
+                            .obligation_ids()
+                            .contains(&abstained_obligation_id)
+                            && matches!(
+                                execution.outcome(),
+                                crate::ExecutionOutcome::Abstained { .. }
+                            )
+                    }));
                     let suffix = log.envelopes[suffix_start..]
                         .iter()
                         .map(|envelope| {
@@ -74931,10 +81119,18 @@ mod tests {
                         replay_basis.clone(),
                         &resolver,
                     )?;
-                    assert!(matches!(
-                        replayed.cardinality_error(),
-                        Some(crate::M6Error::M6ClaimCardinalityUnsupported { observed: 0, .. })
-                    ));
+                    assert_eq!(replayed.action_index, 1);
+                    assert_ne!(replayed.action()?.action_id, abstained_action_id);
+                    assert!(replayed.completed_receipts.is_empty());
+                    assert!(replayed.current_action_event_ids.is_empty());
+                    assert_eq!(
+                        replayed
+                            .aggregate
+                            .obligation(&abstained_obligation_id)
+                            .expect("replayed abstained obligation remains present")
+                            .lifecycle(),
+                        ObligationLifecycle::InProgress
+                    );
                     struct CountingResolver<'a> {
                         inner: &'a Resolver,
                         reads: std::cell::Cell<usize>,
@@ -74996,7 +81192,7 @@ mod tests {
                 })
             },
         )
-        .expect("scheduled zero-claim durable replay");
+        .expect("scheduled abstention durable replay");
     }
 
     #[test]
@@ -75008,20 +81204,20 @@ mod tests {
                         log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                     log.append_program_mapping_phase_v5(
                         phases.closure(),
-                        phases.mapping().clone(),
+                        phases.mapping(),
                         &mut basis,
                     )?;
                     log.append_obligation_correspondence_phase_v5(
                         phases.closure(),
                         phases.mapping(),
-                        phases.correspondence().clone(),
+                        phases.correspondence(),
                         &mut basis,
                     )?;
                     log.append_staleness_phase_v5(
                         phases.closure(),
                         phases.mapping(),
                         phases.correspondence(),
-                        staleness.clone(),
+                        staleness,
                         &mut basis,
                     )?;
                     let policy = basis.policy_revision_hash.clone();
@@ -75176,20 +81372,20 @@ mod tests {
                         log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                     log.append_program_mapping_phase_v5(
                         phases.closure(),
-                        phases.mapping().clone(),
+                        phases.mapping(),
                         &mut basis,
                     )?;
                     log.append_obligation_correspondence_phase_v5(
                         phases.closure(),
                         phases.mapping(),
-                        phases.correspondence().clone(),
+                        phases.correspondence(),
                         &mut basis,
                     )?;
                     log.append_staleness_phase_v5(
                         phases.closure(),
                         phases.mapping(),
                         phases.correspondence(),
-                        staleness.clone(),
+                        staleness,
                         &mut basis,
                     )?;
                     let policy = basis.policy_revision_hash.clone();
@@ -75566,13 +81762,13 @@ mod tests {
                         log.append_incremental_source_closure_v5(phases.closure(), pre_basis)?;
                     log.append_program_mapping_phase_v5(
                         phases.closure(),
-                        phases.mapping().clone(),
+                        phases.mapping(),
                         &mut basis,
                     )?;
                     log.append_obligation_correspondence_phase_v5(
                         phases.closure(),
                         phases.mapping(),
-                        phases.correspondence().clone(),
+                        phases.correspondence(),
                         &mut basis,
                     )?;
 
@@ -75750,7 +81946,7 @@ mod tests {
                         basis_log
                             .append_program_mapping_phase_v5(
                                 phases.closure(),
-                                phases.mapping().clone(),
+                                phases.mapping(),
                                 &mut basis,
                             )
                             .is_err()

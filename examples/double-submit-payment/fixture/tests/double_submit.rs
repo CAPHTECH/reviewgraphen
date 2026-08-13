@@ -1,4 +1,7 @@
-use std::{sync::{Arc, Barrier}, thread};
+use std::{
+    sync::{Arc, Barrier},
+    thread,
+};
 
 use double_submit_payment_fixture::{CheckoutController, PaymentRepository, StripeClient};
 

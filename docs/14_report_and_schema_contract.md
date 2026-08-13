@@ -44,6 +44,37 @@ declares one recoverable loss for every nonempty M5 array it omits; the checked
 example and SHA-256 are emitted by the public journal/CAS/index/runtime/report
 pipeline and checked byte-for-byte against a repeated generation.
 
+M6 reserves the closed
+[`reviewgraphen.review.report.v5`](../schemas/reviewgraphen.report.v5.schema.json)
+contract. V5 is generated only after the target V5 journal, index-v6 snapshot,
+dual-run source closure, authority basis, and CAS witnesses have been checked
+together. It does not upcast a V4 report or accept a detached report document
+as authority. The contract keeps `reviewed`/visited, evidence-supported,
+native-verified, verified, fresh-verified, and human-accepted as distinct
+denominator-relative axes. Its report-only incremental gate is separately
+body-bound and is `blocked`, `incomplete`, or `pass`; it cannot turn a source
+finding, model claim, or confidence value into a target finding or sign-off.
+Every V5 projection view declares a meaningful recoverable loss for each
+omitted incremental record family, with complete source IDs, affected property
+IDs, and the exact V5 JSON pointer used for recovery. The Store V6
+source-bound reader is the public generation entry point used by the CLI.
+The V5 resource proof is also source-bound: Store persists the measured
+dual-session terms with the terminal proof, and report generation applies the
+V5 accounting limit to those terms plus the actual canonical report buffer.
+An authority reopened without that receipt is refused; zero-valued
+report-side substitute accounting is not permitted.
+V5 intentionally does not expose `claim_assessments`: they are replay-derived
+V3 aggregate state rather than durable V5 events, and the contract refuses to
+invent an event witness for them.  Consumers needing that historical derived
+view must use the V3/V4 report contract until Core introduces a separately
+witnessed V5 projection.
+
+For a terminal gluing index only, Store may use Core's opaque proof-bound
+closure to restore those replay-derived assessments into the private SQLite
+foreign-key graph. This does not add a V5 event or report array. A proof or
+terminal marker without that source-bound closure is insufficient and is
+refused for the gluing branch.
+
 ## 1. Report-first principle
 
 ReviewGraphenはCLI表示より先にstable report contractを定義します。

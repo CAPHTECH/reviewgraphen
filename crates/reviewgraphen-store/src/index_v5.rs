@@ -4795,6 +4795,33 @@ impl ProjectionEventMetadataV5 for BorrowedV4EventMetadata<'_> {
     }
 }
 
+/// Metadata already validated by Core's terminal V5 projection visitor.  It
+/// is deliberately usable only by this private index adapter; it grants no
+/// event construction or replay capability.
+impl ProjectionEventMetadataV5 for reviewgraphen_core::V5ProjectionEventWitness {
+    fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    fn id(&self) -> &StableId {
+        &self.event_id
+    }
+    fn schema(&self) -> &str {
+        "reviewgraphen.review_event.v5"
+    }
+    fn event_hash(&self) -> &ContentHash {
+        &self.event_hash
+    }
+    fn payload_hash(&self) -> &ContentHash {
+        &self.payload_hash
+    }
+    fn actor(&self) -> &str {
+        &self.actor
+    }
+    fn logical_time(&self) -> u64 {
+        self.logical_time
+    }
+}
+
 fn phase0_event_base(
     envelope: &impl ProjectionEventMetadataV5,
 ) -> Result<BorrowedRowCharge, IndexError> {
@@ -5785,7 +5812,10 @@ where
     String::from_utf8(bytes).map_err(|_| IndexError::ProjectionContractViolation)
 }
 
-fn project_claim_assessment_v4(
+/// Projects an assessment reconstructed by a Store-held, authority-validated
+/// replay. Callers must retain that replay through the projection boundary;
+/// this helper never accepts a caller-created assessment DTO.
+pub(crate) fn project_claim_assessment_v4(
     value: reviewgraphen_core::BorrowedClaimAssessmentProjectionV4<'_>,
     confirmed_event_sequence: u64,
 ) -> Result<IndexClaimAssessmentV3AtV5, IndexError> {
@@ -5891,7 +5921,7 @@ fn ordered_projection_text<T: Serialize>(value: &T) -> Result<String, IndexError
 }
 
 fn project_execution_opaque(
-    metadata: &BorrowedV4EventMetadata<'_>,
+    metadata: &impl ProjectionEventMetadataV5,
     value: &reviewgraphen_core::BorrowedReviewExecutionProjectionV4<'_>,
 ) -> Result<IndexExecution, IndexError> {
     let outcome = value.outcome();
@@ -5936,7 +5966,7 @@ fn project_execution_opaque(
 }
 
 fn project_claim_opaque(
-    metadata: &BorrowedV4EventMetadata<'_>,
+    metadata: &impl ProjectionEventMetadataV5,
     value: &reviewgraphen_core::BorrowedExecutionClaimProjectionV4<'_>,
 ) -> Result<IndexClaim, IndexError> {
     Ok(IndexClaim {
@@ -5980,7 +6010,7 @@ fn project_claim_opaque(
 fn project_registration_v4_opaque(
     registrations: &mut Vec<ArtifactRegistrationV4IndexItem>,
     descriptors: &mut Vec<GluingInputDescriptorV4IndexItem>,
-    metadata: &BorrowedV4EventMetadata<'_>,
+    metadata: &impl ProjectionEventMetadataV5,
     registration: &reviewgraphen_core::BorrowedArtifactRegistrationProjectionV4<'_>,
 ) -> Result<(), IndexError> {
     let descriptor = registration
@@ -6020,7 +6050,7 @@ fn project_registration_v4_opaque(
 
 fn project_bundle_v4_opaque(
     rows: &mut ReplayProjectionRowsV5,
-    metadata: &BorrowedV4EventMetadata<'_>,
+    metadata: &impl ProjectionEventMetadataV5,
     bundle: &reviewgraphen_core::BorrowedGluingBundleProjectionV4<'_>,
 ) -> Result<(), IndexError> {
     let sequence = metadata.sequence();
@@ -6162,7 +6192,31 @@ impl ReplayProjectionRowsV5 {
         metadata: BorrowedV4EventMetadata<'_>,
         payload: CoreBorrowedProjectionPayloadV4<'_>,
     ) -> Result<(), IndexError> {
-        let view = payload.view();
+        self.confirmed_offset = self
+            .confirmed_offset
+            .checked_add(metadata.canonical_line_bytes())
+            .ok_or(IndexError::IntegerOutOfRange)?;
+        self.observe_view(&metadata, payload.view(), true)
+    }
+
+    /// Materializes one already validated, owned V5 inherited DTO through the
+    /// same closed V3/V4 row adapter used by the V4 index. The caller inserts
+    /// the event tuple separately, so this path cannot double-count or invent
+    /// envelope metadata.
+    pub(crate) fn observe_inherited_v6(
+        &mut self,
+        metadata: &reviewgraphen_core::V5ProjectionEventWitness,
+        view: BorrowedProjectionPayloadV4<'_>,
+    ) -> Result<(), IndexError> {
+        self.observe_view(metadata, view, false)
+    }
+
+    fn observe_view(
+        &mut self,
+        metadata: &impl ProjectionEventMetadataV5,
+        view: BorrowedProjectionPayloadV4<'_>,
+        record_event: bool,
+    ) -> Result<(), IndexError> {
         let kind = match &view {
             BorrowedProjectionPayloadV4::RunGenesisManifestV4(_) => "run_genesis_manifest",
             BorrowedProjectionPayloadV4::ObligationTransition(_) => "obligation_transition",
@@ -6179,27 +6233,32 @@ impl ReplayProjectionRowsV5 {
             BorrowedProjectionPayloadV4::DecisionRecordedV3(_) => "decision_recorded_v3",
             BorrowedProjectionPayloadV4::FindingRecordedV3(_) => "finding_recorded_v3",
             BorrowedProjectionPayloadV4::ArtifactRegisteredV4(_) => "artifact_registered_v4",
+            // A descriptor has no independent journal payload: it is
+            // roots/CAS-derived and attached to its V4 registration only by
+            // the terminal report authority. Refuse it at ordinary index
+            // materialization rather than projecting a detached descriptor.
+            BorrowedProjectionPayloadV4::GluingInputDescriptorV4(_) => {
+                return Err(IndexError::ProjectionContractViolation);
+            }
             BorrowedProjectionPayloadV4::GluingBundleRecordedV4(_) => "gluing_bundle_recorded_v4",
         };
-        self.confirmed_offset = self
-            .confirmed_offset
-            .checked_add(metadata.canonical_line_bytes())
-            .ok_or(IndexError::IntegerOutOfRange)?;
-        self.events.push(IndexEvent {
-            sequence: metadata.sequence(),
-            event_id: metadata.id().clone(),
-            schema: metadata.schema().to_owned(),
-            event_hash: metadata.event_hash().clone(),
-            payload_hash: metadata.payload_hash().clone(),
-            payload_kind: kind.to_owned(),
-            actor: metadata.actor().to_owned(),
-            logical_time: metadata.logical_time(),
-        });
+        if record_event {
+            self.events.push(IndexEvent {
+                sequence: metadata.sequence(),
+                event_id: metadata.id().clone(),
+                schema: metadata.schema().to_owned(),
+                event_hash: metadata.event_hash().clone(),
+                payload_hash: metadata.payload_hash().clone(),
+                payload_kind: kind.to_owned(),
+                actor: metadata.actor().to_owned(),
+                logical_time: metadata.logical_time(),
+            });
+        }
         match view {
             BorrowedProjectionPayloadV4::RunGenesisManifestV4(value) => {
                 self.artifact_registrations
                     .push(project_registration_opaque_v3(
-                        &metadata,
+                        metadata,
                         &value.genesis_artifact(),
                     )?);
             }
@@ -6213,7 +6272,7 @@ impl ReplayProjectionRowsV5 {
             }
             BorrowedProjectionPayloadV4::ArtifactRegisteredV3(value) => {
                 self.artifact_registrations
-                    .push(project_registration_opaque_v3(&metadata, &value)?);
+                    .push(project_registration_opaque_v3(metadata, &value)?);
             }
             BorrowedProjectionPayloadV4::SnapshotSourcesRecorded(value) => {
                 for entry in value.entries() {
@@ -6300,9 +6359,9 @@ impl ReplayProjectionRowsV5 {
             }
             BorrowedProjectionPayloadV4::ReviewExecutionRecorded(value) => {
                 self.executions
-                    .push(project_execution_opaque(&metadata, &value)?);
+                    .push(project_execution_opaque(metadata, &value)?);
                 for claim in value.claims() {
-                    self.claims.push(project_claim_opaque(&metadata, &claim)?);
+                    self.claims.push(project_claim_opaque(metadata, &claim)?);
                 }
             }
             BorrowedProjectionPayloadV4::EvidenceRecordedV3(value) => {
@@ -6416,12 +6475,15 @@ impl ReplayProjectionRowsV5 {
                 project_registration_v4_opaque(
                     &mut self.artifact_registrations_v4,
                     &mut self.gluing_input_descriptors,
-                    &metadata,
+                    metadata,
                     &value,
                 )?;
             }
+            BorrowedProjectionPayloadV4::GluingInputDescriptorV4(_) => {
+                return Err(IndexError::ProjectionContractViolation);
+            }
             BorrowedProjectionPayloadV4::GluingBundleRecordedV4(value) => {
-                project_bundle_v4_opaque(self, &metadata, &value)?;
+                project_bundle_v4_opaque(self, metadata, &value)?;
             }
         }
         Ok(())
@@ -6688,6 +6750,9 @@ impl ReplayPayloadChargeV5 {
             BorrowedProjectionPayloadV4::DecisionRecordedV3(_) => "decision_recorded_v3",
             BorrowedProjectionPayloadV4::FindingRecordedV3(_) => "finding_recorded_v3",
             BorrowedProjectionPayloadV4::ArtifactRegisteredV4(_) => "artifact_registered_v4",
+            BorrowedProjectionPayloadV4::GluingInputDescriptorV4(_) => {
+                return Err(IndexError::ProjectionContractViolation);
+            }
             BorrowedProjectionPayloadV4::GluingBundleRecordedV4(_) => "gluing_bundle_recorded_v4",
         };
         self.add(EVENTS, phase0_event_row(&metadata, kind)?)?;
@@ -6752,6 +6817,9 @@ impl ReplayPayloadChargeV5 {
             }
             BorrowedProjectionPayloadV4::ArtifactRegisteredV4(value) => {
                 replay_charge_m5_registration(self, &metadata, &value)?;
+            }
+            BorrowedProjectionPayloadV4::GluingInputDescriptorV4(_) => {
+                return Err(IndexError::ProjectionContractViolation);
             }
             BorrowedProjectionPayloadV4::GluingBundleRecordedV4(value) => {
                 replay_charge_m5_bundle(self, &metadata, &value)?;
@@ -8271,11 +8339,34 @@ fn build_connection(
     Ok(connection)
 }
 
-fn insert_snapshot(tx: &rusqlite::Transaction<'_>, s: &IndexSnapshotV5) -> Result<(), IndexError> {
+pub(crate) fn insert_snapshot(
+    tx: &rusqlite::Transaction<'_>,
+    s: &IndexSnapshotV5,
+) -> Result<(), IndexError> {
+    insert_snapshot_mode(tx, s, true)
+}
+
+/// Reuses the exact V5 typed-family column adapter from the V6 builder while
+/// leaving V6-owned metadata, event, program, universe and obligation rows
+/// untouched.
+pub(crate) fn insert_inherited_tables_v6(
+    tx: &rusqlite::Transaction<'_>,
+    s: &IndexSnapshotV5,
+) -> Result<(), IndexError> {
+    insert_snapshot_mode(tx, s, false)
+}
+
+fn insert_snapshot_mode(
+    tx: &rusqlite::Transaction<'_>,
+    s: &IndexSnapshotV5,
+    include_structural: bool,
+) -> Result<(), IndexError> {
     use rusqlite::params;
     let m = &s.marker;
-    tx.execute("INSERT INTO index_meta VALUES(1,5,?1,'reviewgraphen.review_event.v4','v4_gluing',?2,?3,?4,?5,?6,?7,?8)", params![m.projection_contract_version,m.run_id.to_string(),m.genesis_hash.to_string(),super::to_i64(m.confirmed_offset)?,m.tail_hash.to_string(),super::to_i64(m.event_count)?,m.policy_revision_hash.to_string(),m.authority_replay_basis_digest.to_string()]).map_err(super::map_sql)?;
-    for r in &s.events {
+    if include_structural {
+        tx.execute("INSERT INTO index_meta VALUES(1,5,?1,'reviewgraphen.review_event.v4','v4_gluing',?2,?3,?4,?5,?6,?7,?8)", params![m.projection_contract_version,m.run_id.to_string(),m.genesis_hash.to_string(),super::to_i64(m.confirmed_offset)?,m.tail_hash.to_string(),super::to_i64(m.event_count)?,m.policy_revision_hash.to_string(),m.authority_replay_basis_digest.to_string()]).map_err(super::map_sql)?;
+    }
+    for r in s.events.iter().filter(|_| include_structural) {
         tx.execute(
             "INSERT INTO events VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
@@ -8291,7 +8382,7 @@ fn insert_snapshot(tx: &rusqlite::Transaction<'_>, s: &IndexSnapshotV5) -> Resul
         )
         .map_err(super::map_sql)?;
     }
-    for r in &s.program_objects {
+    for r in s.program_objects.iter().filter(|_| include_structural) {
         tx.execute(
             "INSERT INTO program_objects VALUES(?1,?2,?3)",
             params![
@@ -8302,7 +8393,7 @@ fn insert_snapshot(tx: &rusqlite::Transaction<'_>, s: &IndexSnapshotV5) -> Resul
         )
         .map_err(super::map_sql)?;
     }
-    for r in &s.program_relations {
+    for r in s.program_relations.iter().filter(|_| include_structural) {
         tx.execute(
             "INSERT INTO program_relations VALUES(?1,?2,?3,?4,?5)",
             params![
@@ -8315,7 +8406,7 @@ fn insert_snapshot(tx: &rusqlite::Transaction<'_>, s: &IndexSnapshotV5) -> Resul
         )
         .map_err(super::map_sql)?;
     }
-    if let Some(r) = &s.universe {
+    if let Some(r) = s.universe.as_ref().filter(|_| include_structural) {
         tx.execute(
             "INSERT INTO universe VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
@@ -8331,7 +8422,7 @@ fn insert_snapshot(tx: &rusqlite::Transaction<'_>, s: &IndexSnapshotV5) -> Resul
         )
         .map_err(super::map_sql)?;
     }
-    for r in &s.obligations {
+    for r in s.obligations.iter().filter(|_| include_structural) {
         tx.execute(
             "INSERT INTO obligations VALUES(?1,?2,?3,?4,?5,?6)",
             params![

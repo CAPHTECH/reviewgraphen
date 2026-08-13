@@ -21,6 +21,7 @@
 | `reviewgraphen.report.v4.schema.json` | Closed additive M5 `reviewgraphen.review.report.v4` contract with nested input registrations/descriptors and index-v5 gluing records。 |
 | `reviewgraphen.report.v4.example.json` | Canonical conflict-path Report V4 emitted by the public journal/CAS/index/runtime/report pipeline。 |
 | `reviewgraphen.report.v4.example.sha256` | SHA-256 of the Report V4 example's canonical bytes, checked against a fresh public-pipeline generation。 |
+| `reviewgraphen.report.v5.schema.json` | Closed M6 incremental report contract. It adds the dual-run source/target authority coordinates, explicit M6 coverage axes, separate preservation registrations, and the report-only `reviewgraphen.incremental_gate.v5`. A report remains a projection: it cannot reconstruct or replace the source-bound V5 journal/index/CAS authority. |
 | `reviewgraphen.migration.schema.json` | `reviewgraphen.program_space.migration.v1` — explicit v1→v2 `MigrationRecord` output of `migrate_program_space_v1_to_v2`。 |
 | `reviewgraphen.input.example.json` | Current v2 double-submit ProgramSpace fixture, with source-traced `CapabilityDeclaration` capabilities。 |
 | `reviewgraphen.input.v1.example.json` | Preserved `reviewgraphen.program_space.input.v1` double-submit ProgramSpace fixture。 |

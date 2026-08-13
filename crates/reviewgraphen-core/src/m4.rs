@@ -2013,6 +2013,26 @@ pub fn evaluate_static_fact_v1(
     derive_static_fact_evaluation_v1(program, obligation, claim)
 }
 
+/// Executes the closed static procedure from a validated durable input. This
+/// is the host-facing deterministic half of static-M4: it cannot select the
+/// claim, obligation, candidates, or applicability inputs, which Core sealed
+/// into `StaticFactInputV1` before issuing the work request.
+pub fn evaluate_static_fact_result_from_input_v1(
+    input: &StaticFactInputV1,
+) -> Result<StaticFactResultV1> {
+    input.validate()?;
+    let applicability = if input.property_id != M4_PROPERTY_ID {
+        StaticApplicabilityV1::UnsupportedProperty
+    } else {
+        match input.candidate_invariant_ids.len() {
+            0 => StaticApplicabilityV1::Absent,
+            1 => StaticApplicabilityV1::Unique,
+            _ => StaticApplicabilityV1::Ambiguous,
+        }
+    };
+    StaticFactResultV1::from_applicability(input.claim_id.clone(), applicability)
+}
+
 pub(crate) fn reconstruct_static_evaluation_v1(
     program: &ProgramSpace,
     obligation: &Obligation,
@@ -6333,6 +6353,7 @@ impl ClaimAssessmentV3 {
     pub fn current_finding_id(&self) -> Option<&StableId> {
         self.current_finding_id.as_ref()
     }
+
     #[cfg(test)]
     pub(crate) fn configure_active_human_pointers_for_test(
         &mut self,

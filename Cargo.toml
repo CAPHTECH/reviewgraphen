@@ -5,6 +5,7 @@ members = [
     "crates/reviewgraphen-reviewer",
     "crates/reviewgraphen-verifier",
     "crates/reviewgraphen-runtime",
+    "crates/reviewgraphen-cli",
     "crates/reviewgraphen-report",
     "crates/reviewgraphen-store",
     "examples/double-submit-payment/fixture",

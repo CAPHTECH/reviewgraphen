@@ -4,6 +4,11 @@
 > Binary: `reviewgraphen`  
 > Design: CLI-first, JSON-contract-first, local-first
 
+Implementation note: ADR 0024 currently implements only the fixed offline
+reference command `review --fixture double-submit`, `schema list|print|validate`,
+and V5-report-only `gate`. All other command examples in this draft remain
+future contract, not currently accepted command syntax.
+
 ## 1. CLIの役割
 
 CLIは人間向けUIの代替ではなく、次を安定して提供するagent-facing execution surfaceです。

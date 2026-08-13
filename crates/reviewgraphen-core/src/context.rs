@@ -2738,6 +2738,19 @@ fn discover(
     let mut all = obligation.source_ids().to_vec();
     all.extend(obligation.target_refs().iter().cloned());
     all.extend(obligation.context_ids().iter().cloned());
+    // Capability-gap obligations intentionally retain the repository as
+    // their stable review source. For context construction, additionally
+    // traverse the accepted facts named by each incomplete capability
+    // declaration; this does not change the obligation/universe identity or
+    // promote the capability state, and it avoids asking a reviewer to assess
+    // an empty projection when concrete partial facts are available.
+    if obligation.property_id() == "reviewgraphen.capability_gap" {
+        for capability in obligation.required_capabilities() {
+            if let Some(declaration) = program.extraction().capabilities.get(capability) {
+                all.extend(declaration.source_ids.iter().cloned());
+            }
+        }
+    }
     all.sort();
     all.dedup();
     let seed_vector_capacity = typed_vec_capacity_bytes::<StableId>(

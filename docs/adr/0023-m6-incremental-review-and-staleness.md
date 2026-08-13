@@ -57,6 +57,18 @@ discriminator, closed enums, and sorted/unique set arrays. It contains no
 derive `body_hash=sha256(canonical complete DTO including schema/id)`; callers
 never supply it.
 
+`terminal_completed_v5` completes the pre-release V5 event vocabulary. It is
+the final, single-shot M5 cursor marker, not a claim, verification, or human
+decision. Its canonical DTO has no `body_hash`; its ID is derived from the
+canonical DTO with `schema` and `id` omitted. The complete DTO binds the source
+closure, partial plan, optional gluing-plan seal ID/body hash, exact M4 receipt
+digest, M5 branch/attempt and member event IDs, and the final cursor basis
+digest. A terminal-proof artifact
+is only a content-addressed projection receipt for this marker. ReviewGraphen
+0.1 has no released V5 persistent stores: all checked-in V5 fixtures are
+regenerated atomically with this completion. Any later V5 vocabulary widening
+requires a new event version and explicit migration.
+
 The `kind` literal is not inferred. The complete V5 ID-kind table is:
 
 | DTO | StableId kind |
@@ -76,6 +88,7 @@ The `kind` literal is not inferred. The complete V5 ID-kind table is:
 | PartialRerunPlanV5 | `partial-rerun-plan-v5` |
 | GluingRerunActionV5 | `gluing-rerun-action-v5` |
 | GluingRerunPlanSealV5 | `gluing-rerun-plan-v5` |
+| TerminalCompletedV5 | `terminal-completed-v5` |
 | IncrementalGateV5 (report only) | `incremental-gate-v5` |
 
 ### 2. Required source and resolved revision closure
@@ -342,6 +355,33 @@ PreservationAdmissionRequestV5 =
 | OutputRegistration(ArtifactRegistrationV5)
 | Verification(PreservationEvidenceV5, PreservationVerificationV5);
 ```
+
+The Store may accept fresh host material for an M6 target gluing route only as
+one non-serializable `V5GluingInputTrustInput` per displayed
+`GluingInputTrustBindingV4AtV5` tuple. Its fields are the complete tuple above
+except `registration_id`, which Core derives from the frozen V4 registration
+preimage. The constructor validates the closed source shape, policy/repository
+tuple, run/genesis/snapshot/universe/plan, descriptor CAS/media/size/
+sensitivity, context, and exact V5 predecessor hash/sequence before privately
+converting it to the replay binding. The public host input is neither a V4
+capability translation nor an append admission; it is consumed only while the
+dual-lock session mints the private roots-bound continuation. A host cannot
+provide a registration, descriptor, selected claim, section, gluing bundle,
+or serialized binding as append authority.
+
+After the second plan is durably sealed, Core exposes the first descriptive
+`M5GluingWorkRequestV5` (payment). The ui-event request is exposed only after
+the payment registration has durably advanced the target tail. This sequential
+handoff is required because each request discloses the fixed
+run/genesis/snapshot/universe/plan/context descriptor coordinates, media
+type/sensitivity, current predecessor hash/sequence, and optional selected
+claim/obligation trace; the ui-event predecessor cannot be guessed before the
+payment registration exists. A request is not a plan, claim-selection,
+registration, or append capability; it merely lets a host construct the fresh
+CAS descriptor and separately validated host trust input for that next M5
+registration. The existing V5 root is consumed and replaced only by adding
+that one validated binding; it cannot be replaced wholesale during the
+dual-lock session.
 
 The two registration event positions and verification position are consecutive
 within that obligation and are derived from `first_event_sequence`; the entry's
@@ -791,6 +831,14 @@ record kind, implicit edge direction, severity heuristic, or caller-selected
 action. A combination not represented by the closed rule or record enums is
 `unsupported_impact_policy` and uses the final conservative row.
 
+The human-resolution requirement is narrower than a record's audit closure.
+A decision/finding closure may reach its execution and plan and therefore all
+plan obligations, but human authority follows only the exact referenced
+claim's explicit obligation IDs. An unsupported impact row still schedules the
+conservative native pipeline, but cannot propagate human authority to its
+successor. This prevents source acceptance from being laundered through an
+unrelated plan obligation or an impact relation the policy cannot establish.
+
 “Active” uses the source decision/finding state recorded at the pinned source
 tail. Human authority is never carried, even if structure is preserved. Runtime
 evidence TTL is not modeled in the MVP, so there is no runtime-expiry reason or
@@ -1165,9 +1213,16 @@ PartialRerunPlanV5 {
   action_count, action_set_digest,
   preservation_verification_count, preservation_verification_digest,
   required_human_resolution_count, required_human_resolution_digest,
+  target_gluing_required: bool,
   source_ids
 }
 ```
+
+`target_gluing_required` is a required, identity-bearing field of the sealed
+partial plan. It is derived solely by the closed rule in §9.4; it is not an
+operator option, a report inference, or a default for older payloads. Its
+addition is part of the pre-release V5 completion defined by this ADR, so all
+V5 fixtures are regenerated atomically and no V4/V5 migration is provided.
 
 `subject_kind` is exactly `obligation`; IDs are
 nonempty sorted target IDs. Action is
@@ -1460,6 +1515,7 @@ partial_rerun_action_recorded_v5(PartialRerunActionV5) repeated
 partial_rerun_plan_sealed_v5(PartialRerunPlanV5)
 gluing_rerun_action_recorded_v5(GluingRerunActionV5) repeated, post-D2 only
 gluing_rerun_plan_sealed_v5(GluingRerunPlanSealV5), post-D2 only
+terminal_completed_v5(TerminalCompletedV5), final-only
 ```
 
 The pre-review M6 phases through the partial-plan seal occur in listed order;
@@ -1481,8 +1537,37 @@ recovery seam. The Completed transition must immediately follow that atomic
 event only when its parsed claim cardinality is exactly one. At zero or greater
 than one it is forbidden, the typed obstruction is report-derived from the
 durable prefix, and the reviewer action remains incomplete. Only after the
-valid transition is durable is the reviewer action complete. If
-`target_gluing_required`, the next phase is ascending derived gluing-action
+valid transition is durable is the reviewer action complete.
+For the two runtime-owned reviewer members, Core exposes a non-authorizing
+`M6ReviewerRuntimeRequestV5` derived from its private scheduled cursor. It
+contains the exact execution ID/key (plan, wave, obligation, context envelope,
+snapshot, attempt), required property, and allowed target/source scope. The
+runtime may use it to produce the closed fixed-reviewer wire and then return
+raw bytes and the parsed capability; it cannot use the request to choose a claim, record
+an execution, or append an event. Core still binds both returned values to its
+private cursor and the raw-artifact registration.
+
+After the atomic D2 claim is durable, Core likewise exposes a descriptive
+`M6NativeHarnessWorkRequestV5` containing only the exact claim ID/body and
+property required by the fixed native-fixture harness. The host may consume its
+V5 roots to add one independently validated harness tuple; Core retains all
+tail/position checks and mints the native records itself. This is necessary
+because the claim body does not exist before the scheduled D2 execution.
+
+For a sealed `static_requires_reconstruction` native action, Core exposes the
+bounded ordered `M6StaticWorkRequestV5` sequence (one current request per
+cursor). Its request binds action, obligation, claim/body, property, and the
+canonical M4 input/output CAS commitments. The host returns only opaque,
+canonical `ValidatedM6StaticResultV5` bytes. Store does not reconstruct a
+static result: Core rederives the sealed M4 input/result, compares both
+byte-for-byte, then mints the five registration/evidence/binding/verification
+members. Only after that check does Store publish the exact two bytes to its
+workspace-scoped CAS and append the prepared member. Missing, duplicate,
+mismatched, noncanonical, out-of-order, or over-limit results refuse; a static
+result can neither fabricate a pass nor select a claim, outcome, record, or
+append position.
+
+If `target_gluing_required`, the next phase is ascending derived gluing-action
 events followed by exactly one gluing-plan seal; no M4, human, gluing-input or
 M5 event may precede that second seal. If gluing is not required, both gluing
 rerun event kinds are forbidden. After the applicable second-plan condition is
@@ -1621,7 +1706,8 @@ CREATE TABLE events (
     'gluing_freshness_recorded_v5','staleness_assessment_sealed_v5',
     'artifact_registered_v5','preservation_verified_v5',
     'partial_rerun_action_recorded_v5','partial_rerun_plan_sealed_v5',
-    'gluing_rerun_action_recorded_v5','gluing_rerun_plan_sealed_v5'
+    'gluing_rerun_action_recorded_v5','gluing_rerun_plan_sealed_v5',
+    'terminal_completed_v5'
   )),
   actor TEXT NOT NULL, logical_time INTEGER NOT NULL CHECK(logical_time>=0),
   UNIQUE(sequence,event_id)
@@ -1913,6 +1999,38 @@ including a valid prefix of gluing actions and the optional gluing-plan seal, in
 event order. It refuses an incomplete pre-review M6 phase or a non-prefix,
 mismatched gluing-action phase; an exact post-D2 gluing-action prefix is exposed
 so the gate can report `gluing_plan_missing`.
+
+#### 13.x Terminal proof persistence boundary
+
+The Store may label a v6 projection `v5_terminal_proof` only when it has
+re-read a canonical `reviewgraphen.terminal_proof.v5` CAS artifact. The proof
+is emitted solely by the completed private M5 cursor and binds the complete V5
+member-event vector, run/genesis, tail, count, target plan, M6 source closure,
+partial-rerun plan, roots-derived policy digest, pre-incremental authority
+basis digest, and one of the two terminal branches (`no_gluing_required` or
+the post-partial M5 bundle attempt). The proof is a receipt for the final
+`terminal_completed_v5` marker only; Core replays that marker's exact M4
+receipt digest, pre-marker cursor basis digest, gluing decision/seal, and M5
+member suffix before issuing its opaque verified terminal receipt. On rebuild,
+Core validates the full V5 grammar and those durable witness coordinates; Store rehashes the exact CAS
+bytes and refuses absent, truncated, malformed, noncanonical, wrong-root, or
+tail-stale proofs. A `v5_current_structural` projection carries no terminal
+claim and never becomes terminal merely because its rows include a bundle.
+
+For the `gluing_bundle_recorded` branch, Core additionally derives an opaque
+`V5TerminalReviewClosure` only after that exact proof verifies. The closure is
+not a payload decoder or an append/replay capability: it carries the complete
+inherited report rows, the same durable registration witness for each replayed
+M5 descriptor, and the replay-derived V3 claim-assessment state required by
+the terminal SQLite foreign-key graph. Store may pass it only from the live
+proof-minting cursor or the full roots/CAS composite recovery. A target-only
+proof rebuild has no such authority and must refuse the gluing branch before
+projecting SQLite; it cannot substitute a terminal-marker scan, source index
+rows, or an empty assessment array. The source-bound rebuild inserts the
+closure's assessments and succeeds only when SQLite FK validation and the
+SQLite table readback agree with that exact closure. This remains an
+internal index projection seam: it does not make claim assessments V5 events
+or report result rows.
 
 Lifecycle transitions add no new DTO, SQL table or report-result array: the V5
 `events` CHECK already admits inherited `obligation_transition`, the inherited

@@ -2794,6 +2794,11 @@ pub struct GlobalCandidateV4 {
 }
 
 impl GlobalCandidateV4 {
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+
     pub(crate) fn complete_body_hash(&self) -> crate::Result<ContentHash> {
         Ok(ContentHash::sha256(&crate::canonical_json(self)?))
     }

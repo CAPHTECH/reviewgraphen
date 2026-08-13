@@ -8,6 +8,11 @@
 mod bounds;
 mod report_v3;
 mod report_v4;
+// The public V5 seam is intentionally fail-closed pending the Store-owned
+// complete inherited-target DTO continuation; its reduction helpers remain
+// exercised by unit tests meanwhile.
+#[allow(dead_code)]
+mod report_v5;
 
 pub use bounds::{
     BoundsError, LogicalCharge, OwnershipError, ReportAccounting, ReportCounts, ReportLimits,
@@ -17,6 +22,10 @@ pub use report_v3::{ReportRequestV3, generate_v3, generate_v3_with_limits};
 pub use report_v4::{
     M5BundleIncomplete, ReportLimitsV4, ReportRequestV4, ReportV4SemanticError, generate_v4,
     generate_v4_with_limits, validate_v4_semantics,
+};
+pub use report_v5::{
+    ReportAccountingV5, ReportCountsV5, ReportLimitsV5, ReportRequestV5, ReportV5SemanticError,
+    generate_v5, generate_v5_with_limits, validate_v5_semantics,
 };
 
 use reviewgraphen_core::{DecodedPayload, EventContractVersion, ObligationLifecycle, StableId};

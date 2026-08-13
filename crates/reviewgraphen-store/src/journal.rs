@@ -11,26 +11,35 @@ use super::{
 use reviewgraphen_core::{
     ArtifactRegisteredV3, ArtifactRegistrationReceiptV4, ArtifactRegistrationV3AtV4Admission,
     ArtifactRegistrationV3AtV4Receipt, ArtifactSensitivity, AuthorityArtifactResolverV3,
-    AuthorityArtifactResolverV4, AuthorityReplayBasisV3, AuthorityReplayBasisV4,
-    AuthorityTrustRootsV3, AuthorityTrustRootsV4, BuiltContextProjection, ChangeMorphismV5,
-    ContentHash, DecisionInputV3, EventAdmissions, EventCommand, EventContractVersion,
-    EventEnvelope, EventLog, EventLogV4, EventLogV5, EventReplayLimits, EventStreamGenesis,
-    ExpectedVerificationAttemptV3, ExternalWitnessAdmissionV3, FixtureExecutionReceiptV1,
-    FixtureRegistrationResumeAuthorityV3, GLUING_INPUT_MEDIA_TYPE_V4, GluingBundleReceiptV4,
-    GluingInputDescriptorV4, IncrementalSourceClosureV5, InheritedD2EventReceiptV4,
-    M5CompletedGluingProfileV4, M5DoubleSubmitAssignmentsV4, M5GluingProfileInputV4, M6Error,
-    M6MappingPhaseV5, MAX_M5_DESCRIPTOR_CANONICAL_BYTES, ObligationLifecycle,
-    OpaqueSessionIdentityV4, PreparedInheritedD2EventV4,
+    AuthorityArtifactResolverV4, AuthorityArtifactResolverV5, AuthorityHarnessBindingV3Tuple,
+    AuthorityHumanGrantV3Tuple, AuthorityReplayBasisV3, AuthorityReplayBasisV4,
+    AuthorityTrustRootsV3, AuthorityTrustRootsV4, AuthorityTrustRootsV5, BuiltContextProjection,
+    ChangeMorphismV5, ContentHash, DecisionInputV3, EventAdmissions, EventCommand,
+    EventContractVersion, EventEnvelope, EventLog, EventLogV4, EventLogV5, EventReplayLimits,
+    EventStreamGenesis, ExpectedVerificationAttemptV3, ExternalWitnessAdmissionV3,
+    ExternalWitnessAdmissionV4, FixedHumanDecisionV5, FixtureExecutionReceiptV1,
+    FixtureExecutionReceiptV4, FixtureRegistrationResumeAuthorityV3, GLUING_INPUT_MEDIA_TYPE_V4,
+    GluingBundleReceiptV4, GluingInputDescriptorV4, GluingM6ContinuationV5, HumanM6ContinuationV5,
+    IncrementalSourceClosureV5, InheritedD2EventReceiptV4, M5CompletedGluingProfileV4,
+    M5DoubleSubmitAssignmentsV4, M5GluingProfileInputV4, M5GluingWorkRequestV5, M5M6ContinuationV5,
+    M6Error, M6HumanWorkRequestV5, M6MappingPhaseV5, M6ReviewerWorkRequestV5,
+    M6StaticWorkRequestV5, MAX_M5_DESCRIPTOR_CANONICAL_BYTES, NativeM6ContinuationV5,
+    ObligationLifecycle, OpaqueSessionIdentityV4, PostPartialM6ContinuationV5, PreD2M6SessionV5,
+    PreparedGluingM6AppendV5, PreparedHumanM6AppendV5, PreparedInheritedD2EventV4,
+    PreparedM5M6AppendV5, PreparedNativeM6AppendV5, PreparedPostPartialM6AppendV5,
+    PreparedPreD2M6AppendV5, PreparedTerminalCompletedV5, RecomputedTerminalM6V5,
     RecoveredM4BundleV4Session as CoreRecoveredM4BundleV4Session, ReviewPlan, RunGenesisSnapshot,
     SnapshotSourceBundle, SnapshotSourcesRecorded, StableId, StaticFactEvaluationV1,
-    StaticVerificationAttemptInspectionV3, TrustedGluingInputAdmissionV4,
-    TrustedGluingInputSourceV4, UntrustedIncrementalMappingProposalV5,
+    StaticVerificationAttemptInspectionV3, TerminalProofV5, TrustedGluingInputAdmissionV4,
+    TrustedGluingInputSourceV4, UntrustedIncrementalMappingProposalV5, V5GluingInputTrustInput,
+    V5InheritedReportProjection, V5TerminalIndexFacts, V5TypedProjectionRecord,
     ValidatedArtifactRegistrationV3, ValidatedDecisionV3, ValidatedExecutionBundle,
-    ValidatedFindingV3, ValidatedGluingBundleV4, ValidatedVerificationBundleV3,
-    ValidatedVerificationBundleV4, VerificationAttemptStageV3, VerificationBundleReceiptV3,
-    VerificationBundleReceiptV4, VerificationBundleRecoveryV4, VerificationBundleRequestV4,
-    VerificationBundleResumeAuthorityV3, VerificationBundleResumeAuthorityV4,
-    VerifierArtifactRoleV3, canonical_json, derive_untrusted_incremental_mapping_proposal_v5,
+    ValidatedFindingV3, ValidatedFixedM6ReviewerResultV5, ValidatedGluingBundleV4,
+    ValidatedM6StaticResultV5, ValidatedVerificationBundleV3, ValidatedVerificationBundleV4,
+    VerificationAttemptStageV3, VerificationBundleReceiptV3, VerificationBundleReceiptV4,
+    VerificationBundleRecoveryV4, VerificationBundleRequestV4, VerificationBundleResumeAuthorityV3,
+    VerificationBundleResumeAuthorityV4, VerifierArtifactRoleV3, canonical_json,
+    derive_untrusted_incremental_mapping_proposal_v5,
 };
 use rustix::{
     fd::OwnedFd,
@@ -1065,6 +1074,81 @@ pub struct CompletedM5ReportAuthorityV4 {
     completed: M5CompletedGluingProfileV4,
 }
 
+/// Fresh host values for the V5 target authority domain.  This is purposefully
+/// distinct from `AuthorityTrustRootsV4`: V4 replay capabilities cannot be
+/// translated into V5 authority because V5 binds a different event-position
+/// space. Hosts schedule V5 gluing only through explicit positioned-binding
+/// inputs derived from the sealed Core work request; V4 bindings are never
+/// reused or translated.
+///
+/// ```compile_fail
+/// use reviewgraphen_store::V5AuthorityTrustInput;
+/// fn requires_clone<T: Clone>(_: T) {}
+/// fn rejected(value: V5AuthorityTrustInput) {
+///     requires_clone(value);
+/// }
+/// ```
+pub struct V5AuthorityTrustInput {
+    policy_revision_hash: ContentHash,
+    repository_id: StableId,
+    repository_source_hash: ContentHash,
+    harnesses: Vec<AuthorityHarnessBindingV3Tuple>,
+    human_grants: Vec<AuthorityHumanGrantV3Tuple>,
+    gluing_inputs: Vec<V5GluingInputTrustInput>,
+}
+
+impl V5AuthorityTrustInput {
+    pub fn new_without_gluing(
+        policy_revision_hash: ContentHash,
+        repository_id: StableId,
+        repository_source_hash: ContentHash,
+        harnesses: Vec<AuthorityHarnessBindingV3Tuple>,
+        human_grants: Vec<AuthorityHumanGrantV3Tuple>,
+    ) -> Self {
+        Self {
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            gluing_inputs: Vec::new(),
+        }
+    }
+
+    /// Fresh, V5-positioned host roots for the required target-gluing branch.
+    /// Each input has already been validated by Core and remains a
+    /// non-serializable host capability rather than a registration DTO.
+    pub fn new_with_gluing(
+        policy_revision_hash: ContentHash,
+        repository_id: StableId,
+        repository_source_hash: ContentHash,
+        harnesses: Vec<AuthorityHarnessBindingV3Tuple>,
+        human_grants: Vec<AuthorityHumanGrantV3Tuple>,
+        gluing_inputs: Vec<V5GluingInputTrustInput>,
+    ) -> Self {
+        Self {
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            harnesses,
+            human_grants,
+            gluing_inputs,
+        }
+    }
+
+    fn into_roots(self) -> Result<AuthorityTrustRootsV5, IncrementalSessionError> {
+        AuthorityTrustRootsV5::new_with_gluing(
+            self.policy_revision_hash,
+            self.repository_id,
+            self.repository_source_hash,
+            self.harnesses,
+            self.human_grants,
+            self.gluing_inputs,
+        )
+        .map_err(|_| IncrementalSessionError::Authority("V5 host roots are invalid"))
+    }
+}
+
 pub enum M5ReportAuthorityInspectionV4 {
     Complete(Box<CompletedM5ReportAuthorityV4>),
     Incomplete { registered_inputs: u64 },
@@ -1113,7 +1197,930 @@ pub struct AcceptedIncrementalMappingV5<'root, 'roots, 'index> {
     accounting: DualSessionAccountingV5,
 }
 
-impl AcceptedIncrementalMappingV5<'_, '_, '_> {
+/// Store-owned result of a roots/CAS replay and deterministic M6 reduction.
+/// It retains the accepted dual-prefix mapping owner, so its typed phase
+/// accessors cannot be detached from the journal/index locks that admitted
+/// their structural inputs.
+///
+/// ```compile_fail
+/// use reviewgraphen_store::AcceptedTerminalM6V5;
+/// fn requires_clone<T: Clone>(_: T) {}
+/// fn rejected(value: AcceptedTerminalM6V5<'_, '_, '_>) {
+///     requires_clone(value);
+///     let _ = serde_json::to_vec(&value);
+/// }
+/// ```
+pub struct AcceptedTerminalM6V5<'root, 'roots, 'index> {
+    mapping: AcceptedIncrementalMappingV5<'root, 'roots, 'index>,
+    recomputed: Option<RecomputedTerminalM6V5>,
+    // Fresh V5 roots are retained through the lock-contiguous transition;
+    // they are never reconstructed from a V4 capability.
+    _roots: AuthorityTrustRootsV5,
+    _resolver: JournalAuthorityResolverV5<'root>,
+}
+
+/// Store-minted, dual-lock report authority for a terminal V5 target.
+///
+/// This value is intentionally neither cloneable nor serializable. It owns
+/// the source V4 shared-lock replay, target V5 exclusive-lock replay, and the
+/// source index image revalidated against that same source prefix. The rows
+/// are immutable descriptive DTOs only; they never provide append or recovery
+/// authority once this owner is dropped.
+pub struct V5TerminalReportAuthority<'root, 'roots, 'index> {
+    _source_index: crate::ValidatedIndexSnapshotV5<'index, 'root, 'roots>,
+    _source_session: PinnedV4SourceSession<'root, 'roots>,
+    _target_session: ReplayedV5RunSession,
+    source_rows: crate::IndexSnapshotV5,
+    target_inherited: Vec<V5InheritedReportProjection>,
+    target_rows: Vec<V5TypedProjectionRecord>,
+    target_facts: V5TerminalIndexFacts,
+    terminal_proof: TerminalProofV5,
+    // This receipt is minted only by the V6 terminal rebuild while this
+    // authority retains both source/target locks.  It is not a caller input
+    // and its snapshot hash is the only target index coordinate Report may
+    // emit.
+    terminal_index_rebuild: Option<crate::IndexRebuildReceiptV6Terminal>,
+    report_accounting: Option<V5TerminalReportAccounting>,
+}
+
+/// Complete immutable rows borrowed while a
+/// [`V5TerminalReportAuthority`] retains both locks. A report reducer cannot
+/// replace them with detached metadata, generic JSON, or caller coordinates.
+pub struct V5TerminalReportRows<'a> {
+    pub source_v4: &'a crate::IndexSnapshotV5,
+    pub target_inherited: &'a [V5InheritedReportProjection],
+    pub target_v5: &'a [V5TypedProjectionRecord],
+    /// Accepted target genesis facts rebuilt by Core only after the locked
+    /// terminal proof validates the complete suffix. This is descriptive
+    /// report input, never a replay or append capability.
+    pub target_facts: &'a V5TerminalIndexFacts,
+    pub terminal_proof: &'a TerminalProofV5,
+}
+
+/// Opaque lock-contiguous M6 production continuation after the pre-D2 prefix
+/// has been durably published.  The Core phase and basis remain private; each
+/// public method advances only its canonical next durable member.
+pub struct IncrementalProductionSessionV5<'root, 'roots, 'index> {
+    mapping: Box<AcceptedIncrementalMappingV5<'root, 'roots, 'index>>,
+    core: PreD2M6SessionV5,
+    // Kept with the writable target session so a subsequent opaque Core
+    // continuation can reopen only the workspace-scoped V5 resolver against
+    // the same accepted authority roots.
+    _roots: AuthorityTrustRootsV5,
+    _resolver: JournalAuthorityResolverV5<'root>,
+}
+
+/// Opaque post-partial reviewer continuation. The accepted dual-prefix
+/// mapping remains owned for its entire lifetime, keeping the source shared
+/// lock and target writer lock live while runtime work is admitted.
+pub struct PostPartialProductionSessionV5<'root, 'roots, 'index> {
+    mapping: Box<AcceptedIncrementalMappingV5<'root, 'roots, 'index>>,
+    core: PostPartialM6ContinuationV5,
+    _roots: AuthorityTrustRootsV5,
+    resolver: JournalAuthorityResolverV5<'root>,
+}
+
+/// Opaque fixed-route native verifier continuation. It retains the same
+/// accepted dual-prefix mapping, V5 roots, and workspace-scoped CAS resolver
+/// through every native-verifier event.
+pub struct NativeProductionSessionV5<'root, 'roots, 'index> {
+    mapping: Box<AcceptedIncrementalMappingV5<'root, 'roots, 'index>>,
+    core: NativeM6ContinuationV5,
+    roots: AuthorityTrustRootsV5,
+    resolver: JournalAuthorityResolverV5<'root>,
+}
+
+/// Opaque target-gluing continuation. It owns the exact Core-selected second
+/// plan; callers can only append its next action/seal before proceeding to
+/// native verification.
+pub struct GluingProductionSessionV5<'root, 'roots, 'index> {
+    mapping: Box<AcceptedIncrementalMappingV5<'root, 'roots, 'index>>,
+    core: GluingM6ContinuationV5,
+    roots: AuthorityTrustRootsV5,
+    resolver: JournalAuthorityResolverV5<'root>,
+}
+
+pub struct HumanProductionSessionV5<'root, 'roots, 'index> {
+    mapping: Box<AcceptedIncrementalMappingV5<'root, 'roots, 'index>>,
+    core: HumanM6ContinuationV5,
+    _roots: AuthorityTrustRootsV5,
+    resolver: JournalAuthorityResolverV5<'root>,
+}
+
+pub struct M5ProductionSessionV5<'root, 'roots, 'index> {
+    mapping: Box<AcceptedIncrementalMappingV5<'root, 'roots, 'index>>,
+    core: M5M6ContinuationV5,
+    _roots: AuthorityTrustRootsV5,
+    _resolver: JournalAuthorityResolverV5<'root>,
+}
+
+/// Content-addressed receipt for the final terminal marker. The proof remains
+/// non-authorizing: report/recovery must still reopen and validate the dual
+/// source/target prefix before using it.
+pub struct PersistedTerminalProofV5 {
+    proof: TerminalProofV5,
+    cas: CasReceipt,
+    accounting: V5TerminalReportAccounting,
+    terminal_review_closure: reviewgraphen_core::V5TerminalReviewClosure,
+    completed_m5_bundle: Option<Box<reviewgraphen_core::GluingBundleV4>>,
+    completed_gluing_inputs: Vec<(
+        reviewgraphen_core::ArtifactRegistrationV4,
+        reviewgraphen_core::GluingInputDescriptorV4,
+    )>,
+}
+
+/// Recovery receipt for the narrow crash interval after the terminal marker
+/// is durable but before its deterministic proof is published to CAS.  It is
+/// intentionally not report authority: source/M4 authority and its measured
+/// dual-session accounting must still be reopened through
+/// [`CompletedM5ReportAuthorityV4`].
+#[derive(Clone, Debug)]
+pub struct RecoveredTerminalProofV5 {
+    proof: TerminalProofV5,
+    cas: CasReceipt,
+}
+
+impl RecoveredTerminalProofV5 {
+    #[must_use]
+    pub const fn proof(&self) -> &TerminalProofV5 {
+        &self.proof
+    }
+
+    #[must_use]
+    pub const fn cas(&self) -> &CasReceipt {
+        &self.cas
+    }
+}
+
+impl PersistedTerminalProofV5 {
+    #[must_use]
+    pub const fn proof(&self) -> &TerminalProofV5 {
+        &self.proof
+    }
+
+    #[must_use]
+    pub const fn cas(&self) -> &CasReceipt {
+        &self.cas
+    }
+
+    #[must_use]
+    pub const fn accounting(&self) -> V5TerminalReportAccounting {
+        self.accounting
+    }
+
+    #[must_use]
+    pub const fn terminal_review_closure(&self) -> &reviewgraphen_core::V5TerminalReviewClosure {
+        &self.terminal_review_closure
+    }
+
+    /// Descriptive M5 result captured only from the live roots/CAS-derived
+    /// cursor that issued this proof. It is not reconstructed from the raw
+    /// terminal journal payload.
+    #[must_use]
+    pub fn completed_m5_bundle(&self) -> Option<&reviewgraphen_core::GluingBundleV4> {
+        self.completed_m5_bundle.as_deref()
+    }
+
+    #[must_use]
+    pub fn completed_gluing_inputs(
+        &self,
+    ) -> &[(
+        reviewgraphen_core::ArtifactRegistrationV4,
+        reviewgraphen_core::GluingInputDescriptorV4,
+    )] {
+        &self.completed_gluing_inputs
+    }
+}
+
+impl<'root, 'roots, 'index> IncrementalProductionSessionV5<'root, 'roots, 'index> {
+    /// Appends exactly the next sealed partial-rerun action or plan member.
+    pub fn append_next_partial(mut self) -> Result<Self, IncrementalSessionError> {
+        self.mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = self
+                    .core
+                    .prepare_partial_append(session.log())
+                    .map_err(JournalError::Domain)?;
+                session
+                    .append_partial_m6(prepared, &mut self.core)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        Ok(self)
+    }
+
+    /// Consumes the sealed partial phase into the opaque scheduled reviewer
+    /// cursor. Refuses while even one partial action/plan member remains.
+    pub fn begin_post_partial(
+        mut self,
+    ) -> Result<PostPartialProductionSessionV5<'root, 'roots, 'index>, IncrementalSessionError>
+    {
+        let core = self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                Ok(self
+                    .core
+                    .begin_post_partial(session.log())
+                    .map_err(JournalError::Domain)?)
+            })?;
+        Ok(PostPartialProductionSessionV5 {
+            mapping: self.mapping,
+            core,
+            _roots: self._roots,
+            resolver: self._resolver,
+        })
+    }
+}
+
+impl<'root, 'roots, 'index> PostPartialProductionSessionV5<'root, 'roots, 'index> {
+    pub fn next_reviewer_work(&self) -> Result<M6ReviewerWorkRequestV5, IncrementalSessionError> {
+        self.core
+            .next_reviewer_work()
+            .map_err(JournalError::Domain)
+            .map_err(Into::into)
+    }
+
+    pub fn append_reviewer_automatic(mut self) -> Result<Self, IncrementalSessionError> {
+        let resolver = &self.resolver;
+        self.mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = self
+                    .core
+                    .prepare_automatic(session.log(), resolver)
+                    .map_err(JournalError::Domain)?;
+                session
+                    .append_post_partial_m6(prepared, &mut self.core)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        Ok(self)
+    }
+
+    pub fn append_reviewer_raw(
+        mut self,
+        raw_bytes: &[u8],
+    ) -> Result<Self, IncrementalSessionError> {
+        // The following structured-execution admission resolves the exact raw
+        // hash through workspace CAS. Publish these caller-supplied bytes
+        // before recording their registration; an interrupted call may leave
+        // only an unreferenced immutable CAS object, never a dangling durable
+        // registration.
+        let raw_hash = ContentHash::sha256(raw_bytes);
+        let raw_size = u64::try_from(raw_bytes.len()).map_err(|_| {
+            IncrementalSessionError::Authority("reviewer raw byte length does not fit u64")
+        })?;
+        CasStore::open(self.mapping.proof.root)
+            .map_err(JournalError::Store)?
+            .put(
+                &CasHash::parse(raw_hash.to_string()).map_err(JournalError::Store)?,
+                Some(raw_size),
+                std::io::Cursor::new(raw_bytes),
+            )
+            .map_err(JournalError::Store)?;
+        self.mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = self
+                    .core
+                    .prepare_reviewer_raw(session.log(), raw_bytes)
+                    .map_err(JournalError::Domain)?;
+                session
+                    .append_post_partial_m6(prepared, &mut self.core)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        Ok(self)
+    }
+
+    pub fn append_fixed_reviewer_execution(
+        mut self,
+        result: ValidatedFixedM6ReviewerResultV5,
+    ) -> Result<Self, IncrementalSessionError> {
+        let resolver = &self.resolver;
+        self.mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = self
+                    .core
+                    .prepare_fixed_reviewer_execution(session.log(), resolver, result)
+                    .map_err(JournalError::Domain)?;
+                session
+                    .append_post_partial_m6(prepared, &mut self.core)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        Ok(self)
+    }
+
+    /// Consumes a completed scheduled-reviewer phase into its native verifier
+    /// route. Core refuses this route when the sealed partial plan requires a
+    /// gluing phase, so this cannot silently skip a required M5 check.
+    pub fn begin_native(
+        mut self,
+    ) -> Result<NativeProductionSessionV5<'root, 'roots, 'index>, IncrementalSessionError> {
+        let core = self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                Ok(self
+                    .core
+                    .begin_native(session.log(), &self._roots)
+                    .map_err(JournalError::Domain)?)
+            })?;
+        Ok(NativeProductionSessionV5 {
+            mapping: self.mapping,
+            core,
+            roots: self._roots,
+            resolver: self.resolver,
+        })
+    }
+
+    /// Opens the Core-derived second gluing plan. This route is the only
+    /// production continuation when the sealed partial plan requires target
+    /// gluing; no caller-supplied claims, sections, or M5 DTOs are accepted.
+    pub fn begin_gluing(
+        self,
+    ) -> Result<GluingProductionSessionV5<'root, 'roots, 'index>, IncrementalSessionError> {
+        let core = self.core.begin_gluing()?;
+        Ok(GluingProductionSessionV5 {
+            mapping: self.mapping,
+            core,
+            roots: self._roots,
+            resolver: self.resolver,
+        })
+    }
+}
+
+impl<'root, 'roots, 'index> GluingProductionSessionV5<'root, 'roots, 'index> {
+    /// Exact number of Core-derived action/seal members remaining in the
+    /// sealed post-D2 gluing suffix.
+    #[must_use]
+    pub fn gluing_member_count(&self) -> usize {
+        self.core.gluing_member_count()
+    }
+
+    /// Reads every exact native harness contract before the host supplies
+    /// their corresponding claim-bound trust roots.
+    pub fn harness_work_requests(
+        &mut self,
+    ) -> Result<Vec<reviewgraphen_core::M6NativeHarnessWorkRequestV5>, IncrementalSessionError>
+    {
+        Ok(self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                Ok(self
+                    .core
+                    .harness_work_requests(session.log())
+                    .map_err(JournalError::Domain)?)
+            })?)
+    }
+
+    pub fn with_harness(
+        mut self,
+        harness: AuthorityHarnessBindingV3Tuple,
+    ) -> Result<Self, IncrementalSessionError> {
+        self.roots = self
+            .roots
+            .with_added_harness(harness)
+            .map_err(JournalError::Domain)?;
+        Ok(self)
+    }
+
+    /// Reads the first Core-derived target-M5 descriptor contract after the
+    /// second plan has sealed. The later contract is intentionally withheld
+    /// until the first durable registration fixes its predecessor.
+    pub fn next_m5_work_request(
+        mut self,
+    ) -> Result<(Self, M5GluingWorkRequestV5), IncrementalSessionError> {
+        let requests = self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                Ok(self
+                    .core
+                    .next_m5_work_request(session.log())
+                    .map_err(JournalError::Domain)?)
+            })?;
+        Ok((self, requests))
+    }
+
+    /// Adds the host's descriptor trust binding for the first exact M5
+    /// coordinate. Core still derives the registration and validates the
+    /// binding when the M5 cursor opens; this method neither appends nor
+    /// accepts caller-supplied M5 records.
+    pub fn with_gluing_input(
+        mut self,
+        input: V5GluingInputTrustInput,
+    ) -> Result<Self, IncrementalSessionError> {
+        self.roots = self
+            .roots
+            .with_added_gluing_input(input)
+            .map_err(JournalError::Domain)?;
+        Ok(self)
+    }
+
+    /// Appends precisely the next Core-derived gluing action or the second
+    /// plan seal. Core refuses after the seal, before all D2 claims, or when
+    /// the durable suffix diverges from the rederived first-missing member.
+    pub fn append_next(mut self) -> Result<Self, IncrementalSessionError> {
+        self.mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = self
+                    .core
+                    .prepare_next(session.log())
+                    .map_err(JournalError::Domain)?;
+                session
+                    .append_gluing_m6(prepared, &mut self.core)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        Ok(self)
+    }
+
+    /// Enters the native verifier route only after the second plan is sealed.
+    pub fn begin_native(
+        mut self,
+    ) -> Result<NativeProductionSessionV5<'root, 'roots, 'index>, IncrementalSessionError> {
+        let core = self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                Ok(self
+                    .core
+                    .begin_native(session.log(), &self.roots)
+                    .map_err(JournalError::Domain)?)
+            })?;
+        Ok(NativeProductionSessionV5 {
+            mapping: self.mapping,
+            core,
+            roots: self.roots,
+            resolver: self.resolver,
+        })
+    }
+}
+
+impl<'root, 'roots, 'index> NativeProductionSessionV5<'root, 'roots, 'index> {
+    /// Returns the one current static reconstruction contract, if the sealed
+    /// native cursor is waiting for a static-M4 member.  The request carries
+    /// stable identity plus the Core-derived input/output commitments only.
+    pub fn next_static_work_request(
+        &self,
+    ) -> Result<Option<M6StaticWorkRequestV5>, IncrementalSessionError> {
+        self.core
+            .next_static_work_request()
+            .map_err(JournalError::Domain)
+            .map_err(Into::into)
+    }
+
+    pub fn next_harness_work_request(
+        &self,
+    ) -> Result<Option<reviewgraphen_core::M6NativeHarnessWorkRequestV5>, IncrementalSessionError>
+    {
+        self.core
+            .next_harness_work_request()
+            .map_err(JournalError::Domain)
+            .map_err(Into::into)
+    }
+
+    pub fn with_harness(
+        mut self,
+        harness: AuthorityHarnessBindingV3Tuple,
+    ) -> Result<Self, IncrementalSessionError> {
+        self.roots = self
+            .roots
+            .with_added_harness(harness)
+            .map_err(JournalError::Domain)?;
+        Ok(self)
+    }
+
+    /// Appends exactly one Core-minted native verifier member. Calling after
+    /// completion is a typed Core sequence refusal.
+    pub fn append_next(mut self) -> Result<Self, IncrementalSessionError> {
+        let resolver = &self.resolver;
+        self.mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = self
+                    .core
+                    .prepare_next(session.log(), resolver)
+                    .map_err(JournalError::Domain)?;
+                session
+                    .append_native_m6(prepared, &mut self.core)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        Ok(self)
+    }
+
+    /// Accepts opaque canonical host bytes only after Core proves they are
+    /// the complete reconstruction of the current sealed static action.
+    /// The Store publishes exactly those verified bytes to its scoped CAS and
+    /// then persists the Core-minted next native member.
+    pub fn append_static_result(
+        mut self,
+        result: ValidatedM6StaticResultV5,
+    ) -> Result<Self, IncrementalSessionError> {
+        self.mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = self
+                    .core
+                    .prepare_static(session.log(), &result)
+                    .map_err(JournalError::Domain)?;
+                for bytes in [result.input_bytes(), result.output_bytes()] {
+                    let hash = ContentHash::sha256(bytes);
+                    let expected = CasHash::parse(hash.to_string()).map_err(JournalError::Store)?;
+                    let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                    CasStore::open(self.mapping.proof.root)
+                        .map_err(JournalError::Store)?
+                        .put(&expected, Some(size), std::io::Cursor::new(bytes))
+                        .map_err(JournalError::Store)?;
+                }
+                session
+                    .append_native_m6(prepared, &mut self.core)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        Ok(self)
+    }
+
+    pub fn begin_human(
+        mut self,
+    ) -> Result<HumanProductionSessionV5<'root, 'roots, 'index>, IncrementalSessionError> {
+        let core = self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                Ok(self
+                    .core
+                    .begin_human(session.log(), &self.roots)
+                    .map_err(JournalError::Domain)?)
+            })?;
+        Ok(HumanProductionSessionV5 {
+            mapping: self.mapping,
+            core,
+            _roots: self.roots,
+            resolver: self.resolver,
+        })
+    }
+}
+
+impl<'root, 'roots, 'index> HumanProductionSessionV5<'root, 'roots, 'index> {
+    pub fn with_human_grant(
+        mut self,
+        grant: AuthorityHumanGrantV3Tuple,
+    ) -> Result<Self, IncrementalSessionError> {
+        self._roots = self
+            ._roots
+            .with_added_human_grant(grant)
+            .map_err(JournalError::Domain)?;
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn next_human_work(&self) -> M6HumanWorkRequestV5 {
+        self.core.next_human_work()
+    }
+
+    pub fn append_decision(
+        mut self,
+        decision: FixedHumanDecisionV5,
+    ) -> Result<Self, IncrementalSessionError> {
+        let roots = &self._roots;
+        self.mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = self
+                    .core
+                    .prepare_decision(session.log(), roots, decision)
+                    .map_err(JournalError::Domain)?;
+                session
+                    .append_human_m6(prepared, &mut self.core, roots)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        Ok(self)
+    }
+
+    pub fn append_derived_finding(mut self) -> Result<Self, IncrementalSessionError> {
+        let roots = &self._roots;
+        self.mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = self
+                    .core
+                    .prepare_derived_finding(session.log(), roots)
+                    .map_err(JournalError::Domain)?;
+                session
+                    .append_human_m6(prepared, &mut self.core, roots)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        Ok(self)
+    }
+
+    pub fn begin_m5(
+        mut self,
+    ) -> Result<M5ProductionSessionV5<'root, 'roots, 'index>, IncrementalSessionError> {
+        let roots = &self._roots;
+        let resolver = &self.resolver;
+        let core = self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                Ok(self
+                    .core
+                    .begin_m5(session.log(), roots, resolver)
+                    .map_err(JournalError::Domain)?)
+            })?;
+        Ok(M5ProductionSessionV5 {
+            mapping: self.mapping,
+            core,
+            _roots: self._roots,
+            _resolver: self.resolver,
+        })
+    }
+}
+
+impl M5ProductionSessionV5<'_, '_, '_> {
+    /// Returns the sole descriptor contract valid at the current durable
+    /// tail, if one registration remains.
+    pub fn next_gluing_work_request(
+        &mut self,
+    ) -> Result<Option<M5GluingWorkRequestV5>, IncrementalSessionError> {
+        Ok(self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                Ok(self
+                    .core
+                    .next_gluing_work_request(session.log())
+                    .map_err(JournalError::Domain)?)
+            })?)
+    }
+
+    /// Admits one host-created descriptor binding for the current request.
+    /// The append remains Core-minted and the descriptor is later re-read
+    /// from the workspace-scoped CAS resolver.
+    pub fn with_gluing_input(
+        mut self,
+        input: V5GluingInputTrustInput,
+    ) -> Result<Self, IncrementalSessionError> {
+        self._roots = self
+            ._roots
+            .with_added_gluing_input(input)
+            .map_err(JournalError::Domain)?;
+        Ok(self)
+    }
+
+    /// Appends the next Core-derived M5 target input registration or atomic
+    /// bundle. Returns `false` once that sealed phase is complete; only the
+    /// terminal marker may then be appended.
+    pub fn append_next(&mut self) -> Result<bool, IncrementalSessionError> {
+        let roots = &self._roots;
+        let resolver = &self._resolver;
+        Ok(self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let Some(prepared) = self
+                    .core
+                    .prepare_next(session.log(), roots, resolver)
+                    .map_err(JournalError::Domain)?
+                else {
+                    return Ok(false);
+                };
+                session
+                    .append_m5_m6(prepared, &mut self.core, roots, resolver)
+                    .map_err(crate::IndexError::Journal)?;
+                Ok(true)
+            })?)
+    }
+
+    /// Durably writes Core's terminal marker and returns its non-authorizing
+    /// proof. The terminal authority remains the retained dual-lock path.
+    pub fn append_terminal_marker(
+        mut self,
+    ) -> Result<PersistedTerminalProofV5, IncrementalSessionError> {
+        let proof = self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = self
+                    .core
+                    .prepare_terminal_marker(session.log())
+                    .map_err(JournalError::Domain)?;
+                session
+                    .append_terminal_marker_m6(prepared, &self.core)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        let completed_m5_bundle = self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                Ok(self
+                    .core
+                    .completed_bundle_for_report(session.log())
+                    .map_err(JournalError::Domain)?)
+            })?;
+        let completed_gluing_inputs =
+            self.mapping
+                .proof
+                .target_index
+                .with_session_mut(|session| {
+                    Ok(self
+                        .core
+                        .completed_gluing_inputs_for_report(session.log())
+                        .map_err(JournalError::Domain)?)
+                })?;
+        let terminal_review_closure =
+            self.mapping
+                .proof
+                .target_index
+                .with_session_mut(|session| {
+                    Ok(self
+                        .core
+                        .terminal_review_closure_for_store(session.log(), &proof)
+                        .map_err(JournalError::Domain)?)
+                })?;
+        // Contract-test crash seam: the terminal marker has already reached
+        // the durable journal, but no proof bytes have been handed to CAS.
+        // Production has no such branch; recovery must be able to recreate
+        // the exact proof solely from the marker-bound canonical prefix.
+        #[cfg(any(test, feature = "test-support"))]
+        self.mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                if session
+                    .writer
+                    .take_fault(AppendFault::TerminalProofBeforeCas)
+                {
+                    return Err(crate::IndexError::Journal(JournalError::Io(
+                        injected_io_error("terminal proof before CAS publication"),
+                    )));
+                }
+                Ok(())
+            })?;
+        let bytes = proof.canonical_bytes().map_err(JournalError::Domain)?;
+        // The proof body hash commits its identity. CAS instead addresses
+        // the complete canonical proof artifact, which includes that field.
+        let expected =
+            CasHash::parse(ContentHash::sha256(&bytes).to_string()).map_err(JournalError::Store)?;
+        let declared_size =
+            u64::try_from(bytes.len()).map_err(|_| IncrementalSessionError::Incomplete {
+                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                observed: u64::MAX,
+            })?;
+        let cas = CasStore::open(self.mapping.proof.root)
+            .map_err(JournalError::Store)?
+            .put(&expected, Some(declared_size), std::io::Cursor::new(bytes))
+            .map_err(JournalError::Store)?;
+        Ok(PersistedTerminalProofV5 {
+            proof,
+            cas,
+            accounting: self.mapping.accounting.into(),
+            terminal_review_closure,
+            completed_m5_bundle: completed_m5_bundle.map(Box::new),
+            completed_gluing_inputs,
+        })
+    }
+}
+
+impl<'root, 'roots, 'index> AcceptedTerminalM6V5<'root, 'roots, 'index> {
+    #[must_use]
+    pub const fn closure(&self) -> &IncrementalSourceClosureV5 {
+        self.recomputed
+            .as_ref()
+            .expect("accepted terminal M6 phases are consumed only after durable pre-D2 append")
+            .closure()
+    }
+
+    #[must_use]
+    pub const fn mapping_phase(&self) -> &M6MappingPhaseV5 {
+        self.recomputed
+            .as_ref()
+            .expect("accepted terminal M6 phases")
+            .mapping()
+    }
+
+    #[must_use]
+    pub const fn correspondence(&self) -> &reviewgraphen_core::M6ObligationCorrespondencePhaseV5 {
+        self.recomputed
+            .as_ref()
+            .expect("accepted terminal M6 phases")
+            .correspondence()
+    }
+
+    #[must_use]
+    pub const fn staleness(&self) -> &reviewgraphen_core::M6StalenessPhaseV5 {
+        self.recomputed
+            .as_ref()
+            .expect("accepted terminal M6 phases")
+            .staleness()
+    }
+
+    #[must_use]
+    pub const fn preservation(&self) -> &reviewgraphen_core::M6PreservationPhaseV5 {
+        self.recomputed
+            .as_ref()
+            .expect("accepted terminal M6 phases")
+            .preservation()
+    }
+
+    #[must_use]
+    pub fn partial_actions(&self) -> &[reviewgraphen_core::PartialRerunActionV5] {
+        self.recomputed
+            .as_ref()
+            .expect("accepted terminal M6 phases")
+            .partial_actions()
+    }
+
+    #[must_use]
+    pub const fn partial_plan(&self) -> &reviewgraphen_core::PartialRerunPlanV5 {
+        self.recomputed
+            .as_ref()
+            .expect("accepted terminal M6 phases")
+            .partial_plan()
+    }
+
+    #[must_use]
+    pub const fn working_peak_bytes(&self) -> u64 {
+        self.mapping.working_peak_bytes()
+    }
+
+    /// Compares a recovered durable V5 terminal against the retained,
+    /// roots/CAS-recomputed M6 DTOs.  This is deliberately verification-only;
+    /// it has no append authority and accepts no caller-supplied phase body.
+    pub fn validate_durable_authority_rows(
+        &self,
+        recovered: &EventLogV5,
+    ) -> Result<(), IncrementalSessionError> {
+        self.recomputed
+            .as_ref()
+            .ok_or(IncrementalSessionError::Authority(
+                "pre-D2 M6 phases were already consumed",
+            ))?
+            .validate_durable_authority_rows(recovered)
+            .map_err(|_| {
+                IncrementalSessionError::Authority(
+                    "durable M6 authority rows differ from roots/CAS recomputation",
+                )
+            })
+    }
+
+    /// Persists the closure, mapping, correspondence, and staleness prefix as
+    /// one exact Core-issued pre-D2 candidate.  This consumes the ephemeral
+    /// replay basis so the same phase cannot be appended twice; the owning
+    /// target index session keeps its lock and writer until confirmation.
+    pub fn append_pre_d2_m6(
+        mut self,
+    ) -> Result<IncrementalProductionSessionV5<'root, 'roots, 'index>, IncrementalSessionError>
+    {
+        let recomputed = self
+            .recomputed
+            .take()
+            .ok_or(IncrementalSessionError::Authority(
+                "pre-D2 M6 append already consumed",
+            ))?;
+        let core = self
+            .mapping
+            .proof
+            .target_index
+            .with_session_mut(|session| {
+                let prepared = recomputed
+                    .prepare_pre_d2_append(session.log())
+                    .map_err(JournalError::Domain)?;
+                session
+                    .append_pre_d2_m6(prepared)
+                    .map_err(crate::IndexError::Journal)
+            })?;
+        Ok(IncrementalProductionSessionV5 {
+            mapping: Box::new(self.mapping),
+            core,
+            _roots: self._roots,
+            _resolver: self._resolver,
+        })
+    }
+}
+
+impl<'root, 'roots, 'index> AcceptedIncrementalMappingV5<'root, 'roots, 'index> {
     #[must_use]
     pub const fn closure(&self) -> &IncrementalSourceClosureV5 {
         let _ = &self.proof;
@@ -1134,6 +2141,41 @@ impl AcceptedIncrementalMappingV5<'_, '_, '_> {
     pub const fn working_peak_bytes(&self) -> u64 {
         self.accounting.peak_bytes
     }
+
+    /// Consumes this accepted dual-prefix owner into the no-gluing terminal
+    /// replay factory.  The fresh V5 host input is converted only inside this
+    /// lock-contiguous Store seam, and the CAS resolver remains workspace
+    /// scoped.  No V4 trust capability is accepted or translated here.
+    pub fn recompute_terminal_m6_no_gluing(
+        self,
+        host: V5AuthorityTrustInput,
+        assessment_time: &str,
+    ) -> Result<AcceptedTerminalM6V5<'root, 'roots, 'index>, IncrementalSessionError> {
+        let roots = host.into_roots()?;
+        let resolver = JournalAuthorityResolverV5 {
+            reader: CasReader::open_existing(self.proof.root).map_err(|_| {
+                IncrementalSessionError::Authority("V5 authority CAS is unavailable")
+            })?,
+        };
+        let recomputed = self
+            .proof
+            .target_index
+            .event_log()
+            .recompute_terminal_m6_no_gluing_v5(
+                self.proof._source_session.log(),
+                self.proposal.closure(),
+                self.proposal.mapping_phase(),
+                &resolver,
+                &roots,
+                assessment_time,
+            )?;
+        Ok(AcceptedTerminalM6V5 {
+            mapping: self,
+            recomputed: Some(recomputed),
+            _roots: roots,
+            _resolver: resolver,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1150,6 +2192,42 @@ struct DualSessionAccountingV5 {
     target_event_line_bytes: u64,
     mapping_reservation_bytes: u64,
     peak_bytes: u64,
+}
+
+/// Read-only measured dual-session terms retained with a V5 terminal proof.
+/// This is descriptive accounting only; it neither exposes the sessions nor
+/// grants replay, append, or CAS access to a report consumer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct V5TerminalReportAccounting {
+    pub source_journal_bytes: u64,
+    pub target_journal_bytes: u64,
+    pub source_index_bytes: u64,
+    pub target_index_bytes: u64,
+    pub source_index_owned_bytes: u64,
+    pub target_index_owned_bytes: u64,
+    pub source_cas_bytes: u64,
+    pub target_cas_bytes: u64,
+    pub source_event_line_bytes: u64,
+    pub target_event_line_bytes: u64,
+    pub mapping_reservation_bytes: u64,
+}
+
+impl From<DualSessionAccountingV5> for V5TerminalReportAccounting {
+    fn from(value: DualSessionAccountingV5) -> Self {
+        Self {
+            source_journal_bytes: value.source_journal_bytes,
+            target_journal_bytes: value.target_journal_bytes,
+            source_index_bytes: value.source_index_bytes,
+            target_index_bytes: value.target_index_bytes,
+            source_index_owned_bytes: value.source_index_owned_bytes,
+            target_index_owned_bytes: value.target_index_owned_bytes,
+            source_cas_bytes: value.source_cas_buffer_bytes,
+            target_cas_bytes: value.target_cas_buffer_bytes,
+            source_event_line_bytes: value.source_event_line_bytes,
+            target_event_line_bytes: value.target_event_line_bytes,
+            mapping_reservation_bytes: value.mapping_reservation_bytes,
+        }
+    }
 }
 
 impl DualSessionAccountingV5 {
@@ -1222,17 +2300,6 @@ impl DualSessionLiveBuffersV5 {
             u64::try_from(self.target_event_line.len()).unwrap_or(u64::MAX),
         ]
     }
-}
-
-fn checked_incremental_component_add(
-    left: u64,
-    right: u64,
-) -> Result<u64, IncrementalSessionError> {
-    left.checked_add(right)
-        .ok_or(IncrementalSessionError::Incomplete {
-            limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
-            observed: u64::MAX,
-        })
 }
 
 fn retain_largest_canonical_event_line(
@@ -1361,8 +2428,6 @@ impl<'root, 'roots, 'index> IncrementalSessionProofV5<'root, 'roots, 'index> {
             target_cas_bytes,
             source_line_bytes,
             target_line_bytes,
-            source_event_bytes,
-            target_event_bytes,
         ) = {
             let source_program = self
                 ._source_session
@@ -1388,14 +2453,6 @@ impl<'root, 'roots, 'index> IncrementalSessionProofV5<'root, 'roots, 'index> {
                 self.target_index.max_cas_bytes(),
                 source_line_bytes,
                 target_line_bytes,
-                checked_incremental_component_add(
-                    self._source_session.retained_event_bytes()?,
-                    source_line_bytes,
-                )?,
-                checked_incremental_component_add(
-                    self.target_index.retained_event_bytes()?,
-                    target_line_bytes,
-                )?,
             )
         };
         let accounting = DualSessionAccountingV5::checked([
@@ -1417,8 +2474,8 @@ impl<'root, 'roots, 'index> IncrementalSessionProofV5<'root, 'roots, 'index> {
             self.target_index.decoded_owned_bytes(),
             source_cas_bytes,
             target_cas_bytes,
-            source_event_bytes,
-            target_event_bytes,
+            source_line_bytes,
+            target_line_bytes,
             mapping_reservation_bytes,
         ])?;
 
@@ -1484,6 +2541,172 @@ impl<'root, 'roots, 'index> IncrementalSessionProofV5<'root, 'roots, 'index> {
 }
 
 impl CompletedM5ReportAuthorityV4 {
+    /// Reopens a terminal report after the marker/proof-CAS crash seam.
+    /// Unlike target-only proof publication, this takes the completed locked
+    /// V4 source authority and fresh V5 host roots, then asks Core to replay
+    /// every terminal suffix before attaching typed M5 report material.
+    ///
+    /// The caller receives report rows only. No recovered cursor or append
+    /// capability crosses this boundary.
+    pub fn recover_terminal_report_authority_v5<'authority, 'root, 'index>(
+        &'authority self,
+        source_journal: &EventJournal<'root>,
+        source_index: &'index crate::DerivedIndexV5<'root>,
+        target_journal: &EventJournal<'root>,
+        target_index: &crate::DerivedIndexV6<'root>,
+        host: V5AuthorityTrustInput,
+    ) -> Result<V5TerminalReportAuthority<'root, 'authority, 'index>, IncrementalSessionError> {
+        let roots = host.into_roots()?;
+        // First acquire the normal dual report locks and bind the proof to
+        // that exact target. The composite Core replay below then consumes
+        // only those lock-held logs plus fresh roots/CAS.
+        let target = target_journal.replayed_v5_target_session()?;
+        let proof =
+            TerminalProofV5::recover_from_terminal_log_for_store(target.log()).map_err(|_| {
+                IncrementalSessionError::Authority("terminal marker cannot reconstruct its proof")
+            })?;
+        drop(target);
+        let mut authority =
+            self.terminal_report_authority_v5(source_journal, source_index, target_journal, proof)?;
+        let resolver = JournalAuthorityResolverV5 {
+            reader: CasReader::open_existing(source_journal.root).map_err(|_| {
+                IncrementalSessionError::Authority("V5 authority CAS is unavailable")
+            })?,
+        };
+        let terminal_review_closure = authority
+            ._target_session
+            .log()
+            .terminal_review_closure_for_store(
+                authority._source_session.log(),
+                &resolver,
+                &roots,
+                &authority.terminal_proof,
+            )
+            .map_err(|_| {
+                IncrementalSessionError::Authority(
+                    "terminal composite replay did not reconstruct the proof-bound review closure",
+                )
+            })?;
+        authority.target_inherited = terminal_review_closure.inherited_rows().to_vec();
+        if !target_index.matches_store_root(source_journal.root) {
+            return Err(IncrementalSessionError::Authority(
+                "recovered terminal report index belongs to another StoreRoot",
+            ));
+        }
+        let (target_receipt, target_snapshot) = target_index
+            .rebuild_terminal_from_verified_session_with_inherited_v5_v6(
+                &authority._target_session,
+                &authority.terminal_proof,
+                Some(&terminal_review_closure),
+            )?;
+        let source_projection = authority._source_session.index_v5_replay_projection()?;
+        let source_index_bytes = authority._source_index.canonical_snapshot_bytes()?;
+        let target_index_bytes = canonical_json(&target_snapshot)
+            .map_err(|_| crate::IndexError::ProjectionContractViolation)?;
+        let source_program = authority
+            ._source_session
+            .index_v5_genesis()?
+            .program_space_for_store();
+        let mapping_reservation_bytes = u64::try_from(
+            ChangeMorphismV5::mapping_reservation_bytes_from_accepted_program_facts(
+                source_program,
+                &authority.target_facts.program_space,
+            )?,
+        )
+        .map_err(|_| IncrementalSessionError::Incomplete {
+            limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+            observed: u64::MAX,
+        })?;
+        let accounting = DualSessionAccountingV5::checked([
+            authority._source_session.index_v5_confirmed_offset()?,
+            authority._target_session.confirmed_offset(),
+            u64::try_from(source_index_bytes.len()).map_err(|_| {
+                IncrementalSessionError::Incomplete {
+                    limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                    observed: u64::MAX,
+                }
+            })?,
+            u64::try_from(target_index_bytes.len()).map_err(|_| {
+                IncrementalSessionError::Incomplete {
+                    limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
+                    observed: u64::MAX,
+                }
+            })?,
+            authority._source_index.recursive_owned_bytes()?,
+            target_receipt.rebuild.accounting.owned_bytes,
+            source_projection.max_cas_bytes(),
+            target_receipt.rebuild.accounting.observed_object_bytes,
+            source_projection.max_event_line_bytes(),
+            target_receipt.rebuild.accounting.observed_event_line_bytes,
+            mapping_reservation_bytes,
+        ])?;
+        authority.terminal_index_rebuild = Some(target_receipt);
+        authority.report_accounting = Some(accounting.into());
+        Ok(authority)
+    }
+
+    /// Opens terminal report authority from the proof object emitted by the
+    /// live M5 cursor. When that cursor completed a bundle, its already
+    /// roots/CAS-validated typed value is attached to the matching durable
+    /// event witness; raw target-payload decoding is never used.
+    pub fn terminal_report_authority_from_persisted_v5<'authority, 'root, 'index>(
+        &'authority self,
+        source_journal: &EventJournal<'root>,
+        source_index: &'index crate::DerivedIndexV5<'root>,
+        target_journal: &EventJournal<'root>,
+        persisted: &PersistedTerminalProofV5,
+    ) -> Result<V5TerminalReportAuthority<'root, 'authority, 'index>, IncrementalSessionError> {
+        let mut authority = self.terminal_report_authority_v5(
+            source_journal,
+            source_index,
+            target_journal,
+            persisted.proof().clone(),
+        )?;
+        authority.report_accounting = Some(persisted.accounting());
+        authority.target_inherited = persisted
+            .terminal_review_closure()
+            .inherited_rows()
+            .to_vec();
+        Ok(authority)
+    }
+
+    /// Opens report authority for a live persisted terminal marker and also
+    /// rebuilds the exact terminal V6 projection under the same retained
+    /// dual-run authority.  The returned authority carries the resulting
+    /// receipt; callers cannot provide or replace its snapshot hash.
+    pub fn terminal_report_authority_from_persisted_with_terminal_index_v5<
+        'authority,
+        'root,
+        'index,
+    >(
+        &'authority self,
+        source_journal: &EventJournal<'root>,
+        source_index: &'index crate::DerivedIndexV5<'root>,
+        target_journal: &EventJournal<'root>,
+        target_index: &crate::DerivedIndexV6<'root>,
+        persisted: &PersistedTerminalProofV5,
+    ) -> Result<V5TerminalReportAuthority<'root, 'authority, 'index>, IncrementalSessionError> {
+        let mut authority = self.terminal_report_authority_from_persisted_v5(
+            source_journal,
+            source_index,
+            target_journal,
+            persisted,
+        )?;
+        if !target_index.matches_store_root(source_journal.root) {
+            return Err(IncrementalSessionError::Authority(
+                "terminal report index belongs to another StoreRoot",
+            ));
+        }
+        let (receipt, _) = target_index
+            .rebuild_terminal_from_verified_session_with_inherited_v5_v6(
+                &authority._target_session,
+                &authority.terminal_proof,
+                Some(persisted.terminal_review_closure()),
+            )?;
+        authority.terminal_index_rebuild = Some(receipt);
+        Ok(authority)
+    }
+
     pub fn rebuild_v5(
         &self,
         index: &crate::DerivedIndexV5<'_>,
@@ -1498,6 +2721,145 @@ impl CompletedM5ReportAuthorityV4 {
         journal: &EventJournal<'_>,
     ) -> Result<crate::ValidatedIndexSnapshotV5<'index, 'root, '_>, crate::IndexError> {
         index.validated_snapshot_current_v5(journal, &self.roots)
+    }
+
+    /// Reopens the exact completed source under a shared lock and the target
+    /// under its exclusive/read lock, then admits a terminal report callback
+    /// owner.  This is deliberately separate from target-only V6 recovery:
+    /// the target proof is necessary but cannot establish the source M4/M5
+    /// baseline.
+    ///
+    /// The current production continuation has not yet exposed a completed
+    /// terminal cursor.  It must hand its Core-issued [`TerminalProofV5`] to
+    /// this seam after the marker is durable; callers cannot synthesize a
+    /// report authority from a target journal or proof artifact alone.
+    pub fn terminal_report_authority_v5<'authority, 'root, 'index>(
+        &'authority self,
+        source_journal: &EventJournal<'root>,
+        source_index: &'index crate::DerivedIndexV5<'root>,
+        target_journal: &EventJournal<'root>,
+        terminal_proof: TerminalProofV5,
+    ) -> Result<V5TerminalReportAuthority<'root, 'authority, 'index>, IncrementalSessionError> {
+        if source_journal.root.identity() != target_journal.root.identity()
+            || !source_index.matches_store_root(source_journal.root)
+        {
+            return Err(IncrementalSessionError::Authority(
+                "terminal report source and target must share one admitted StoreRoot",
+            ));
+        }
+
+        // Keep index -> root -> run -> journal acquisition order. The index
+        // image and source prefix are checked only after both run locks are
+        // held, preventing a source append from changing the M4/M5 basis
+        // between source validation and target proof validation.
+        let source_index_pin = source_index.pin_incremental_validation_v5()?;
+        let (source_session, source_basis, target_session) =
+            source_journal.replayed_incremental_pair_v5(target_journal, &self.roots)?;
+        let source_view = source_index_pin.validate_pinned_source(
+            source_journal,
+            &source_session,
+            &source_basis,
+            &self.roots,
+        )?;
+        let source_rows = source_view.snapshot().clone();
+
+        if source_rows.marker.tail_hash != *self.completed.confirmed_tail_hash()
+            || source_rows.marker.event_count != self.completed.confirmed_event_count()
+            || source_rows.gluing_attempts.len() != 1
+            || source_rows.gluing_attempts[0].event_id != *self.completed.event_id()
+            || source_rows.gluing_input_descriptors.len() != 2
+            || source_rows.artifact_registrations_v4.len() != 2
+            || source_basis.confirmed_tail_hash() != &source_rows.marker.tail_hash
+            || source_basis.confirmed_event_count() != source_rows.marker.event_count
+            || source_basis.policy_revision_hash() != &source_rows.marker.policy_revision_hash
+            || source_basis.basis_digest() != &source_rows.marker.authority_replay_basis_digest
+        {
+            return Err(IncrementalSessionError::Authority(
+                "source M4/M5 completion is not the exact locked report baseline",
+            ));
+        }
+        let source_result_event = source_rows
+            .global_candidates
+            .iter()
+            .any(|row| row.event_id == *self.completed.event_id())
+            || source_rows
+                .gluing_obstructions
+                .iter()
+                .any(|row| row.event_id == *self.completed.event_id());
+        if !source_result_event {
+            return Err(IncrementalSessionError::Authority(
+                "source M5 completion has no locked gluing result witness",
+            ));
+        }
+
+        // Core verifies the terminal proof against the exact live target
+        // prefix, final marker, final cursor digest, and terminal grammar.
+        // A proof merely supplied for a target-only rebuild never reaches this
+        // point because the source lock/basis above is mandatory.
+        target_session
+            .log()
+            .verify_terminal_proof_v5(&terminal_proof)
+            .map_err(|_| {
+                IncrementalSessionError::Authority(
+                    "target terminal proof or final marker is not bound to the locked prefix",
+                )
+            })?;
+        let target_facts = target_session
+            .log()
+            .terminal_index_facts_for_store(&terminal_proof)
+            .map_err(|_| {
+                IncrementalSessionError::Authority(
+                    "target terminal facts are not bound to the locked proof",
+                )
+            })?;
+        let target_inherited = target_session
+            .log()
+            .inherited_report_projection_v5_for_store()
+            .map_err(|_| {
+                IncrementalSessionError::Authority(
+                    "target inherited V5 projection is not complete typed data",
+                )
+            })?;
+        let mut target_rows = Vec::new();
+        target_session
+            .log()
+            .visit_typed_index_projection_v5_for_store(&mut |row| {
+                target_rows.push(row);
+                Ok(())
+            })
+            .map_err(|_| {
+                IncrementalSessionError::Authority(
+                    "target terminal rows are not a complete typed projection",
+                )
+            })?;
+        match target_rows.last() {
+            Some(V5TypedProjectionRecord::TerminalCompletedV5 { witness, value, .. })
+                if witness.event_id
+                    == *terminal_proof.member_event_ids().last().ok_or(
+                        IncrementalSessionError::Authority(
+                            "terminal proof has no final marker member",
+                        ),
+                    )?
+                    && value.source_closure_id == *terminal_proof.source_closure_id() => {}
+            _ => {
+                return Err(IncrementalSessionError::Authority(
+                    "target typed rows do not end in the proof-bound terminal marker",
+                ));
+            }
+        }
+
+        Ok(V5TerminalReportAuthority {
+            _source_index: source_view,
+            _source_session: source_session,
+            _target_session: target_session,
+            source_rows,
+            target_inherited,
+            target_rows,
+            target_facts,
+            terminal_proof,
+            terminal_index_rebuild: None,
+            report_accounting: None,
+        })
     }
 
     /// Replays and binds the exact completed M5 source, current source index,
@@ -1637,6 +2999,59 @@ impl CompletedM5ReportAuthorityV4 {
             source_journal_bytes: Vec::new(),
             target_journal_bytes: Vec::new(),
             _live_buffers: None,
+        })
+    }
+}
+
+impl V5TerminalReportAuthority<'_, '_, '_> {
+    /// Returns the Store-minted V6 terminal rebuild receipt.  It is present
+    /// only when the authority was opened through a source-bound terminal
+    /// rebuild seam; legacy row-only authority cannot stand in for it.
+    pub fn terminal_index_rebuild_receipt(
+        &self,
+    ) -> Result<&crate::IndexRebuildReceiptV6Terminal, IncrementalSessionError> {
+        self.terminal_index_rebuild
+            .as_ref()
+            .ok_or(IncrementalSessionError::Authority(
+                "terminal report authority lacks its source-bound V6 rebuild receipt",
+            ))
+    }
+
+    /// Exact content hash of the source-bound terminal V6 index snapshot.
+    /// This value is derived by Store and cannot be supplied by a report
+    /// caller or substituted with the terminal proof body hash.
+    pub fn terminal_index_snapshot_hash(&self) -> Result<ContentHash, IncrementalSessionError> {
+        Ok(self
+            .terminal_index_rebuild_receipt()?
+            .rebuild
+            .snapshot_hash
+            .clone())
+    }
+
+    /// The actual dual-session measurement captured while the same accepted
+    /// mapping owner persisted the terminal marker.  A report generated from
+    /// an authority reopened without that receipt is refused rather than
+    /// substituting zero accounting terms.
+    pub fn report_accounting(&self) -> Result<V5TerminalReportAccounting, IncrementalSessionError> {
+        self.report_accounting
+            .ok_or(IncrementalSessionError::Authority(
+                "terminal report authority lacks its persisted dual-session accounting receipt",
+            ))
+    }
+    /// Runs one report reduction while the source shared lock and target
+    /// exclusive/read lock are still retained.  The callback cannot retain a
+    /// mutable journal, raw CAS reader, or replay basis, and the authority is
+    /// consumed by the report API rather than clonable for a second pass.
+    pub fn with_terminal_rows<T>(
+        &self,
+        reduce: impl FnOnce(V5TerminalReportRows<'_>) -> Result<T, IncrementalSessionError>,
+    ) -> Result<T, IncrementalSessionError> {
+        reduce(V5TerminalReportRows {
+            source_v4: &self.source_rows,
+            target_inherited: &self.target_inherited,
+            target_v5: &self.target_rows,
+            target_facts: &self.target_facts,
+            terminal_proof: &self.terminal_proof,
         })
     }
 }
@@ -2094,6 +3509,34 @@ impl AuthorityArtifactResolverV4 for JournalAuthorityResolverV4<'_> {
             .map_err(|error| {
                 reviewgraphen_core::DomainError::Validation(format!(
                     "event-v4 authority CAS resolution failed: {error}"
+                ))
+            })
+    }
+}
+
+/// V5's resolver is deliberately a separate implementation from the V4
+/// resolver.  Sharing the underlying Store CAS is safe; sharing the V4 trait
+/// capability would erase the event-position authority boundary.
+struct JournalAuthorityResolverV5<'a> {
+    reader: CasReader<'a>,
+}
+
+impl AuthorityArtifactResolverV5 for JournalAuthorityResolverV5<'_> {
+    fn read_exact(
+        &self,
+        cas_hash: &ContentHash,
+        destination: &mut [u8],
+    ) -> reviewgraphen_core::Result<()> {
+        let hash = CasHash::parse(cas_hash.as_str().to_owned()).map_err(|error| {
+            reviewgraphen_core::DomainError::Validation(format!(
+                "event-v5 authority CAS hash is not admissible: {error}"
+            ))
+        })?;
+        self.reader
+            .read_exact_slice(&hash, destination)
+            .map_err(|error| {
+                reviewgraphen_core::DomainError::Validation(format!(
+                    "event-v5 authority CAS resolution failed: {error}"
                 ))
             })
     }
@@ -2893,19 +4336,203 @@ impl ReplayedV5RunSession {
         read_prefix(&mut self.writer.file, self.writer.state.confirmed_offset)
     }
 
-    pub(crate) fn retained_event_bytes(&self) -> Result<u64, JournalError> {
-        self.writer
-            .state
-            .retained_envelope_bytes()?
-            .checked_add(
-                self.log
-                    .retained_envelope_bytes_for_store()
-                    .map_err(JournalError::Domain)?,
-            )
-            .ok_or(JournalError::Incomplete {
-                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
-                observed: u64::MAX,
-            })
+    /// Durably appends Core's opaque pre-D2 M6 candidate while the same
+    /// journal writer remains locked.  Canonical lines are used only to
+    /// bridge Core's one-use append capability to the writer; they are
+    /// immediately reparsed and compared by `append_batch`, never exposed to
+    /// callers as raw phase authority.
+    fn append_pre_d2_m6(
+        &mut self,
+        prepared: PreparedPreD2M6AppendV5,
+    ) -> Result<PreD2M6SessionV5, JournalError> {
+        if self.writer.state.events.len() != self.log.envelopes().len()
+            || self
+                .writer
+                .state
+                .events
+                .last()
+                .map(EventEnvelope::event_hash)
+                != self.log.envelopes().last().map(EventEnvelope::event_hash)
+        {
+            return Err(JournalError::Identity(
+                "V5 writer state and lock-held Core log do not name one prefix",
+            ));
+        }
+        let expected_sequence = u64::try_from(self.log.envelopes().len())
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .ok_or(JournalError::Identity("V5 pre-D2 sequence overflow"))?;
+        if prepared.first_sequence() != expected_sequence
+            || prepared.predecessor_event_hash() != self.log.tail_hash()
+        {
+            return Err(JournalError::Identity(
+                "Core pre-D2 candidate does not extend the lock-held V5 prefix",
+            ));
+        }
+        let mut bytes = Vec::new();
+        let (prepared, ()) = prepared.append_to_store(|lines| {
+            lines
+                .write_canonical_lines(&mut bytes)
+                .map_err(JournalError::Domain)
+        })?;
+        let events = bytes
+            .strip_suffix(b"\n")
+            .ok_or(JournalError::Identity(
+                "pre-D2 M6 canonical suffix lacks newline",
+            ))?
+            .split(|byte| *byte == b'\n')
+            .map(EventEnvelope::from_json_slice)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.writer.append_batch(&events)?;
+        prepared
+            .confirm(&mut self.log)
+            .map_err(JournalError::Domain)
+    }
+
+    fn append_partial_m6(
+        &mut self,
+        prepared: reviewgraphen_core::PreparedPartialM6AppendV5,
+        core: &mut PreD2M6SessionV5,
+    ) -> Result<(), JournalError> {
+        let mut bytes = Vec::new();
+        let (prepared, ()) = prepared.append_to_store(|line| {
+            line.write_canonical_line(&mut bytes)
+                .map_err(JournalError::Domain)
+        })?;
+        let line = bytes.strip_suffix(b"\n").ok_or(JournalError::Identity(
+            "partial M6 canonical member lacks newline",
+        ))?;
+        let event = EventEnvelope::from_json_slice(line)?;
+        self.writer.append(event).map_err(|error| match error {
+            JournalError::Domain(_) => {
+                JournalError::Identity("partial M6 writer rejected Core envelope")
+            }
+            other => other,
+        })?;
+        prepared.confirm(&mut self.log, core).map_err(|_| {
+            JournalError::Identity("partial M6 Core confirmation rejected its envelope")
+        })
+    }
+
+    fn append_post_partial_m6(
+        &mut self,
+        prepared: PreparedPostPartialM6AppendV5,
+        core: &mut PostPartialM6ContinuationV5,
+    ) -> Result<(), JournalError> {
+        let mut bytes = Vec::new();
+        let (prepared, ()) = prepared.append_to_store(|line| {
+            line.write_canonical_line(&mut bytes)
+                .map_err(JournalError::Domain)
+        })?;
+        let line = bytes.strip_suffix(b"\n").ok_or(JournalError::Identity(
+            "post-partial M6 canonical member lacks newline",
+        ))?;
+        let event = EventEnvelope::from_json_slice(line)?;
+        self.writer.append(event)?;
+        prepared
+            .confirm(&mut self.log, core)
+            .map_err(JournalError::Domain)
+    }
+
+    fn append_gluing_m6(
+        &mut self,
+        prepared: PreparedGluingM6AppendV5,
+        core: &mut GluingM6ContinuationV5,
+    ) -> Result<(), JournalError> {
+        let mut bytes = Vec::new();
+        let (prepared, ()) = prepared.append_to_store(|line| {
+            line.write_canonical_line(&mut bytes)
+                .map_err(JournalError::Domain)
+        })?;
+        let line = bytes.strip_suffix(b"\n").ok_or(JournalError::Identity(
+            "gluing M6 canonical member lacks newline",
+        ))?;
+        let event = EventEnvelope::from_json_slice(line)?;
+        self.writer.append(event)?;
+        prepared
+            .confirm(&mut self.log, core)
+            .map_err(JournalError::Domain)
+    }
+
+    fn append_native_m6(
+        &mut self,
+        prepared: PreparedNativeM6AppendV5,
+        core: &mut NativeM6ContinuationV5,
+    ) -> Result<(), JournalError> {
+        let mut bytes = Vec::new();
+        let (prepared, ()) = prepared.append_to_store(|line| {
+            line.write_canonical_line(&mut bytes)
+                .map_err(JournalError::Domain)
+        })?;
+        let line = bytes.strip_suffix(b"\n").ok_or(JournalError::Identity(
+            "native M6 canonical member lacks newline",
+        ))?;
+        let event = EventEnvelope::from_json_slice(line)?;
+        self.writer.append(event)?;
+        prepared
+            .confirm(&mut self.log, core)
+            .map_err(JournalError::Domain)
+    }
+
+    fn append_human_m6(
+        &mut self,
+        prepared: PreparedHumanM6AppendV5,
+        core: &mut HumanM6ContinuationV5,
+        roots: &AuthorityTrustRootsV5,
+    ) -> Result<(), JournalError> {
+        let mut bytes = Vec::new();
+        let (prepared, ()) = prepared.append_to_store(|line| {
+            line.write_canonical_line(&mut bytes)
+                .map_err(JournalError::Domain)
+        })?;
+        let line = bytes.strip_suffix(b"\n").ok_or(JournalError::Identity(
+            "human M6 canonical member lacks newline",
+        ))?;
+        let event = EventEnvelope::from_json_slice(line)?;
+        self.writer.append(event)?;
+        prepared
+            .confirm(&mut self.log, core, roots)
+            .map_err(JournalError::Domain)
+    }
+
+    fn append_terminal_marker_m6(
+        &mut self,
+        prepared: PreparedTerminalCompletedV5,
+        core: &M5M6ContinuationV5,
+    ) -> Result<TerminalProofV5, JournalError> {
+        let mut bytes = Vec::new();
+        let (prepared, ()) = prepared.append_to_store(|line| {
+            line.write_canonical_line(&mut bytes)
+                .map_err(JournalError::Domain)
+        })?;
+        let line = bytes
+            .strip_suffix(b"\n")
+            .ok_or(JournalError::Identity("terminal M6 marker lacks newline"))?;
+        let event = EventEnvelope::from_json_slice(line)?;
+        self.writer.append(event)?;
+        core.confirm_terminal_marker(&mut self.log, prepared)
+            .map_err(JournalError::Domain)
+    }
+
+    fn append_m5_m6(
+        &mut self,
+        prepared: PreparedM5M6AppendV5,
+        core: &mut M5M6ContinuationV5,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<(), JournalError> {
+        let mut bytes = Vec::new();
+        let (prepared, ()) = prepared.append_to_store(|line| {
+            line.write_canonical_line(&mut bytes)
+                .map_err(JournalError::Domain)
+        })?;
+        let line = bytes.strip_suffix(b"\n").ok_or(JournalError::Identity(
+            "scheduled M5 canonical member lacks newline",
+        ))?;
+        let event = EventEnvelope::from_json_slice(line)?;
+        self.writer.append(event)?;
+        core.confirm_next(&mut self.log, prepared, roots, resolver)
+            .map_err(JournalError::Domain)
     }
 }
 
@@ -2983,6 +4610,11 @@ fn replay_v5_locked(
         genesis.to_vec(),
         envelopes,
     )?;
+    // `EventLogV5` owns the validated replay while the writer remains the
+    // durable append cursor. Restore the writer's structural prefix from the
+    // validated log before exposing the combined session; otherwise its next
+    // batch is incorrectly validated as a fresh sequence-one stream.
+    writer.state.events = log.envelopes().to_vec();
     Ok(ReplayedV5RunSession {
         _run_lock: run_lock,
         writer,
@@ -3048,6 +4680,74 @@ impl<'root, 'roots> RecoveredVerificationBundleV3Session<'root, 'roots> {
 }
 
 impl<'root, 'roots> ReplayedV4RunSession<'root, 'roots> {
+    /// Appends one human decision only through a fresh host grant selected
+    /// against this exact lock-held V4 position.
+    pub fn append_human_decision(
+        &mut self,
+        grant: AuthorityHumanGrantV3Tuple,
+        claim_id: &StableId,
+        input: DecisionInputV3,
+        trusted_now: &str,
+        basis: &mut AuthorityReplayBasisV4,
+    ) -> Result<reviewgraphen_core::DecisionReceiptV4, JournalError> {
+        self.require_healthy()?;
+        let request = reviewgraphen_core::HumanDecisionRequestV4::new(claim_id.clone(), input);
+        let trusted = reviewgraphen_core::TrustedHumanAdmissionV4::from_trusted_host(
+            grant,
+            &request,
+            trusted_now,
+            &self.log,
+            basis,
+            &self.session_identity,
+        )?;
+        let prepared = self
+            .log
+            .mint_decision_v4(trusted, request, self.roots, basis)?;
+        let envelope = prepared
+            .envelope(&self.log, basis, &self.session_identity)?
+            .clone();
+        self.append_one_v4(envelope)?;
+        let (next_log, next_basis) = self.replay_candidate_v4_after_durable()?;
+        let receipt = prepared
+            .confirm_replayed(&next_log, &next_basis, &self.session_identity)
+            .map_err(|error| {
+                self.state = ReplayedV4RunSessionState::Uncertain;
+                JournalError::Domain(error)
+            })?;
+        self.log = next_log;
+        *basis = next_basis;
+        Ok(receipt)
+    }
+
+    /// Appends the deterministic finding derived from the current accepted
+    /// assessment. No human grant or confidence threshold is substituted for
+    /// the already durable decision.
+    pub fn append_human_finding(
+        &mut self,
+        claim_id: &StableId,
+        projection_descriptor_id: &str,
+        basis: &mut AuthorityReplayBasisV4,
+    ) -> Result<reviewgraphen_core::FindingReceiptV4, JournalError> {
+        self.require_healthy()?;
+        let prepared = self
+            .log
+            .mint_finding_v4(claim_id, projection_descriptor_id, basis)?;
+        let envelope = prepared
+            .envelope(&self.log, basis, &self.session_identity)?
+            .clone();
+        self.append_one_v4(envelope)?;
+        let (next_log, next_basis) = self.replay_candidate_v4_after_durable()?;
+        let receipt = prepared
+            .confirm_replayed(&next_log, &next_basis, &self.session_identity)
+            .map_err(|error| {
+                self.state = ReplayedV4RunSessionState::Uncertain;
+                JournalError::Domain(error)
+            })?;
+        self.log = next_log;
+        *basis = next_basis;
+        Ok(receipt)
+    }
+
     /// Seals one authority-free inherited D2 command against this exact
     /// lock-held V4 tail. No durable state changes during preparation.
     pub fn prepare_inherited_d2_event(
@@ -3153,6 +4853,67 @@ impl<'root, 'roots> ReplayedV4RunSession<'root, 'roots> {
                 self.roots,
                 basis,
             )?)
+    }
+
+    /// Executes Core's sole compiled-in fixture harness against the exact
+    /// authority roots and confirmed V4 prefix owned by this session.
+    pub fn execute_fixture_harness(
+        &self,
+        claim_id: &StableId,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<FixtureExecutionReceiptV4, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .execute_fixture_harness_v4(claim_id, self.roots, basis)?)
+    }
+
+    /// Seals the deterministic fixture result registration. The result bytes
+    /// must already be present in this session's workspace-scoped CAS.
+    pub fn prepare_fixture_verifier_output_registration(
+        &self,
+        receipt: &FixtureExecutionReceiptV4,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .prepare_fixture_verifier_output_registration_v3_at_v4(
+                receipt,
+                &self.resolver,
+                basis,
+            )?)
+    }
+
+    /// Seals the external witness registration from Core's one-shot trusted
+    /// harness receipt. No caller-authored harness metadata is accepted.
+    pub fn prepare_external_harness_witness_registration(
+        &self,
+        receipt: &FixtureExecutionReceiptV4,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ArtifactRegistrationV3AtV4Admission, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .prepare_external_harness_witness_registration_v3_at_v4(
+                receipt,
+                &self.resolver,
+                basis,
+            )?)
+    }
+
+    /// Mints one-shot witness admission only after the exact witness
+    /// registration has been durably appended and replay-confirmed.
+    pub fn admit_external_witness(
+        &self,
+        receipt: FixtureExecutionReceiptV4,
+        registration: &ArtifactRegistrationV3AtV4Receipt,
+        basis: &AuthorityReplayBasisV4,
+    ) -> Result<ExternalWitnessAdmissionV4, JournalError> {
+        self.require_healthy()?;
+        Ok(self
+            .log
+            .admit_external_witness_v4(receipt, registration, basis)?)
     }
 
     pub fn append_inherited_artifact_registration(
@@ -3582,21 +5343,6 @@ impl PinnedV4SourceSession<'_, '_> {
         read_prefix(&mut self.reader.file, self.reader.state.confirmed_offset)
     }
 
-    fn retained_event_bytes(&self) -> Result<u64, JournalError> {
-        self.reader
-            .state
-            .retained_envelope_bytes()?
-            .checked_add(
-                self.log
-                    .retained_envelope_bytes_for_store()
-                    .map_err(JournalError::Domain)?,
-            )
-            .ok_or(JournalError::Incomplete {
-                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
-                observed: u64::MAX,
-            })
-    }
-
     pub(crate) const fn index_v5_replay_projection(
         &self,
     ) -> Result<&crate::index::ReplayProjectionChargeV5, JournalError> {
@@ -3830,6 +5576,7 @@ enum AppendFault {
     BundleAfterDurableLine1,
     BundleAfterDurableLine2,
     BundleStageSync,
+    TerminalProofBeforeCas,
 }
 
 #[cfg(test)]
@@ -3937,27 +5684,6 @@ struct ScanState {
     torn: Option<TornTail>,
 }
 
-impl ScanState {
-    fn retained_envelope_bytes(&self) -> Result<u64, JournalError> {
-        let slots = self
-            .events
-            .capacity()
-            .checked_mul(std::mem::size_of::<EventEnvelope>())
-            .and_then(|value| u64::try_from(value).ok())
-            .ok_or(JournalError::Incomplete {
-                limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
-                observed: u64::MAX,
-            })?;
-        self.events.iter().try_fold(slots, |total, event| {
-            total
-                .checked_add(u64::try_from(event.allocated_bytes()).unwrap_or(u64::MAX))
-                .ok_or(JournalError::Incomplete {
-                    limit: MAX_INCREMENTAL_SESSION_WORKING_BYTES,
-                    observed: u64::MAX,
-                })
-        })
-    }
-}
 #[derive(Clone, Debug)]
 struct TornTail {
     good_offset: u64,
@@ -4227,6 +5953,52 @@ impl<'a> EventJournal<'a> {
                 confirmed_offset: line_len,
             },
         ))
+    }
+
+    /// Publishes an already verified, immutable V5 contract fixture. This is
+    /// test-only and has no append/session authority; it validates every
+    /// canonical event through the normal V5 chain before create-only
+    /// publication so Store recovery tests do not bypass the journal boundary.
+    #[cfg(test)]
+    pub(crate) fn publish_fixture_v5(
+        root: &'a StoreRoot,
+        identity: JournalIdentity,
+        canonical_jsonl: &[u8],
+    ) -> Result<Self, JournalError> {
+        if identity.version() != EventContractVersion::V5
+            || canonical_jsonl.is_empty()
+            || !canonical_jsonl.ends_with(b"\n")
+        {
+            return Err(JournalError::V1ReadOnly);
+        }
+        let limits = JournalLimits::from_store(root.limits());
+        validate_limits(limits)?;
+        let events = canonical_jsonl[..canonical_jsonl.len() - 1]
+            .split(|byte| *byte == b'\n')
+            .map(EventEnvelope::from_json_slice)
+            .collect::<Result<Vec<_>, _>>()?;
+        validate_prefix(&identity, &events)?;
+        for line in canonical_jsonl.split_inclusive(|byte| *byte == b'\n') {
+            limit(
+                u64::try_from(line.len()).unwrap_or(u64::MAX),
+                limits.max_event_line_bytes,
+            )?;
+        }
+        limit(
+            u64::try_from(events.len()).unwrap_or(u64::MAX),
+            limits.max_events,
+        )?;
+        limit(
+            u64::try_from(canonical_jsonl.len()).unwrap_or(u64::MAX),
+            limits.max_replay_bytes,
+        )?;
+        let runs = open_or_create_dir(root.fd(), RUNS_DIR, "runs directory")?;
+        let run = open_or_create_dir(&runs, &run_dir_name(&identity.run_id), "run directory")?;
+        let recovery = open_or_create_dir(&run, RECOVERY_DIR, "run recovery directory")?;
+        let _ = open_or_create_dir(&recovery, INTENTS_DIR, "recovery intent directory")?;
+        let _ = open_or_create_dir(&recovery, COMPLETIONS_DIR, "recovery completion directory")?;
+        publish_initial_log_v5(&run, canonical_jsonl)?;
+        Self::open_with_limits(root, identity, limits)
     }
 
     /// Reads V4 recovery state under the same root -> run -> journal lock
@@ -5114,6 +6886,24 @@ impl<'a> EventJournal<'a> {
             },
             basis,
         ))
+    }
+
+    /// Idempotently publishes the deterministic proof for an already durable
+    /// V5 terminal marker.  This is the only Store recovery entry point for
+    /// the marker-written/proof-missing crash seam: the proof is rebuilt from
+    /// the lock-held canonical log and its canonical bytes are re-read from
+    /// CAS before the receipt is returned.
+    pub fn recover_terminal_proof_v5(&self) -> Result<RecoveredTerminalProofV5, JournalError> {
+        let session = self.replayed_v5_target_session()?;
+        let proof = TerminalProofV5::recover_from_terminal_log_for_store(session.log())?;
+        let bytes = proof.canonical_bytes()?;
+        let expected = CasHash::parse(ContentHash::sha256(&bytes).to_string())?;
+        let size = u64::try_from(bytes.len())
+            .map_err(|_| JournalError::Identity("terminal proof bytes do not fit u64"))?;
+        let cas =
+            CasStore::open(self.root)?.put(&expected, Some(size), std::io::Cursor::new(&bytes))?;
+        CasStore::open(self.root)?.verify_exact_bytes_streaming(&expected, &bytes)?;
+        Ok(RecoveredTerminalProofV5 { proof, cas })
     }
 
     /// Acquires the target journal lock and structurally replays the complete
@@ -10270,8 +12060,9 @@ mod tests {
         GluingInputTrustBindingV4, HarnessTrustRootInputV3, HumanAuthorityCapabilityV3,
         HumanTrustGrantInputV3, M4_PROPERTY_ID, MvpRulePack, ObligationLifecycle, PlanBudget,
         ProgramSpace, ReviewAggregate, RunGenesisBootstrapRequestV4, SnapshotSourceRecordEntry,
-        SnapshotSourcesRecorded, ValidatedExecutionBundle, VerificationAttemptStageV3,
-        VerificationBundleRequestV4, evaluate_static_fact_v1, plan, prepare_context,
+        SnapshotSourcesRecorded, StaticFactInputV1, ValidatedExecutionBundle,
+        ValidatedM6StaticResultV5, VerificationAttemptStageV3, VerificationBundleRequestV4,
+        evaluate_static_fact_result_from_input_v1, evaluate_static_fact_v1, plan, prepare_context,
     };
     use reviewgraphen_ingest::{IngestRequest, ingest_with_sources};
     use serde_json::Value;
@@ -10407,6 +12198,67 @@ mod tests {
             .unwrap()
             .put(&hash, Some(bytes.len() as u64), bytes)
             .unwrap();
+    }
+
+    fn v5_gluing_input_for_request(
+        root: &StoreRoot,
+        request: &M5GluingWorkRequestV5,
+        policy_revision_hash: ContentHash,
+        repository_id: StableId,
+        repository_source_hash: ContentHash,
+    ) -> V5GluingInputTrustInput {
+        let descriptor = GluingInputDescriptorV4::new(
+            request.run_id().clone(),
+            request.snapshot_id().clone(),
+            request.universe_id().clone(),
+            request.plan_id().clone(),
+            request.context_id().clone(),
+            AssignmentValueV4::Satisfied,
+            BTreeSet::new(),
+        )
+        .unwrap();
+        let bytes = canonical_json(&descriptor).unwrap();
+        let descriptor_hash = ContentHash::sha256(&bytes);
+        let descriptor_size = u64::try_from(bytes.len()).unwrap();
+        put_test_cas(root, &bytes);
+        let source = ArtifactSourceV4::GluingInput {
+            context_id: request.context_id().clone(),
+            descriptor_hash: descriptor_hash.clone(),
+            descriptor_id: descriptor.id().clone(),
+            descriptor_media_type: request.descriptor_media_type().to_owned(),
+            descriptor_sensitivity: request.descriptor_sensitivity(),
+            descriptor_size,
+            genesis_hash: request.genesis_hash().clone(),
+            plan_id: request.plan_id().clone(),
+            policy_revision_hash: policy_revision_hash.clone(),
+            profile_descriptor_id: request.profile_descriptor_id().to_owned(),
+            repository_id: repository_id.clone(),
+            repository_source_hash: repository_source_hash.clone(),
+            run_id: request.run_id().clone(),
+            snapshot_id: request.snapshot_id().clone(),
+            universe_id: request.universe_id().clone(),
+        };
+        V5GluingInputTrustInput::new(
+            policy_revision_hash,
+            repository_id,
+            repository_source_hash,
+            request.run_id().clone(),
+            request.genesis_hash().clone(),
+            request.snapshot_id().clone(),
+            request.universe_id().clone(),
+            request.plan_id().clone(),
+            request.profile_descriptor_id(),
+            request.context_id().clone(),
+            descriptor.id().clone(),
+            descriptor_hash,
+            descriptor_size,
+            request.descriptor_media_type(),
+            request.descriptor_sensitivity(),
+            source,
+            request.predecessor_event_hash().clone(),
+            request.event_sequence(),
+        )
+        .unwrap()
     }
 
     struct IngestPlannedPrefix {
@@ -17449,8 +19301,8 @@ mod tests {
             proof.target_index.decoded_owned_bytes(),
             u64::try_from(buffers.source_cas.len()).unwrap(),
             u64::try_from(proof.target_index.largest_verified_cas_bytes().len()).unwrap(),
-            proof._source_session.retained_event_bytes().unwrap() + source_line,
-            proof.target_index.retained_event_bytes().unwrap() + target_line,
+            source_line,
+            target_line,
             u64::try_from(accepted.mapping_phase().working_peak_upper_bound_bytes()).unwrap(),
         ];
         assert_eq!(
@@ -17502,6 +19354,458 @@ mod tests {
                 .derive_incremental_mapping_v5(&source, &source_index, &target, &target_index,)
                 .is_err(),
             "source tail drift must refuse a mapping derived from the pinned index prefix"
+        );
+    }
+
+    #[test]
+    fn required_gluing_m6_store_path_drives_core_derived_reviewer_requests() {
+        required_gluing_m6_store_path_drives_core_derived_reviewer_requests_impl(false);
+    }
+
+    #[test]
+    fn terminal_marker_written_before_proof_cas_recovers_idempotently() {
+        required_gluing_m6_store_path_drives_core_derived_reviewer_requests_impl(true);
+    }
+
+    #[inline(never)]
+    fn required_gluing_m6_store_path_drives_core_derived_reviewer_requests_impl(
+        inject_terminal_proof_before_cas: bool,
+    ) {
+        let (_workspace, root) = root();
+        put_test_cas(
+            &root,
+            br#"{"charge_count":2,"expected_max":1,"outcome":"witnessed","schema":"reviewgraphen.test_witness_result.v1","test_artifact_id":"test:double-submit"}"#,
+        );
+        let (source, _roots, [payment, ui]) =
+            public_v4_gluing_journal_incremental_v3(&root, "run:m6-store-reviewer-source");
+        let assignments = M5DoubleSubmitAssignmentsV4::new(
+            payment.descriptor.assignment_value(),
+            ui.descriptor.assignment_value(),
+        );
+        source
+            .with_m5_gluing_profile_session(
+                incremental_v3_profile_base_roots(),
+                assignments,
+                |profile| {
+                    assert!(profile.publish_next_gluing_input()?.is_some());
+                    assert!(profile.publish_next_gluing_input()?.is_some());
+                    profile.append_gluing_bundle().map(|_| ())
+                },
+            )
+            .unwrap();
+        let authority = match source
+            .inspect_m5_report_authority_v4(incremental_v3_profile_base_roots(), assignments)
+            .unwrap()
+        {
+            M5ReportAuthorityInspectionV4::Complete(authority) => authority,
+            M5ReportAuthorityInspectionV4::Incomplete { .. } => panic!("M5 must be complete"),
+        };
+        let source_index = crate::DerivedIndexV5::open(&root).unwrap();
+        authority.rebuild_v5(&source_index, &source).unwrap();
+
+        let (target, _) = EventJournal::publish_new_v5(
+            &root,
+            crate::index::v6::tests::planned_double_submit_target_with_run(
+                &root,
+                "run:m6-store-reviewer-target",
+            ),
+        )
+        .unwrap();
+        let target_index = crate::DerivedIndexV6::open(&root).unwrap();
+        target_index.rebuild_pre_incremental_v6(&target).unwrap();
+        let target_snapshot = target_index
+            .validated_snapshot_current_v6(&target)
+            .unwrap()
+            .snapshot()
+            .clone();
+        let expected_target_policy = ContentHash::sha256(
+            &canonical_json(&serde_json::json!({
+                "schema": "reviewgraphen.target_policy_identity.v6",
+                "profile_id": target_snapshot.program_space.profile_id(),
+                "profile_version": target_snapshot.program_space.profile_version(),
+                "policy_version": target_snapshot.program_space.policy_version(),
+                "rule_set_hash": target_snapshot.program_space.rule_set_hash(),
+                "extractor_set_hash": target_snapshot.program_space.extractor_set_hash(),
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            target_snapshot.marker.policy_revision_hash,
+            expected_target_policy
+        );
+        let target_repository_source_hash = ContentHash::parse(
+            serde_json::to_value(&target_snapshot.program_space).unwrap()["source"]["content_hash"]
+                .as_str()
+                .expect("target ProgramSpace source hash"),
+        )
+        .unwrap();
+        let accepted = Box::new(
+            authority
+                .derive_incremental_mapping_v5(&source, &source_index, &target, &target_index)
+                .unwrap(),
+        );
+        let host = V5AuthorityTrustInput::new_without_gluing(
+            target_snapshot.marker.policy_revision_hash.clone(),
+            target_snapshot.repository_id.clone(),
+            target_repository_source_hash.clone(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let terminal = Box::new(
+            accepted
+                .recompute_terminal_m6_no_gluing(host, "2026-08-13T00:00:00Z")
+                .unwrap(),
+        );
+        let partial_members = terminal.partial_actions().len() + 1;
+        let mut incremental = Box::new((*terminal).append_pre_d2_m6().unwrap());
+        for index in 0..partial_members {
+            *incremental = (*incremental)
+                .append_next_partial()
+                .unwrap_or_else(|error| panic!("partial member {index} failed: {error:?}"));
+        }
+        let mut reviewer = Box::new((*incremental).begin_post_partial().unwrap());
+        let mut raw = None;
+        // A selected reviewer action has the six ordinary durable members
+        // plus one cursor-selection/completion transition. The sealed partial
+        // phase bounds the selected action count; the final +1 observes the
+        // terminal `Complete` work request rather than assuming exhaustion.
+        let reviewer_step_limit = partial_members.saturating_mul(7).saturating_add(1);
+        let mut reviewer_steps = 0;
+        for _ in 0..reviewer_step_limit {
+            reviewer_steps += 1;
+            match reviewer.next_reviewer_work().unwrap() {
+                M6ReviewerWorkRequestV5::Automatic => {
+                    *reviewer = (*reviewer).append_reviewer_automatic().unwrap();
+                }
+                M6ReviewerWorkRequestV5::RawReviewerResponse(request) => {
+                    let selected = if request
+                        .allowed_target_refs()
+                        .contains(&StableId::parse("relation:payment-calls-stripe").unwrap())
+                    {
+                        Some(("relation:payment-calls-stripe", "file:payment-repository"))
+                    } else if request
+                        .allowed_target_refs()
+                        .contains(&StableId::parse("relation:tap-handled-by-submit").unwrap())
+                    {
+                        Some(("relation:tap-handled-by-submit", "file:checkout-controller"))
+                    } else {
+                        None
+                    };
+                    let bytes = match selected {
+                        None => canonical_json(&serde_json::json!({
+                            "abstention": {
+                                "detail": "store fixture does not select this local action",
+                                "reason": "property_not_understood",
+                            },
+                            "claims": [],
+                            "execution_id": request.execution_id(),
+                            "schema": "reviewgraphen.reviewer_output.v1",
+                        })),
+                        Some((target_ref, source_id)) => canonical_json(&serde_json::json!({
+                            "abstention": null,
+                            "claims": [{
+                                "assumptions": [],
+                                "candidate_confidence": 1.0,
+                                "polarity": "issue_present",
+                                "property_id": request.property_id(),
+                                "requested_evidence": [],
+                            "source_ids": [source_id],
+                                "summary": "store M6 reviewer fixture",
+                            "target_refs": [target_ref],
+                            }],
+                            "execution_id": request.execution_id(),
+                            "schema": "reviewgraphen.reviewer_output.v1",
+                        })),
+                    }
+                    .unwrap();
+                    raw = Some(bytes.clone());
+                    *reviewer = (*reviewer).append_reviewer_raw(&bytes).unwrap();
+                }
+                M6ReviewerWorkRequestV5::StructuredReviewerResult(_request) => {
+                    let bytes = raw.take().expect("raw request precedes execution");
+                    let parsed =
+                        ValidatedFixedM6ReviewerResultV5::from_canonical_bytes(&bytes).unwrap();
+                    *reviewer = (*reviewer).append_fixed_reviewer_execution(parsed).unwrap();
+                }
+                M6ReviewerWorkRequestV5::Complete => break,
+            }
+        }
+        assert!(
+            matches!(
+                reviewer.next_reviewer_work().unwrap(),
+                M6ReviewerWorkRequestV5::Complete
+            ),
+            "reviewer did not complete within sealed-phase bound ({reviewer_steps}/{reviewer_step_limit})"
+        );
+        let mut gluing = Box::new((*reviewer).begin_gluing().unwrap());
+        let mut recovery_gluing_inputs = Vec::new();
+        let mut recovery_harnesses = Vec::new();
+        // The target gluing suffix is closed before its first M5 descriptor
+        // coordinate can be derived from the durable post-D2 terminal tail.
+        for _ in 0..gluing.gluing_member_count() {
+            *gluing = (*gluing).append_next().unwrap();
+        }
+        let (gluing_next, first_m5_request) = (*gluing).next_m5_work_request().unwrap();
+        let mut gluing = Box::new(gluing_next);
+        recovery_gluing_inputs.push(v5_gluing_input_for_request(
+            &root,
+            &first_m5_request,
+            target_snapshot.marker.policy_revision_hash.clone(),
+            target_snapshot.repository_id.clone(),
+            target_repository_source_hash.clone(),
+        ));
+        *gluing = (*gluing)
+            .with_gluing_input(v5_gluing_input_for_request(
+                &root,
+                &first_m5_request,
+                target_snapshot.marker.policy_revision_hash.clone(),
+                target_snapshot.repository_id.clone(),
+                target_repository_source_hash.clone(),
+            ))
+            .unwrap();
+        let harness_requests = gluing.harness_work_requests().unwrap();
+        assert!(!harness_requests.is_empty(), "fixture native action");
+        for harness_request in &harness_requests {
+            put_test_cas(
+                &root,
+                &canonical_json(&serde_json::json!({
+                    "claim_id": harness_request.claim_id(),
+                    "descriptor_id": FIXTURE_DESCRIPTOR_ID,
+                    "outcome": "passed",
+                    "procedure_version": FIXTURE_PROCEDURE_ID,
+                    "property_id": M4_PROPERTY_ID,
+                    "schema": "reviewgraphen.fixture_test_result.v1",
+                    "subject_ids": ["relation:payment-calls-stripe", FIXTURE_TEST_ARTIFACT_ID],
+                    "witness_hash": FIXTURE_WITNESS_HASH,
+                }))
+                .unwrap(),
+            );
+            let harness = AuthorityHarnessBindingV3Tuple {
+                policy_revision_hash: target_snapshot.marker.policy_revision_hash.clone(),
+                repository_id: target_snapshot.repository_id.clone(),
+                repository_source_hash: target_repository_source_hash.clone(),
+                harness_id: FIXTURE_HARNESS_ID.to_owned(),
+                harness_revision: FIXTURE_HARNESS_REVISION.to_owned(),
+                harness_source_hash: ContentHash::parse(FIXTURE_HARNESS_SOURCE_HASH).unwrap(),
+                test_artifact_id: StableId::parse(FIXTURE_TEST_ARTIFACT_ID).unwrap(),
+                descriptor_id: FIXTURE_DESCRIPTOR_ID.to_owned(),
+                procedure_version: FIXTURE_PROCEDURE_ID.to_owned(),
+                result_hash: ContentHash::parse(FIXTURE_WITNESS_HASH).unwrap(),
+                result_size: 145,
+                result_media_type: FIXTURE_MEDIA_TYPE.to_owned(),
+                result_sensitivity: ArtifactSensitivity::CanonicalState,
+                run_id: target.identity.run_id.clone(),
+                genesis_hash: target.identity.genesis_hash().clone(),
+                snapshot_id: target_snapshot.snapshot_id.clone(),
+                universe_id: target_snapshot.universe_id.clone(),
+                property_id: harness_request.property_id().to_owned(),
+                claim_id: harness_request.claim_id().clone(),
+                claim_body_hash: harness_request.claim_body_hash().clone(),
+            };
+            recovery_harnesses.push(harness.clone());
+            *gluing = (*gluing).with_harness(harness).unwrap();
+        }
+        let mut native = Box::new((*gluing).begin_native().unwrap());
+        let native_step_limit = partial_members.saturating_mul(5);
+        for _ in 0..native_step_limit {
+            if let Some(request) = native.next_static_work_request().unwrap() {
+                let input = StaticFactInputV1::from_json_bytes(request.input_bytes()).unwrap();
+                let output = evaluate_static_fact_result_from_input_v1(&input)
+                    .unwrap()
+                    .canonical_bytes()
+                    .unwrap();
+                let result =
+                    ValidatedM6StaticResultV5::from_canonical_bytes(request.input_bytes(), &output)
+                        .unwrap();
+                *native = (*native).append_static_result(result).unwrap();
+            } else if native.next_harness_work_request().unwrap().is_some() {
+                *native = (*native).append_next().unwrap();
+            } else {
+                break;
+            }
+        }
+        assert!(native.next_harness_work_request().unwrap().is_none());
+        assert!(native.next_static_work_request().unwrap().is_none());
+        let grant = AuthorityHumanGrantV3Tuple {
+            policy_revision_hash: target_snapshot.marker.policy_revision_hash.clone(),
+            actor: "human:store-reviewer".to_owned(),
+            authority_id: "store-review-board".to_owned(),
+            capabilities: BTreeSet::from([HumanAuthorityCapabilityV3::AcceptFinding]),
+            run_id: target.identity.run_id.clone(),
+            snapshot_id: target_snapshot.snapshot_id.clone(),
+            universe_id: target_snapshot.universe_id.clone(),
+            property_ids: harness_requests
+                .iter()
+                .map(|request| request.property_id().to_owned())
+                .collect(),
+            claim_ids: harness_requests
+                .iter()
+                .map(|request| request.claim_id().clone())
+                .collect(),
+            valid_from: "2026-01-01T00:00:00Z".to_owned(),
+            valid_until: "2027-01-01T00:00:00Z".to_owned(),
+        };
+        let mut human = Box::new(
+            (*native)
+                .begin_human()
+                .unwrap()
+                .with_human_grant(grant.clone())
+                .unwrap(),
+        );
+        for _ in 0..4 {
+            match human.next_human_work() {
+                M6HumanWorkRequestV5::Decision => {
+                    *human = (*human)
+                        .append_decision(FixedHumanDecisionV5::new(
+                            grant.clone(),
+                            DecisionInputV3::new(
+                                DecisionOutcomeV3::Accept,
+                                "human:store-reviewer",
+                                "store-review-board",
+                                "fixture accepts the reproduced issue",
+                                "2026-08-13T00:00:00Z",
+                                None,
+                            ),
+                        ))
+                        .unwrap();
+                }
+                M6HumanWorkRequestV5::DerivedFinding => {
+                    *human = (*human).append_derived_finding().unwrap();
+                }
+                M6HumanWorkRequestV5::Complete => break,
+            }
+        }
+        assert_eq!(human.next_human_work(), M6HumanWorkRequestV5::Complete);
+        let mut m5 = Box::new((*human).begin_m5().unwrap());
+        for _ in 0..2 {
+            let request = m5
+                .next_gluing_work_request()
+                .unwrap()
+                .expect("one of the two sequential M5 descriptor registrations");
+            recovery_gluing_inputs.push(v5_gluing_input_for_request(
+                &root,
+                &request,
+                target_snapshot.marker.policy_revision_hash.clone(),
+                target_snapshot.repository_id.clone(),
+                target_repository_source_hash.clone(),
+            ));
+            *m5 = (*m5)
+                .with_gluing_input(v5_gluing_input_for_request(
+                    &root,
+                    &request,
+                    target_snapshot.marker.policy_revision_hash.clone(),
+                    target_snapshot.repository_id.clone(),
+                    target_repository_source_hash.clone(),
+                ))
+                .unwrap();
+            assert!((*m5).append_next().unwrap());
+        }
+        assert!(m5.next_gluing_work_request().unwrap().is_none());
+        assert!(m5.append_next().unwrap());
+        assert!(!m5.append_next().unwrap());
+        if inject_terminal_proof_before_cas {
+            m5.mapping
+                .proof
+                .target_index
+                .with_session_mut(|session| {
+                    session
+                        .writer
+                        .inject_faults([AppendFault::TerminalProofBeforeCas]);
+                    Ok(())
+                })
+                .unwrap();
+            assert!(m5.append_terminal_marker().is_err());
+            let recovered = target.recover_terminal_proof_v5().unwrap();
+            let recovered_again = target.recover_terminal_proof_v5().unwrap();
+            assert_eq!(recovered.proof(), recovered_again.proof());
+            assert_eq!(recovered.cas().hash, recovered_again.cas().hash);
+            let recovered_authority = authority
+                .recover_terminal_report_authority_v5(
+                    &source,
+                    &source_index,
+                    &target,
+                    &target_index,
+                    V5AuthorityTrustInput::new_with_gluing(
+                        target_snapshot.marker.policy_revision_hash.clone(),
+                        target_snapshot.repository_id.clone(),
+                        target_repository_source_hash.clone(),
+                        recovery_harnesses,
+                        vec![grant],
+                        recovery_gluing_inputs,
+                    ),
+                )
+                .unwrap();
+            recovered_authority
+                .with_terminal_rows(|rows| {
+                    assert!(rows.target_inherited.iter().any(|row| matches!(
+                        row,
+                        V5InheritedReportProjection::GluingBundleRecordedV4 { .. }
+                    )));
+                    Ok(())
+                })
+                .unwrap();
+            return;
+        }
+        let proof = m5.append_terminal_marker().unwrap();
+        assert_eq!(proof.proof().run_id(), &target.identity.run_id);
+        let mut closure_assessment_count = 0_usize;
+        proof
+            .terminal_review_closure()
+            .visit_claim_assessments_for_store(&mut |_| {
+                closure_assessment_count += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            closure_assessment_count > 0,
+            "the proof-bound terminal closure must retain assessed claims"
+        );
+        // A terminal marker/proof alone cannot reconstruct roots/CAS-derived
+        // claim assessments. The legacy target-only index route must therefore
+        // fail FK validation for this glued terminal rather than minting a
+        // partial index that appears authoritative.
+        assert!(
+            target_index
+                .rebuild_terminal_from_persisted_v5_v6(&target, &proof)
+                .is_err(),
+            "target-only terminal rebuild accepted a glued assessment closure"
+        );
+        {
+            let terminal_session = target.replayed_v5_target_session().unwrap();
+            let (_, terminal_snapshot) = target_index
+                .rebuild_terminal_from_verified_session_with_inherited_v5_v6(
+                    &terminal_session,
+                    proof.proof(),
+                    Some(proof.terminal_review_closure()),
+                )
+                .unwrap();
+            assert_eq!(
+                terminal_snapshot.terminal_claim_assessments.len(),
+                closure_assessment_count,
+                "SQLite terminal rebuild did not read back the full proof-bound assessment closure"
+            );
+        }
+        // The terminal V6 rebuild is a source-bound report operation: its
+        // full inherited closure (including claim assessments) must come from
+        // the same proof-bound Core cursor, not a target-only marker scan.
+        let terminal_authority = authority
+            .terminal_report_authority_from_persisted_with_terminal_index_v5(
+                &source,
+                &source_index,
+                &target,
+                &target_index,
+                &proof,
+            )
+            .unwrap();
+        // A terminal proof's identity/body hash names the proof artifact, not
+        // the derived V6 index snapshot. Report authority must retain the
+        // latter from the exact source-bound rebuild receipt.
+        let receipt = terminal_authority.terminal_index_rebuild_receipt().unwrap();
+        assert_eq!(receipt.terminal_proof_id, *proof.proof().id());
+        assert_ne!(proof.proof().body_hash(), &receipt.rebuild.snapshot_hash);
+        assert_eq!(
+            terminal_authority.terminal_index_snapshot_hash().unwrap(),
+            receipt.rebuild.snapshot_hash
         );
     }
 

@@ -829,6 +829,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "reviewgraphen-cli"
+version = "0.1.0"
+dependencies = [
+ "jsonschema",
+ "reviewgraphen-core",
+ "reviewgraphen-report",
+ "reviewgraphen-runtime",
+ "reviewgraphen-store",
+ "reviewgraphen-verifier",
+ "rustix",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "reviewgraphen-core"
 version = "0.1.0"
 dependencies = [
@@ -886,11 +901,14 @@ dependencies = [
 name = "reviewgraphen-runtime"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
+ "quote",
  "reviewgraphen-core",
  "reviewgraphen-reviewer",
  "reviewgraphen-store",
  "reviewgraphen-verifier",
  "serde_json",
+ "syn 2.0.119",
  "tempfile",
  "thiserror",
 ]

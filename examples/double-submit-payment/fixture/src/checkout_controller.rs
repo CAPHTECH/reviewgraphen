@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Barrier,
+    atomic::{AtomicBool, Ordering},
 };
 
 use crate::PaymentRepository;
@@ -13,10 +13,7 @@ pub struct CheckoutController {
 }
 
 impl CheckoutController {
-    pub fn new(
-        validation_boundary: Arc<Barrier>,
-        payments: Arc<PaymentRepository>,
-    ) -> Self {
+    pub fn new(validation_boundary: Arc<Barrier>, payments: Arc<PaymentRepository>) -> Self {
         Self {
             loading: AtomicBool::new(false),
             validation_boundary,

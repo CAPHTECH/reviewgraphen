@@ -72,6 +72,11 @@ pub const MAX_M6_GLUING_PREREQUISITES: usize = 8;
 
 pub type M6Result<T> = std::result::Result<T, M6Error>;
 
+fn canonical_json_string_v6<T: Serialize>(value: &T) -> M6Result<String> {
+    String::from_utf8(crate::canonical_json(value)?)
+        .map_err(|error| M6Error::InvalidWire(error.to_string()))
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum M6Error {
     #[error("invalid M6 source/target closure: {0}")]
@@ -648,6 +653,23 @@ pub struct ArtifactRegistrationV5 {
     source: PreservationArtifactV5,
 }
 
+/// Closed, read-only SQL projection for the ADR-0023 preservation
+/// registration table. The canonical source cell is produced by Core from
+/// the typed source enum; Store never parses a payload or generic DTO JSON.
+#[derive(Clone, Debug)]
+pub struct ArtifactRegistrationV5IndexProjection {
+    pub schema: String,
+    pub registration_id: StableId,
+    pub run_id: StableId,
+    pub cas_hash: ContentHash,
+    pub media_type: String,
+    pub size: u64,
+    pub sensitivity: &'static str,
+    pub source_kind: &'static str,
+    pub source_canonical_json: String,
+    pub body_hash: ContentHash,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ArtifactRegistrationWireV5 {
@@ -784,6 +806,25 @@ impl ArtifactRegistrationV5 {
     pub fn body_hash(&self) -> M6Result<ContentHash> {
         body_hash(self)
     }
+
+    /// Produces the complete typed column projection for
+    /// `artifact_registrations_v5`.
+    pub fn index_projection_v6(&self) -> M6Result<ArtifactRegistrationV5IndexProjection> {
+        let source_canonical_json = String::from_utf8(crate::canonical_json(&self.source)?)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        Ok(ArtifactRegistrationV5IndexProjection {
+            schema: self.schema.clone(),
+            registration_id: self.id.clone(),
+            run_id: self.run_id.clone(),
+            cas_hash: self.cas_hash.clone(),
+            media_type: self.media_type.clone(),
+            size: self.size,
+            sensitivity: "canonical_state",
+            source_kind: "preservation_artifact",
+            source_canonical_json,
+            body_hash: self.body_hash()?,
+        })
+    }
 }
 
 impl<'de> Deserialize<'de> for ArtifactRegistrationV5 {
@@ -873,6 +914,28 @@ pub struct PreservationEvidenceV5 {
     source_ids: BTreeSet<StableId>,
 }
 
+#[derive(Clone, Debug)]
+pub struct PreservationEvidenceV5IndexProjection {
+    pub schema: String,
+    pub evidence_id: StableId,
+    pub target_snapshot_id: StableId,
+    pub target_obligation_id: StableId,
+    pub source_closure_id: StableId,
+    pub morphism_id: StableId,
+    pub correspondence_entry_id: StableId,
+    pub source_claim_id: StableId,
+    pub source_evidence_ids_canonical_json: String,
+    pub source_verification_id: StableId,
+    pub dependency_mapping_ids_canonical_json: String,
+    pub input_registration_id: StableId,
+    pub output_registration_id: StableId,
+    pub descriptor_id: String,
+    pub procedure_version: String,
+    pub observation: String,
+    pub source_ids_canonical_json: String,
+    pub body_hash: ContentHash,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreservationVerificationV5 {
@@ -886,6 +949,21 @@ pub struct PreservationVerificationV5 {
     procedure_version: String,
     outcome: String,
     source_ids: BTreeSet<StableId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreservationVerificationV5IndexProjection {
+    pub schema: String,
+    pub verification_id: StableId,
+    pub target_snapshot_id: StableId,
+    pub target_obligation_id: StableId,
+    pub evidence_id: StableId,
+    pub source_verification_id: StableId,
+    pub descriptor_id: String,
+    pub procedure_version: String,
+    pub outcome: String,
+    pub source_ids_canonical_json: String,
+    pub body_hash: ContentHash,
 }
 
 fn exact_preservation_source_ids(
@@ -1057,6 +1135,32 @@ impl PreservationResultV1 {
 }
 
 impl PreservationEvidenceV5 {
+    pub fn index_projection_v6(&self) -> M6Result<PreservationEvidenceV5IndexProjection> {
+        Ok(PreservationEvidenceV5IndexProjection {
+            schema: self.schema.clone(),
+            evidence_id: self.id.clone(),
+            target_snapshot_id: self.target_snapshot_id.clone(),
+            target_obligation_id: self.target_obligation_id.clone(),
+            source_closure_id: self.source_closure_id.clone(),
+            morphism_id: self.morphism_id.clone(),
+            correspondence_entry_id: self.correspondence_entry_id.clone(),
+            source_claim_id: self.source_claim_id.clone(),
+            source_evidence_ids_canonical_json: canonical_json_string_v6(
+                &self.source_evidence_ids,
+            )?,
+            source_verification_id: self.source_verification_id.clone(),
+            dependency_mapping_ids_canonical_json: canonical_json_string_v6(
+                &self.dependency_mapping_ids,
+            )?,
+            input_registration_id: self.input_registration_id.clone(),
+            output_registration_id: self.output_registration_id.clone(),
+            descriptor_id: self.descriptor_id.clone(),
+            procedure_version: self.procedure_version.clone(),
+            observation: self.observation.clone(),
+            source_ids_canonical_json: canonical_json_string_v6(&self.source_ids)?,
+            body_hash: self.body_hash()?,
+        })
+    }
     pub(crate) fn retained_bytes(&self) -> M6Result<usize> {
         [
             std::mem::size_of::<Self>(),
@@ -1412,6 +1516,21 @@ impl PreservationVerificationV5 {
     #[must_use]
     pub fn source_verification_id(&self) -> &StableId {
         &self.source_verification_id
+    }
+    pub fn index_projection_v6(&self) -> M6Result<PreservationVerificationV5IndexProjection> {
+        Ok(PreservationVerificationV5IndexProjection {
+            schema: self.schema.clone(),
+            verification_id: self.id.clone(),
+            target_snapshot_id: self.target_snapshot_id.clone(),
+            target_obligation_id: self.target_obligation_id.clone(),
+            evidence_id: self.evidence_id.clone(),
+            source_verification_id: self.source_verification_id.clone(),
+            descriptor_id: self.descriptor_id.clone(),
+            procedure_version: self.procedure_version.clone(),
+            outcome: self.outcome.clone(),
+            source_ids_canonical_json: canonical_json_string_v6(&self.source_ids)?,
+            body_hash: self.body_hash()?,
+        })
     }
     pub fn body_hash(&self) -> M6Result<ContentHash> {
         body_hash(self)
@@ -2187,6 +2306,10 @@ impl PartialRerunActionV5 {
         &self.id
     }
     #[must_use]
+    pub fn staleness_assessment_id(&self) -> &StableId {
+        &self.staleness_assessment_id
+    }
+    #[must_use]
     pub const fn action(&self) -> PartialRerunActionKindV5 {
         self.action
     }
@@ -2237,6 +2360,7 @@ struct PartialRerunPlanIdentityV5<'a> {
     staleness_assessment_id: &'a StableId,
     planner_descriptor_id: &'static str,
     target_plan_id: &'a StableId,
+    target_gluing_required: bool,
     selected_target_count: u64,
     selected_target_digest: &'a ContentHash,
     action_count: u64,
@@ -2269,6 +2393,7 @@ struct PartialRerunPlanCanonicalV5<'a> {
     source_closure_id: &'a StableId,
     source_ids: &'a BTreeSet<StableId>,
     staleness_assessment_id: &'a StableId,
+    target_gluing_required: bool,
     target_plan_id: &'a StableId,
 }
 
@@ -2282,6 +2407,7 @@ pub struct PartialRerunPlanV5 {
     staleness_assessment_id: StableId,
     planner_descriptor_id: &'static str,
     target_plan_id: StableId,
+    target_gluing_required: bool,
     selected_target_count: u64,
     selected_target_digest: ContentHash,
     action_count: u64,
@@ -2304,6 +2430,7 @@ struct PartialRerunPlanWireV5 {
     staleness_assessment_id: StableId,
     planner_descriptor_id: String,
     target_plan_id: StableId,
+    target_gluing_required: bool,
     selected_target_count: u64,
     selected_target_digest: ContentHash,
     action_count: u64,
@@ -2321,6 +2448,7 @@ struct PartialRerunPlanPartsV5<'a> {
     correspondence_id: StableId,
     staleness_assessment_id: StableId,
     target_plan_id: StableId,
+    target_gluing_required: bool,
     selected_target_ids: &'a BTreeSet<StableId>,
     actions: &'a [PartialRerunActionV5],
     preservation_verifications: &'a [PreservationVerificationV5],
@@ -2328,6 +2456,10 @@ struct PartialRerunPlanPartsV5<'a> {
 }
 
 impl PartialRerunPlanV5 {
+    #[must_use]
+    pub const fn target_gluing_required(&self) -> bool {
+        self.target_gluing_required
+    }
     pub(crate) fn canonical_body_matches(&self, input: &[u8]) -> M6Result<bool> {
         crate::canonical::compact_json_eq_streaming(
             &PartialRerunPlanCanonicalV5 {
@@ -2348,6 +2480,7 @@ impl PartialRerunPlanV5 {
                 source_ids: &self.source_ids,
                 staleness_assessment_id: &self.staleness_assessment_id,
                 target_plan_id: &self.target_plan_id,
+                target_gluing_required: self.target_gluing_required,
             },
             input,
         )
@@ -2515,6 +2648,7 @@ impl PartialRerunPlanV5 {
             staleness_assessment_id: parts.staleness_assessment_id,
             planner_descriptor_id: PARTIAL_RERUN_PLANNER_DESCRIPTOR_V5,
             target_plan_id: parts.target_plan_id,
+            target_gluing_required: parts.target_gluing_required,
             selected_target_count: u64::try_from(parts.selected_target_ids.len()).map_err(
                 |_| M6Error::Incomplete {
                     operation: "M6 selected target count",
@@ -2564,6 +2698,7 @@ impl PartialRerunPlanV5 {
             staleness_assessment_id: &self.staleness_assessment_id,
             planner_descriptor_id: self.planner_descriptor_id,
             target_plan_id: &self.target_plan_id,
+            target_gluing_required: self.target_gluing_required,
             selected_target_count: self.selected_target_count,
             selected_target_digest: &self.selected_target_digest,
             action_count: self.action_count,
@@ -2615,6 +2750,7 @@ impl PartialRerunPlanV5 {
             staleness_assessment_id: wire.staleness_assessment_id,
             planner_descriptor_id: PARTIAL_RERUN_PLANNER_DESCRIPTOR_V5,
             target_plan_id: wire.target_plan_id,
+            target_gluing_required: wire.target_gluing_required,
             selected_target_count: wire.selected_target_count,
             selected_target_digest: wire.selected_target_digest,
             action_count: wire.action_count,
@@ -2686,6 +2822,7 @@ impl PartialRerunPlanV5 {
             staleness_assessment_id: wire.staleness_assessment_id,
             planner_descriptor_id: PARTIAL_RERUN_PLANNER_DESCRIPTOR_V5,
             target_plan_id: wire.target_plan_id,
+            target_gluing_required: wire.target_gluing_required,
             selected_target_count: wire.selected_target_count,
             selected_target_digest: wire.selected_target_digest,
             action_count: wire.action_count,
@@ -2721,6 +2858,25 @@ impl PartialRerunPlanV5 {
     pub fn id(&self) -> &StableId {
         &self.id
     }
+    /// Read-only provenance of this derived plan.  This exposes no planning
+    /// or append authority and lets the terminal proof verifier bind a sealed
+    /// plan to the exact source-closure event that carried it.
+    #[must_use]
+    pub fn source_closure_id(&self) -> &StableId {
+        &self.source_closure_id
+    }
+    #[must_use]
+    pub fn morphism_id(&self) -> &StableId {
+        &self.morphism_id
+    }
+    #[must_use]
+    pub fn correspondence_id(&self) -> &StableId {
+        &self.correspondence_id
+    }
+    #[must_use]
+    pub fn staleness_assessment_id(&self) -> &StableId {
+        &self.staleness_assessment_id
+    }
     #[must_use]
     pub fn target_plan_id(&self) -> &StableId {
         &self.target_plan_id
@@ -2732,6 +2888,10 @@ impl PartialRerunPlanV5 {
     #[must_use]
     pub const fn selected_target_count(&self) -> u64 {
         self.selected_target_count
+    }
+    #[must_use]
+    pub fn selected_target_digest(&self) -> &ContentHash {
+        &self.selected_target_digest
     }
     #[must_use]
     pub const fn preservation_verification_count(&self) -> u64 {
@@ -2748,6 +2908,10 @@ impl PartialRerunPlanV5 {
     #[must_use]
     pub fn action_set_digest(&self) -> &ContentHash {
         &self.action_set_digest
+    }
+    #[must_use]
+    pub fn required_human_resolution_digest(&self) -> &ContentHash {
+        &self.required_human_resolution_digest
     }
     #[must_use]
     pub fn source_ids(&self) -> &BTreeSet<StableId> {
@@ -3133,6 +3297,10 @@ impl GluingRerunActionV5 {
         &self.planning_scope_id
     }
     #[must_use]
+    pub const fn subject_kind(&self) -> GluingRerunSubjectKindV5 {
+        self.subject_kind
+    }
+    #[must_use]
     pub const fn action(&self) -> GluingRerunActionKindV5 {
         self.action
     }
@@ -3143,6 +3311,14 @@ impl GluingRerunActionV5 {
     #[must_use]
     pub fn prerequisites(&self) -> &[ActionPrerequisiteV5] {
         &self.prerequisites
+    }
+    #[must_use]
+    pub fn reasons(&self) -> &BTreeSet<GluingRerunReasonV5> {
+        &self.reasons
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
     }
     pub fn body_hash(&self) -> M6Result<ContentHash> {
         body_hash(self)
@@ -3821,6 +3997,10 @@ impl GluingRerunPlanSealV5 {
     pub fn claim_bindings(&self) -> &[GluingClaimBindingV5; 2] {
         &self.claim_bindings
     }
+    #[must_use]
+    pub fn action_set_digest(&self) -> &ContentHash {
+        &self.action_set_digest
+    }
 
     #[must_use]
     pub fn existing_target_bundle_witness(&self) -> Option<&ExistingTargetRecordV5> {
@@ -3829,6 +4009,10 @@ impl GluingRerunPlanSealV5 {
     #[must_use]
     pub const fn action_count(&self) -> u64 {
         self.action_count
+    }
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
     }
     pub fn body_hash(&self) -> M6Result<ContentHash> {
         body_hash(self)
@@ -3973,6 +4157,43 @@ pub struct IncrementalSourceClosureV5 {
     input: IncrementalStructuralInputV5,
 }
 
+/// Read-only, complete report projection of a closure already admitted by the
+/// dual-run replay.  This is descriptive data only: it has no constructor,
+/// no mutation API, and cannot be supplied to an append path.
+#[derive(Clone, Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IncrementalSourceClosureReportProjectionV5 {
+    pub repository_id: StableId,
+    pub repository_identity_hash: ContentHash,
+    pub source_run_id: StableId,
+    pub source_genesis_hash: ContentHash,
+    pub source_confirmed_offset: u64,
+    pub source_tail_hash: ContentHash,
+    pub source_event_count: u64,
+    pub source_snapshot_id: StableId,
+    pub source_universe_id: StableId,
+    pub source_index_snapshot_hash: ContentHash,
+    pub source_authority_policy_revision_hash: ContentHash,
+    pub source_authority_replay_basis_digest: ContentHash,
+    pub source_resolved_target_commit_oid: String,
+    pub source_target_tree_hash: ContentHash,
+    pub source_gluing_bundle_id: StableId,
+    pub target_run_id: StableId,
+    pub target_genesis_hash: ContentHash,
+    pub target_predecessor_offset: u64,
+    pub target_predecessor_tail_hash: ContentHash,
+    pub target_predecessor_event_count: u64,
+    pub target_snapshot_id: StableId,
+    pub target_universe_id: StableId,
+    pub target_predecessor_index_snapshot_hash: ContentHash,
+    pub target_authority_policy_revision_hash: ContentHash,
+    pub target_pre_incremental_authority_replay_basis_digest: ContentHash,
+    pub target_resolved_base_commit_oid: String,
+    pub target_base_tree_hash: ContentHash,
+    pub target_resolved_target_commit_oid: String,
+    pub target_target_tree_hash: ContentHash,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct IncrementalSourceClosureWireV5 {
@@ -3983,6 +4204,19 @@ struct IncrementalSourceClosureWireV5 {
 }
 
 impl IncrementalSourceClosureV5 {
+    /// Store-only descriptive projection parser. It validates the closed
+    /// durable wire but produces no admission, append, or replay capability.
+    pub(crate) fn from_projection_event_json(input: &[u8]) -> M6Result<Self> {
+        Self::validate_event_wire(input)?;
+        let wire: IncrementalSourceClosureWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        Ok(Self {
+            schema: "reviewgraphen.incremental_source_closure.v5",
+            id: wire.id,
+            input: wire.input,
+        })
+    }
+
     pub(crate) fn validate_event_wire(input: &[u8]) -> M6Result<()> {
         preflight_event_line(input.len(), 1)?;
         bounded(
@@ -4145,6 +4379,55 @@ impl IncrementalSourceClosureV5 {
         &self.id
     }
 
+    /// Projects all report-visible dual-run coordinates from an already
+    /// validated closure. The result is intentionally owned and has no
+    /// identity/constructor method, preventing use as an authority proposal.
+    #[must_use]
+    pub fn report_projection(&self) -> IncrementalSourceClosureReportProjectionV5 {
+        let value = &self.input;
+        IncrementalSourceClosureReportProjectionV5 {
+            repository_id: value.repository_id.clone(),
+            repository_identity_hash: value.repository_identity_hash.clone(),
+            source_run_id: value.source_run_id.clone(),
+            source_genesis_hash: value.source_genesis_hash.clone(),
+            source_confirmed_offset: value.source_confirmed_offset,
+            source_tail_hash: value.source_tail_hash.clone(),
+            source_event_count: value.source_event_count,
+            source_snapshot_id: value.source_snapshot_id.clone(),
+            source_universe_id: value.source_universe_id.clone(),
+            source_index_snapshot_hash: value.source_index_snapshot_hash.clone(),
+            source_authority_policy_revision_hash: value
+                .source_authority_policy_revision_hash
+                .clone(),
+            source_authority_replay_basis_digest: value
+                .source_authority_replay_basis_digest
+                .clone(),
+            source_resolved_target_commit_oid: value.source_resolved_target_commit_oid.clone(),
+            source_target_tree_hash: value.source_target_tree_hash.clone(),
+            source_gluing_bundle_id: value.source_gluing_bundle_id.clone(),
+            target_run_id: value.target_run_id.clone(),
+            target_genesis_hash: value.target_genesis_hash.clone(),
+            target_predecessor_offset: value.target_predecessor_offset,
+            target_predecessor_tail_hash: value.target_predecessor_tail_hash.clone(),
+            target_predecessor_event_count: value.target_predecessor_event_count,
+            target_snapshot_id: value.target_snapshot_id.clone(),
+            target_universe_id: value.target_universe_id.clone(),
+            target_predecessor_index_snapshot_hash: value
+                .target_predecessor_index_snapshot_hash
+                .clone(),
+            target_authority_policy_revision_hash: value
+                .target_authority_policy_revision_hash
+                .clone(),
+            target_pre_incremental_authority_replay_basis_digest: value
+                .target_pre_incremental_authority_replay_basis_digest
+                .clone(),
+            target_resolved_base_commit_oid: value.target_resolved_base_commit_oid.clone(),
+            target_base_tree_hash: value.target_base_tree_hash.clone(),
+            target_resolved_target_commit_oid: value.target_resolved_target_commit_oid.clone(),
+            target_target_tree_hash: value.target_target_tree_hash.clone(),
+        }
+    }
+
     #[must_use]
     pub(crate) fn input(&self) -> &IncrementalStructuralInputV5 {
         &self.input
@@ -4171,6 +4454,10 @@ impl IncrementalSourceClosureV5 {
 
     pub(crate) fn target_genesis_hash(&self) -> &ContentHash {
         &self.input.target_genesis_hash
+    }
+
+    pub(crate) const fn target_predecessor_offset(&self) -> u64 {
+        self.input.target_predecessor_offset
     }
 
     pub(crate) const fn target_predecessor_event_count(&self) -> u64 {
@@ -4856,6 +5143,14 @@ impl ProgramMappingV5 {
     #[must_use]
     pub fn candidate_key_kind(&self) -> CandidateKeyKindV5 {
         self.candidate_key_kind
+    }
+    #[must_use]
+    pub fn source_body_hashes(&self) -> &[IdBodyHashV5] {
+        &self.source_body_hashes
+    }
+    #[must_use]
+    pub fn target_body_hashes(&self) -> &[IdBodyHashV5] {
+        &self.target_body_hashes
     }
     #[must_use]
     pub fn change_fact_ids(&self) -> &BTreeSet<StableId> {
@@ -7438,6 +7733,25 @@ impl M6MappingPhaseV5 {
         self.working_peak_upper_bound_bytes
     }
 
+    /// Rebuilds the minimal structural proposal view needed by the terminal
+    /// crash-recovery reducer.  This is deliberately crate-private: callers
+    /// cannot turn durable mapping rows into an appendable mapping phase.
+    /// The caller must still recompute and compare every row from roots/CAS
+    /// before it can use the result for recovery.
+    pub(crate) fn from_durable_morphism_for_recovery(morphism: ChangeMorphismV5) -> M6Result<Self> {
+        Ok(Self {
+            // The durable mapping entries are deliberately not used as an
+            // authority source. The terminal recovery immediately derives
+            // the complete phase again from accepted program facts.
+            mappings: Vec::new(),
+            morphism,
+            // This temporary value is never admitted as a mapping
+            // reservation. The recovery reducer derives a fresh phase before
+            // it compares the durable rows.
+            working_peak_upper_bound_bytes: 0,
+        })
+    }
+
     /// Compares replayed canonical DTOs against this freshly recomputed phase;
     /// replay bytes can never select or alter mappings.
     #[doc(hidden)]
@@ -7529,6 +7843,36 @@ struct ChangeMorphismWireV5 {
 }
 
 impl ChangeMorphismV5 {
+    pub(crate) fn from_projection_event_json(input: &[u8]) -> M6Result<Self> {
+        Self::validate_event_wire(input)?;
+        let wire: ChangeMorphismWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        Ok(Self {
+            schema: "reviewgraphen.change_morphism.v5",
+            id: wire.id,
+            source_closure_id: wire.source_closure_id,
+            repository_id: wire.repository_id,
+            source_snapshot_id: wire.source_snapshot_id,
+            target_snapshot_id: wire.target_snapshot_id,
+            mapping_policy_descriptor_id: PROGRAM_MAPPING_POLICY_V5,
+            semantic_anchor_descriptor_id: RUST_SYMBOL_ANCHOR_V1,
+            mapping_count: wire.mapping_count,
+            mapping_set_digest: wire.mapping_set_digest,
+            source_domain_count: wire.source_domain_count,
+            source_domain_digest: wire.source_domain_digest,
+            target_domain_count: wire.target_domain_count,
+            target_domain_digest: wire.target_domain_digest,
+            status_counts: wire.status_counts,
+            source_ids: wire.source_ids,
+        })
+    }
+
+    /// Compares a durable seal body with this freshly recomputed expected
+    /// morphism.  The raw body grants no authority by itself.
+    pub(crate) fn canonical_body_matches(&self, input: &[u8]) -> M6Result<bool> {
+        Ok(crate::canonical_json(self)? == input)
+    }
+
     pub(crate) fn validate_event_wire(input: &[u8]) -> M6Result<()> {
         preflight_event_line(input.len(), 1)?;
         bounded(
@@ -8505,6 +8849,10 @@ impl ChangeMorphismV5 {
         &self.id
     }
     #[must_use]
+    pub fn repository_id(&self) -> &StableId {
+        &self.repository_id
+    }
+    #[must_use]
     pub fn source_closure_id(&self) -> &StableId {
         &self.source_closure_id
     }
@@ -8916,6 +9264,34 @@ struct ObligationCorrespondenceWireV5 {
 }
 
 impl ObligationCorrespondenceV5 {
+    pub(crate) fn from_projection_event_json(input: &[u8]) -> M6Result<Self> {
+        Self::validate_event_wire(input)?;
+        let wire: ObligationCorrespondenceWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        Ok(Self {
+            schema: "reviewgraphen.obligation_correspondence.v5",
+            id: wire.id,
+            morphism_id: wire.morphism_id,
+            source_universe_id: wire.source_universe_id,
+            target_universe_id: wire.target_universe_id,
+            policy_descriptor_id: OBLIGATION_CORRESPONDENCE_POLICY_V5,
+            entry_count: wire.entry_count,
+            entry_set_digest: wire.entry_set_digest,
+            source_domain_count: wire.source_domain_count,
+            source_domain_digest: wire.source_domain_digest,
+            target_domain_count: wire.target_domain_count,
+            target_domain_digest: wire.target_domain_digest,
+            status_counts: wire.status_counts,
+            source_ids: wire.source_ids,
+        })
+    }
+
+    /// Compares a durable seal body with this freshly recomputed expected
+    /// correspondence phase without deserializing it as authority.
+    pub(crate) fn canonical_body_matches(&self, input: &[u8]) -> M6Result<bool> {
+        Ok(crate::canonical_json(self)? == input)
+    }
+
     pub(crate) fn validate_event_wire(input: &[u8]) -> M6Result<()> {
         preflight_event_line(input.len(), 1)?;
         bounded(
@@ -9880,6 +10256,40 @@ struct StalenessAssessmentSealPartsV5 {
 }
 
 impl StalenessAssessmentV5 {
+    pub(crate) fn from_projection_event_json(input: &[u8]) -> M6Result<Self> {
+        Self::validate_event_wire(input)?;
+        let wire: StalenessAssessmentWireV5 = serde_json::from_slice(input)
+            .map_err(|error| M6Error::InvalidWire(error.to_string()))?;
+        Ok(Self {
+            schema: "reviewgraphen.staleness_assessment.v5",
+            id: wire.id,
+            source_closure_id: wire.source_closure_id,
+            morphism_id: wire.morphism_id,
+            correspondence_id: wire.correspondence_id,
+            impact_policy_descriptor_id: MVP_PROPERTY_IMPACT_POLICY_V5,
+            assessment_time: wire.assessment_time,
+            record_count: wire.record_count,
+            record_set_digest: wire.record_set_digest,
+            gluing_freshness_count: wire.gluing_freshness_count,
+            gluing_freshness_set_digest: wire.gluing_freshness_set_digest,
+            stale_source_count: wire.stale_source_count,
+            stale_source_digest: wire.stale_source_digest,
+            superseded_source_count: wire.superseded_source_count,
+            superseded_source_digest: wire.superseded_source_digest,
+            preservation_candidate_count: wire.preservation_candidate_count,
+            preservation_candidate_digest: wire.preservation_candidate_digest,
+            m5_dependent_successor_count: wire.m5_dependent_successor_count,
+            m5_dependent_successor_digest: wire.m5_dependent_successor_digest,
+            source_ids: wire.source_ids,
+        })
+    }
+
+    /// Compares the closed durable staleness seal with the roots/CAS-derived
+    /// expected assessment.  Presence alone never establishes freshness.
+    pub(crate) fn canonical_body_matches(&self, input: &[u8]) -> M6Result<bool> {
+        Ok(crate::canonical_json(self)? == input)
+    }
+
     pub(crate) fn validate_event_wire(input: &[u8]) -> M6Result<()> {
         preflight_event_line(input.len(), 1)?;
         bounded(
@@ -11757,6 +12167,39 @@ fn transitive_record_closure_v5(
     Ok(result)
 }
 
+fn active_human_obligation_ids_v5(
+    node: &AssessmentRecordNodeV5,
+    nodes: &BTreeMap<OwnedHistoricalRecordKeyV5, AssessmentRecordNodeV5>,
+) -> M6Result<BTreeSet<StableId>> {
+    let claim_keys = node
+        .required_records
+        .iter()
+        .filter(|key| key.kind == HistoricalSourceRecordKindV4::Claim)
+        .collect::<Vec<_>>();
+    if claim_keys.len() != 1 {
+        return Err(M6Error::InvalidHistoricalTopology(
+            "active decision/finding must reference exactly one claim",
+        ));
+    }
+    let claim = nodes
+        .get(claim_keys[0])
+        .ok_or(M6Error::InvalidHistoricalTopology(
+            "active decision/finding claim is absent",
+        ))?;
+    let obligation_ids = claim
+        .required_records
+        .iter()
+        .filter(|key| key.kind == HistoricalSourceRecordKindV4::Obligation)
+        .map(|key| key.id.clone())
+        .collect::<BTreeSet<_>>();
+    if obligation_ids.is_empty() {
+        return Err(M6Error::InvalidHistoricalTopology(
+            "active decision/finding claim has no obligation",
+        ));
+    }
+    Ok(obligation_ids)
+}
+
 #[derive(Clone, Debug, Default)]
 struct PartialRerunActionSeedV5 {
     require_native_pipeline: bool,
@@ -11891,7 +12334,11 @@ fn partial_rerun_row_v5(
                 target,
                 PartialRerunActionSeedV5 {
                     require_native_pipeline: true,
-                    require_human_resolution: active_human,
+                    // An unsupported impact row cannot prove that the source
+                    // human authority applies to this successor obligation.
+                    // Keep the conservative native rerun, but never launder
+                    // that source decision into a target human-action demand.
+                    require_human_resolution: active_human && row.supported,
                     stale_source_record_ids: stale_source_record_ids.clone(),
                     reasons: reasons.clone(),
                 },
@@ -12113,7 +12560,10 @@ impl M6StalenessPhaseV5 {
                 .entry(verification.target_obligation_id.clone())
                 .or_default();
             seed.require_native_pipeline = true;
-            // ADR 0023's MVP preservation admission is issue_present-only.
+            // ADR 0023's MVP preservation admission is issue-present-only.
+            // The source decision itself carries no authority, so this exact
+            // preserved verification still requires a fresh target human
+            // resolution.
             seed.require_human_resolution = true;
         }
         seeds.retain(|_, seed| seed.require_native_pipeline || seed.require_human_resolution);
@@ -12342,6 +12792,7 @@ impl M6StalenessPhaseV5 {
             correspondence_id: self.assessment.correspondence_id.clone(),
             staleness_assessment_id: self.assessment.id.clone(),
             target_plan_id: self.target_plan_id.clone(),
+            target_gluing_required: self.target_gluing_required,
             selected_target_ids: &selected_target_ids,
             actions: &actions,
             preservation_verifications: &verifications,
@@ -13049,6 +13500,15 @@ impl IncrementalStalenessInputV5<'_> {
                     key.kind,
                     HistoricalSourceRecordKindV4::Decision | HistoricalSourceRecordKindV4::Finding
                 );
+            // A decision/finding's audit closure reaches its execution and
+            // plan, and therefore may contain unrelated plan obligations.
+            // Human authority is narrower: it follows only the exact claim's
+            // explicit obligation IDs.
+            let active_human_obligation_ids = if active_human {
+                active_human_obligation_ids_v5(node, &source_nodes)?
+            } else {
+                BTreeSet::new()
+            };
             for obligation_id in &obligation_ids {
                 let Some(row) = obligation_rows.get(obligation_id) else {
                     reasons.insert(StaleReasonV5::UnsupportedImpactPolicy);
@@ -13141,7 +13601,7 @@ impl IncrementalStalenessInputV5<'_> {
                     &mapping_ids,
                     row_target_missing,
                     row_dependency_changed,
-                    active_human,
+                    active_human && active_human_obligation_ids.contains(obligation_id),
                     self.mapping,
                     self.correspondence,
                     self.source.program_space(),
@@ -18733,6 +19193,7 @@ mod tests {
             correspondence_id: assessment.correspondence_id().clone(),
             staleness_assessment_id: assessment.id().clone(),
             target_plan_id: id("plan:target"),
+            target_gluing_required: false,
             selected_target_ids: &selected_target_ids,
             actions: &actions,
             preservation_verifications: &[],
@@ -19123,6 +19584,7 @@ mod tests {
         .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, target_obligation.clone());
+        assert!(!rows[0].1.require_human_resolution);
         assert_eq!(
             rows[0].1.reasons,
             BTreeSet::from([

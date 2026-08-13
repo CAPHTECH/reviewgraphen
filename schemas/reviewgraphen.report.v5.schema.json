@@ -1,0 +1,3345 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capht.tech/schemas/reviewgraphen/review-report.v5.schema.json",
+  "title": "ReviewGraphen Review Report v5",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "report_type",
+    "report_version",
+    "metadata",
+    "scenario",
+    "result",
+    "coverage",
+    "projection",
+    "gate"
+  ],
+  "properties": {
+    "schema": {
+      "const": "reviewgraphen.review.report.v5"
+    },
+    "report_type": {
+      "const": "review"
+    },
+    "report_version": {
+      "const": 5
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "scenario": {
+      "$ref": "#/$defs/scenario"
+    },
+    "result": {
+      "$ref": "#/$defs/result"
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "projection": {
+      "$ref": "#/$defs/projection"
+    },
+    "gate": {
+      "$ref": "#/$defs/gate"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9_.:@/+-]*$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nonEmpty": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "nonZeroCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "gitOid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "gitTreeHash": {
+      "type": "string",
+      "pattern": "^git:[0-9a-f]{40}$"
+    },
+    "idSet": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 8192,
+      "items": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "statusCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preserved",
+        "modified",
+        "added",
+        "removed",
+        "split",
+        "merged",
+        "unresolved"
+      ],
+      "properties": {
+        "preserved": {
+          "$ref": "#/$defs/count"
+        },
+        "modified": {
+          "$ref": "#/$defs/count"
+        },
+        "added": {
+          "$ref": "#/$defs/count"
+        },
+        "removed": {
+          "$ref": "#/$defs/count"
+        },
+        "split": {
+          "$ref": "#/$defs/count"
+        },
+        "merged": {
+          "$ref": "#/$defs/count"
+        },
+        "unresolved": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "idBodyHash": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "body_hash"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "prerequisite": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "action_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "scheduled_action"
+            },
+            "action_id": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "record_id",
+            "body_hash",
+            "event_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "existing_target_record"
+            },
+            "record_id": {
+              "$ref": "#/$defs/id"
+            },
+            "body_hash": {
+              "$ref": "#/$defs/hash"
+            },
+            "event_id": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        }
+      ]
+    },
+    "incrementalSourceClosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "repository_id",
+        "repository_identity_hash",
+        "source_run_id",
+        "source_genesis_hash",
+        "source_confirmed_offset",
+        "source_tail_hash",
+        "source_event_count",
+        "source_snapshot_id",
+        "source_universe_id",
+        "source_index_snapshot_hash",
+        "source_authority_policy_revision_hash",
+        "source_authority_replay_basis_digest",
+        "source_resolved_target_commit_oid",
+        "source_target_tree_hash",
+        "source_gluing_bundle_id",
+        "target_run_id",
+        "target_genesis_hash",
+        "target_predecessor_offset",
+        "target_predecessor_tail_hash",
+        "target_predecessor_event_count",
+        "target_snapshot_id",
+        "target_universe_id",
+        "target_predecessor_index_snapshot_hash",
+        "target_authority_policy_revision_hash",
+        "target_pre_incremental_authority_replay_basis_digest",
+        "target_resolved_base_commit_oid",
+        "target_base_tree_hash",
+        "target_resolved_target_commit_oid",
+        "target_target_tree_hash"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.incremental_source_closure.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/id"
+        },
+        "repository_identity_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_genesis_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_confirmed_offset": {
+          "$ref": "#/$defs/count"
+        },
+        "source_tail_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_event_count": {
+          "$ref": "#/$defs/nonZeroCount"
+        },
+        "source_snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_universe_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_index_snapshot_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_authority_policy_revision_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_authority_replay_basis_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_resolved_target_commit_oid": {
+          "$ref": "#/$defs/gitOid"
+        },
+        "source_target_tree_hash": {
+          "$ref": "#/$defs/gitTreeHash"
+        },
+        "source_gluing_bundle_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_genesis_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_predecessor_offset": {
+          "$ref": "#/$defs/count"
+        },
+        "target_predecessor_tail_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_predecessor_event_count": {
+          "$ref": "#/$defs/nonZeroCount"
+        },
+        "target_snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_universe_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_predecessor_index_snapshot_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_authority_policy_revision_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_pre_incremental_authority_replay_basis_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_resolved_base_commit_oid": {
+          "$ref": "#/$defs/gitOid"
+        },
+        "target_base_tree_hash": {
+          "$ref": "#/$defs/gitTreeHash"
+        },
+        "target_resolved_target_commit_oid": {
+          "$ref": "#/$defs/gitOid"
+        },
+        "target_target_tree_hash": {
+          "$ref": "#/$defs/gitTreeHash"
+        }
+      }
+    },
+    "programMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "source_closure_id",
+        "source_snapshot_id",
+        "target_snapshot_id",
+        "object_kind",
+        "from_ids",
+        "to_ids",
+        "status",
+        "candidate_key_kind",
+        "source_body_hashes",
+        "target_body_hashes",
+        "change_fact_ids",
+        "predecessor_mapping_ids",
+        "successor_ids",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.program_mapping.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_closure_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "object_kind": {
+          "enum": [
+            "repository",
+            "snapshot",
+            "artifact",
+            "relation",
+            "context",
+            "invariant",
+            "limitation"
+          ]
+        },
+        "from_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "to_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "status": {
+          "$ref": "#/$defs/mappingStatus"
+        },
+        "candidate_key_kind": {
+          "enum": [
+            "repository_identity",
+            "snapshot_pair",
+            "same_path",
+            "git_rename_same_content",
+            "rust_symbol_anchor_v1",
+            "same_kind_label_language_location",
+            "mapped_directed_endpoints",
+            "mapped_members",
+            "mapped_scope",
+            "mapped_limitation_sources",
+            "no_candidate"
+          ]
+        },
+        "source_body_hashes": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 8192,
+          "items": {
+            "$ref": "#/$defs/idBodyHash"
+          }
+        },
+        "target_body_hashes": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 8192,
+          "items": {
+            "$ref": "#/$defs/idBodyHash"
+          }
+        },
+        "change_fact_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "predecessor_mapping_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "successor_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "mappingStatus": {
+      "enum": [
+        "preserved",
+        "modified",
+        "added",
+        "removed",
+        "split",
+        "merged",
+        "unresolved"
+      ]
+    },
+    "changeMorphism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "source_closure_id",
+        "repository_id",
+        "source_snapshot_id",
+        "target_snapshot_id",
+        "mapping_policy_descriptor_id",
+        "semantic_anchor_descriptor_id",
+        "mapping_count",
+        "mapping_set_digest",
+        "source_domain_count",
+        "source_domain_digest",
+        "target_domain_count",
+        "target_domain_digest",
+        "status_counts",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.change_morphism.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_closure_id": {
+          "$ref": "#/$defs/id"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "mapping_policy_descriptor_id": {
+          "const": "reviewgraphen.program_mapping@1"
+        },
+        "semantic_anchor_descriptor_id": {
+          "const": "reviewgraphen.rust_symbol_anchor@1"
+        },
+        "mapping_count": {
+          "$ref": "#/$defs/count"
+        },
+        "mapping_set_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_domain_count": {
+          "$ref": "#/$defs/count"
+        },
+        "source_domain_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_domain_count": {
+          "$ref": "#/$defs/count"
+        },
+        "target_domain_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "status_counts": {
+          "$ref": "#/$defs/statusCounts"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "correspondenceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "morphism_id",
+        "from_obligation_ids",
+        "to_obligation_ids",
+        "status",
+        "source_mapping_ids",
+        "predecessor_entry_ids",
+        "successor_obligation_ids",
+        "source_body_hashes",
+        "target_body_hashes",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.obligation_correspondence_entry.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "morphism_id": {
+          "$ref": "#/$defs/id"
+        },
+        "from_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "to_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "status": {
+          "$ref": "#/$defs/mappingStatus"
+        },
+        "source_mapping_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "predecessor_entry_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "successor_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "source_body_hashes": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/idBodyHash"
+          }
+        },
+        "target_body_hashes": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/idBodyHash"
+          }
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "correspondence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "morphism_id",
+        "source_universe_id",
+        "target_universe_id",
+        "policy_descriptor_id",
+        "entry_count",
+        "entry_set_digest",
+        "source_domain_count",
+        "source_domain_digest",
+        "target_domain_count",
+        "target_domain_digest",
+        "status_counts",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.obligation_correspondence.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "morphism_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_universe_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_universe_id": {
+          "$ref": "#/$defs/id"
+        },
+        "policy_descriptor_id": {
+          "const": "reviewgraphen.obligation_correspondence@1"
+        },
+        "entry_count": {
+          "$ref": "#/$defs/count"
+        },
+        "entry_set_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_domain_count": {
+          "$ref": "#/$defs/count"
+        },
+        "source_domain_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_domain_count": {
+          "$ref": "#/$defs/count"
+        },
+        "target_domain_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "status_counts": {
+          "$ref": "#/$defs/statusCounts"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "historicalAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "assessment_id",
+        "source_record_kind",
+        "source_record_id",
+        "source_record_body_hash",
+        "successor_record_ids",
+        "status",
+        "directness",
+        "reasons",
+        "dependency_source_ids",
+        "mapping_ids",
+        "correspondence_entry_ids",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.historical_record_assessment.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "assessment_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_record_kind": {
+          "enum": [
+            "obligation",
+            "review_plan",
+            "context_envelope",
+            "execution",
+            "claim",
+            "claim_assessment",
+            "artifact_registration_v3",
+            "artifact_registration_v4",
+            "evidence",
+            "evidence_binding",
+            "verification",
+            "decision",
+            "finding",
+            "gluing_input_descriptor",
+            "context_cover",
+            "section",
+            "restriction",
+            "gluing_attempt",
+            "global_candidate",
+            "gluing_obstruction",
+            "coverage"
+          ]
+        },
+        "source_record_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_record_body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "successor_record_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "status": {
+          "enum": [
+            "structurally_preserved",
+            "stale",
+            "superseded"
+          ]
+        },
+        "directness": {
+          "enum": [
+            "not_applicable",
+            "indirect",
+            "direct",
+            "direct_and_indirect"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/staleReason"
+          }
+        },
+        "dependency_source_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "mapping_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "correspondence_entry_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "staleReason": {
+      "enum": [
+        "target_changed",
+        "dependency_changed",
+        "context_changed",
+        "evidence_changed",
+        "test_changed",
+        "policy_changed",
+        "rule_changed",
+        "extractor_changed",
+        "model_policy_changed",
+        "human_authority_not_carried",
+        "mapping_unresolved",
+        "obligation_changed",
+        "gluing_input_changed",
+        "unsupported_impact_policy"
+      ]
+    },
+    "gluingFreshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "assessment_id",
+        "source_attempt_id",
+        "status",
+        "reasons",
+        "dependency_mapping_ids",
+        "successor_target_attempt_ids",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.gluing_freshness.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "assessment_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_attempt_id": {
+          "$ref": "#/$defs/id"
+        },
+        "status": {
+          "enum": [
+            "structurally_preserved",
+            "stale",
+            "superseded"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/staleReason"
+          }
+        },
+        "dependency_mapping_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "successor_target_attempt_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "stalenessAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "source_closure_id",
+        "morphism_id",
+        "correspondence_id",
+        "impact_policy_descriptor_id",
+        "assessment_time",
+        "record_count",
+        "record_set_digest",
+        "gluing_freshness_count",
+        "gluing_freshness_set_digest",
+        "stale_source_count",
+        "stale_source_digest",
+        "superseded_source_count",
+        "superseded_source_digest",
+        "preservation_candidate_count",
+        "preservation_candidate_digest",
+        "m5_dependent_successor_count",
+        "m5_dependent_successor_digest",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.staleness_assessment.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_closure_id": {
+          "$ref": "#/$defs/id"
+        },
+        "morphism_id": {
+          "$ref": "#/$defs/id"
+        },
+        "correspondence_id": {
+          "$ref": "#/$defs/id"
+        },
+        "impact_policy_descriptor_id": {
+          "const": "reviewgraphen.mvp_property_impact@1"
+        },
+        "assessment_time": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "record_count": {
+          "$ref": "#/$defs/count"
+        },
+        "record_set_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "gluing_freshness_count": {
+          "$ref": "#/$defs/count"
+        },
+        "gluing_freshness_set_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "stale_source_count": {
+          "$ref": "#/$defs/count"
+        },
+        "stale_source_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "superseded_source_count": {
+          "$ref": "#/$defs/count"
+        },
+        "superseded_source_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "preservation_candidate_count": {
+          "$ref": "#/$defs/count"
+        },
+        "preservation_candidate_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "m5_dependent_successor_count": {
+          "$ref": "#/$defs/count"
+        },
+        "m5_dependent_successor_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "preservationArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "run_id",
+        "target_snapshot_id",
+        "target_obligation_id",
+        "source_run_id",
+        "source_verification_id",
+        "descriptor_id",
+        "procedure_version",
+        "role"
+      ],
+      "properties": {
+        "kind": {
+          "const": "preservation_artifact"
+        },
+        "run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_obligation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_verification_id": {
+          "$ref": "#/$defs/id"
+        },
+        "descriptor_id": {
+          "const": "reviewgraphen.structural_preservation@1"
+        },
+        "procedure_version": {
+          "const": "reviewgraphen.structural_preservation.payment_v1"
+        },
+        "role": {
+          "enum": [
+            "input",
+            "output"
+          ]
+        }
+      }
+    },
+    "artifactRegistrationV5": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "run_id",
+        "cas_hash",
+        "media_type",
+        "size",
+        "sensitivity",
+        "source"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.artifact_registration.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "cas_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "media_type": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "size": {
+          "$ref": "#/$defs/count"
+        },
+        "sensitivity": {
+          "const": "canonical_state"
+        },
+        "source": {
+          "$ref": "#/$defs/preservationArtifact"
+        }
+      }
+    },
+    "preservationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "target_snapshot_id",
+        "target_obligation_id",
+        "source_closure_id",
+        "morphism_id",
+        "correspondence_entry_id",
+        "source_claim_id",
+        "source_evidence_ids",
+        "source_verification_id",
+        "dependency_mapping_ids",
+        "input_registration_id",
+        "output_registration_id",
+        "descriptor_id",
+        "procedure_version",
+        "observation",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.preservation_evidence.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_obligation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_closure_id": {
+          "$ref": "#/$defs/id"
+        },
+        "morphism_id": {
+          "$ref": "#/$defs/id"
+        },
+        "correspondence_entry_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_claim_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_evidence_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "source_verification_id": {
+          "$ref": "#/$defs/id"
+        },
+        "dependency_mapping_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "input_registration_id": {
+          "$ref": "#/$defs/id"
+        },
+        "output_registration_id": {
+          "$ref": "#/$defs/id"
+        },
+        "descriptor_id": {
+          "const": "reviewgraphen.structural_preservation@1"
+        },
+        "procedure_version": {
+          "const": "reviewgraphen.structural_preservation.payment_v1"
+        },
+        "observation": {
+          "const": "structure_preserved"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "preservationVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "target_snapshot_id",
+        "target_obligation_id",
+        "evidence_id",
+        "source_verification_id",
+        "descriptor_id",
+        "procedure_version",
+        "outcome",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.preservation_verification.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_obligation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "evidence_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_verification_id": {
+          "$ref": "#/$defs/id"
+        },
+        "descriptor_id": {
+          "const": "reviewgraphen.structural_preservation@1"
+        },
+        "procedure_version": {
+          "const": "reviewgraphen.structural_preservation.payment_v1"
+        },
+        "outcome": {
+          "const": "passed"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "partialAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "staleness_assessment_id",
+        "subject_kind",
+        "subject_ids",
+        "action",
+        "prerequisites",
+        "stale_source_record_ids",
+        "reasons",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.partial_rerun_action.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "staleness_assessment_id": {
+          "$ref": "#/$defs/id"
+        },
+        "subject_kind": {
+          "const": "obligation"
+        },
+        "subject_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "action": {
+          "enum": [
+            "reproject_context",
+            "rerun_reviewer",
+            "rerun_verifier",
+            "rerun_human_decision"
+          ]
+        },
+        "prerequisites": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/prerequisite"
+          }
+        },
+        "stale_source_record_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/staleReason"
+          }
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "partialPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "source_closure_id",
+        "morphism_id",
+        "correspondence_id",
+        "staleness_assessment_id",
+        "planner_descriptor_id",
+        "target_plan_id",
+        "target_gluing_required",
+        "selected_target_count",
+        "selected_target_digest",
+        "action_count",
+        "action_set_digest",
+        "preservation_verification_count",
+        "preservation_verification_digest",
+        "required_human_resolution_count",
+        "required_human_resolution_digest",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.partial_rerun_plan.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_closure_id": {
+          "$ref": "#/$defs/id"
+        },
+        "morphism_id": {
+          "$ref": "#/$defs/id"
+        },
+        "correspondence_id": {
+          "$ref": "#/$defs/id"
+        },
+        "staleness_assessment_id": {
+          "$ref": "#/$defs/id"
+        },
+        "planner_descriptor_id": {
+          "const": "reviewgraphen.partial_rerun@1"
+        },
+        "target_plan_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_gluing_required": {
+          "type": "boolean"
+        },
+        "selected_target_count": {
+          "$ref": "#/$defs/count"
+        },
+        "selected_target_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "action_count": {
+          "$ref": "#/$defs/count"
+        },
+        "action_set_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "preservation_verification_count": {
+          "$ref": "#/$defs/count"
+        },
+        "preservation_verification_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "required_human_resolution_count": {
+          "$ref": "#/$defs/count"
+        },
+        "required_human_resolution_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "gluingAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "planning_scope_id",
+        "subject_kind",
+        "subject_ids",
+        "action",
+        "prerequisites",
+        "reasons",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.gluing_rerun_action.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "planning_scope_id": {
+          "$ref": "#/$defs/id"
+        },
+        "subject_kind": {
+          "enum": [
+            "gluing_context",
+            "gluing_attempt"
+          ]
+        },
+        "subject_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "action": {
+          "enum": [
+            "register_gluing_input",
+            "rebuild_section",
+            "reglue"
+          ]
+        },
+        "prerequisites": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/prerequisite"
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "const": "fresh_target_gluing_required"
+          }
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "gluingBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_id",
+        "status",
+        "claim_id",
+        "claim_body_hash",
+        "obligation_id"
+      ],
+      "properties": {
+        "context_id": {
+          "enum": [
+            "context:payment",
+            "context:ui-event"
+          ]
+        },
+        "status": {
+          "enum": [
+            "selected",
+            "missing"
+          ]
+        },
+        "claim_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_.-]*:"
+        },
+        "claim_body_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "obligation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "existingTargetRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_id",
+        "body_hash",
+        "event_id"
+      ],
+      "properties": {
+        "record_id": {
+          "$ref": "#/$defs/id"
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "event_id": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "gluingPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "planning_scope_id",
+        "source_closure_id",
+        "partial_rerun_plan_id",
+        "target_plan_id",
+        "selection_descriptor_id",
+        "claim_bindings",
+        "action_count",
+        "action_set_digest",
+        "existing_target_bundle_witness",
+        "source_ids"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.gluing_rerun_plan.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "planning_scope_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_closure_id": {
+          "$ref": "#/$defs/id"
+        },
+        "partial_rerun_plan_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_plan_id": {
+          "$ref": "#/$defs/id"
+        },
+        "selection_descriptor_id": {
+          "const": "reviewgraphen.m5_claim_selection@1"
+        },
+        "claim_bindings": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/gluingBinding"
+            },
+            {
+              "$ref": "#/$defs/gluingBinding"
+            }
+          ],
+          "items": false
+        },
+        "action_count": {
+          "$ref": "#/$defs/count"
+        },
+        "action_set_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "existing_target_bundle_witness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/existingTargetRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "closureTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/incrementalSourceClosure"
+        }
+      }
+    },
+    "morphismTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/changeMorphism"
+        }
+      }
+    },
+    "correspondenceTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/correspondence"
+        }
+      }
+    },
+    "mappingTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/programMapping"
+        }
+      }
+    },
+    "correspondenceEntryTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/correspondenceEntry"
+        }
+      }
+    },
+    "historicalTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/historicalAssessment"
+        }
+      }
+    },
+    "freshnessTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/gluingFreshness"
+        }
+      }
+    },
+    "stalenessTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/stalenessAssessment"
+        }
+      }
+    },
+    "artifactV5Tuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/artifactRegistrationV5"
+        }
+      }
+    },
+    "preservationEvidenceTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/preservationEvidence"
+        }
+      }
+    },
+    "preservationVerificationTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/preservationVerification"
+        }
+      }
+    },
+    "partialActionTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body",
+        "state",
+        "completion_witness_ids",
+        "resolved_reviewer_output_records"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/partialAction"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "completion_witness_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "resolved_reviewer_output_records": {
+          "$ref": "#/$defs/resolvedReviewerOutputs"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "pending"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "completion_witness_ids": {
+                "maxItems": 0
+              },
+              "resolved_reviewer_output_records": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "completion_witness_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "complete"
+              },
+              "body": {
+                "properties": {
+                  "action": {
+                    "const": "rerun_verifier"
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "body"
+            ]
+          },
+          "then": {
+            "properties": {
+              "resolved_reviewer_output_records": {
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "resolved_reviewer_output_records": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "partialPlanTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/partialPlan"
+        }
+      }
+    },
+    "gluingActionTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body",
+        "state",
+        "completion_witness_ids",
+        "resolved_reviewer_output_records"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/gluingAction"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "completion_witness_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "resolved_reviewer_output_records": {
+          "type": "array",
+          "maxItems": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "pending"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "completion_witness_ids": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "completion_witness_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "gluingPlanTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/gluingPlan"
+        }
+      }
+    },
+    "v3RegistrationTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/registrationBodyV5"
+        }
+      }
+    },
+    "propertyIdV5": {"type":"string","pattern":"^[a-z][a-z0-9_.@-]*$"},
+    "utcSecondV5": {"type":"string","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "stringSetV5": {"type":"array","uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":16384}},
+    "registrationSourceV5": {
+      "oneOf": [
+        {"type":"object","additionalProperties":false,"required":["kind","run_id"],"properties":{"kind":{"const":"run_genesis"},"run_id":{"$ref":"#/$defs/id"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","adapter_id","run_id","snapshot_id"],"properties":{"kind":{"const":"snapshot_ingest"},"adapter_id":{"type":"string","minLength":1,"maxLength":16384},"run_id":{"$ref":"#/$defs/id"},"snapshot_id":{"$ref":"#/$defs/id"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","execution_id","reviewer_id","run_id"],"properties":{"kind":{"const":"reviewer_execution"},"execution_id":{"$ref":"#/$defs/id"},"reviewer_id":{"type":"string","minLength":1,"maxLength":16384},"run_id":{"$ref":"#/$defs/id"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","claim_id","descriptor_id","procedure_version","role","run_id"],"properties":{"kind":{"const":"verifier_artifact"},"claim_id":{"$ref":"#/$defs/id"},"descriptor_id":{"type":"string","minLength":1,"maxLength":16384},"procedure_version":{"type":"string","minLength":1,"maxLength":16384},"role":{"enum":["input","output"]},"run_id":{"$ref":"#/$defs/id"}}},
+        {"$ref":"#/$defs/externalHarnessSourceV5"}
+      ]
+    },
+    "externalHarnessSourceV5": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["kind","claim_body_hash","claim_id","descriptor_id","genesis_hash","harness_id","harness_revision","harness_source_hash","policy_revision_hash","procedure_version","property_id","repository_id","repository_source_hash","run_id","snapshot_id","test_artifact_id","universe_id"],
+      "properties": {
+        "kind":{"const":"external_harness_witness"},
+        "claim_body_hash":{"$ref":"#/$defs/hash"},
+        "claim_id":{"$ref":"#/$defs/id"},
+        "descriptor_id":{"const":"reviewgraphen.fixture_test_verifier@1"},
+        "genesis_hash":{"$ref":"#/$defs/hash"},
+        "harness_id":{"const":"reviewgraphen.double_submit_harness@1"},
+        "harness_revision":{"const":"1"},
+        "harness_source_hash":{"$ref":"#/$defs/hash"},
+        "policy_revision_hash":{"$ref":"#/$defs/hash"},
+        "procedure_version":{"const":"reviewgraphen.fixture_test.duplicate_submit@1"},
+        "property_id":{"const":"payment.at_most_once"},
+        "repository_id":{"$ref":"#/$defs/id"},
+        "repository_source_hash":{"$ref":"#/$defs/gitTreeHash"},
+        "run_id":{"$ref":"#/$defs/id"},
+        "snapshot_id":{"$ref":"#/$defs/id"},
+        "test_artifact_id":{"const":"test:double-submit"},
+        "universe_id":{"$ref":"#/$defs/id"}
+      }
+    },
+    "registrationBodyV5": {
+      "type":"object","additionalProperties":false,
+      "required":["registration_id","run_id","cas_hash","media_type","size","sensitivity","source"],
+      "properties":{"registration_id":{"$ref":"#/$defs/id"},"run_id":{"$ref":"#/$defs/id"},"cas_hash":{"$ref":"#/$defs/hash"},"media_type":{"type":"string","minLength":1,"maxLength":16384},"size":{"type":"integer","minimum":0},"sensitivity":{"enum":["canonical_state","workspace_source","sensitive"]},"source":{"$ref":"#/$defs/registrationSourceV5"}},
+      "allOf":[{"if":{"properties":{"source":{"properties":{"kind":{"const":"external_harness_witness"}},"required":["kind"]}},"required":["source"]},"then":{"properties":{"media_type":{"const":"application/vnd.reviewgraphen.test-witness+json;version=1"},"sensitivity":{"const":"canonical_state"}}}}]
+    },
+    "v3ExternalHarnessRegistrationTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "event_sequence", "body_hash", "body"],
+      "properties": {
+        "event_id": {"$ref": "#/$defs/id"},
+        "event_sequence": {"type": "integer", "minimum": 1},
+        "body_hash": {"$ref": "#/$defs/hash"},
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["registration_id", "run_id", "cas_hash", "media_type", "size", "sensitivity", "source"],
+          "properties": {
+            "registration_id": {"$ref": "#/$defs/id"},
+            "run_id": {"$ref": "#/$defs/id"},
+            "cas_hash": {"$ref": "#/$defs/hash"},
+            "media_type": {"const": "application/vnd.reviewgraphen.test-witness+json;version=1"},
+            "size": {"type": "integer", "minimum": 0},
+            "sensitivity": {"const": "canonical_state"},
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "claim_body_hash", "claim_id", "descriptor_id", "genesis_hash", "harness_id", "harness_revision", "harness_source_hash", "policy_revision_hash", "procedure_version", "property_id", "repository_id", "repository_source_hash", "run_id", "snapshot_id", "test_artifact_id", "universe_id"],
+              "properties": {
+                "kind": {"const": "external_harness_witness"},
+                "claim_body_hash": {"$ref": "#/$defs/hash"},
+                "claim_id": {"$ref": "#/$defs/id"},
+                "descriptor_id": {"const": "reviewgraphen.fixture_test_verifier@1"},
+                "genesis_hash": {"$ref": "#/$defs/hash"},
+                "harness_id": {"const": "reviewgraphen.double_submit_harness@1"},
+                "harness_revision": {"const": "1"},
+                "harness_source_hash": {"$ref": "#/$defs/hash"},
+                "policy_revision_hash": {"$ref": "#/$defs/hash"},
+                "procedure_version": {"const": "reviewgraphen.fixture_test.duplicate_submit@1"},
+                "property_id": {"const": "payment.at_most_once"},
+                "repository_id": {"$ref": "#/$defs/id"},
+                "repository_source_hash": {"$ref": "#/$defs/gitTreeHash"},
+                "run_id": {"$ref": "#/$defs/id"},
+                "snapshot_id": {"$ref": "#/$defs/id"},
+                "test_artifact_id": {"const": "test:double-submit"},
+                "universe_id": {"$ref": "#/$defs/id"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "executionTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/executionBodyV5"
+        }
+      }
+    },
+    "executionOutcomeV5": {"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"structured"}}},{"type":"object","additionalProperties":false,"required":["kind","reason","detail"],"properties":{"kind":{"const":"abstained"},"reason":{"enum":["insufficient_context","unresolved_symbol","required_evidence_unavailable","property_not_understood","conflicting_sources","tool_capability_missing","budget_exhausted","prompt_injection_suspected"]},"detail":{"type":"string","minLength":1,"maxLength":4096}}},{"type":"object","additionalProperties":false,"required":["kind","reason","diagnostic"],"properties":{"kind":{"const":"malformed"},"reason":{"enum":["schema_violation","unresolved_source_id","unknown_obligation_id","invalid_polarity","confidence_out_of_range","unknown_field"]},"diagnostic":{"type":"string","minLength":1,"maxLength":4096}}},{"type":"object","additionalProperties":false,"required":["kind","retryable","diagnostic"],"properties":{"kind":{"const":"provider_failure"},"retryable":{"type":"boolean"},"diagnostic":{"type":"string","minLength":1,"maxLength":4096}}}]},
+    "executionBodyV5": {
+      "type":"object","additionalProperties":false,
+      "required":["id","plan_id","wave_id","obligation_ids","envelope_id","snapshot_id","reviewer_kind","reviewer_id","provider","model","model_revision","system_prompt_version","prompt_template_version","inference_settings","tool_policy_version","tool_calls","attempt","raw_artifact_registration_id","raw_artifact_hash","parsed_claim_ids","outcome","identity_body_hash","body_hash"],
+      "properties":{"id":{"$ref":"#/$defs/id"},"plan_id":{"$ref":"#/$defs/id"},"wave_id":{"$ref":"#/$defs/id"},"obligation_ids":{"allOf":[{"$ref":"#/$defs/idSet"},{"minItems":1,"maxItems":1}]},"envelope_id":{"$ref":"#/$defs/id"},"snapshot_id":{"$ref":"#/$defs/id"},"reviewer_kind":{"const":"fake"},"reviewer_id":{"const":"reviewgraphen.fake_reviewer@1"},"provider":{"type":"null"},"model":{"type":"null"},"model_revision":{"type":"null"},"system_prompt_version":{"const":"reviewgraphen.system.no_tools@1"},"prompt_template_version":{"const":"fixture@1"},"inference_settings":{"type":"object","maxProperties":0,"additionalProperties":false},"tool_policy_version":{"const":"reviewgraphen.tool_policy.none@1"},"tool_calls":{"type":"array","maxItems":0},"attempt":{"type":"integer","minimum":1,"maximum":4294967295},"raw_artifact_registration_id":{"$ref":"#/$defs/id"},"raw_artifact_hash":{"$ref":"#/$defs/hash"},"parsed_claim_ids":{"allOf":[{"$ref":"#/$defs/idSet"},{"maxItems":16}]},"outcome":{"$ref":"#/$defs/executionOutcomeV5"},"identity_body_hash":{"$ref":"#/$defs/hash"},"body_hash":{"$ref":"#/$defs/hash"}}
+    },
+    "claimTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/claimBodyV5"
+        }
+      }
+    },
+    "claimBodyV5": {"type":"object","additionalProperties":false,"required":["id","execution_id","obligation_ids","property_id","target_refs","polarity","disposition","summary","source_ids","assumptions","requested_evidence","candidate_confidence","author_kind","review_status","identity_body_hash","body_hash"],"properties":{"id":{"$ref":"#/$defs/id"},"execution_id":{"$ref":"#/$defs/id"},"obligation_ids":{"allOf":[{"$ref":"#/$defs/idSet"},{"minItems":1,"maxItems":1}]},"property_id":{"$ref":"#/$defs/propertyIdV5"},"target_refs":{"allOf":[{"$ref":"#/$defs/idSet"},{"minItems":1,"maxItems":64}]},"polarity":{"enum":["issue_present","issue_absent","inconclusive","not_applicable","conflict"]},"disposition":{"const":"proposed"},"summary":{"type":"string","minLength":1,"maxLength":8192},"source_ids":{"allOf":[{"$ref":"#/$defs/idSet"},{"minItems":1,"maxItems":128}]},"assumptions":{"allOf":[{"$ref":"#/$defs/stringSetV5"},{"maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2048}}]},"requested_evidence":{"allOf":[{"$ref":"#/$defs/stringSetV5"},{"maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2048}}]},"candidate_confidence":{"type":["number","null"],"minimum":0,"maximum":1},"author_kind":{"const":"ai"},"review_status":{"const":"unreviewed"},"identity_body_hash":{"$ref":"#/$defs/hash"},"body_hash":{"$ref":"#/$defs/hash"}}},
+    "resolvedReviewerOutputs": {
+      "oneOf": [
+        {
+          "type": "array",
+          "maxItems": 0
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/executionTuple"
+            },
+            {
+              "$ref": "#/$defs/claimTuple"
+            }
+          ],
+          "items": false
+        }
+      ]
+    },
+    "evidenceTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/evidenceBodyV5"
+        }
+      }
+    },
+    "evidenceBodyV5": {"type":"object","additionalProperties":false,"required":["id","schema","kind","snapshot_id","subject_ids","descriptor_id","procedure_version","input_registration_id","output_registration_id","observation"],"allOf":[{"if":{"properties":{"kind":{"const":"static_fact"}},"required":["kind"]},"then":{"properties":{"descriptor_id":{"const":"reviewgraphen.static_fact_verifier@1"},"procedure_version":{"const":"reviewgraphen.static_fact.projection@1"},"observation":{"const":"fact_present"}}},"else":{"properties":{"descriptor_id":{"const":"reviewgraphen.fixture_test_verifier@1"},"procedure_version":{"const":"reviewgraphen.fixture_test.duplicate_submit@1"},"observation":{"const":"witnessed"}}}}],"properties":{"id":{"$ref":"#/$defs/id"},"schema":{"const":"reviewgraphen.evidence.v3"},"kind":{"enum":["static_fact","test_witness"]},"snapshot_id":{"$ref":"#/$defs/id"},"subject_ids":{"allOf":[{"$ref":"#/$defs/idSet"},{"minItems":1,"maxItems":128}]},"descriptor_id":{"enum":["reviewgraphen.static_fact_verifier@1","reviewgraphen.fixture_test_verifier@1"]},"procedure_version":{"enum":["reviewgraphen.static_fact.projection@1","reviewgraphen.fixture_test.duplicate_submit@1"]},"input_registration_id":{"$ref":"#/$defs/id"},"output_registration_id":{"$ref":"#/$defs/id"},"observation":{"enum":["fact_present","witnessed"]}}},
+    "bindingTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/bindingBodyV5"
+        }
+      }
+    },
+    "bindingBodyV5": {"type":"object","additionalProperties":false,"required":["id","schema","claim_id","evidence_id","relation","property_id"],"properties":{"id":{"$ref":"#/$defs/id"},"schema":{"const":"reviewgraphen.evidence_binding.v3"},"claim_id":{"$ref":"#/$defs/id"},"evidence_id":{"$ref":"#/$defs/id"},"relation":{"enum":["qualifies","reproduces"]},"property_id":{"const":"payment.at_most_once"}}},
+    "verificationTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/verificationBodyV5"
+        }
+      }
+    },
+    "verificationBodyV5": {"type":"object","additionalProperties":false,"required":["id","schema","claim_id","descriptor_id","procedure_version","input_registration_id","output_registration_id","evidence_ids","outcome","limitations"],"allOf":[{"if":{"properties":{"descriptor_id":{"const":"reviewgraphen.static_fact_verifier@1"}},"required":["descriptor_id"]},"then":{"properties":{"procedure_version":{"const":"reviewgraphen.static_fact.projection@1"},"outcome":{"enum":["inconclusive","unsupported"]}}},"else":{"properties":{"procedure_version":{"const":"reviewgraphen.fixture_test.duplicate_submit@1"},"outcome":{"const":"passed"}}}}],"properties":{"id":{"$ref":"#/$defs/id"},"schema":{"const":"reviewgraphen.verification.v3"},"claim_id":{"$ref":"#/$defs/id"},"descriptor_id":{"enum":["reviewgraphen.static_fact_verifier@1","reviewgraphen.fixture_test_verifier@1"]},"procedure_version":{"enum":["reviewgraphen.static_fact.projection@1","reviewgraphen.fixture_test.duplicate_submit@1"]},"input_registration_id":{"$ref":"#/$defs/id"},"output_registration_id":{"$ref":"#/$defs/id"},"evidence_ids":{"allOf":[{"$ref":"#/$defs/idSet"},{"maxItems":128}]},"outcome":{"enum":["passed","inconclusive","unsupported"]},"limitations":{"allOf":[{"$ref":"#/$defs/stringSetV5"},{"maxItems":32,"items":{"type":"string","minLength":1,"maxLength":2048}}]}}},
+    "decisionTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/decisionBodyV5"
+        }
+      }
+    },
+    "decisionBodyV5": {"type":"object","additionalProperties":false,"required":["id","schema","policy_revision_hash","run_id","universe_id","claim_id","property_id","outcome","actor","authority_id","snapshot_id","source_ids","rationale","issued_at","expires_at"],"allOf":[{"if":{"properties":{"outcome":{"const":"exception"}},"required":["outcome"]},"then":{"properties":{"expires_at":{"$ref":"#/$defs/utcSecondV5"}}},"else":{"properties":{"expires_at":{"type":"null"}}}}],"properties":{"id":{"$ref":"#/$defs/id"},"schema":{"const":"reviewgraphen.human_decision.v3"},"policy_revision_hash":{"$ref":"#/$defs/hash"},"run_id":{"$ref":"#/$defs/id"},"universe_id":{"$ref":"#/$defs/id"},"claim_id":{"$ref":"#/$defs/id"},"property_id":{"const":"payment.at_most_once"},"outcome":{"enum":["accept","reject","defer","exception"]},"actor":{"type":"string","pattern":"^human:.+","maxLength":256},"authority_id":{"type":"string","minLength":1,"maxLength":256},"snapshot_id":{"$ref":"#/$defs/id"},"source_ids":{"allOf":[{"$ref":"#/$defs/idSet"},{"maxItems":256}]},"rationale":{"type":"string","minLength":1,"maxLength":8192},"issued_at":{"$ref":"#/$defs/utcSecondV5"},"expires_at":{"type":["string","null"]}}},
+    "findingTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "#/$defs/findingBodyV5"
+        }
+      }
+    },
+    "findingBodyV5": {"type":"object","additionalProperties":false,"required":["id","schema","projection_descriptor_id","claim_id","status","evidence_ids","verification_ids","decision_id","supersedes_finding_id"],"allOf":[{"if":{"properties":{"status":{"enum":["accepted","rejected"]}},"required":["status"]},"then":{"properties":{"decision_id":{"$ref":"#/$defs/id"}}},"else":{"properties":{"decision_id":{"type":"null"}}}}],"properties":{"id":{"$ref":"#/$defs/id"},"schema":{"const":"reviewgraphen.finding.v3"},"projection_descriptor_id":{"const":"reviewgraphen.finding_projection@1"},"claim_id":{"$ref":"#/$defs/id"},"status":{"enum":["unverified_candidate","verified_candidate","accepted","rejected"]},"evidence_ids":{"allOf":[{"$ref":"#/$defs/idSet"},{"maxItems":64}]},"verification_ids":{"allOf":[{"$ref":"#/$defs/idSet"},{"maxItems":64}]},"decision_id":{"type":["string","null"],"pattern":"^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9_.:@/+-]*$"},"supersedes_finding_id":{"type":["string","null"],"pattern":"^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9_.:@/+-]*$"}}},
+    "gluingDescriptorTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v4.schema.json#/$defs/descriptor"
+        }
+      }
+    },
+    "coverTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v4.schema.json#/$defs/cover"
+        }
+      }
+    },
+    "sectionTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v4.schema.json#/$defs/section"
+        }
+      }
+    },
+    "attemptTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v4.schema.json#/$defs/attempt"
+        }
+      }
+    },
+    "restrictionTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v4.schema.json#/$defs/restriction"
+        }
+      }
+    },
+    "candidateTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v4.schema.json#/$defs/candidate"
+        }
+      }
+    },
+    "gluingObstructionTuple": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_sequence",
+        "body_hash",
+        "body"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "body": {
+          "$ref": "https://capht.tech/schemas/reviewgraphen/review-report.v4.schema.json#/$defs/obstruction"
+        }
+      }
+    },
+    "reportObstruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "message",
+        "source_ids",
+        "blocks"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "message": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "source_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "blocks": {
+          "$ref": "#/$defs/idSet"
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_id",
+        "run_id",
+        "profile_id",
+        "rule_set_hash",
+        "extractor_set_hash",
+        "policy_version",
+        "event_contract_version",
+        "index_projection_version",
+        "genesis_hash",
+        "confirmed_offset",
+        "confirmed_tail_hash",
+        "confirmed_event_count",
+        "tool_versions",
+        "authority_policy_revision_hash",
+        "authority_replay_basis_digest",
+        "gluing_profile_descriptor_id",
+        "incremental_policy_descriptor_id",
+        "source_run_id",
+        "source_genesis_hash",
+        "source_confirmed_offset",
+        "source_tail_hash",
+        "source_event_count",
+        "source_index_snapshot_hash",
+        "source_authority_policy_revision_hash",
+        "source_authority_replay_basis_digest",
+        "target_predecessor_offset",
+        "target_predecessor_tail_hash",
+        "target_predecessor_event_count",
+        "target_predecessor_index_snapshot_hash",
+        "target_pre_incremental_authority_replay_basis_digest",
+        "target_index_snapshot_hash"
+      ],
+      "properties": {
+        "report_id": {
+          "$ref": "#/$defs/id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "rule_set_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "extractor_set_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "policy_version": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "event_contract_version": {
+          "const": "reviewgraphen.review_event.v5"
+        },
+        "index_projection_version": {
+          "const": "reviewgraphen.index_projection.v6"
+        },
+        "genesis_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "confirmed_offset": {
+          "$ref": "#/$defs/count"
+        },
+        "confirmed_tail_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "confirmed_event_count": {
+          "$ref": "#/$defs/count"
+        },
+        "tool_versions": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 64,
+          "additionalProperties": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        },
+        "authority_policy_revision_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "authority_replay_basis_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "gluing_profile_descriptor_id": {
+          "const": "reviewgraphen.double_submit_gluing@1"
+        },
+        "incremental_policy_descriptor_id": {
+          "const": "reviewgraphen.incremental_gate@1"
+        },
+        "source_run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_genesis_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_confirmed_offset": {
+          "$ref": "#/$defs/count"
+        },
+        "source_tail_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_event_count": {
+          "$ref": "#/$defs/count"
+        },
+        "source_index_snapshot_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_authority_policy_revision_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_authority_replay_basis_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_predecessor_offset": {
+          "$ref": "#/$defs/count"
+        },
+        "target_predecessor_tail_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_predecessor_event_count": {
+          "$ref": "#/$defs/count"
+        },
+        "target_predecessor_index_snapshot_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_pre_incremental_authority_replay_basis_digest": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_index_snapshot_hash": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository_id",
+        "snapshot_id",
+        "program_space_ref",
+        "universe_id",
+        "plan_id",
+        "selected_obligation_ids",
+        "artifact_registration_ids",
+        "preservation_registration_ids",
+        "context_cover_ids",
+        "incremental_source_closure",
+        "change_morphism",
+        "obligation_correspondence"
+      ],
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/id"
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "program_space_ref": {
+          "$ref": "#/$defs/id"
+        },
+        "universe_id": {
+          "$ref": "#/$defs/id"
+        },
+        "plan_id": {
+          "$ref": "#/$defs/id"
+        },
+        "selected_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "artifact_registration_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "preservation_registration_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "context_cover_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "incremental_source_closure": {
+          "$ref": "#/$defs/closureTuple"
+        },
+        "change_morphism": {
+          "$ref": "#/$defs/morphismTuple"
+        },
+        "obligation_correspondence": {
+          "$ref": "#/$defs/correspondenceTuple"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "artifact_registrations",
+        "artifact_registrations_v5",
+        "executions",
+        "claims",
+        "evidence",
+        "evidence_bindings",
+        "verifications",
+        "decisions",
+        "findings",
+        "obstructions",
+        "gluing_input_descriptors",
+        "context_covers",
+        "sections",
+        "gluing_attempts",
+        "restrictions",
+        "global_candidates",
+        "gluing_obstructions",
+        "program_mappings",
+        "obligation_correspondence_entries",
+        "historical_record_assessments",
+        "gluing_freshness",
+        "staleness_assessment",
+        "preservation_evidence",
+        "preservation_verifications",
+        "partial_rerun_actions",
+        "partial_rerun_plan",
+        "gluing_rerun_actions",
+        "gluing_rerun_plan"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "completed",
+            "partial",
+            "unsupported_input",
+            "failed"
+          ]
+        },
+        "artifact_registrations": {
+          "type": "array",
+          "maxItems": 8192,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/v3RegistrationTuple"
+          }
+        },
+        "artifact_registrations_v5": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/artifactV5Tuple"
+          }
+        },
+        "executions": {
+          "type": "array",
+          "maxItems": 8192,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/executionTuple"
+          }
+        },
+        "claims": {
+          "type": "array",
+          "maxItems": 131072,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/claimTuple"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 131072,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/evidenceTuple"
+          }
+        },
+        "evidence_bindings": {
+          "type": "array",
+          "maxItems": 131072,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/bindingTuple"
+          }
+        },
+        "verifications": {
+          "type": "array",
+          "maxItems": 131072,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/verificationTuple"
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "maxItems": 131072,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/decisionTuple"
+          }
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 131072,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/findingTuple"
+          }
+        },
+        "obstructions": {
+          "type": "array",
+          "maxItems": 8192,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/reportObstruction"
+          }
+        },
+        "gluing_input_descriptors": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/gluingDescriptorTuple"
+          }
+        },
+        "context_covers": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/coverTuple"
+          }
+        },
+        "sections": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/sectionTuple"
+          }
+        },
+        "gluing_attempts": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/attemptTuple"
+          }
+        },
+        "restrictions": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/restrictionTuple"
+          }
+        },
+        "global_candidates": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/candidateTuple"
+          }
+        },
+        "gluing_obstructions": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/gluingObstructionTuple"
+          }
+        },
+        "program_mappings": {
+          "type": "array",
+          "maxItems": 8192,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/mappingTuple"
+          }
+        },
+        "obligation_correspondence_entries": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/correspondenceEntryTuple"
+          }
+        },
+        "historical_record_assessments": {
+          "type": "array",
+          "maxItems": 8192,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/historicalTuple"
+          }
+        },
+        "gluing_freshness": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/freshnessTuple"
+          }
+        },
+        "staleness_assessment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/stalenessTuple"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preservation_evidence": {
+          "type": "array",
+          "maxItems": 2048,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/preservationEvidenceTuple"
+          }
+        },
+        "preservation_verifications": {
+          "type": "array",
+          "maxItems": 2048,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/preservationVerificationTuple"
+          }
+        },
+        "partial_rerun_actions": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/partialActionTuple"
+          }
+        },
+        "partial_rerun_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/partialPlanTuple"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gluing_rerun_actions": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/gluingActionTuple"
+          }
+        },
+        "gluing_rerun_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/gluingPlanTuple"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "universe_id",
+        "denominator_obligation_ids",
+        "visited_obligation_ids",
+        "completed_obligation_ids",
+        "evidence_supported_obligation_ids",
+        "m5_dependent_successor_obligation_ids",
+        "required_human_resolution_obligation_ids",
+        "structurally_preserved_obligation_ids",
+        "native_verified_obligation_ids",
+        "verified_obligation_ids",
+        "fresh_verified_obligation_ids",
+        "accepted_obligation_ids",
+        "selected",
+        "visited",
+        "completed",
+        "evidence_supported",
+        "m5_dependent_successors",
+        "required_human_resolutions",
+        "structurally_preserved",
+        "native_verified",
+        "verified",
+        "fresh_verified",
+        "accepted"
+      ],
+      "properties": {
+        "universe_id": {
+          "$ref": "#/$defs/id"
+        },
+        "denominator_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "visited_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "completed_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "evidence_supported_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "m5_dependent_successor_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "required_human_resolution_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "structurally_preserved_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "native_verified_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "verified_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "fresh_verified_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "accepted_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "selected": {
+          "$ref": "#/$defs/count"
+        },
+        "visited": {
+          "$ref": "#/$defs/count"
+        },
+        "completed": {
+          "$ref": "#/$defs/count"
+        },
+        "evidence_supported": {
+          "$ref": "#/$defs/count"
+        },
+        "m5_dependent_successors": {
+          "$ref": "#/$defs/count"
+        },
+        "required_human_resolutions": {
+          "$ref": "#/$defs/count"
+        },
+        "structurally_preserved": {
+          "$ref": "#/$defs/count"
+        },
+        "native_verified": {
+          "$ref": "#/$defs/count"
+        },
+        "verified": {
+          "$ref": "#/$defs/count"
+        },
+        "fresh_verified": {
+          "$ref": "#/$defs/count"
+        },
+        "accepted": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "loss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reason",
+        "source_ids",
+        "affected_properties",
+        "meaningful",
+        "recoverable",
+        "recovery_ref"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "omitted_m6_incremental_records",
+            "omitted_m5_gluing_records",
+            "omitted_records"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "pattern": "^view omits complete records from reviewgraphen\\.review\\.report\\.v[345]#/"
+        },
+        "source_ids": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/idSet"
+            },
+            {
+              "minItems": 1
+            }
+          ]
+        },
+        "affected_properties": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        },
+        "meaningful": {
+          "const": true
+        },
+        "recoverable": {
+          "const": true
+        },
+        "recovery_ref": {
+          "type": "string",
+          "pattern": "^reviewgraphen\\.review\\.report\\.v[345]#/"
+        }
+      }
+    },
+    "inheritedV4ViewPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "execution_ids",
+        "claim_ids",
+        "obstruction_kinds"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "completed",
+            "partial",
+            "unsupported_input",
+            "failed"
+          ]
+        },
+        "execution_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "claim_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "obstruction_kinds": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 8192,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        }
+      }
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "source_ids",
+        "information_loss",
+        "payload"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "human",
+            "ci",
+            "machine"
+          ]
+        },
+        "source_ids": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/idSet"
+            },
+            {
+              "minItems": 1
+            }
+          ]
+        },
+        "information_loss": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/loss"
+          }
+        },
+        "payload": {
+          "$ref": "#/$defs/inheritedV4ViewPayload"
+        }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "views"
+      ],
+      "properties": {
+        "views": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/view"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "human"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/view"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "ci"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/view"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "machine"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "policy_descriptor_id",
+        "status",
+        "required_fresh_obligation_ids",
+        "blocking_ids",
+        "incomplete_ids",
+        "reasons",
+        "source_ids",
+        "body_hash"
+      ],
+      "properties": {
+        "schema": {
+          "const": "reviewgraphen.incremental_gate.v5"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "policy_descriptor_id": {
+          "const": "reviewgraphen.incremental_gate@1"
+        },
+        "status": {
+          "enum": [
+            "blocked",
+            "incomplete",
+            "pass"
+          ]
+        },
+        "required_fresh_obligation_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "blocking_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "incomplete_ids": {
+          "$ref": "#/$defs/idSet"
+        },
+        "reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "current_accepted_issue",
+              "target_gluing_assignment_conflict",
+              "fresh_verification_missing",
+              "rerun_pending",
+              "mapping_unresolved",
+              "unsupported_impact_policy",
+              "target_gluing_missing",
+              "target_gluing_incomplete",
+              "gluing_plan_missing",
+              "human_resolution_missing",
+              "m6_claim_cardinality_unsupported",
+              "extraction_incomplete"
+            ]
+          }
+        },
+        "source_ids": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/idSet"
+            },
+            {
+              "minItems": 5
+            }
+          ]
+        },
+        "body_hash": {
+          "$ref": "#/$defs/hash"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "pass"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "blocking_ids": {
+                "maxItems": 0
+              },
+              "incomplete_ids": {
+                "maxItems": 0
+              },
+              "reasons": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "anyOf": [
+              {
+                "properties": {
+                  "blocking_ids": {
+                    "minItems": 1
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "incomplete_ids": {
+                    "minItems": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
