@@ -10145,6 +10145,11 @@ std::thread_local! {
     static V5_TEST_HUMAN_APPEND_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_HUMAN_RECOVERY_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_HUMAN_MATERIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M5_BEGIN_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M5_PREPARE_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M5_APPEND_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M5_RECOVERY_REQUIRED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static V5_TEST_M5_MATERIALIZATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V5_TEST_M4_FORCED_CONTEXT_WORKING_OVERHEAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_APPEND_SHADOW_SEAMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static V3_TEST_BINDING_APPEND_PEAK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -10209,6 +10214,31 @@ fn reset_scheduled_human_resource_counters_for_test() {
     V5_TEST_HUMAN_APPEND_REQUIRED.with(|value| value.set(0));
     V5_TEST_HUMAN_RECOVERY_REQUIRED.with(|value| value.set(0));
     V5_TEST_HUMAN_MATERIALIZATIONS.with(|value| value.set(0));
+}
+
+#[cfg(test)]
+fn reset_scheduled_m5_resource_counters_for_test() {
+    V5_TEST_M5_BEGIN_REQUIRED.with(|value| value.set(0));
+    V5_TEST_M5_PREPARE_REQUIRED.with(|value| value.set(0));
+    V5_TEST_M5_APPEND_REQUIRED.with(|value| value.set(0));
+    V5_TEST_M5_RECOVERY_REQUIRED.with(|value| value.set(0));
+    V5_TEST_M5_MATERIALIZATIONS.with(|value| value.set(0));
+}
+
+#[cfg(test)]
+fn scheduled_m5_required_working_for_test(which: u8) -> u64 {
+    match which {
+        0 => V5_TEST_M5_BEGIN_REQUIRED.with(std::cell::Cell::get),
+        1 => V5_TEST_M5_PREPARE_REQUIRED.with(std::cell::Cell::get),
+        2 => V5_TEST_M5_APPEND_REQUIRED.with(std::cell::Cell::get),
+        3 => V5_TEST_M5_RECOVERY_REQUIRED.with(std::cell::Cell::get),
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+fn scheduled_m5_materializations_for_test() -> u64 {
+    V5_TEST_M5_MATERIALIZATIONS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -23828,6 +23858,27 @@ fn select_gluing_claim_binding_v5(
 
 #[allow(dead_code)] // Staged opaque post-D2 session seam; production caller lands next slice.
 impl SealedGluingRerunPhaseV5 {
+    /// Rebinds an already sealed, immutable second-plan cursor to a freshly
+    /// reconstructed V5 log instance. This changes only the process-local
+    /// capability identity; all sealed action, plan, aggregate and basis
+    /// material is copied verbatim and remains validated by the caller's
+    /// prefix/basis checks.
+    fn rebind_replayed_log_identity(&self, log_identity: V5LogInstanceIdentity) -> Self {
+        Self {
+            log_identity,
+            source_closure_id: self.source_closure_id.clone(),
+            partial_rerun_plan_id: self.partial_rerun_plan_id.clone(),
+            target_plan_id: self.target_plan_id.clone(),
+            actions: self.actions.clone(),
+            seal: self.seal.clone(),
+            aggregate: self.aggregate.clone(),
+            v3_aggregate: self.v3_aggregate.clone(),
+            initial_basis: self.initial_basis.clone(),
+            basis: self.basis.clone(),
+            predecessor: self.predecessor.clone(),
+        }
+    }
+
     /// Input-only mint admission.  This is intentionally conservative about
     /// allocator node metadata, but every variable term is measured from a
     /// retained input ID/hash; it runs before canonicalizing an old M5 bundle
@@ -25056,6 +25107,11 @@ impl EventLogV5 {
                 observed: usize::MAX,
             })?;
         if observed > self.limits.max_working_bytes {
+            #[cfg(test)]
+            eprintln!(
+                "begin refuse limit={} observed={observed}",
+                self.limits.max_working_bytes
+            );
             return Err(replay_incomplete(
                 "post-D2 terminal gate preflight ownership",
                 self.limits.max_working_bytes,
@@ -28539,6 +28595,11 @@ impl EventLogV5 {
 
 #[allow(dead_code)]
 impl ReplayedScheduledHumanResolutionPhaseV5 {
+    fn is_finished(&self) -> bool {
+        self.action_index == self.actions.len()
+            && self.stage == ScheduledHumanResolutionStageV5::Decision
+    }
+
     fn current_action(&self) -> Result<&ScheduledHumanResolutionActionV5> {
         self.actions.get(self.action_index).ok_or_else(|| {
             DomainError::EventSequence("scheduled human phase is complete".to_owned())
@@ -28708,6 +28769,1441 @@ impl ReplayedScheduledHumanResolutionPhaseV5 {
         }
         Ok(())
     }
+}
+
+/// The final post-human terminal cursor.  This is deliberately a capability,
+/// not a report projection: it owns the exact roots/CAS-replayed M5 inputs and
+/// can advance only through the two fixed registrations followed by one frozen
+/// V4 bundle.  A no-gluing target is represented explicitly and has no append
+/// operation.
+#[allow(dead_code)]
+pub(crate) struct ReplayedScheduledM5GluingPhaseV5 {
+    log_identity: V5LogInstanceIdentity,
+    source_closure_id: StableId,
+    partial_rerun_plan_id: StableId,
+    target_plan_id: StableId,
+    basis: AuthorityReplayBasisV5,
+    terminal: V5StructuralPostPlanPhase,
+    v4_registration_ids: BTreeSet<StableId>,
+    aggregate: ReviewAggregate,
+    v3_aggregate: V3RunAggregate,
+    bindings: Option<[crate::GluingClaimBindingV5; 2]>,
+    descriptors: BTreeMap<StableId, crate::GluingInputDescriptorV4>,
+    registrations: BTreeMap<StableId, ArtifactRegistrationV4>,
+    completed_bundle: Option<crate::GluingBundleV4>,
+}
+
+/// One-shot exact next-member admission.  The payload remains private to the
+/// event layer so no raw V4 registration or bundle can escape as generic V5
+/// append authority.
+struct PreparedScheduledM5GluingAppendV5 {
+    log_identity: V5LogInstanceIdentity,
+    basis_digest: ContentHash,
+    predecessor_event_hash: ContentHash,
+    event_sequence: u64,
+    payload: PersistedPayload,
+    // The descriptor is deliberately retained by the one-shot capability.
+    // Appending must not re-open CAS after it has already admitted and
+    // materialized this exact first-missing registration.
+    descriptor: Option<crate::GluingInputDescriptorV4>,
+    // Bundle preparation owns the one validated DTO. Append transfers this
+    // value into the replay cursor; it must not rebuild or decode the bundle.
+    bundle: Option<Box<crate::GluingBundleV4>>,
+    bundle_payload_hash: Option<ContentHash>,
+}
+
+impl PreparedScheduledM5GluingAppendV5 {
+    fn retained_bytes(&self) -> Result<u64> {
+        let mut total = u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX);
+        for bytes in [
+            self.basis_digest.allocated_bytes(),
+            self.predecessor_event_hash.allocated_bytes(),
+        ] {
+            total = total
+                .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 prepared ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        total = total
+            .checked_add(self.payload.validation_heap_bytes_v5()?)
+            .and_then(|value| {
+                value.checked_add(
+                    self.descriptor
+                        .as_ref()
+                        .map_or(0, crate::GluingInputDescriptorV4::retained_bytes_for_v5),
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    self.bundle
+                        .as_ref()
+                        .map_or(0, |bundle| bundle.retained_bytes_for_v5()),
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(self.bundle_payload_hash.as_ref().map_or(0, |hash| {
+                    u64::try_from(hash.allocated_bytes()).unwrap_or(u64::MAX)
+                }))
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled M5 prepared ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        Ok(total)
+    }
+}
+
+struct ScheduledM5GluingRecoveryInputV5<'a> {
+    native: Box<ReplayedScheduledNativeVerifierPhaseV5>,
+    human: Box<ReplayedScheduledHumanResolutionPhaseV5>,
+    partial: &'a SealedPartialRerunPhaseV5,
+    gluing: Option<Box<SealedGluingRerunPhaseV5>>,
+    roots: &'a AuthorityTrustRootsV5,
+    resolver: &'a dyn AuthorityArtifactResolverV5,
+}
+
+#[allow(dead_code)]
+pub(crate) enum M5TerminalCompletionV5 {
+    NoGluingRequired {
+        source_closure_id: StableId,
+        target_plan_id: StableId,
+        basis_digest: ContentHash,
+    },
+    GluingBundleRecorded {
+        source_closure_id: StableId,
+        target_plan_id: StableId,
+        attempt_id: StableId,
+        basis_digest: ContentHash,
+    },
+}
+
+#[allow(dead_code)]
+impl EventLogV5 {
+    /// Opens M5 only after the exact scheduled native and human cursors have
+    /// both finished.  The gluing rerun seal is decoded from the durable
+    /// suffix and rechecked against those cursors; callers cannot pass a
+    /// replacement action, binding, descriptor, registration, or bundle.
+    pub(crate) fn begin_scheduled_m5_gluing_phase_v5(
+        &self,
+        native: Box<ReplayedScheduledNativeVerifierPhaseV5>,
+        human: Box<ReplayedScheduledHumanResolutionPhaseV5>,
+        partial: &SealedPartialRerunPhaseV5,
+        gluing: Option<Box<SealedGluingRerunPhaseV5>>,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<ReplayedScheduledM5GluingPhaseV5> {
+        if self.instance_identity != native.log_identity
+            || self.instance_identity != human.log_identity
+            || !native.is_finished()
+            || !human.is_finished()
+            || native.source_closure_id != human.source_closure_id
+            || native.partial_rerun_plan_id != human.partial_rerun_plan_id
+            || native.target_plan_id != human.target_plan_id
+            || partial.source_closure_id != human.source_closure_id
+            || partial.plan.id() != &human.partial_rerun_plan_id
+            || partial.plan.target_plan_id() != &human.target_plan_id
+            || human.native_completion_digest != native.digest()?
+            || human.basis.target_confirmed_tail_hash != *self.tail_hash()
+            || roots.policy_revision_hash != human.basis.policy_revision_hash
+            || roots.repository_id != *human.aggregate.program().repository_id()
+            || roots.repository_source_hash
+                != *human
+                    .aggregate
+                    .program()
+                    .repository_source()
+                    .content_hash()
+                    .ok_or(DomainError::AuthorityPolicyMismatch)?
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        validate_post_d2_gluing_presence(partial.target_gluing_required, gluing.is_some())?;
+        // First actual-input gate. Every borrowed cursor/root remains live,
+        // and all descriptor CAS buffers which may be needed by the fixed
+        // binding vector are reserved before we clone terminal state, build a
+        // V4 registration, or decode even one descriptor byte.
+        let descriptor_buffers = if partial.target_gluing_required {
+            let phase = gluing
+                .as_ref()
+                .ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+            phase
+                .seal
+                .claim_bindings()
+                .iter()
+                .try_fold(0_u64, |total, binding| {
+                    let mut matches = roots.allowed_gluing_input_bindings.iter().filter(|root| {
+                        root.context_id == *binding.context_id()
+                            && root.run_id == self.run_id
+                            && root.genesis_hash == self.genesis_hash
+                            && root.snapshot_id == *human.aggregate.program().snapshot_id()
+                            && root.universe_id == *human.aggregate.universe().id()
+                            && root.plan_id == human.target_plan_id
+                            && root.policy_revision_hash == human.basis.policy_revision_hash
+                    });
+                    let root = matches
+                        .next()
+                        .ok_or(DomainError::GluingInputAdmissionMismatch)?;
+                    if matches.next().is_some() {
+                        return Err(DomainError::GluingInputAdmissionMismatch);
+                    }
+                    total
+                        .checked_add(root.descriptor_size)
+                        .ok_or(DomainError::Incomplete {
+                            operation: "scheduled M5 descriptor preallocation",
+                            limit: usize::try_from(self.limits.max_working_bytes)
+                                .unwrap_or(usize::MAX),
+                            observed: usize::MAX,
+                        })
+                })?
+        } else {
+            0
+        };
+        // Existing-target reconstruction is a separate peak from the empty
+        // M5 open: it retains decoded descriptors/registrations and possibly
+        // the frozen bundle while the input cursors and returned phase clone
+        // coexist. Predict it from the live roots and raw durable rows before
+        // any resolver read or DTO/map allocation.
+        let existing_suffix_peak = if human.terminal == V5StructuralPostPlanPhase::M5BundleRecorded
+        {
+            let registrations = roots
+                .allowed_gluing_input_bindings
+                .iter()
+                .filter(|root| {
+                    root.run_id == self.run_id
+                        && root.genesis_hash == self.genesis_hash
+                        && root.plan_id == human.target_plan_id
+                        && root.policy_revision_hash == human.basis.policy_revision_hash
+                })
+                .map(scheduled_m5_registration_prepare_predictor)
+                .try_fold(0_u64, |total, value| {
+                    total.checked_add(value?).ok_or(DomainError::Incomplete {
+                        operation: "scheduled M5 existing-target predictor registrations",
+                        limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                        observed: usize::MAX,
+                    })
+                })?;
+            let bundle_raw = self.envelopes.iter().try_fold(0_u64, |peak, envelope| {
+                let raw = envelope.payload.get().as_bytes();
+                let is_bundle = raw
+                    .windows(b"gluing_bundle_recorded_v4".len())
+                    .any(|window| window == b"gluing_bundle_recorded_v4");
+                Ok::<_, DomainError>(if is_bundle {
+                    peak.max(u64::try_from(raw.len()).unwrap_or(u64::MAX))
+                } else {
+                    peak
+                })
+            })?;
+            human
+                .retained_bytes()?
+                .checked_add(registrations)
+                .and_then(|value| value.checked_add(bundle_raw))
+                .and_then(|value| {
+                    value.checked_add(
+                        u64::try_from(size_of::<ReplayedScheduledM5GluingPhaseV5>())
+                            .unwrap_or(u64::MAX),
+                    )
+                })
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 existing-target predictor phase",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?
+        } else {
+            0
+        };
+        let observed = self
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(native.retained_bytes()?)
+            .and_then(|value| value.checked_add(human.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+            .and_then(|value| {
+                value.checked_add(
+                    gluing
+                        .as_ref()
+                        .map_or(Ok(0_u64), |phase| phase.retained_bytes())
+                        .ok()?,
+                )
+            })
+            .and_then(|value| value.checked_add(native_authority_roots_retained_bytes(roots).ok()?))
+            .and_then(|value| value.checked_add(descriptor_buffers))
+            .and_then(|value| value.checked_add(existing_suffix_peak))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled M5 begin actual-input ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if observed > self.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled M5 begin actual-input ownership",
+                self.limits.max_working_bytes,
+                observed,
+            ));
+        }
+        #[cfg(test)]
+        V5_TEST_M5_BEGIN_REQUIRED.with(|value| value.set(value.get().max(observed)));
+        human.basis.validate_current_log(self)?;
+
+        let seal = self
+            .envelopes
+            .iter()
+            .filter_map(|envelope| {
+                let payload =
+                    decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())
+                        .ok()?;
+                let PersistedPayload::GluingRerunPlanSealedV5(seal) = payload else {
+                    return None;
+                };
+                Some(seal)
+            })
+            .next_back();
+        if !partial.target_gluing_required {
+            // ADR 0023's legal no-gluing branch is closed: an M5 descriptor,
+            // registration, or bundle after a target that did not seal the
+            // second plan is an authority error, never an implicit empty plan.
+            if seal.is_some()
+                || human.terminal == V5StructuralPostPlanPhase::M5BundleRecorded
+                || !human.v4_registration_ids.is_empty()
+            {
+                return Err(DomainError::AuthorityReplayBasisMismatch);
+            }
+            return Ok(ReplayedScheduledM5GluingPhaseV5 {
+                log_identity: self.instance_identity,
+                source_closure_id: human.source_closure_id.clone(),
+                partial_rerun_plan_id: human.partial_rerun_plan_id.clone(),
+                target_plan_id: human.target_plan_id.clone(),
+                basis: human.basis.clone(),
+                terminal: human.terminal,
+                v4_registration_ids: human.v4_registration_ids.clone(),
+                aggregate: human.aggregate.clone(),
+                v3_aggregate: human.v3_aggregate.clone(),
+                bindings: None,
+                descriptors: BTreeMap::new(),
+                registrations: BTreeMap::new(),
+                completed_bundle: None,
+            });
+        }
+        let seal = seal.ok_or_else(|| {
+            DomainError::EventSequence(
+                "scheduled M5 requires the completed post-D2 gluing plan seal".to_owned(),
+            )
+        })?;
+        if seal.source_closure_id() != &human.source_closure_id
+            || seal.partial_rerun_plan_id() != &human.partial_rerun_plan_id
+            || seal.target_plan_id() != &human.target_plan_id
+            || seal.existing_target_bundle_witness().is_some()
+                != (human.terminal == V5StructuralPostPlanPhase::M5BundleRecorded)
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        let gluing = gluing.ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+        if gluing.log_identity != self.instance_identity
+            || gluing.source_closure_id != human.source_closure_id
+            || gluing.partial_rerun_plan_id != human.partial_rerun_plan_id
+            || gluing.target_plan_id != human.target_plan_id
+            || gluing.seal.id() != seal.id()
+            || gluing.actions.len() as u64 != seal.action_count()
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+
+        let mut phase = ReplayedScheduledM5GluingPhaseV5 {
+            log_identity: self.instance_identity,
+            source_closure_id: human.source_closure_id.clone(),
+            partial_rerun_plan_id: human.partial_rerun_plan_id.clone(),
+            target_plan_id: human.target_plan_id.clone(),
+            basis: human.basis.clone(),
+            terminal: human.terminal,
+            v4_registration_ids: human.v4_registration_ids.clone(),
+            aggregate: human.aggregate.clone(),
+            v3_aggregate: human.v3_aggregate.clone(),
+            bindings: Some(seal.claim_bindings().clone()),
+            descriptors: BTreeMap::new(),
+            registrations: BTreeMap::new(),
+            completed_bundle: None,
+        };
+        phase.reconstruct_existing_inputs(self, roots, resolver)?;
+        if let Some(bundle) = phase.completed_bundle.as_ref() {
+            let source = phase.validated_source()?;
+            validate_existing_target_m5_bindings_v5(
+                bundle,
+                &source,
+                phase
+                    .bindings
+                    .as_ref()
+                    .ok_or(DomainError::AuthorityReplayBasisMismatch)?,
+                &phase.aggregate,
+            )
+            .map_err(|error| DomainError::Validation(error.to_string()))?;
+        }
+        // Tier 2 validates the actual returned cursor after its one-shot
+        // reconstruction. The Tier 1 gate above has already ruled out any
+        // resolver access at insufficient limits.
+        scheduled_m5_working_preflight(
+            self,
+            &phase,
+            roots,
+            native
+                .retained_bytes()?
+                .checked_add(human.retained_bytes()?)
+                .and_then(|value| value.checked_add(partial.retained_bytes().ok()?))
+                .and_then(|value| value.checked_add(gluing.retained_bytes().ok()?))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 existing-target materialized ownership",
+                    limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled M5 existing-target materialized ownership",
+        )?;
+        #[cfg(test)]
+        V5_TEST_M5_BEGIN_REQUIRED.with(|value| {
+            value.set(
+                value.get().max(
+                    self.full_resident_bytes_for_structural_store()
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(phase.retained_bytes().unwrap_or(u64::MAX))
+                        .saturating_add(
+                            native_authority_roots_retained_bytes(roots).unwrap_or(u64::MAX),
+                        )
+                        .saturating_add(native.retained_bytes().unwrap_or(u64::MAX))
+                        .saturating_add(human.retained_bytes().unwrap_or(u64::MAX))
+                        .saturating_add(partial.retained_bytes().unwrap_or(u64::MAX))
+                        .saturating_add(gluing.retained_bytes().unwrap_or(u64::MAX)),
+                ),
+            )
+        });
+        Ok(phase)
+    }
+
+    fn prepare_scheduled_m5_gluing_append_v5(
+        &self,
+        phase: &ReplayedScheduledM5GluingPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<Option<PreparedScheduledM5GluingAppendV5>> {
+        phase.validate_current(self)?;
+        if phase.completed_bundle.is_some() {
+            return Ok(None);
+        }
+        for binding in phase
+            .bindings
+            .as_ref()
+            .ok_or(DomainError::AuthorityReplayBasisMismatch)?
+        {
+            let context_id = binding.context_id().clone();
+            if !phase.descriptors.contains_key(&context_id) {
+                let binding = phase.current_gluing_binding(self, roots, &context_id)?;
+                // Tier 1 is intentionally derived only from borrowed roots
+                // and the live phase.  It predicts every allocation which
+                // precedes the single CAS read: in particular do not mint a
+                // registration merely to measure it.
+                let predecode = scheduled_m5_registration_prepare_predictor(binding)?;
+                scheduled_m5_working_preflight(
+                    self,
+                    phase,
+                    roots,
+                    predecode,
+                    "scheduled M5 prepare actual-input ownership",
+                )?;
+                #[cfg(test)]
+                V5_TEST_M5_PREPARE_REQUIRED.with(|value| {
+                    value.set(
+                        value.get().max(
+                            self.full_resident_bytes_for_structural_store()
+                                .unwrap_or(u64::MAX)
+                                .saturating_add(phase.retained_bytes().unwrap_or(u64::MAX))
+                                .saturating_add(
+                                    native_authority_roots_retained_bytes(roots)
+                                        .unwrap_or(u64::MAX),
+                                )
+                                .saturating_add(predecode),
+                        ),
+                    )
+                });
+                #[cfg(test)]
+                V5_TEST_M5_MATERIALIZATIONS.with(|value| value.set(value.get().saturating_add(1)));
+                let descriptor = read_v5_gluing_descriptor(binding, resolver)?;
+                let registration = registration_from_v5_gluing_binding(binding)?;
+                if descriptor.context_id() != &context_id
+                    || registration.id() != &binding.registration_id
+                {
+                    return Err(DomainError::GluingInputAdmissionMismatch);
+                }
+                let prepared = PreparedScheduledM5GluingAppendV5 {
+                    log_identity: phase.log_identity,
+                    basis_digest: phase.basis.basis_digest.clone(),
+                    predecessor_event_hash: self.tail_hash().clone(),
+                    event_sequence: phase.basis.target_next_sequence,
+                    payload: PersistedPayload::ArtifactRegisteredV4(registration),
+                    descriptor: Some(descriptor),
+                    bundle: None,
+                    bundle_payload_hash: None,
+                };
+                // Tier 2 re-measures the retained, materialized capability.
+                // The Tier 1 predictor is deliberately an actual-input upper
+                // bound, so this cannot introduce a second CAS read.
+                scheduled_m5_working_preflight(
+                    self,
+                    phase,
+                    roots,
+                    prepared.retained_bytes()?,
+                    "scheduled M5 prepare materialized ownership",
+                )?;
+                return Ok(Some(prepared));
+            }
+        }
+        // The frozen bundle is likewise admission-gated before constructing
+        // a validated source, bundle DTO, or canonical RawValue.  Its bound
+        // is a function of the current retained phase—not a configured M5
+        // maximum—and therefore grows only with the exact source presented.
+        let bundle_predictor = scheduled_m5_bundle_prepare_predictor(phase)?;
+        scheduled_m5_working_preflight(
+            self,
+            phase,
+            roots,
+            bundle_predictor,
+            "scheduled M5 bundle prepare actual-input ownership",
+        )?;
+        #[cfg(test)]
+        V5_TEST_M5_PREPARE_REQUIRED.with(|value| {
+            value.set(
+                value.get().max(
+                    self.full_resident_bytes_for_structural_store()
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(phase.retained_bytes().unwrap_or(u64::MAX))
+                        .saturating_add(
+                            native_authority_roots_retained_bytes(roots).unwrap_or(u64::MAX),
+                        )
+                        .saturating_add(bundle_predictor),
+                ),
+            )
+        });
+        let source = phase.validated_source()?;
+        let bundle = crate::GluingBundleV4::from_validated(source);
+        let raw_bundle = raw_payload(canonical_json(&bundle)?)?;
+        let bundle_payload_hash = ContentHash::sha256(raw_bundle.get().as_bytes());
+        let prepared = PreparedScheduledM5GluingAppendV5 {
+            log_identity: phase.log_identity,
+            basis_digest: phase.basis.basis_digest.clone(),
+            predecessor_event_hash: self.tail_hash().clone(),
+            event_sequence: phase.basis.target_next_sequence,
+            payload: PersistedPayload::GluingBundleRecordedV4(raw_bundle),
+            descriptor: None,
+            bundle: Some(Box::new(bundle)),
+            bundle_payload_hash: Some(bundle_payload_hash),
+        };
+        scheduled_m5_working_preflight(
+            self,
+            phase,
+            roots,
+            prepared.retained_bytes()?,
+            "scheduled M5 bundle prepare materialized ownership",
+        )?;
+        Ok(Some(prepared))
+    }
+
+    fn append_prepared_scheduled_m5_gluing_v5(
+        &mut self,
+        mut prepared: PreparedScheduledM5GluingAppendV5,
+        phase: &mut ReplayedScheduledM5GluingPhaseV5,
+        roots: &AuthorityTrustRootsV5,
+        _resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<()> {
+        // The prepared descriptor, the current cursor, all trust roots, a
+        // cloned next basis/terminal state, and the new envelope coexist at
+        // the append seam.  Admit that peak before interpreting the token.
+        const SHA256_CAPACITY: u64 = ("sha256:".len() + 64) as u64;
+        let append_extra = Some(prepared.retained_bytes()?)
+            .and_then(|value| value.checked_add(u64::try_from(size_of::<EventEnvelope>()).ok()?))
+            .and_then(|value| value.checked_add(prepared.payload.validation_heap_bytes_v5().ok()?))
+            .and_then(|value| value.checked_add(SHA256_CAPACITY.saturating_mul(4)))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled M5 append actual-input ownership",
+                limit: usize::try_from(self.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        scheduled_m5_working_preflight(
+            self,
+            phase,
+            roots,
+            append_extra,
+            "scheduled M5 append actual-input ownership",
+        )?;
+        #[cfg(test)]
+        V5_TEST_M5_APPEND_REQUIRED.with(|value| {
+            value.set(
+                value.get().max(
+                    self.full_resident_bytes_for_structural_store()
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(phase.retained_bytes().unwrap_or(u64::MAX))
+                        .saturating_add(
+                            native_authority_roots_retained_bytes(roots).unwrap_or(u64::MAX),
+                        )
+                        .saturating_add(append_extra),
+                ),
+            )
+        });
+        phase.validate_current(self)?;
+        if prepared.log_identity != self.instance_identity
+            || prepared.basis_digest != phase.basis.basis_digest
+            || prepared.predecessor_event_hash != *self.tail_hash()
+            || prepared.event_sequence != phase.basis.target_next_sequence
+        {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        // Do not call `prepare` here: doing so would read the descriptor a
+        // second time and would make the one-shot capability depend on a
+        // mutable CAS view.  Re-derive only allocation-free authority facts
+        // from the current position and validate the descriptor it owns.
+        let registration_context = match &prepared.payload {
+            PersistedPayload::ArtifactRegisteredV4(registration) => {
+                if prepared.bundle.is_some() || prepared.bundle_payload_hash.is_some() {
+                    return Err(DomainError::AuthorityReplayBasisMismatch);
+                }
+                let context_id = phase.context_for_registration(registration)?.clone();
+                let binding = phase.current_gluing_binding(self, roots, &context_id)?;
+                let descriptor = prepared
+                    .descriptor
+                    .as_ref()
+                    .ok_or(DomainError::GluingInputAdmissionMismatch)?;
+                validate_v5_gluing_descriptor(binding, descriptor)?;
+                if registration_from_v5_gluing_binding(binding)? != *registration {
+                    return Err(DomainError::GluingInputAdmissionMismatch);
+                }
+                Some(context_id)
+            }
+            PersistedPayload::GluingBundleRecordedV4(_) => {
+                if prepared.descriptor.is_some() || prepared.bundle.is_none() {
+                    return Err(DomainError::AuthorityReplayBasisMismatch);
+                }
+                let raw = match &prepared.payload {
+                    PersistedPayload::GluingBundleRecordedV4(raw) => raw,
+                    _ => unreachable!(),
+                };
+                if prepared.bundle_payload_hash.as_ref()
+                    != Some(&ContentHash::sha256(raw.get().as_bytes()))
+                    || canonical_json(prepared.bundle.as_ref().expect("checked bundle"))?.as_slice()
+                        != raw.get().as_bytes()
+                {
+                    return Err(DomainError::GluingBundleMismatch);
+                }
+                None
+            }
+            _ => return Err(DomainError::AuthorityReplayBasisMismatch),
+        };
+        let payload = prepared.payload;
+        let registration_input = match &payload {
+            PersistedPayload::ArtifactRegisteredV4(_) => {
+                let context_id = registration_context
+                    .clone()
+                    .ok_or(DomainError::GluingInputAdmissionMismatch)?;
+                Some((
+                    context_id,
+                    prepared
+                        .descriptor
+                        .take()
+                        .ok_or(DomainError::GluingInputAdmissionMismatch)?,
+                ))
+            }
+            PersistedPayload::GluingBundleRecordedV4(_) => None,
+            _ => unreachable!(),
+        };
+        let actor = match &payload {
+            PersistedPayload::ArtifactRegisteredV4(_) => "engine:reviewgraphen.m5_gluing_input@1",
+            PersistedPayload::GluingBundleRecordedV4(_) => "engine:reviewgraphen.m5_gluing@1",
+            _ => return Err(DomainError::AuthorityReplayBasisMismatch),
+        };
+        let envelope = EventEnvelope::new(
+            EventContractVersion::V5,
+            self.run_id.clone(),
+            self.genesis_hash.clone(),
+            phase.basis.target_next_sequence,
+            actor,
+            phase.basis.target_next_sequence,
+            self.tail_hash().clone(),
+            payload.clone(),
+        )?;
+        let mut next_terminal = phase.terminal;
+        let mut next_ids = phase.v4_registration_ids.clone();
+        advance_v5_post_d2_terminal_gate(&mut next_terminal, &mut next_ids, &payload)?;
+        let mut next_basis = phase.basis.clone();
+        if let PersistedPayload::ArtifactRegisteredV4(registration) = &payload {
+            let binding = phase.current_gluing_binding(
+                self,
+                roots,
+                phase.context_for_registration(registration)?,
+            )?;
+            let trust = ContentHash::sha256(&canonical_gluing_binding_v4_at_v5(binding)?);
+            next_basis
+                .gluing_input_entries
+                .push(GluingInputReplayEntryV5 {
+                    event_id: envelope.id().clone(),
+                    event_sequence: envelope.sequence(),
+                    predecessor_event_hash: envelope.previous_event_hash().clone(),
+                    registration_body_hash: ContentHash::sha256(&canonical_json(registration)?),
+                    registration_id: registration.id().clone(),
+                    trust_binding_digest: trust.clone(),
+                    v5_position_digest: v5_gluing_input_position_digest(
+                        &self.run_id,
+                        &self.genesis_hash,
+                        envelope.id(),
+                        envelope.sequence(),
+                        envelope.previous_event_hash(),
+                        &trust,
+                    )?,
+                });
+        }
+        next_basis.advance_authority_free_to_event(&envelope)?;
+        self.append_sealed_envelope_at_v5(envelope, V5SealedPayloadPosition::General)?;
+        phase.basis = next_basis;
+        phase.terminal = next_terminal;
+        phase.v4_registration_ids = next_ids;
+        match payload {
+            PersistedPayload::ArtifactRegisteredV4(registration) => {
+                let (context_id, descriptor) =
+                    registration_input.ok_or(DomainError::GluingInputAdmissionMismatch)?;
+                phase.descriptors.insert(context_id, descriptor);
+                phase
+                    .registrations
+                    .insert(registration.id().clone(), registration);
+            }
+            PersistedPayload::GluingBundleRecordedV4(raw) => {
+                let bundle = prepared
+                    .bundle
+                    .take()
+                    .ok_or(DomainError::GluingBundleMismatch)?;
+                if prepared.bundle_payload_hash.as_ref()
+                    != Some(&ContentHash::sha256(raw.get().as_bytes()))
+                {
+                    return Err(DomainError::GluingBundleMismatch);
+                }
+                phase.completed_bundle = Some(*bundle);
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    /// Reconstructs the final M5 cursor from the complete pre-M5 authority
+    /// state and replays an externally retained canonical suffix one member
+    /// at a time.  The suffix is never treated as append authority: each
+    /// member must equal the freshly roots/CAS-derived first-missing payload.
+    /// Legal prefixes are empty, payment registration, payment+UI
+    /// registration, and those registrations plus the sole atomic bundle.
+    fn replay_scheduled_m5_gluing_suffix_v5(
+        log: EventLogV5,
+        canonical_suffix: &[Vec<u8>],
+        input: ScheduledM5GluingRecoveryInputV5<'_>,
+    ) -> Result<(EventLogV5, ReplayedScheduledM5GluingPhaseV5)> {
+        // The seal owns the fixed binding vector.  Compute this boundary from
+        // that live sealed phase instead of accepting a magic grammar cap.
+        // ADR 0022's frozen bundle has one V4 registration per binding and
+        // one final atomic bundle event.
+        let member_count = input.gluing.as_ref().map_or(0_usize, |phase| {
+            phase.seal.claim_bindings().len().saturating_add(1)
+        });
+        if canonical_suffix.len() > member_count {
+            return Err(DomainError::EventSequence(
+                "scheduled M5 suffix exceeds its sealed member bound".to_owned(),
+            ));
+        }
+        let suffix_owned = canonical_suffix.iter().try_fold(0_u64, |total, bytes| {
+            total
+                .checked_add(u64::try_from(size_of::<Vec<u8>>()).unwrap_or(u64::MAX))
+                .and_then(|value| {
+                    value.checked_add(u64::try_from(bytes.capacity()).unwrap_or(u64::MAX))
+                })
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 recovery suffix ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })
+        })?;
+        let observed = log
+            .full_resident_bytes_for_structural_store()?
+            .checked_add(input.native.retained_bytes()?)
+            .and_then(|value| value.checked_add(input.human.retained_bytes().ok()?))
+            .and_then(|value| value.checked_add(input.partial.retained_bytes().ok()?))
+            .and_then(|value| {
+                value.checked_add(
+                    input
+                        .gluing
+                        .as_ref()
+                        .map_or(Ok(0_u64), |phase| phase.retained_bytes())
+                        .ok()?,
+                )
+            })
+            .and_then(|value| {
+                value.checked_add(native_authority_roots_retained_bytes(input.roots).ok()?)
+            })
+            .and_then(|value| value.checked_add(suffix_owned))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled M5 recovery actual-input ownership",
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        if observed > log.limits.max_working_bytes {
+            return Err(replay_incomplete(
+                "scheduled M5 recovery actual-input ownership",
+                log.limits.max_working_bytes,
+                observed,
+            ));
+        }
+        #[cfg(test)]
+        V5_TEST_M5_RECOVERY_REQUIRED.with(|value| value.set(value.get().max(observed)));
+        let recovery_cursor_bytes = input
+            .native
+            .retained_bytes()?
+            .checked_add(input.human.retained_bytes()?)
+            .and_then(|value| value.checked_add(input.partial.retained_bytes().ok()?))
+            .and_then(|value| {
+                value.checked_add(
+                    input
+                        .gluing
+                        .as_ref()
+                        .map_or(Ok(0_u64), |phase| phase.retained_bytes())
+                        .ok()?,
+                )
+            })
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled M5 recovery cursor ownership",
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        // As with native/human recovery, `log` is the confirmed prefix before
+        // this suffix. Keeping it in place avoids a second full journal
+        // materialization and makes this gate reflect actual live ownership.
+        let mut log = log;
+        let mut phase = log.begin_scheduled_m5_gluing_phase_v5(
+            input.native,
+            input.human,
+            input.partial,
+            input.gluing,
+            input.roots,
+            input.resolver,
+        )?;
+        // The caller's complete suffix remains borrowed. At each replay seam
+        // its observed envelope and a freshly rebuilt expected envelope are
+        // live together, alongside the one prepared capability. Reserve the
+        // actual largest retained suffix row and the selected descriptor CAS
+        // destination before decoding the first row; this is deliberately
+        // independent of configured grammar maxima.
+        let largest_suffix_row = canonical_suffix
+            .iter()
+            .map(|row| u64::try_from(row.capacity()).unwrap_or(u64::MAX))
+            .max()
+            .unwrap_or(0);
+        let largest_descriptor = input
+            .roots
+            .allowed_gluing_input_bindings
+            .iter()
+            .filter(|root| {
+                root.run_id == log.run_id
+                    && root.genesis_hash == log.genesis_hash
+                    && root.plan_id == phase.target_plan_id
+                    && root.policy_revision_hash == phase.basis.policy_revision_hash
+            })
+            .map(|root| root.descriptor_size)
+            .max()
+            .unwrap_or(0);
+        let bundle_prepare_peak = scheduled_m5_bundle_prepare_predictor(&phase)?;
+        let registration_prepare_peak = input
+            .roots
+            .allowed_gluing_input_bindings
+            .iter()
+            .filter(|root| {
+                root.run_id == log.run_id
+                    && root.genesis_hash == log.genesis_hash
+                    && root.plan_id == phase.target_plan_id
+                    && root.policy_revision_hash == phase.basis.policy_revision_hash
+            })
+            .map(scheduled_m5_registration_prepare_predictor)
+            .try_fold(0_u64, |peak, value| value.map(|value| peak.max(value)))?;
+        // Every retained suffix member can grow the M5 cursor before the
+        // next prepare. Predict that closed two-registration state from the
+        // actual root vector now, so recovery cannot admit its initial prefix
+        // and then fail at a later first-missing prepare under the same limit.
+        let all_registration_prepare_bytes = input
+            .roots
+            .allowed_gluing_input_bindings
+            .iter()
+            .filter(|root| {
+                root.run_id == log.run_id
+                    && root.genesis_hash == log.genesis_hash
+                    && root.plan_id == phase.target_plan_id
+                    && root.policy_revision_hash == phase.basis.policy_revision_hash
+            })
+            .map(scheduled_m5_registration_prepare_predictor)
+            .try_fold(0_u64, |total, value| {
+                total.checked_add(value?).ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 recovery virtual registration ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })
+            })?;
+        let virtual_complete_phase = phase
+            .retained_bytes()?
+            .checked_add(all_registration_prepare_bytes)
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled M5 recovery virtual phase ownership",
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        let virtual_bundle_prepare_peak =
+            crate::m5::v5_terminal_m5_typed_retained_upper_bound(0, virtual_complete_phase)?
+                .checked_add(
+                    u64::try_from(size_of::<PreparedScheduledM5GluingAppendV5>())
+                        .unwrap_or(u64::MAX),
+                )
+                .and_then(|value| value.checked_add(2 * (("sha256:".len() + 64) as u64)))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 recovery virtual bundle ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?;
+        let replay_member_peak = largest_suffix_row
+            .checked_mul(2)
+            .and_then(|value| {
+                value.checked_add(u64::try_from(size_of::<EventEnvelope>() * 2).ok()?)
+            })
+            .and_then(|value| value.checked_add(largest_descriptor))
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(size_of::<PreparedScheduledM5GluingAppendV5>()).ok()?,
+                )
+            })
+            .and_then(|value| value.checked_add(("sha256:".len() as u64 + 64) * 4))
+            .and_then(|value| value.checked_add(bundle_prepare_peak))
+            .and_then(|value| value.checked_add(registration_prepare_peak))
+            .and_then(|value| value.checked_add(all_registration_prepare_bytes))
+            .and_then(|value| value.checked_add(virtual_bundle_prepare_peak))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled M5 recovery decode ownership",
+                limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                observed: usize::MAX,
+            })?;
+        scheduled_m5_working_preflight(
+            &log,
+            &phase,
+            input.roots,
+            Some(recovery_cursor_bytes)
+                .and_then(|value| value.checked_add(suffix_owned))
+                .and_then(|value| value.checked_add(replay_member_peak))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 recovery decode ownership",
+                    limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+                    observed: usize::MAX,
+                })?,
+            "scheduled M5 recovery decode ownership",
+        )?;
+        #[cfg(test)]
+        V5_TEST_M5_RECOVERY_REQUIRED.with(|value| {
+            let prepare_peak = log
+                .full_resident_bytes_for_structural_store()
+                .unwrap_or(u64::MAX)
+                .saturating_add(phase.retained_bytes().unwrap_or(u64::MAX))
+                .saturating_add(
+                    native_authority_roots_retained_bytes(input.roots).unwrap_or(u64::MAX),
+                )
+                .saturating_add(
+                    registration_prepare_peak
+                        .max(bundle_prepare_peak)
+                        .max(all_registration_prepare_bytes)
+                        .max(virtual_bundle_prepare_peak),
+                );
+            value.set(
+                value.get().max(
+                    prepare_peak.max(
+                        log.full_resident_bytes_for_structural_store()
+                            .unwrap_or(u64::MAX)
+                            .saturating_add(phase.retained_bytes().unwrap_or(u64::MAX))
+                            .saturating_add(
+                                native_authority_roots_retained_bytes(input.roots)
+                                    .unwrap_or(u64::MAX),
+                            )
+                            .saturating_add(recovery_cursor_bytes)
+                            .saturating_add(suffix_owned)
+                            .saturating_add(replay_member_peak),
+                    ),
+                ),
+            )
+        });
+        for (index, bytes) in canonical_suffix.iter().enumerate() {
+            let observed = EventEnvelope::from_json_slice_at_v5_position(
+                bytes,
+                V5SealedPayloadPosition::General,
+            )
+            .map_err(|error| {
+                DomainError::Validation(format!("scheduled M5 suffix event {index}: {error}"))
+            })?;
+            observed.validate_chain_position_at_v5(
+                &log.run_id,
+                &log.genesis_hash,
+                phase.basis.target_next_sequence,
+                log.tail_hash(),
+                V5SealedPayloadPosition::General,
+            )?;
+            let expected = log
+                .prepare_scheduled_m5_gluing_append_v5(&phase, input.roots, input.resolver)?
+                .ok_or(DomainError::AlreadyComplete)?;
+            let expected_envelope = EventEnvelope::new(
+                EventContractVersion::V5,
+                log.run_id.clone(),
+                log.genesis_hash.clone(),
+                expected.event_sequence,
+                expected.payload.actor().to_owned(),
+                expected.event_sequence,
+                expected.predecessor_event_hash.clone(),
+                expected.payload.clone(),
+            )?;
+            if observed.id() != expected_envelope.id()
+                || observed.event_hash() != expected_envelope.event_hash()
+                || observed.canonical_bytes()? != expected_envelope.canonical_bytes()?
+            {
+                return Err(DomainError::HistoricalPrefixMismatch(
+                    "scheduled M5 durable member differs from exact first-missing replay",
+                ));
+            }
+            log.append_prepared_scheduled_m5_gluing_v5(
+                expected,
+                &mut phase,
+                input.roots,
+                input.resolver,
+            )?;
+        }
+        Ok((log, phase))
+    }
+}
+
+fn scheduled_m5_working_preflight(
+    log: &EventLogV5,
+    phase: &ReplayedScheduledM5GluingPhaseV5,
+    roots: &AuthorityTrustRootsV5,
+    extra: u64,
+    operation: &'static str,
+) -> Result<()> {
+    let observed = log
+        .full_resident_bytes_for_structural_store()?
+        .checked_add(phase.retained_bytes()?)
+        .and_then(|value| value.checked_add(native_authority_roots_retained_bytes(roots).ok()?))
+        .and_then(|value| value.checked_add(extra))
+        .ok_or(DomainError::Incomplete {
+            operation,
+            limit: usize::try_from(log.limits.max_working_bytes).unwrap_or(usize::MAX),
+            observed: usize::MAX,
+        })?;
+    if observed > log.limits.max_working_bytes {
+        return Err(replay_incomplete(
+            operation,
+            log.limits.max_working_bytes,
+            observed,
+        ));
+    }
+    Ok(())
+}
+
+/// Allocation-free Tier 1 registration predictor.  `ArtifactRegistrationV4`
+/// is assembled exclusively by cloning these binding fields, so this mirrors
+/// its retained heap exactly; the descriptor term is the existing M5 typed
+/// upper bound parameterized by the *actual* CAS object length.
+fn scheduled_m5_registration_prepare_predictor(
+    binding: &GluingInputTrustBindingV4AtV5,
+) -> Result<u64> {
+    let registration_heap = "reviewgraphen.artifact_registration.v4"
+        .len()
+        .checked_add(binding.registration_id.allocated_bytes())
+        .and_then(|value| value.checked_add(binding.run_id.allocated_bytes()))
+        .and_then(|value| value.checked_add(binding.descriptor_hash.allocated_bytes()))
+        .and_then(|value| value.checked_add(binding.descriptor_media_type.capacity()))
+        .and_then(|value| value.checked_add(binding.source.allocated_bytes()))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled M5 registration predictor ownership",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })?;
+    crate::m5::v5_terminal_m5_typed_retained_upper_bound(binding.descriptor_size, 0)?
+        .checked_add(u64::try_from(registration_heap).unwrap_or(u64::MAX))
+        .and_then(|value| {
+            value.checked_add(
+                u64::try_from(size_of::<PreparedScheduledM5GluingAppendV5>()).unwrap_or(u64::MAX),
+            )
+        })
+        .and_then(|value| value.checked_add(2 * (("sha256:".len() + 64) as u64)))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled M5 registration predictor ownership",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })
+}
+
+/// Allocation-free Tier 1 bundle predictor.  The bundle is wholly derived
+/// from the already-retained phase; use that exact live source size as the
+/// wire-size input to M5's typed upper bound instead of a grammar maximum.
+/// This reserves the DTO and canonical-raw construction peak before either
+/// `validated_source`, `GluingBundleV4`, or `canonical_json` is materialized.
+fn scheduled_m5_bundle_prepare_predictor(phase: &ReplayedScheduledM5GluingPhaseV5) -> Result<u64> {
+    let source_bytes = phase.retained_bytes()?;
+    crate::m5::v5_terminal_m5_typed_retained_upper_bound(0, source_bytes)?
+        .checked_add(
+            u64::try_from(size_of::<PreparedScheduledM5GluingAppendV5>()).unwrap_or(u64::MAX),
+        )
+        .and_then(|value| value.checked_add(2 * (("sha256:".len() + 64) as u64)))
+        .ok_or(DomainError::Incomplete {
+            operation: "scheduled M5 bundle predictor ownership",
+            limit: usize::MAX,
+            observed: usize::MAX,
+        })
+}
+
+#[allow(dead_code)]
+impl ReplayedScheduledM5GluingPhaseV5 {
+    fn retained_bytes(&self) -> Result<u64> {
+        let mut total = u64::try_from(size_of::<Self>()).unwrap_or(u64::MAX);
+        for bytes in [
+            self.source_closure_id.allocated_bytes(),
+            self.partial_rerun_plan_id.allocated_bytes(),
+            self.target_plan_id.allocated_bytes(),
+        ] {
+            total = total
+                .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 phase retained ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        total = total
+            .checked_add(self.basis.retained_bytes()?)
+            .and_then(|value| value.checked_add(self.aggregate.retained_bytes_v3().ok()?))
+            .and_then(|value| value.checked_add(self.v3_aggregate.retained_bytes().ok()?))
+            .ok_or(DomainError::Incomplete {
+                operation: "scheduled M5 phase retained ownership",
+                limit: usize::MAX,
+                observed: usize::MAX,
+            })?;
+        total = self
+            .v4_registration_ids
+            .iter()
+            .try_fold(total, |total, id| {
+                total
+                    .checked_add(
+                        u64::try_from(size_of::<StableId>() + id.allocated_bytes() + 128)
+                            .unwrap_or(u64::MAX),
+                    )
+                    .ok_or(DomainError::Incomplete {
+                        operation: "scheduled M5 V4 ID ownership",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })
+            })?;
+        if let Some(bindings) = &self.bindings {
+            for binding in bindings {
+                total = total
+                    .checked_add(gluing_claim_binding_retained_bytes(binding)?)
+                    .ok_or(DomainError::Incomplete {
+                        operation: "scheduled M5 binding ownership",
+                        limit: usize::MAX,
+                        observed: usize::MAX,
+                    })?;
+            }
+        }
+        for (context_id, descriptor) in &self.descriptors {
+            total = total
+                .checked_add(
+                    u64::try_from(size_of::<StableId>() + context_id.allocated_bytes() + 128)
+                        .unwrap_or(u64::MAX),
+                )
+                .and_then(|value| value.checked_add(descriptor.retained_bytes_for_v5()))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 descriptor ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        for (registration_id, registration) in &self.registrations {
+            total = total
+                .checked_add(
+                    u64::try_from(size_of::<StableId>() + registration_id.allocated_bytes() + 128)
+                        .unwrap_or(u64::MAX),
+                )
+                .and_then(|value| {
+                    value.checked_add(
+                        u64::try_from(registration.allocated_bytes()).unwrap_or(u64::MAX),
+                    )
+                })
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 registration ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })?;
+        }
+        if let Some(bundle) = &self.completed_bundle {
+            total = total.checked_add(bundle.retained_bytes_for_v5()).ok_or(
+                DomainError::Incomplete {
+                    operation: "scheduled M5 bundle ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                },
+            )?;
+        }
+        Ok(total)
+    }
+
+    pub(crate) fn completion(&self) -> Result<M5TerminalCompletionV5> {
+        if let Some(bundle) = &self.completed_bundle {
+            return Ok(M5TerminalCompletionV5::GluingBundleRecorded {
+                source_closure_id: self.source_closure_id.clone(),
+                target_plan_id: self.target_plan_id.clone(),
+                attempt_id: bundle.attempt().id().clone(),
+                basis_digest: self.basis.basis_digest.clone(),
+            });
+        }
+        if self.bindings.is_none() && self.descriptors.is_empty() && self.registrations.is_empty() {
+            return Ok(M5TerminalCompletionV5::NoGluingRequired {
+                source_closure_id: self.source_closure_id.clone(),
+                target_plan_id: self.target_plan_id.clone(),
+                basis_digest: self.basis.basis_digest.clone(),
+            });
+        }
+        Err(DomainError::EventSequence(
+            "scheduled M5 phase is incomplete".to_owned(),
+        ))
+    }
+
+    fn validate_current(&self, log: &EventLogV5) -> Result<()> {
+        if self.log_identity != log.instance_identity {
+            return Err(DomainError::AuthorityReplayBasisMismatch);
+        }
+        self.basis.validate_current_log(log)
+    }
+
+    fn current_gluing_binding<'a>(
+        &self,
+        log: &EventLogV5,
+        roots: &'a AuthorityTrustRootsV5,
+        context_id: &StableId,
+    ) -> Result<&'a GluingInputTrustBindingV4AtV5> {
+        let mut matches = roots
+            .allowed_gluing_input_bindings
+            .iter()
+            .filter(|binding| {
+                binding.context_id == *context_id
+                    && self.bindings.as_ref().is_some_and(|bindings| {
+                        bindings
+                            .iter()
+                            .any(|candidate| candidate.context_id() == context_id)
+                    })
+                    && binding.run_id == log.run_id
+                    && binding.genesis_hash == log.genesis_hash
+                    && binding.snapshot_id == *self.aggregate.program().snapshot_id()
+                    && binding.universe_id == *self.aggregate.universe().id()
+                    && binding.plan_id == self.target_plan_id
+                    && binding.policy_revision_hash == self.basis.policy_revision_hash
+                    && binding.predecessor_event_hash == *log.tail_hash()
+                    && binding.event_sequence == self.basis.target_next_sequence
+            });
+        let value = matches
+            .next()
+            .ok_or(DomainError::GluingInputAdmissionMismatch)?;
+        if matches.next().is_some() {
+            return Err(DomainError::GluingInputAdmissionMismatch);
+        }
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn context_for_registration<'a>(
+        &self,
+        registration: &'a ArtifactRegistrationV4,
+    ) -> Result<&'a StableId> {
+        match registration.source() {
+            ArtifactSourceV4::GluingInput { context_id, .. } => Ok(context_id),
+            _ => Err(DomainError::GluingInputAdmissionMismatch),
+        }
+    }
+
+    fn reconstruct_existing_inputs(
+        &mut self,
+        log: &EventLogV5,
+        roots: &AuthorityTrustRootsV5,
+        resolver: &dyn AuthorityArtifactResolverV5,
+    ) -> Result<()> {
+        for envelope in &log.envelopes {
+            let payload =
+                decode_canonical_payload(EventContractVersion::V5, envelope.payload.get())?;
+            match payload {
+                PersistedPayload::ArtifactRegisteredV4(registration) => {
+                    let ArtifactSourceV4::GluingInput { context_id, .. } = registration.source()
+                    else {
+                        continue;
+                    };
+                    let binding = roots
+                        .allowed_gluing_input_bindings
+                        .iter()
+                        .find(|binding| {
+                            binding.registration_id == *registration.id()
+                                && binding.predecessor_event_hash == *envelope.previous_event_hash()
+                                && binding.event_sequence == envelope.sequence()
+                        })
+                        .ok_or(DomainError::GluingInputAdmissionMismatch)?;
+                    if roots
+                        .allowed_gluing_input_bindings
+                        .iter()
+                        .filter(|candidate| {
+                            candidate.registration_id == *registration.id()
+                                && candidate.predecessor_event_hash
+                                    == *envelope.previous_event_hash()
+                                && candidate.event_sequence == envelope.sequence()
+                        })
+                        .count()
+                        != 1
+                    {
+                        return Err(DomainError::GluingInputAdmissionMismatch);
+                    }
+                    let expected = registration_from_v5_gluing_binding(binding)?;
+                    if expected != registration {
+                        return Err(DomainError::GluingInputAdmissionMismatch);
+                    }
+                    let descriptor = read_v5_gluing_descriptor(binding, resolver)?;
+                    if descriptor.context_id() != context_id
+                        || self
+                            .descriptors
+                            .insert(context_id.clone(), descriptor)
+                            .is_some()
+                        || self
+                            .registrations
+                            .insert(registration.id().clone(), registration)
+                            .is_some()
+                    {
+                        return Err(DomainError::GluingInputAdmissionMismatch);
+                    }
+                }
+                PersistedPayload::GluingBundleRecordedV4(raw) => {
+                    if self.completed_bundle.is_some() {
+                        return Err(DomainError::AlreadyComplete);
+                    }
+                    if self.descriptors.len() != 2 || self.registrations.len() != 2 {
+                        return Err(DomainError::GluingBundleMismatch);
+                    }
+                    let source = self.validated_source()?;
+                    self.completed_bundle = Some(
+                        crate::GluingBundleV4::from_json_bytes(raw.get().as_bytes(), &source)
+                            .map_err(|error| DomainError::Validation(error.to_string()))?,
+                    );
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn validated_source(&self) -> Result<crate::m5::ValidatedM5SourceV4> {
+        let bindings = self
+            .bindings
+            .as_ref()
+            .ok_or(DomainError::AuthorityReplayBasisMismatch)?;
+        let input = |context_id: &StableId| -> Result<crate::m5::RegisteredGluingInputV4> {
+            let descriptor = self
+                .descriptors
+                .get(context_id)
+                .ok_or(DomainError::GluingBundleMismatch)?;
+            let registration = self.registrations.values().find(|registration| matches!(registration.source(), ArtifactSourceV4::GluingInput { context_id: source_context, descriptor_id, .. } if source_context == context_id && descriptor_id == descriptor.id())).ok_or(DomainError::GluingBundleMismatch)?;
+            crate::m5::RegisteredGluingInputV4::seal(descriptor.clone(), registration.id().clone())
+                .map_err(|error| DomainError::Validation(error.to_string()))
+        };
+        crate::m5::ValidatedM5SourceV4::mint_from_v4_replay(
+            &self.aggregate,
+            &self.basis.target_run_id,
+            |claim_id| self.v3_aggregate.assessments.get(claim_id),
+            [
+                input(bindings[0].context_id())?,
+                input(bindings[1].context_id())?,
+            ],
+        )
+        .map_err(|error| DomainError::Validation(error.to_string()))
+    }
+}
+
+fn gluing_claim_binding_retained_bytes(binding: &crate::GluingClaimBindingV5) -> Result<u64> {
+    [
+        binding.context_id().allocated_bytes(),
+        binding.claim_id().map_or(0, StableId::allocated_bytes),
+        binding
+            .claim_body_hash()
+            .map_or(0, ContentHash::allocated_bytes),
+        binding.obligation_id().map_or(0, StableId::allocated_bytes),
+    ]
+    .into_iter()
+    .try_fold(
+        u64::try_from(size_of::<crate::GluingClaimBindingV5>()).unwrap_or(u64::MAX),
+        |total, bytes| {
+            total
+                .checked_add(u64::try_from(bytes).unwrap_or(u64::MAX))
+                .ok_or(DomainError::Incomplete {
+                    operation: "scheduled M5 binding ownership",
+                    limit: usize::MAX,
+                    observed: usize::MAX,
+                })
+        },
+    )
+}
+
+fn registration_from_v5_gluing_binding(
+    binding: &GluingInputTrustBindingV4AtV5,
+) -> Result<ArtifactRegistrationV4> {
+    let registration = ArtifactRegistrationV4 {
+        schema: "reviewgraphen.artifact_registration.v4".to_owned(),
+        id: binding.registration_id.clone(),
+        run_id: binding.run_id.clone(),
+        cas_hash: binding.descriptor_hash.clone(),
+        media_type: binding.descriptor_media_type.clone(),
+        size: binding.descriptor_size,
+        sensitivity: binding.descriptor_sensitivity,
+        source: binding.source.clone(),
+    };
+    registration.validate()?;
+    Ok(registration)
+}
+
+fn read_v5_gluing_descriptor(
+    binding: &GluingInputTrustBindingV4AtV5,
+    resolver: &dyn AuthorityArtifactResolverV5,
+) -> Result<crate::GluingInputDescriptorV4> {
+    let size = usize::try_from(binding.descriptor_size)
+        .map_err(|_| DomainError::GluingInputAdmissionMismatch)?;
+    if size > crate::MAX_M5_DESCRIPTOR_CANONICAL_BYTES {
+        return Err(DomainError::GluingInputAdmissionMismatch);
+    }
+    let mut bytes = vec![0_u8; size];
+    resolver.read_exact(&binding.descriptor_hash, &mut bytes)?;
+    if ContentHash::sha256(&bytes) != binding.descriptor_hash {
+        return Err(DomainError::GluingInputAdmissionMismatch);
+    }
+    let descriptor = crate::GluingInputDescriptorV4::from_json_bytes(&bytes)
+        .map_err(|error| DomainError::Validation(error.to_string()))?;
+    validate_v5_gluing_descriptor(binding, &descriptor)?;
+    Ok(descriptor)
+}
+
+/// Rechecks the descriptor half of a V5 gluing admission without reopening
+/// CAS.  This is used both immediately after the single materialization and
+/// when consuming the prepared append capability.
+fn validate_v5_gluing_descriptor(
+    binding: &GluingInputTrustBindingV4AtV5,
+    descriptor: &crate::GluingInputDescriptorV4,
+) -> Result<()> {
+    if descriptor.id() != &binding.descriptor_id
+        || descriptor.run_id() != &binding.run_id
+        || descriptor.snapshot_id() != &binding.snapshot_id
+        || descriptor.universe_id() != &binding.universe_id
+        || descriptor.plan_id() != &binding.plan_id
+        || descriptor.context_id() != &binding.context_id
+    {
+        return Err(DomainError::GluingInputAdmissionMismatch);
+    }
+    Ok(())
 }
 
 impl PreparedScheduledHumanResolutionAppendV5 {
@@ -70561,6 +72057,22 @@ mod tests {
                     .payload
                     .get()
                     .contains("finding_recorded_v3"));
+                // This target deliberately has no gluing invariant.  The
+                // post-human terminal cursor must therefore complete without
+                // accepting a second seal, descriptor, registration, or M5
+                // bundle.
+                let m5_terminal = log.begin_scheduled_m5_gluing_phase_v5(
+                    Box::new(phase),
+                    Box::new(human),
+                    &partial,
+                    None,
+                    &human_roots,
+                    &resolver,
+                )?;
+                assert!(matches!(
+                    m5_terminal.completion()?,
+                    M5TerminalCompletionV5::NoGluingRequired { .. }
+                ));
                 let suffix = log.envelopes[start..human_start]
                     .iter()
                     .map(EventEnvelope::canonical_bytes)
@@ -70772,7 +72284,7 @@ mod tests {
                     .collect::<Result<Vec<_>>>()?;
                 assert_eq!(human_suffix.len(), 2);
                 for persisted in 0..=human_suffix.len() {
-                    if persisted == 1 {
+                    {
                         reset_scheduled_human_resource_counters_for_test();
                     }
                     let (base, _) = EventLogV5::replay_confirmed_v5_prefix(
@@ -72170,6 +73682,678 @@ mod tests {
                             .collect::<Result<Vec<_>>>()?,
                     );
                 }
+                // Terminal M5 consumes only completed post-human cursors.
+                // This selected/selected fixture has no additional native or
+                // human actions after the second-plan seal, so model that
+                // legal zero-action handoff explicitly instead of bypassing
+                // either cursor with a raw structural append.
+                let post_d2_terminal = terminal;
+                post_d2_terminal
+                    .basis
+                    .validate_current_log(&log)
+                    .map_err(|error| DomainError::Validation(format!("M5 terminal basis: {error}")))?;
+                let m5_base_envelopes = log.envelopes.clone();
+                let mut m5_base_limits = log.limits;
+                m5_base_limits.max_working_bytes = m5_base_limits.max_working_bytes.max(2_000_000);
+                let make_cursors = |identity: V5LogInstanceIdentity| -> Result<_> {
+                    let native = ReplayedScheduledNativeVerifierPhaseV5 {
+                        log_identity: identity,
+                        source_closure_id: post_d2_terminal.source_closure_id.clone(),
+                        partial_rerun_plan_id: post_d2_terminal.partial_rerun_plan_id.clone(),
+                        target_plan_id: post_d2_terminal.target_plan_id.clone(),
+                        reviewer_completion_digest: post_d2_terminal.reviewer_completion_digest.clone(),
+                        basis: post_d2_terminal.basis.clone(),
+                        actions: Vec::new(),
+                        completed_verifications: Vec::new(),
+                        action_index: 0,
+                        member_index: 0,
+                        aggregate: gluing.aggregate.clone(),
+                        v3_aggregate: gluing.v3_aggregate.clone(),
+                        terminal: post_d2_terminal.terminal,
+                        v4_registration_ids: post_d2_terminal.v4_registration_ids.clone(),
+                    };
+                    let human = ReplayedScheduledHumanResolutionPhaseV5 {
+                        log_identity: identity,
+                        source_closure_id: post_d2_terminal.source_closure_id.clone(),
+                        partial_rerun_plan_id: post_d2_terminal.partial_rerun_plan_id.clone(),
+                        target_plan_id: post_d2_terminal.target_plan_id.clone(),
+                        native_completion_digest: native.digest()?,
+                        basis: post_d2_terminal.basis.clone(),
+                        actions: Vec::new(),
+                        action_index: 0,
+                        stage: ScheduledHumanResolutionStageV5::Decision,
+                        aggregate: gluing.aggregate.clone(),
+                        v3_aggregate: gluing.v3_aggregate.clone(),
+                        terminal: post_d2_terminal.terminal,
+                        v4_registration_ids: post_d2_terminal.v4_registration_ids.clone(),
+                    };
+                    Ok((native, human))
+                };
+                let (native, human) = make_cursors(log.instance_identity)?;
+                let mut positioned_roots = gluing
+                    .seal
+                    .claim_bindings()
+                    .iter()
+                    .map(|binding| -> Result<_> {
+                        let descriptor = crate::GluingInputDescriptorV4::new(
+                            log.run_id.clone(),
+                            gluing.aggregate.program().snapshot_id().clone(),
+                            gluing.aggregate.universe().id().clone(),
+                            gluing.target_plan_id.clone(),
+                            binding.context_id().clone(),
+                            crate::AssignmentValueV4::Satisfied,
+                            BTreeSet::new(),
+                        )
+                        .map_err(|error| DomainError::Validation(error.to_string()))?;
+                        let bytes = canonical_json(&descriptor)?;
+                        let descriptor_hash = ContentHash::sha256(&bytes);
+                        resolver.0.insert(descriptor_hash.clone(), bytes);
+                        let source = ArtifactSourceV4::GluingInput {
+                            context_id: binding.context_id().clone(),
+                            descriptor_hash: descriptor_hash.clone(),
+                            descriptor_id: descriptor.id().clone(),
+                            descriptor_media_type: GLUING_INPUT_MEDIA_TYPE_V4.to_owned(),
+                            descriptor_sensitivity: ArtifactSensitivity::CanonicalState,
+                            descriptor_size: u64::try_from(canonical_json(&descriptor)?.len()).unwrap_or(u64::MAX),
+                            genesis_hash: log.genesis_hash.clone(),
+                            plan_id: gluing.target_plan_id.clone(),
+                            policy_revision_hash: post_d2_terminal.basis.policy_revision_hash.clone(),
+                            profile_descriptor_id: crate::DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID.to_owned(),
+                            repository_id: gluing.aggregate.program().repository_id().clone(),
+                            repository_source_hash: gluing.aggregate.program().repository_source().content_hash().expect("M5 repo source").clone(),
+                            run_id: log.run_id.clone(),
+                            snapshot_id: gluing.aggregate.program().snapshot_id().clone(),
+                            universe_id: gluing.aggregate.universe().id().clone(),
+                        };
+                        let registration = ArtifactRegistrationV4::derived_id(
+                            &log.run_id,
+                            &descriptor_hash,
+                            GLUING_INPUT_MEDIA_TYPE_V4,
+                            u64::try_from(canonical_json(&descriptor)?.len()).unwrap_or(u64::MAX),
+                            ArtifactSensitivity::CanonicalState,
+                            &source,
+                        )?;
+                        Ok(GluingInputTrustBindingV4AtV5 {
+                            policy_revision_hash: post_d2_terminal.basis.policy_revision_hash.clone(),
+                            repository_id: gluing.aggregate.program().repository_id().clone(),
+                            repository_source_hash: gluing.aggregate.program().repository_source().content_hash().expect("M5 repo source").clone(),
+                            run_id: log.run_id.clone(), genesis_hash: log.genesis_hash.clone(),
+                            snapshot_id: gluing.aggregate.program().snapshot_id().clone(), universe_id: gluing.aggregate.universe().id().clone(),
+                            plan_id: gluing.target_plan_id.clone(), profile_descriptor_id: crate::DOUBLE_SUBMIT_GLUING_DESCRIPTOR_ID.to_owned(),
+                            context_id: binding.context_id().clone(), descriptor_id: descriptor.id().clone(), descriptor_hash,
+                            descriptor_size: u64::try_from(canonical_json(&descriptor)?.len()).unwrap_or(u64::MAX),
+                            descriptor_media_type: GLUING_INPUT_MEDIA_TYPE_V4.to_owned(), descriptor_sensitivity: ArtifactSensitivity::CanonicalState,
+                            registration_id: registration, source, predecessor_event_hash: ContentHash::sha256(b"unpositioned-gluing-root"), event_sequence: 1,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                positioned_roots.sort_by(|left, right| left.context_id.cmp(&right.context_id));
+                positioned_roots[0].predecessor_event_hash = log.tail_hash().clone();
+                positioned_roots[0].event_sequence = post_d2_terminal.basis.target_next_sequence;
+                let first_registration = registration_from_v5_gluing_binding(&positioned_roots[0])?;
+                let first = EventEnvelope::new(
+                    EventContractVersion::V5,
+                    log.run_id.clone(),
+                    log.genesis_hash.clone(),
+                    positioned_roots[0].event_sequence,
+                    "engine:reviewgraphen.m5_gluing_input@1",
+                    positioned_roots[0].event_sequence,
+                    positioned_roots[0].predecessor_event_hash.clone(),
+                    PersistedPayload::ArtifactRegisteredV4(first_registration),
+                )?;
+                positioned_roots[1].predecessor_event_hash = first.event_hash().clone();
+                positioned_roots[1].event_sequence = first.sequence() + 1;
+                let m5_roots = AuthorityTrustRootsV5::new(
+                    post_d2_terminal.basis.policy_revision_hash.clone(),
+                    gluing.aggregate.program().repository_id().clone(),
+                    gluing
+                        .aggregate
+                        .program()
+                        .repository_source()
+                        .content_hash()
+                        .expect("M5 target repository source")
+                        .clone(),
+                    Vec::new(),
+                    Vec::new(),
+                    positioned_roots,
+                )?;
+                // Begin's linear inputs are rebuilt for every actual-limit
+                // probe. No descriptor resolver read is possible at this
+                // admission seam.
+                let begin_required = {
+                    reset_scheduled_m5_resource_counters_for_test();
+                    let (base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(), target.log.canonical_genesis_bytes.clone(),
+                        m5_base_envelopes.clone(), m5_base_limits,
+                    )?;
+                    let (native, human) = make_cursors(base.instance_identity)?;
+                    let gluing = gluing.rebind_replayed_log_identity(base.instance_identity);
+                    drop(base.begin_scheduled_m5_gluing_phase_v5(
+                        Box::new(native), Box::new(human), &partial,
+                        Some(Box::new(gluing)), &m5_roots, &resolver,
+                    )?);
+                    scheduled_m5_required_working_for_test(0)
+                };
+                assert_ne!(begin_required, 0);
+                for offset in [-1_i8, 0, 1] {
+                    let (mut base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(), target.log.canonical_genesis_bytes.clone(),
+                        m5_base_envelopes.clone(), m5_base_limits,
+                    )?;
+                    base.limits.max_working_bytes = match offset {
+                        -1 => begin_required - 1,
+                        0 => begin_required,
+                        1 => begin_required + 1,
+                        _ => unreachable!(),
+                    };
+                    let tail = base.tail_hash().clone();
+                    let count = base.envelopes.len();
+                    let (native, human) = make_cursors(base.instance_identity)?;
+                    let gluing = gluing.rebind_replayed_log_identity(base.instance_identity);
+                    let result = base.begin_scheduled_m5_gluing_phase_v5(
+                        Box::new(native), Box::new(human), &partial,
+                        Some(Box::new(gluing)), &m5_roots, &resolver,
+                    );
+                    if offset < 0 {
+                        assert!(result.is_err());
+                        assert_eq!(base.tail_hash(), &tail);
+                        assert_eq!(base.envelopes.len(), count);
+                    } else {
+                        assert!(result.is_ok());
+                    }
+                }
+                let m5_gluing = gluing.rebind_replayed_log_identity(log.instance_identity);
+                reset_scheduled_m5_resource_counters_for_test();
+                let m5 = log.begin_scheduled_m5_gluing_phase_v5(
+                    Box::new(native),
+                    Box::new(human),
+                    &partial,
+                    Some(Box::new(m5_gluing)),
+                    &m5_roots,
+                    &resolver,
+                )?;
+                let m5_begin_required = scheduled_m5_required_working_for_test(0);
+                assert_ne!(m5_begin_required, 0);
+                let m5_start_tail = log.tail_hash().clone();
+                let m5_start_count = log.envelopes.len();
+                let saved_m5_limit = log.limits.max_working_bytes.max(2_000_000);
+                drop(m5);
+                // Reconstruct a fresh pre-M5 session for each append limit;
+                // the successful calibration consumed its token/member.
+                let fresh_first = |limit: u64| -> Result<_> {
+                    let (mut fresh_log, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(), target.log.canonical_genesis_bytes.clone(),
+                        m5_base_envelopes.clone(), m5_base_limits,
+                    )?;
+                    fresh_log.limits.max_working_bytes = saved_m5_limit;
+                    let (fresh_native, fresh_human) = make_cursors(fresh_log.instance_identity)?;
+                    let fresh_gluing = gluing.rebind_replayed_log_identity(fresh_log.instance_identity);
+                    let fresh_m5 = fresh_log.begin_scheduled_m5_gluing_phase_v5(
+                        Box::new(fresh_native), Box::new(fresh_human), &partial, Some(Box::new(fresh_gluing)), &m5_roots, &resolver,
+                    )?;
+                    let token = fresh_log.prepare_scheduled_m5_gluing_append_v5(
+                        &fresh_m5, &m5_roots, &resolver,
+                    )?.expect("fresh M5 registration token");
+                    fresh_log.limits.max_working_bytes = limit;
+                    Ok((fresh_log, fresh_m5, token))
+                };
+                let (mut calibration_log, mut calibration_m5, calibration_token) =
+                    fresh_first(saved_m5_limit)?;
+                calibration_log.append_prepared_scheduled_m5_gluing_v5(
+                    calibration_token, &mut calibration_m5, &m5_roots, &resolver,
+                )?;
+                let m5_append_required = scheduled_m5_required_working_for_test(2);
+                assert_ne!(m5_append_required, 0);
+                for offset in [-1_i8, 0, 1] {
+                    let limit = match offset { -1 => m5_append_required - 1, 0 => m5_append_required, 1 => m5_append_required + 1, _ => unreachable!() };
+                    let (mut fresh_log, mut fresh_m5, token) = fresh_first(limit)?;
+                    let tail = fresh_log.tail_hash().clone();
+                    let count = fresh_log.envelopes.len();
+                    let result = fresh_log.append_prepared_scheduled_m5_gluing_v5(
+                        token, &mut fresh_m5, &m5_roots, &resolver,
+                    );
+                    if offset < 0 {
+                        assert!(result.is_err());
+                        assert_eq!(fresh_log.tail_hash(), &tail);
+                        assert_eq!(fresh_log.envelopes.len(), count);
+                    } else {
+                        assert!(result.is_ok(), "M5 append {offset:+} must admit");
+                    }
+                }
+                // The original phase was used solely for calibration. Resume
+                // the functional M5 suffix from a fresh exact session.
+                let (mut log, mut m5, prepared_first) = fresh_first(saved_m5_limit)?;
+                let m5_start = log.envelopes.len();
+                log.append_prepared_scheduled_m5_gluing_v5(
+                    prepared_first,
+                    &mut m5,
+                    &m5_roots,
+                    &resolver,
+                )?;
+                while let Some(prepared) = log.prepare_scheduled_m5_gluing_append_v5(&m5, &m5_roots, &resolver)? {
+                    log.append_prepared_scheduled_m5_gluing_v5(
+                        prepared,
+                        &mut m5,
+                        &m5_roots,
+                        &resolver,
+                    )?;
+                }
+                assert!(matches!(
+                    m5.completion()?,
+                    M5TerminalCompletionV5::GluingBundleRecorded { .. }
+                ));
+                let m5_suffix = log.envelopes[m5_start..]
+                    .iter()
+                    .map(EventEnvelope::canonical_bytes)
+                    .collect::<Result<Vec<_>>>()?;
+                assert_eq!(m5_suffix.len(), 3);
+                // Closed hostile matrix: use a fresh pre-M5 prefix so every
+                // rejection reaches its named admission seam rather than
+                // merely failing because an already-complete suffix is stale.
+                let fresh_hostile_base = || -> Result<_> {
+                    let (mut base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(), target.log.canonical_genesis_bytes.clone(),
+                        m5_base_envelopes.clone(), m5_base_limits,
+                    )?;
+                    base.limits.max_working_bytes = saved_m5_limit;
+                    let (native, human) = make_cursors(base.instance_identity)?;
+                    let gluing = gluing.rebind_replayed_log_identity(base.instance_identity);
+                    Ok((base, native, human, gluing))
+                };
+                let (hostile_log, hostile_native, hostile_human, mut hostile_gluing) =
+                    fresh_hostile_base()?;
+                let hostile_tail = hostile_log.tail_hash().clone();
+                let hostile_count = hostile_log.envelopes.len();
+                hostile_gluing.target_plan_id = StableId::parse("plan:m5-hostile")?;
+                assert!(hostile_log.begin_scheduled_m5_gluing_phase_v5(
+                    Box::new(hostile_native), Box::new(hostile_human), &partial, Some(Box::new(hostile_gluing)), &m5_roots, &resolver,
+                ).is_err());
+                assert_eq!(hostile_log.tail_hash(), &hostile_tail);
+                assert_eq!(hostile_log.envelopes.len(), hostile_count);
+                // M5 cannot be opened from an unfinished human cursor, nor
+                // from a gluing phase whose action stream no longer matches
+                // its durable seal.
+                let (hostile_log, hostile_native, mut hostile_human, hostile_gluing) =
+                    fresh_hostile_base()?;
+                let hostile_tail = hostile_log.tail_hash().clone();
+                let hostile_count = hostile_log.envelopes.len();
+                hostile_human.stage = ScheduledHumanResolutionStageV5::Finding;
+                assert!(hostile_log.begin_scheduled_m5_gluing_phase_v5(
+                    Box::new(hostile_native), Box::new(hostile_human), &partial, Some(Box::new(hostile_gluing)), &m5_roots, &resolver,
+                ).is_err());
+                assert_eq!(hostile_log.tail_hash(), &hostile_tail);
+                assert_eq!(hostile_log.envelopes.len(), hostile_count);
+                let (hostile_log, hostile_native, hostile_human, mut hostile_gluing) =
+                    fresh_hostile_base()?;
+                let hostile_tail = hostile_log.tail_hash().clone();
+                let hostile_count = hostile_log.envelopes.len();
+                hostile_gluing.actions.clear();
+                assert!(hostile_log.begin_scheduled_m5_gluing_phase_v5(
+                    Box::new(hostile_native), Box::new(hostile_human), &partial, Some(Box::new(hostile_gluing)), &m5_roots, &resolver,
+                ).is_err());
+                assert_eq!(hostile_log.tail_hash(), &hostile_tail);
+                assert_eq!(hostile_log.envelopes.len(), hostile_count);
+                // No reviewer/D2 work may interleave in an M5 recovery
+                // suffix. The linear begin consumed the live cursors; the
+                // recovery recognizer independently rejects a gluing-action
+                // row where the first M5 registration is required.
+                let (hostile_log, _hostile_native, _hostile_human, hostile_gluing) =
+                    fresh_hostile_base()?;
+                let rogue_action = hostile_gluing
+                    .actions
+                    .first()
+                    .expect("sealed gluing action")
+                    .clone();
+                let rogue = EventEnvelope::new(
+                    EventContractVersion::V5,
+                    hostile_log.run_id.clone(),
+                    hostile_log.genesis_hash.clone(),
+                    post_d2_terminal.basis.target_next_sequence,
+                    SYSTEM_ACTOR,
+                    post_d2_terminal.basis.target_next_sequence,
+                    hostile_log.tail_hash().clone(),
+                    PersistedPayload::GluingRerunActionRecordedV5(rogue_action),
+                )?;
+                let rogue = rogue.canonical_bytes()?;
+                let (hostile_log, hostile_native, hostile_human, hostile_gluing) =
+                    fresh_hostile_base()?;
+                assert!(EventLogV5::replay_scheduled_m5_gluing_suffix_v5(
+                    hostile_log, &[rogue], ScheduledM5GluingRecoveryInputV5 {
+                        native: Box::new(hostile_native), human: Box::new(hostile_human), partial: &partial,
+                        gluing: Some(Box::new(hostile_gluing)), roots: &m5_roots, resolver: &resolver,
+                    },
+                ).is_err());
+                let (hostile_log, hostile_native, hostile_human, hostile_gluing) =
+                    fresh_hostile_base()?;
+                let hostile_tail = hostile_log.tail_hash().clone();
+                let hostile_count = hostile_log.envelopes.len();
+                let hostile_phase = hostile_log.begin_scheduled_m5_gluing_phase_v5(
+                    Box::new(hostile_native), Box::new(hostile_human), &partial, Some(Box::new(hostile_gluing)), &m5_roots, &resolver,
+                )?;
+                let mut hostile_roots = m5_roots.clone();
+                hostile_roots.allowed_gluing_input_bindings[0].source = ArtifactSourceV4::RunGenesis {
+                    run_id: hostile_log.run_id.clone(),
+                };
+                assert!(hostile_log.prepare_scheduled_m5_gluing_append_v5(
+                    &hostile_phase, &hostile_roots, &resolver,
+                ).is_err());
+                assert_eq!(hostile_log.tail_hash(), &hostile_tail);
+                assert_eq!(hostile_log.envelopes.len(), hostile_count);
+                let (hostile_log, hostile_native, hostile_human, hostile_gluing) =
+                    fresh_hostile_base()?;
+                let hostile_tail = hostile_log.tail_hash().clone();
+                let hostile_count = hostile_log.envelopes.len();
+                let hostile_phase = hostile_log.begin_scheduled_m5_gluing_phase_v5(
+                    Box::new(hostile_native), Box::new(hostile_human), &partial, Some(Box::new(hostile_gluing)), &m5_roots, &resolver,
+                )?;
+                let mut hostile_roots = m5_roots.clone();
+                if let ArtifactSourceV4::GluingInput { snapshot_id, .. } =
+                    &mut hostile_roots.allowed_gluing_input_bindings[0].source
+                {
+                    *snapshot_id = StableId::parse("snapshot:m5-stale-source")?;
+                } else {
+                    panic!("M5 root must retain its gluing descriptor source");
+                }
+                assert!(hostile_log.prepare_scheduled_m5_gluing_append_v5(
+                    &hostile_phase, &hostile_roots, &resolver,
+                ).is_err());
+                assert_eq!(hostile_log.tail_hash(), &hostile_tail);
+                assert_eq!(hostile_log.envelopes.len(), hostile_count);
+                let (hostile_log, hostile_native, hostile_human, hostile_gluing) =
+                    fresh_hostile_base()?;
+                let hostile_tail = hostile_log.tail_hash().clone();
+                let hostile_count = hostile_log.envelopes.len();
+                let hostile_phase = hostile_log.begin_scheduled_m5_gluing_phase_v5(
+                    Box::new(hostile_native), Box::new(hostile_human), &partial, Some(Box::new(hostile_gluing)), &m5_roots, &resolver,
+                )?;
+                let mut hostile_roots = m5_roots.clone();
+                hostile_roots.allowed_gluing_input_bindings[0].predecessor_event_hash =
+                    ContentHash::sha256(b"m5-hostile-root-tail");
+                assert!(hostile_log.prepare_scheduled_m5_gluing_append_v5(
+                    &hostile_phase, &hostile_roots, &resolver,
+                ).is_err());
+                assert_eq!(hostile_log.tail_hash(), &hostile_tail);
+                assert_eq!(hostile_log.envelopes.len(), hostile_count);
+                let (hostile_log, hostile_native, hostile_human, mut hostile_gluing) =
+                    fresh_hostile_base()?;
+                let hostile_tail = hostile_log.tail_hash().clone();
+                let hostile_count = hostile_log.envelopes.len();
+                hostile_gluing.log_identity.ordinal = hostile_gluing.log_identity.ordinal.saturating_add(1);
+                assert!(hostile_log.begin_scheduled_m5_gluing_phase_v5(
+                    Box::new(hostile_native), Box::new(hostile_human), &partial, Some(Box::new(hostile_gluing)), &m5_roots, &resolver,
+                ).is_err());
+                assert_eq!(hostile_log.tail_hash(), &hostile_tail);
+                assert_eq!(hostile_log.envelopes.len(), hostile_count);
+                // A stored registration/bundle must have exactly the fresh
+                // first-missing wire: mutate every byte-bearing member in
+                // the recovery suffix and reject it without accepting state.
+                for member in &m5_suffix {
+                    let mut hostile = member.clone();
+                    let position = hostile.len().saturating_sub(2);
+                    if let Some(byte) = hostile.get_mut(position) {
+                        *byte = byte.wrapping_add(1);
+                    }
+                    let (base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(), target.log.canonical_genesis_bytes.clone(),
+                        m5_base_envelopes.clone(), m5_base_limits,
+                    )?;
+                    let (hostile_native, hostile_human) = make_cursors(base.instance_identity)?;
+                    let hostile_gluing = gluing.rebind_replayed_log_identity(base.instance_identity);
+                    assert!(EventLogV5::replay_scheduled_m5_gluing_suffix_v5(
+                        base, &[hostile], ScheduledM5GluingRecoveryInputV5 {
+                            native: Box::new(hostile_native), human: Box::new(hostile_human), partial: &partial,
+                            gluing: Some(Box::new(hostile_gluing)), roots: &m5_roots, resolver: &resolver,
+                        },
+                    ).is_err());
+                }
+                // Every member shape (two registrations, then the frozen
+                // bundle) gets an independent append -1/exact/+1 probe.
+                // The phase is rebuilt through the durable preceding suffix
+                // rather than reusing a token or a capacity-mutated cursor.
+                let fresh_m5_phase = |member_index: usize, limit: u64| -> Result<_> {
+                    let (mut fresh_log, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(), target.log.canonical_genesis_bytes.clone(),
+                        m5_base_envelopes.clone(), m5_base_limits,
+                    )?;
+                    fresh_log.limits.max_working_bytes = saved_m5_limit;
+                    let (fresh_native, fresh_human) = make_cursors(fresh_log.instance_identity)?;
+                    let fresh_gluing = gluing.rebind_replayed_log_identity(fresh_log.instance_identity);
+                    let (mut fresh_log, fresh_m5) = EventLogV5::replay_scheduled_m5_gluing_suffix_v5(
+                        fresh_log, &m5_suffix[..member_index],
+                        ScheduledM5GluingRecoveryInputV5 {
+                            native: Box::new(fresh_native), human: Box::new(fresh_human), partial: &partial,
+                            gluing: Some(Box::new(fresh_gluing)), roots: &m5_roots, resolver: &resolver,
+                        },
+                    )?;
+                    fresh_log.limits.max_working_bytes = limit;
+                    Ok((fresh_log, Box::new(fresh_m5)))
+                };
+                let fresh_m5_member = |member_index: usize, limit: u64| -> Result<_> {
+                    let (mut fresh_log, fresh_m5) =
+                        fresh_m5_phase(member_index, saved_m5_limit)?;
+                    let token = fresh_log
+                        .prepare_scheduled_m5_gluing_append_v5(&fresh_m5, &m5_roots, &resolver)?
+                        .ok_or(DomainError::AlreadyComplete)?;
+                    fresh_log.limits.max_working_bytes = limit;
+                    Ok((fresh_log, fresh_m5, token))
+                };
+                // Every first-missing member has its own prepare boundary:
+                // both registrations and the final bundle are checked at
+                // -1/exact/+1 before append consumes a capability.
+                for member_index in 0..m5_suffix.len() {
+                    let required = {
+                        reset_scheduled_m5_resource_counters_for_test();
+                        let (probe_log, probe_phase) =
+                            fresh_m5_phase(member_index, saved_m5_limit)?;
+                        assert!(probe_log
+                            .prepare_scheduled_m5_gluing_append_v5(
+                                &probe_phase, &m5_roots, &resolver,
+                            )?
+                            .is_some());
+                        scheduled_m5_required_working_for_test(1)
+                    };
+                    assert_ne!(required, 0);
+                    for offset in [-1_i8, 0, 1] {
+                        let limit = match offset {
+                            -1 => required - 1,
+                            0 => required,
+                            1 => required + 1,
+                            _ => unreachable!(),
+                        };
+                        let (probe_log, probe_phase) = fresh_m5_phase(member_index, limit)?;
+                        let tail = probe_log.tail_hash().clone();
+                        let count = probe_log.envelopes.len();
+                        reset_scheduled_m5_resource_counters_for_test();
+                        if offset < 0 {
+                            assert!(probe_log
+                                .prepare_scheduled_m5_gluing_append_v5(
+                                    &probe_phase, &m5_roots, &resolver,
+                                )
+                                .is_err());
+                            assert_eq!(scheduled_m5_materializations_for_test(), 0);
+                            assert_eq!(probe_log.tail_hash(), &tail);
+                            assert_eq!(probe_log.envelopes.len(), count);
+                        } else {
+                            assert!(probe_log
+                                .prepare_scheduled_m5_gluing_append_v5(
+                                    &probe_phase, &m5_roots, &resolver,
+                                )?
+                                .is_some(), "M5 prepare member {member_index} {offset:+}");
+                        }
+                    }
+                }
+                // A syntactically valid registration or bundle is not append
+                // authority: its semantic identity/body must be exactly the
+                // current first-missing member.  These are deliberately not
+                // merely byte-corruption cases.
+                let (mut hostile_log, mut hostile_phase, mut hostile_token) =
+                    fresh_m5_member(0, saved_m5_limit)?;
+                let hostile_tail = hostile_log.tail_hash().clone();
+                let hostile_count = hostile_log.envelopes.len();
+                let PersistedPayload::ArtifactRegisteredV4(registration) = &mut hostile_token.payload else {
+                    panic!("first M5 member must be a V4 registration");
+                };
+                registration.size = registration.size.saturating_add(1);
+                assert!(hostile_log.append_prepared_scheduled_m5_gluing_v5(
+                    hostile_token, &mut hostile_phase, &m5_roots, &resolver,
+                ).is_err());
+                assert_eq!(hostile_log.tail_hash(), &hostile_tail);
+                assert_eq!(hostile_log.envelopes.len(), hostile_count);
+                let (mut hostile_log, mut hostile_phase, mut hostile_token) =
+                    fresh_m5_member(2, saved_m5_limit)?;
+                let hostile_tail = hostile_log.tail_hash().clone();
+                let hostile_count = hostile_log.envelopes.len();
+                hostile_token.payload = PersistedPayload::GluingBundleRecordedV4(
+                    raw_payload(br#"{}"#.to_vec())?,
+                );
+                assert!(hostile_log.append_prepared_scheduled_m5_gluing_v5(
+                    hostile_token, &mut hostile_phase, &m5_roots, &resolver,
+                ).is_err());
+                assert_eq!(hostile_log.tail_hash(), &hostile_tail);
+                assert_eq!(hostile_log.envelopes.len(), hostile_count);
+                let mut duplicate_suffix = m5_suffix.clone();
+                duplicate_suffix.push(m5_suffix.last().expect("M5 bundle").clone());
+                let (duplicate_base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                    target.run_id().clone(), target.log.canonical_genesis_bytes.clone(),
+                    m5_base_envelopes.clone(), m5_base_limits,
+                )?;
+                let (duplicate_native, duplicate_human) =
+                    make_cursors(duplicate_base.instance_identity)?;
+                let duplicate_gluing =
+                    gluing.rebind_replayed_log_identity(duplicate_base.instance_identity);
+                assert!(EventLogV5::replay_scheduled_m5_gluing_suffix_v5(
+                    duplicate_base, &duplicate_suffix,
+                    ScheduledM5GluingRecoveryInputV5 {
+                        native: Box::new(duplicate_native), human: Box::new(duplicate_human), partial: &partial,
+                        gluing: Some(Box::new(duplicate_gluing)), roots: &m5_roots, resolver: &resolver,
+                    },
+                ).is_err());
+                for member_index in 0..m5_suffix.len() {
+                    reset_scheduled_m5_resource_counters_for_test();
+                    let (mut calibration_log, mut calibration_phase, calibration_token) =
+                        fresh_m5_member(member_index, saved_m5_limit)?;
+                    calibration_log.append_prepared_scheduled_m5_gluing_v5(
+                        calibration_token, &mut calibration_phase, &m5_roots, &resolver,
+                    )?;
+                    let required = scheduled_m5_required_working_for_test(2);
+                    assert_ne!(required, 0);
+                    for offset in [-1_i8, 0, 1] {
+                        let limit = match offset {
+                            -1 => required - 1,
+                            0 => required,
+                            1 => required + 1,
+                            _ => unreachable!(),
+                        };
+                        let (mut probe_log, mut probe_phase, token) =
+                            fresh_m5_member(member_index, limit)?;
+                        let tail = probe_log.tail_hash().clone();
+                        let count = probe_log.envelopes.len();
+                        let result = probe_log.append_prepared_scheduled_m5_gluing_v5(
+                            token, &mut probe_phase, &m5_roots, &resolver,
+                        );
+                        if offset < 0 {
+                            assert!(result.is_err());
+                            assert_eq!(probe_log.tail_hash(), &tail);
+                            assert_eq!(probe_log.envelopes.len(), count);
+                        } else {
+                            assert!(result.is_ok(), "M5 member {member_index} append {offset:+}");
+                        }
+                    }
+                }
+                // Every durable M5 prefix restarts from its pre-M5 log and
+                // the exact cursor/root/CAS inputs. The suffix supplies no
+                // authority: it must equal the newly prepared first missing
+                // registration or bundle at every position.
+                for persisted in 0..=m5_suffix.len() {
+                    {
+                        // Calibrate from a fresh prefix, then probe the
+                        // recovery admission at -1/exact/+1 with separately
+                        // rebuilt logs/cursors. The -1 path must fail before
+                        // descriptor CAS materialization or journal change.
+                        let (mut calibration_base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                            target.run_id().clone(),
+                            target.log.canonical_genesis_bytes.clone(),
+                            m5_base_envelopes.clone(), m5_base_limits,
+                        )?;
+                        calibration_base.limits.max_working_bytes = saved_m5_limit;
+                        let (calibration_native, calibration_human) =
+                            make_cursors(calibration_base.instance_identity)?;
+                        let calibration_gluing =
+                            gluing.rebind_replayed_log_identity(calibration_base.instance_identity);
+                        reset_scheduled_m5_resource_counters_for_test();
+                        let _ = EventLogV5::replay_scheduled_m5_gluing_suffix_v5(
+                            calibration_base, &m5_suffix[..persisted],
+                            ScheduledM5GluingRecoveryInputV5 {
+                                native: Box::new(calibration_native), human: Box::new(calibration_human),
+                                partial: &partial, gluing: Some(Box::new(calibration_gluing)),
+                                roots: &m5_roots, resolver: &resolver,
+                            },
+                        )?;
+                        let required = scheduled_m5_required_working_for_test(3);
+                        assert_ne!(required, 0);
+                        for offset in [-1_i8, 0, 1] {
+                            let (mut probe_base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                                target.run_id().clone(), target.log.canonical_genesis_bytes.clone(),
+                                m5_base_envelopes.clone(), m5_base_limits,
+                            )?;
+                            probe_base.limits.max_working_bytes = match offset {
+                                -1 => required - 1, 0 => required, 1 => required + 1, _ => unreachable!(),
+                            };
+                            let tail = probe_base.tail_hash().clone();
+                            let count = probe_base.envelopes.len();
+                            let (probe_native, probe_human) = make_cursors(probe_base.instance_identity)?;
+                            let probe_gluing = gluing.rebind_replayed_log_identity(probe_base.instance_identity);
+                            reset_scheduled_m5_resource_counters_for_test();
+                            let attempt = EventLogV5::replay_scheduled_m5_gluing_suffix_v5(
+                                probe_base, &m5_suffix[..persisted],
+                                ScheduledM5GluingRecoveryInputV5 {
+                                    native: Box::new(probe_native), human: Box::new(probe_human), partial: &partial,
+                                    gluing: Some(Box::new(probe_gluing)), roots: &m5_roots, resolver: &resolver,
+                                },
+                            );
+                            if offset < 0 {
+                                assert!(attempt.is_err());
+                                // Ownership was rejected before any replay
+                                // append; the input prefix remains available
+                                // for an independent identical retry.
+                                assert_eq!(tail, m5_start_tail);
+                                assert_eq!(count, m5_start_count);
+                                assert_eq!(scheduled_m5_materializations_for_test(), 0);
+                            } else {
+                                assert!(attempt.is_ok(), "M5 recovery {offset:+} must admit");
+                            }
+                        }
+                    }
+                    let (mut base, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        target.run_id().clone(),
+                        target.log.canonical_genesis_bytes.clone(),
+                        m5_base_envelopes.clone(),
+                        m5_base_limits,
+                    )?;
+                    base.limits.max_working_bytes = saved_m5_limit;
+                    let (replayed_native, replayed_human) = make_cursors(base.instance_identity)?;
+                    let replayed_gluing = gluing.rebind_replayed_log_identity(base.instance_identity);
+                    let (replayed_log, replayed_m5) =
+                        EventLogV5::replay_scheduled_m5_gluing_suffix_v5(
+                            base,
+                                &m5_suffix[..persisted],
+                            ScheduledM5GluingRecoveryInputV5 {
+                                native: Box::new(replayed_native),
+                                human: Box::new(replayed_human),
+                                partial: &partial,
+                                gluing: Some(Box::new(replayed_gluing)),
+                                roots: &m5_roots,
+                                resolver: &resolver,
+                            },
+                        )?;
+                    assert_eq!(replayed_log.envelopes.len(), m5_start + persisted);
+                    if persisted == m5_suffix.len() {
+                        assert!(matches!(
+                            replayed_m5.completion()?,
+                            M5TerminalCompletionV5::GluingBundleRecorded { .. }
+                        ));
+                    }
+                }
                 Ok(())
             })
             .expect("post-D2 gluing append");
@@ -72318,6 +74502,69 @@ mod tests {
                 assert!(log.prepare_gluing_rerun_append_v5(&mut gluing).is_err());
                 let terminal =
                     log.open_post_d2_terminal_phase_v5(&state, &partial, Some(&mut gluing))?;
+                // Existing-target M5 is reconstructed from the rewrapped V4
+                // predecessor records already present in this V5 log. Probe
+                // its begin gate from fresh opaque cursors at -1/exact/+1.
+                let make_existing_cursors = |identity: V5LogInstanceIdentity| -> Result<_> {
+                    let native = ReplayedScheduledNativeVerifierPhaseV5 {
+                        log_identity: identity,
+                        source_closure_id: terminal.source_closure_id.clone(),
+                        partial_rerun_plan_id: terminal.partial_rerun_plan_id.clone(),
+                        target_plan_id: terminal.target_plan_id.clone(),
+                        reviewer_completion_digest: terminal.reviewer_completion_digest.clone(),
+                        basis: terminal.basis.clone(), actions: Vec::new(),
+                        completed_verifications: Vec::new(), action_index: 0, member_index: 0,
+                        aggregate: gluing.aggregate.clone(), v3_aggregate: gluing.v3_aggregate.clone(),
+                        terminal: terminal.terminal, v4_registration_ids: terminal.v4_registration_ids.clone(),
+                    };
+                    let human = ReplayedScheduledHumanResolutionPhaseV5 {
+                        log_identity: identity, source_closure_id: terminal.source_closure_id.clone(),
+                        partial_rerun_plan_id: terminal.partial_rerun_plan_id.clone(),
+                        target_plan_id: terminal.target_plan_id.clone(), native_completion_digest: native.digest()?,
+                        basis: terminal.basis.clone(), actions: Vec::new(), action_index: 0,
+                        stage: ScheduledHumanResolutionStageV5::Decision,
+                        aggregate: gluing.aggregate.clone(), v3_aggregate: gluing.v3_aggregate.clone(),
+                        terminal: terminal.terminal, v4_registration_ids: terminal.v4_registration_ids.clone(),
+                    };
+                    Ok((native, human))
+                };
+                let base_envelopes = log.envelopes.clone();
+                let base_limits = log.limits;
+                reset_scheduled_m5_resource_counters_for_test();
+                let (calibration_log, _) = EventLogV5::replay_confirmed_v5_prefix(
+                    log.run_id.clone(), log.canonical_genesis_bytes.clone(),
+                    base_envelopes.clone(), base_limits,
+                )?;
+                let (calibration_native, calibration_human) =
+                    make_existing_cursors(calibration_log.instance_identity)?;
+                let gluing_identity =
+                    gluing.rebind_replayed_log_identity(calibration_log.instance_identity);
+                let _ = calibration_log.begin_scheduled_m5_gluing_phase_v5(
+                    Box::new(calibration_native), Box::new(calibration_human), &partial,
+                    Some(Box::new(gluing_identity)), &target.roots, &resolver,
+                )?;
+                let required = scheduled_m5_required_working_for_test(0);
+                assert_ne!(required, 0);
+                for offset in [-1_i8, 0, 1] {
+                    let (mut probe, _) = EventLogV5::replay_confirmed_v5_prefix(
+                        log.run_id.clone(), log.canonical_genesis_bytes.clone(),
+                        base_envelopes.clone(), base_limits,
+                    )?;
+                    probe.limits.max_working_bytes = match offset { -1 => required - 1, 0 => required, 1 => required + 1, _ => unreachable!() };
+                    let tail = probe.tail_hash().clone(); let count = probe.envelopes.len();
+                    let (native, human) = make_existing_cursors(probe.instance_identity)?;
+                    let gluing = gluing.rebind_replayed_log_identity(probe.instance_identity);
+                    let outcome = probe.begin_scheduled_m5_gluing_phase_v5(
+                        Box::new(native), Box::new(human), &partial,
+                        Some(Box::new(gluing)), &target.roots, &resolver,
+                    );
+                    if offset < 0 {
+                        assert!(outcome.is_err());
+                        assert_eq!(probe.tail_hash(), &tail); assert_eq!(probe.envelopes.len(), count);
+                    } else {
+                        assert!(matches!(outcome?.completion()?, M5TerminalCompletionV5::GluingBundleRecorded { .. }));
+                    }
+                }
                 let existing_m5 = log
                     .envelopes
                     .iter()

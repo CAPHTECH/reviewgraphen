@@ -3806,6 +3806,18 @@ impl GluingRerunPlanSealV5 {
         &self.planning_scope_id
     }
     #[must_use]
+    pub fn source_closure_id(&self) -> &StableId {
+        &self.source_closure_id
+    }
+    #[must_use]
+    pub fn partial_rerun_plan_id(&self) -> &StableId {
+        &self.partial_rerun_plan_id
+    }
+    #[must_use]
+    pub fn target_plan_id(&self) -> &StableId {
+        &self.target_plan_id
+    }
+    #[must_use]
     pub fn claim_bindings(&self) -> &[GluingClaimBindingV5; 2] {
         &self.claim_bindings
     }
