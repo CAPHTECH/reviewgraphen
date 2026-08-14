@@ -1,0 +1,62 @@
+{
+  "format": "reviewgraphen.generic_review.measurement.v1",
+  "measured_at_utc": "2026-08-14",
+  "implementation_commit": "3c9352e",
+  "product_surface": {
+    "generic_command": "reviewgraphen review --request <request.json> --artifacts <fresh-absolute-dir>",
+    "fixed_fixture_command_present": false,
+    "fixed_fixture_rejection_test": "passed"
+  },
+  "input": {
+    "kind": "ordinary_git_repository",
+    "repository_identity": "repository:generic-live-smoke",
+    "base_revision": "63e3e987df00ffcaa4fdacd98b9a64043b29a299",
+    "target_revision": "7384ae4b67a4ccdd87971141f051a181c0697941",
+    "change": "pub fn submit() became pub async fn submit()"
+  },
+  "codex_cli": {
+    "provider": "openai",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "observed_protocol_version": "codex-exec@0.147.0",
+    "live_run_completed": true,
+    "tool_event_allowlist": "passed",
+    "denominator": 5,
+    "planned": 5,
+    "executed": 5,
+    "structured": 0,
+    "abstained": 2,
+    "malformed": 3,
+    "provider_failure": 0,
+    "deferred": 0,
+    "proposed_claims": 0,
+    "bugs_detected": 0,
+    "authority": {
+      "classification": "non_authority",
+      "trusted_pass": false,
+      "result_status": "incomplete"
+    },
+    "canonical_run_sha256": "7441eec2a78e066d4819761109def98425be21cd6a3a1a59883b0ed31a3c1fb8",
+    "replay_sha256": "7441eec2a78e066d4819761109def98425be21cd6a3a1a59883b0ed31a3c1fb8",
+    "live_replay_byte_identical": true,
+    "schema_and_semantic_validation": "passed"
+  },
+  "claude_cli": {
+    "provider": "anthropic",
+    "requested_model": "sonnet",
+    "effort": "high",
+    "observed_local_cli_version": "2.1.231",
+    "adapter_unit_tests": "passed",
+    "live_run_completed": false,
+    "failure": "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "conclusion": "live Claude response and replay were not verified"
+  },
+  "verification_gates": {
+    "cargo_fmt_check": "passed",
+    "cargo_build_workspace": "passed",
+    "cargo_test_workspace_with_trusted_cargo": "passed",
+    "cargo_clippy_workspace_all_targets_deny_warnings": "passed",
+    "bundle_validation": "passed",
+    "git_diff_check": "passed"
+  }
+}
