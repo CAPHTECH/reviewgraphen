@@ -126,6 +126,32 @@ pub fn validate_v5_semantics(report: &Value) -> Result<(), ReportV5SemanticError
     if denominator.is_empty() {
         return Err(ReportV5SemanticError("coverage denominator is empty"));
     }
+    let scenario = object
+        .get("scenario")
+        .and_then(Value::as_object)
+        .ok_or(ReportV5SemanticError("scenario is missing"))?;
+    let selected = semantic_id_set(
+        scenario,
+        "selected_obligation_ids",
+        "scenario selection is invalid",
+    )?;
+    if denominator != selected {
+        return Err(ReportV5SemanticError(
+            "coverage denominator does not equal scenario selection",
+        ));
+    }
+    if coverage.get("selected").and_then(Value::as_u64)
+        != Some(u64::try_from(denominator.len()).unwrap_or(u64::MAX))
+    {
+        return Err(ReportV5SemanticError(
+            "coverage selected count does not match denominator",
+        ));
+    }
+    if coverage.get("universe_id") != scenario.get("universe_id") {
+        return Err(ReportV5SemanticError(
+            "coverage universe does not match scenario universe",
+        ));
+    }
     for (ids_key, count_key) in [
         ("visited_obligation_ids", "visited"),
         ("completed_obligation_ids", "completed"),
