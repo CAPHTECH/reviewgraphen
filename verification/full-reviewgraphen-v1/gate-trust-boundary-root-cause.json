@@ -1,0 +1,74 @@
+{
+  "schema": "reviewgraphen.verification.root_cause_analysis.v1",
+  "date": "2026-08-14",
+  "scope": "seven broken serialized-report adversarial cases from full-reviewgraphen-v1",
+  "architectural_root_count": 1,
+  "architectural_root": "a detached serialized V5 report is treated as a policy input without authentication against its authoritative Store revision",
+  "independent_implementation_root_count": 3,
+  "roots": [
+    {
+      "id": "R1",
+      "name": "tuple_integrity_and_provenance_not_verified",
+      "trusted_values": [
+        "serialized decision body",
+        "serialized evidence body",
+        "serialized tuple IDs and hashes",
+        "serialized gate ID and hash"
+      ],
+      "cases": [
+        "authority.serialized_decision_tamper",
+        "evidence.serialized_body_tamper",
+        "gate.coherent_local_forgery"
+      ],
+      "evidence": [
+        "schemas/reviewgraphen.report.v5.schema.json:2140",
+        "schemas/reviewgraphen.report.v5.schema.json:2218",
+        "crates/reviewgraphen-report/src/report_v5.rs:212",
+        "crates/reviewgraphen-report/src/report_v5.rs:3996"
+      ]
+    },
+    {
+      "id": "R2",
+      "name": "coverage_denominator_not_checked_against_authoritative_plan_and_universe",
+      "trusted_values": [
+        "coverage.denominator_obligation_ids",
+        "coverage.selected",
+        "coverage-local axes and counts"
+      ],
+      "cases": [
+        "denominator.omission",
+        "denominator.inflation",
+        "denominator.substitution",
+        "freshness.forged_pass"
+      ],
+      "evidence": [
+        "crates/reviewgraphen-report/src/report_v5.rs:114",
+        "schemas/reviewgraphen.report.v5.schema.json:2639",
+        "schemas/reviewgraphen.report.v5.schema.json:2967",
+        "crates/reviewgraphen-report/src/report_v5.rs:1316"
+      ]
+    },
+    {
+      "id": "R3",
+      "name": "freshness_and_gate_reduction_not_replayed",
+      "trusted_values": [
+        "coverage native/verified/fresh sets",
+        "gate blocking and incomplete IDs",
+        "gate reasons and status",
+        "gate source IDs"
+      ],
+      "cases": [
+        "freshness.forged_pass",
+        "gate.coherent_local_forgery"
+      ],
+      "evidence": [
+        "crates/reviewgraphen-report/src/report_v5.rs:155",
+        "crates/reviewgraphen-report/src/report_v5.rs:3020",
+        "crates/reviewgraphen-report/src/report_v5.rs:493",
+        "crates/reviewgraphen-report/src/report_v5.rs:3850",
+        "crates/reviewgraphen-cli/src/lib.rs:144"
+      ]
+    }
+  ],
+  "conclusion": "one architectural boundary error, three independently repairable validation roots; body-hash recomputation alone is insufficient"
+}
