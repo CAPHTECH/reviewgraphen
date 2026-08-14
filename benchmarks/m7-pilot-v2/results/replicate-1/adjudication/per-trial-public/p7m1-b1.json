@@ -1,0 +1,1 @@
+[{"finding":{"locations":[{"end_line":24,"path":"src/lib.rs","start_line":16}],"mechanism_tags":["repeatable_entry","state_transition_gap"]},"item_id":"adj:sha256:16613417f0e06b8f91d59a3ac7c16de4f2210ebd8a8abe84fbd8de55d780ec19"}]

@@ -1,0 +1,52 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:m3x9:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "F1",
+      "locations": [
+        {
+          "path": "src/lib.rs",
+          "start_line": 7,
+          "end_line": 7
+        }
+      ],
+      "mechanism_tags": [
+        "unstable_token",
+        "repeated_effect"
+      ],
+      "severity": "high",
+      "rationale": "Each retry changes the request token. If an earlier send took effect but its confirmation was not observed, the receiver cannot recognize the next attempt as the same operation, so the retries can apply the payment more than once."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:189025a10036149e039c39ec4b618d9754b01c33e936b2982c0cbc1ddb757827",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:304e5d8d5e06142a5b9f2ba7953b14ca342b84502743657d4cd806ecd736c7e4",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:56dc82782e13c3669dd24fc62905ec8efdd16904570d091df007abb2f13f5ce6",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:5d4026f442b4c7bb771a896ff07765f1aaaec1cfffb0f1ab10c7110bef17a512",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:6cb6ce5e39ec5682e1f74f19f63b2398d7018ce6c4456f7e894a1e6ec2cc3484",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "F1"
+      ]
+    }
+  ]
+}

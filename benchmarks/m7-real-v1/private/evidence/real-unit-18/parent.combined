@@ -1,0 +1,65 @@
+STDOUT
+
+running 1 test
+domain_replay_rejects_an_unknown_trailing_flag --- FAILED
+
+failures:
+
+---- domain_replay_rejects_an_unknown_trailing_flag stdout ----
+
+thread 'domain_replay_rejects_an_unknown_trailing_flag' (53284) panicked at fslc/tests/issue_516_domain_cli_extra_args.rs:55:5:
+assertion `left == right` failed: {
+  "fsl": "1.0",
+  "result": "conformance_checked",
+  "dialect": "fsl-domain-effect.v0",
+  "finding_schema_version": "fsl-domain-finding.v0",
+  "domain": "OrderAsyncEffect",
+  "guarantee_kind": "runtime_observed",
+  "steps_checked": 3,
+  "events_observed": [
+    "PaymentCaptureRequested",
+    "PaymentCaptured"
+  ],
+  "pending_effects": [],
+  "findings": [],
+  "final_state": {
+    "capture_payment_attempts": {
+      "0": 1,
+      "1": 0
+    },
+    "capture_payment_status": {
+      "0": "CapturePaymentEffectStatus_Succeeded",
+      "1": "CapturePaymentEffectStatus_NotStarted"
+    },
+    "event_OrderApproved": false,
+    "event_OrderCancelled": false,
+    "event_PaymentCaptureRequested": false,
+    "event_PaymentCaptureTimedOut": false,
+    "event_PaymentCaptured": true,
+    "event_PaymentFailed": false,
+    "order_payment_status": "PaymentStatus_Captured",
+    "order_status": "OrderStatus_Approved"
+  },
+  "assumptions": [
+    {
+      "id": "DOMAIN-ASSUME-FINITE-DOMAIN-MODEL",
+      "text": "domain IDs and undeclared scalar input types are modeled as finite 0..1 ranges unless declared explicitly"
+    },
+    {
+      "id": "DOMAIN-ASSUME-GENERATED-SCAFFOLD",
+      "text": "generated Functional DDD code is an implementation scaffold; runtime conformance still requires an adapter/replay evidence boundary"
+    }
+  ]
+}
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    domain_replay_rejects_an_unknown_trailing_flag
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.01s
+
+STDERR
+error: test failed, to rerun pass `-p fslc-rust --test issue_516_domain_cli_extra_args`

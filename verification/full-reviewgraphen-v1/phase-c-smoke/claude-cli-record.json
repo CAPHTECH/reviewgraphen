@@ -1,0 +1,25 @@
+{
+  "backend": {
+    "inference_settings": {
+      "effort": "high"
+    },
+    "kind": "claude_cli",
+    "model": "sonnet",
+    "protocol_version": "claude-print@2.1.227",
+    "provider": "anthropic"
+  },
+  "exit_code": 0,
+  "input_files": {
+    "agent_input/candidate-output.schema.json": "sha256:f3cadfc9821f9233efd919e42b883a5bcc6f4cd70625e4c0a59fd92deca89417",
+    "agent_input/instruction.txt": "sha256:470c3182618bb3b050ada7ba7efd08a6b8354d0c7070cb43e124b45b5ddee484"
+  },
+  "input_manifest_hash": "sha256:b8524fc3ef738c29b133aaa44dc01e862261e1170f75ed3573b5452c7ec77c85",
+  "prompt_hash": "sha256:53814775a848af6b911a2b484e9b05fc7449e0a05c118cca42728f5c9d4ef370",
+  "prompt_version": "reviewgraphen.process_reviewer_prompt.v1",
+  "raw_response": "{\"answer\":\"ok\"}\n",
+  "raw_response_hash": "sha256:6053e074a9d246a6355af35528cc596bc0233b8e4e46ba68dd111d4a71f3bd6c",
+  "schema": "reviewgraphen.process_reviewer_record.v1",
+  "stderr_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_hash": "sha256:6053e074a9d246a6355af35528cc596bc0233b8e4e46ba68dd111d4a71f3bd6c",
+  "tool_policy_version": "reviewgraphen.process_reviewer.bwrap-no-tools.v1"
+}

@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":8879,"path":"rust/fslc/src/main.rs","start_line":8857}],"mechanism_tags":["cross_file_contract","state_transition_gap"]},"item_id":"adj:sha256:9ba0673ebd0c08ee1b3bf8c3dfe466d5c888af5cab38dad101ddb322d61f315e"}

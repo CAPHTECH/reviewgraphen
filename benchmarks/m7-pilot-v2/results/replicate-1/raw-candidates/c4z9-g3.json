@@ -1,0 +1,51 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:c4z9:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "finding-1",
+      "locations": [
+        {
+          "path": "src/catalog.rs",
+          "start_line": 9,
+          "end_line": 9
+        }
+      ],
+      "mechanism_tags": [
+        "cross_file_contract"
+      ],
+      "severity": "medium",
+      "rationale": "Changing the public, read-only can_allocate receiver from &self to &mut self is a source-breaking API change: callers holding only an immutable Catalog reference can no longer perform the availability check, despite the method not mutating state."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:0698fc5a0c5b3dcf08e9e9d1a8e977f30a7fa3fc8f9a85d58c6a00e088df6c30",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:9bbf10f321fd2f5c628d817cfa8a9814cb4d7010447be52edd99ee087686d6c9",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:aa056cdbca9dd76fef5eb6200b77751941ac28b3cf6d3671b88aa2ee595947de",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "finding-1"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:e52b51f734beec217dc3ffbf5b20ba8def2ead7bc8dd100c78c55e8f20a03d13",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:e6686c24d6bf4b6d8f8ca995f4c327cac1e286fc37ddd1dbf3d790585f15b905",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    }
+  ]
+}

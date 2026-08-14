@@ -1,0 +1,62 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:q4n8:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "check-then-insert-race",
+      "locations": [
+        {
+          "path": "src/lib.rs",
+          "start_line": 20,
+          "end_line": 26
+        }
+      ],
+      "mechanism_tags": [
+        "check_write_gap",
+        "state_transition_gap",
+        "repeatable_entry",
+        "repeated_effect"
+      ],
+      "severity": "high",
+      "rationale": "The availability check releases the mutex before register reacquires it to insert. Two concurrent calls for the same key can both observe it absent and both return true, whereas the previous single critical section allowed only one successful registration. Callers using true as the once-only admission gate can therefore perform the guarded effect twice."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:1f8f8a76a7ab15a6d1d8f5c2d75d7ce1453c2bedccd91b0374762311651027c7",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "check-then-insert-race"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:2a8b1684fa4644e1cdca183e935335870b666c13babd83d41a283e695367ce10",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "check-then-insert-race"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:3c53bd6801d78a4f331f8ad9ded8902056ca4881c5f4732a616ea86b5a3ee365",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "check-then-insert-race"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:95f2f4ef4068678179f163d553aa8f9b49e09df9d3ef8ff501cb88ca9c611467",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "check-then-insert-race"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:992f1521bde1dee1a31f0af5e36b3f91789498568266ff80ed7919a50ab24128",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "check-then-insert-race"
+      ]
+    }
+  ]
+}

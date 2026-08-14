@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.dev/schemas/reviewgraphen.process_reviewer_record.v1.schema.json",
+  "title": "ReviewGraphen non-authority process reviewer record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "backend",
+    "prompt_version",
+    "prompt_hash",
+    "tool_policy_version",
+    "input_files",
+    "input_manifest_hash",
+    "raw_response",
+    "raw_response_hash",
+    "stdout_hash",
+    "stderr_hash",
+    "exit_code"
+  ],
+  "properties": {
+    "schema": { "const": "reviewgraphen.process_reviewer_record.v1" },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "provider", "model", "inference_settings", "protocol_version"],
+      "properties": {
+        "kind": { "enum": ["codex_cli", "claude_cli", "codex_app_server"] },
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "inference_settings": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "protocol_version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "prompt_version": { "const": "reviewgraphen.process_reviewer_prompt.v1" },
+    "prompt_hash": { "$ref": "#/$defs/hash" },
+    "tool_policy_version": { "const": "reviewgraphen.process_reviewer.bwrap-no-tools.v1" },
+    "input_files": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "type": "string", "minLength": 1 },
+      "additionalProperties": { "$ref": "#/$defs/hash" }
+    },
+    "input_manifest_hash": { "$ref": "#/$defs/hash" },
+    "raw_response": { "type": "string", "minLength": 1, "maxLength": 4194304 },
+    "raw_response_hash": { "$ref": "#/$defs/hash" },
+    "stdout_hash": { "$ref": "#/$defs/hash" },
+    "stderr_hash": { "$ref": "#/$defs/hash" },
+    "exit_code": { "const": 0 }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

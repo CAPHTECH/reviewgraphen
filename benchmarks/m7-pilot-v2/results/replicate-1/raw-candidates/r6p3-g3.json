@@ -1,0 +1,54 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:r6p3:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "F1",
+      "severity": "high",
+      "mechanism_tags": [
+        "check_write_gap",
+        "repeated_effect"
+      ],
+      "locations": [
+        {
+          "path": "src/lib.rs",
+          "start_line": 13,
+          "end_line": 18
+        }
+      ],
+      "rationale": "The acknowledgement is checked only after sink.append has already performed the effect. When observed returns false, the loop repeats and calls append with the same value a second time, so an unavailable or delayed receipt can cause the side effect to be applied twice."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:49935d67ccf1cbbe7acfe159df37b29e21e39b1a0a9afe0a5962b4c22b39d7d8",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:c9cee182d733637b7171502b597bef5355ab439209659d8c29c60abde6054b95",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "F1"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:cc269868830820e286bb1070430b023e7666aefc344470ef4d98304d0f7cd27f",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:d6c7848eb5d4e844dafe3565000345cb39a04a1f3b926378d9bceb091c151d92",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:f71a845c9f24825619fe7cfe5ef18caf680c2ae2826e8d85a53227d35416ae6f",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "F1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+STDOUT
+
+running 1 test
+replay_accepts_a_bmc_valid_initial_state_that_leaves_a_component_free --- FAILED
+
+failures:
+
+---- replay_accepts_a_bmc_valid_initial_state_that_leaves_a_component_free stdout ----
+
+thread 'replay_accepts_a_bmc_valid_initial_state_that_leaves_a_component_free' (50720) panicked at fslc/tests/issue_519_monitor_deterministic_init.rs:72:5:
+assertion `left == right` failed: {
+  "fsl": "1.0",
+  "result": "nonconformant",
+  "spec": "PartialBool",
+  "failed_at_event": null,
+  "violation": {
+    "kind": "initial_state_mismatch",
+    "check": "safety",
+    "tick": 0,
+    "expected_state": {
+      "m": {
+        "0": false,
+        "1": false
+      }
+    },
+    "observed_state": {
+      "m": {
+        "0": false,
+        "1": true
+      }
+    },
+    "mismatches": [
+      {
+        "path": "m.1",
+        "expected": false,
+        "observed": true
+      }
+    ]
+  },
+  "state_before": {
+    "m": {
+      "0": false,
+      "1": false
+    }
+  },
+  "hint": "the implementation initial state is not a valid specification state",
+  "note": "leadsTo properties are not checked by replay (finite logs only)"
+}
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    replay_accepts_a_bmc_valid_initial_state_that_leaves_a_component_free
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+STDERR
+error: test failed, to rerun pass `-p fslc-rust --test issue_519_monitor_deterministic_init`

@@ -1,0 +1,1 @@
+{"case_id":"rgp-m7-v1-a03","entry":{"path":"src/alpha.rs","symbol":"Entry::run"},"files":["Cargo.toml","src/alpha.rs","src/beta.rs"],"language":"rust","revisions":["base","head"]}

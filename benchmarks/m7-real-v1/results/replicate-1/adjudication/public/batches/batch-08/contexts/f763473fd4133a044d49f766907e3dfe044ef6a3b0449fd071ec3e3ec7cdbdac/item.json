@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":567,"path":"rust/fsl-syntax/src/ai_project.rs","start_line":465},{"end_line":637,"path":"rust/fsl-syntax/src/ai_project.rs","start_line":607}],"mechanism_tags":["state_transition_gap","unstable_token"]},"item_id":"adj:sha256:f763473fd4133a044d49f766907e3dfe044ef6a3b0449fd071ec3e3ec7cdbdac"}

@@ -1,0 +1,7 @@
+Independently adjudicate every item using only the supplied role-blind data.
+The mechanism tags state the alleged failure classes; candidate prose was intentionally withheld.
+Use valid_novel_defect only when the excerpts alone support a concrete defect.
+Use false_positive when the alleged mechanisms are contradicted by the code, and insufficient when omitted context prevents a reliable decision.
+For materially identical items in this batch, keep the lexicographically smallest item_id as the substantive decision and mark the others duplicate.
+Never use matches_known_root. Do not infer or mention an arm, revision role, oracle, model, trial, commit, issue, or branch.
+Return exactly one decision per item inside the decisions array, and only the JSON object required by decision-output.schema.json.

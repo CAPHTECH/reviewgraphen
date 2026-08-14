@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":2875,"path":"rust/fsl-runtime/src/lib.rs","start_line":2867},{"end_line":3028,"path":"rust/fsl-runtime/src/lib.rs","start_line":3018}],"mechanism_tags":["check_write_gap","repeated_effect"]},"item_id":"adj:sha256:a2c9d842df90aeb0fe1df75d86a398fd6866dd8b170b96875a74417431ecfc81"}

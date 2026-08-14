@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":57,"path":"rust/fsl-syntax/src/ai_project.rs","start_line":47}],"mechanism_tags":["check_write_gap","cross_file_contract"]},"item_id":"adj:sha256:5778041be6c3d1f7a4718c966744ece7d446e761c98cfd9d15686622aada089d"}

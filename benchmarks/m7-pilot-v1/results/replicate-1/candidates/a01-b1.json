@@ -1,0 +1,23 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:rgp-m7-v1-a01:b1:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "F1",
+      "locations": [
+        {
+          "path": "src/alpha.rs",
+          "start_line": 24,
+          "end_line": 28
+        }
+      ],
+      "mechanism_tags": [
+        "check_then_act_race"
+      ],
+      "severity": "high",
+      "rationale": "The load and the later store do not reserve execution. Two callers can both observe false, pass the barrier, store true, and call send, so active does not enforce its intended single-active-run guard."
+    }
+  ],
+  "obligation_results": []
+}

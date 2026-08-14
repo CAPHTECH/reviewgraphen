@@ -1,0 +1,390 @@
+STDOUT
+
+running 1 test
+paid_is_not_reachable_without_requesting_the_effect --- FAILED
+
+failures:
+
+---- paid_is_not_reachable_without_requesting_the_effect stdout ----
+
+thread 'paid_is_not_reachable_without_requesting_the_effect' (18804) panicked at fslc/tests/issue_640_saga_observation_correlation.rs:145:5:
+assertion `left == right` failed: {
+  "fsl": "1.0",
+  "spec": "DomainEffectSagaCharacterization",
+  "result": "verified",
+  "depth": 1,
+  "checked_to_depth": 1,
+  "completeness": "bounded",
+  "invariants_checked": [
+    "_bounds_order_status",
+    "_bounds_capture_payment_status",
+    "_bounds_capture_payment_attempts",
+    "PaymentFlow_terminalOutcome"
+  ],
+  "transitions_checked": [
+    "CapturePayment_SuccessSticky"
+  ],
+  "reachables": {
+    "ProbePaidNoRequest": {
+      "witnessed_at_step": 1,
+      "witness": [
+        {
+          "step": 0,
+          "state": {
+            "capture_payment_attempts": {
+              "0": 0,
+              "1": 0
+            },
+            "capture_payment_status": {
+              "0": "CapturePaymentEffectStatus_NotStarted",
+              "1": "CapturePaymentEffectStatus_NotStarted"
+            },
+            "event_Approved": false,
+            "event_PaymentCaptured": false,
+            "event_PaymentFailed": false,
+            "event_PaymentRequested": false,
+            "event_PaymentTimedOut": false,
+            "order_status": "Status_Draft"
+          }
+        },
+        {
+          "step": 1,
+          "state": {
+            "capture_payment_attempts": {
+              "0": 0,
+              "1": 0
+            },
+            "capture_payment_status": {
+              "0": "CapturePaymentEffectStatus_NotStarted",
+              "1": "CapturePaymentEffectStatus_NotStarted"
+            },
+            "event_Approved": false,
+            "event_PaymentCaptured": true,
+            "event_PaymentFailed": false,
+            "event_PaymentRequested": false,
+            "event_PaymentTimedOut": false,
+            "order_status": "Status_Paid"
+          },
+          "action": {
+            "name": "saga_payment_flow_observe_payment_captured",
+            "params": {
+              "payment_request_id": 0
+            },
+            "loc": {
+              "line": 90,
+              "column": 3
+            }
+          },
+          "changes": {
+            "event_PaymentCaptured": {
+              "from": false,
+              "to": true
+            },
+            "order_status": {
+              "from": "Status_Draft",
+              "to": "Status_Paid"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "action_coverage": {
+    "capture_payment_complete_payment_captured": {
+      "covered": false,
+      "blocking_requires": [],
+      "hint": "these requires clauses are unsatisfiable at every step up to depth 1; weaken one of them, add an action that establishes them, or increase --depth",
+      "faithfulness_class": "intent_unexercised",
+      "recommended_action": "add a single-shot reachable for the action / raise --depth"
+    },
+    "capture_payment_complete_payment_failed": {
+      "covered": false,
+      "blocking_requires": [],
+      "hint": "these requires clauses are unsatisfiable at every step up to depth 1; weaken one of them, add an action that establishes them, or increase --depth",
+      "faithfulness_class": "intent_unexercised",
+      "recommended_action": "add a single-shot reachable for the action / raise --depth"
+    },
+    "capture_payment_complete_payment_timed_out": {
+      "covered": false,
+      "blocking_requires": [],
+      "hint": "these requires clauses are unsatisfiable at every step up to depth 1; weaken one of them, add an action that establishes them, or increase --depth",
+      "faithfulness_class": "intent_unexercised",
+      "recommended_action": "add a single-shot reachable for the action / raise --depth"
+    },
+    "capture_payment_retry": {
+      "covered": false,
+      "blocking_requires": [],
+      "hint": "these requires clauses are unsatisfiable at every step up to depth 1; weaken one of them, add an action that establishes them, or increase --depth",
+      "faithfulness_class": "intent_unexercised",
+      "recommended_action": "add a single-shot reachable for the action / raise --depth"
+    },
+    "order_approve": true,
+    "order_request_payment": true,
+    "saga_payment_flow_capture": true,
+    "saga_payment_flow_capture_timeout": true,
+    "saga_payment_flow_observe_payment_captured": true,
+    "saga_payment_flow_observe_payment_failed": true,
+    "saga_payment_flow_observe_payment_timed_out": true
+  },
+  "deadlock": {
+    "found": false
+  },
+  "warnings": [
+    {
+      "message": "action 'capture_payment_complete_payment_captured' is never enabled within depth 1 — the spec may be vacuous (check its requires clauses)",
+      "hint": "these requires clauses are unsatisfiable at every step up to depth 1; weaken one of them, add an action that establishes them, or increase --depth"
+    },
+    {
+      "message": "action 'capture_payment_complete_payment_failed' is never enabled within depth 1 — the spec may be vacuous (check its requires clauses)",
+      "hint": "these requires clauses are unsatisfiable at every step up to depth 1; weaken one of them, add an action that establishes them, or increase --depth"
+    },
+    {
+      "message": "action 'capture_payment_complete_payment_timed_out' is never enabled within depth 1 — the spec may be vacuous (check its requires clauses)",
+      "hint": "these requires clauses are unsatisfiable at every step up to depth 1; weaken one of them, add an action that establishes them, or increase --depth"
+    },
+    {
+      "message": "action 'capture_payment_retry' is never enabled within depth 1 — the spec may be vacuous (check its requires clauses)",
+      "hint": "these requires clauses are unsatisfiable at every step up to depth 1; weaken one of them, add an action that establishes them, or increase --depth"
+    }
+  ],
+  "note": "bounded verification: no violation within depth 1",
+  "hint": "state space not saturated at depth 1; a violation could exist beyond depth 1; consider a larger --depth or the induction engine",
+  "cost": {
+    "elapsed_s": 0.054471099,
+    "solver": {
+      "checks": 66,
+      "check_elapsed_s": 0.028302698999999994,
+      "conflicts": 41,
+      "decisions": 156,
+      "propagations": 2453,
+      "memory_mb": 17.34
+    },
+    "properties": [
+      {
+        "kind": "action_coverage",
+        "name": "capture_payment_complete_payment_captured",
+        "checks": 4,
+        "elapsed_s": 0.001210862
+      },
+      {
+        "kind": "action_coverage",
+        "name": "capture_payment_complete_payment_failed",
+        "checks": 4,
+        "elapsed_s": 0.0010032349999999999
+      },
+      {
+        "kind": "action_coverage",
+        "name": "capture_payment_complete_payment_timed_out",
+        "checks": 4,
+        "elapsed_s": 0.000921079
+      },
+      {
+        "kind": "action_coverage",
+        "name": "capture_payment_retry",
+        "checks": 4,
+        "elapsed_s": 0.001503854
+      },
+      {
+        "kind": "action_coverage",
+        "name": "order_approve",
+        "checks": 1,
+        "elapsed_s": 0.00011235
+      },
+      {
+        "kind": "action_coverage",
+        "name": "order_request_payment",
+        "checks": 3,
+        "elapsed_s": 0.001459019
+      },
+      {
+        "kind": "action_coverage",
+        "name": "saga_payment_flow_capture",
+        "checks": 2,
+        "elapsed_s": 0.000439935
+      },
+      {
+        "kind": "action_coverage",
+        "name": "saga_payment_flow_capture_timeout",
+        "checks": 2,
+        "elapsed_s": 0.000375655
+      },
+      {
+        "kind": "action_coverage",
+        "name": "saga_payment_flow_observe_payment_captured",
+        "checks": 1,
+        "elapsed_s": 0.000040476
+      },
+      {
+        "kind": "action_coverage",
+        "name": "saga_payment_flow_observe_payment_failed",
+        "checks": 1,
+        "elapsed_s": 0.000013256
+      },
+      {
+        "kind": "action_coverage",
+        "name": "saga_payment_flow_observe_payment_timed_out",
+        "checks": 1,
+        "elapsed_s": 0.000011902
+      },
+      {
+        "kind": "deadlock",
+        "name": "deadlock",
+        "checks": 2,
+        "elapsed_s": 0.000014288999999999998
+      },
+      {
+        "kind": "init",
+        "name": "initial_state",
+        "checks": 1,
+        "elapsed_s": 0.002683689
+      },
+      {
+        "kind": "invariant",
+        "name": "PaymentFlow_terminalOutcome",
+        "checks": 2,
+        "elapsed_s": 0.00015757599999999998
+      },
+      {
+        "kind": "reachable",
+        "name": "ProbePaidNoRequest",
+        "checks": 3,
+        "elapsed_s": 0.001604393
+      },
+      {
+        "kind": "trans",
+        "name": "CapturePayment_SuccessSticky",
+        "checks": 1,
+        "elapsed_s": 8.666e-6
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_capture_payment_attempts",
+        "checks": 2,
+        "elapsed_s": 0.0020513619999999997
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_capture_payment_status",
+        "checks": 2,
+        "elapsed_s": 0.0011987620000000001
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_event_Approved",
+        "checks": 2,
+        "elapsed_s": 0.000013806
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_event_PaymentCaptured",
+        "checks": 2,
+        "elapsed_s": 5.089e-6
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_event_PaymentFailed",
+        "checks": 2,
+        "elapsed_s": 4.378e-6
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_event_PaymentRequested",
+        "checks": 2,
+        "elapsed_s": 4.2580000000000006e-6
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_event_PaymentTimedOut",
+        "checks": 2,
+        "elapsed_s": 4.108e-6
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_order_status",
+        "checks": 2,
+        "elapsed_s": 0.00155457
+      },
+      {
+        "kind": "vacuity",
+        "name": "capture_payment_complete_payment_captured",
+        "checks": 1,
+        "elapsed_s": 0.000869522
+      },
+      {
+        "kind": "vacuity",
+        "name": "capture_payment_complete_payment_failed",
+        "checks": 1,
+        "elapsed_s": 0.000913295
+      },
+      {
+        "kind": "vacuity",
+        "name": "capture_payment_complete_payment_timed_out",
+        "checks": 1,
+        "elapsed_s": 0.000953942
+      },
+      {
+        "kind": "vacuity",
+        "name": "capture_payment_retry",
+        "checks": 2,
+        "elapsed_s": 0.001980761
+      },
+      {
+        "kind": "vacuity",
+        "name": "order_approve",
+        "checks": 1,
+        "elapsed_s": 0.000850477
+      },
+      {
+        "kind": "vacuity",
+        "name": "order_request_payment",
+        "checks": 3,
+        "elapsed_s": 0.002663022
+      },
+      {
+        "kind": "vacuity",
+        "name": "saga_payment_flow_capture",
+        "checks": 2,
+        "elapsed_s": 0.001652453
+      },
+      {
+        "kind": "vacuity",
+        "name": "saga_payment_flow_capture_timeout",
+        "checks": 2,
+        "elapsed_s": 0.001643095
+      },
+      {
+        "kind": "vacuity",
+        "name": "session",
+        "checks": 1,
+        "elapsed_s": 0.000379563
+      }
+    ]
+  },
+  "versions": {
+    "verifier": {
+      "name": "fslc-rust",
+      "version": "4.1.0"
+    },
+    "core": {
+      "name": "fsl-core",
+      "version": "4.1.0"
+    },
+    "solver": {
+      "name": "z3",
+      "backend": "native-z3",
+      "version": "Z3 4.16.0.0"
+    }
+  }
+}
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    paid_is_not_reachable_without_requesting_the_effect
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.16s
+
+STDERR
+error: test failed, to rerun pass `-p fslc-rust --test issue_640_saga_observation_correlation`

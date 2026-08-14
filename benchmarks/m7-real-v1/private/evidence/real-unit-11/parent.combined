@@ -1,0 +1,21 @@
+STDOUT
+
+running 1 test
+every_frozen_reference_field_is_present --- FAILED
+
+failures:
+
+---- every_frozen_reference_field_is_present stdout ----
+
+thread 'every_frozen_reference_field_is_present' (33334) panicked at fslc/tests/issue_563_ai_check_project_fields.rs:79:5:
+missing ["ai_project", "assumptions", "datasets", "dialect", "evaluators", "failure_modes"] from {"fsl":"1.0","result":"ai_project_analyzed","formal_result":"not_run","components":["SupportAnswerAgent"],"statistical_properties":["LooseQuality","StrictQuality"],"observed_properties":["SupportAgentOperationalQuality"],"migrations":["PromptV7ToV8"],"raw_blocks":[{"kind":"ai_action","name":"ClassifyTicket"},{"kind":"retriever","name":"SupportDocsRetriever"},{"kind":"trust_boundary","name":"SupportAnswerAgentBoundary"},{"kind":"authority","name":"SupportAgentAuthority"},{"kind":"ai_contract","name":"SupportAnswerContract"}],"findings":[]}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    every_frozen_reference_field_is_present
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+STDERR
+error: test failed, to rerun pass `-p fslc-rust --test issue_563_ai_check_project_fields`

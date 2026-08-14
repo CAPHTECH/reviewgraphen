@@ -1,0 +1,23 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:b9q6:b1:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "F1",
+      "locations": [
+        {
+          "path": "src/lib.rs",
+          "start_line": 15,
+          "end_line": 15
+        }
+      ],
+      "mechanism_tags": [
+        "unstable_scope_key"
+      ],
+      "severity": "medium",
+      "rationale": "The new labelled key is still an ambiguous concatenation because neither component is escaped or length-delimited. For example, (workspace, job) = (\"a/job/b\", \"c\") and (\"a\", \"b/job/c\") both produce `workspace/a/job/b/job/c`, so admitting one incorrectly suppresses the other."
+    }
+  ],
+  "obligation_results": []
+}

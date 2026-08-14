@@ -1,0 +1,1 @@
+error: test failed, to rerun pass `-p fslc-rust --test issue_570_reserved_declaration_names`

@@ -1,0 +1,322 @@
+[
+  {
+    "candidate_hash": "sha256:f5880bdc130da8d395749a236b9f937b757b2dd658cd58172ddd461924778d74",
+    "manifest_hash": "sha256:c2d572c0579a9d9413b9b050b2cca32ed1ec8cbaab2a62fc36fff054912c3447",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-01:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:50ff89eb62f8e0b997fa25913d15c0b0bb991f588694770ecff98801e7251988",
+    "manifest_hash": "sha256:b7fbe1db3d6eba479f735a58f9e9d49c369071712d4fdfad6d61cd58a0ce9cd9",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-02:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:e00a024b7c3fec6d9501a4a0d914f39898439b34ab46435b10acef40b61fe4fb",
+    "manifest_hash": "sha256:1a8a08395e021e2a1c09c71caffdaf7e7a1b812e7ffaa8f255b1b4677e3d6f3a",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-03:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:90adaf89689f2bc69baa84f3c657ace977fc15ff6ea1bc0765347be20a897016",
+    "manifest_hash": "sha256:03f52085e71da6d69062971b7ca982054936fead170939c88ef493ac723effdd",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-04:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:ec4f1d5575fb7d7aa7214afa0b071bf44072b00eb5dbc2c3f683f29c519ec347",
+    "manifest_hash": "sha256:6f047e080702c1fa2808cf678443091c4e1e6391348243b237d40a5970ed88be",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-05:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:bef083eec98dc47c2d78a493fd8f198f53efc66eda66abc120ab4a2b7061f903",
+    "manifest_hash": "sha256:de8b86d5d66bf1828b275c9a5d7d5dd3f8fc92beab027e8318674214594fc35b",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-06:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:10958f2f9a147b3c09e3c87e0dfedf81d51bccd5833e741803f6e0e6557f46fa",
+    "manifest_hash": "sha256:7767924014d6e9350171e69f1a283df78b0f2c3dd4a10568f1380de4e57f1bda",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-07:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:647216dff70f01e73250ece4ffbec539cbfe67a24376b181fb956e8bd6b68168",
+    "manifest_hash": "sha256:32088c89320b18fdd2db3d53be356a94f3c069357a1fc74bfc5bd123f4fa40c9",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-08:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:037d086f4f7b3baa69c9d31999a99caa46373f30adee05715bd44c38293a7b34",
+    "manifest_hash": "sha256:fb0c93b2e37caead2a811924a1dfaf2c691d55d3a035ad3c47ec5ec4b5a8ebbb",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-09:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:68041030380d62f2a59350eed4618389f177c5ae9daa2f7046d4d2fc677eacf5",
+    "manifest_hash": "sha256:b11b092beeef09325b64f32e772371237db66064b6cdd7d601f01de05032465e",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-10:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:9ac885c6fd4a03048b8a22a8e2d4592771a5def053048c9fac35f0a2606daa6d",
+    "manifest_hash": "sha256:e8927f2edd1db7710140d375540536e07dc3efa14a840a43704b6e8ba6e46e81",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-11:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:05851a42ca3255a3fb2d214b0f1d853ba8a041ce2873684103ed5ac5c1ca3dca",
+    "manifest_hash": "sha256:5a65339f3fb72d5152c264dc8eb45645c5592d699c183620d53b481143662e99",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-12:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:8841459d6e341231341f194366862cecb0c7a36373306ca225b189dfd175a1e1",
+    "manifest_hash": "sha256:9aaeee561e4d72ccca9039ef8474d5a3f33f49692cc17cd10761ea3f9d0455a1",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-13:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:4f2fa2748d05c693c6ffbdce88294ff34862c7930fbadbb1e352ae65247826a4",
+    "manifest_hash": "sha256:eb52aec107c3b78fe13cffa0a3e64a9b2ea91e5409566b8be420e3799a259456",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-14:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:2a9ccc3126ec69585557cea644bcc5829d5a478202ab2a4c2cdb081091046865",
+    "manifest_hash": "sha256:b0ec87713a845e77f308d88134d68f51d531f8b0b19d06d728199cbba870823a",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-15:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:87e258784cd63a391b59086eee7693bd6fd584a32d45a19cb53a6fb0f50435e1",
+    "manifest_hash": "sha256:e5b57a6f16b3b509a719531f523d4b22c2596a55dd1089f3792084c5a81dbda3",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-16:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:b5066c13e52419bca08cb3f45ad7893e956bd6b845cd4fe7f3d637d66f95e523",
+    "manifest_hash": "sha256:da410493911b03726e159ca965c713e2c80d1d07569745db7988827e13130714",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-17:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:2c49b596021afa3e88d441eba724124aea105b26604f45d078dcffc38e8e6cd5",
+    "manifest_hash": "sha256:7984ca4f8cc1854001375825157d5b234e039b867b6cd9954fd2495c6d0369e5",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-18:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:d2d3e7e31ea04e4fd10744f5597a3be7b8c5e6ffbd6d4bce9cb48d481d712939",
+    "manifest_hash": "sha256:03a607de20d6a2d194d68bb280c743e54a1f1ebe29ce4ee5e9805633b02e3660",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-19:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:cfa058c9f6a8ad8c4f542dd0c439c38fa86bfa1013f71add0a05bf985960e65b",
+    "manifest_hash": "sha256:ef70e956b614fc5f7a2fea8e7bb26bd0375138b508b3ee9338c3b6396d2396e6",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-20:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:c5c5fbf964d012e7254c3d5985ccc10f856941c60bd90900271a8eae04de53e8",
+    "manifest_hash": "sha256:5ad41f81890ed8bb5aff174a7a117275a175c08af1a057432fa2b708caf10ac3",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-21:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:802fb647d4f412858d70ae31b66cc6159934be8f2e64593ada7889785ba2e820",
+    "manifest_hash": "sha256:b1e661a63961b4401c2f763237aeae9d1943275a56060b4060f978120cfdb2c4",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-22:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:ee4089e08d616fe846821e62c36d66238ebfc6124d9477a8818c99a9d4fa69fb",
+    "manifest_hash": "sha256:b7a37e965fa806f43fe4c66cdb5bfb7ad453369d2711db70462706c431689ad9",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-23:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:f6f37d058979991fd0fe3797a3e2e3cb3103cfb246e1ef0af1803d04e12ca213",
+    "manifest_hash": "sha256:a358edba802c7e34151cb4cb4ec2a467a037fdd55884648a45cdd1a71f5141ad",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-24:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:97a883f2088074991f98bb4f206b12acebb0a51b9c25f01dcec69b8f8bcc4cd6",
+    "manifest_hash": "sha256:0a81263e8967b0c2e7202ed02588ad65e2f31ef7963eeef9929924d5a9ee852e",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-25:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:744dc5733adf96a6ac860b0f127e9499a4d0696cdfa5046a383a74a1daf4067e",
+    "manifest_hash": "sha256:53a414180a3040876d1f421c12e1dbd5959be64e76611218b646531587ceaee5",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-26:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:c5549a335bc7acdf1f17b4fa4fc514e52c5397a9ff9df87a3183ac179665c1e4",
+    "manifest_hash": "sha256:7d79d336fd7aa11651bedc34dad7110a0f6d32eeac12a6274eb5acd42c8387ef",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-27:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:484d1a6a3dc539c8cefa353e65ca3a16491e75c8696528f17d79817789441957",
+    "manifest_hash": "sha256:6a9b665e2ad972b6a18a9a72fe0dcfd691367894290896c84e4a112ed8a1ddc5",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-28:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:fc60a4a6a3403021ce85e2f3397336d63e98aab64b99abf7b3817b2ee1f4e0f0",
+    "manifest_hash": "sha256:19f9c2c0d3323fcb18e748cc7416f63f251838015964039b48feb04591d86e0d",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-29:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:9e23217f577c51ac2a843af29e246c825cd1dfe25d92cc30ae9e78f4737e19a6",
+    "manifest_hash": "sha256:a66017deccfb07c16a72d440aa240fae4174efd69500c544b812513e018e4255",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-30:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:c71de890ce323777ca30c1fa639c9b495898e7f642916be3bb9783e8d4fed040",
+    "manifest_hash": "sha256:4659f12ba2eb872ad1a512928f61afac83d0712a71e9152ca261c097bc4e10bf",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-31:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:b16835bd69176eab3ff41aa727ff33ff0acc7d4ee714177e38cbec59d12a00dc",
+    "manifest_hash": "sha256:be9d247f1e6731892ab5037df39f9083303223b41f3106d09b53e06e8ef3e8b9",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-32:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:c1d6f6758052ff89f67b60e553fbd515d93a6c68f170c7c930a96904e75dc702",
+    "manifest_hash": "sha256:a0f28f35e94a200b788cd3cd4691c14cec69ff1a847e5941c45bf785ccf20eff",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-33:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:8bb797aea3469edc572529f71afa1c6ada76183134f1509e56e5882063598c02",
+    "manifest_hash": "sha256:9a2c4ffa3fcf3b97b7c3684ca1dd2f9e623e55dd82891f74e1a9433ab0d58272",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-34:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:dd86f8ad1e55a21b5326e845abb88d0b51b38254af50da6a05a73a0f5b561c14",
+    "manifest_hash": "sha256:4a2c472f6d467a74e4c4fdf7e20f173d2c51fb1857fdb8826df7d4f5b6217021",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-35:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:792238dd91ed3e5785458cdff44f182c38b1a9b4057a52b393bb8e1da35d8d6a",
+    "manifest_hash": "sha256:13527c48fba6af7ce14737a33674c632ef733682f998a8108c8745b17727c707",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-36:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:e5380011510ce05cb63fae44c996e2089692c4f97fc6ecf1701662735b2fc76b",
+    "manifest_hash": "sha256:c890fc49ec22a56a1f561fb0fa933d7896417232a1aad89cacf0a1d5eb1c1809",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-37:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:1423a40c60676ff272dfdb97f4eff774581ca50c51e2691ad77a329751e29a3b",
+    "manifest_hash": "sha256:617e7fc4f23024198387cc66a8e8a9339490d4a91be5639f1ba4f854f06ca90a",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-38:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:60e4daa975c52efc724be88fd1f33be97568a36c994093d459cb8fffcf66ced5",
+    "manifest_hash": "sha256:5ec7d93b3e0c317fe62409982d3f90aa148a09413694c57a67505ca8fa98e5c3",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-39:full_review_graphen:1"
+  },
+  {
+    "candidate_hash": "sha256:5a6056eb2d70cf7c90933022b9cf9425d46a191763a48c384caca8361ad426e4",
+    "manifest_hash": "sha256:117e23425d47ce710cf455ae592c17a9bf5dc362a9eb7f85653a923ec33c157c",
+    "outcome": "structured",
+    "protocol_error": null,
+    "schema": "reviewgraphen.benchmark.collection.v1",
+    "trial_id": "m7-real:snapshot-40:full_review_graphen:1"
+  }
+]

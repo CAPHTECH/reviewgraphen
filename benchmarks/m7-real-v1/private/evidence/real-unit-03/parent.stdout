@@ -1,0 +1,18 @@
+
+running 1 test
+rendered_can_expansion_parenthesizes_each_piece --- FAILED
+
+failures:
+
+---- rendered_can_expansion_parenthesizes_each_piece stdout ----
+
+thread 'rendered_can_expansion_parenthesizes_each_piece' (9616) panicked at fslc/tests/issue_690_can_precedence_false_green.rs:103:5:
+expected each can(Open) piece individually parenthesized, got:   invariant Gate_aImpliesCanOpen "DOMAIN-INVARIANT: Gate.aImpliesCanOpen" { gate_a => (gate_a or gate_b and gate_c) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    rendered_can_expansion_parenthesizes_each_piece
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+

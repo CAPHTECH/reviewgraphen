@@ -1,0 +1,52 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:rgp-m7-v1-a05:b1:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "F1",
+      "locations": [
+        {
+          "path": "src/alpha.rs",
+          "start_line": 24,
+          "end_line": 24
+        }
+      ],
+      "mechanism_tags": ["concurrency", "liveness", "barrier"],
+      "severity": "high",
+      "rationale": "Every invocation waits for all parties in the externally supplied Barrier before it attempts the non-blocking active guard. A caller that invokes run without enough concurrent peers (including a normal single caller when the Barrier count is greater than one) blocks indefinitely instead of returning or sending. The active guard cannot prevent this because it is reached only after the wait."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "sha256:2447a77924daf1207af2d22ca61704a0294a0a07e308d5bb48bfccbceaf0cf6f",
+      "disposition": "issue_absent",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "sha256:b583484d9633e6dbec1d1f26ee217ec55e0138a00d0e2a8a08109f7cb342ed15",
+      "disposition": "issue_absent",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "sha256:3934bfb99eb8773210654399aeb0ccf8f2fd911a100ba45d4b07199990a7b031",
+      "disposition": "issue_present",
+      "finding_local_ids": ["F1"]
+    },
+    {
+      "packet_id": "sha256:d295aab89a6f0e0f81ac72d7d59a3768310932f6b3c8811bf93fa3aeeb44320a",
+      "disposition": "issue_absent",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "sha256:d9919a89449e6d90532697a5126d56c3d99d389de477397814b4054804fbb7e2",
+      "disposition": "issue_present",
+      "finding_local_ids": ["F1"]
+    },
+    {
+      "packet_id": "sha256:09f044e0bfd9320ca8f3d3e959bc1e2231d1ff3b9b61042b2b74c4caee54a197",
+      "disposition": "issue_absent",
+      "finding_local_ids": []
+    }
+  ]
+}

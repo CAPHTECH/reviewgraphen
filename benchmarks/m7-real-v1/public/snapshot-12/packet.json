@@ -1,0 +1,1 @@
+{"files":["rust/fsl-core/src/domain.rs","rust/fsl-core/src/domain_lowering.rs","rust/fsl-core/src/lib.rs","rust/fsl-tools/src/domain.rs"],"input_tree_hash":"git:339df4cb508e525ea0179413c7fc391f6e402cfe","language":"rust","unit_id":"snapshot-12"}

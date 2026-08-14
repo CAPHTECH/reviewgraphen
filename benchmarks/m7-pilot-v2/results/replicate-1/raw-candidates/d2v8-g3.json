@@ -1,0 +1,51 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:d2v8:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "worker_failure_leaves_task_running",
+      "locations": [
+        {
+          "path": "src/lib.rs",
+          "start_line": 20,
+          "end_line": 20
+        }
+      ],
+      "mechanism_tags": [
+        "state_transition_gap"
+      ],
+      "severity": "medium",
+      "rationale": "The ? returns immediately when Worker::run fails, so the task remains in Phase::Running even though execution has terminated unsuccessfully. The exposed Phase::Failed state is never recorded on this error path."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:429a5a1dac744cf8e752cf85ce32261f4d4eaad20c7f8ebd1ebd8b7ed3dbd0b0",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:8454bb821badd09fc36a32903f7842893ed7f68c94f8d34591e9701891e3f8b6",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "worker_failure_leaves_task_running"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:930cda8cce84658a2c4dd3a7df2b1b5b4581307ec105f61a8ced051509a851f2",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:c3a9f2a5551cbb46cf712e1edcfe101b7c7c0a01ad8d08fa5e57e4fa439969d8",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:aa682b99cc1a79248e5752fabf40f283eeab75b19c078244edbca62385543248",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    }
+  ]
+}

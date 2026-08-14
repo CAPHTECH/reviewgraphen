@@ -1,0 +1,25 @@
+{
+  "backend": {
+    "inference_settings": {
+      "reasoning_effort": "high"
+    },
+    "kind": "codex_cli",
+    "model": "gpt-5.6-sol",
+    "protocol_version": "codex-exec@0.147.0",
+    "provider": "openai"
+  },
+  "exit_code": 0,
+  "input_files": {
+    "agent_input/candidate-output.schema.json": "sha256:bb691daa6aa26db7839799d9cb97ea88f6cbe4d09ee2eac5ac171ecadd6b86de",
+    "agent_input/instruction.txt": "sha256:470c3182618bb3b050ada7ba7efd08a6b8354d0c7070cb43e124b45b5ddee484"
+  },
+  "input_manifest_hash": "sha256:b9fb4b529259935cd61b67b7565100e3b70db8eb592d8d28c4a54c632c0e86a9",
+  "prompt_hash": "sha256:53814775a848af6b911a2b484e9b05fc7449e0a05c118cca42728f5c9d4ef370",
+  "prompt_version": "reviewgraphen.process_reviewer_prompt.v1",
+  "raw_response": "{\"answer\":\"ok\"}",
+  "raw_response_hash": "sha256:2b82c37965faf7db40dae134cc94675e0f6dac048a0173a1861b6ed1b8db7d5b",
+  "schema": "reviewgraphen.process_reviewer_record.v1",
+  "stderr_hash": "sha256:1aa26269eb1cc57f86b235a03cda53c004edb5b1e9fc99d4da4f00843293d721",
+  "stdout_hash": "sha256:a41b82e5aa1bac9df222e2876893602c41a66e06475d3cfc6157617cf01ffa63",
+  "tool_policy_version": "reviewgraphen.process_reviewer.bwrap-no-tools.v1"
+}

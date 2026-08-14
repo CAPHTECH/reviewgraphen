@@ -1,0 +1,56 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:rgp-m7-v1-a01:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "F1",
+      "locations": [
+        {
+          "path": "src/alpha.rs",
+          "start_line": 24,
+          "end_line": 29
+        }
+      ],
+      "mechanism_tags": [
+        "check_then_act",
+        "concurrent_reentry"
+      ],
+      "severity": "high",
+      "rationale": "The active flag is only loaded before the barrier and is then set with a separate store. Two concurrent run calls can both observe false at line 24, pass the barrier, and both execute send at line 29, so the guard does not enforce at-most-once dispatch."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:b6a7bf09a616f296809d1ff0e0463b28818bb3b28a53369d17391e93436cb520",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "F1"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:2153b275d5885318b0018ffe5f451b902e9f87ff2aa271f015008d542b040597",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "F1"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:5d983333218eb4f7435dd73107b48248ab6f5af5061ca0346b290a06edcb4430",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:49ca468197b264de282eab1b09c83791ce32656b67204ae9414a481e1bb1cd71",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "F1"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:3d0cd148cbbd1fb609a6d76fabde77909f3a406c9d380994e72389974f906979",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    }
+  ]
+}

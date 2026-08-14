@@ -1,0 +1,23 @@
+STDOUT
+
+running 1 test
+ai_check_rejects_an_unparseable_statistical_require_clause --- FAILED
+
+failures:
+
+---- ai_check_rejects_an_unparseable_statistical_require_clause stdout ----
+
+thread 'ai_check_rejects_an_unparseable_statistical_require_clause' (45354) panicked at fslc/tests/issue_542_ai_check_rejects_unparseable_clauses.rs:57:5:
+assertion `left == right` failed: {"fsl":"1.0","result":"ai_project_analyzed","formal_result":"not_run","components":[""],"statistical_properties":["Whatever"],"observed_properties":[],"migrations":[],"raw_blocks":[],"findings":[]}
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ai_check_rejects_an_unparseable_statistical_require_clause
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+STDERR
+error: test failed, to rerun pass `-p fslc-rust --test issue_542_ai_check_rejects_unparseable_clauses`

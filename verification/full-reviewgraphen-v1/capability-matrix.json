@@ -1,0 +1,248 @@
+{
+  "schema": "reviewgraphen.verification.capability_matrix.v1",
+  "as_of": "2026-08-14",
+  "classification_rule": {
+    "mechanically_enforced": "A production constructor, typestate, parser, reducer, or CLI rejection boundary enforces the scoped claim.",
+    "test_backed_only": "Code or a contract test exercises the claim, but the supported CLI vertical slice does not expose an end-to-end production route for it.",
+    "documentation_only": "The current workspace has no executable production route establishing the claim."
+  },
+  "premises": [
+    {
+      "id": "P1",
+      "assessment": "qualified_correct",
+      "claim": "There is no HTTP client, LLM SDK, or asynchronous runtime dependency.",
+      "qualification": "The listed workspace.dependencies are exact, but crate-local dependencies additionally include rusqlite and optional base64.",
+      "evidence": ["Cargo.toml:17", "crates/reviewgraphen-store/Cargo.toml:18"]
+    },
+    {
+      "id": "P2",
+      "assessment": "correct",
+      "claim": "The only review CLI route is review --fixture double-submit; the remaining supported families are schema and gate.",
+      "evidence": ["crates/reviewgraphen-cli/src/lib.rs:65"]
+    },
+    {
+      "id": "P3",
+      "assessment": "corrected",
+      "claim": "The product currently has no live-model execution route; a local process adapter is feasible without HTTP, SDK, or async dependencies but has not yet been built.",
+      "evidence": ["crates/reviewgraphen-cli/src/lib.rs:344", "crates/reviewgraphen-reviewer/src/lib.rs:862", "docs/adr/0020-minimal-deterministic-fake-runtime.md:31", "benchmarks/m7-real-v1/scripts/run_isolated_trial.sh:1"]
+    },
+    {
+      "id": "P4",
+      "assessment": "correct",
+      "claim": "The fixed route traverses authority, obligation, evidence, verification, decision, terminal report authority, and V5 report generation.",
+      "evidence": ["crates/reviewgraphen-cli/src/lib.rs:194", "crates/reviewgraphen-cli/src/lib.rs:640", "crates/reviewgraphen-cli/src/lib.rs:669"]
+    }
+  ],
+  "vertical_slice": [
+    {"order": 1, "stage": "closed dispatch", "evidence": "crates/reviewgraphen-cli/src/lib.rs:65"},
+    {"order": 2, "stage": "isolated temporary Store and fixed M4 prefix", "evidence": "crates/reviewgraphen-cli/src/lib.rs:194"},
+    {"order": 3, "stage": "source M5 gluing and source authority inspection", "evidence": "crates/reviewgraphen-cli/src/lib.rs:209"},
+    {"order": 4, "stage": "source index rebuild and target V5 publication/index validation", "evidence": "crates/reviewgraphen-cli/src/lib.rs:242"},
+    {"order": 5, "stage": "incremental mapping, obligation selection, and partial reruns", "evidence": "crates/reviewgraphen-cli/src/lib.rs:282"},
+    {"order": 6, "stage": "fixed raw reviewer response and strict structured admission", "evidence": "crates/reviewgraphen-cli/src/lib.rs:331"},
+    {"order": 7, "stage": "target gluing and verifier contract binding", "evidence": "crates/reviewgraphen-cli/src/lib.rs:392"},
+    {"order": 8, "stage": "native static/harness verification", "evidence": "crates/reviewgraphen-cli/src/lib.rs:468"},
+    {"order": 9, "stage": "explicit human grant and decision", "evidence": "crates/reviewgraphen-cli/src/lib.rs:521"},
+    {"order": 10, "stage": "target M5 completion and proof-bound terminal marker", "evidence": "crates/reviewgraphen-cli/src/lib.rs:563"},
+    {"order": 11, "stage": "dual-run terminal report authority and canonical V5 generation", "evidence": "crates/reviewgraphen-cli/src/lib.rs:640"}
+  ],
+  "capabilities": [
+    {
+      "id": "C01",
+      "property": "The supported CLI review surface is closed to exactly one fixture route.",
+      "scope": "CLI command dispatch",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-cli/src/lib.rs:65"],
+      "test_evidence": ["crates/reviewgraphen-cli/src/lib.rs:1011"],
+      "documentation_evidence": ["docs/adr/0024-fixed-offline-cli-vertical-slice.md:20"]
+    },
+    {
+      "id": "C02",
+      "property": "The fixed route executes the persisted M4/M5/M6 continuation rather than printing a committed report fixture.",
+      "scope": "fixed double-submit route",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-cli/src/lib.rs:194", "crates/reviewgraphen-cli/src/lib.rs:675"],
+      "test_evidence": ["crates/reviewgraphen-cli/src/lib.rs:1054"],
+      "documentation_evidence": ["docs/adr/0024-fixed-offline-cli-vertical-slice.md:26"]
+    },
+    {
+      "id": "C03",
+      "property": "A fixed input produces canonical, byte-identical V5 report output.",
+      "scope": "fixed double-submit route",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-core/src/canonical.rs:9", "crates/reviewgraphen-cli/src/lib.rs:675"],
+      "test_evidence": ["crates/reviewgraphen-cli/src/lib.rs:1054"],
+      "documentation_evidence": ["docs/05_system_architecture.md:188"]
+    },
+    {
+      "id": "C04",
+      "property": "Program facts, reviewer claims, evidence, verification, and decisions use separate typed records.",
+      "scope": "Core aggregate and V5 projection",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-core/src/program.rs:757", "crates/reviewgraphen-core/src/review.rs:604", "crates/reviewgraphen-core/src/review.rs:934", "crates/reviewgraphen-core/src/review.rs:1142"],
+      "test_evidence": [],
+      "documentation_evidence": ["docs/03_conceptual_model.md:20", "docs/03_conceptual_model.md:58"]
+    },
+    {
+      "id": "C05",
+      "property": "Coverage axes are derived relative to an explicit non-empty obligation denominator.",
+      "scope": "typed report generation; serialized validation is weaker",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-report/src/report_v5.rs:114", "crates/reviewgraphen-report/src/report_v5.rs:1352"],
+      "test_evidence": ["crates/reviewgraphen-report/src/report_v5.rs:4185"],
+      "documentation_evidence": ["docs/03_conceptual_model.md:152"],
+      "phase_b_note": "Serialized report validation does not bind the denominator back to source rows; omission, inflation, and substitution were accepted."
+    },
+    {
+      "id": "C06",
+      "property": "Reviewer input is a source-closed byte request with no filesystem path or tool channel.",
+      "scope": "reviewgraphen-reviewer request boundary",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-reviewer/src/lib.rs:328", "crates/reviewgraphen-reviewer/src/lib.rs:338"],
+      "test_evidence": ["crates/reviewgraphen-reviewer/src/lib.rs:2730"],
+      "documentation_evidence": ["docs/adr/0013-m3-plan-context-and-reviewer-contract.md:666"]
+    },
+    {
+      "id": "C07",
+      "property": "AI reviewer output remains proposed and unreviewed and cannot directly label itself accepted.",
+      "scope": "V5 claim contract and report schema",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-core/src/execution.rs:2696", "schemas/reviewgraphen.report.v5.schema.json:2117"],
+      "test_evidence": [],
+      "documentation_evidence": ["docs/03_conceptual_model.md:132"]
+    },
+    {
+      "id": "C08",
+      "property": "A human decision is admitted only against an exact actor, authority, capability, run, snapshot, universe, property, claim, and validity grant.",
+      "scope": "Core/Store fresh and replay authority before report serialization",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-core/src/event.rs:12795", "crates/reviewgraphen-core/src/event.rs:15072"],
+      "test_evidence": ["crates/reviewgraphen-core/src/event.rs:61761"],
+      "documentation_evidence": ["docs/adr/0021-m4-evidence-bound-verification.md:682"],
+      "phase_b_note": "A serialized decision actor/authority mutation was accepted because CLI validation does not recompute record hashes or replay authority."
+    },
+    {
+      "id": "C09",
+      "property": "Evidence and verification must form a connected, passed, claim-bound trace, with freshness when required.",
+      "scope": "Core aggregate before report serialization",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-core/src/review.rs:3044", "crates/reviewgraphen-core/src/review.rs:3229"],
+      "test_evidence": ["crates/reviewgraphen-core/src/m6_test_support.rs:611"],
+      "documentation_evidence": ["docs/03_conceptual_model.md:132"],
+      "phase_b_note": "Serialized evidence and fresh-coverage mutations were accepted without replaying this aggregate validation."
+    },
+    {
+      "id": "C10",
+      "property": "Local review sections are glued before the fixed global result is projected.",
+      "scope": "fixed M5/M6 pipeline",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-cli/src/lib.rs:392", "crates/reviewgraphen-cli/src/lib.rs:563"],
+      "test_evidence": ["crates/reviewgraphen-cli/src/lib.rs:1077"],
+      "documentation_evidence": ["docs/03_conceptual_model.md:176"]
+    },
+    {
+      "id": "C11",
+      "property": "V5 report generation requires a non-cloneable, non-serializable dual-run terminal authority, not caller-supplied rows.",
+      "scope": "Report generator API",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-store/src/journal.rs:1222", "crates/reviewgraphen-report/src/report_v5.rs:560"],
+      "test_evidence": ["crates/reviewgraphen-report/src/report_v5.rs:4576"],
+      "documentation_evidence": ["docs/adr/0024-fixed-offline-cli-vertical-slice.md:51"]
+    },
+    {
+      "id": "C12",
+      "property": "The V5 JSON shape is closed and schema-external values are rejected.",
+      "scope": "schema validate and gate input",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-cli/src/lib.rs:109", "schemas/reviewgraphen.report.v5.schema.json:1"],
+      "test_evidence": ["crates/reviewgraphen-cli/src/lib.rs:1011"],
+      "documentation_evidence": ["docs/05_system_architecture.md:13"]
+    },
+    {
+      "id": "C13",
+      "property": "Gate rejects malformed, unsupported, and locally inconsistent V5 reports and maps valid embedded status to exit codes.",
+      "scope": "report-only CLI gate; not a signature or journal replay verifier",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-cli/src/lib.rs:144", "crates/reviewgraphen-report/src/report_v5.rs:95"],
+      "test_evidence": ["crates/reviewgraphen-cli/src/lib.rs:1041"],
+      "documentation_evidence": ["docs/adr/0024-fixed-offline-cli-vertical-slice.md:46"],
+      "phase_b_note": "The broader fail-closed claim was broken by a locally coherent pass rewrite retaining invalid derived ID/body_hash values."
+    },
+    {
+      "id": "C14",
+      "property": "The durable journal and derived indexes reject body, chain, CAS, or stale-index tampering on replay/rebuild.",
+      "scope": "Store replay and index rebuild",
+      "classification": "mechanically_enforced",
+      "implementation_evidence": ["crates/reviewgraphen-store/src/journal.rs:2736", "crates/reviewgraphen-store/src/index.rs:6385"],
+      "test_evidence": ["crates/reviewgraphen-store/src/index.rs:5495", "crates/reviewgraphen-store/src/index.rs:6931"],
+      "documentation_evidence": ["docs/adr/0014-snapshot-source-cas-and-durable-replay-admission.md:1"],
+      "phase_b_note": "Not independently injected into the private Store typestate; the serialized report boundary was tested instead."
+    },
+    {
+      "id": "C15",
+      "property": "Rust/Git ingestion can execute against an arbitrary admitted local repository snapshot.",
+      "scope": "library and ingest tests; absent from supported CLI review route",
+      "classification": "test_backed_only",
+      "implementation_evidence": ["crates/reviewgraphen-ingest/src/git.rs:1393"],
+      "test_evidence": ["crates/reviewgraphen-ingest/tests/m2.rs:210"],
+      "documentation_evidence": ["docs/05_system_architecture.md:220"]
+    },
+    {
+      "id": "C16",
+      "property": "The current product can call a live LLM through a provider adapter.",
+      "scope": "product execution",
+      "classification": "documentation_only",
+      "implementation_evidence": [],
+      "test_evidence": [],
+      "documentation_evidence": ["docs/05_system_architecture.md:294", "docs/00_vision_and_scope.md:145"]
+      ,"note": "This is an absent current capability, not a technical impossibility: codex exec and claude --print can be invoked through std::process. Phase C is the implementation target."
+    },
+    {
+      "id": "C17",
+      "property": "Live provider calls are isolated, recorded, and replayable without recalling the provider.",
+      "scope": "future live reviewer execution",
+      "classification": "documentation_only",
+      "implementation_evidence": [],
+      "test_evidence": [],
+      "documentation_evidence": ["docs/05_system_architecture.md:400"]
+    },
+    {
+      "id": "C18",
+      "property": "The generic Stage 0 through Stage 10 pipeline is available for arbitrary repositories and profiles.",
+      "scope": "product end-to-end",
+      "classification": "documentation_only",
+      "implementation_evidence": [],
+      "test_evidence": [],
+      "documentation_evidence": ["docs/05_system_architecture.md:218"]
+    },
+    {
+      "id": "C19",
+      "property": "Parallel independent obligation execution with stable logical commit ordering is implemented.",
+      "scope": "runtime scheduling",
+      "classification": "documentation_only",
+      "implementation_evidence": [],
+      "test_evidence": [],
+      "documentation_evidence": ["docs/05_system_architecture.md:360"]
+    },
+    {
+      "id": "C20",
+      "property": "ReviewGraphen improves defect detection over free-form review through its product execution path.",
+      "scope": "detection performance",
+      "classification": "documentation_only",
+      "implementation_evidence": [],
+      "test_evidence": [],
+      "documentation_evidence": ["docs/00_vision_and_scope.md:191"],
+      "note": "M7 is a separate non-authority benchmark and cannot establish this product-path claim."
+    },
+    {
+      "id": "C21",
+      "property": "The current Rust implementation executes over HigherGraphen crates.",
+      "scope": "workspace dependency graph",
+      "classification": "documentation_only",
+      "implementation_evidence": [],
+      "test_evidence": [],
+      "documentation_evidence": ["README.md:64", "docs/04_highergraphen_mapping.md:1"],
+      "note": "Cargo manifests contain no HigherGraphen crate dependency; the mapping is currently conceptual."
+    }
+  ]
+}

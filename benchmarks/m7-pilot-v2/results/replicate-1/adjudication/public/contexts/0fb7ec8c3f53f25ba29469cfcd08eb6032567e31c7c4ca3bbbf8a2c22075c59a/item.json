@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":8,"path":"src/lib.rs","start_line":8}],"mechanism_tags":["cross_file_contract","repeated_effect"]},"item_id":"adj:sha256:0fb7ec8c3f53f25ba29469cfcd08eb6032567e31c7c4ca3bbbf8a2c22075c59a"}

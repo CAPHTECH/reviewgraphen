@@ -1,0 +1,99 @@
+STDOUT
+
+running 1 test
+a_forall_wrapped_implication_is_flagged_vacuous_by_default --- FAILED
+
+failures:
+
+---- a_forall_wrapped_implication_is_flagged_vacuous_by_default stdout ----
+
+thread 'a_forall_wrapped_implication_is_flagged_vacuous_by_default' (58608) panicked at fslc/tests/issue_486_vacuous_forall_implication.rs:56:5:
+expected a vacuous_implication warning for NeverActivated: {
+  "fsl": "1.0",
+  "spec": "ForallVacuousImplication",
+  "result": "verified",
+  "depth": 3,
+  "checked_to_depth": 3,
+  "completeness": "bounded",
+  "invariants_checked": [
+    "NeverActivated"
+  ],
+  "transitions_checked": [],
+  "reachables": {},
+  "action_coverage": {
+    "stay": true
+  },
+  "deadlock": {
+    "found": false
+  },
+  "warnings": [],
+  "note": "bounded verification: no violation within depth 3",
+  "cost": {
+    "elapsed_s": 0.012684762,
+    "solver": {
+      "checks": 14,
+      "check_elapsed_s": 0.001681196,
+      "conflicts": 6,
+      "decisions": 6,
+      "propagations": 39,
+      "memory_mb": 16.86
+    },
+    "properties": [
+      {
+        "kind": "action_coverage",
+        "name": "stay",
+        "checks": 1,
+        "elapsed_s": 0.00005863
+      },
+      {
+        "kind": "deadlock",
+        "name": "deadlock",
+        "checks": 4,
+        "elapsed_s": 0.000030245
+      },
+      {
+        "kind": "init",
+        "name": "initial_state",
+        "checks": 1,
+        "elapsed_s": 0.000780888
+      },
+      {
+        "kind": "invariant",
+        "name": "NeverActivated",
+        "checks": 4,
+        "elapsed_s": 0.000765458
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_active",
+        "checks": 4,
+        "elapsed_s": 0.000045975
+      }
+    ]
+  },
+  "versions": {
+    "verifier": {
+      "name": "fslc-rust",
+      "version": "3.1.0"
+    },
+    "core": {
+      "name": "fsl-core",
+      "version": "3.1.0"
+    },
+    "solver": {
+      "name": "z3",
+      "backend": "native-z3",
+      "version": "Z3 4.16.0.0"
+    }
+  }
+}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_forall_wrapped_implication_is_flagged_vacuous_by_default
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.02s
+
+STDERR
+error: test failed, to rerun pass `-p fslc-rust --test issue_486_vacuous_forall_implication`

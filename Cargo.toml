@@ -8,6 +8,7 @@ members = [
     "crates/reviewgraphen-cli",
     "crates/reviewgraphen-report",
     "crates/reviewgraphen-store",
+    "crates/reviewgraphen-benchmark",
     "examples/double-submit-payment/fixture",
 ]
 resolver = "3"

@@ -1,0 +1,54 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:z8c5:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "F1",
+      "locations": [
+        {
+          "path": "src/lib.rs",
+          "start_line": 14,
+          "end_line": 14
+        }
+      ],
+      "mechanism_tags": [
+        "check_write_gap",
+        "repeated_effect"
+      ],
+      "severity": "high",
+      "rationale": "The external append is performed before receipt state is checked. If append succeeds but observed remains false during the two checks, this returns an error; a normal caller retry enters submit again and appends the same value again. There is no pre-write receipt check or durable idempotency guard to prevent the repeated effect."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:0f2f1f0ff0a0c584dceb21fbe8228da2fc723b62010d478a09678687d659c133",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:745c3847a9d806ab1aab5da189c3becb7e3e99d90fd419f2136d14d83fa9b617",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "F1"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:b3f347d7aee3e710152f3ede1ac10dbd813cf5df2418a2b7c602388734474cd7",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "F1"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:e41c34cbc01bf47542b5f5b0739d1d998d4d3afb1d7220c0d5a50066b7534b67",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:fd29e6f4c77aeef8b4025a9e5f081dcfea40c6e251d1f81e1efce1dfc8e7e8cc",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    }
+  ]
+}

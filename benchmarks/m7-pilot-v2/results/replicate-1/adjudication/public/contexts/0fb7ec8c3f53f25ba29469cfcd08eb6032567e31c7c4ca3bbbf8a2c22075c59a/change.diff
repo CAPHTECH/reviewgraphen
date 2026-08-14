@@ -1,0 +1,17 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 510b34b..61b584a 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -3,5 +3,11 @@ pub trait Channel {
+ }
+ 
+ pub fn transmit(channel: &mut impl Channel, request: &str, body: &[u8]) -> Result<(), String> {
+-    channel.send(request, body).map(|_| ())
++    let token = format!("request:{request}");
++    for _ in 0..3 {
++        if channel.send(&token, body)? {
++            return Ok(());
++        }
++    }
++    Err("delivery unconfirmed".to_owned())
+ }

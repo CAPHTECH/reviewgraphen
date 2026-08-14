@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":1539,"path":"rust/fsl-runtime/src/lib.rs","start_line":1526}],"mechanism_tags":["repeated_effect","state_transition_gap"]},"item_id":"adj:sha256:f65f2206fb9008a7e4a25cd2b9e4087e8f3c31a08e8e286d51b173e80e615e03"}

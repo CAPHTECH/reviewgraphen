@@ -1,0 +1,48 @@
+
+running 1 test
+domain_check_preserves_kernel_warnings --- FAILED
+
+failures:
+
+---- domain_check_preserves_kernel_warnings stdout ----
+
+thread 'domain_check_preserves_kernel_warnings' (21432) panicked at fslc/tests/issue_641_domain_check_kernel_warnings.rs:48:5:
+{
+  "fsl": "1.0",
+  "result": "verified_under_assumptions",
+  "dialect": "fsl-domain-effect.v0",
+  "finding_schema_version": "fsl-domain-finding.v0",
+  "domain": "UnreachableDecisionDomain",
+  "spec": "UnreachableDecisionDomain",
+  "formal_result": "verified",
+  "kernel": {
+    "result": "verified",
+    "spec": "UnreachableDecisionDomain",
+    "depth": 4,
+    "checked_to_depth": 4,
+    "completeness": "bounded"
+  },
+  "findings": [],
+  "assumptions": [
+    {
+      "id": "DOMAIN-ASSUME-FINITE-DOMAIN-MODEL",
+      "text": "domain IDs and undeclared scalar input types are modeled as finite 0..1 ranges unless declared explicitly"
+    },
+    {
+      "id": "DOMAIN-ASSUME-GENERATED-SCAFFOLD",
+      "text": "generated Functional DDD code is an implementation scaffold; runtime conformance still requires an adapter/replay evidence boundary"
+    }
+  ],
+  "generated_actions": [
+    "doc_archive_doc",
+    "doc_touch_doc"
+  ]
+}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    domain_check_preserves_kernel_warnings
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+

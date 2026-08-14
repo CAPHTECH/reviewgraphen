@@ -1,0 +1,24 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:m3x9:b1:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "retry-token-changes",
+      "locations": [
+        {
+          "path": "src/lib.rs",
+          "start_line": 6,
+          "end_line": 6
+        }
+      ],
+      "mechanism_tags": [
+        "unstable_token",
+        "repeated_effect"
+      ],
+      "severity": "high",
+      "rationale": "A false result means delivery was not confirmed, not that the receiver did not process the request. Changing the token for each retry prevents a receiver from recognizing retries as the same operation, so an accepted first attempt followed by a lost confirmation can be processed again as a separate request. Keep one stable idempotency token for all attempts of this transmit call."
+    }
+  ],
+  "obligation_results": []
+}

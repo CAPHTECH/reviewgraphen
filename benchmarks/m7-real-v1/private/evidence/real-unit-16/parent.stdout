@@ -1,0 +1,233 @@
+
+running 1 test
+reachable_is_non_reflexive_for_an_empty_relation_on_both_engines --- FAILED
+
+failures:
+
+---- reachable_is_non_reflexive_for_an_empty_relation_on_both_engines stdout ----
+
+thread 'reachable_is_non_reflexive_for_an_empty_relation_on_both_engines' (48048) panicked at fslc/tests/issue_502_reachable_reflexivity.rs:87:5:
+assertion `left == right` failed: issue_502_reachable_empty.fsl: bmc={
+  "fsl": "1.0",
+  "spec": "ReachableEmpty",
+  "result": "violated",
+  "violation_kind": "invariant",
+  "invariant": "NoTrivialSelfReach",
+  "loc": {
+    "line": 17,
+    "column": 3
+  },
+  "violated_at_step": 1,
+  "violating_bindings": [
+    {}
+  ],
+  "blame": {
+    "conjuncts": [
+      {
+        "index": 0,
+        "text": "not rel_reachable(r, 0, 0)",
+        "holds": false,
+        "violating_bindings": [
+          {}
+        ]
+      }
+    ]
+  },
+  "last_action": {
+    "name": "link",
+    "params": {
+      "a": 0,
+      "b": 0
+    },
+    "loc": {
+      "line": 13,
+      "column": 3
+    }
+  },
+  "trace": [
+    {
+      "step": 0,
+      "state": {
+        "r": []
+      }
+    },
+    {
+      "step": 1,
+      "state": {
+        "r": [
+          [
+            0,
+            0
+          ]
+        ]
+      },
+      "action": {
+        "name": "link",
+        "params": {
+          "a": 0,
+          "b": 0
+        },
+        "loc": {
+          "line": 13,
+          "column": 3
+        }
+      },
+      "changes": {
+        "r": {
+          "from": [],
+          "to": [
+            [
+              0,
+              0
+            ]
+          ]
+        }
+      },
+      "blame": {
+        "guards": [],
+        "effects": []
+      }
+    }
+  ],
+  "checked_to_depth": 1,
+  "completeness": "bounded",
+  "cost": {
+    "elapsed_s": 0.011407704,
+    "solver": {
+      "checks": 8,
+      "check_elapsed_s": 0.001621736,
+      "conflicts": null,
+      "decisions": 3,
+      "propagations": 39,
+      "memory_mb": 16.86
+    },
+    "properties": [
+      {
+        "kind": "action_coverage",
+        "name": "link",
+        "checks": 1,
+        "elapsed_s": 0.000054723
+      },
+      {
+        "kind": "deadlock",
+        "name": "deadlock",
+        "checks": 1,
+        "elapsed_s": 2.545e-6
+      },
+      {
+        "kind": "init",
+        "name": "initial_state",
+        "checks": 1,
+        "elapsed_s": 0.000730722
+      },
+      {
+        "kind": "invariant",
+        "name": "NoTrivialSelfReach",
+        "checks": 3,
+        "elapsed_s": 0.0008093
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_r",
+        "checks": 2,
+        "elapsed_s": 0.000024446
+      }
+    ]
+  },
+  "trace_type": "invariant",
+  "versions": {
+    "verifier": {
+      "name": "fslc-rust",
+      "version": "3.1.0"
+    },
+    "core": {
+      "name": "fsl-core",
+      "version": "3.1.0"
+    },
+    "solver": {
+      "name": "z3",
+      "backend": "native-z3",
+      "version": "Z3 4.16.0.0"
+    }
+  }
+} explicit={
+  "fsl": "1.0",
+  "spec": "ReachableEmpty",
+  "result": "violated",
+  "violation_kind": "invariant",
+  "invariant": "NoTrivialSelfReach",
+  "loc": {
+    "line": 17,
+    "column": 3
+  },
+  "violated_at_step": 0,
+  "violating_bindings": [
+    {}
+  ],
+  "blame": {
+    "conjuncts": [
+      {
+        "index": 0,
+        "text": "not rel_reachable(r, 0, 0)",
+        "holds": false,
+        "violating_bindings": [
+          {}
+        ]
+      }
+    ]
+  },
+  "last_action": null,
+  "trace": [
+    {
+      "step": 0,
+      "state": {
+        "r": []
+      }
+    }
+  ],
+  "checked_to_depth": 0,
+  "completeness": "bounded",
+  "cost": {
+    "elapsed_s": 0.00016515,
+    "solver": {
+      "checks": 0,
+      "check_elapsed_s": 0.0,
+      "conflicts": null,
+      "decisions": null,
+      "propagations": null,
+      "memory_mb": null
+    },
+    "properties": []
+  },
+  "trace_type": "invariant",
+  "engine": "explicit",
+  "closure": false,
+  "states_explored": 1,
+  "max_frontier_width": 1,
+  "depth_reached": 0,
+  "versions": {
+    "verifier": {
+      "name": "fslc-rust",
+      "version": "3.1.0"
+    },
+    "core": {
+      "name": "fsl-core",
+      "version": "3.1.0"
+    },
+    "solver": {
+      "name": "z3",
+      "backend": "native-z3",
+      "version": "Z3 4.16.0.0"
+    }
+  }
+}
+  left: Number(1)
+ right: Number(0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    reachable_is_non_reflexive_for_an_empty_relation_on_both_engines
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.02s
+

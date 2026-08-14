@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":7196,"path":"rust/fslc/src/main.rs","start_line":7147}],"mechanism_tags":["repeated_effect","state_transition_gap"]},"item_id":"adj:sha256:c424eb640742744810f78cfd10a8266be3a7105f8f49c98ff02a2bd07888b55c"}

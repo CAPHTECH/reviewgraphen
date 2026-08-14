@@ -1,0 +1,29 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:k8r5:b1:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "F1",
+      "locations": [
+        {
+          "path": "src/catalog.rs",
+          "start_line": 8,
+          "end_line": 14
+        },
+        {
+          "path": "src/lib.rs",
+          "start_line": 5,
+          "end_line": 8
+        }
+      ],
+      "mechanism_tags": [
+        "repeated_effect",
+        "state_transition_gap"
+      ],
+      "severity": "high",
+      "rationale": "can_allocate now consumes units, but allocate calls record after a successful check and consumes the same units again. Requests needing more than half of the remaining capacity fail after partially mutating the catalog; successful requests reduce capacity by twice the requested amount."
+    }
+  ],
+  "obligation_results": []
+}

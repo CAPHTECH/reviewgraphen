@@ -1,0 +1,23 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 0c01d68..77200c4 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -12,12 +12,16 @@ impl Registry {
+         }
+     }
+ 
+-    pub fn register(&self, key: &str) -> bool {
+-        let mut keys = self.keys.lock().expect("registry lock");
++    fn insert_available(keys: &mut BTreeSet<String>, key: &str) -> bool {
+         if keys.contains(key) {
+             return false;
+         }
+         keys.insert(key.to_owned());
+         true
+     }
++
++    pub fn register(&self, key: &str) -> bool {
++        let mut keys = self.keys.lock().expect("registry lock");
++        Self::insert_available(&mut keys, key)
++    }
+ }

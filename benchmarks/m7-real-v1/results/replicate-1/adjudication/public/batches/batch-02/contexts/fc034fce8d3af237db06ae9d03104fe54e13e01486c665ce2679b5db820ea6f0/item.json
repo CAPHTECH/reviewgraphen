@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":530,"path":"rust/fsl-core/src/domain.rs","start_line":500},{"end_line":575,"path":"rust/fsl-core/src/domain.rs","start_line":553}],"mechanism_tags":["repeated_effect","unstable_token"]},"item_id":"adj:sha256:fc034fce8d3af237db06ae9d03104fe54e13e01486c665ce2679b5db820ea6f0"}

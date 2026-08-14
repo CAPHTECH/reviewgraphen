@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":2217,"path":"rust/fsl-core/src/dialect.rs","start_line":2198}],"mechanism_tags":["check_write_gap","state_transition_gap"]},"item_id":"adj:sha256:2c55d2e465e5090a5c8f9774ef6467672ff9900e1cd8539128071ccfc2632bc3"}

@@ -1,0 +1,325 @@
+STDOUT
+
+running 1 test
+manifest_and_standalone_input_agree_on_the_graph_vocabulary --- FAILED
+
+failures:
+
+---- manifest_and_standalone_input_agree_on_the_graph_vocabulary stdout ----
+
+thread 'manifest_and_standalone_input_agree_on_the_graph_vocabulary' (41980) panicked at fslc/tests/issue_558_manifest_tsg_vocabulary.rs:137:9:
+assertion `left == right` failed: business node kinds diverge; manifest slice {
+  "nodes": [
+    {
+      "id": "business:action:finish",
+      "kind": "action",
+      "label": "finish",
+      "name": "finish",
+      "loc": {
+        "line": 15,
+        "column": 5
+      },
+      "fair": true,
+      "sync": false,
+      "meta": {
+        "id": "finish",
+        "text": "by Agent"
+      },
+      "requirements": [
+        {
+          "id": "finish",
+          "text": "by Agent"
+        }
+      ],
+      "layer": "business"
+    },
+    {
+      "id": "business:effect:finish:0",
+      "kind": "effect",
+      "label": "finish effect 0",
+      "name": "finish:0",
+      "loc": {
+        "line": 15,
+        "column": 5
+      },
+      "expr": [
+        "var",
+        "Done"
+      ],
+      "action": "action:finish",
+      "target": "item_stage",
+      "layer": "business"
+    },
+    {
+      "id": "business:guard:finish:0",
+      "kind": "guard",
+      "label": "finish requires 0",
+      "name": "finish:0",
+      "loc": {
+        "line": 15,
+        "column": 5
+      },
+      "expr": [
+        "bin",
+        "==",
+        [
+          "index",
+          [
+            "var",
+            "item_stage"
+          ],
+          [
+            "var",
+            "c"
+          ]
+        ],
+        [
+          "var",
+          "Open"
+        ]
+      ],
+      "action": "action:finish",
+      "layer": "business"
+    },
+    {
+      "id": "business:leadsTo:REQ-SHARED",
+      "kind": "leadsTo",
+      "label": "REQ-SHARED",
+      "name": "REQ-SHARED",
+      "loc": {
+        "line": 24,
+        "column": 3
+      },
+      "P": [
+        "bin",
+        "==",
+        [
+          "index",
+          [
+            "var",
+            "item_stage"
+          ],
+          [
+            "var",
+            "c"
+          ]
+        ],
+        [
+          "var",
+          "Open"
+        ]
+      ],
+      "Q": [
+        "bin",
+        "==",
+        [
+          "index",
+          [
+            "var",
+            "item_stage"
+          ],
+          [
+            "var",
+            "c"
+          ]
+        ],
+        [
+          "var",
+          "Done"
+        ]
+      ],
+      "meta": {
+        "id": "REQ-SHARED",
+        "text": "every opened item is eventually finished"
+      },
+      "requirements": [
+        {
+          "id": "REQ-SHARED",
+          "text": "every opened item is eventually finished"
+        }
+      ],
+      "layer": "business"
+    },
+    {
+      "id": "business:phys_state:item_stage",
+      "kind": "phys_state",
+      "label": "item_stage",
+      "name": "item_stage",
+      "logical": "item_stage",
+      "layer": "business"
+    },
+    {
+      "id": "business:requirement:REQ-SHARED",
+      "kind": "requirement",
+      "label": "REQ-SHARED",
+      "name": "REQ-SHARED",
+      "layer": "business"
+    },
+    {
+      "id": "business:requirement:finish",
+      "kind": "requirement",
+      "label": "finish",
+      "name": "finish",
+      "layer": "business"
+    },
+    {
+      "id": "business:spec:ManifestVocabularyBusiness",
+      "kind": "business_spec",
+      "label": "ManifestVocabularyBusiness",
+      "name": "ManifestVocabularyBusiness",
+      "layer": "business"
+    },
+    {
+      "id": "business:state:item_stage",
+      "kind": "state",
+      "label": "item_stage",
+      "name": "item_stage",
+      "type": [
+        "map",
+        [
+          "domain",
+          0,
+          1
+        ],
+        [
+          "enum",
+          "ItemStage"
+        ]
+      ],
+      "layer": "business"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge:business:edge:action:finish:has_effect:effect:finish:0",
+      "kind": "has_effect",
+      "from": "business:action:finish",
+      "to": "business:effect:finish:0",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:action:finish:has_guard:guard:finish:0",
+      "kind": "has_guard",
+      "from": "business:action:finish",
+      "to": "business:guard:finish:0",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:action:finish:reads:state:item_stage",
+      "kind": "reads",
+      "from": "business:action:finish",
+      "to": "business:state:item_stage",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:action:finish:writes:state:item_stage",
+      "kind": "writes",
+      "from": "business:action:finish",
+      "to": "business:state:item_stage",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:effect:finish:0:writes:state:item_stage",
+      "kind": "writes",
+      "from": "business:effect:finish:0",
+      "to": "business:state:item_stage",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:guard:finish:0:reads:state:item_stage",
+      "kind": "reads",
+      "from": "business:guard:finish:0",
+      "to": "business:state:item_stage",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:leadsTo:REQ-SHARED:checks:state:item_stage",
+      "kind": "checks",
+      "from": "business:leadsTo:REQ-SHARED",
+      "to": "business:state:item_stage",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:leadsTo:REQ-SHARED:reads:state:item_stage",
+      "kind": "reads",
+      "from": "business:leadsTo:REQ-SHARED",
+      "to": "business:state:item_stage",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:requirement:REQ-SHARED:covers:leadsTo:REQ-SHARED",
+      "kind": "covers",
+      "from": "business:requirement:REQ-SHARED",
+      "to": "business:leadsTo:REQ-SHARED",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:requirement:finish:covers:action:finish",
+      "kind": "covers",
+      "from": "business:requirement:finish",
+      "to": "business:action:finish",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:spec:ManifestVocabularyBusiness:declares:action:finish",
+      "kind": "declares",
+      "from": "business:spec:ManifestVocabularyBusiness",
+      "to": "business:action:finish",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:spec:ManifestVocabularyBusiness:declares:leadsTo:REQ-SHARED",
+      "kind": "declares",
+      "from": "business:spec:ManifestVocabularyBusiness",
+      "to": "business:leadsTo:REQ-SHARED",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:spec:ManifestVocabularyBusiness:declares:phys_state:item_stage",
+      "kind": "declares",
+      "from": "business:spec:ManifestVocabularyBusiness",
+      "to": "business:phys_state:item_stage",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:spec:ManifestVocabularyBusiness:declares:requirement:REQ-SHARED",
+      "kind": "declares",
+      "from": "business:spec:ManifestVocabularyBusiness",
+      "to": "business:requirement:REQ-SHARED",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:spec:ManifestVocabularyBusiness:declares:requirement:finish",
+      "kind": "declares",
+      "from": "business:spec:ManifestVocabularyBusiness",
+      "to": "business:requirement:finish",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:spec:ManifestVocabularyBusiness:declares:state:item_stage",
+      "kind": "declares",
+      "from": "business:spec:ManifestVocabularyBusiness",
+      "to": "business:state:item_stage",
+      "layer": "business"
+    },
+    {
+      "id": "edge:business:edge:state:item_stage:expands_to:phys_state:item_stage",
+      "kind": "expands_to",
+      "from": "business:state:item_stage",
+      "to": "business:phys_state:item_stage",
+      "layer": "business"
+    }
+  ]
+}
+  left: {"action", "effect", "guard", "leadsTo", "phys_state", "requirement", "spec", "state"}
+ right: {"action", "control", "effect", "guard", "leadsTo", "phys_state", "requirement", "spec", "state"}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    manifest_and_standalone_input_agree_on_the_graph_vocabulary
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s
+
+STDERR
+error: test failed, to rerun pass `-p fslc-rust --test issue_558_manifest_tsg_vocabulary`

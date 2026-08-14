@@ -1,0 +1,1 @@
+{"b1_detected_roots":3,"collection_binding_invalid_trials":0,"eligible_pairs":11,"excluded_pairs":1,"exclusion_reason_counts":{"protocol_invalid":1},"g3_minus_b1_detected_roots":3,"g3_proxy_detected_roots":6,"missing_trials":0,"prepared_trials":24,"protocol_invalid_trials":1,"schema":"reviewgraphen.benchmark.run_summary.v1","total_roots_per_arm":6,"valid_collections":23}

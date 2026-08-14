@@ -34,6 +34,20 @@
 | `reviewgraphen.extraction_report.v1.example.json` | A frozen, self-consistent `ExtractionReport` instance from a real M2 fixture ingest。 |
 | `reviewgraphen.extraction_report.v1.example.sha256` | SHA-256 of the example's own canonical bytes (self-consistency only — see below, this is not byte-compared against a fresh ingest run)。 |
 | `reviewgraphen.config.example.toml` | CLI/local runtime configuration example。 |
+| `reviewgraphen.benchmark.trial_manifest.v1.schema.json` | M7 non-authority trial protocol, exact packet set, source inventory, ontology and protocol versions. |
+| `reviewgraphen.benchmark.candidate_output.v1.schema.json` | Shared B1/G3-proxy candidate output using the closed arm-neutral mechanism ontology. |
+| `reviewgraphen.benchmark.oracle.v1.schema.json` | Private deterministic root anchors; never reviewer input. |
+| `reviewgraphen.benchmark.score.v1.schema.json` | Non-authority score bound to manifest, candidate, oracle, input tree, and paired execution configuration. |
+| `reviewgraphen.benchmark.collection.v1.schema.json` | Collector-owned outcome; only this record may mark a trial `protocol_invalid`. |
+| `reviewgraphen.benchmark.trial_inventory.v1.schema.json` | Complete expected trial denominator with exact manifest and paired-configuration hashes. |
+| `reviewgraphen.benchmark.run_summary.v1.schema.json` | Inventory-driven prepared/valid/protocol-invalid/binding-invalid/missing counts, eligible pairs, and exclusion reasons. |
+| `reviewgraphen.benchmark.real_unit.v1.schema.json` | Private real-fix pair binding with machine-recorded parent-fails/fix-passes regression evidence; never reviewer input. |
+| `reviewgraphen.benchmark.real_oracle.v1.schema.json` | Private target-only positive/control oracle with code-fix-hunk anchors and explicit control semantics. |
+| `reviewgraphen.benchmark.real_score.v1.schema.json` | Target-root score that keeps every matched-fix-control finding unlabeled pending adjudication. |
+| `reviewgraphen.benchmark.real_trial_inventory.v1.schema.json` | Private four-cell inventory for positive/control by B1/G3, without leaking roles to reviewers. |
+| `reviewgraphen.benchmark.real_run_summary.v1.schema.json` | Real-fix paired recall and separately named unlabeled-control/target-anchor allegation counts; no false-positive claim. |
+| `reviewgraphen.benchmark.real_full_run_summary.v1.schema.json` | Additive full-ReviewGraphen-only real-fix summary; the frozen B1/G3 paired summary remains unchanged. |
+| `reviewgraphen.process_reviewer_record.v1.schema.json` | Hash-bound raw Codex/Claude process observation for deterministic replay; explicitly non-authority. |
 
 ## Validation layers
 
@@ -44,6 +58,15 @@ JSON Schemaはshape、required field、enum、basic rangeを確認します。�
 - coverage numerator ≤ denominator。
 - universe `obligation_ids`と実体の一致。
 - illegal lifecycle/disposition/verification transitions。
+- Benchmark manifest `paired_configuration_hash` recomputation and inventory pair completeness.
+- Candidate finding IDs referenced by obligation results and G3 finding-to-obligation coverage.
+- Collection/manifest/candidate/score hash equality and exclusion of invalid or missing trials.
+- Oracle input-tree/source-bundle equality plus root path/file-hash/range equality against manifest inventory.
+- Score arithmetic equality and paired oracle/configuration compatibility.
+- Real-fix presence evidence equality, parent-fails/fix-passes exit semantics, and commit/tree binding.
+- Real positive/control four-cell completeness; positive-only target roots; all control findings remain unlabeled.
+
+For benchmark artifacts, JSON Schema checks closed shapes, enums, caps, and local conditionals. The Rust validator is normative for these cross-record relations; a schema-valid record alone is not score-eligible.
 - accepted claim/findingにrequired decisionがあること。
 - verificationにverifierとvalid evidenceがあること。
 - stale recordをfresh coverageへ含めないこと。

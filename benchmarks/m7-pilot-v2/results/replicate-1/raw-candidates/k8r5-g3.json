@@ -1,0 +1,59 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:k8r5:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "double_debit_after_mutating_check",
+      "locations": [
+        {
+          "path": "src/catalog.rs",
+          "start_line": 9,
+          "end_line": 14
+        },
+        {
+          "path": "src/lib.rs",
+          "start_line": 6,
+          "end_line": 7
+        }
+      ],
+      "mechanism_tags": [
+        "cross_file_contract",
+        "repeated_effect"
+      ],
+      "severity": "high",
+      "rationale": "can_allocate now deducts units on success, but allocate still calls record with the same units. A successful allocation is therefore charged twice; if the first deduction leaves fewer than units, allocate returns Err after already consuming capacity."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:41fc002cbaac4b069ae464025589a4278d3fcb5cbfacea6f4dbeb1851d10d688",
+      "disposition": "not_applicable",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:c5beb44975f5d5e44d01f0af8f5130551823685bcc0870e3878f78effad85b21",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "double_debit_after_mutating_check"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:64c6d6356ad917bb04e9d09d2ef121054001a7c31380655476b3c3d15752dc9c",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:b2163040c09d26a8102b913ed5e5f707703169b004045f3f599339a484c1ce59",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "double_debit_after_mutating_check"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:bf814be573f939e9465de861d4413b7c77b12d67281b5eea5edefa64021101ce",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+
+running 1 test
+domain_analyze_rejects_unlowerable_constructs_like_check --- FAILED
+
+failures:
+
+---- domain_analyze_rejects_unlowerable_constructs_like_check stdout ----
+
+thread 'domain_analyze_rejects_unlowerable_constructs_like_check' (2954) panicked at fslc/tests/issue_726_domain_analyze_lowering_guard.rs:92:9:
+assertion `left == right` failed: rust/fslc/tests/fixtures/domain_await_routing_rejected.fsl: {
+  "fsl": "1.0",
+  "result": "analyzed",
+  "dialect": "fsl-domain-effect.v0",
+  "finding_schema_version": "fsl-domain-finding.v0",
+  "domain": "AwaitRoutingRejected",
+  "aggregates": [
+    {
+      "name": "Order",
+      "id_type": "OrderId",
+      "state": [
+        {
+          "name": "status",
+          "type": "PaymentResultStatus"
+        }
+      ],
+      "commands": [
+        "RequestPaymentCapture"
+      ],
+      "events": [
+        "PaymentCaptureRequested",
+        "PaymentCaptured",
+        "PaymentFailed"
+      ],
+      "errors": [],
+      "invariants": []
+    }
+  ],
+  "effects": [],
+  "sagas": [],
+  "findings": [],
+  "assumptions": [
+    {
+      "id": "DOMAIN-ASSUME-FINITE-DOMAIN-MODEL",
+      "text": "domain IDs and undeclared scalar input types are modeled as finite 0..1 ranges unless declared explicitly"
+    },
+    {
+      "id": "DOMAIN-ASSUME-GENERATED-SCAFFOLD",
+      "text": "generated Functional DDD code is an implementation scaffold; runtime conformance still requires an adapter/replay evidence boundary"
+    }
+  ]
+}
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    domain_analyze_rejects_unlowerable_constructs_like_check
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+

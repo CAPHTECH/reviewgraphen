@@ -1,0 +1,18 @@
+
+running 1 test
+untagged_hint_proposes_the_typed_annotation_and_not_the_string_slot --- FAILED
+
+failures:
+
+---- untagged_hint_proposes_the_typed_annotation_and_not_the_string_slot stdout ----
+
+thread 'untagged_hint_proposes_the_typed_annotation_and_not_the_string_slot' (24101) panicked at fslc/tests/untagged_hint_names_canonical_tag.rs:74:9:
+hint must name the canonical annotation: add a declaration tag such as "REQ-1: original requirement"; use "MODEL: ..." or "ASSUME-1: ..." when this is modeling intent
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    untagged_hint_proposes_the_typed_annotation_and_not_the_string_slot
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+

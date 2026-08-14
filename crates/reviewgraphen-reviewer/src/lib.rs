@@ -1,8 +1,10 @@
-//! Bounded deterministic reviewer boundary.
+//! Bounded reviewer boundary.
 //!
-//! This crate has no provider, filesystem, process, network, or tool
-//! dependency. A trusted caller supplies registered bytes; the request checks
-//! their closure against the core envelope and exposes excerpts only.
+//! The canonical D2 path remains deterministic fake/no-tools. The additive
+//! process adapter invokes local CLIs through `std::process` and returns only
+//! a recorded, replayable, non-authority observation.
+
+pub mod process;
 
 use reviewgraphen_core::{
     AbstentionReason, ClaimPolarity, ContentHash, ExecutionClaimInputV2, MalformedOutputReason,

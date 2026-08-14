@@ -1,0 +1,21 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:rgp-m7-v1-a08:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "f1",
+      "locations": [{"path": "src/beta.rs", "start_line": 9, "end_line": 10}],
+      "mechanism_tags": ["incorrect-deduplication-key", "ignored-parameter"],
+      "severity": "medium",
+      "rationale": "send receives group but discards it when choosing the deduplication key. Consequently, a value accepted for one group is rejected for every other group, even though Entry::run now forwards the group as part of the call contract."
+    }
+  ],
+  "obligation_results": [
+    {"packet_id": "benchmark-context:sha256:e337a9598484219839a8f3103d57edf97ee3c80c93bfac2633a7c5073f1ca164", "disposition": "issue_absent", "finding_local_ids": []},
+    {"packet_id": "benchmark-context:sha256:088bb31fc34962720b14ce814a9c5b302dba049cdb5d37ce1c47f5397f7ceea5", "disposition": "issue_present", "finding_local_ids": ["f1"]},
+    {"packet_id": "benchmark-context:sha256:dda324f49f2e2c7dc75f3eb39815dd32c0deb3a4be8da89d3b22d0153f8ff704", "disposition": "issue_absent", "finding_local_ids": []},
+    {"packet_id": "benchmark-context:sha256:f389c98c6b5944a16e69d88e053f9b09f2e6aa1b11bbaa0f50f67fba1bce4f7a", "disposition": "issue_absent", "finding_local_ids": []},
+    {"packet_id": "benchmark-context:sha256:bc0c0a9cee549fea45fb02d04f1d0f39072d5cd8cdb28178db1a3b4005b5939c", "disposition": "issue_absent", "finding_local_ids": []}
+  ]
+}

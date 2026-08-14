@@ -1,0 +1,27 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 1f2d2a4..0ac202b 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,6 +2,20 @@ pub trait Sink {
+     fn append(&mut self, value: &[u8]) -> Result<(), String>;
+ }
+ 
+-pub fn submit(sink: &mut impl Sink, value: &[u8]) -> Result<(), String> {
+-    sink.append(value)
++pub trait Receipt {
++    fn observed(&mut self) -> bool;
++}
++
++pub fn submit(
++    sink: &mut impl Sink,
++    receipt: &mut impl Receipt,
++    value: &[u8],
++) -> Result<(), String> {
++    sink.append(value)?;
++    for _ in 0..2 {
++        if receipt.observed() {
++            return Ok(());
++        }
++    }
++    Err("receipt unavailable".to_owned())
+ }

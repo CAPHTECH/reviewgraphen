@@ -1,0 +1,66 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:rgp-m7-v1-a04:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "F1",
+      "locations": [
+        {
+          "path": "src/alpha.rs",
+          "start_line": 21,
+          "end_line": 23
+        }
+      ],
+      "mechanism_tags": [
+        "ignored-parameter",
+        "changed-call-contract"
+      ],
+      "severity": "high",
+      "rationale": "run accepts a group supplied by its caller but discards it and substitutes a process-wide sequence number. Calls that use group as their routing or idempotency key are therefore recorded under a different key."
+    },
+    {
+      "local_id": "F2",
+      "locations": [
+        {
+          "path": "src/alpha.rs",
+          "start_line": 22,
+          "end_line": 22
+        }
+      ],
+      "mechanism_tags": [
+        "counter-wraparound",
+        "idempotency-key-collision"
+      ],
+      "severity": "medium",
+      "rationale": "AtomicU8 wraps after 256 calls. A later call with the same value then reuses the same (group, value) key, and Bridge's BTreeSet treats it as already seen, silently suppressing the later operation."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:ea46d2e559ebd6dcbd463864f487f472315c2148294f96974cb7dc90716cbb6b",
+      "disposition": "issue_present",
+      "finding_local_ids": ["F1"]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:1efc7fe96f517d9f1aecb7ea2d3b96a490659b7fbab8335d3189deefe401b278",
+      "disposition": "issue_present",
+      "finding_local_ids": ["F2"]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:2e3f189ebdd6fe3914c5ae538a0187da948a108f330dac9ad2cd3682044fc56a",
+      "disposition": "issue_present",
+      "finding_local_ids": ["F1", "F2"]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:89d2d6d0405471879985ad8fba9447dae30e30b220e2ecbb5f25ed2299ecf689",
+      "disposition": "issue_present",
+      "finding_local_ids": ["F1"]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:1a18de32fb8c86395e9ad3459127629105bc71ef6537530273fc2017d8f3ff9b",
+      "disposition": "issue_present",
+      "finding_local_ids": ["F2"]
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":14,"path":"src/catalog.rs","start_line":8},{"end_line":8,"path":"src/lib.rs","start_line":5}],"mechanism_tags":["repeated_effect","state_transition_gap"]},"item_id":"adj:sha256:f8d7ab882af008d5b9bcf2679413a1d8864f00551280672e6bf747579bdd7693"}

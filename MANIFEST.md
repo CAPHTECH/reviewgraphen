@@ -32,7 +32,7 @@ Additional references:
 
 ## Architecture decisions
 
-Nine accepted-for-v0.1 ADRs live under [`docs/adr/`](docs/adr/):
+Eleven accepted-for-v0.1 ADRs live under [`docs/adr/`](docs/adr/):
 
 1. ReviewGraphen is an Intermediate Tool。
 2. Artifact / Review / Evidence Space separation。
@@ -43,6 +43,8 @@ Nine accepted-for-v0.1 ADRs live under [`docs/adr/`](docs/adr/):
 7. Local-first event log and derived index。
 8. Language-neutral core with profile-specific extractors。
 9. Minimal Rust development harness before product crates。
+10. M7 detection benchmark contract: arm-neutral ontology, manifest-bound protocol, and non-authority scoring。
+11. M7 real regression corpus: machine presence evidence, target-only control semantics, and additive version boundary。
 
 ## Contracts
 
@@ -52,6 +54,8 @@ Nine accepted-for-v0.1 ADRs live under [`docs/adr/`](docs/adr/):
 - ReviewObligation universe schema and example。
 - Review report schema and example。
 - Local configuration example。
+- M7 pilot and real-regression benchmark contracts (research artifacts, never accepted review state)。
+- Isolated Codex/Claude process reviewer record and exact-byte replay contract (non-authority)。
 - Schema validation notes。
 
 ## Reference scenario

@@ -1,0 +1,17 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index b27d4d9..f1c087c 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -11,7 +11,11 @@ impl Seen {
+         }
+     }
+ 
++    fn key(workspace: &str, job: &str) -> String {
++        format!("workspace/{workspace}/job/{job}")
++    }
++
+     pub fn admit(&mut self, workspace: &str, job: &str) -> bool {
+-        self.values.insert(format!("{workspace}/{job}"))
++        self.values.insert(Self::key(workspace, job))
+     }
+ }

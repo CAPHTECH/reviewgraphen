@@ -1,0 +1,20 @@
+
+running 1 test
+a_statistical_clause_reports_its_own_line_and_column --- FAILED
+
+failures:
+
+---- a_statistical_clause_reports_its_own_line_and_column stdout ----
+
+thread 'a_statistical_clause_reports_its_own_line_and_column' (39290) panicked at fslc/tests/issue_562_ai_project_clause_loc.rs:66:9:
+assertion `left == right` failed: ["ai", "check", "/tmp/fsl-m7-real-harness/repository/rust/fslc/tests/fixtures/issue_542_unparseable_statistical_clause.fsl"]: {"fsl":"1.0","result":"error","kind":"parse","message":"require clause matches no known fsl-ai evidence clause grammar (min_samples, ci_lower, ci_upper, a point estimate, observed, or drift): statistical_property 'Whatever' (slice 'all'): require this is not a valid clause at all !!! ### $$$"}
+  left: Null
+ right: Object {"line": Number(5), "column": Number(3)}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_statistical_clause_reports_its_own_line_and_column
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+

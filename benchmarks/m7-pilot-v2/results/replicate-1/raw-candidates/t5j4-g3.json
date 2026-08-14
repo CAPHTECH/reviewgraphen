@@ -1,0 +1,51 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:t5j4:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "F1",
+      "severity": "medium",
+      "mechanism_tags": [
+        "unstable_scope_key"
+      ],
+      "locations": [
+        {
+          "path": "src/lib.rs",
+          "start_line": 14,
+          "end_line": 16
+        }
+      ],
+      "rationale": "The new key omits the workspace. Calls to admit with the same job in different workspaces now map to the same set entry, so the second workspace is incorrectly treated as already seen."
+    }
+  ],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:121c933c7790a892e234be5869ef11e1068307c753d17f21f6f4c9ac6e621331",
+      "disposition": "issue_absent",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:6a25256eea0c2505e8607f6c0fa763506ee4ef7884fe9e16f74b65da301b4744",
+      "disposition": "not_applicable",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:7d91155d720145314b912af5e7305ab61a110a5e955946d1f3983601d1dd27e4",
+      "disposition": "issue_present",
+      "finding_local_ids": [
+        "F1"
+      ]
+    },
+    {
+      "packet_id": "benchmark-context:sha256:d23e4331a180f711b8a2be55b354b102ae52510d2db9529b44fc0c6b5b06a5ce",
+      "disposition": "issue_absent",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:f7dba5e350e6109b7c5dad1f32e99c6bfac63e23f6c9aa23a31d539d6c747e03",
+      "disposition": "issue_absent",
+      "finding_local_ids": []
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":2435,"path":"rust/fsl-runtime/src/lib.rs","start_line":2381}],"mechanism_tags":["repeatable_entry","repeated_effect"]},"item_id":"adj:sha256:549e031fa6e33416f3c9a9376c02f2dcb4236a57f4eb3b4ab8f77a3ceb78f452"}

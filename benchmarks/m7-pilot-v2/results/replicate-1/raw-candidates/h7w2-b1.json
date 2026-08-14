@@ -1,0 +1,23 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:h7w2:b1:1",
+  "outcome": "structured",
+  "findings": [
+    {
+      "local_id": "f1",
+      "locations": [
+        {
+          "path": "src/lib.rs",
+          "start_line": 7,
+          "end_line": 10
+        }
+      ],
+      "mechanism_tags": [
+        "repeated_effect"
+      ],
+      "severity": "high",
+      "rationale": "An Ok(false) result denotes that delivery was not confirmed, not that the request was not delivered. Retrying the same body can therefore issue a non-idempotent request multiple times; Channel supplies no deduplication or idempotency guarantee."
+    }
+  ],
+  "obligation_results": []
+}

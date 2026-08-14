@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":420,"path":"rust/fsl-runtime/src/explicit.rs","start_line":389},{"end_line":1541,"path":"rust/fsl-runtime/src/lib.rs","start_line":1507}],"mechanism_tags":["cross_file_contract","state_transition_gap"]},"item_id":"adj:sha256:0ed0da06c0feff0506c5ad356c7ebd894b1075230dafe6c3fe81822fbb441e85"}

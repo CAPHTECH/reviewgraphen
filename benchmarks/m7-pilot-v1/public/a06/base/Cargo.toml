@@ -1,0 +1,9 @@
+[package]
+name = "unit-a06-base"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[workspace]

@@ -105,7 +105,28 @@ def validate_schemas() -> list[str]:
                 for e in errors
             )
             fail(rendered)
-    return [f"validated JSON Schema examples: {len(pairs)}"]
+    benchmark_schemas = [
+        "reviewgraphen.benchmark.trial_manifest.v1.schema.json",
+        "reviewgraphen.benchmark.candidate_output.v1.schema.json",
+        "reviewgraphen.benchmark.oracle.v1.schema.json",
+        "reviewgraphen.benchmark.score.v1.schema.json",
+        "reviewgraphen.benchmark.collection.v1.schema.json",
+        "reviewgraphen.benchmark.trial_inventory.v1.schema.json",
+        "reviewgraphen.benchmark.run_summary.v1.schema.json",
+        "reviewgraphen.benchmark.real_unit.v1.schema.json",
+        "reviewgraphen.benchmark.real_oracle.v1.schema.json",
+        "reviewgraphen.benchmark.real_score.v1.schema.json",
+        "reviewgraphen.benchmark.real_trial_inventory.v1.schema.json",
+        "reviewgraphen.benchmark.real_run_summary.v1.schema.json",
+        "reviewgraphen.benchmark.real_full_run_summary.v1.schema.json",
+        "reviewgraphen.process_reviewer_record.v1.schema.json",
+    ]
+    for schema_name in benchmark_schemas:
+        Draft202012Validator.check_schema(load_json(SCHEMAS / schema_name))
+    return [
+        f"validated JSON Schema examples: {len(pairs)}",
+        f"validated benchmark JSON Schemas: {len(benchmark_schemas)}",
+    ]
 
 
 D2_REPORT_MAX_ROWS = 200_000

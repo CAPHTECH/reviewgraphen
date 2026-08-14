@@ -1,0 +1,15 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 606dccf..7788a94 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -16,6 +16,9 @@ pub struct Task {
+ 
+ impl Task {
+     pub fn execute(&mut self, worker: &mut impl Worker) -> Result<(), String> {
+-        worker.run()
++        self.phase = Phase::Running;
++        worker.run()?;
++        self.phase = Phase::Done;
++        Ok(())
+     }
+ }

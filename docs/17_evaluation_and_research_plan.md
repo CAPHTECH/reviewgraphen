@@ -30,6 +30,16 @@ ReviewGraphenを評価するとき、モデル性能とreview harness性能を�
 
 ## 3. Experimental conditions
 
+M7 pilot execution is governed by [ADR 0025](adr/0025-m7-detection-benchmark-contract.md).
+The first comparison is paired B1 versus `g3_proxy` using the same model/session
+configuration and an opaque arm assignment. Candidate output is identical in
+both arms; only the proxy returns packet dispositions. It is not reported as
+full G3 until it uses admitted `ReviewContextEnvelope` artifacts. Ground-truth mutation roots
+are private scorer input, not reviewer input.  This isolates process detection
+performance and does not make provider output accepted ReviewGraphen state.
+
+Real regression-fix evaluation is separately governed by [ADR 0026](adr/0026-m7-real-regression-corpus-contract.md). It preserves the pilot-v2 artifact meaning and uses additive private records. A matched fix control establishes absence only of the selected target regression; its other findings are unlabeled and require blind adjudication. They are not an empty-root false-positive proxy.
+
 ### B0: Diff-only prompt
 
 PR diffとsummaryだけを一回レビュー。
@@ -158,6 +168,11 @@ ground truth source:
 
 human reviewにない真のissueをtoolが見つける可能性があるため、unmatched candidateをexpert adjudicationへ回します。
 
+The deterministic M7 scorer only performs location-anchor plus mechanism-tag
+matching. It cannot decide whether unmatched prose is a valid novel defect.
+Those candidates are exported to blinded expert adjudication; novel-valid
+defects are reported separately from injected-root recall.
+
 ## 6. Metrics
 
 ### 6.1 Detection
@@ -225,6 +240,11 @@ human reviewにない真のissueをtoolが見つける可能性があるため�
 - multiple comparison補正。
 - benchmark内でhyperparameterを調整しすぎない。
 - profileを事前固定する。
+
+The first M7 pilot has only a few replicates per unit. Its paired aggregate
+reports raw denominators, paired recall deltas, and confidence intervals added
+by an external analysis step; it must not claim significance or generalization
+from mutations alone. Benchmark unit, not individual finding, is the sample.
 
 ## 8. Token and cost normalization
 
@@ -371,6 +391,11 @@ ReviewGraphenの信頼性は成功例の数ではなく、失敗境界を再現�
 - cost log。
 - adjudication records。
 - known limitations。
+
+M7 retains canonical hashes for the manifest, candidate output, private oracle,
+and score. The oracle is excluded from reviewer mounts and public agent packets.
+Raw response artifacts and parse/abstention outcomes are retained by the
+runner, but are not canonical ReviewGraphen claims.
 
 ## 18. Research milestones
 

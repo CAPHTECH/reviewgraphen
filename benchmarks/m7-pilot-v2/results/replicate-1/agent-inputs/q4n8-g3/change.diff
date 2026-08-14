@@ -1,0 +1,26 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 0c01d68..81e0058 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -12,12 +12,18 @@ impl Registry {
+         }
+     }
+ 
++    fn available(&self, key: &str) -> bool {
++        !self.keys.lock().expect("registry lock").contains(key)
++    }
++
+     pub fn register(&self, key: &str) -> bool {
+-        let mut keys = self.keys.lock().expect("registry lock");
+-        if keys.contains(key) {
++        if !self.available(key) {
+             return false;
+         }
+-        keys.insert(key.to_owned());
++        self.keys
++            .lock()
++            .expect("registry lock")
++            .insert(key.to_owned());
+         true
+     }
+ }

@@ -1,0 +1,23 @@
+STDOUT
+
+running 1 test
+db_check_folds_an_inconclusive_kernel_into_its_top_level_verdict --- FAILED
+
+failures:
+
+---- db_check_folds_an_inconclusive_kernel_into_its_top_level_verdict stdout ----
+
+thread 'db_check_folds_an_inconclusive_kernel_into_its_top_level_verdict' (26697) panicked at fslc/tests/issue_600_db_check_folds_kernel_verdict.rs:95:5:
+assertion `left != right` failed: an inconclusive kernel must not be reported as success (#600); got {"fsl":"1.0","result":"verified_under_assumptions","dialect":"fsl-db-mvp.v0","finding_schema_version":"fsl-db-finding.v0","dbsystem":"DbInconclusiveKernel","assumptions":[{"id":"DB-ASSUME-ROLLING-SNAPSHOT","text":"environment schema ranges denote finite snapshots reachable in the declared migration order; percentages are modeled only as coexistence windows"},{"id":"DB-ASSUME-CAPABILITY-DECLARATIONS","text":"artifact capability declarations are complete for the checked compatibility window"},{"id":"DB-ASSUME-BOUNDED-ROW-MODEL","text":"data preservation and rollback are checked over a finite representative row model"}],"findings":[],"kernel":{"result":"unknown_cti","spec":"DbInconclusiveKernel","checked_to_depth":8,"completeness":"bounded","invariant":"db_read__prod__active__server_v2__schema___1___1__users__id"}}
+  left: String("verified_under_assumptions")
+ right: "verified_under_assumptions"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    db_check_folds_an_inconclusive_kernel_into_its_top_level_verdict
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.05s
+
+STDERR
+error: test failed, to rerun pass `-p fslc-rust --test issue_600_db_check_folds_kernel_verdict`

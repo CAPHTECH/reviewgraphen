@@ -222,12 +222,23 @@ Rule packは一般的な全バグtaxonomyを装いません。参照シナリオ
 - paired metric calculator。
 - reproducibility bundle。
 
+The initial pilot is a strict, non-authority artifact pipeline defined by ADR
+0025: paired B1 free-form and `g3_proxy` obligation/context trials, private mutation
+oracle, deterministic anchor/tag scoring, and blinded expert-adjudication
+export. Provider/network session launching remains outside the repository.
+
 ### Exit criteria
 
 - 同じmodel/budgetでbaselineとReviewGraphen条件を比較できる。
 - finding matchingを自動judgeだけに依存せずexpert adjudicationへ接続できる。
 - obligation generation missを独立metricとして測れる。
 - negative resultを含むrun artifactを再現できる。
+
+The pilot must retain distinct parse failure and abstention outcomes, deduplicate
+multiple candidates for one injected root, accept empty-root clean controls,
+and keep oracle fields out of all reviewer-visible artifacts. It must not turn
+benchmark candidates, scores, or adjudication into claims, evidence, coverage,
+or a gate result.
 
 ## 5. MVP completion gate
 

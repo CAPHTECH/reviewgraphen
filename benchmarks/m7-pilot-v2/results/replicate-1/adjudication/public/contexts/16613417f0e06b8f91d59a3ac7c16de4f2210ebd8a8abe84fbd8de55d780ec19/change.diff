@@ -1,0 +1,19 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 606dccf..724b810 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -16,6 +16,13 @@ pub struct Task {
+ 
+ impl Task {
+     pub fn execute(&mut self, worker: &mut impl Worker) -> Result<(), String> {
+-        worker.run()
++        self.phase = Phase::Running;
++        let result = worker.run();
++        self.phase = if result.is_ok() {
++            Phase::Done
++        } else {
++            Phase::Failed
++        };
++        result
+     }
+ }

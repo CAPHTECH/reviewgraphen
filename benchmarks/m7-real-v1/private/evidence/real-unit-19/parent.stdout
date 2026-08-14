@@ -1,0 +1,25 @@
+
+running 1 test
+refine_reports_map_partial_op_for_a_zero_divisor_in_a_correspondence_argument --- FAILED
+
+failures:
+
+---- refine_reports_map_partial_op_for_a_zero_divisor_in_a_correspondence_argument stdout ----
+
+thread 'refine_reports_map_partial_op_for_a_zero_divisor_in_a_correspondence_argument' (55949) panicked at fslc/tests/issue_512_refine_map_partial_op.rs:74:5:
+assertion `left == right` failed: {
+  "fsl": "1.0",
+  "result": "error",
+  "kind": "type",
+  "message": "division by zero"
+}
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    refine_reports_map_partial_op_for_a_zero_divisor_in_a_correspondence_argument
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.02s
+

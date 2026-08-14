@@ -1,0 +1,1 @@
+[{"finding":{"locations":[{"end_line":21,"path":"src/lib.rs","start_line":14}],"mechanism_tags":["check_write_gap","repeated_effect"]},"item_id":"adj:sha256:63b3e0a719be4714ebf0ccfcb4ddc862e1b173814885880a4c898b2994d47265"}]

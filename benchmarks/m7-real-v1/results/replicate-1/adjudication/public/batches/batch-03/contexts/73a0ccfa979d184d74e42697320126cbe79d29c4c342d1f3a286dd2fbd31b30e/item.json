@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":2419,"path":"rust/fsl-core/src/domain_lowering.rs","start_line":2381},{"end_line":2583,"path":"rust/fsl-core/src/domain_lowering.rs","start_line":2533}],"mechanism_tags":["check_write_gap","repeatable_entry","repeated_effect"]},"item_id":"adj:sha256:73a0ccfa979d184d74e42697320126cbe79d29c4c342d1f3a286dd2fbd31b30e"}

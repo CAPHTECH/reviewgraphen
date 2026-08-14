@@ -1,0 +1,1 @@
+error: test failed, to rerun pass `-p fslc-rust --test issue_563_ai_check_project_fields`

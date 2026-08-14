@@ -1,0 +1,33 @@
+{
+  "schema": "reviewgraphen.benchmark.candidate_output.v1",
+  "trial_id": "m7:unit:b9q6:g3_proxy:1",
+  "outcome": "structured",
+  "findings": [],
+  "obligation_results": [
+    {
+      "packet_id": "benchmark-context:sha256:09cab2cc50edd1e9a0a1f3161ff6114516c4d442c6e59ffd4fab341034355c59",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:3d2abb42dac390eed7f5bf93d2bcd588e6d3083add71ba5236fa6f18cf1c3747",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:68969d5b964a0efe6ca141319d78d49fb1b3a5693e8f748f781fe2c945e285db",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:9593258b3b8194094935c7e1caf13d92b4feb40bbd1ef5510b0e9580063027ad",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    },
+    {
+      "packet_id": "benchmark-context:sha256:c4141c389a96c0cddafdafd10149bc3b62fd954432af3907e76f45ecc72fdb4f",
+      "disposition": "inconclusive",
+      "finding_local_ids": []
+    }
+  ]
+}

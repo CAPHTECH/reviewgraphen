@@ -1,0 +1,147 @@
+
+running 1 test
+native_bmc_rejects_a_bypass_with_policy_attribution_and_replay --- FAILED
+
+failures:
+
+---- native_bmc_rejects_a_bypass_with_policy_attribution_and_replay stdout ----
+
+thread 'native_bmc_rejects_a_bypass_with_policy_attribution_and_replay' (15494) panicked at fslc/tests/issue_681_precedence_policy.rs:141:5:
+assertion `left == right` failed: {
+  "fsl": "1.0",
+  "spec": "ReturnHandling",
+  "result": "verified",
+  "depth": 2,
+  "checked_to_depth": 2,
+  "completeness": "bounded",
+  "invariants_checked": [
+    "_bounds_return_stage"
+  ],
+  "transitions_checked": [],
+  "reachables": {},
+  "action_coverage": {
+    "approve": true,
+    "bypass": true,
+    "refund": true,
+    "reject": true
+  },
+  "deadlock": {
+    "found": false
+  },
+  "warnings": [
+    {
+      "message": "spec declares no user invariants (only implicit type bounds are checked)"
+    }
+  ],
+  "note": "bounded verification: no violation within depth 2",
+  "cost": {
+    "elapsed_s": 0.024044081,
+    "solver": {
+      "checks": 20,
+      "check_elapsed_s": 0.008956760000000001,
+      "conflicts": 15,
+      "decisions": 29,
+      "propagations": 248,
+      "memory_mb": 17.15
+    },
+    "properties": [
+      {
+        "kind": "action_coverage",
+        "name": "approve",
+        "checks": 1,
+        "elapsed_s": 0.00011141
+      },
+      {
+        "kind": "action_coverage",
+        "name": "bypass",
+        "checks": 1,
+        "elapsed_s": 0.000012032
+      },
+      {
+        "kind": "action_coverage",
+        "name": "refund",
+        "checks": 2,
+        "elapsed_s": 0.00045825
+      },
+      {
+        "kind": "action_coverage",
+        "name": "reject",
+        "checks": 1,
+        "elapsed_s": 0.000017713
+      },
+      {
+        "kind": "init",
+        "name": "initial_state",
+        "checks": 1,
+        "elapsed_s": 0.002681315
+      },
+      {
+        "kind": "partial_op",
+        "name": "terminal",
+        "checks": 6,
+        "elapsed_s": 0.000739648
+      },
+      {
+        "kind": "type_bound",
+        "name": "_bounds_return_stage",
+        "checks": 3,
+        "elapsed_s": 0.0017776290000000002
+      },
+      {
+        "kind": "vacuity",
+        "name": "approve",
+        "checks": 1,
+        "elapsed_s": 0.000669328
+      },
+      {
+        "kind": "vacuity",
+        "name": "bypass",
+        "checks": 1,
+        "elapsed_s": 0.000545033
+      },
+      {
+        "kind": "vacuity",
+        "name": "refund",
+        "checks": 1,
+        "elapsed_s": 0.000589878
+      },
+      {
+        "kind": "vacuity",
+        "name": "reject",
+        "checks": 1,
+        "elapsed_s": 0.000651684
+      },
+      {
+        "kind": "vacuity",
+        "name": "session",
+        "checks": 1,
+        "elapsed_s": 0.00070284
+      }
+    ]
+  },
+  "versions": {
+    "verifier": {
+      "name": "fslc-rust",
+      "version": "4.1.0"
+    },
+    "core": {
+      "name": "fsl-core",
+      "version": "4.1.0"
+    },
+    "solver": {
+      "name": "z3",
+      "backend": "native-z3",
+      "version": "Z3 4.16.0.0"
+    }
+  }
+}
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    native_bmc_rejects_a_bypass_with_policy_attribution_and_replay
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.03s
+

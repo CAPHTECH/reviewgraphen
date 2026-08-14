@@ -1,0 +1,23 @@
+STDOUT
+
+running 1 test
+a_reserved_state_variable_is_a_check_error --- FAILED
+
+failures:
+
+---- a_reserved_state_variable_is_a_check_error stdout ----
+
+thread 'a_reserved_state_variable_is_a_check_error' (29917) panicked at fslc/tests/issue_570_reserved_declaration_names.rs:76:5:
+assertion `left == right` failed: {"fsl":"1.0","result":"ok","spec":"ShadowTrue","warnings":[],"versions":{"verifier":{"name":"fslc-rust","version":"3.1.0"},"core":{"name":"fsl-core","version":"3.1.0"},"solver":{"name":"z3","backend":"native-z3","version":"Z3 4.16.0.0"}}}
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_reserved_state_variable_is_a_check_error
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+STDERR
+error: test failed, to rerun pass `-p fslc-rust --test issue_570_reserved_declaration_names`
