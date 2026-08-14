@@ -1,6 +1,6 @@
 # ADR 0024: Fixed Offline CLI Vertical Slice
 
-Status: Accepted
+Status: Accepted; detached-report gate decision superseded by ADR 0028
 
 ## Context
 
@@ -48,6 +48,10 @@ report-only `gate.status` field: `pass` -> 0, `blocked` -> 10, `incomplete`
 -> 11, malformed/unsupported report or status -> 12. It does not infer a
 gate from findings, coverage, V4 gluing, report status, or any model output.
 
+This detached-report adapter was subsequently withdrawn by ADR 0028 after
+adversarial verification demonstrated that local schema/semantic consistency
+does not authenticate a report or its declared gate status.
+
 ## Consequences
 
 - The `review` command produces `reviewgraphen.review.report.v5` only after
@@ -61,5 +65,5 @@ gate from findings, coverage, V4 gluing, report status, or any model output.
   argument error rather than approximating semantics.
 - The binary has deterministic integration tests for schema operations, two
   independent fixed runs with byte-identical V5 output, V5 schema and semantic
-  validation, typed terminal/gluing rows, separated stdout/stderr, and gate
-  exit mapping.
+  validation, typed terminal/gluing rows, and separated stdout/stderr. ADR 0028
+  removes the detached gate exit mapping.

@@ -4,6 +4,8 @@ This directory records the 2026-08-14 Phase A–D audit and experiment. Results 
 
 - Phase A: `capability-matrix.json` and `capability-matrix.md`
 - Phase B: `phase-b-adversarial.md`, `adversarial-results.json`, and `scripts/run_adversarial.py`
+- Gate trust-boundary follow-up: `gate-trust-boundary-root-cause.{md,json}`,
+  `gate-trust-boundary-after.json`, and `gate-trust-boundary-remediation.md`
 - Phase C: ADR 0027 and implementation/tests in `reviewgraphen-reviewer`
 - Phase D: `phase-d.md` and the additive result bundle under `benchmarks/m7-real-v1/results/full-reviewgraphen-replicate-1/`
 

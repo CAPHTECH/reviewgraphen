@@ -181,7 +181,7 @@ def run() -> dict[str, Any]:
                 "verdict": "not_broken" if secure else "broken",
             })
 
-        reject = lambda validation, gate: validation["exit_code"] != 0 and gate["exit_code"] == 12
+        reject = lambda validation, gate: validation["exit_code"] != 0 and gate["exit_code"] != 0
         mutation_case(
             "report_schema.unknown_top_level",
             "schema-external values cannot enter a V5 report",
@@ -259,7 +259,8 @@ def run() -> dict[str, Any]:
         "limitations": [
             "A not_broken verdict means only that the named attack did not break the property.",
             "The CLI exposes no injection seam into the private Store authority typestate, so this runner tests its serialized report consumer boundary, not every internal constructor.",
-            "No live-model or provider path exists, so provider isolation and live replay were not verified.",
+            "This runner does not invoke the live-model adapter, so provider isolation and live replay are outside its measured scope.",
+            "After ADR 0028, every detached gate invocation is expected to fail as unsupported (exit 2); this demonstrates absence of a pass-producing detached gate, not authentication of the report.",
         ],
     }
 

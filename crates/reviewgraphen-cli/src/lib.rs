@@ -52,14 +52,6 @@ impl CommandOutcome {
             stderr: stderr.into(),
         }
     }
-
-    fn gate(exit_code: u8, status: &str) -> Self {
-        Self {
-            exit_code,
-            stdout: canonical_json(&json!({"status":status})).unwrap_or_default(),
-            stderr: String::new(),
-        }
-    }
 }
 
 /// Executes only the documented fixed vertical slice. The parser is manual
@@ -79,13 +71,12 @@ pub fn run(arguments: Vec<String>) -> CommandOutcome {
         [command, subcommand, path] if command == "schema" && subcommand == "validate" => {
             schema_validate(Path::new(path))
         }
-        [command, path] if command == "gate" => gate(Path::new(path)),
         _ => CommandOutcome::failure(2, usage()),
     }
 }
 
 fn usage() -> &'static str {
-    "usage: reviewgraphen schema list|print <schema-id>|validate <report.json> | review --fixture double-submit | gate <report.json>"
+    "usage: reviewgraphen schema list|print <schema-id>|validate <report.json> | review --fixture double-submit"
 }
 
 fn schema_list() -> CommandOutcome {
@@ -138,32 +129,6 @@ fn validation_failure(reason: &str) -> CommandOutcome {
         exit_code: 3,
         stdout: canonical_json(&json!({"valid":false,"reason":reason})).unwrap_or_default(),
         stderr: String::new(),
-    }
-}
-
-fn gate(path: &Path) -> CommandOutcome {
-    let bytes = match bounded_regular_file(path) {
-        Ok(bytes) => bytes,
-        Err(_) => return CommandOutcome::gate(12, "policy_error"),
-    };
-    let value: Value = match serde_json::from_slice(&bytes) {
-        Ok(value) => value,
-        Err(_) => return CommandOutcome::gate(12, "policy_error"),
-    };
-    let schema_name = value.get("schema").and_then(Value::as_str);
-    if schema_name != Some("reviewgraphen.review.report.v5")
-        || validator_for("reviewgraphen.review.report.v5")
-            .map(|validator| validator.is_valid(&value))
-            != Ok(true)
-        || reviewgraphen_report::validate_v5_semantics(&value).is_err()
-    {
-        return CommandOutcome::gate(12, "policy_error");
-    }
-    match value.pointer("/gate/status").and_then(Value::as_str) {
-        Some("pass") => CommandOutcome::gate(0, "pass"),
-        Some("blocked") => CommandOutcome::gate(10, "blocked"),
-        Some("incomplete") => CommandOutcome::gate(11, "incomplete"),
-        _ => CommandOutcome::gate(12, "policy_error"),
     }
 }
 
@@ -1039,16 +1004,24 @@ mod tests {
     }
 
     #[test]
-    fn gate_refuses_non_v5_input_without_inferring_status() {
+    fn detached_report_gate_command_is_not_supported() {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(
             file.path(),
-            br#"{"schema":"reviewgraphen.review.report.v4"}"#,
+            br#"{"schema":"reviewgraphen.review.report.v5","gate":{"status":"pass"}}"#,
         )
         .unwrap();
         let result = run(vec!["gate".into(), file.path().display().to_string()]);
-        assert_eq!(result.exit_code, 12);
-        assert_eq!(result.stdout, br#"{"status":"policy_error"}"#);
+        assert_eq!(result.exit_code, 2);
+        assert!(result.stdout.is_empty());
+        assert!(!result.stderr.contains("gate <report.json>"));
+
+        let nonexistent = run(vec![
+            "gate".into(),
+            "/path/that/must/not/be/read.json".into(),
+        ]);
+        assert_eq!(nonexistent.exit_code, 2);
+        assert_eq!(nonexistent.stderr, result.stderr);
     }
 
     #[test]
@@ -1114,10 +1087,5 @@ mod tests {
                 "coverage omitted distinct {axis} axis"
             );
         }
-        let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), &first.stdout).unwrap();
-        let gate_outcome = run(vec!["gate".into(), file.path().display().to_string()]);
-        assert_eq!(gate_outcome.exit_code, 10);
-        assert_eq!(gate_outcome.stdout, br#"{"status":"blocked"}"#);
     }
 }

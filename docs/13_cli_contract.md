@@ -5,9 +5,10 @@
 > Design: CLI-first, JSON-contract-first, local-first
 
 Implementation note: ADR 0024 currently implements only the fixed offline
-reference command `review --fixture double-submit`, `schema list|print|validate`,
-and V5-report-only `gate`. All other command examples in this draft remain
-future contract, not currently accepted command syntax.
+reference command `review --fixture double-submit` and
+`schema list|print|validate`. ADR 0028 withdraws the detached-report-only
+`gate <report.json>` command. The Store-bound `gate` described later in this
+draft remains a future contract, not currently accepted command syntax.
 
 ## 1. CLIの役割
 
@@ -318,6 +319,10 @@ output:
 
 `gate`だけがdomain statusをCI exit codeへ変換します。他commandはvalid reportを生成できたかをexit codeで表します。
 
+この節は将来契約です。実装済みだった `gate <report.json>` は、信頼された
+Store revision または署名へ束縛されない直列化 report から pass を返せたため、
+ADR 0028 で撤去されました。現在の CLI に `gate` command はありません。
+
 ## 16. Inspect
 
 ```bash
@@ -368,14 +373,14 @@ secretはconfig fileへ平文保存せず、environmentまたはOS secret mechan
 
 | Code | Meaning |
 | --- | --- |
-| 0 | command succeeded; `gate`の場合はpass |
+| 0 | command succeeded; 将来のStore-bound `gate`の場合はpass |
 | 2 | invalid CLI arguments |
 | 3 | schema or configuration invalid |
 | 4 | I/O or store error |
 | 5 | extractor/reviewer/verifier tool failure |
-| 10 | `gate`: blocked |
-| 11 | `gate`: incomplete |
-| 12 | `gate`: policy evaluation error |
+| 10 | future Store-bound `gate`: blocked |
+| 11 | future Store-bound `gate`: incomplete |
+| 12 | future Store-bound `gate`: policy evaluation error |
 | 20 | internal invariant violation |
 
 Findingがあるだけでstage commandをnon-zeroにしません。domain resultとtool failureを分離します。
