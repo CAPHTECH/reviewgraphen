@@ -1,6 +1,6 @@
 # ADR 0024: Fixed Offline CLI Vertical Slice
 
-Status: Accepted; detached-report gate decision superseded by ADR 0028
+Status: Superseded by ADR 0029; detached-report gate decision superseded by ADR 0028
 
 ## Context
 

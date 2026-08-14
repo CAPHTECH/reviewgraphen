@@ -4,9 +4,13 @@
 > Binary: `reviewgraphen`  
 > Design: CLI-first, JSON-contract-first, local-first
 
-Implementation note: ADR 0024 currently implements only the fixed offline
-reference command `review --fixture double-submit` and
-`schema list|print|validate`. ADR 0028 withdraws the detached-report-only
+Implementation note: ADR 0029 withdraws ADR 0024's fixed offline
+`review --fixture double-submit` command because it was not a generic review
+path. The implemented surface is currently only `schema list|print|validate`;
+all `review --fixture ...` forms are rejected before input access. The generic
+`review` command described below remains future syntax until its ordinary Git
+ingestion, isolated non-authority reviewer execution, and replay contracts are
+implemented. ADR 0028 likewise withdraws the detached-report-only
 `gate <report.json>` command. The Store-bound `gate` described later in this
 draft remains a future contract, not currently accepted command syntax.
 

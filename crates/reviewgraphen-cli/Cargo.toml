@@ -1,6 +1,6 @@
 [package]
 name = "reviewgraphen-cli"
-description = "Fixed offline CLI vertical slice for ReviewGraphen"
+description = "Command-line interface for ReviewGraphen"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -18,9 +18,6 @@ workspace = true
 jsonschema.workspace = true
 reviewgraphen-core = { path = "../reviewgraphen-core" }
 reviewgraphen-report = { path = "../reviewgraphen-report" }
-reviewgraphen-runtime = { path = "../reviewgraphen-runtime" }
-reviewgraphen-store = { path = "../reviewgraphen-store" }
-reviewgraphen-verifier = { path = "../reviewgraphen-verifier" }
 rustix.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
