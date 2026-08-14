@@ -1,7 +1,8 @@
 use jsonschema::{Draft, Resource};
+use reviewgraphen_core::{ContentHash, StableId, canonical_json};
 use reviewgraphen_report::validate_v5_semantics;
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 const V3_URI: &str = "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json";
 const V4_URI: &str = "https://capht.tech/schemas/reviewgraphen/review-report.v4.schema.json";
@@ -219,23 +220,55 @@ fn loss() -> Value {
 
 fn semantically_valid_report() -> Value {
     let mut value = report();
-    for key in [
-        "denominator_obligation_ids",
-        "native_verified_obligation_ids",
-        "verified_obligation_ids",
-        "fresh_verified_obligation_ids",
-    ] {
-        value["coverage"][key] = json!(["obligation:test"]);
-    }
-    for key in ["native_verified", "verified", "fresh_verified"] {
-        value["coverage"][key] = json!(1);
-    }
+    value["scenario"]["selected_obligation_ids"] = json!(["obligation:test"]);
+    value["coverage"]["denominator_obligation_ids"] = json!(["obligation:test"]);
+    value["coverage"]["selected"] = json!(1);
+    value["result"]["staleness_assessment"] = tuple(json!({
+        "id":"staleness-assessment-v5:test"
+    }));
+    value["result"]["partial_rerun_plan"] = tuple(json!({
+        "id":"partial-rerun-plan-v5:test"
+    }));
+    value["gate"]["source_ids"] = json!([
+        "change-morphism-v5:test",
+        "incremental-source-closure-v5:test",
+        "obligation-correspondence-v5:test",
+        "partial-rerun-plan-v5:test",
+        "plan:test",
+        "program-space:snapshot:test",
+        "snapshot:test",
+        "staleness-assessment-v5:test",
+        "universe:test"
+    ]);
+    seal_gate(&mut value);
     value
+}
+
+fn seal_gate(value: &mut Value) {
+    let gate = value["gate"].as_object_mut().unwrap();
+    let identity = gate
+        .iter()
+        .filter(|(key, _)| !matches!(key.as_str(), "schema" | "id" | "body_hash"))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let id = StableId::derived("incremental-gate-v5", &identity).unwrap();
+    gate.insert("id".to_owned(), json!(id));
+    let body = gate
+        .iter()
+        .filter(|(key, _)| key.as_str() != "body_hash")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let hash = ContentHash::sha256(&canonical_json(&Value::Object(body)).unwrap());
+    gate.insert("body_hash".to_owned(), json!(hash));
 }
 
 #[test]
 fn v5_semantics_requires_exact_zero_claim_cardinality_row() {
     let mut value = semantically_valid_report();
+    value["result"]["executions"] = json!([{
+        "event_id":"event:execution", "event_sequence":1, "body_hash":hash(),
+        "body":{"id":"execution:test", "outcome":{"kind":"structured"}}
+    }]);
     value["result"]["obstructions"] = json!([{
         "kind":"m6_claim_cardinality_unsupported",
         "message":"M6 requires exactly one parsed claim; observed 0",
@@ -250,7 +283,29 @@ fn v5_semantics_requires_exact_zero_claim_cardinality_row() {
             "registration:test"
         ]
     }]);
-    assert!(validate_v5_semantics(&value).is_ok());
+    value["gate"]["status"] = json!("incomplete");
+    value["gate"]["incomplete_ids"] = json!(["execution:test", "obligation:test"]);
+    value["gate"]["reasons"] = json!(["m6_claim_cardinality_unsupported"]);
+    value["gate"]["source_ids"] = json!([
+        "change-morphism-v5:test",
+        "context-envelope:test",
+        "event:execution",
+        "execution:test",
+        "incremental-source-closure-v5:test",
+        "obligation-correspondence-v5:test",
+        "obligation:test",
+        "partial-rerun-action-v5:test",
+        "partial-rerun-plan-v5:test",
+        "plan:test",
+        "program-space:snapshot:test",
+        "registration:test",
+        "snapshot:test",
+        "staleness-assessment-v5:test",
+        "universe:test"
+    ]);
+    seal_gate(&mut value);
+    let validation = validate_v5_semantics(&value);
+    assert!(validation.is_ok(), "{validation:?}");
     value["result"]["obstructions"][0]["message"] = json!("caller selected one claim");
     assert!(validate_v5_semantics(&value).is_err());
 }
@@ -486,8 +541,8 @@ fn v5_schema_allows_the_adr_gluing_prerequisite_bound_of_eight() {
 fn v5_semantics_refuses_axis_and_view_loss_laundering() {
     let mut value = semantically_valid_report();
     assert!(validate_v5_semantics(&value).is_ok());
-    value["coverage"]["verified_obligation_ids"] = json!([]);
-    value["coverage"]["verified"] = json!(0);
+    value["coverage"]["verified_obligation_ids"] = json!(["obligation:test"]);
+    value["coverage"]["verified"] = json!(1);
     assert!(validate_v5_semantics(&value).is_err());
 
     let mut value = semantically_valid_report();

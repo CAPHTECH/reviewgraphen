@@ -1087,5 +1087,43 @@ mod tests {
                 "coverage omitted distinct {axis} axis"
             );
         }
+
+        let forge_pass = |value: &mut Value| {
+            let gate = value
+                .get_mut("gate")
+                .and_then(Value::as_object_mut)
+                .unwrap();
+            gate.insert("status".to_owned(), Value::String("pass".to_owned()));
+            for key in ["blocking_ids", "incomplete_ids", "reasons"] {
+                gate.insert(key.to_owned(), Value::Array(Vec::new()));
+            }
+        };
+        let mut forged_gate = report.clone();
+        forge_pass(&mut forged_gate);
+        assert!(
+            reviewgraphen_report::validate_v5_semantics(&forged_gate).is_err(),
+            "a locally coherent pass rewrite retained the old reduction identity"
+        );
+
+        let mut forged_freshness = report.clone();
+        let forged_coverage = forged_freshness
+            .get_mut("coverage")
+            .and_then(Value::as_object_mut)
+            .unwrap();
+        let denominator = forged_coverage["denominator_obligation_ids"].clone();
+        let count = denominator.as_array().unwrap().len() as u64;
+        for (ids_key, count_key) in [
+            ("native_verified_obligation_ids", "native_verified"),
+            ("verified_obligation_ids", "verified"),
+            ("fresh_verified_obligation_ids", "fresh_verified"),
+        ] {
+            forged_coverage.insert(ids_key.to_owned(), denominator.clone());
+            forged_coverage.insert(count_key.to_owned(), Value::from(count));
+        }
+        forge_pass(&mut forged_freshness);
+        assert!(
+            reviewgraphen_report::validate_v5_semantics(&forged_freshness).is_err(),
+            "coverage-local freshness could be promoted without native evidence closure"
+        );
     }
 }

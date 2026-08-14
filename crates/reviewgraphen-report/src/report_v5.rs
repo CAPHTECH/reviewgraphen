@@ -257,12 +257,12 @@ pub fn validate_v5_semantics(report: &Value) -> Result<(), ReportV5SemanticError
             .and_then(Value::as_array)
             .ok_or(ReportV5SemanticError("obstruction array is missing"))?,
     )?;
-    validate_v5_gate(
-        object
-            .get("gate")
-            .and_then(Value::as_object)
-            .ok_or(ReportV5SemanticError("gate is missing"))?,
-    )?;
+    let gate = object
+        .get("gate")
+        .and_then(Value::as_object)
+        .ok_or(ReportV5SemanticError("gate is missing"))?;
+    validate_v5_derived_freshness_and_gate(scenario, result, coverage, &denominator, gate)?;
+    validate_v5_gate(gate)?;
     Ok(())
 }
 
@@ -344,6 +344,524 @@ fn validate_v5_tuple_integrity(
                 "V5 tuple body hash does not match body",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_v5_derived_freshness_and_gate(
+    scenario: &serde_json::Map<String, Value>,
+    result: &serde_json::Map<String, Value>,
+    coverage: &serde_json::Map<String, Value>,
+    denominator: &BTreeSet<String>,
+    gate: &serde_json::Map<String, Value>,
+) -> Result<(), ReportV5SemanticError> {
+    fn bodies<'a>(
+        result: &'a serde_json::Map<String, Value>,
+        key: &str,
+    ) -> Result<Vec<&'a serde_json::Map<String, Value>>, ReportV5SemanticError> {
+        result
+            .get(key)
+            .and_then(Value::as_array)
+            .ok_or(ReportV5SemanticError("V5 result tuple family is missing"))?
+            .iter()
+            .map(|row| {
+                row.get("body")
+                    .and_then(Value::as_object)
+                    .ok_or(ReportV5SemanticError("V5 result tuple body is missing"))
+            })
+            .collect()
+    }
+
+    fn parse_id(value: &str) -> Result<StableId, ReportV5SemanticError> {
+        StableId::parse(value).map_err(|_| ReportV5SemanticError("V5 derived gate ID is invalid"))
+    }
+    fn body_id(
+        body: &serde_json::Map<String, Value>,
+        key: &'static str,
+    ) -> Result<StableId, ReportV5SemanticError> {
+        parse_id(
+            body.get(key)
+                .and_then(Value::as_str)
+                .ok_or(ReportV5SemanticError("V5 derived gate ID is missing"))?,
+        )
+    }
+    fn tuple_body_id(
+        object: &serde_json::Map<String, Value>,
+        key: &'static str,
+    ) -> Result<StableId, ReportV5SemanticError> {
+        body_id(
+            object
+                .get(key)
+                .and_then(Value::as_object)
+                .and_then(|tuple| tuple.get("body"))
+                .and_then(Value::as_object)
+                .ok_or(ReportV5SemanticError("V5 derived gate tuple is missing"))?,
+            "id",
+        )
+    }
+    fn body_id_set(
+        body: &serde_json::Map<String, Value>,
+        key: &'static str,
+    ) -> Result<BTreeSet<StableId>, ReportV5SemanticError> {
+        body.get(key)
+            .and_then(Value::as_array)
+            .ok_or(ReportV5SemanticError("V5 derived gate ID set is missing"))?
+            .iter()
+            .map(|value| {
+                parse_id(
+                    value
+                        .as_str()
+                        .ok_or(ReportV5SemanticError("V5 derived gate ID is invalid"))?,
+                )
+            })
+            .collect()
+    }
+
+    let executions = bodies(result, "executions")?;
+    let claims = bodies(result, "claims")?;
+    let evidence = bodies(result, "evidence")?;
+    let bindings = bodies(result, "evidence_bindings")?;
+    let verifications = bodies(result, "verifications")?;
+    let decisions = bodies(result, "decisions")?;
+    let findings = bodies(result, "findings")?;
+    let structured_executions = executions
+        .iter()
+        .filter(|body| {
+            body.get("outcome")
+                .and_then(Value::as_object)
+                .and_then(|outcome| outcome.get("kind"))
+                .and_then(Value::as_str)
+                == Some("structured")
+        })
+        .filter_map(|body| body.get("id").and_then(Value::as_str).map(|id| (id, *body)))
+        .collect::<BTreeMap<_, _>>();
+    let superseded = findings
+        .iter()
+        .filter_map(|body| body.get("supersedes_finding_id").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let current_findings = findings
+        .iter()
+        .filter(|body| {
+            body.get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !superseded.contains(id))
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    let selected_current_claim_ids = current_findings
+        .iter()
+        .filter_map(|finding| {
+            let decision_id = finding.get("decision_id").and_then(Value::as_str)?;
+            let claim_id = finding.get("claim_id").and_then(Value::as_str)?;
+            let status = finding.get("status").and_then(Value::as_str)?;
+            decisions
+                .iter()
+                .any(|decision| {
+                    decision.get("id").and_then(Value::as_str) == Some(decision_id)
+                        && decision.get("claim_id").and_then(Value::as_str) == Some(claim_id)
+                        && matches!(
+                            (status, decision.get("outcome").and_then(Value::as_str)),
+                            ("accepted", Some("accept")) | ("rejected", Some("reject"))
+                        )
+                })
+                .then_some(claim_id)
+        })
+        .collect::<BTreeSet<_>>();
+    let mut candidates = BTreeMap::<StableId, Vec<NativePassWitnessV5>>::new();
+    for claim in claims {
+        let Some(claim_id) = claim.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(execution_id) = claim.get("execution_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(execution) = structured_executions.get(execution_id) else {
+            continue;
+        };
+        let Some(obligation_ids) = claim.get("obligation_ids").and_then(Value::as_array) else {
+            continue;
+        };
+        if obligation_ids.len() != 1 {
+            continue;
+        }
+        let Some(obligation_id) = obligation_ids[0].as_str() else {
+            continue;
+        };
+        if !denominator.contains(obligation_id) {
+            continue;
+        }
+        for verification in verifications.iter().filter(|body| {
+            body.get("claim_id").and_then(Value::as_str) == Some(claim_id)
+                && body.get("outcome").and_then(Value::as_str) == Some("passed")
+        }) {
+            let Some(evidence_ids) = verification.get("evidence_ids").and_then(Value::as_array)
+            else {
+                continue;
+            };
+            if evidence_ids.len() != 1 {
+                continue;
+            }
+            let Some(evidence_id) = evidence_ids[0].as_str() else {
+                continue;
+            };
+            let matching_evidence = evidence
+                .iter()
+                .filter(|body| body.get("id").and_then(Value::as_str) == Some(evidence_id))
+                .collect::<Vec<_>>();
+            let matching_bindings = bindings
+                .iter()
+                .filter(|body| {
+                    body.get("claim_id").and_then(Value::as_str) == Some(claim_id)
+                        && body.get("evidence_id").and_then(Value::as_str) == Some(evidence_id)
+                })
+                .collect::<Vec<_>>();
+            if matching_evidence.len() != 1 || matching_bindings.len() != 1 {
+                continue;
+            }
+            let evidence = matching_evidence[0];
+            let registration_ids = [
+                body_id(execution, "raw_artifact_registration_id")?,
+                body_id(evidence, "input_registration_id")?,
+                body_id(evidence, "output_registration_id")?,
+                body_id(verification, "input_registration_id")?,
+                body_id(verification, "output_registration_id")?,
+            ]
+            .into_iter()
+            .collect();
+            let obligation_id = parse_id(obligation_id)?;
+            candidates
+                .entry(obligation_id.clone())
+                .or_default()
+                .push(NativePassWitnessV5 {
+                    obligation_id,
+                    context_envelope_id: body_id(execution, "envelope_id")?,
+                    execution_id: body_id(execution, "id")?,
+                    claim_id: parse_id(claim_id)?,
+                    evidence_id: parse_id(evidence_id)?,
+                    binding_id: body_id(matching_bindings[0], "id")?,
+                    verification_id: body_id(verification, "id")?,
+                    registration_ids,
+                });
+        }
+    }
+    let mut native_passes = candidates
+        .into_values()
+        .filter_map(|mut rows| {
+            if rows.len() == 1 {
+                return rows.pop();
+            }
+            let mut selected = rows
+                .into_iter()
+                .filter(|row| selected_current_claim_ids.contains(row.claim_id.as_str()));
+            let candidate = selected.next()?;
+            selected.next().is_none().then_some(candidate)
+        })
+        .collect::<Vec<_>>();
+    native_passes.sort_by(|left, right| left.obligation_id.cmp(&right.obligation_id));
+    let native = native_passes
+        .iter()
+        .map(|row| row.obligation_id.to_string())
+        .collect::<BTreeSet<_>>();
+    let declared_native = semantic_id_set(
+        coverage,
+        "native_verified_obligation_ids",
+        "native coverage is invalid",
+    )?;
+    if native != declared_native {
+        return Err(ReportV5SemanticError(
+            "native coverage does not match evidence closure",
+        ));
+    }
+
+    let native_by_claim = native_passes
+        .iter()
+        .map(|row| (row.claim_id.to_string(), row.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut derived_findings = Vec::new();
+    for finding in current_findings {
+        let Some(claim_id) = finding.get("claim_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(decision_id) = finding.get("decision_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(native) = native_by_claim.get(claim_id) else {
+            continue;
+        };
+        let outcome = match finding.get("status").and_then(Value::as_str) {
+            Some("accepted") => CurrentFindingOutcomeV5::AcceptedIssue,
+            Some("rejected") => CurrentFindingOutcomeV5::Rejected,
+            _ => continue,
+        };
+        let decision_matches = decisions.iter().any(|decision| {
+            decision.get("id").and_then(Value::as_str) == Some(decision_id)
+                && decision.get("claim_id").and_then(Value::as_str) == Some(claim_id)
+                && matches!(
+                    (outcome, decision.get("outcome").and_then(Value::as_str)),
+                    (CurrentFindingOutcomeV5::AcceptedIssue, Some("accept"))
+                        | (CurrentFindingOutcomeV5::Rejected, Some("reject"))
+                )
+        });
+        if decision_matches {
+            derived_findings.push(CurrentFindingWitnessV5 {
+                decision_id: parse_id(decision_id)?,
+                finding_id: body_id(finding, "id")?,
+                outcome,
+                native: native.clone(),
+            });
+        }
+    }
+
+    let partial_actions = result
+        .get("partial_rerun_actions")
+        .and_then(Value::as_array)
+        .ok_or(ReportV5SemanticError("partial rerun actions are missing"))?;
+    let mut required_fresh = BTreeSet::new();
+    let mut pending = BTreeSet::new();
+    let mut human_missing = BTreeSet::new();
+    for row in partial_actions {
+        let body = row
+            .get("body")
+            .and_then(Value::as_object)
+            .ok_or(ReportV5SemanticError(
+                "partial rerun action body is missing",
+            ))?;
+        let action = body.get("action").and_then(Value::as_str);
+        let subjects = body_id_set(body, "subject_ids")?
+            .into_iter()
+            .filter(|id| denominator.contains(id.as_str()))
+            .collect::<BTreeSet<_>>();
+        if action == Some("rerun_verifier") {
+            required_fresh.extend(subjects.iter().cloned());
+        }
+        if row.get("state").and_then(Value::as_str) == Some("pending") {
+            pending.insert(body_id(body, "id")?);
+            if action == Some("rerun_human_decision") {
+                human_missing.extend(subjects);
+            }
+        }
+    }
+
+    let mappings = bodies(result, "program_mappings")?;
+    let unresolved_mapping_ids = mappings
+        .iter()
+        .filter(|body| body.get("status").and_then(Value::as_str) == Some("unresolved"))
+        .map(|body| body_id(body, "id"))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let limitation_ids = mappings
+        .iter()
+        .filter(|body| body.get("object_kind").and_then(Value::as_str) == Some("limitation"))
+        .map(|body| body_id_set(body, "to_ids"))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .filter(|id| id.kind() == "limitation")
+        .collect::<BTreeSet<_>>();
+    let unsupported_impact_ids = bodies(result, "historical_record_assessments")?
+        .into_iter()
+        .filter(|body| {
+            body.get("status").and_then(Value::as_str) != Some("structurally_preserved")
+                && body
+                    .get("reasons")
+                    .and_then(Value::as_array)
+                    .is_some_and(|reasons| {
+                        reasons
+                            .iter()
+                            .any(|reason| reason.as_str() == Some("unsupported_impact_policy"))
+                    })
+        })
+        .map(|body| body_id(body, "id"))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+
+    let mut current_m5_ids = BTreeSet::new();
+    for key in [
+        "context_covers",
+        "sections",
+        "restrictions",
+        "gluing_attempts",
+        "global_candidates",
+        "gluing_obstructions",
+    ] {
+        for body in bodies(result, key)? {
+            current_m5_ids.insert(body_id(body, "id")?);
+            if key == "sections" {
+                current_m5_ids.insert(body_id(body, "input_registration_id")?);
+            }
+        }
+    }
+    let mut assignment_conflicts = BTreeSet::new();
+    let mut gluing_missing = BTreeSet::new();
+    let mut gluing_incomplete = BTreeSet::new();
+    for obstruction in bodies(result, "gluing_obstructions")? {
+        match obstruction.get("kind").and_then(Value::as_str) {
+            Some("assignment_conflict") => {
+                assignment_conflicts.insert(body_id(obstruction, "id")?);
+            }
+            Some("required_section_missing" | "required_overlap_missing") => {
+                gluing_missing.extend(denominator.iter().map(|id| parse_id(id)).collect::<Result<
+                    BTreeSet<_>,
+                    _,
+                >>(
+                )?);
+            }
+            Some("section_unknown") => {
+                gluing_incomplete.insert(body_id(obstruction, "id")?);
+            }
+            _ => {}
+        }
+    }
+
+    let closure_id = tuple_body_id(scenario, "incremental_source_closure")?;
+    let partial_plan_id = tuple_body_id(result, "partial_rerun_plan")?;
+    let mut cardinality = Vec::new();
+    let execution_event_ids = result
+        .get("executions")
+        .and_then(Value::as_array)
+        .ok_or(ReportV5SemanticError("execution tuples are missing"))?
+        .iter()
+        .filter_map(|row| {
+            Some((
+                row.pointer("/body/id")?.as_str()?,
+                row.get("event_id")?.as_str()?,
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for obstruction in result
+        .get("obstructions")
+        .and_then(Value::as_array)
+        .ok_or(ReportV5SemanticError("obstructions are missing"))?
+        .iter()
+        .filter(|row| {
+            row.get("kind").and_then(Value::as_str) == Some("m6_claim_cardinality_unsupported")
+        })
+    {
+        let source_ids = obstruction
+            .get("source_ids")
+            .and_then(Value::as_array)
+            .ok_or(ReportV5SemanticError("cardinality sources are missing"))?
+            .iter()
+            .map(|id| {
+                parse_id(
+                    id.as_str()
+                        .ok_or(ReportV5SemanticError("cardinality source is invalid"))?,
+                )
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let one = |kind: &str| {
+            let values = source_ids
+                .iter()
+                .filter(|id| id.kind() == kind)
+                .cloned()
+                .collect::<Vec<_>>();
+            match values.as_slice() {
+                [value] => Ok(value.clone()),
+                _ => Err(ReportV5SemanticError(
+                    "cardinality source closure is ambiguous",
+                )),
+            }
+        };
+        let execution_id = one("execution")?;
+        let execution_event_id = parse_id(
+            execution_event_ids
+                .get(execution_id.as_str())
+                .copied()
+                .ok_or(ReportV5SemanticError(
+                    "cardinality execution event is missing",
+                ))?,
+        )?;
+        let reviewer_actions = source_ids
+            .iter()
+            .filter(|id| id.kind() == "partial-rerun-action-v5")
+            .cloned()
+            .collect::<Vec<_>>();
+        let provenance = if let [reviewer_action_id] = reviewer_actions.as_slice() {
+            CardinalityProvenanceV5::Fresh {
+                reviewer_action_id: reviewer_action_id.clone(),
+            }
+        } else {
+            let completed_event_id = source_ids
+                .iter()
+                .filter(|id| id.kind() == "event" && **id != execution_event_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let [completed_event_id] = completed_event_id.as_slice() else {
+                return Err(ReportV5SemanticError("cardinality provenance is ambiguous"));
+            };
+            CardinalityProvenanceV5::Reused {
+                completed_event_id: completed_event_id.clone(),
+            }
+        };
+        let blocks = obstruction
+            .get("blocks")
+            .and_then(Value::as_array)
+            .ok_or(ReportV5SemanticError("cardinality blocks are missing"))?;
+        let [subject] = blocks.as_slice() else {
+            return Err(ReportV5SemanticError("cardinality subject is ambiguous"));
+        };
+        cardinality.push(CardinalityObstructionWitnessV5 {
+            subject_obligation_id: parse_id(
+                subject
+                    .as_str()
+                    .ok_or(ReportV5SemanticError("cardinality subject is invalid"))?,
+            )?,
+            envelope_id: one("context-envelope")?,
+            raw_registration_id: one("registration")?,
+            execution_id,
+            execution_event_id,
+            observed_claim_ids: source_ids
+                .iter()
+                .filter(|id| id.kind() == "claim")
+                .cloned()
+                .collect(),
+            provenance,
+        });
+    }
+
+    let gluing_rerun_plan_id = match result.get("gluing_rerun_plan") {
+        Some(Value::Object(_)) => Some(tuple_body_id(result, "gluing_rerun_plan")?),
+        Some(Value::Null) | None => None,
+        _ => return Err(ReportV5SemanticError("gluing rerun plan is invalid")),
+    };
+    let expected = reduce_incremental_gate_v5(&GateInputV5 {
+        source_closure_id: closure_id,
+        change_morphism_id: tuple_body_id(scenario, "change_morphism")?,
+        obligation_correspondence_id: tuple_body_id(scenario, "obligation_correspondence")?,
+        staleness_assessment_id: tuple_body_id(result, "staleness_assessment")?,
+        partial_rerun_plan_id: partial_plan_id,
+        gluing_rerun_plan_id,
+        native_passes,
+        current_findings: derived_findings,
+        current_m5_ids,
+        extraction: ExtractionWitnessesV5 {
+            snapshot_id: body_id(scenario, "snapshot_id")?,
+            program_space_id: body_id(scenario, "program_space_ref")?,
+            universe_id: body_id(scenario, "universe_id")?,
+            plan_id: body_id(scenario, "plan_id")?,
+            limitation_ids: limitation_ids.clone(),
+        },
+        required_fresh_obligation_ids: required_fresh,
+        fresh_verified_obligation_ids: native
+            .iter()
+            .map(|id| parse_id(id))
+            .collect::<Result<_, _>>()?,
+        target_gluing_assignment_conflict_ids: assignment_conflicts,
+        pending_rerun_action_ids: pending,
+        unresolved_mapping_ids,
+        unsupported_impact_ids,
+        target_gluing_missing_ids: gluing_missing,
+        target_gluing_incomplete_ids: gluing_incomplete,
+        gluing_plan_missing_scope_id: None,
+        human_resolution_missing_ids: human_missing,
+        cardinality_obstructions: cardinality,
+        extraction_incomplete_ids: limitation_ids,
+    })
+    .map_err(|_| ReportV5SemanticError("serialized gate inputs cannot be reduced"))?;
+    let expected = serde_json::to_value(expected)
+        .map_err(|_| ReportV5SemanticError("derived gate cannot be serialized"))?;
+    if expected != Value::Object(gate.clone()) {
+        return Err(ReportV5SemanticError(
+            "serialized gate does not equal the shared reducer output",
+        ));
     }
     Ok(())
 }

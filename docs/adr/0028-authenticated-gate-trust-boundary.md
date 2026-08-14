@@ -54,6 +54,22 @@ bases:
 
 A plain content hash or report-provided Store path is not a trust basis.
 
+### Detached report-local replay status
+
+R1 through R3 now implement the three report-local consistency layers in the
+V5 semantic validator. Decision and evidence bodies have canonical body hashes;
+the coverage denominator is closed against the scenario projection; and the
+validator reconstructs the native evidence closure and every gate reducer input
+available in V5, then calls the same `reduce_incremental_gate_v5` function as
+the producer and requires equality of the complete serialized gate, including
+status, blockers, incomplete IDs, reasons, sources, ID, and body hash.
+
+This makes detached V5 reports self-consistent, not self-authenticating. An
+editor can still coherently replace the artifact and its unkeyed hashes, and V5
+does not carry a trusted Store revision or signature. Consequently the removed
+`gate <report.json>` command is not restored. `schema validate` may reject a
+locally inconsistent report, but it does not emit a policy pass result.
+
 ### Required replay layers
 
 The future consumer must perform all three layers, in order:
@@ -111,7 +127,9 @@ require a follow-up ADR before implementation.
 - The future implementation has a larger blast radius than a hash comparison:
   Store revision APIs, typed report deserialization, shared reduction APIs,
   attestation/version schemas, fixtures, migration docs, and adversarial tests.
-- The seven Phase B failures are not all repaired by this immediate change.
-  Detached pass forgery is closed; tuple authentication and denominator closure
-  remain explicit future work and must continue to be reported as broken where
-  their original schema-validation properties still fail.
+- The original seven Phase B mutations are retained as immutable before
+  evidence. R1--R3 results are additive measurements; they do not retroactively
+  rewrite those findings.
+- Report-local replay does not satisfy either authenticated trust basis. A
+  pass-producing command remains future work until the Store revision or signed
+  attestation contract is implemented.
