@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.dev/schemas/reviewgraphen.generic_review_request.v1.schema.json",
+  "title": "ReviewGraphen generic review request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace_root",
+    "repository_root",
+    "repository_identity",
+    "base_revision",
+    "target_revision",
+    "ingest",
+    "plan",
+    "reviewer"
+  ],
+  "properties": {
+    "schema": { "const": "reviewgraphen.generic_review_request.v1" },
+    "workspace_root": { "$ref": "#/$defs/path" },
+    "repository_root": { "$ref": "#/$defs/path" },
+    "repository_identity": { "type": "string", "minLength": 1, "maxLength": 16384 },
+    "base_revision": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "target_revision": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "ingest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "profile_version",
+        "rule_set_hash",
+        "policy_version",
+        "max_files",
+        "max_file_bytes",
+        "max_total_source_bytes",
+        "trusted_cargo_executable"
+      ],
+      "properties": {
+        "profile_id": { "const": "code-review" },
+        "profile_version": { "const": "1" },
+        "rule_set_hash": { "$ref": "#/$defs/hash" },
+        "policy_version": { "type": "string", "minLength": 1, "maxLength": 16384 },
+        "max_files": { "type": "integer", "minimum": 1, "maximum": 20000 },
+        "max_file_bytes": { "type": "integer", "minimum": 1, "maximum": 2097152 },
+        "max_total_source_bytes": { "type": "integer", "minimum": 1, "maximum": 17179869184 },
+        "trusted_cargo_executable": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/path" }]
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_waves", "max_obligations_per_wave"],
+      "properties": {
+        "max_waves": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "max_obligations_per_wave": { "type": "integer", "minimum": 1, "maximum": 2048 }
+      }
+    },
+    "reviewer": {
+      "oneOf": [
+        { "$ref": "#/$defs/codex_cli" },
+        { "$ref": "#/$defs/claude_cli" },
+        { "$ref": "#/$defs/codex_app_server" },
+        { "$ref": "#/$defs/replay" }
+      ]
+    }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "path": { "type": "string", "minLength": 1, "maxLength": 32768 },
+    "codex_cli": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "executable", "model", "reasoning_effort", "bwrap", "credential_home"],
+      "properties": {
+        "kind": { "const": "codex_cli" },
+        "executable": { "$ref": "#/$defs/path" },
+        "model": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "reasoning_effort": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "bwrap": { "$ref": "#/$defs/path" },
+        "credential_home": { "$ref": "#/$defs/path" }
+      }
+    },
+    "claude_cli": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "executable", "model", "effort", "bwrap", "credential_home"],
+      "properties": {
+        "kind": { "const": "claude_cli" },
+        "executable": { "$ref": "#/$defs/path" },
+        "model": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "effort": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "bwrap": { "$ref": "#/$defs/path" },
+        "credential_home": { "$ref": "#/$defs/path" }
+      }
+    },
+    "codex_app_server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "executable", "protocol_version", "bwrap", "credential_home"],
+      "properties": {
+        "kind": { "const": "codex_app_server" },
+        "executable": { "$ref": "#/$defs/path" },
+        "protocol_version": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "bwrap": { "$ref": "#/$defs/path" },
+        "credential_home": { "$ref": "#/$defs/path" }
+      }
+    },
+    "replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "records"],
+      "properties": {
+        "kind": { "const": "replay" },
+        "records": {
+          "type": "array",
+          "maxItems": 2048,
+          "items": { "$ref": "#/$defs/path" }
+        }
+      }
+    }
+  }
+}

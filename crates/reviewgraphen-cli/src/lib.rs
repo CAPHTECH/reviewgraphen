@@ -6,6 +6,7 @@
 
 use jsonschema::{Resource, Validator};
 use reviewgraphen_core::canonical_json;
+use reviewgraphen_runtime::generic::{GenericReviewRequest, run_generic_review};
 #[cfg(target_os = "linux")]
 use rustix::fs::{self, FileType, Mode, OFlags};
 use serde_json::{Value, json};
@@ -46,6 +47,18 @@ impl CommandOutcome {
 /// fixed-fixture form, are rejected before filesystem or report work starts.
 pub fn run(arguments: Vec<String>) -> CommandOutcome {
     match arguments.as_slice() {
+        [
+            command,
+            request_flag,
+            request_path,
+            artifacts_flag,
+            artifact_root,
+        ] if command == "review"
+            && request_flag == "--request"
+            && artifacts_flag == "--artifacts" =>
+        {
+            generic_review(Path::new(request_path), Path::new(artifact_root))
+        }
         [command, subcommand] if command == "schema" && subcommand == "list" => schema_list(),
         [command, subcommand, name] if command == "schema" && subcommand == "print" => {
             schema_print(name)
@@ -58,7 +71,22 @@ pub fn run(arguments: Vec<String>) -> CommandOutcome {
 }
 
 fn usage() -> &'static str {
-    "usage: reviewgraphen schema list|print <schema-id>|validate <report.json>"
+    "usage: reviewgraphen review --request <request.json> --artifacts <fresh-absolute-dir> | schema list|print <schema-id>|validate <json-file>"
+}
+
+fn generic_review(request_path: &Path, artifact_root: &Path) -> CommandOutcome {
+    let bytes = match bounded_regular_file(request_path) {
+        Ok(bytes) => bytes,
+        Err(error) => return CommandOutcome::failure(3, error),
+    };
+    let request: GenericReviewRequest = match serde_json::from_slice(&bytes) {
+        Ok(request) => request,
+        Err(_) => return CommandOutcome::failure(3, "invalid generic review request JSON"),
+    };
+    match run_generic_review(&request, artifact_root).and_then(|run| run.canonical_bytes()) {
+        Ok(bytes) => CommandOutcome::success(bytes, String::new()),
+        Err(error) => CommandOutcome::failure(20, error.to_string()),
+    }
 }
 
 fn schema_list() -> CommandOutcome {
@@ -67,7 +95,11 @@ fn schema_list() -> CommandOutcome {
         "reviewgraphen.review.report.v2",
         "reviewgraphen.review.report.v3",
         "reviewgraphen.review.report.v4",
-        "reviewgraphen.review.report.v5"
+        "reviewgraphen.review.report.v5",
+        "reviewgraphen.generic_review_request.v1",
+        "reviewgraphen.reviewer_output.v1",
+        "reviewgraphen.process_reviewer_record.v1",
+        "reviewgraphen.generic_review_run.v1"
     ]);
     CommandOutcome::success(canonical_json(&values).unwrap_or_default(), String::new())
 }
@@ -138,6 +170,10 @@ fn semantic_validation(name: &str, report: &Value) -> Result<(), ()> {
         "reviewgraphen.review.report.v5" => {
             reviewgraphen_report::validate_v5_semantics(report).map_err(|_| ())
         }
+        "reviewgraphen.generic_review_run.v1" => {
+            reviewgraphen_runtime::generic::validate_generic_review_run_semantics(report)
+                .map_err(|_| ())
+        }
         _ => Ok(()),
     }
 }
@@ -204,6 +240,18 @@ fn schema_source(name: &str) -> Option<&'static str> {
         "reviewgraphen.review.report.v5" => Some(include_str!(
             "../../../schemas/reviewgraphen.report.v5.schema.json"
         )),
+        "reviewgraphen.generic_review_request.v1" => Some(include_str!(
+            "../../../schemas/reviewgraphen.generic_review_request.v1.schema.json"
+        )),
+        "reviewgraphen.reviewer_output.v1" => Some(include_str!(
+            "../../../schemas/reviewgraphen.reviewer_output.v1.schema.json"
+        )),
+        "reviewgraphen.process_reviewer_record.v1" => Some(include_str!(
+            "../../../schemas/reviewgraphen.process_reviewer_record.v1.schema.json"
+        )),
+        "reviewgraphen.generic_review_run.v1" => Some(include_str!(
+            "../../../schemas/reviewgraphen.generic_review_run.v1.schema.json"
+        )),
         _ => None,
     }
 }
@@ -223,7 +271,11 @@ mod tests {
                 "reviewgraphen.review.report.v2",
                 "reviewgraphen.review.report.v3",
                 "reviewgraphen.review.report.v4",
-                "reviewgraphen.review.report.v5"
+                "reviewgraphen.review.report.v5",
+                "reviewgraphen.generic_review_request.v1",
+                "reviewgraphen.reviewer_output.v1",
+                "reviewgraphen.process_reviewer_record.v1",
+                "reviewgraphen.generic_review_run.v1"
             ])
         );
         let printed = run(vec![

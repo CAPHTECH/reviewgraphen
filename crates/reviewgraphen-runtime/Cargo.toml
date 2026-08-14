@@ -12,9 +12,11 @@ workspace = true
 
 [dependencies]
 reviewgraphen-core = { path = "../reviewgraphen-core" }
+reviewgraphen-ingest = { path = "../reviewgraphen-ingest" }
 reviewgraphen-store = { path = "../reviewgraphen-store" }
 reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer" }
 reviewgraphen-verifier = { path = "../reviewgraphen-verifier" }
+serde.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
 quote.workspace = true
@@ -22,5 +24,6 @@ proc-macro2.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 reviewgraphen-store = { path = "../reviewgraphen-store", features = ["test-support"] }
 tempfile.workspace = true

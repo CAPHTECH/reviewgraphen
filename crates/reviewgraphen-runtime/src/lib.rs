@@ -11,6 +11,7 @@
 //! exposes no arbitrary command, path, environment, network, or runner input.
 
 pub mod fixed_offline;
+pub mod generic;
 pub mod m4_verification;
 pub mod m5_gluing;
 

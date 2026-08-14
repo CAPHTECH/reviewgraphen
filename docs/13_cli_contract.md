@@ -6,11 +6,15 @@
 
 Implementation note: ADR 0029 withdraws ADR 0024's fixed offline
 `review --fixture double-submit` command because it was not a generic review
-path. The implemented surface is currently only `schema list|print|validate`;
-all `review --fixture ...` forms are rejected before input access. The generic
-`review` command described below remains future syntax until its ordinary Git
-ingestion, isolated non-authority reviewer execution, and replay contracts are
-implemented. ADR 0028 likewise withdraws the detached-report-only
+path. The implemented surface contains `schema list|print|validate` and the
+ADR 0030 generic command below; all `review --fixture ...` forms are rejected
+before input access. ADR 0030
+implements the generic `review --request <request.json> --artifacts
+<fresh-absolute-dir>` path over ordinary Git ingestion, deterministic
+obligations/planning/context, isolated Codex or Claude CLI execution, and exact
+process-record replay. Its output is explicitly non-authority and incomplete:
+it creates proposed/unreviewed claims but performs no verifier or human
+acceptance operation. ADR 0028 likewise withdraws the detached-report-only
 `gate <report.json>` command. The Store-bound `gate` described later in this
 draft remains a future contract, not currently accepted command syntax.
 
@@ -53,20 +57,33 @@ reviewgraphen
 
 ## 3. Convenience command
 
-一般利用者向け:
+現在実装されているgeneric orchestration:
 
 ```bash
 reviewgraphen review \
-  --base main \
-  --head HEAD \
-  --profile code-review \
-  --format json \
-  --output .reviewgraphen/reports/latest.json
+  --request /absolute/path/review-request.json \
+  --artifacts /absolute/fresh/path/review-artifacts
 ```
 
-これはstage commandを順に呼ぶtransactional orchestrationです。
+requestは`reviewgraphen.generic_review_request.v1`、stdoutはcanonicalな
+`reviewgraphen.generic_review_run.v1`です。artifacts directoryにはmodelへ
+渡したexact packet、process output、replay用process recordを残します。
+Codex CLI、Claude CLI、またはrecord replayをrequestで選択します。Codex
+App Serverは差し替え境界だけが存在し、未実装としてfail-closedします。
 
-内部stageが失敗した場合、完了済みeventを残し、どこまで進んだかをreportします。
+これはingest、obligation synthesis、plan、context construction、reviewer
+実行、proposal parsingを順に呼ぶorchestrationです。Evidence、Verification、
+Decision、Finding、V5 report、gateは生成しません。
+
+以下のoption-oriented convenience syntaxは将来案であり、現在のaccepted
+command syntaxではありません。
+
+```bash
+reviewgraphen review --base main --head HEAD --profile code-review
+```
+
+内部stageが失敗した場合はnonzeroで停止します。作成済みpacket/process
+artifactは診断用に残りますが、durable Store eventやauthorityとしては扱いません。
 
 ## 4. Initialization
 

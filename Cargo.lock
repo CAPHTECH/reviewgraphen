@@ -848,6 +848,7 @@ dependencies = [
  "jsonschema",
  "reviewgraphen-core",
  "reviewgraphen-report",
+ "reviewgraphen-runtime",
  "rustix",
  "serde_json",
  "tempfile",
@@ -912,12 +913,15 @@ dependencies = [
 name = "reviewgraphen-runtime"
 version = "0.1.0"
 dependencies = [
+ "jsonschema",
  "proc-macro2",
  "quote",
  "reviewgraphen-core",
+ "reviewgraphen-ingest",
  "reviewgraphen-reviewer",
  "reviewgraphen-store",
  "reviewgraphen-verifier",
+ "serde",
  "serde_json",
  "syn 2.0.119",
  "tempfile",

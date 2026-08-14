@@ -286,6 +286,46 @@ impl ExecutionClaimInputV2 {
         Ok(input)
     }
 
+    #[must_use]
+    pub fn property_id(&self) -> &str {
+        &self.property_id
+    }
+
+    #[must_use]
+    pub fn target_refs(&self) -> &BTreeSet<StableId> {
+        &self.target_refs
+    }
+
+    #[must_use]
+    pub const fn polarity(&self) -> ClaimPolarity {
+        self.polarity
+    }
+
+    #[must_use]
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+
+    #[must_use]
+    pub fn source_ids(&self) -> &BTreeSet<StableId> {
+        &self.source_ids
+    }
+
+    #[must_use]
+    pub fn assumptions(&self) -> &BTreeSet<String> {
+        &self.assumptions
+    }
+
+    #[must_use]
+    pub fn requested_evidence(&self) -> &BTreeSet<String> {
+        &self.requested_evidence
+    }
+
+    #[must_use]
+    pub const fn candidate_confidence(&self) -> Option<f64> {
+        self.candidate_confidence
+    }
+
     fn validate(&self) -> Result<()> {
         require_nonempty_bounded(&self.property_id, MAX_D2_TRACE_BYTES, "D2 property_id")?;
         require_nonempty_bounded(&self.summary, MAX_D2_SUMMARY_BYTES, "D2 claim summary")?;

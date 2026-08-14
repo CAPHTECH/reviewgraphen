@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.dev/schemas/reviewgraphen.generic_review_run.v1.schema.json",
+  "title": "ReviewGraphen generic non-authority review run v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run_id",
+    "program_space",
+    "extraction_report",
+    "obligation_bundle",
+    "plan",
+    "contexts",
+    "executions",
+    "coverage",
+    "authority"
+  ],
+  "properties": {
+    "schema": { "const": "reviewgraphen.generic_review_run.v1" },
+    "run_id": { "$ref": "#/$defs/stable_id" },
+    "program_space": { "type": "object" },
+    "extraction_report": { "type": "object" },
+    "obligation_bundle": { "type": "object" },
+    "plan": { "type": "object" },
+    "contexts": {
+      "type": "array",
+      "maxItems": 2048,
+      "items": { "$ref": "#/$defs/context" }
+    },
+    "executions": {
+      "type": "array",
+      "maxItems": 2048,
+      "items": { "$ref": "#/$defs/execution" }
+    },
+    "coverage": { "$ref": "#/$defs/coverage" },
+    "authority": { "$ref": "#/$defs/authority" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "stable_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*:(?:sha256:[0-9a-f]{64}|[A-Za-z0-9._@:-]+)$" },
+    "id_set": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 2048,
+      "items": { "$ref": "#/$defs/stable_id" }
+    },
+    "input_files": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "type": "string", "minLength": 1 },
+      "additionalProperties": { "$ref": "#/$defs/hash" }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["obligation_id", "wave_id", "envelope", "packet_input_files"],
+      "properties": {
+        "obligation_id": { "$ref": "#/$defs/stable_id" },
+        "wave_id": { "$ref": "#/$defs/stable_id" },
+        "envelope": { "type": "object" },
+        "packet_input_files": { "$ref": "#/$defs/input_files" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_id",
+        "obligation_id",
+        "wave_id",
+        "envelope_id",
+        "attempt",
+        "process_record",
+        "outcome"
+      ],
+      "properties": {
+        "execution_id": { "$ref": "#/$defs/stable_id" },
+        "obligation_id": { "$ref": "#/$defs/stable_id" },
+        "wave_id": { "$ref": "#/$defs/stable_id" },
+        "envelope_id": { "$ref": "#/$defs/stable_id" },
+        "attempt": { "const": 1 },
+        "process_record": { "$ref": "#/$defs/process_record" },
+        "outcome": { "$ref": "#/$defs/outcome" }
+      }
+    },
+    "process_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "backend",
+        "prompt_version",
+        "prompt_hash",
+        "tool_policy_version",
+        "input_files",
+        "input_manifest_hash",
+        "raw_response",
+        "raw_response_hash",
+        "stdout_hash",
+        "stderr_hash",
+        "exit_code"
+      ],
+      "properties": {
+        "schema": { "const": "reviewgraphen.process_reviewer_record.v1" },
+        "backend": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "provider", "model", "inference_settings", "protocol_version"],
+          "properties": {
+            "kind": { "enum": ["codex_cli", "claude_cli", "codex_app_server"] },
+            "provider": { "type": "string", "minLength": 1 },
+            "model": { "type": "string", "minLength": 1 },
+            "inference_settings": {
+              "type": "object",
+              "additionalProperties": { "type": "string", "minLength": 1 }
+            },
+            "protocol_version": { "type": "string", "minLength": 1 }
+          }
+        },
+        "prompt_version": { "const": "reviewgraphen.process_reviewer_prompt.v1" },
+        "prompt_hash": { "$ref": "#/$defs/hash" },
+        "tool_policy_version": { "const": "reviewgraphen.process_reviewer.bwrap-no-tools.v1" },
+        "input_files": { "$ref": "#/$defs/input_files" },
+        "input_manifest_hash": { "$ref": "#/$defs/hash" },
+        "raw_response": { "type": "string", "minLength": 1, "maxLength": 4194304 },
+        "raw_response_hash": { "$ref": "#/$defs/hash" },
+        "stdout_hash": { "$ref": "#/$defs/hash" },
+        "stderr_hash": { "$ref": "#/$defs/hash" },
+        "exit_code": { "const": 0 }
+      }
+    },
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "property_id",
+        "target_refs",
+        "polarity",
+        "summary",
+        "source_ids",
+        "assumptions",
+        "requested_evidence",
+        "candidate_confidence",
+        "disposition",
+        "author_kind",
+        "review_status"
+      ],
+      "properties": {
+        "property_id": { "type": "string", "minLength": 1 },
+        "target_refs": { "$ref": "#/$defs/id_set" },
+        "polarity": { "enum": ["issue_present", "issue_absent", "inconclusive", "not_applicable", "conflict"] },
+        "summary": { "type": "string", "minLength": 1 },
+        "source_ids": { "$ref": "#/$defs/id_set" },
+        "assumptions": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "requested_evidence": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "candidate_confidence": { "oneOf": [{ "type": "null" }, { "type": "number", "minimum": 0, "maximum": 1 }] },
+        "disposition": { "const": "proposed" },
+        "author_kind": { "const": "ai" },
+        "review_status": { "const": "unreviewed" }
+      }
+    },
+    "outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "proposals"],
+          "properties": {
+            "kind": { "const": "structured" },
+            "proposals": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/proposal" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reason", "detail"],
+          "properties": {
+            "kind": { "const": "abstained" },
+            "reason": { "type": "string", "minLength": 1 },
+            "detail": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reason", "diagnostic"],
+          "properties": {
+            "kind": { "const": "malformed" },
+            "reason": { "type": "string", "minLength": 1 },
+            "diagnostic": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "retryable", "diagnostic"],
+          "properties": {
+            "kind": { "const": "provider_failure" },
+            "retryable": { "type": "boolean" },
+            "diagnostic": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "denominator_obligation_ids",
+        "planned_obligation_ids",
+        "deferred_obligation_ids",
+        "executed_obligation_ids",
+        "structured_obligation_ids",
+        "abstained_obligation_ids",
+        "malformed_obligation_ids",
+        "provider_failure_obligation_ids",
+        "proposed_claim_count"
+      ],
+      "properties": {
+        "denominator_obligation_ids": { "$ref": "#/$defs/id_set" },
+        "planned_obligation_ids": { "$ref": "#/$defs/id_set" },
+        "deferred_obligation_ids": { "$ref": "#/$defs/id_set" },
+        "executed_obligation_ids": { "$ref": "#/$defs/id_set" },
+        "structured_obligation_ids": { "$ref": "#/$defs/id_set" },
+        "abstained_obligation_ids": { "$ref": "#/$defs/id_set" },
+        "malformed_obligation_ids": { "$ref": "#/$defs/id_set" },
+        "provider_failure_obligation_ids": { "$ref": "#/$defs/id_set" },
+        "proposed_claim_count": { "type": "integer", "minimum": 0, "maximum": 32768 }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "trusted_pass", "result_status", "incomplete_reasons"],
+      "properties": {
+        "classification": { "const": "non_authority" },
+        "trusted_pass": { "const": false },
+        "result_status": { "const": "incomplete" },
+        "incomplete_reasons": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "evidence_not_executed",
+              "human_decision_not_recorded",
+              "model_output_non_authority",
+              "obligations_deferred",
+              "reviewer_abstained",
+              "reviewer_output_malformed",
+              "reviewer_provider_failure"
+            ]
+          },
+          "allOf": [
+            { "contains": { "const": "evidence_not_executed" } },
+            { "contains": { "const": "human_decision_not_recorded" } },
+            { "contains": { "const": "model_output_non_authority" } }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.dev/schemas/reviewgraphen.reviewer_output.v1.schema.json",
+  "title": "ReviewGraphen non-authority reviewer output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["abstention", "claims", "execution_id", "schema"],
+  "properties": {
+    "schema": { "const": "reviewgraphen.reviewer_output.v1" },
+    "execution_id": { "$ref": "#/$defs/execution_id" },
+    "abstention": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/abstention" }]
+    },
+    "claims": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/claim" }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "abstention": { "type": "null" },
+        "claims": { "minItems": 1 }
+      }
+    },
+    {
+      "properties": {
+        "abstention": { "type": "object" },
+        "claims": { "maxItems": 0 }
+      }
+    }
+  ],
+  "$defs": {
+    "stable_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*:(?:sha256:[0-9a-f]{64}|[A-Za-z0-9._@:-]+)$" },
+    "execution_id": { "type": "string", "pattern": "^execution:(?:sha256:[0-9a-f]{64}|[A-Za-z0-9._@:-]+)$" },
+    "abstention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detail", "reason"],
+      "properties": {
+        "detail": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "reason": {
+          "enum": [
+            "insufficient_context",
+            "unresolved_symbol",
+            "required_evidence_unavailable",
+            "property_not_understood",
+            "conflicting_sources",
+            "tool_capability_missing",
+            "budget_exhausted",
+            "prompt_injection_suspected"
+          ]
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assumptions",
+        "candidate_confidence",
+        "polarity",
+        "property_id",
+        "requested_evidence",
+        "source_ids",
+        "summary",
+        "target_refs"
+      ],
+      "properties": {
+        "assumptions": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        },
+        "candidate_confidence": {
+          "oneOf": [{ "type": "null" }, { "type": "number", "minimum": 0, "maximum": 1 }]
+        },
+        "polarity": {
+          "enum": ["issue_present", "issue_absent", "inconclusive", "not_applicable", "conflict"]
+        },
+        "property_id": { "type": "string", "minLength": 1, "maxLength": 16384 },
+        "requested_evidence": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^evidence:source:.+$", "maxLength": 2048 }
+        },
+        "source_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/stable_id" }
+        },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "target_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/stable_id" }
+        }
+      }
+    }
+  }
+}
