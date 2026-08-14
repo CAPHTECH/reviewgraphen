@@ -22,7 +22,7 @@ const GATE_POLICY: &str = "reviewgraphen.incremental_gate@1";
 struct TypedReportEventTupleV5<'a, T: Serialize> {
     event_id: &'a StableId,
     event_sequence: u64,
-    body_hash: &'a ContentHash,
+    body_hash: ContentHash,
     body: &'a T,
 }
 
@@ -34,7 +34,9 @@ impl<'a, T: Serialize> TypedReportEventTupleV5<'a, T> {
         Self {
             event_id: &witness.event_id,
             event_sequence: witness.sequence,
-            body_hash: &witness.body_hash,
+            body_hash: ContentHash::sha256(
+                &canonical_json(value).expect("typed report body must be serializable"),
+            ),
             body: value,
         }
     }
@@ -99,6 +101,7 @@ pub fn validate_v5_semantics(report: &Value) -> Result<(), ReportV5SemanticError
     if object.get("schema").and_then(Value::as_str) != Some("reviewgraphen.review.report.v5") {
         return Err(ReportV5SemanticError("wrong V5 report schema"));
     }
+    validate_v5_tuple_integrity(object)?;
     validate_v5_source_closure(
         object
             .get("scenario")
@@ -234,6 +237,88 @@ pub fn validate_v5_semantics(report: &Value) -> Result<(), ReportV5SemanticError
             .and_then(Value::as_object)
             .ok_or(ReportV5SemanticError("gate is missing"))?,
     )?;
+    Ok(())
+}
+
+/// Re-check the content-addressed envelope fields of every serialized V5
+/// event tuple. Schema validation only checks that these fields have the right
+/// shapes; a detached consumer must not trust a retained hash after its body
+/// has been edited.
+fn validate_v5_tuple_integrity(
+    report: &serde_json::Map<String, Value>,
+) -> Result<(), ReportV5SemanticError> {
+    let mut tuples = Vec::new();
+    if let Some(scenario) = report.get("scenario").and_then(Value::as_object) {
+        tuples.extend(scenario.values().filter(|row| {
+            row.get("body").is_some()
+                && row.get("event_id").is_some()
+                && row.get("body_hash").is_some()
+        }));
+    }
+    if let Some(result) = report.get("result").and_then(Value::as_object) {
+        for value in result.values() {
+            match value {
+                Value::Array(rows) => tuples.extend(rows.iter().filter(|row| {
+                    row.get("body").is_some()
+                        && row.get("event_id").is_some()
+                        && row.get("body_hash").is_some()
+                })),
+                Value::Object(row)
+                    if row.get("body").is_some()
+                        && row.get("event_id").is_some()
+                        && row.get("body_hash").is_some() =>
+                {
+                    tuples.push(value)
+                }
+                _ => {}
+            }
+        }
+    }
+    for tuple in tuples {
+        let tuple = tuple
+            .as_object()
+            .ok_or(ReportV5SemanticError("V5 tuple is not an object"))?;
+        let body = tuple
+            .get("body")
+            .ok_or(ReportV5SemanticError("V5 tuple body is missing"))?;
+        let body_schema = body.get("schema").and_then(Value::as_str);
+        if !matches!(
+            body_schema,
+            Some("reviewgraphen.evidence.v3" | "reviewgraphen.human_decision.v3")
+        ) {
+            continue;
+        }
+        let event_id = tuple
+            .get("event_id")
+            .and_then(Value::as_str)
+            .ok_or(ReportV5SemanticError("V5 tuple event ID is missing"))?;
+        if !event_id.starts_with("event:") {
+            return Err(ReportV5SemanticError(
+                "V5 tuple event ID has wrong namespace",
+            ));
+        }
+        if tuple
+            .get("event_sequence")
+            .and_then(Value::as_u64)
+            .is_none_or(|sequence| sequence == 0)
+        {
+            return Err(ReportV5SemanticError("V5 tuple event sequence is invalid"));
+        }
+        let declared_hash = tuple
+            .get("body_hash")
+            .and_then(Value::as_str)
+            .ok_or(ReportV5SemanticError("V5 tuple body hash is missing"))?;
+        let recomputed = ContentHash::sha256(
+            &canonical_json(body)
+                .map_err(|_| ReportV5SemanticError("V5 tuple body is not canonicalizable"))?,
+        )
+        .to_string();
+        if declared_hash != recomputed {
+            return Err(ReportV5SemanticError(
+                "V5 tuple body hash does not match body",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -4224,7 +4309,10 @@ mod tests {
             serde_json::to_value(TypedReportEventTupleV5::from_witness(&body, &witness)).unwrap();
         assert_eq!(value["event_id"], "event:sealed");
         assert_eq!(value["event_sequence"], 7);
-        assert_eq!(value["body_hash"], witness.body_hash.to_string());
+        assert_eq!(
+            value["body_hash"],
+            ContentHash::sha256(&canonical_json(&body).unwrap()).to_string()
+        );
         assert_eq!(value["body"]["id"], "record:test");
         assert!(value.get("actor").is_none());
     }
