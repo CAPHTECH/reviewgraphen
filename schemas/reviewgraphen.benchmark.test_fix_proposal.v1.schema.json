@@ -17,6 +17,7 @@
   ],
   "properties": {
     "schema": {
+      "type": "string",
       "const": "reviewgraphen.benchmark.test_fix_proposal.v1"
     },
     "proposal_id": {
@@ -24,6 +25,7 @@
       "pattern": "^proposal:[a-z0-9][a-z0-9._-]{0,127}$"
     },
     "outcome": {
+      "type": "string",
       "enum": ["proposal", "unverifiable"]
     },
     "test_target_id": {

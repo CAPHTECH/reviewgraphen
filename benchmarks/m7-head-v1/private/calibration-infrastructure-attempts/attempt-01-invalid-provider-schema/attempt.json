@@ -1,0 +1,16 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_head_infrastructure_attempt.v1",
+  "attempt_id": "attempt-01-invalid-provider-schema",
+  "calibration_id": "calibration-01",
+  "backend": "codex_cli",
+  "model": "gpt-5.6-sol",
+  "reasoning_effort": "high",
+  "adapter_exit_status": 1,
+  "classification": "infrastructure_invalid_provider_schema",
+  "semantic_attempt_consumed": false,
+  "provider_error_code": "invalid_json_schema",
+  "provider_error_detail": "proposal_id schema omitted its explicit string type",
+  "adapter_stderr_sha256": "sha256:1cbeec1b1bf42124f0f7efac606cd62165af2ee246252b6c66365fecf0e5858e",
+  "adapter_stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "exit_status_sha256": "sha256:4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+}

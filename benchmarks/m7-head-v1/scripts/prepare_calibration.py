@@ -111,8 +111,14 @@ def test_examples(
 
 def packet_schema(proposal_id: str, target_ids: list[str]) -> bytes:
     value = json.loads(PROPOSAL_SCHEMA.read_bytes())
-    value["properties"]["proposal_id"] = {"const": proposal_id}
-    value["properties"]["test_target_id"] = {"enum": ["", *target_ids]}
+    value["properties"]["proposal_id"] = {
+        "type": "string",
+        "const": proposal_id,
+    }
+    value["properties"]["test_target_id"] = {
+        "type": "string",
+        "enum": ["", *target_ids],
+    }
     return json.dumps(value, indent=2, sort_keys=True).encode() + b"\n"
 
 
