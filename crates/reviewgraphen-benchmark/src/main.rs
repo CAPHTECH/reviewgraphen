@@ -144,10 +144,36 @@ fn main() -> ExitCode {
             executable,
             model,
             effort,
+            false,
+        ),
+        [
+            command,
+            backend,
+            input_root,
+            output_schema,
+            output_root,
+            record_output,
+            bwrap,
+            credential_home,
+            executable,
+            model,
+            effort,
+        ] if command == "run-process-reviewer-constrained" => run_process_reviewer(
+            backend,
+            Path::new(input_root),
+            output_schema,
+            Path::new(output_root),
+            Path::new(record_output),
+            bwrap,
+            credential_home,
+            executable,
+            model,
+            effort,
+            true,
         ),
         _ => {
             eprintln!(
-                "usage: reviewgraphen-benchmark validate <execution|manifest|candidate|oracle|collection|inventory|score|real-unit|real-oracle|real-inventory|real-score> <file> | score <manifest> <candidate> <oracle> | score-real <manifest> <candidate> <real-oracle> <real-unit> | export-real-adjudication <manifest> <candidate> <real-oracle> <real-unit> <public-out> <private-out> | validate-blind-adjudication <reconciliation.json> <decision.json> | summarize-run <inventory.json> <collections.json> <scores.json> | summarize-real-run <real-inventory.json> <collections.json> <real-scores.json> | summarize-real-full-run <full-real-inventory.json> <collections.json> <real-scores.json> | prepare-pilot <absolute-public-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real-full <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | collect <manifest> <candidate.json> <out> | run-process-reviewer <codex|claude> <input-root> <output-schema-relative> <fresh-output-root> <record-output> <bwrap> <credential-home> <backend-executable> <model> <effort> | replay-process-reviewer <record.json>"
+                "usage: reviewgraphen-benchmark validate <execution|manifest|candidate|oracle|collection|inventory|score|real-unit|real-oracle|real-inventory|real-score> <file> | score <manifest> <candidate> <oracle> | score-real <manifest> <candidate> <real-oracle> <real-unit> | export-real-adjudication <manifest> <candidate> <real-oracle> <real-unit> <public-out> <private-out> | validate-blind-adjudication <reconciliation.json> <decision.json> | summarize-run <inventory.json> <collections.json> <scores.json> | summarize-real-run <real-inventory.json> <collections.json> <real-scores.json> | summarize-real-full-run <full-real-inventory.json> <collections.json> <real-scores.json> | prepare-pilot <absolute-public-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real-full <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | collect <manifest> <candidate.json> <out> | run-process-reviewer[-constrained] <codex|claude> <input-root> <output-schema-relative> <fresh-output-root> <record-output> <bwrap> <credential-home> <backend-executable> <model> <effort> | replay-process-reviewer <record.json>"
             );
             ExitCode::from(2)
         }
@@ -185,6 +211,7 @@ fn run_process_reviewer(
     executable: &str,
     model: &str,
     effort: &str,
+    provider_constrained: bool,
 ) -> ExitCode {
     let result = (|| {
         if record_output.exists() {
@@ -200,11 +227,13 @@ fn run_process_reviewer(
             ProcessSandbox::new(bwrap, credential_home).map_err(|error| error.to_string())?;
         let input =
             ProcessReviewerInput::admit_current(input_root).map_err(|error| error.to_string())?;
-        let record = ProcessReviewer::new(backend, sandbox)
-            .and_then(|reviewer| {
-                reviewer.run_downstream_validated(&input, output_schema, output_root)
-            })
-            .map_err(|error| error.to_string())?;
+        let reviewer = ProcessReviewer::new(backend, sandbox).map_err(|error| error.to_string())?;
+        let record = if provider_constrained {
+            reviewer.run(&input, output_schema, output_root)
+        } else {
+            reviewer.run_downstream_validated(&input, output_schema, output_root)
+        }
+        .map_err(|error| error.to_string())?;
         let bytes =
             reviewgraphen_core::canonical_json(&record).map_err(|error| error.to_string())?;
         fs::write(record_output, bytes).map_err(|error| error.to_string())?;
