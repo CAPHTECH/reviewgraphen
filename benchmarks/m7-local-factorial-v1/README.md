@@ -24,3 +24,10 @@ uses `snapshot-06` (minimum B1 admitted bytes) and `snapshot-34` (maximum),
 with all three arms for each. The pre-model input audit found that the
 historical G3 packets exceed the original process-adapter prompt cap in 26 of
 40 snapshots, so ADR 0027 raises the fixed cap without truncating an arm.
+
+Latency is recorded only for reproduction and never gates execution or reduces
+the twenty-unit row. The FSL presence-eligible population is 28 while the
+conservative target is 83, so this experiment reports descriptive cells and
+does not test or claim a significant interaction. A later multi-repository
+Rust corpus is the preregistered route to a larger denominator if the local
+protocol proves usable.

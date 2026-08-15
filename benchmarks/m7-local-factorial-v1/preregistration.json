@@ -130,15 +130,13 @@
   "analysis": {
     "unit_of_pairing": "real_unit_id",
     "cell_estimates": "detected_count_over_20_with_Wilson_95_percent_interval",
-    "within_row_arm_comparison": "two_sided_exact_McNemar_with_full_vs_B1_primary_and_G3_vs_B1_secondary",
+    "within_row_arm_comparison": "descriptive_paired_detection_table_and_discordant_target_identities_only",
     "interaction_contrasts": [
       "(local_full-local_B1)-(frontier_full-frontier_B1)",
       "(local_G3-local_B1)-(frontier_G3-frontier_B1)"
     ],
-    "omnibus_interaction_test": "enumerate_all_2_power_20_within_unit_swaps_of_the_two_model_row_arm_difference_vectors_and_use_max_absolute_contrast_statistic",
-    "alpha": 0.05,
-    "planned_contrast_adjustment": "Holm_for_two_interaction_contrasts_after_reporting_the_omnibus",
-    "inference_limit": "model_rows_were_not_randomized_and_runner_conditions_are_asymmetric_so_p_values_are_sensitivity_descriptions_not_a_causal_or_model_population_claim"
+    "interaction_test": "not_performed_due_to_preregistered_population_and_power_limit",
+    "inference_limit": "descriptive_only_no_significance_or_equivalence_claim_model_rows_were_not_randomized_and_runner_conditions_are_asymmetric"
   },
   "power": {
     "n": 20,
@@ -151,6 +149,13 @@
     "same_floor_rule": "if_all_local_cells_are_1_of_20_report_no_observed_rate_interaction_and_that_the_design_remains_floor_limited_do_not_conclude_no_scaffold_effect",
     "equal_local_gain_rule": "if_all_local_arms_improve_equally_report_a_model_row_difference_without_scaffold_interaction",
     "non_significant_rule": "report_the_observed_effect_and_uncertainty_as_inconclusive_not_as_equivalence"
+  },
+  "feasibility_boundary": {
+    "latency_role": "record_for_reproduction_only_never_a_gate_for_proceeding_reducing_units_or_stopping",
+    "presence_eligible_fsl_population": 28,
+    "conservative_required_final_n": 83,
+    "interaction_inference": "not_testable_with_fsl_alone_report_local_cells_as_descriptive_statistics",
+    "future_option": "if_local_review_is_operationally_valid_expand_the_same_presence_oracle_protocol_across_additional_Rust_repositories_to_seek_n_83"
   },
   "preservation": {
     "rewrite_existing_results": false,
