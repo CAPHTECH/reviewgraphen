@@ -84,9 +84,15 @@ and fixed runtime roots only. No repository or Store root is mounted.
 Each scheduled obligation receives a deterministic execution ID derived from
 the run, plan wave, obligation, envelope, and attempt. Codex CLI and Claude CLI
 produce `reviewgraphen.process_reviewer_record.v1`. The raw response remains
-byte-for-byte in that record. Parsing uses the existing closed
-`reviewgraphen.reviewer_output.v1` wire contract and caller-fixed execution,
-property, target, and source closure. Results are structured proposals,
+byte-for-byte in that record. Live process parsing uses
+`reviewgraphen.reviewer_output.v2`. Its root remains an object while the nested
+`result` is a closed `anyOf` between a non-empty `structured` claim list and an
+`abstained` result. This preserves the provider Structured Outputs root-object
+constraint without permitting a response to claim and abstain simultaneously.
+The v2 transport is canonicalized and deterministically lowered into the
+existing strict v1 parser, retaining its caller-fixed execution, property,
+target, and source closure. The v1 schema remains available for stored
+compatibility but is not emitted in new generic review packets. Results are structured proposals,
 abstention, malformed output, or provider failure. Parse failure is recorded;
 it is not repaired from prose.
 
@@ -119,10 +125,27 @@ model coverage, nor replay changes that ceiling. Promotion requires a future
 separate Core/Store operation with the existing evidence and human-authority
 admissions; generic orchestration exposes no such operation.
 
+### Obligation-profile boundary
+
+The built-in v1 request always uses `MvpRulePack`. Its profile fields bind the
+ingest and denominator identity; they do not select an arbitrary rule engine.
+For an ordinary repository without accepted domain invariants, the measured
+universe can consist entirely of `reviewgraphen.capability_gap` obligations.
+In that case the command truthfully reviews analyzer capability and may
+abstain, but it has no contract basis for claiming general bug detection.
+
+Detection benchmarks may consume the process adapter with an independently
+versioned, explicit obligation profile. M7 does so with its frozen mechanism
+ontology, five-obligation denominator, canonical Core envelopes, and strict
+candidate/manifest collector. This consumer path is separate from
+`generic_review_request.v1`: it neither changes the built-in denominator nor
+implies that arbitrary correctness obligations can be inferred by the model.
+
 ## Consequences
 
-- ReviewGraphen can review arbitrary admitted Git revisions through Codex CLI
-  or Claude CLI without adding an HTTP, LLM SDK, or async-runtime dependency.
+- ReviewGraphen can execute its built-in obligation universe over arbitrary
+  admitted Git revisions through Codex CLI or Claude CLI without adding an
+  HTTP, LLM SDK, or async-runtime dependency.
 - A successful generic run demonstrates ingestion through proposed findings,
   not verified or accepted bug detection.
 - Deferred obligations remain in the denominator and force an explicit

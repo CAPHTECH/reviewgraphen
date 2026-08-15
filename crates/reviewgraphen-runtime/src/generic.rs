@@ -30,10 +30,12 @@ use thiserror::Error;
 
 pub const GENERIC_REVIEW_REQUEST_SCHEMA: &str = "reviewgraphen.generic_review_request.v1";
 pub const GENERIC_REVIEW_RUN_SCHEMA: &str = "reviewgraphen.generic_review_run.v1";
-const REVIEWER_OUTPUT_SCHEMA: &str = "reviewgraphen.reviewer_output.v1";
-const PACKET_INSTRUCTION_VERSION: &str = "reviewgraphen.generic_review_packet.v1";
+const REVIEWER_OUTPUT_SCHEMA: &str = "reviewgraphen.reviewer_output.v2";
+const LEGACY_REVIEWER_OUTPUT_SCHEMA: &str = "reviewgraphen.reviewer_output.v1";
+const PACKET_INSTRUCTION_VERSION: &str = "reviewgraphen.generic_review_packet.v2";
 const SOURCE_ADAPTER_ID: &str = "reviewgraphen-generic-review@1";
 const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_PROCESS_OUTPUT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum GenericReviewError {
@@ -247,6 +249,39 @@ struct PreparedTask {
     execution_id: StableId,
     output_root: PathBuf,
     input: ProcessReviewerInput,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessReviewerOutputV2 {
+    execution_id: StableId,
+    result: ProcessReviewerResultV2,
+    schema: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ProcessReviewerResultV2 {
+    Structured {
+        claims: Vec<ProcessClaimProposalV2>,
+    },
+    Abstained {
+        detail: String,
+        reason: AbstentionReason,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessClaimProposalV2 {
+    assumptions: Vec<String>,
+    candidate_confidence: Option<f64>,
+    polarity: ClaimPolarity,
+    property_id: String,
+    requested_evidence: Vec<String>,
+    source_ids: Vec<StableId>,
+    summary: String,
+    target_refs: Vec<StableId>,
 }
 
 trait ObservationDriver {
@@ -957,40 +992,109 @@ fn reviewer_output_schema(
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["abstention", "claims", "execution_id", "schema"],
+        "required": ["execution_id", "result", "schema"],
         "properties": {
             "schema": {"type": "string", "const": REVIEWER_OUTPUT_SCHEMA},
             "execution_id": {"type": "string", "const": execution_id.to_string()},
-            "abstention": {
-                "type": ["object", "null"],
-                "additionalProperties": false,
-                "required": ["detail", "reason"],
-                "properties": {
-                    "detail": {"type": "string", "minLength": 1, "maxLength": 8192},
-                    "reason": {"type": "string", "enum": ["insufficient_context", "unresolved_symbol", "required_evidence_unavailable", "property_not_understood", "conflicting_sources", "tool_capability_missing", "budget_exhausted", "prompt_injection_suspected"]}
-                }
-            },
-            "claims": {
-                "type": "array",
-                "maxItems": 16,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["assumptions", "candidate_confidence", "polarity", "property_id", "requested_evidence", "source_ids", "summary", "target_refs"],
-                    "properties": {
-                        "assumptions": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
-                        "candidate_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
-                        "polarity": {"type": "string", "enum": ["issue_present", "issue_absent", "inconclusive", "not_applicable", "conflict"]},
-                        "property_id": {"type": "string", "const": obligation.property_id()},
-                        "requested_evidence": {"type": "array", "maxItems": 32, "items": {"type": "string", "enum": evidence}},
-                        "source_ids": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"type": "string", "enum": sources}},
-                        "summary": {"type": "string", "minLength": 1, "maxLength": 8192},
-                        "target_refs": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "string", "enum": targets}}
+            "result": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["claims", "kind"],
+                        "properties": {
+                            "kind": {"type": "string", "const": "structured"},
+                            "claims": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 16,
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["assumptions", "candidate_confidence", "polarity", "property_id", "requested_evidence", "source_ids", "summary", "target_refs"],
+                                    "properties": {
+                                        "assumptions": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+                                        "candidate_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+                                        "polarity": {"type": "string", "enum": ["issue_present", "issue_absent", "inconclusive", "not_applicable", "conflict"]},
+                                        "property_id": {"type": "string", "const": obligation.property_id()},
+                                        "requested_evidence": {"type": "array", "maxItems": 32, "items": {"type": "string", "enum": evidence}},
+                                        "source_ids": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"type": "string", "enum": sources}},
+                                        "summary": {"type": "string", "minLength": 1, "maxLength": 8192},
+                                        "target_refs": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "string", "enum": targets}}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["detail", "kind", "reason"],
+                        "properties": {
+                            "kind": {"type": "string", "const": "abstained"},
+                            "detail": {"type": "string", "minLength": 1, "maxLength": 4096},
+                            "reason": {"type": "string", "enum": ["insufficient_context", "unresolved_symbol", "required_evidence_unavailable", "property_not_understood", "conflicting_sources", "tool_capability_missing", "budget_exhausted", "prompt_injection_suspected"]}
+                        }
                     }
-                }
+                ]
             }
         }
     })
+}
+
+fn parse_process_reviewer_output_v2(
+    raw: &[u8],
+    request: &ReviewerRequest<'_>,
+    expected_execution_id: &StableId,
+    scope: &ClaimProposalScope,
+) -> GenericReviewResult<ParsedReviewerOutput> {
+    if raw.len() > MAX_PROCESS_OUTPUT_BYTES {
+        return Err(GenericReviewError::Request(
+            "reviewer output exceeds record limit",
+        ));
+    }
+    let decoded: ProcessReviewerOutputV2 = match serde_json::from_slice(raw) {
+        Ok(decoded) => decoded,
+        Err(_) => {
+            return Ok(ParsedReviewerOutput::Malformed {
+                reason: MalformedOutputReason::SchemaViolation,
+                diagnostic: "reviewer output v2 schema validation failed".to_owned(),
+            });
+        }
+    };
+    if canonical_json(&decoded)?.as_slice() != raw {
+        return Ok(ParsedReviewerOutput::Malformed {
+            reason: MalformedOutputReason::SchemaViolation,
+            diagnostic: "reviewer output v2 is not canonical JSON".to_owned(),
+        });
+    }
+    if decoded.schema != REVIEWER_OUTPUT_SCHEMA || decoded.execution_id != *expected_execution_id {
+        return Ok(ParsedReviewerOutput::Malformed {
+            reason: MalformedOutputReason::SchemaViolation,
+            diagnostic: "reviewer output v2 schema or execution ID mismatch".to_owned(),
+        });
+    }
+    let legacy = match decoded.result {
+        ProcessReviewerResultV2::Structured { claims } => json!({
+            "abstention": null,
+            "claims": claims,
+            "execution_id": decoded.execution_id,
+            "schema": LEGACY_REVIEWER_OUTPUT_SCHEMA,
+        }),
+        ProcessReviewerResultV2::Abstained { detail, reason } => json!({
+            "abstention": {"detail": detail, "reason": reason},
+            "claims": [],
+            "execution_id": decoded.execution_id,
+            "schema": LEGACY_REVIEWER_OUTPUT_SCHEMA,
+        }),
+    };
+    let legacy = canonical_json(&legacy)?;
+    Ok(parse_fake_reviewer_output(
+        &legacy,
+        request,
+        expected_execution_id,
+        scope,
+    )?)
 }
 
 fn parse_outcome(
@@ -1006,7 +1110,16 @@ fn parse_outcome(
         task.obligation.normalized_target_refs().clone(),
     )?;
     Ok(
-        match parse_fake_reviewer_output(record.replay()?, &request, &task.execution_id, &scope)? {
+        match if record.replay()?.starts_with(b"{\"diagnostic\"") {
+            parse_fake_reviewer_output(record.replay()?, &request, &task.execution_id, &scope)?
+        } else {
+            parse_process_reviewer_output_v2(
+                record.replay()?,
+                &request,
+                &task.execution_id,
+                &scope,
+            )?
+        } {
             ParsedReviewerOutput::Structured {
                 execution_id,
                 claims,
@@ -1229,12 +1342,12 @@ mod tests {
             let Some(source_id) = task.envelope.normalized_included_source_ids().iter().next()
             else {
                 let raw = canonical_json(&json!({
-                    "abstention": {
+                    "execution_id": task.execution_id,
+                    "result": {
                         "detail": "No source excerpt was admitted.",
+                        "kind": "abstained",
                         "reason": "insufficient_context"
                     },
-                    "claims": [],
-                    "execution_id": task.execution_id,
                     "schema": REVIEWER_OUTPUT_SCHEMA
                 }))?;
                 return Ok(NonAuthorityProcessRecord::admit_successful_observation(
@@ -1252,18 +1365,20 @@ mod tests {
                 .next()
                 .ok_or(GenericReviewError::Request("test target"))?;
             let raw = canonical_json(&json!({
-                "abstention": null,
-                "claims": [{
-                    "assumptions": [],
-                    "candidate_confidence": 0.5,
-                    "polarity": "issue_present",
-                    "property_id": task.obligation.property_id(),
-                    "requested_evidence": [format!("evidence:source:{source_id}")],
-                    "source_ids": [source_id],
-                    "summary": "A deterministic test proposal.",
-                    "target_refs": [target_id]
-                }],
                 "execution_id": task.execution_id,
+                "result": {
+                    "claims": [{
+                        "assumptions": [],
+                        "candidate_confidence": 0.5,
+                        "polarity": "issue_present",
+                        "property_id": task.obligation.property_id(),
+                        "requested_evidence": [format!("evidence:source:{source_id}")],
+                        "source_ids": [source_id],
+                        "summary": "A deterministic test proposal.",
+                        "target_refs": [target_id]
+                    }],
+                    "kind": "structured"
+                },
                 "schema": REVIEWER_OUTPUT_SCHEMA
             }))?;
             Ok(NonAuthorityProcessRecord::admit_successful_observation(
@@ -1372,6 +1487,27 @@ mod tests {
         );
         validate_generic_review_run_semantics(&first_value).unwrap();
         assert!(!first.executions.is_empty());
+        assert!(first.executions.iter().all(|execution| !matches!(
+            execution.outcome,
+            GenericReviewerOutcome::Malformed { .. }
+        )));
+        assert!(first.executions.iter().all(|execution| {
+            serde_json::from_str::<Value>(&execution.process_record.raw_response)
+                .ok()
+                .and_then(|value| value.get("schema").cloned())
+                == Some(Value::String(REVIEWER_OUTPUT_SCHEMA.to_owned()))
+        }));
+        let provider_schema: Value = serde_json::from_slice(
+            &fs::read(live_root.join("packets/0000/output-schema.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(provider_schema.get("oneOf").is_none());
+        assert_eq!(
+            provider_schema["properties"]["result"]["anyOf"]
+                .as_array()
+                .map(Vec::len),
+            Some(2)
+        );
         assert_eq!(first.authority.classification, "non_authority");
         assert!(!first.authority.trusted_pass);
         assert_eq!(first.authority.result_status, "incomplete");

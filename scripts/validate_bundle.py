@@ -120,6 +120,7 @@ def validate_schemas() -> list[str]:
         "reviewgraphen.benchmark.real_run_summary.v1.schema.json",
         "reviewgraphen.benchmark.real_full_run_summary.v1.schema.json",
         "reviewgraphen.process_reviewer_record.v1.schema.json",
+        "reviewgraphen.reviewer_output.v2.schema.json",
     ]
     for schema_name in benchmark_schemas:
         Draft202012Validator.check_schema(load_json(SCHEMAS / schema_name))

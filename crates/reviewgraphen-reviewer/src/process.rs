@@ -390,6 +390,30 @@ impl ProcessReviewer {
         output_schema_relative_path: &str,
         output_root: &Path,
     ) -> ProcessReviewerResult<NonAuthorityProcessRecord> {
+        self.run_with_constraint(input, output_schema_relative_path, output_root, true)
+    }
+
+    /// Runs a reviewer when the authoritative downstream consumer, rather
+    /// than the provider, validates the supplied closed output schema. This is
+    /// required for schemas whose invariants exceed a provider's supported
+    /// Structured Outputs subset. The raw response remains non-authority and
+    /// must not be consumed without that downstream validation.
+    pub fn run_downstream_validated(
+        &self,
+        input: &ProcessReviewerInput,
+        output_schema_relative_path: &str,
+        output_root: &Path,
+    ) -> ProcessReviewerResult<NonAuthorityProcessRecord> {
+        self.run_with_constraint(input, output_schema_relative_path, output_root, false)
+    }
+
+    fn run_with_constraint(
+        &self,
+        input: &ProcessReviewerInput,
+        output_schema_relative_path: &str,
+        output_root: &Path,
+        provider_constrained: bool,
+    ) -> ProcessReviewerResult<NonAuthorityProcessRecord> {
         if matches!(self.backend, ProcessReviewerBackend::CodexAppServer { .. }) {
             return Err(ProcessReviewerError::Unsupported("codex app-server"));
         }
@@ -409,7 +433,8 @@ impl ProcessReviewer {
         let materialized_prompt = materialize_prompt(input)?;
 
         let backend = self.backend.executable().canonicalize()?;
-        let backend_record = observe_backend_record(&self.backend, &backend)?;
+        let backend_record =
+            observe_backend_record(&self.backend, &backend, &self.sandbox.credential_home)?;
         let credential_target = match self.backend {
             ProcessReviewerBackend::CodexCli { .. } => "/home/reviewer/.codex",
             ProcessReviewerBackend::ClaudeCli { .. } => "/home/reviewer/.claude",
@@ -501,10 +526,12 @@ impl ProcessReviewer {
                 for feature in CODEX_DISABLED_FEATURES {
                     command.args(["--disable", feature]);
                 }
-                command
-                    .arg("--output-schema")
-                    .arg(format!("/workspace/input/{output_schema_relative_path}"))
-                    .args(["-o", "/workspace/output/raw-response.json"]);
+                if provider_constrained {
+                    command
+                        .arg("--output-schema")
+                        .arg(format!("/workspace/input/{output_schema_relative_path}"));
+                }
+                command.args(["-o", "/workspace/output/raw-response.json"]);
             }
             ProcessReviewerBackend::ClaudeCli { model, effort, .. } => {
                 let schema = fs::read_to_string(input.root.join(output_schema_relative_path))?;
@@ -526,7 +553,10 @@ impl ProcessReviewer {
                         "--model",
                     ])
                     .arg(model)
-                    .args(["--effort", effort, "--json-schema", &schema]);
+                    .args(["--effort", effort]);
+                if provider_constrained {
+                    command.args(["--json-schema", &schema]);
+                }
             }
             ProcessReviewerBackend::CodexAppServer { .. } => unreachable!(),
         }
@@ -594,13 +624,24 @@ impl ProcessReviewer {
 fn observe_backend_record(
     backend: &ProcessReviewerBackend,
     executable: &Path,
+    credential_home: &Path,
 ) -> ProcessReviewerResult<ProcessBackendRecord> {
-    let output = Command::new(executable).arg("--version").output()?;
-    if !output.status.success()
-        || output.stdout.len() > 4096
-        || output.stderr.len() > 4096
-        || !output.stderr.is_empty()
-    {
+    let mut command = Command::new(executable);
+    command.arg("--version").env("HOME", credential_home);
+    match backend {
+        ProcessReviewerBackend::CodexCli { .. } => {
+            command.env("CODEX_HOME", credential_home);
+        }
+        ProcessReviewerBackend::ClaudeCli { .. } => {
+            command.env("CLAUDE_CONFIG_DIR", credential_home);
+        }
+        ProcessReviewerBackend::CodexAppServer { .. } => {}
+    }
+    let output = command.output()?;
+    // Some trusted local clients emit bounded bootstrap warnings on stderr
+    // even when `--version` succeeds. Identity is derived only from the
+    // strictly parsed stdout token below; stderr never selects the protocol.
+    if !output.status.success() || output.stdout.len() > 4096 || output.stderr.len() > 4096 {
         return Err(ProcessReviewerError::Input("backend version probe"));
     }
     let version = std::str::from_utf8(&output.stdout)

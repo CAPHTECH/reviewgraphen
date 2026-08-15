@@ -201,7 +201,9 @@ fn run_process_reviewer(
         let input =
             ProcessReviewerInput::admit_current(input_root).map_err(|error| error.to_string())?;
         let record = ProcessReviewer::new(backend, sandbox)
-            .and_then(|reviewer| reviewer.run(&input, output_schema, output_root))
+            .and_then(|reviewer| {
+                reviewer.run_downstream_validated(&input, output_schema, output_root)
+            })
             .map_err(|error| error.to_string())?;
         let bytes =
             reviewgraphen_core::canonical_json(&record).map_err(|error| error.to_string())?;

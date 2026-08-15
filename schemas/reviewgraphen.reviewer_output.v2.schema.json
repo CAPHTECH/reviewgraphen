@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.dev/schemas/reviewgraphen.reviewer_output.v2.schema.json",
+  "title": "ReviewGraphen non-authority process reviewer output v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["execution_id", "result", "schema"],
+  "properties": {
+    "execution_id": { "$ref": "#/$defs/execution_id" },
+    "result": {
+      "anyOf": [
+        { "$ref": "#/$defs/structured" },
+        { "$ref": "#/$defs/abstained" }
+      ]
+    },
+    "schema": { "const": "reviewgraphen.reviewer_output.v2" }
+  },
+  "$defs": {
+    "stable_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*:(?:sha256:[0-9a-f]{64}|[A-Za-z0-9._@:-]+)$" },
+    "execution_id": { "type": "string", "pattern": "^execution:(?:sha256:[0-9a-f]{64}|[A-Za-z0-9._@:-]+)$" },
+    "structured": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claims", "kind"],
+      "properties": {
+        "claims": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/claim" }
+        },
+        "kind": { "const": "structured" }
+      }
+    },
+    "abstained": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detail", "kind", "reason"],
+      "properties": {
+        "detail": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "kind": { "const": "abstained" },
+        "reason": {
+          "enum": [
+            "insufficient_context",
+            "unresolved_symbol",
+            "required_evidence_unavailable",
+            "property_not_understood",
+            "conflicting_sources",
+            "tool_capability_missing",
+            "budget_exhausted",
+            "prompt_injection_suspected"
+          ]
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assumptions",
+        "candidate_confidence",
+        "polarity",
+        "property_id",
+        "requested_evidence",
+        "source_ids",
+        "summary",
+        "target_refs"
+      ],
+      "properties": {
+        "assumptions": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        },
+        "candidate_confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "polarity": {
+          "enum": ["issue_present", "issue_absent", "inconclusive", "not_applicable", "conflict"]
+        },
+        "property_id": { "type": "string", "minLength": 1, "maxLength": 16384 },
+        "requested_evidence": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^evidence:source:.+$", "maxLength": 2048 }
+        },
+        "source_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/stable_id" }
+        },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "target_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/stable_id" }
+        }
+      }
+    }
+  }
+}

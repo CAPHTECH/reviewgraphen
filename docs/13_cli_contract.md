@@ -75,6 +75,14 @@ App Serverは差し替え境界だけが存在し、未実装としてfail-close
 実行、proposal parsingを順に呼ぶorchestrationです。Evidence、Verification、
 Decision、Finding、V5 report、gateは生成しません。
 
+現在のrequest v1は`MvpRulePack`固定です。profile fieldはingestと分母の
+identityを束縛しますが、任意のcorrectness rule engineを選択しません。
+accepted domain invariantがない入力では、実測上すべてのobligationが
+`reviewgraphen.capability_gap`になり得ます。この場合はanalyzer capabilityを
+reviewしているのであり、generic bug detectionを実行したとは扱いません。
+M7は別途freezeしたontology/obligation profileをprocess adapterのconsumer
+として使い、同じraw-record/replay境界の下で検出性能を測ります。
+
 以下のoption-oriented convenience syntaxは将来案であり、現在のaccepted
 command syntaxではありません。
 

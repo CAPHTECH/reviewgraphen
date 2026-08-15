@@ -98,6 +98,7 @@ fn schema_list() -> CommandOutcome {
         "reviewgraphen.review.report.v5",
         "reviewgraphen.generic_review_request.v1",
         "reviewgraphen.reviewer_output.v1",
+        "reviewgraphen.reviewer_output.v2",
         "reviewgraphen.process_reviewer_record.v1",
         "reviewgraphen.generic_review_run.v1"
     ]);
@@ -246,6 +247,9 @@ fn schema_source(name: &str) -> Option<&'static str> {
         "reviewgraphen.reviewer_output.v1" => Some(include_str!(
             "../../../schemas/reviewgraphen.reviewer_output.v1.schema.json"
         )),
+        "reviewgraphen.reviewer_output.v2" => Some(include_str!(
+            "../../../schemas/reviewgraphen.reviewer_output.v2.schema.json"
+        )),
         "reviewgraphen.process_reviewer_record.v1" => Some(include_str!(
             "../../../schemas/reviewgraphen.process_reviewer_record.v1.schema.json"
         )),
@@ -274,6 +278,7 @@ mod tests {
                 "reviewgraphen.review.report.v5",
                 "reviewgraphen.generic_review_request.v1",
                 "reviewgraphen.reviewer_output.v1",
+                "reviewgraphen.reviewer_output.v2",
                 "reviewgraphen.process_reviewer_record.v1",
                 "reviewgraphen.generic_review_run.v1"
             ])

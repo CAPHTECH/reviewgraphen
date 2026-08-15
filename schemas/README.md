@@ -48,6 +48,10 @@
 | `reviewgraphen.benchmark.real_run_summary.v1.schema.json` | Real-fix paired recall and separately named unlabeled-control/target-anchor allegation counts; no false-positive claim. |
 | `reviewgraphen.benchmark.real_full_run_summary.v1.schema.json` | Additive full-ReviewGraphen-only real-fix summary; the frozen B1/G3 paired summary remains unchanged. |
 | `reviewgraphen.process_reviewer_record.v1.schema.json` | Hash-bound raw Codex/Claude process observation for deterministic replay; explicitly non-authority. |
+| `reviewgraphen.generic_review_request.v1.schema.json` | Ordinary Git generic orchestration request with explicit ingest/plan bounds and a swappable local-process or replay backend. |
+| `reviewgraphen.reviewer_output.v1.schema.json` | Preserved strict non-authority reviewer output contract; root-level exclusivity makes it unsuitable as the current provider Structured Outputs schema. |
+| `reviewgraphen.reviewer_output.v2.schema.json` | Provider-facing non-authority output with a root object and a nested closed `anyOf` between structured claims and abstention; new generic packets emit v2 and deterministically lower it through the strict v1 parser. |
+| `reviewgraphen.generic_review_run.v1.schema.json` | Denominator-preserving generic run projection with raw process records, parsed proposal outcomes, and a fixed non-authority/incomplete ceiling. |
 
 ## Validation layers
 
