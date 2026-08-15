@@ -1,5 +1,9 @@
 # M7 HEAD Issue-Worthiness Study v1
 
+> **Status: interrupted before calibration execution.** See
+> [`INTERRUPTED.md`](INTERRUPTED.md). The retained implementation is historical
+> experiment infrastructure, not a completed result.
+
 This additive benchmark measures cross-family AI dispositions about whether
 static-review findings merit local issue tracking. The label
 `issue_should_be_created` is a model disposition only. The benchmark never
