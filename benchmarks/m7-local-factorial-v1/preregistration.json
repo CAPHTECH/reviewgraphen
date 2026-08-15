@@ -1,8 +1,8 @@
 {
   "schema": "reviewgraphen.benchmark.m7_local_factorial_preregistration.v1",
   "experiment": "m7-local-factorial-v1",
-  "decision_timing": "after_frontier_floor_before_local_model_tag_and_before_any_ollama_semantic_call",
-  "status": "waiting_for_frozen_model_tag",
+  "decision_timing": "initial_design_after_frontier_floor_before_local_model_tag_transport_amended_after_operator_supplied_profile_facts_and_before_any_experiment_semantic_call",
+  "status": "waiting_for_codex_profile_adapter_and_frozen_execution_config",
   "hypothesis": "the scaffold effect on known-target detection is larger for the local model than for the frontier model",
   "factors": {
     "model_capability": [
@@ -41,7 +41,7 @@
     "known_asymmetries": [
       "B1_and_G3_are_historical_replicate_1_while_full_is_historical_replicate_2",
       "B1_and_G3_used_the_original_isolated_Codex_runner_with_workspace_scoped_shell_reads_while_full_used_the_ADR_0027_no_tools_process_adapter",
-      "local_cells_all_use_the_new_no_tools_Ollama_curl_adapter",
+      "local_cells_all_use_the_new_no_tools_Codex_profile_adapter",
       "provider_prompt_rendering_tokenization_quantization_context_limit_and_generation_settings_differ_by_model_row",
       "frontier_runs_included_matched_controls_while_the_local_primary_run_contains_positive_trials_only",
       "sessions_are_independent_per_trial_so_control_omission_has_no intended_cross_trial_memory_effect_but_order_load_and_runtime_conditions_still_differ"
@@ -49,19 +49,24 @@
     "interpretation": "quasi_factorial_historical_comparison_not_a_randomized_causal_model_by_scaffold_experiment"
   },
   "local_row": {
-    "endpoint_origin": "http://mac-studio.local:11434",
-    "ollama_expected_version_at_design": "0.32.13_operator_reported_to_be_reobserved",
-    "model_tag": "pending_operator_input",
-    "model_digest": "must_be_observed_and_frozen_before_probe",
-    "model_capabilities": "must_be_observed_and_frozen_before_probe",
+    "transport": "codex_exec_profile",
+    "codex_version": "0.147.0",
+    "profile": "ollama-priv",
+    "profile_file": "$CODEX_HOME/ollama-priv.config.toml",
+    "provider": "ollama-priv",
+    "provider_base_url": "http://192.168.68.71:11999/v1/",
+    "model_tag": "qwen3.8:27b-mlx",
+    "profile_hash": "must_be_observed_and_frozen_before_probe",
+    "environment_variable_names": ["OLLAMA_PRIV_API_KEY"],
+    "environment_values_recorded": false,
     "generation_settings": {
-      "temperature": 0,
-      "seed": 7,
-      "stream": false,
+      "temperature": "not_exposed_by_the_verified_Codex_0_147_profile_route_and_not_claimed_controlled",
+      "seed": "not_exposed_by_the_verified_Codex_0_147_profile_route_and_not_claimed_controlled",
+      "stream": "Codex_JSONL_transport_detail_not_a_model_sampling_control",
       "tools": "none",
-      "think": "freeze_from_model_capability_before_probe",
-      "context_limit": "freeze_at_or_below_observed_model_limit_before_probe",
-      "output_limit": "freeze_before_probe"
+      "think": "model_emits_thinking_via_codex_protocol",
+      "context_limit": "exact_effective_value_not_reported_by_verified_route_fallback_warning_recorded",
+      "output_limit": "exact_effective_value_not_reported_by_verified_route_nonempty_final_is_required_and_no_post_result_override_is_allowed"
     },
     "arms": ["b1_free_form", "g3_proxy", "full_reviewgraphen"],
     "positive_units_per_arm": 20,
@@ -71,7 +76,19 @@
     "no_semantic_retry": true,
     "source_and_oracle": "frozen_m7-real-v1_without_modification",
     "input_blinding": "same_commit_issue_test_oracle_private_exclusions_as_m7-real-v1",
-    "full_context_bound": {"maximum_files_per_obligation": 8, "maximum_bytes_per_obligation": 262144}
+    "full_context_bound": {"maximum_files_per_obligation": 8, "maximum_bytes_per_obligation": 262144},
+    "observed_operational_warnings": [
+      "Model metadata for qwen3.8:27b-mlx not found. Defaulting to fallback metadata",
+      "failed to refresh available models: missing field models"
+    ],
+    "token_cost_anchor": {
+      "probe_prompt": "Reply with exactly: OK",
+      "observed_total_tokens": 72955,
+      "stage_1_six_call_floor_if_equal": 437730,
+      "sixty_positive_call_floor_if_equal": 4377300,
+      "interpretation": "cost_anchor_only_actual_source_prompts_can_be_larger"
+    },
+    "empty_final_content": "protocol_invalid_no_retry"
   },
   "schema_conformance_probe": {
     "purpose": "transport_and_exact_candidate_schema_adherence_only_not_target_detection",
@@ -92,7 +109,7 @@
       "proceed_if": "at_least_17_of_18_overall_and_at_least_5_of_6_in_each_arm",
       "otherwise": "stop_as_measurement_infeasible_for_frozen_model_protocol"
     },
-    "valid_definition": "HTTP_success_complete_Ollama_envelope_exact_candidate_JSON_schema_trial_binding_and_for_scaffold_arms_exact_obligation_denominator",
+    "valid_definition": "Codex_process_success_allowlisted_no_tool_JSONL_events_nonempty_final_exact_candidate_JSON_schema_trial_binding_and_for_scaffold_arms_exact_obligation_denominator",
     "schema_invalid_retry": false,
     "transport_failure": "pause_and_record_without_scoring_as_schema_observation_resume_only_after_operator_restores_same_frozen_endpoint_model_and_request",
     "response_repair": "forbidden",

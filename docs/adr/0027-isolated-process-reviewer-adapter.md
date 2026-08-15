@@ -3,6 +3,47 @@
 - Status: Accepted
 - Date: 2026-08-14
 
+## 2026-08-15 amendment: named Codex profiles
+
+Codex CLI 0.147 can route the same `codex exec` protocol through a named v2
+profile stored at `$CODEX_HOME/<name>.config.toml`. The verified
+`ollama-priv` profile selects provider `ollama-priv`, model
+`qwen3.8:27b-mlx`, and an OpenAI-compatible local endpoint. A separate Ollama
+HTTP backend would duplicate Codex's already working transport, structured
+output, event stream, and raw final-message behavior. The adapter therefore
+extends `CodexCli` with an optional profile and allow-listed pass-through
+environment-variable names; profile omission retains the original frontier
+behavior byte-for-byte.
+
+The adapter reads but never modifies the profile. It rejects non-normalized
+profile names, symlinked or oversized profile files, model mismatch, provider
+binding mismatch, non-allow-listed environment names, and any parsed
+`forced_login_method` key. In Codex 0.147, running this local profile with
+`forced_login_method = "api"` can delete the shared ChatGPT login from
+`auth.json`; refusing the key is therefore part of the process boundary, not
+an operator convention.
+
+Only `OLLAMA_PRIV_API_KEY` is currently allow-listed. Its value is read from
+the parent immediately before launch, passed through bwrap to Codex, and never
+serialized. The v1 backend record remains sufficient: `provider` and `model`
+contain the profile-observed values, while `inference_settings` records the
+profile name, profile content hash, provider base URL, reasoning effort, and
+environment-variable name. Secret values remain absent. Raw response,
+input-manifest binding, no-tools event validation, replay, and the
+non-authority ceiling are unchanged.
+
+Two observed Codex warnings are experimental metadata, not ignored facts:
+
+- missing model metadata causes fallback context/model limits, which can alter
+  long-input behavior; and
+- the local proxy's OpenAI-style model list lacks the `models` field Codex's
+  refresh path expects, although semantic responses succeed.
+
+The local Qwen model emits long thinking traces. Empty final content caused by
+an exhausted output allowance is a protocol-invalid observation, not an
+abstention and not eligible for retry. The exact profile/model and the
+fallback-limit warning are retained in the experiment record and report.
+
 ## Context
 
 The D2 execution contract intentionally admits exactly the deterministic fake/no-tools reviewer. ReviewGraphen has no HTTP client, model SDK, or async runtime, and the only supported review CLI is the fixed `double-submit` fixture. Local `codex exec`, Codex App Server, and `claude --print` processes make a live reviewer technically possible without adding a network crate. They do not make model output deterministic or authoritative.

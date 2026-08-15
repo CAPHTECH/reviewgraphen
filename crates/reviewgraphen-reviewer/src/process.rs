@@ -7,8 +7,8 @@
 use reviewgraphen_core::{ContentHash, canonical_json};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
-    fs,
+    collections::{BTreeMap, BTreeSet},
+    env, fs,
     io::Write,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -20,6 +20,8 @@ const PROMPT_VERSION: &str = "reviewgraphen.process_reviewer_prompt.v1";
 const TOOL_POLICY_VERSION: &str = "reviewgraphen.process_reviewer.bwrap-no-tools.v1";
 const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_MATERIALIZED_PROMPT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CODEX_PROFILE_BYTES: u64 = 64 * 1024;
+const CODEX_ENVIRONMENT_ALLOW_LIST: [&str; 1] = ["OLLAMA_PRIV_API_KEY"];
 const CODEX_DISABLED_FEATURES: [&str; 16] = [
     "apps",
     "browser_use",
@@ -64,6 +66,7 @@ pub enum ProcessReviewerBackend {
         executable: PathBuf,
         model: String,
         reasoning_effort: String,
+        profile: Option<CodexProfile>,
     },
     ClaudeCli {
         executable: PathBuf,
@@ -76,6 +79,15 @@ pub enum ProcessReviewerBackend {
     },
 }
 
+/// A named Codex v2 profile plus names of explicitly allowed pass-through
+/// environment variables. Secret values are read only at process launch and
+/// are never stored in this descriptor or in a process record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CodexProfile {
+    name: String,
+    environment_variables: BTreeSet<String>,
+}
+
 impl ProcessReviewerBackend {
     pub fn codex_cli(
         executable: impl Into<PathBuf>,
@@ -86,6 +98,27 @@ impl ProcessReviewerBackend {
             executable: executable.into(),
             model: model.into(),
             reasoning_effort: reasoning_effort.into(),
+            profile: None,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn codex_cli_with_profile(
+        executable: impl Into<PathBuf>,
+        model: impl Into<String>,
+        reasoning_effort: impl Into<String>,
+        profile: impl Into<String>,
+        environment_variables: impl IntoIterator<Item = String>,
+    ) -> ProcessReviewerResult<Self> {
+        let value = Self::CodexCli {
+            executable: executable.into(),
+            model: model.into(),
+            reasoning_effort: reasoning_effort.into(),
+            profile: Some(CodexProfile {
+                name: profile.into(),
+                environment_variables: environment_variables.into_iter().collect(),
+            }),
         };
         value.validate()?;
         Ok(value)
@@ -123,6 +156,7 @@ impl ProcessReviewerBackend {
                 executable,
                 model,
                 reasoning_effort,
+                profile: _,
             } => (executable, vec![model, reasoning_effort]),
             Self::ClaudeCli {
                 executable,
@@ -137,6 +171,21 @@ impl ProcessReviewerBackend {
         if !executable.is_absolute() || fields.iter().any(|value| value.is_empty()) {
             return Err(ProcessReviewerError::Input("invalid backend descriptor"));
         }
+        if let Self::CodexCli {
+            profile: Some(profile),
+            ..
+        } = self
+            && (!valid_profile_name(&profile.name)
+                || profile.environment_variables.is_empty()
+                || profile
+                    .environment_variables
+                    .iter()
+                    .any(|name| !CODEX_ENVIRONMENT_ALLOW_LIST.contains(&name.as_str())))
+        {
+            return Err(ProcessReviewerError::Input(
+                "invalid Codex profile descriptor",
+            ));
+        }
         Ok(())
     }
 
@@ -148,40 +197,94 @@ impl ProcessReviewerBackend {
         }
     }
 
-    fn record(&self, observed_protocol_version: String) -> ProcessBackendRecord {
+    fn record(
+        &self,
+        observed_protocol_version: String,
+        credential_home: &Path,
+    ) -> ProcessReviewerResult<ProcessBackendRecord> {
         match self {
             Self::CodexCli {
                 model,
                 reasoning_effort,
+                profile,
                 ..
-            } => ProcessBackendRecord {
-                kind: ProcessBackendKind::CodexCli,
-                provider: "openai".to_owned(),
-                model: model.clone(),
-                inference_settings: BTreeMap::from([(
-                    "reasoning_effort".to_owned(),
-                    reasoning_effort.clone(),
-                )]),
-                protocol_version: observed_protocol_version,
-            },
-            Self::ClaudeCli { model, effort, .. } => ProcessBackendRecord {
+            } => {
+                let (provider, observed_model, mut settings) = if let Some(profile) = profile {
+                    let observed = observe_codex_profile(credential_home, profile)?;
+                    if &observed.model != model {
+                        return Err(ProcessReviewerError::Input("Codex profile model mismatch"));
+                    }
+                    (
+                        observed.provider,
+                        observed.model,
+                        BTreeMap::from([
+                            ("profile".to_owned(), profile.name.clone()),
+                            ("profile_hash".to_owned(), observed.hash.to_string()),
+                            ("provider_base_url".to_owned(), observed.base_url),
+                            (
+                                "environment_variables".to_owned(),
+                                profile
+                                    .environment_variables
+                                    .iter()
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                                    .join(","),
+                            ),
+                        ]),
+                    )
+                } else {
+                    ("openai".to_owned(), model.clone(), BTreeMap::new())
+                };
+                settings.insert("reasoning_effort".to_owned(), reasoning_effort.clone());
+                Ok(ProcessBackendRecord {
+                    kind: ProcessBackendKind::CodexCli,
+                    provider,
+                    model: observed_model,
+                    inference_settings: settings,
+                    protocol_version: observed_protocol_version,
+                })
+            }
+            Self::ClaudeCli { model, effort, .. } => Ok(ProcessBackendRecord {
                 kind: ProcessBackendKind::ClaudeCli,
                 provider: "anthropic".to_owned(),
                 model: model.clone(),
                 inference_settings: BTreeMap::from([("effort".to_owned(), effort.clone())]),
                 protocol_version: observed_protocol_version,
-            },
+            }),
             Self::CodexAppServer {
                 protocol_version, ..
-            } => ProcessBackendRecord {
+            } => Ok(ProcessBackendRecord {
                 kind: ProcessBackendKind::CodexAppServer,
                 provider: "openai".to_owned(),
                 model: "caller-negotiated".to_owned(),
                 inference_settings: BTreeMap::new(),
                 protocol_version: protocol_version.clone(),
-            },
+            }),
         }
     }
+
+    fn environment_variables(&self) -> impl Iterator<Item = &str> {
+        match self {
+            Self::CodexCli {
+                profile: Some(profile),
+                ..
+            } => profile
+                .environment_variables
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        }
+        .into_iter()
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ObservedCodexProfile {
+    provider: String,
+    model: String,
+    base_url: String,
+    hash: ContentHash,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -485,11 +588,22 @@ impl ProcessReviewer {
             .arg("--ro-bind")
             .arg(&backend)
             .arg("/reviewer-backend");
+        for name in self.backend.environment_variables() {
+            let value = env::var(name)
+                .map_err(|_| ProcessReviewerError::Input("missing Codex profile environment"))?;
+            if value.is_empty() || value.contains('\0') {
+                return Err(ProcessReviewerError::Input(
+                    "invalid Codex profile environment",
+                ));
+            }
+            command.args(["--setenv", name, &value]);
+        }
 
         match &self.backend {
             ProcessReviewerBackend::CodexCli {
                 model,
                 reasoning_effort,
+                profile,
                 ..
             } => {
                 if let Some(companion) = backend
@@ -514,9 +628,13 @@ impl ProcessReviewer {
                         "--ephemeral",
                         "--skip-git-repo-check",
                         "--json",
-                        "-m",
-                    ])
-                    .arg(model)
+                    ]);
+                if let Some(profile) = profile {
+                    command.args(["--profile", &profile.name]);
+                } else {
+                    command.args(["-m", model]);
+                }
+                command
                     .args([
                         "-c",
                         &format!("model_reasoning_effort='{reasoning_effort}'"),
@@ -590,6 +708,15 @@ impl ProcessReviewer {
             validate_codex_no_tool_events(&output.stdout)?;
         }
         input.validate()?;
+        if self.backend.record(
+            backend_record.protocol_version.clone(),
+            &self.sandbox.credential_home,
+        )? != backend_record
+        {
+            return Err(ProcessReviewerError::Input(
+                "process backend identity drift",
+            ));
+        }
         let raw = match self.backend {
             ProcessReviewerBackend::CodexCli { .. } => {
                 fs::read(output_root.join("raw-response.json"))?
@@ -659,7 +786,94 @@ fn observe_backend_record(
         ProcessReviewerBackend::CodexAppServer { .. } => None,
     }
     .ok_or(ProcessReviewerError::Input("unrecognized backend version"))?;
-    Ok(backend.record(protocol))
+    backend.record(protocol, credential_home)
+}
+
+fn valid_profile_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn observe_codex_profile(
+    credential_home: &Path,
+    profile: &CodexProfile,
+) -> ProcessReviewerResult<ObservedCodexProfile> {
+    let root = credential_home.canonicalize()?;
+    let path = credential_home.join(format!("{}.config.toml", profile.name));
+    let metadata = fs::symlink_metadata(&path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_CODEX_PROFILE_BYTES
+        || path
+            .parent()
+            .ok_or(ProcessReviewerError::Input("Codex profile path"))?
+            .canonicalize()?
+            != root
+    {
+        return Err(ProcessReviewerError::Input("Codex profile file"));
+    }
+    let bytes = fs::read(&path)?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| ProcessReviewerError::Input("Codex profile is not UTF-8"))?;
+    let value: toml::Value = toml::from_str(text)
+        .map_err(|_| ProcessReviewerError::Input("invalid Codex profile TOML"))?;
+    if toml_contains_key(&value, "forced_login_method") {
+        return Err(ProcessReviewerError::Input(
+            "forced_login_method is forbidden in Codex profiles",
+        ));
+    }
+    let table = value
+        .as_table()
+        .ok_or(ProcessReviewerError::Input("Codex profile root"))?;
+    let model = required_toml_string(table, "model")?;
+    let provider = required_toml_string(table, "model_provider")?;
+    let openai_base_url = required_toml_string(table, "openai_base_url")?;
+    let provider_table = table
+        .get("model_providers")
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get(&provider))
+        .and_then(toml::Value::as_table)
+        .ok_or(ProcessReviewerError::Input("Codex profile provider"))?;
+    let base_url = required_toml_string(provider_table, "base_url")?;
+    let env_key = required_toml_string(provider_table, "env_key")?;
+    if openai_base_url != base_url || profile.environment_variables != BTreeSet::from([env_key]) {
+        return Err(ProcessReviewerError::Input(
+            "Codex profile provider binding mismatch",
+        ));
+    }
+    Ok(ObservedCodexProfile {
+        provider,
+        model,
+        base_url,
+        hash: ContentHash::sha256(&bytes),
+    })
+}
+
+fn required_toml_string(
+    table: &toml::map::Map<String, toml::Value>,
+    key: &'static str,
+) -> ProcessReviewerResult<String> {
+    table
+        .get(key)
+        .and_then(toml::Value::as_str)
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+        .map(str::to_owned)
+        .ok_or(ProcessReviewerError::Input("Codex profile string"))
+}
+
+fn toml_contains_key(value: &toml::Value, needle: &str) -> bool {
+    match value {
+        toml::Value::Table(table) => {
+            table.contains_key(needle)
+                || table.values().any(|value| toml_contains_key(value, needle))
+        }
+        toml::Value::Array(values) => values.iter().any(|value| toml_contains_key(value, needle)),
+        _ => false,
+    }
 }
 
 fn valid_version(value: &str) -> bool {
@@ -860,9 +1074,137 @@ mod tests {
             "codex-app-server-jsonrpc@0.147.0",
         )
         .unwrap();
+        let credentials = tempdir().unwrap();
         assert_eq!(
-            backend.record("unused-for-app-server".to_owned()).kind,
+            backend
+                .record("unused-for-app-server".to_owned(), credentials.path())
+                .unwrap()
+                .kind,
             ProcessBackendKind::CodexAppServer
+        );
+    }
+
+    #[test]
+    fn codex_profile_is_bound_to_model_provider_hash_and_environment_name() {
+        let credentials = tempdir().unwrap();
+        let profile_bytes = br#"
+openai_base_url = "http://192.168.68.71:11999/v1/"
+model_provider = "ollama-priv"
+model = "qwen3.8:27b-mlx"
+
+[model_providers.ollama-priv]
+name = "Ollama"
+base_url = "http://192.168.68.71:11999/v1/"
+env_key = "OLLAMA_PRIV_API_KEY"
+"#;
+        fs::write(
+            credentials.path().join("ollama-priv.config.toml"),
+            profile_bytes,
+        )
+        .unwrap();
+        let backend = ProcessReviewerBackend::codex_cli_with_profile(
+            "/absolute/codex",
+            "qwen3.8:27b-mlx",
+            "high",
+            "ollama-priv",
+            ["OLLAMA_PRIV_API_KEY".to_owned()],
+        )
+        .unwrap();
+        let record = backend
+            .record("codex-exec@0.147.0".to_owned(), credentials.path())
+            .unwrap();
+        assert_eq!(record.provider, "ollama-priv");
+        assert_eq!(record.model, "qwen3.8:27b-mlx");
+        assert_eq!(
+            record.inference_settings.get("profile").map(String::as_str),
+            Some("ollama-priv")
+        );
+        assert_eq!(
+            record
+                .inference_settings
+                .get("environment_variables")
+                .map(String::as_str),
+            Some("OLLAMA_PRIV_API_KEY")
+        );
+        assert_eq!(
+            record
+                .inference_settings
+                .get("profile_hash")
+                .map(String::as_str),
+            Some(ContentHash::sha256(profile_bytes).as_str())
+        );
+    }
+
+    #[test]
+    fn codex_profile_rejects_forced_login_model_drift_and_unlisted_environment() {
+        let credentials = tempdir().unwrap();
+        let path = credentials.path().join("ollama-priv.config.toml");
+        fs::write(
+            &path,
+            br#"
+forced_login_method = "api"
+openai_base_url = "http://local/v1/"
+model_provider = "ollama-priv"
+model = "qwen"
+[model_providers.ollama-priv]
+base_url = "http://local/v1/"
+env_key = "OLLAMA_PRIV_API_KEY"
+"#,
+        )
+        .unwrap();
+        let backend = ProcessReviewerBackend::codex_cli_with_profile(
+            "/absolute/codex",
+            "qwen",
+            "high",
+            "ollama-priv",
+            ["OLLAMA_PRIV_API_KEY".to_owned()],
+        )
+        .unwrap();
+        assert!(
+            backend
+                .record("codex-exec@0.147.0".to_owned(), credentials.path())
+                .is_err()
+        );
+        fs::write(
+            &path,
+            br#"
+openai_base_url = "http://local/v1/"
+model_provider = "ollama-priv"
+model = "different"
+[model_providers.ollama-priv]
+base_url = "http://local/v1/"
+env_key = "OLLAMA_PRIV_API_KEY"
+"#,
+        )
+        .unwrap();
+        assert!(
+            backend
+                .record("codex-exec@0.147.0".to_owned(), credentials.path())
+                .is_err()
+        );
+        assert!(
+            ProcessReviewerBackend::codex_cli_with_profile(
+                "/absolute/codex",
+                "qwen",
+                "high",
+                "ollama-priv",
+                ["UNLISTED_SECRET".to_owned()],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn codex_profile_names_cannot_escape_the_credential_home() {
+        assert!(
+            ProcessReviewerBackend::codex_cli_with_profile(
+                "/absolute/codex",
+                "qwen",
+                "high",
+                "../profile",
+                ["OLLAMA_PRIV_API_KEY".to_owned()],
+            )
+            .is_err()
         );
     }
 

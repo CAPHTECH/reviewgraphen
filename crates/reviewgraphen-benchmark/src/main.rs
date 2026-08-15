@@ -171,9 +171,63 @@ fn main() -> ExitCode {
             effort,
             true,
         ),
+        [
+            command,
+            profile,
+            environment_variable,
+            input_root,
+            output_schema,
+            output_root,
+            record_output,
+            bwrap,
+            credential_home,
+            executable,
+            model,
+            effort,
+        ] if command == "run-process-reviewer-codex-profile" => run_process_reviewer_with_profile(
+            Path::new(input_root),
+            output_schema,
+            Path::new(output_root),
+            Path::new(record_output),
+            bwrap,
+            credential_home,
+            executable,
+            model,
+            effort,
+            Some((profile, environment_variable)),
+            false,
+        ),
+        [
+            command,
+            profile,
+            environment_variable,
+            input_root,
+            output_schema,
+            output_root,
+            record_output,
+            bwrap,
+            credential_home,
+            executable,
+            model,
+            effort,
+        ] if command == "run-process-reviewer-codex-profile-constrained" => {
+            run_process_reviewer_with_profile(
+                Path::new(input_root),
+                output_schema,
+                Path::new(output_root),
+                Path::new(record_output),
+                bwrap,
+                credential_home,
+                executable,
+                model,
+                effort,
+                Some((profile, environment_variable)),
+                true,
+            )
+        }
         _ => {
             eprintln!(
-                "usage: reviewgraphen-benchmark validate <execution|manifest|candidate|oracle|collection|inventory|score|real-unit|real-oracle|real-inventory|real-score> <file> | score <manifest> <candidate> <oracle> | score-real <manifest> <candidate> <real-oracle> <real-unit> | export-real-adjudication <manifest> <candidate> <real-oracle> <real-unit> <public-out> <private-out> | validate-blind-adjudication <reconciliation.json> <decision.json> | summarize-run <inventory.json> <collections.json> <scores.json> | summarize-real-run <real-inventory.json> <collections.json> <real-scores.json> | summarize-real-full-run <full-real-inventory.json> <collections.json> <real-scores.json> | prepare-pilot <absolute-public-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real-full <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | collect <manifest> <candidate.json> <out> | run-process-reviewer[-constrained] <codex|claude> <input-root> <output-schema-relative> <fresh-output-root> <record-output> <bwrap> <credential-home> <backend-executable> <model> <effort> | replay-process-reviewer <record.json>"
+                "usage: reviewgraphen-benchmark validate <execution|manifest|candidate|oracle|collection|inventory|score|real-unit|real-oracle|real-inventory|real-score> <file> | score <manifest> <candidate> <oracle> | score-real <manifest> <candidate> <real-oracle> <real-unit> | export-real-adjudication <manifest> <candidate> <real-oracle> <real-unit> <public-out> <private-out> | validate-blind-adjudication <reconciliation.json> <decision.json> | summarize-run <inventory.json> <collections.json> <scores.json> | summarize-real-run <real-inventory.json> <collections.json> <real-scores.json> | summarize-real-full-run <full-real-inventory.json> <collections.json> <real-scores.json> | prepare-pilot <absolute-public-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real-full <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | collect <manifest> <candidate.json> <out> | run-process-reviewer[-constrained] <codex|claude> <input-root> <output-schema-relative> <fresh-output-root> <record-output> <bwrap> <credential-home> <backend-executable> <model> <effort> | run-process-reviewer-codex-profile[-constrained] <profile> <environment-variable> <input-root> <output-schema-relative> <fresh-output-root> <record-output> <bwrap> <credential-home> <backend-executable> <model> <effort> | replay-process-reviewer <record.json>"
             );
             ExitCode::from(2)
         }
@@ -213,14 +267,84 @@ fn run_process_reviewer(
     effort: &str,
     provider_constrained: bool,
 ) -> ExitCode {
+    if backend_kind == "codex" {
+        return run_process_reviewer_with_profile(
+            input_root,
+            output_schema,
+            output_root,
+            record_output,
+            bwrap,
+            credential_home,
+            executable,
+            model,
+            effort,
+            None,
+            provider_constrained,
+        );
+    }
     let result = (|| {
         if record_output.exists() {
             return Err("process reviewer record output already exists".to_owned());
         }
         let backend = match backend_kind {
-            "codex" => ProcessReviewerBackend::codex_cli(executable, model, effort),
             "claude" => ProcessReviewerBackend::claude_cli(executable, model, effort),
             _ => return Err("backend must be codex or claude".to_owned()),
+        }
+        .map_err(|error| error.to_string())?;
+        let sandbox =
+            ProcessSandbox::new(bwrap, credential_home).map_err(|error| error.to_string())?;
+        let input =
+            ProcessReviewerInput::admit_current(input_root).map_err(|error| error.to_string())?;
+        let reviewer = ProcessReviewer::new(backend, sandbox).map_err(|error| error.to_string())?;
+        let record = if provider_constrained {
+            reviewer.run(&input, output_schema, output_root)
+        } else {
+            reviewer.run_downstream_validated(&input, output_schema, output_root)
+        }
+        .map_err(|error| error.to_string())?;
+        let bytes =
+            reviewgraphen_core::canonical_json(&record).map_err(|error| error.to_string())?;
+        fs::write(record_output, bytes).map_err(|error| error.to_string())?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_process_reviewer_with_profile(
+    input_root: &Path,
+    output_schema: &str,
+    output_root: &Path,
+    record_output: &Path,
+    bwrap: &str,
+    credential_home: &str,
+    executable: &str,
+    model: &str,
+    effort: &str,
+    profile: Option<(&str, &str)>,
+    provider_constrained: bool,
+) -> ExitCode {
+    let result = (|| {
+        if record_output.exists() {
+            return Err("process reviewer record output already exists".to_owned());
+        }
+        let backend = match profile {
+            Some((profile, environment_variable)) => {
+                ProcessReviewerBackend::codex_cli_with_profile(
+                    executable,
+                    model,
+                    effort,
+                    profile,
+                    [environment_variable.to_owned()],
+                )
+            }
+            None => ProcessReviewerBackend::codex_cli(executable, model, effort),
         }
         .map_err(|error| error.to_string())?;
         let sandbox =

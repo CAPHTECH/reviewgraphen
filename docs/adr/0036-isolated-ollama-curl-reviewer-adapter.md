@@ -1,10 +1,14 @@
 # ADR 0036: Isolated Ollama curl reviewer adapter
 
-- Status: Accepted for implementation; model execution is blocked on a frozen model tag
+- Status: Superseded before implementation by the 2026-08-15 ADR 0027 profile amendment
 - Date: 2026-08-15
 - Extends: ADR 0027
 
 ## Context
+
+> Historical design only. No curl backend was implemented or executed. A
+> verified Codex v2 profile already provides the local OpenAI-compatible route,
+> so the accepted implementation is the narrower ADR 0027 amendment.
 
 ADR 0027 admits local Codex and Claude child processes and deliberately adds no
 HTTP client, model SDK, or async runtime. The replacement M7 experiment needs a
