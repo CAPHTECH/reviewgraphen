@@ -25,3 +25,10 @@ families and opposite-family judges:
 
 The judge input omits arm and generator identity. All model outputs remain
 non-authority observations with byte-exact process records.
+
+The judge calibration is prepared by `scripts/prepare_judge_calibration.py`,
+run sequentially through both isolated process backends by
+`scripts/run_judge_calibration.sh`, and replayed/scored by
+`scripts/score_judge_calibration.py`. The private truth is never mounted in a
+judge input. Production review must not start unless the frozen thresholds pass
+for both judge families.

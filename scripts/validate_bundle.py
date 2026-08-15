@@ -119,6 +119,7 @@ def validate_schemas() -> list[str]:
         "reviewgraphen.benchmark.real_trial_inventory.v1.schema.json",
         "reviewgraphen.benchmark.real_run_summary.v1.schema.json",
         "reviewgraphen.benchmark.real_full_run_summary.v1.schema.json",
+        "reviewgraphen.benchmark.issue_judge_batch.v1.schema.json",
         "reviewgraphen.process_reviewer_record.v1.schema.json",
         "reviewgraphen.reviewer_output.v2.schema.json",
     ]
