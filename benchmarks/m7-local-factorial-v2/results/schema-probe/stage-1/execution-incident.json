@@ -1,0 +1,44 @@
+{
+  "schema": "reviewgraphen.benchmark.local_schema_probe_incident.v1",
+  "experiment": "m7-local-factorial-v2",
+  "observed_at": "2026-08-16",
+  "semantic_retry_performed": false,
+  "cause": "the runner sampled the append-only shaper log before the completed-request record was appended",
+  "classification": "measurement_instrumentation_race_not_model_schema_failure",
+  "snapshot_06_b1": {
+    "semantic_attempt": "completed",
+    "initial_runner_outcome": "protocol_invalid_request_count_mismatch",
+    "reconciled_outcome": "valid",
+    "reconciliation_basis": [
+      "exactly_one_transport_record_was_eventually_appended",
+      "process_exit_code_was_zero",
+      "recorded_limit_binding_matched_preregistration",
+      "raw_final_was_nonempty",
+      "candidate_schema_validated",
+      "trial_binding_and_denominator_collection_succeeded"
+    ],
+    "candidate_sha256": "sha256:3ecf853bb6e422cf01bd8d46454e7967cfb918bcceadee1b0e6128709a8d309b"
+  },
+  "snapshot_06_full": {
+    "semantic_attempt": "started_then_operator_interrupted",
+    "process_exit_code": 130,
+    "outcome": "protocol_invalid",
+    "failure_class": "operator_instrumentation_interruption",
+    "rerun": false,
+    "note": "the completion-only shaper log cannot establish whether the upstream model had begun generation"
+  },
+  "snapshot_34_b1": {
+    "semantic_attempt": "not_started",
+    "outcome": "not_run",
+    "basis": "the request shaper was already stopped and its health check failed before adapter launch"
+  },
+  "snapshot_34_full": {
+    "semantic_attempt": "not_started",
+    "outcome": "not_run"
+  },
+  "corrective_action": {
+    "semantic_condition_changed": false,
+    "runner_waits_for_completed_log_append": true,
+    "request_count_mismatch_now_stops_batch_immediately": true
+  }
+}

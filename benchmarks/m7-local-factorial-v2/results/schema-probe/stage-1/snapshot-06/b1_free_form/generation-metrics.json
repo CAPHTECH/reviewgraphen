@@ -1,0 +1,13 @@
+{
+  "schema": "reviewgraphen.benchmark.local_generation_metrics.v1",
+  "admitted_input_bytes": 40716,
+  "provider_input_tokens": 16283,
+  "provider_output_tokens": 38880,
+  "thinking_tokens": 0,
+  "final_content_tokens": 38880,
+  "final_content_bytes": 3151,
+  "empty_final": false,
+  "elapsed_milliseconds": 980899,
+  "elapsed_seconds": 980.899,
+  "failure_class": "valid_after_request_log_race_reconciliation"
+}

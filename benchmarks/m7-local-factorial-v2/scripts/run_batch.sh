@@ -59,7 +59,9 @@ while IFS=$'\t' read -r snapshot arm input; do
   result="$run_root/$mode/$snapshot/$arm"
   printf 'START index=%d snapshot=%s arm=%s completed=%d valid=%d protocol_invalid=%d\n' \
     "$index" "$snapshot" "$arm" "$completed" "$valid" "$invalid"
-  if bash "$runner" "$input" "$result"; then
+  bash "$runner" "$input" "$result"
+  trial_status=$?
+  if (( trial_status == 0 )); then
     ((valid += 1))
     consecutive_invalid=0
     outcome=valid
@@ -72,6 +74,11 @@ while IFS=$'\t' read -r snapshot arm input; do
   printf 'DONE index=%d snapshot=%s arm=%s outcome=%s completed=%d valid=%d protocol_invalid=%d\n' \
     "$index" "$snapshot" "$arm" "$outcome" "$completed" "$valid" "$invalid"
   ((index += 1))
+  if (( trial_status == 70 )); then
+    printf 'BATCH_STOP reason=request_count_mismatch completed=%d valid=%d protocol_invalid=%d\n' \
+      "$completed" "$valid" "$invalid"
+    exit 70
+  fi
   if (( consecutive_invalid >= 3 )); then
     printf 'BATCH_STOP reason=three_consecutive_invalid completed=%d valid=%d protocol_invalid=%d\n' \
       "$completed" "$valid" "$invalid"

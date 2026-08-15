@@ -61,6 +61,13 @@ elapsed_milliseconds=$(((finished_nanoseconds-started_nanoseconds)/1000000))
 printf '%s\n' "$process_status" > "$result_dir/process-status"
 printf '%s\n' "$elapsed_milliseconds" > "$result_dir/elapsed-milliseconds"
 after_requests=$(wc -l < "$M7_V2_SHAPER_LOG")
+for _ in {1..50}; do
+  if (( after_requests >= before_requests + 1 )); then
+    break
+  fi
+  sleep 0.1
+  after_requests=$(wc -l < "$M7_V2_SHAPER_LOG")
+done
 if (( after_requests != before_requests + 1 )); then
   echo "expected exactly one shaped Responses request" >&2
   exit 70
