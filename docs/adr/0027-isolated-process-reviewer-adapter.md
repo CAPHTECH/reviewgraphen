@@ -48,6 +48,15 @@ Two observed Codex warnings are experimental metadata, not ignored facts:
 - the local proxy's OpenAI-style model list lacks the `models` field Codex's
   refresh path expects, although semantic responses succeed.
 
+Codex 0.147 serializes that model-list refresh diagnostic as an `error` item
+even when the semantic request and final message succeed. The no-tools event
+allowlist admits `error` as a non-tool diagnostic alongside reasoning and the
+agent message; command execution, file change, MCP, web, and every unknown
+item remain rejected. Three frozen control probes independently produced
+schema-valid, manifest-valid final messages together with this exact item type
+before the distinction was implemented; those raw responses are retained as
+schema observations, not replayable successful process records.
+
 The local Qwen model emits long thinking traces. Empty final content caused by
 an exhausted output allowance is a protocol-invalid observation, not an
 abstention and not eligible for retry. The exact profile/model and the

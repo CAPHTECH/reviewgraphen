@@ -908,7 +908,7 @@ fn validate_codex_no_tool_events(bytes: &[u8]) -> ProcessReviewerResult<()> {
                     .and_then(|item| item.get("type"))
                     .and_then(serde_json::Value::as_str)
                     .ok_or(ProcessReviewerError::Input("untyped Codex item event"))?;
-                if !matches!(item_type, "reasoning" | "agent_message") {
+                if !matches!(item_type, "reasoning" | "agent_message" | "error") {
                     return Err(ProcessReviewerError::Protocol(format!(
                         "forbidden Codex item type {item_type}"
                     )));
@@ -1249,6 +1249,7 @@ env_key = "OLLAMA_PRIV_API_KEY"
             "{\"type\":\"thread.started\"}\n",
             "{\"type\":\"turn.started\"}\n",
             "{\"type\":\"item.completed\",\"item\":{\"type\":\"reasoning\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"error\"}}\n",
             "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\"}}\n",
             "{\"type\":\"turn.completed\"}\n"
         );
