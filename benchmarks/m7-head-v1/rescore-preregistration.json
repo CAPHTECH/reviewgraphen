@@ -1,0 +1,40 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_head_calibration_rescore_preregistration.v1",
+  "experiment": "m7-head-v1",
+  "rescore_id": "test-only-rescore-1",
+  "decision_timing": "post_hoc_after_attempt_1_results",
+  "decision_reason": "remove unified-diff formatting as a construct-irrelevant bottleneck while retaining runtime regression evidence",
+  "frozen_source_attempt": "private/calibration/",
+  "rewrite_source_attempt": false,
+  "new_model_generation": false,
+  "semantic_attempts_added": 0,
+  "unit_count": 20,
+  "test_reconstruction": {
+    "source": "record.raw_response.test_patch",
+    "required_shape": "single_new_file_single_hunk_added_lines_only",
+    "path_must_equal_selected_allowed_test_target": true,
+    "manual_repair": false,
+    "git_apply_required": false
+  },
+  "success_observations": [
+    "generated_test_builds_and_fails_at_runtime_on_known_defective_parent",
+    "same_generated_test_builds_and_passes_on_canonical_fix"
+  ],
+  "excluded_requirements": [
+    "production_fix_patch_parse",
+    "production_fix_patch_apply",
+    "generated_fix_success"
+  ],
+  "compilation_failure_counts_as_success": false,
+  "minimum_successes_to_proceed": 13,
+  "threshold_basis": {
+    "null_success_probability": 0.4,
+    "reason_for_higher_null_than_attempt_1": "the test-only endpoint is easier than the former joint test-and-fix endpoint",
+    "exact_one_sided_tail_probability": 0.021028927477771152,
+    "reference_success_probability": 0.75,
+    "pass_probability_at_reference": 0.8981881430772773,
+    "operational_minimum_rate": 0.65
+  },
+  "stop_if_below_threshold": true,
+  "production_canonical_fix_root_status": "not_yet_defined"
+}
