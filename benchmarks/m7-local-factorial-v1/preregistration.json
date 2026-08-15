@@ -1,0 +1,135 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_local_factorial_preregistration.v1",
+  "experiment": "m7-local-factorial-v1",
+  "decision_timing": "after_frontier_floor_before_local_model_tag_and_before_any_ollama_semantic_call",
+  "status": "waiting_for_frozen_model_tag",
+  "hypothesis": "the scaffold effect on known-target detection is larger for the local model than for the frontier model",
+  "factors": {
+    "model_capability": [
+      "frontier_gpt_5_6_sol_high_historical",
+      "local_qwen_frozen_tag"
+    ],
+    "review_scaffold": [
+      "b1_free_form",
+      "g3_proxy",
+      "full_reviewgraphen"
+    ]
+  },
+  "endpoint": {
+    "primary": "strict_m7_real_v1_known_target_detection_bit",
+    "authority": "mechanically_scored_against_frozen_private_location_oracle",
+    "positive_units": 20,
+    "recall_denominator_per_cell": 20,
+    "protocol_invalid_primary_handling": "count_as_not_detected_intention_to_measure",
+    "secondary": [
+      "protocol_invalid_count_and_rate",
+      "reported_finding_count",
+      "detected_target_identity_and_cross_cell_overlap"
+    ],
+    "ai_adjudication_is_not_primary": true
+  },
+  "frontier_row": {
+    "reuse_only_no_rerun": true,
+    "b1_source": "m7-real-v1/results/replicate-1",
+    "g3_proxy_source": "m7-real-v1/results/replicate-1",
+    "full_source": "m7-real-v1/results/full-reviewgraphen-replicate-2",
+    "observed_detection": {
+      "b1_free_form": {"count": 1, "unit_ids": ["real-unit-02"]},
+      "g3_proxy": {"count": 1, "unit_ids": ["real-unit-02"]},
+      "full_reviewgraphen": {"count": 1, "unit_ids": ["real-unit-15"]}
+    },
+    "known_asymmetries": [
+      "B1_and_G3_are_historical_replicate_1_while_full_is_historical_replicate_2",
+      "B1_and_G3_used_the_original_isolated_Codex_runner_with_workspace_scoped_shell_reads_while_full_used_the_ADR_0027_no_tools_process_adapter",
+      "local_cells_all_use_the_new_no_tools_Ollama_curl_adapter",
+      "provider_prompt_rendering_tokenization_quantization_context_limit_and_generation_settings_differ_by_model_row",
+      "frontier_runs_included_matched_controls_while_the_local_primary_run_contains_positive_trials_only",
+      "sessions_are_independent_per_trial_so_control_omission_has_no intended_cross_trial_memory_effect_but_order_load_and_runtime_conditions_still_differ"
+    ],
+    "interpretation": "quasi_factorial_historical_comparison_not_a_randomized_causal_model_by_scaffold_experiment"
+  },
+  "local_row": {
+    "endpoint_origin": "http://mac-studio.local:11434",
+    "ollama_expected_version_at_design": "0.32.13_operator_reported_to_be_reobserved",
+    "model_tag": "pending_operator_input",
+    "model_digest": "must_be_observed_and_frozen_before_probe",
+    "model_capabilities": "must_be_observed_and_frozen_before_probe",
+    "generation_settings": {
+      "temperature": 0,
+      "seed": 7,
+      "stream": false,
+      "tools": "none",
+      "think": "freeze_from_model_capability_before_probe",
+      "context_limit": "freeze_at_or_below_observed_model_limit_before_probe",
+      "output_limit": "freeze_before_probe"
+    },
+    "arms": ["b1_free_form", "g3_proxy", "full_reviewgraphen"],
+    "positive_units_per_arm": 20,
+    "replicates": 1,
+    "semantic_trials": 60,
+    "execution_order": "deterministic_hash_order_blocked_by_unit_with_arm_order_rotated_by_unit",
+    "no_semantic_retry": true,
+    "source_and_oracle": "frozen_m7-real-v1_without_modification",
+    "input_blinding": "same_commit_issue_test_oracle_private_exclusions_as_m7-real-v1",
+    "full_context_bound": {"maximum_files_per_obligation": 8, "maximum_bytes_per_obligation": 262144}
+  },
+  "schema_conformance_probe": {
+    "purpose": "transport_and_exact_candidate_schema_adherence_only_not_target_detection",
+    "uses_controls_only": true,
+    "stage_1": {
+      "units": 2,
+      "selection": "minimum_and_maximum_B1_admitted_input_bytes_among_20_matched_controls_ties_by_unit_id",
+      "arms_per_unit": 3,
+      "calls": 6,
+      "proceed_immediately_if": "6_of_6_exact_schema_valid",
+      "expand_if": "exactly_5_of_6_exact_schema_valid",
+      "stop_if": "4_or_fewer_of_6_exact_schema_valid"
+    },
+    "stage_2_if_expanded": {
+      "additional_units": 4,
+      "selection": "B1_input_size_order_ranks_4_7_14_17_among_remaining_controls_ties_by_unit_id",
+      "additional_calls": 12,
+      "proceed_if": "at_least_17_of_18_overall_and_at_least_5_of_6_in_each_arm",
+      "otherwise": "stop_as_measurement_infeasible_for_frozen_model_protocol"
+    },
+    "valid_definition": "HTTP_success_complete_Ollama_envelope_exact_candidate_JSON_schema_trial_binding_and_for_scaffold_arms_exact_obligation_denominator",
+    "schema_invalid_retry": false,
+    "transport_failure": "pause_and_record_without_scoring_as_schema_observation_resume_only_after_operator_restores_same_frozen_endpoint_model_and_request",
+    "response_repair": "forbidden",
+    "schema_relaxation": "forbidden_in_v1",
+    "postprocessing_normalization": "forbidden_in_v1",
+    "failure_consequence": "report_measurement_infeasible_and_do_not_run_60_positive_trials",
+    "future_change": "requires_new_version_and_new_preregistration"
+  },
+  "analysis": {
+    "unit_of_pairing": "real_unit_id",
+    "cell_estimates": "detected_count_over_20_with_Wilson_95_percent_interval",
+    "within_row_arm_comparison": "two_sided_exact_McNemar_with_full_vs_B1_primary_and_G3_vs_B1_secondary",
+    "interaction_contrasts": [
+      "(local_full-local_B1)-(frontier_full-frontier_B1)",
+      "(local_G3-local_B1)-(frontier_G3-frontier_B1)"
+    ],
+    "omnibus_interaction_test": "enumerate_all_2_power_20_within_unit_swaps_of_the_two_model_row_arm_difference_vectors_and_use_max_absolute_contrast_statistic",
+    "alpha": 0.05,
+    "planned_contrast_adjustment": "Holm_for_two_interaction_contrasts_after_reporting_the_omnibus",
+    "inference_limit": "model_rows_were_not_randomized_and_runner_conditions_are_asymmetric_so_p_values_are_sensitivity_descriptions_not_a_causal_or_model_population_claim"
+  },
+  "power": {
+    "n": 20,
+    "minimum_one_direction_McNemar_discordances_for_two_sided_p_below_0_05": 6,
+    "assumption_examples": [
+      {"full_only_probability": 0.35, "B1_only_probability": 0.05, "net_rate_difference": 0.30, "within_local_McNemar_power": 0.454891770591895},
+      {"full_only_probability": 0.45, "B1_only_probability": 0.05, "net_rate_difference": 0.40, "within_local_McNemar_power": 0.693716334859002}
+    ],
+    "interaction_power_statement": "no_80_percent_power_claim_is_made_for_the_omnibus_interaction_the_exact_test_will_condition_on_the_two_discordant_historical_frontier_target_identities",
+    "same_floor_rule": "if_all_local_cells_are_1_of_20_report_no_observed_rate_interaction_and_that_the_design_remains_floor_limited_do_not_conclude_no_scaffold_effect",
+    "equal_local_gain_rule": "if_all_local_arms_improve_equally_report_a_model_row_difference_without_scaffold_interaction",
+    "non_significant_rule": "report_the_observed_effect_and_uncertainty_as_inconclusive_not_as_equivalence"
+  },
+  "preservation": {
+    "rewrite_existing_results": false,
+    "actual_upstream_writes": false,
+    "ollama_pull_by_experiment": false,
+    "fsl_repository_mutability": "read_only"
+  }
+}
