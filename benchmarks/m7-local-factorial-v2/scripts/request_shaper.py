@@ -231,6 +231,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.log.exists() or not args.log.parent.is_dir():
         raise SystemExit("log path must be fresh under an existing directory")
+    args.log.touch(mode=0o600, exist_ok=False)
     Server(args.log).serve_forever()
 
 

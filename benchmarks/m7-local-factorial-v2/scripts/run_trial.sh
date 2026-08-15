@@ -80,6 +80,9 @@ if [[ -f "$result_dir/process-output/raw-response.json" ]]; then
   if (( final_content_bytes == 0 )); then
     empty_final=true
   fi
+elif (( process_status != 0 )) && rg -q 'raw response size 0 is outside' "$result_dir/adapter.stderr"; then
+  final_content_bytes=0
+  empty_final=true
 fi
 write_metrics() {
   local failure_class=$1
