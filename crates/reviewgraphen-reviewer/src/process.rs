@@ -619,16 +619,17 @@ impl ProcessReviewer {
                 command
                     .args(["--setenv", "CODEX_HOME", "/home/reviewer/.codex"])
                     .arg("/reviewer-backend")
-                    .args([
-                        "exec",
-                        "--dangerously-bypass-approvals-and-sandbox",
-                        "--ignore-user-config",
-                        "--ignore-rules",
-                        "--strict-config",
-                        "--ephemeral",
-                        "--skip-git-repo-check",
-                        "--json",
-                    ]);
+                    .args(["exec", "--dangerously-bypass-approvals-and-sandbox"]);
+                if profile.is_none() {
+                    command.arg("--ignore-user-config");
+                }
+                command.args([
+                    "--ignore-rules",
+                    "--strict-config",
+                    "--ephemeral",
+                    "--skip-git-repo-check",
+                    "--json",
+                ]);
                 if let Some(profile) = profile {
                     command.args(["--profile", &profile.name]);
                 } else {

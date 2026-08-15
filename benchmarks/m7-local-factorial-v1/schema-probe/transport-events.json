@@ -1,0 +1,17 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_local_schema_probe_transport_events.v1",
+  "events": [
+    {
+      "attempt_id": "stage-1-snapshot-06-b1-transport-1",
+      "trial_id": "m7-real:snapshot-06:b1:3",
+      "semantic_response_observed": false,
+      "process_record_created": false,
+      "process_exit_status": 1,
+      "stderr_sha256": "sha256:eaa4a9fb64b12106586f0051c48812fe605d5801abc0c31561d04481476f9163",
+      "observed_wrong_endpoint": "https://api.openai.com/v1/responses",
+      "cause": "Codex 0.147 --ignore-user-config disabled the explicitly named profile",
+      "disposition": "transport_failure_not_a_schema_observation",
+      "retry_basis": "preregistered transport-failure pause rule; retry only after adapter correction with the same frozen profile, model, prompt, and trial input"
+    }
+  ]
+}

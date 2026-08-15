@@ -32,6 +32,15 @@ environment-variable name. Secret values remain absent. Raw response,
 input-manifest binding, no-tools event validation, replay, and the
 non-authority ceiling are unchanged.
 
+Codex 0.147 treats `--ignore-user-config` as disabling an explicitly named v2
+profile as well as the base config. The flag therefore remains mandatory for
+the profile-free frontier path but is omitted in named-profile mode. Named
+profiles run with an operator-prepared minimal credential home containing only
+the admitted profile file: no base `config.toml`, shared `auth.json`, rules, or
+benchmark material is copied into it. The first local probe established this
+behavior as a transport failure before any semantic response; it is not scored
+as schema evidence and is retained in the probe transport log.
+
 Two observed Codex warnings are experimental metadata, not ignored facts:
 
 - missing model metadata causes fallback context/model limits, which can alter
