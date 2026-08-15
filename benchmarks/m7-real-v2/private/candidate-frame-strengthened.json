@@ -1,0 +1,2536 @@
+{
+  "frame_counts": {
+    "candidate": 14,
+    "excluded": 1
+  },
+  "record_count": 15,
+  "records": [
+    {
+      "commit_date": "2026-07-18",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 1.0,
+        "production_changed_lines": 13,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 1,
+        "production_hunk_count": 2,
+        "projected_production_bytes": 508990,
+        "projected_production_file_count": 1,
+        "test_changed_lines": 18,
+        "test_to_production_changed_line_ratio": 1.3846153846153846
+      },
+      "fix_commit": "git:2af284644f9bbe5dcf351577b97a315934874e13",
+      "frame_status": "candidate",
+      "parent_commit": "git:516d9d94219c63b20e1402ce3962d473cf38d256",
+      "production_paths": [
+        "rust/fslc/src/main.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:2ce2398d9cbc737740e718861a0425a05213a982f136d848d5dba25314933b16",
+      "subject_private": "fix(document): enforce paired CLI rendering",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "claims_and_generate_agree_on_spec_and_claim_set_digests",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "claims_output_validates_against_the_rcir_v1_schema",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "claims_with_output_writes_the_raw_rcir_json_and_a_small_envelope",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_default_mode_succeeds_despite_an_unattributed_target",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_default_mode_succeeds_despite_unsupported_targets",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_is_byte_identical_across_repeated_runs",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_lang_en_renders_english_markdown",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_rejects_an_unknown_lang",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_rejects_an_unknown_view",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_strict_fails_on_an_unattributed_target",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_strict_fails_on_unsupported_targets",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_strict_rendering_fails_on_a_formula_fallback",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_with_output_writes_file_and_envelope_with_digests_and_coverage",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:1182f4d1d486df62ba3d0765b59a7841bb9c43ee8e35fc7c2406f7fb2c3d6520",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a3eb0c0377134328413325d61c1a58b38798396d533f5d22714320b458a0f134",
+          "test_bin": "document_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "unknown_document_subcommand_is_rejected",
+          "test_path": "rust/fslc/tests/document_cli.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fslc/tests/document_cli.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-17",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 0.18823529411764706,
+        "production_changed_lines": 170,
+        "production_crate_count": 5,
+        "production_cross_crate": true,
+        "production_file_count": 10,
+        "production_hunk_count": 13,
+        "projected_production_bytes": 934657,
+        "projected_production_file_count": 10,
+        "test_changed_lines": 2,
+        "test_to_production_changed_line_ratio": 0.011764705882352941
+      },
+      "fix_commit": "git:9558087afe7cfc8b82e70de3caff273e419d82ec",
+      "frame_status": "candidate",
+      "parent_commit": "git:2188dcc2ca599e072fcb61762a3c8f01fd122aac",
+      "production_paths": [
+        "rust/fsl-core/src/domain.rs",
+        "rust/fsl-core/src/lib.rs",
+        "rust/fsl-core/src/public_kernel.rs",
+        "rust/fsl-syntax/src/db.rs",
+        "rust/fsl-syntax/src/domain.rs",
+        "rust/fsl-syntax/src/parser.rs",
+        "rust/fsl-tools/src/analysis_graph.rs",
+        "rust/fsl-verifier/src/value.rs",
+        "rust/fslc/src/coverage.rs",
+        "rust/fslc/src/main.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:4c57401ba529f41a7b4f5dd652cb734f7eb939053e1922bf52c315b88444b7fd",
+      "subject_private": "fix(release): align Rust MSRV with locked dependencies",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:fdcf72665ed49956fe9050f8978a0f2447462fe0e2b60fc2e6c13118ac92b6ce",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a5585dd7fb26983ff5cef43a8538fbda465b8c4ea4dbeaac8e0659a83804ea43",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_cli_envelopes_match_the_published_schema",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:fdcf72665ed49956fe9050f8978a0f2447462fe0e2b60fc2e6c13118ac92b6ce",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a5585dd7fb26983ff5cef43a8538fbda465b8c4ea4dbeaac8e0659a83804ea43",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_cli_help_matches_the_embedded_contract_at_every_command_path",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:fdcf72665ed49956fe9050f8978a0f2447462fe0e2b60fc2e6c13118ac92b6ce",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a5585dd7fb26983ff5cef43a8538fbda465b8c4ea4dbeaac8e0659a83804ea43",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_release_unit_is_atomic_pinned_and_platform_closed",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:fdcf72665ed49956fe9050f8978a0f2447462fe0e2b60fc2e6c13118ac92b6ce",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a5585dd7fb26983ff5cef43a8538fbda465b8c4ea4dbeaac8e0659a83804ea43",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "production_accepts_only_governed_source_branches",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:fdcf72665ed49956fe9050f8978a0f2447462fe0e2b60fc2e6c13118ac92b6ce",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a5585dd7fb26983ff5cef43a8538fbda465b8c4ea4dbeaac8e0659a83804ea43",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "published_schema_inventory_is_complete_and_parseable",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:fdcf72665ed49956fe9050f8978a0f2447462fe0e2b60fc2e6c13118ac92b6ce",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:a5585dd7fb26983ff5cef43a8538fbda465b8c4ea4dbeaac8e0659a83804ea43",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "workspace_packages_are_not_publishable",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fslc/tests/native_integration.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-08-08",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 1.0,
+        "production_changed_lines": 23,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 1,
+        "production_hunk_count": 2,
+        "projected_production_bytes": 131962,
+        "projected_production_file_count": 1,
+        "test_changed_lines": 48,
+        "test_to_production_changed_line_ratio": 2.0869565217391304
+      },
+      "fix_commit": "git:ef645670c8050d83807a4fd5cdab86030a550ba5",
+      "frame_status": "candidate",
+      "parent_commit": "git:b8060376bc0399d534a642d89fd2754326859575",
+      "production_paths": [
+        "rust/fsl-core/src/domain_lowering.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:6c9498bcc721210ef8a393220aee3f0e29f6c89007307b6b2988106ce23dda8f",
+      "subject_private": "fix(domain)!: reject retry backoff which has no executable lowering (#723) (#774)",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:0f5031f15bb9dd6b9bf0298d39c5099e5eab78796f15d4014d991bfac3f4022c",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "container_default_zero_regressions_are_rejected",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:0f5031f15bb9dd6b9bf0298d39c5099e5eab78796f15d4014d991bfac3f4022c",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "corpus_discovery_matches_registered_classification",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:0f5031f15bb9dd6b9bf0298d39c5099e5eab78796f15d4014d991bfac3f4022c",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "empty_enum_declarations_fail_closed_before_rendering",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:0f5031f15bb9dd6b9bf0298d39c5099e5eab78796f15d4014d991bfac3f4022c",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "exclusion_set_is_exactly_span_and_nothing_else",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:0f5031f15bb9dd6b9bf0298d39c5099e5eab78796f15d4014d991bfac3f4022c",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "known_divergent_domain_fixture_pins_the_open_finding",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:0f5031f15bb9dd6b9bf0298d39c5099e5eab78796f15d4014d991bfac3f4022c",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "semantically_invalid_domain_fixtures_are_rejected_by_both_lowering_paths",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:0f5031f15bb9dd6b9bf0298d39c5099e5eab78796f15d4014d991bfac3f4022c",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "syntax_invalid_domain_fixtures_fail_to_parse",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:0f5031f15bb9dd6b9bf0298d39c5099e5eab78796f15d4014d991bfac3f4022c",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "unlowered_domain_constructs_fail_closed_on_both_paths",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:0f5031f15bb9dd6b9bf0298d39c5099e5eab78796f15d4014d991bfac3f4022c",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "unsupported_default_shapes_fail_closed_with_original_origins",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:0f5031f15bb9dd6b9bf0298d39c5099e5eab78796f15d4014d991bfac3f4022c",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "valid_domain_corpus_lowering_and_rendering_agree",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fsl-core/tests/domain_render_agreement.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-17",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 0.8095238095238095,
+        "production_changed_lines": 21,
+        "production_crate_count": 2,
+        "production_cross_crate": true,
+        "production_file_count": 2,
+        "production_hunk_count": 5,
+        "projected_production_bytes": 146926,
+        "projected_production_file_count": 2,
+        "test_changed_lines": 22,
+        "test_to_production_changed_line_ratio": 1.0476190476190477
+      },
+      "fix_commit": "git:125d2d0c12a2dd74816410ec721f53686007aba2",
+      "frame_status": "candidate",
+      "parent_commit": "git:ffcd7a73581196812a3d8bf523c52a6c7e062d2e",
+      "production_paths": [
+        "rust/fsl-core/src/domain_lowering.rs",
+        "rust/fsl-solver-z3/src/lib.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:746958f31b5c9ae8575d090dfaeee2fd20a8cb5df8262e32c1763008cf1e99fb",
+      "subject_private": "fix(release): statically vendor native Z3",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:523a91e2e71d7e7c73b652b007e1423a8dc4049bfb5ccf4afbc85827930f2f3e",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:16db3315df6ad4efff71a6091d775998c2ad270d921e9880076aab2ed8faa7d7",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_cli_envelopes_match_the_published_schema",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:523a91e2e71d7e7c73b652b007e1423a8dc4049bfb5ccf4afbc85827930f2f3e",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:16db3315df6ad4efff71a6091d775998c2ad270d921e9880076aab2ed8faa7d7",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_cli_help_matches_the_embedded_contract_at_every_command_path",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:523a91e2e71d7e7c73b652b007e1423a8dc4049bfb5ccf4afbc85827930f2f3e",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:16db3315df6ad4efff71a6091d775998c2ad270d921e9880076aab2ed8faa7d7",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_release_unit_is_atomic_pinned_and_platform_closed",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:523a91e2e71d7e7c73b652b007e1423a8dc4049bfb5ccf4afbc85827930f2f3e",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:16db3315df6ad4efff71a6091d775998c2ad270d921e9880076aab2ed8faa7d7",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "production_accepts_only_governed_source_branches",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:523a91e2e71d7e7c73b652b007e1423a8dc4049bfb5ccf4afbc85827930f2f3e",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:16db3315df6ad4efff71a6091d775998c2ad270d921e9880076aab2ed8faa7d7",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "published_schema_inventory_is_complete_and_parseable",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:523a91e2e71d7e7c73b652b007e1423a8dc4049bfb5ccf4afbc85827930f2f3e",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:16db3315df6ad4efff71a6091d775998c2ad270d921e9880076aab2ed8faa7d7",
+          "test_bin": "native_integration",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "workspace_packages_are_not_publishable",
+          "test_path": "rust/fslc/tests/native_integration.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fslc/tests/native_integration.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-18",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 0.6756756756756757,
+        "production_changed_lines": 37,
+        "production_crate_count": 2,
+        "production_cross_crate": true,
+        "production_file_count": 3,
+        "production_hunk_count": 9,
+        "projected_production_bytes": 675375,
+        "projected_production_file_count": 3,
+        "test_changed_lines": 19,
+        "test_to_production_changed_line_ratio": 0.5135135135135135
+      },
+      "fix_commit": "git:6277dcbeb93538f369cd7c2a7b2753b51d1811fd",
+      "frame_status": "candidate",
+      "parent_commit": "git:ed83d561b37d135573e84f5cc017d18b547cdd84",
+      "production_paths": [
+        "rust/fsl-tools/src/document_render.rs",
+        "rust/fslc/src/approval.rs",
+        "rust/fslc/src/main.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:80540e4eecf55ddc9f9b09d3fab0a8760cc3159e0309dbb4089a5dc6074171fe",
+      "subject_private": "fix(approval): verify reviewed artifact overlay",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:3480c6bbcf8fed387174b2165c8d918a5194387a3688dbfd46502f557ab95a06",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:35c322717de13d8747f942710c2e49ae3bab434e5ee4a68b230e3acfd981dc35",
+          "test_bin": "document_approval",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "approvals_section_includes_the_intent_fidelity_disclaimer",
+          "test_path": "rust/fsl-tools/tests/document_approval.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:3480c6bbcf8fed387174b2165c8d918a5194387a3688dbfd46502f557ab95a06",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:35c322717de13d8747f942710c2e49ae3bab434e5ee4a68b230e3acfd981dc35",
+          "test_bin": "document_approval",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "approvals_section_lists_records_sorted_by_approved_at_then_path",
+          "test_path": "rust/fsl-tools/tests/document_approval.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:3480c6bbcf8fed387174b2165c8d918a5194387a3688dbfd46502f557ab95a06",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:35c322717de13d8747f942710c2e49ae3bab434e5ee4a68b230e3acfd981dc35",
+          "test_bin": "document_approval",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "no_approval_renders_byte_identically_to_no_approval_argument",
+          "test_path": "rust/fsl-tools/tests/document_approval.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:3480c6bbcf8fed387174b2165c8d918a5194387a3688dbfd46502f557ab95a06",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:35c322717de13d8747f942710c2e49ae3bab434e5ee4a68b230e3acfd981dc35",
+          "test_bin": "document_approval",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "signed_and_unsigned_records_render_distinct_signature_lines",
+          "test_path": "rust/fsl-tools/tests/document_approval.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "acceptance_and_forbidden_carry_the_non_generalization_disclaimer",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "analysis_bounds_carry_the_not_a_system_limit_disclaimer",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "analysis_scope_numeric_bounds_render_as_plain_numbers",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "cancel_system_renders_with_zero_formula_fallbacks",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "deadline_rule_is_distinguished_from_progress_rule_liveness",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "fairness_is_a_scheduling_assumption_not_immediate_execution",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "forbidden_with_no_prefix_is_worded_without_an_empty_step_list",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "multiple_guards_use_a_numbered_list_not_a_single_run_on_sentence",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "non_inline_if_condition_keeps_its_nested_updates",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "not_is_preserved_as_negation_not_dropped",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "original_text_and_formalized_meaning_are_separate_sections",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "progress_rule_never_claims_established_evidence",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "reachability_goal_is_a_goal_not_an_invariant",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "renderer_rejects_a_different_trace_payload_with_the_same_id",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "renderer_rejects_a_subject_mapped_to_another_valid_target",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "renderer_rejects_an_unresolved_semantic_target",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "renderer_rejects_rcir_paired_with_another_valid_model",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "rendering_is_byte_identical_across_repeated_runs",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "req2_en_golden_matches_exactly",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "req2_ja_golden_matches_exactly",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "requires_renders_as_enablement_not_desirability",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "shared_claim_across_two_requirements_is_rendered_once_and_back_referenced",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "transition_rule_uses_the_n_and_special_case_and_preserves_old",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:e83ef8b3cd07cbc838d98158bccb3a84af521cb556c1c568dcf204f9220c1881",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:bec9cdc07a6d85ba57ae0164323db02b05de1e2ba9a22fdb31e0c377460d05fe",
+          "test_bin": "document_render",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "undecided_is_excluded_from_normative_claims_and_labeled_as_metadata",
+          "test_path": "rust/fsl-tools/tests/document_render.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "a_ledger_kind_record_hand_edited_into_a_document_schema_is_rejected",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "approval_create_rejects_an_artifact_that_already_carries_an_approval_overlay",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "approval_diff_accepts_a_requirements_document_record",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "changed_glossary_content_surfaces_as_rendering_drift_not_spec_drift",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "document_flags_are_rejected_with_a_solver_kind",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "editable_slot_is_bound_separately_from_the_canonical_rendering",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "normative_claim_edits_are_rejected_at_approval_create",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "requirements_document_approval_create_and_check_round_trip",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "requirements_document_approval_detects_spec_and_claim_set_drift",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "requirements_document_approval_records_document_inputs_with_glossary_and_evidence",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "requirements_document_record_without_reviewed_digest_is_rejected",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "signed_requirements_document_approval_uses_schema_v4_and_verifies",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "solver_flags_are_rejected_with_requirements_document_kind",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:56a6a64118a66273b1ff9ee0081e0aaa84d185fa4015c29043f469fe061786ca",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:e31eac8f7c9ba99b42b2bec154c32bf320e104189eca21b52dd341794d68b04f",
+          "test_bin": "issue_333_approval_requirements_document",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "tampered_v4_signature_is_rejected",
+          "test_path": "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fsl-tools/tests/document_approval.rs",
+        "rust/fsl-tools/tests/document_render.rs",
+        "rust/fslc/tests/issue_333_approval_requirements_document.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-20",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 1.0,
+        "production_changed_lines": 7,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 1,
+        "production_hunk_count": 1,
+        "projected_production_bytes": 608272,
+        "projected_production_file_count": 1,
+        "test_changed_lines": 6,
+        "test_to_production_changed_line_ratio": 0.8571428571428571
+      },
+      "fix_commit": "git:0ad428a87354bf0dcd9439ac67e14e2621b744e6",
+      "frame_status": "candidate",
+      "parent_commit": "git:3c09aac165691cd852e4677846f16b11ac186891",
+      "production_paths": [
+        "rust/fslc/src/main.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:922aed225280a2c7351e77604ed90a72228efd8e9aadb31df3d173d69a9bd0bd",
+      "subject_private": "fix(mutate): preserve explicit case requirements",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "conditional_type_diagnostics_point_to_the_invalid_child_expression",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "formatter_parenthesizes_a_conditional_used_as_an_operator_operand",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "general_conditionals_cross_cli_verification_and_replay_paths",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "monitor_boundary_self_spec_is_proved_and_mutation_sensitive",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "mutate_attributes_trace_oracle_kills_to_attached_requirements",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_check_and_verify_reject_duplicate_correspondence_origins",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_check_and_verify_share_the_core_duplicate_write_gate",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_check_locates_a_malformed_dependency_at_the_governance_reference",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_check_locates_a_semantic_dependency_error_at_the_preservation",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_check_rejects_a_missing_governance_dependency",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_check_rejects_an_incomplete_governance_contract",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_check_reports_a_governance_counterexample_without_misclassifying_it",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_cli_checks_a_repository_spec_without_python",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_cli_preserves_bmc_outcomes",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_cli_preserves_induction_outcomes",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_cli_replays_witnesses_from_partially_initialized_state",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "native_verify_preserves_the_agent_document_boundary_error",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "qualified_requirements_stage_keeps_its_process_path_in_evidence",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "requirements_stage_is_readable_in_explain_and_violation_evidence",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:338d69828a558e9fb91d7b99542a9857500589f3383241729d7ecb868c4e0972",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:30504a990d3088f405a7ab0cd55c641a3cd11ac0fa8013995efc834f646e4aba",
+          "test_bin": "cli_regression",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "typed_requirement_relations_reach_strict_tags_scenarios_and_diagnostics",
+          "test_path": "rust/fslc/tests/cli_regression.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fslc/tests/cli_regression.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-14",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 0.4,
+        "production_changed_lines": 155,
+        "production_crate_count": 3,
+        "production_cross_crate": true,
+        "production_file_count": 5,
+        "production_hunk_count": 20,
+        "projected_production_bytes": 713800,
+        "projected_production_file_count": 5,
+        "test_changed_lines": 25,
+        "test_to_production_changed_line_ratio": 0.16129032258064516
+      },
+      "fix_commit": "git:d6882adcdd74bdff20e67cacf6a248ba2dc27036",
+      "frame_status": "candidate",
+      "parent_commit": "git:a35813112f9845265b48f9e8e9241403b0a57a09",
+      "production_paths": [
+        "rust/fsl-core/src/domain_lowering.rs",
+        "rust/fsl-syntax/src/annotation.rs",
+        "rust/fsl-syntax/src/dispatch.rs",
+        "rust/fsl-syntax/src/syntax_expr.rs",
+        "rust/fslc/src/main.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:92a8d7d822b5646ebda8338a8ba5ced0bc281c0edefb18de3d72ff37ffcd6124",
+      "subject_private": "fix(syntax): complete dialect registry acceptance",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:77e56a6156ca48f6495f04166ebd8f00668f4a2c258508ac47c8559ee51a1d1a",
+          "package": "fsl-syntax",
+          "parent_test_source_sha256": "sha256:144b7be5e47deb098609507bb88d567c7b1d21d7b75060911a0665ee55cd7e38",
+          "test_bin": "domain_typed_expressions",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "canonical_enum_and_legacy_union_retain_source_form_spans_and_comments",
+          "test_path": "rust/fsl-syntax/tests/domain_typed_expressions.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:77e56a6156ca48f6495f04166ebd8f00668f4a2c258508ac47c8559ee51a1d1a",
+          "package": "fsl-syntax",
+          "parent_test_source_sha256": "sha256:144b7be5e47deb098609507bb88d567c7b1d21d7b75060911a0665ee55cd7e38",
+          "test_bin": "domain_typed_expressions",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "domain_expressions_are_typed_spanned_and_preserve_legacy_operators",
+          "test_path": "rust/fsl-syntax/tests/domain_typed_expressions.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:77e56a6156ca48f6495f04166ebd8f00668f4a2c258508ac47c8559ee51a1d1a",
+          "package": "fsl-syntax",
+          "parent_test_source_sha256": "sha256:144b7be5e47deb098609507bb88d567c7b1d21d7b75060911a0665ee55cd7e38",
+          "test_bin": "domain_typed_expressions",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "domain_type_references_reject_more_than_two_arguments",
+          "test_path": "rust/fsl-syntax/tests/domain_typed_expressions.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:77e56a6156ca48f6495f04166ebd8f00668f4a2c258508ac47c8559ee51a1d1a",
+          "package": "fsl-syntax",
+          "parent_test_source_sha256": "sha256:144b7be5e47deb098609507bb88d567c7b1d21d7b75060911a0665ee55cd7e38",
+          "test_bin": "domain_typed_expressions",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "effect_references_remain_dotted_identifier_paths",
+          "test_path": "rust/fsl-syntax/tests/domain_typed_expressions.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:77e56a6156ca48f6495f04166ebd8f00668f4a2c258508ac47c8559ee51a1d1a",
+          "package": "fsl-syntax",
+          "parent_test_source_sha256": "sha256:144b7be5e47deb098609507bb88d567c7b1d21d7b75060911a0665ee55cd7e38",
+          "test_bin": "domain_typed_expressions",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "every_domain_expression_position_uses_structured_syntax",
+          "test_path": "rust/fsl-syntax/tests/domain_typed_expressions.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:77e56a6156ca48f6495f04166ebd8f00668f4a2c258508ac47c8559ee51a1d1a",
+          "package": "fsl-syntax",
+          "parent_test_source_sha256": "sha256:144b7be5e47deb098609507bb88d567c7b1d21d7b75060911a0665ee55cd7e38",
+          "test_bin": "domain_typed_expressions",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "malformed_domain_expression_reports_the_original_source_span",
+          "test_path": "rust/fsl-syntax/tests/domain_typed_expressions.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:77e56a6156ca48f6495f04166ebd8f00668f4a2c258508ac47c8559ee51a1d1a",
+          "package": "fsl-syntax",
+          "parent_test_source_sha256": "sha256:144b7be5e47deb098609507bb88d567c7b1d21d7b75060911a0665ee55cd7e38",
+          "test_bin": "domain_typed_expressions",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "public_helper_nodes_retain_their_own_spans",
+          "test_path": "rust/fsl-syntax/tests/domain_typed_expressions.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:77e56a6156ca48f6495f04166ebd8f00668f4a2c258508ac47c8559ee51a1d1a",
+          "package": "fsl-syntax",
+          "parent_test_source_sha256": "sha256:144b7be5e47deb098609507bb88d567c7b1d21d7b75060911a0665ee55cd7e38",
+          "test_bin": "domain_typed_expressions",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "shared_expression_parser_preserves_trailing_comma_compatibility",
+          "test_path": "rust/fsl-syntax/tests/domain_typed_expressions.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:77e56a6156ca48f6495f04166ebd8f00668f4a2c258508ac47c8559ee51a1d1a",
+          "package": "fsl-syntax",
+          "parent_test_source_sha256": "sha256:144b7be5e47deb098609507bb88d567c7b1d21d7b75060911a0665ee55cd7e38",
+          "test_bin": "domain_typed_expressions",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "unsupported_double_ampersand_remains_a_lexer_error",
+          "test_path": "rust/fsl-syntax/tests/domain_typed_expressions.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fsl-syntax/tests/domain_typed_expressions.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-19",
+      "exclusion_reasons": [
+        "blind_projection_failed"
+      ],
+      "features": {
+        "largest_production_file_changed_line_fraction": 0.4251968503937008,
+        "production_changed_lines": 127,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 4,
+        "production_hunk_count": 7,
+        "projected_production_bytes": 0,
+        "projected_production_file_count": 4,
+        "test_changed_lines": 146,
+        "test_to_production_changed_line_ratio": 1.1496062992125984
+      },
+      "fix_commit": "git:8e85a7c313604b476fdc772ed9b976e0ac4a90fc",
+      "frame_status": "excluded",
+      "parent_commit": "git:fc00dfdc9ae2e8d0517e00923c4145f18f23f950",
+      "production_paths": [
+        "rust/fsl-tools/src/causal_analysis.rs",
+        "rust/fsl-tools/src/causal_evidence.rs",
+        "rust/fsl-tools/src/causal_projection.rs",
+        "rust/fsl-tools/src/lib.rs"
+      ],
+      "projection_error_private": "cfg(test) module is not the final Rust item",
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:be8b3146f0c9a85a9ded99863272f357e669ea1aea3ab587bca7a925f035acab",
+      "subject_private": "fix(causal): enforce diff lifecycle and scope contracts",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "causal_check_reports_counts_and_stays_review_only",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "causal_check_warns_on_latent_variable_without_proxy",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "causal_diff_pins_identity_to_ids_and_support_to_not_available",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "causal_graph_projection_carries_loop_class_and_truncation",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "causal_review_findings_are_never_violations",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "causal_timeline_reports_first_pass_window_and_feedback_flag",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "check_and_review_outputs_are_deterministic",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "evidence_graph_overlays_support_without_touching_formal_assurance",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "evidence_without_lifecycle_chain_is_excluded_from_support",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "expectation_clock_gates_fail_closed",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "expectation_rejects_legacy_supports_field_and_unresolved_targets",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generated_leadsto_matches_a_hand_written_property",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "incident_model_reports_cadence_against_shortest_persistence",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ledger_all_claims_appear_even_without_plans_or_evidence",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ledger_claims_without_plan_have_missing_attention",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ledger_deterministic_output",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ledger_observation_evidence_stays_inconclusive_and_never_directed",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ledger_plan_missing_attention_fires_without_plans",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ledger_plan_version_mismatch_fires_attention",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ledger_retired_claim_has_no_attention_but_appears",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ledger_with_plan_and_evidence_clears_attention",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "mermaid_and_dot_exports_are_deterministic",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "observe_expectations_claim_version_change_does_not_auto_update_support",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "observe_expectations_fails_without_period",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "observe_expectations_fails_without_scope",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "observe_expectations_generates_valid_evidence_artifacts",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "observe_expectations_pass_and_violated_golden",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "observe_expectations_rejects_nonconformant_log",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "observe_expectations_rejects_short_observation_window",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "observe_expectations_rejects_tampered_mapping",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "plain_check_routes_a_causal_model_to_the_causal_checker",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "review_profile_with_evidence_appends_support_map",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "stale_evidence_requires_explicit_as_of",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "tampered_artifact_digest_fails_closed",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "there_is_no_causal_verify_subcommand",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "traceability_projection_bridges_requirements_and_kpis",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "unknown_reference_fails_closed_with_location",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d27d150bd355b577a117e1e48eede1d001520cc06d361140fd28537d31a62c66",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:4b170386d7e9ef0406a5bd3e7512bb7ce34b8a55cac20cba3d3dadbbf7811b8e",
+          "test_bin": "causal_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "verify_expectations_checks_bounded_and_never_touches_claim_axes",
+          "test_path": "rust/fslc/tests/causal_cli.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fslc/tests/causal_cli.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-18",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 1.0,
+        "production_changed_lines": 20,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 1,
+        "production_hunk_count": 1,
+        "projected_production_bytes": 500420,
+        "projected_production_file_count": 1,
+        "test_changed_lines": 3,
+        "test_to_production_changed_line_ratio": 0.15
+      },
+      "fix_commit": "git:620834721349ad05f76d996ce05d49043c17a9bb",
+      "frame_status": "candidate",
+      "parent_commit": "git:8eadce8ef8a0ed62fc38d1ddee91c210848e39ba",
+      "production_paths": [
+        "rust/fslc/src/main.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:c35dcbed26f9b43240a5f7d365a57b6d89d2f01586b07ad4ab4fcc7768df23ad",
+      "subject_private": "fix(lint): deduplicate aliased input paths",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ai_native_legacy_operator_attempt_reports_each_unsupported_token",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "builtin_id_policy_reports_each_surface_kind_without_rewriting_ids",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "dry_run_write_repeat_and_formatter_contracts_are_consistent",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "inline_maps_with_parameter_comments_are_refused_without_source_changes",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "invalid_double_ampersand_and_ambiguous_maps_are_explicit_refusals",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "invalid_project_id_policy_fails_closed",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "legacy_quantifier_colon_migrates_to_braces",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "lint_directory_reports_nested_fsl_errors_instead_of_skipping_them",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "lint_recursively_expands_directories_and_accepts_canonical_control_references",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "malformed_input_reports_the_file_and_parse_location",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "multi_file_prepare_io_failure_leaves_every_input_unchanged",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "multi_file_refusal_leaves_every_input_unchanged",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "project_id_policy_partially_overrides_builtin_templates",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "safe_inline_maps_move_to_the_single_local_implements_block",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d5715c2a6de71a82566eb2ab2c013a483daede304d35802019277808c1483faf",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:c2fe789e4f2ebf677873a8456cacae91ad2961d0bfe8d3f2ec9aba032468eeba",
+          "test_bin": "edition_migrator",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "string_metadata_uses_typed_annotations_without_changing_public_kernel",
+          "test_path": "rust/fslc/tests/edition_migrator.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fslc/tests/edition_migrator.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-08-05",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 1.0,
+        "production_changed_lines": 18,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 1,
+        "production_hunk_count": 2,
+        "projected_production_bytes": 131581,
+        "projected_production_file_count": 1,
+        "test_changed_lines": 25,
+        "test_to_production_changed_line_ratio": 1.3888888888888888
+      },
+      "fix_commit": "git:062f1aa939c22dc5f1a7dc45d3c4749f44d70272",
+      "frame_status": "candidate",
+      "parent_commit": "git:58311c9cb04b93d76a00cb2faceffdf017a37d42",
+      "production_paths": [
+        "rust/fsl-core/src/domain_lowering.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:c8295d32129247066c13634c3a61cc11e6ee0a7d052dab82f480465b4b58ebc7",
+      "subject_private": "fix(domain): reject aggregate on_stale as fail-closed unlowered (#711)",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:c29e617a88977e25555b8ed9c059cd48197061d92294b4eaca59ee94e522eda5",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "container_default_zero_regressions_are_rejected",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:c29e617a88977e25555b8ed9c059cd48197061d92294b4eaca59ee94e522eda5",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "corpus_discovery_matches_registered_classification",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:c29e617a88977e25555b8ed9c059cd48197061d92294b4eaca59ee94e522eda5",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "empty_enum_declarations_fail_closed_before_rendering",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:c29e617a88977e25555b8ed9c059cd48197061d92294b4eaca59ee94e522eda5",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "exclusion_set_is_exactly_span_and_nothing_else",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:c29e617a88977e25555b8ed9c059cd48197061d92294b4eaca59ee94e522eda5",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "known_divergent_domain_fixture_pins_the_open_finding",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:c29e617a88977e25555b8ed9c059cd48197061d92294b4eaca59ee94e522eda5",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "semantically_invalid_domain_fixtures_are_rejected_by_both_lowering_paths",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:c29e617a88977e25555b8ed9c059cd48197061d92294b4eaca59ee94e522eda5",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "syntax_invalid_domain_fixtures_fail_to_parse",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:c29e617a88977e25555b8ed9c059cd48197061d92294b4eaca59ee94e522eda5",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "unlowered_domain_constructs_fail_closed_on_both_paths",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:c29e617a88977e25555b8ed9c059cd48197061d92294b4eaca59ee94e522eda5",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "unsupported_default_shapes_fail_closed_with_original_origins",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:c29e617a88977e25555b8ed9c059cd48197061d92294b4eaca59ee94e522eda5",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "valid_domain_corpus_lowering_and_rendering_agree",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fsl-core/tests/domain_render_agreement.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-08-05",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 1.0,
+        "production_changed_lines": 16,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 1,
+        "production_hunk_count": 2,
+        "projected_production_bytes": 131639,
+        "projected_production_file_count": 1,
+        "test_changed_lines": 14,
+        "test_to_production_changed_line_ratio": 0.875
+      },
+      "fix_commit": "git:49e0e3712313f3205956cb69800fd9f2659121cf",
+      "frame_status": "candidate",
+      "parent_commit": "git:062f1aa939c22dc5f1a7dc45d3c4749f44d70272",
+      "production_paths": [
+        "rust/fsl-core/src/domain_lowering.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:d49ed9d3517f893cb4fba3c0e2b4791f17802e3ec8714a72cb672d50e4d999fb",
+      "subject_private": "fix(domain): reject value_object invariants as fail-closed unlowered (#710)",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "container_default_zero_regressions_are_rejected",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "corpus_discovery_matches_registered_classification",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "empty_enum_declarations_fail_closed_before_rendering",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "exclusion_set_is_exactly_span_and_nothing_else",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "known_divergent_domain_fixture_pins_the_open_finding",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "semantically_invalid_domain_fixtures_are_rejected_by_both_lowering_paths",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "syntax_invalid_domain_fixtures_fail_to_parse",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "unlowered_domain_constructs_fail_closed_on_both_paths",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "unsupported_default_shapes_fail_closed_with_original_origins",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:4d73eb467c772cb4289c3afe27c12475c4ebf5da6f9c1903d6fc3d9682d37bc3",
+          "package": "fsl-core",
+          "parent_test_source_sha256": "sha256:ce440ce2648f47fce467c060a3c754aa3d010fecb7c493aaf8d30af4ada7eb71",
+          "test_bin": "domain_render_agreement",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "valid_domain_corpus_lowering_and_rendering_agree",
+          "test_path": "rust/fsl-core/tests/domain_render_agreement.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fsl-core/tests/domain_render_agreement.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-19",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 1.0,
+        "production_changed_lines": 19,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 1,
+        "production_hunk_count": 1,
+        "projected_production_bytes": 513633,
+        "projected_production_file_count": 1,
+        "test_changed_lines": 17,
+        "test_to_production_changed_line_ratio": 0.8947368421052632
+      },
+      "fix_commit": "git:ebc4796ef973300598c401c5497014ecd57cac64",
+      "frame_status": "candidate",
+      "parent_commit": "git:0aa64abe69771c739646ce5cce1ea78769ac26b6",
+      "production_paths": [
+        "rust/fslc/src/main.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:d814f249c146bd9ab78cb69d3e2457d2ef44c089c3494220750c8e7148282578",
+      "subject_private": "fix(document): pass source to marker renderers",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:53177a0f64f2f87222a4b49af7c4e8a96a6318c3b36d5ffc18d129abf0679749",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:1a737592a675f4742afad74fa21ed577328c289bd98b15140df412492ceb84cb",
+          "test_bin": "document_markers",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "a_document_with_no_frontmatter_is_rejected",
+          "test_path": "rust/fsl-tools/tests/document_markers.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:53177a0f64f2f87222a4b49af7c4e8a96a6318c3b36d5ffc18d129abf0679749",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:1a737592a675f4742afad74fa21ed577328c289bd98b15140df412492ceb84cb",
+          "test_bin": "document_markers",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "a_marker_like_line_inside_a_slot_is_rejected",
+          "test_path": "rust/fsl-tools/tests/document_markers.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:53177a0f64f2f87222a4b49af7c4e8a96a6318c3b36d5ffc18d129abf0679749",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:1a737592a675f4742afad74fa21ed577328c289bd98b15140df412492ceb84cb",
+          "test_bin": "document_markers",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "an_unknown_frontmatter_key_is_rejected",
+          "test_path": "rust/fsl-tools/tests/document_markers.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:53177a0f64f2f87222a4b49af7c4e8a96a6318c3b36d5ffc18d129abf0679749",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:1a737592a675f4742afad74fa21ed577328c289bd98b15140df412492ceb84cb",
+          "test_bin": "document_markers",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "back_references_carry_no_markers",
+          "test_path": "rust/fsl-tools/tests/document_markers.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:53177a0f64f2f87222a4b49af7c4e8a96a6318c3b36d5ffc18d129abf0679749",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:1a737592a675f4742afad74fa21ed577328c289bd98b15140df412492ceb84cb",
+          "test_bin": "document_markers",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "background_slot_is_present_exactly_once_with_the_fixed_name",
+          "test_path": "rust/fsl-tools/tests/document_markers.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:53177a0f64f2f87222a4b49af7c4e8a96a6318c3b36d5ffc18d129abf0679749",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:1a737592a675f4742afad74fa21ed577328c289bd98b15140df412492ceb84cb",
+          "test_bin": "document_markers",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "every_claim_renders_inside_exactly_one_marker_pair_with_a_unique_id",
+          "test_path": "rust/fsl-tools/tests/document_markers.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:53177a0f64f2f87222a4b49af7c4e8a96a6318c3b36d5ffc18d129abf0679749",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:1a737592a675f4742afad74fa21ed577328c289bd98b15140df412492ceb84cb",
+          "test_bin": "document_markers",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generated_document_starts_with_a_well_formed_frontmatter_block",
+          "test_path": "rust/fsl-tools/tests/document_markers.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:53177a0f64f2f87222a4b49af7c4e8a96a6318c3b36d5ffc18d129abf0679749",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:1a737592a675f4742afad74fa21ed577328c289bd98b15140df412492ceb84cb",
+          "test_bin": "document_markers",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "marker_digest_equals_framed_text_digest_of_the_body",
+          "test_path": "rust/fsl-tools/tests/document_markers.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:53177a0f64f2f87222a4b49af7c4e8a96a6318c3b36d5ffc18d129abf0679749",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:1a737592a675f4742afad74fa21ed577328c289bd98b15140df412492ceb84cb",
+          "test_bin": "document_markers",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "parser_roundtrips_a_freshly_rendered_document",
+          "test_path": "rust/fsl-tools/tests/document_markers.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fsl-tools/tests/document_markers.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-18",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 0.5238095238095238,
+        "production_changed_lines": 42,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 2,
+        "production_hunk_count": 7,
+        "projected_production_bytes": 83690,
+        "projected_production_file_count": 2,
+        "test_changed_lines": 34,
+        "test_to_production_changed_line_ratio": 0.8095238095238095
+      },
+      "fix_commit": "git:ed56b40cd1a81d3a21e1d67514edaddcbd94f4d2",
+      "frame_status": "candidate",
+      "parent_commit": "git:e655242daae395ae04d3ac707bed5d60c39bc244",
+      "production_paths": [
+        "rust/fsl-tools/src/document_evidence.rs",
+        "rust/fsl-tools/src/document_render.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:e953e10bab61910e2b48cdeaf85f345f7446f801bc7c112b6774a07d1439ff33",
+      "subject_private": "fix(document): make evidence rendering order-independent",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "a_non_liveness_requirement_never_gets_the_liveness_caveat",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "a_violated_bounded_run_still_classifies_as_bounded_never_downgraded",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "bounded_evidence_appears_in_the_requirement_it_names_and_not_in_others",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "bounded_evidence_classifies_into_the_formal_dimension_with_its_depth",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "claim_block_digests_are_unaffected_by_evidence_presence_or_absence",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "en_locale_renders_the_assurance_class_heading_and_not_run_dimensions",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "every_dimension_renders_explicitly_even_when_not_run",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "evidence_file_order_does_not_change_the_computed_assurance",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "evidence_matching_a_known_requirement_id_is_not_unmatched",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "evidence_naming_an_unknown_requirement_id_is_reported_as_unmatched",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "evidence_sources_section_lists_files_sorted_with_matched_requirement_ids",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "liveness_requirement_gets_a_caveat_when_only_bounded_formal_evidence_backs_it",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "matches_via_both_the_requirements_array_and_the_singular_requirement_id",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "no_evidence_renders_byte_identically_to_no_evidence_argument",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "no_matching_evidence_leaves_a_requirement_not_run",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "proved_evidence_classifies_into_the_formal_dimension",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "replay_observed_evidence_classifies_into_the_conformance_dimension",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "statistical_evidence_classifies_into_the_statistical_dimension",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:b3089b97e4d250c73b719c28a3f176f4c7d277947e41679396f867ec92cb1381",
+          "package": "fsl-tools",
+          "parent_test_source_sha256": "sha256:d24a87bba7ba9d1f5eb7b2cdc4a4a425305369853c68ee1b96d242658fe5c3bb",
+          "test_bin": "document_evidence",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "whole_spec_evidence_naming_no_requirement_id_is_never_unmatched",
+          "test_path": "rust/fsl-tools/tests/document_evidence.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "a_hand_edit_inside_a_claim_block_is_still_caught_even_when_evidence_also_changed",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "changing_the_evidence_changes_artifact_digest_but_not_claim_set_digest",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "check_is_conformant_when_the_same_evidence_is_supplied",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "check_reports_evidence_changed_when_spurious_evidence_is_supplied",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "check_reports_evidence_changed_when_the_evidence_content_differs",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "check_reports_evidence_changed_when_the_flag_is_omitted",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "check_without_evidence_on_an_evidenceless_artifact_is_unaffected",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "evidence_file_order_does_not_change_the_recorded_digest",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_evidence_malformed_json_exits_two",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_evidence_non_object_json_exits_two",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_evidence_unmatched_file_fails_under_strict_on_a_fixture_with_no_other_coverage_issues",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_evidence_unmatched_file_warns_by_default",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_missing_evidence_file_exits_two_as_io_error",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:c83165962a875671c093efc212fb0678d4c7253b5f8328aa0ca2145b83d0f4d4",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:2f18d40a7013ddb91c24a843e3cc6ebd3ff11ebaa664b79760925c8ba0c1b602",
+          "test_bin": "document_evidence_cli",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "generate_with_evidence_overlays_assurance_and_records_digest",
+          "test_path": "rust/fslc/tests/document_evidence_cli.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fsl-tools/tests/document_evidence.rs",
+        "rust/fslc/tests/document_evidence_cli.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-26",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 1.0,
+        "production_changed_lines": 280,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 1,
+        "production_hunk_count": 10,
+        "projected_production_bytes": 39624,
+        "projected_production_file_count": 1,
+        "test_changed_lines": 4,
+        "test_to_production_changed_line_ratio": 0.014285714285714285
+      },
+      "fix_commit": "git:be005ae95d252520443b37a91576ef858c19722b",
+      "frame_status": "candidate",
+      "parent_commit": "git:c7b92cfddc5f04b6d3f264a63a848851d00d1542",
+      "production_paths": [
+        "rust/fsl-lsp/src/index.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:eb8a5842744e3742d1ad3ec5399967e12c713f221c9b288d9504398fd7fcc109",
+      "subject_private": "fix(lsp): stop an @ annotation swallowing the following declaration",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:69f738e7fe3628a2cfe6f0a24d71d260aa2b5a664783dd605febf7705b7c51c7",
+          "package": "fsl-lsp",
+          "parent_test_source_sha256": "sha256:2a80e138938033854e1a1538a25dbe0c26f05358cc253f727a101159c450fc21",
+          "test_bin": "corpus",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "valid_corpus_is_parsed_and_every_identifier_is_indexed",
+          "test_path": "rust/fsl-lsp/tests/corpus.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fsl-lsp/tests/corpus.rs"
+      ]
+    },
+    {
+      "commit_date": "2026-07-26",
+      "exclusion_reasons": [],
+      "features": {
+        "largest_production_file_changed_line_fraction": 1.0,
+        "production_changed_lines": 7,
+        "production_crate_count": 1,
+        "production_cross_crate": false,
+        "production_file_count": 1,
+        "production_hunk_count": 1,
+        "projected_production_bytes": 37353,
+        "projected_production_file_count": 1,
+        "test_changed_lines": 30,
+        "test_to_production_changed_line_ratio": 4.285714285714286
+      },
+      "fix_commit": "git:40d1a4e69090852e2a9747a8311655d88093e5a9",
+      "frame_status": "candidate",
+      "parent_commit": "git:62acf02b4d9779779cc3a61f1b902b7bd8ff988c",
+      "production_paths": [
+        "rust/fsl-syntax/src/ai_project.rs"
+      ],
+      "projection_error_private": null,
+      "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate.v1",
+      "split_hash": "sha256:fe73a20b7693c1d61943493b29cb4fc925c0d9788ef9447ac3f6427655a77af0",
+      "subject_private": "fix(ai): reject duplicate dataset/evaluator names, and stop analysis_conservation racing on a shared path (#586)",
+      "test_options": [
+        {
+          "fix_test_source_sha256": "sha256:d85cb9623078fdf12af775b9ddaafdb07bab3e6a4aab34f25dea4830659f9f32",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:994c456938832537af4ae36c852bfc830a6318698d74be965439314ce199391c",
+          "test_bin": "analysis_conservation",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ai_review_invalid_input_and_unsupported_modes_still_exit_two",
+          "test_path": "rust/fslc/tests/analysis_conservation.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d85cb9623078fdf12af775b9ddaafdb07bab3e6a4aab34f25dea4830659f9f32",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:994c456938832537af4ae36c852bfc830a6318698d74be965439314ce199391c",
+          "test_bin": "analysis_conservation",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "ai_review_keeps_the_conservation_envelope_order_and_id",
+          "test_path": "rust/fslc/tests/analysis_conservation.rs"
+        },
+        {
+          "fix_test_source_sha256": "sha256:d85cb9623078fdf12af775b9ddaafdb07bab3e6a4aab34f25dea4830659f9f32",
+          "package": "fslc-rust",
+          "parent_test_source_sha256": "sha256:994c456938832537af4ae36c852bfc830a6318698d74be965439314ce199391c",
+          "test_bin": "analysis_conservation",
+          "test_change_kind": "strengthened_existing",
+          "test_name": "cli_source_has_no_conservation_classifier_copy",
+          "test_path": "rust/fslc/tests/analysis_conservation.rs"
+        }
+      ],
+      "test_paths": [
+        "rust/fslc/tests/analysis_conservation.rs"
+      ]
+    }
+  ],
+  "schema": "reviewgraphen.benchmark.m7_real_v2_strengthened_candidate_frame.v1",
+  "source_candidate_frame_sha256": "sha256:95c9e812d403e99791c5a8f503519d42c56be9a65f3718ea101fba2c2c935f01",
+  "source_recall_audit_sha256": "sha256:0d947a2849bdc3c8b9b164fb9c9c0112ccbb437e7b9a083b7b8f721521d246e3"
+}

@@ -183,6 +183,8 @@ def process_candidate(
     parent_clone = work_root / "parent"
     attempts: list[dict[str, object]] = []
     builds: list[dict[str, object]] = []
+    baseline_attempts: list[dict[str, object]] = []
+    baseline_builds: list[dict[str, object]] = []
     selected: dict[str, object] | None = None
     try:
         for clone, revision in ((fix_clone, fix), (parent_clone, parent)):
@@ -202,14 +204,6 @@ def process_candidate(
                 raise InfrastructureError(
                     f"checkout failed: {sha256(stderr)}"
                 )
-        status, _, stderr = run(
-            ["git", "-C", str(parent_clone), "apply", "--whitespace=nowarn", "-"],
-            stdin=patch,
-            timeout=120,
-        )
-        if status != 0:
-            raise RuntimeError(f"test backport failed: {stderr.decode(errors='replace')}")
-
         environment = os.environ.copy()
         environment["CARGO_TARGET_DIR"] = str(target_dir)
         environment["CARGO_BUILD_JOBS"] = "2"
@@ -219,6 +213,73 @@ def process_candidate(
         for option_value in options:
             option = {str(key): str(value) for key, value in option_value.items()}
             groups.setdefault((option["package"], option["test_bin"]), []).append(option)
+        baseline_statuses: dict[tuple[str, str, str], int] = {}
+        baseline_executions: dict[tuple[str, str, str], dict[str, object]] = {}
+        baseline_outputs: dict[tuple[str, str, str], tuple[bytes, bytes]] = {}
+        for group_key in sorted(groups):
+            strengthened = [
+                option
+                for option in groups[group_key]
+                if option.get("test_change_kind") == "strengthened_existing"
+            ]
+            if not strengthened:
+                continue
+            build_command = cargo_build_command(cargo, strengthened[0])
+            build_status, build_stdout, build_stderr = run(
+                build_command, cwd=parent_clone, env=environment, timeout=1800
+            )
+            if infrastructure_failure(build_stderr):
+                raise InfrastructureError(
+                    f"baseline parent build infrastructure failure for {fix}: {sha256(build_stderr)}"
+                )
+            baseline_builds.append(
+                {
+                    "package": group_key[0],
+                    "test_bin": group_key[1],
+                    "exit_status": build_status,
+                    "stdout_sha256": sha256(build_stdout),
+                    "stderr_sha256": sha256(build_stderr),
+                }
+            )
+            if build_status != 0:
+                continue
+            for option in strengthened:
+                command = cargo_command(cargo, option)
+                baseline_status, baseline_stdout, baseline_stderr = run(
+                    command, cwd=parent_clone, env=environment
+                )
+                if infrastructure_failure(baseline_stderr):
+                    raise InfrastructureError(
+                        f"baseline parent test infrastructure failure for {fix}: {sha256(baseline_stderr)}"
+                    )
+                key = (option["package"], option["test_bin"], option["test_name"])
+                baseline_statuses[key] = baseline_status
+                baseline_executions[key] = execution(
+                    parent,
+                    parent_tree,
+                    command,
+                    baseline_status,
+                    baseline_stdout,
+                    baseline_stderr,
+                )
+                baseline_outputs[key] = (baseline_stdout, baseline_stderr)
+                baseline_attempts.append(
+                    {
+                        "test_selector": f'{option["test_bin"]}::{option["test_name"]}',
+                        "exit_status": baseline_status,
+                        "stdout_sha256": sha256(baseline_stdout),
+                        "stderr_sha256": sha256(baseline_stderr),
+                    }
+                )
+
+        status, _, stderr = run(
+            ["git", "-C", str(parent_clone), "apply", "--whitespace=nowarn", "-"],
+            stdin=patch,
+            timeout=120,
+        )
+        if status != 0:
+            raise RuntimeError(f"test backport failed: {stderr.decode(errors='replace')}")
+
         for group_key in sorted(groups):
             group_options = groups[group_key]
             build_command = cargo_build_command(cargo, group_options[0])
@@ -255,6 +316,15 @@ def process_candidate(
             if fix_build_status != 0 or parent_build_status != 0:
                 continue
             for option in group_options:
+                change_kind = option.get("test_change_kind", "added_exact")
+                baseline_key = (
+                    option["package"], option["test_bin"], option["test_name"]
+                )
+                if (
+                    change_kind == "strengthened_existing"
+                    and baseline_statuses.get(baseline_key) != 0
+                ):
+                    continue
                 command = cargo_command(cargo, option)
                 fix_status, fix_stdout, fix_stderr = run(
                     command, cwd=fix_clone, env=environment
@@ -292,12 +362,27 @@ def process_candidate(
                     (selected_dir / "fix.stderr").write_bytes(fix_stderr)
                     (selected_dir / "parent.stdout").write_bytes(parent_stdout)
                     (selected_dir / "parent.stderr").write_bytes(parent_stderr)
+                    if change_kind == "strengthened_existing":
+                        original_stdout, original_stderr = baseline_outputs[baseline_key]
+                        (selected_dir / "original-parent.stdout").write_bytes(
+                            original_stdout
+                        )
+                        (selected_dir / "original-parent.stderr").write_bytes(
+                            original_stderr
+                        )
                     selected = {
                         "schema": "reviewgraphen.benchmark.regression_presence_evidence.v1",
                         "test_selector": f'{option["test_bin"]}::{option["test_name"]}',
                         "test_path": option["test_path"],
-                        "test_source_sha256": option["test_source_sha256"],
-                        "strategy": "fix_regression_test_backported_to_parent",
+                        "test_source_sha256": option.get(
+                            "test_source_sha256", option.get("fix_test_source_sha256")
+                        ),
+                        "test_change_kind": change_kind,
+                        "strategy": (
+                            "strengthened_regression_test_backported_to_parent"
+                            if change_kind == "strengthened_existing"
+                            else "fix_regression_test_backported_to_parent"
+                        ),
                         "backported_paths": paths,
                         "parent_run": execution(
                             parent,
@@ -317,6 +402,10 @@ def process_candidate(
                         ),
                         "artifact_directory": slug,
                     }
+                    if change_kind == "strengthened_existing":
+                        selected["original_parent_run"] = baseline_executions[
+                            baseline_key
+                        ]
                     break
             if selected is not None:
                 break
@@ -331,6 +420,8 @@ def process_candidate(
         "status": "eligible" if selected is not None else "ineligible",
         "attempts": attempts,
         "builds": builds,
+        "baseline_attempts": baseline_attempts,
+        "baseline_builds": baseline_builds,
         "presence_evidence": selected,
         "features": record["features"],
         "production_paths": record["production_paths"],
