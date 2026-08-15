@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 import shutil
 import subprocess
 import tempfile
@@ -60,23 +61,27 @@ def run(
     stdin: bytes | None = None,
     timeout: int = 600,
 ) -> tuple[int, bytes, bytes]:
+    process = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
     try:
-        result = subprocess.run(
-            argv,
-            cwd=cwd,
-            env=env,
-            input=stdin,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=timeout,
-        )
-        return result.returncode, result.stdout, result.stderr
+        stdout, stderr = process.communicate(input=stdin, timeout=timeout)
+        return process.returncode, stdout, stderr
     except subprocess.TimeoutExpired as error:
+        os.killpg(process.pid, signal.SIGKILL)
+        stdout, stderr = process.communicate()
         return (
             TIMEOUT_STATUS,
-            error.stdout or b"",
-            (error.stderr or b"") + b"\n[reviewgraphen presence timeout]\n",
+            (error.stdout or b"") + stdout,
+            (error.stderr or b"")
+            + stderr
+            + b"\n[reviewgraphen presence timeout]\n",
         )
 
 
@@ -114,6 +119,21 @@ def cargo_command(cargo: Path, option: dict[str, str]) -> list[str]:
         option["test_name"],
         "--",
         "--exact",
+    ]
+
+
+def cargo_build_command(cargo: Path, option: dict[str, str]) -> list[str]:
+    return [
+        str(cargo),
+        "test",
+        "--quiet",
+        "--manifest-path",
+        MANIFEST,
+        "-p",
+        option["package"],
+        "--test",
+        option["test_bin"],
+        "--no-run",
     ]
 
 
@@ -162,6 +182,7 @@ def process_candidate(
     fix_clone = work_root / "fix"
     parent_clone = work_root / "parent"
     attempts: list[dict[str, object]] = []
+    builds: list[dict[str, object]] = []
     selected: dict[str, object] | None = None
     try:
         for clone, revision in ((fix_clone, fix), (parent_clone, parent)):
@@ -194,70 +215,110 @@ def process_candidate(
         environment["CARGO_BUILD_JOBS"] = "2"
         fix_tree = git_source("rev-parse", f"{fix}^{{tree}}").decode().strip()
         parent_tree = git_source("rev-parse", f"{parent}^{{tree}}").decode().strip()
+        groups: dict[tuple[str, str], list[dict[str, str]]] = {}
         for option_value in options:
             option = {str(key): str(value) for key, value in option_value.items()}
-            command = cargo_command(cargo, option)
-            fix_status, fix_stdout, fix_stderr = run(
-                command, cwd=fix_clone, env=environment
+            groups.setdefault((option["package"], option["test_bin"]), []).append(option)
+        for group_key in sorted(groups):
+            group_options = groups[group_key]
+            build_command = cargo_build_command(cargo, group_options[0])
+            fix_build_status, fix_build_stdout, fix_build_stderr = run(
+                build_command, cwd=fix_clone, env=environment, timeout=1800
             )
-            if infrastructure_failure(fix_stderr):
+            if infrastructure_failure(fix_build_stderr):
                 raise InfrastructureError(
-                    f"fix test infrastructure failure for {fix}: {sha256(fix_stderr)}"
+                    f"fix build infrastructure failure for {fix}: {sha256(fix_build_stderr)}"
                 )
-            parent_status = -1
-            parent_stdout = b""
-            parent_stderr = b""
-            if fix_status == 0:
-                parent_status, parent_stdout, parent_stderr = run(
-                    command, cwd=parent_clone, env=environment
+            parent_build_status = -1
+            parent_build_stdout = b""
+            parent_build_stderr = b""
+            if fix_build_status == 0:
+                parent_build_status, parent_build_stdout, parent_build_stderr = run(
+                    build_command, cwd=parent_clone, env=environment, timeout=1800
                 )
-                if infrastructure_failure(parent_stderr):
+                if infrastructure_failure(parent_build_stderr):
                     raise InfrastructureError(
-                        f"parent test infrastructure failure for {fix}: {sha256(parent_stderr)}"
+                        f"parent build infrastructure failure for {fix}: {sha256(parent_build_stderr)}"
                     )
-            attempt = {
-                "test_selector": f'{option["test_bin"]}::{option["test_name"]}',
-                "fix_exit_status": fix_status,
-                "parent_exit_status": parent_status,
-                "fix_stdout_sha256": sha256(fix_stdout),
-                "fix_stderr_sha256": sha256(fix_stderr),
-                "parent_stdout_sha256": sha256(parent_stdout),
-                "parent_stderr_sha256": sha256(parent_stderr),
-            }
-            attempts.append(attempt)
-            if fix_status == 0 and parent_status not in (-1, 0, TIMEOUT_STATUS):
-                slug = hashlib.sha256(bytes.fromhex(fix)).hexdigest()
-                selected_dir = artifact_dir / slug
-                selected_dir.mkdir(parents=True, exist_ok=True)
-                (selected_dir / "fix.stdout").write_bytes(fix_stdout)
-                (selected_dir / "fix.stderr").write_bytes(fix_stderr)
-                (selected_dir / "parent.stdout").write_bytes(parent_stdout)
-                (selected_dir / "parent.stderr").write_bytes(parent_stderr)
-                selected = {
-                    "schema": "reviewgraphen.benchmark.regression_presence_evidence.v1",
-                    "test_selector": f'{option["test_bin"]}::{option["test_name"]}',
-                    "test_path": option["test_path"],
-                    "test_source_sha256": option["test_source_sha256"],
-                    "strategy": "fix_regression_test_backported_to_parent",
-                    "backported_paths": paths,
-                    "parent_run": execution(
-                        parent,
-                        parent_tree,
-                        command,
-                        parent_status,
-                        parent_stdout,
-                        parent_stderr,
-                    ),
-                    "fix_run": execution(
-                        fix,
-                        fix_tree,
-                        command,
-                        fix_status,
-                        fix_stdout,
-                        fix_stderr,
-                    ),
-                    "artifact_directory": slug,
+            builds.append(
+                {
+                    "package": group_key[0],
+                    "test_bin": group_key[1],
+                    "fix_exit_status": fix_build_status,
+                    "parent_exit_status": parent_build_status,
+                    "fix_stdout_sha256": sha256(fix_build_stdout),
+                    "fix_stderr_sha256": sha256(fix_build_stderr),
+                    "parent_stdout_sha256": sha256(parent_build_stdout),
+                    "parent_stderr_sha256": sha256(parent_build_stderr),
                 }
+            )
+            if fix_build_status != 0 or parent_build_status != 0:
+                continue
+            for option in group_options:
+                command = cargo_command(cargo, option)
+                fix_status, fix_stdout, fix_stderr = run(
+                    command, cwd=fix_clone, env=environment
+                )
+                if infrastructure_failure(fix_stderr):
+                    raise InfrastructureError(
+                        f"fix test infrastructure failure for {fix}: {sha256(fix_stderr)}"
+                    )
+                parent_status = -1
+                parent_stdout = b""
+                parent_stderr = b""
+                if fix_status == 0:
+                    parent_status, parent_stdout, parent_stderr = run(
+                        command, cwd=parent_clone, env=environment
+                    )
+                    if infrastructure_failure(parent_stderr):
+                        raise InfrastructureError(
+                            f"parent test infrastructure failure for {fix}: {sha256(parent_stderr)}"
+                        )
+                attempt = {
+                    "test_selector": f'{option["test_bin"]}::{option["test_name"]}',
+                    "fix_exit_status": fix_status,
+                    "parent_exit_status": parent_status,
+                    "fix_stdout_sha256": sha256(fix_stdout),
+                    "fix_stderr_sha256": sha256(fix_stderr),
+                    "parent_stdout_sha256": sha256(parent_stdout),
+                    "parent_stderr_sha256": sha256(parent_stderr),
+                }
+                attempts.append(attempt)
+                if fix_status == 0 and parent_status not in (-1, 0, TIMEOUT_STATUS):
+                    slug = hashlib.sha256(bytes.fromhex(fix)).hexdigest()
+                    selected_dir = artifact_dir / slug
+                    selected_dir.mkdir(parents=True, exist_ok=True)
+                    (selected_dir / "fix.stdout").write_bytes(fix_stdout)
+                    (selected_dir / "fix.stderr").write_bytes(fix_stderr)
+                    (selected_dir / "parent.stdout").write_bytes(parent_stdout)
+                    (selected_dir / "parent.stderr").write_bytes(parent_stderr)
+                    selected = {
+                        "schema": "reviewgraphen.benchmark.regression_presence_evidence.v1",
+                        "test_selector": f'{option["test_bin"]}::{option["test_name"]}',
+                        "test_path": option["test_path"],
+                        "test_source_sha256": option["test_source_sha256"],
+                        "strategy": "fix_regression_test_backported_to_parent",
+                        "backported_paths": paths,
+                        "parent_run": execution(
+                            parent,
+                            parent_tree,
+                            command,
+                            parent_status,
+                            parent_stdout,
+                            parent_stderr,
+                        ),
+                        "fix_run": execution(
+                            fix,
+                            fix_tree,
+                            command,
+                            fix_status,
+                            fix_stdout,
+                            fix_stderr,
+                        ),
+                        "artifact_directory": slug,
+                    }
+                    break
+            if selected is not None:
                 break
     finally:
         shutil.rmtree(work_root, ignore_errors=True)
@@ -269,6 +330,7 @@ def process_candidate(
         "split_hash": record["split_hash"],
         "status": "eligible" if selected is not None else "ineligible",
         "attempts": attempts,
+        "builds": builds,
         "presence_evidence": selected,
         "features": record["features"],
         "production_paths": record["production_paths"],
