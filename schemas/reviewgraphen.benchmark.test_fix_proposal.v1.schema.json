@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.local/schemas/reviewgraphen.benchmark.test_fix_proposal.v1.schema.json",
+  "title": "ReviewGraphen benchmark test and fix proposal v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "proposal_id",
+    "outcome",
+    "test_target_id",
+    "test_patch",
+    "fix_patch",
+    "expected_behavior",
+    "unverifiable_reason",
+    "spec_queries"
+  ],
+  "properties": {
+    "schema": {
+      "const": "reviewgraphen.benchmark.test_fix_proposal.v1"
+    },
+    "proposal_id": {
+      "type": "string",
+      "pattern": "^proposal:[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "outcome": {
+      "enum": ["proposal", "unverifiable"]
+    },
+    "test_target_id": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "test_patch": {
+      "type": "string",
+      "maxLength": 262144
+    },
+    "fix_patch": {
+      "type": "string",
+      "maxLength": 262144
+    },
+    "expected_behavior": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "unverifiable_reason": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "spec_queries": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "maxLength": 512
+      }
+    }
+  }
+}

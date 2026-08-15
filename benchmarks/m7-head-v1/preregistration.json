@@ -1,0 +1,65 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_head_v1_preregistration.v1",
+  "experiment": "m7-head-v1",
+  "source_repository": "/home/rizumita/github/fsl",
+  "source_mutability": "read_only",
+  "production_endpoint": "mechanically_verified_bug_yield_not_recall",
+  "calibration": {
+    "unit_source": "m7-real-v1-positive-parents",
+    "unit_count": 20,
+    "generator_backend": "codex_cli",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "attempts_per_unit": 1,
+    "semantic_retries": 0,
+    "minimum_successes": 9,
+    "null_success_probability": 0.25,
+    "exact_boundary_tail_probability": 0.04092516770651855,
+    "reference_success_probability": 0.6,
+    "pass_probability_at_reference": 0.943473632965747
+  },
+  "calibration_input_prohibitions": [
+    "fix_revision",
+    "fix_diff",
+    "commit_message",
+    "issue_or_branch_material",
+    "known_regression_test",
+    "known_test_selector",
+    "presence_output",
+    "prior_candidate_output"
+  ],
+  "calibration_success_observations": [
+    "generated_test_builds_and_fails_at_runtime_on_parent",
+    "same_generated_test_builds_and_passes_on_canonical_fix",
+    "same_generated_test_builds_and_passes_on_parent_with_proposed_fix",
+    "proposed_fix_does_not_modify_generated_test"
+  ],
+  "production_arms": [
+    "b1_free_form",
+    "g3_proxy",
+    "full_review_graphen"
+  ],
+  "production_scope": {
+    "selection": "all_frozen_head_production_rust_files",
+    "primary_file_ownership": "exactly_once",
+    "cross_file_context": "deterministic_recorded_duplication",
+    "sampling": false
+  },
+  "verification_dispositions": [
+    "verified",
+    "not_verified",
+    "unverifiable"
+  ],
+  "specification_dispositions": [
+    "spec_mechanically_supported",
+    "spec_text_cited_only",
+    "spec_not_found"
+  ],
+  "stop_conditions": [
+    "calibration_successes_below_9_of_20",
+    "calibration_private_material_leak",
+    "generator_or_verifier_boundary_failure",
+    "head_inventory_or_blind_packet_failure"
+  ],
+  "upstream_writes_allowed": false
+}
