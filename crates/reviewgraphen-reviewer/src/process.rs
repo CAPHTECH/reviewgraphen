@@ -54,6 +54,8 @@ pub enum ProcessReviewerError {
     Json(#[from] serde_json::Error),
     #[error("process reviewer command failed with exit code {exit_code}: {diagnostic}")]
     CommandFailure { exit_code: i32, diagnostic: String },
+    #[error("process reviewer protocol rejected: {0}")]
+    Protocol(String),
 }
 
 pub type ProcessReviewerResult<T> = Result<T, ProcessReviewerError>;
@@ -907,15 +909,15 @@ fn validate_codex_no_tool_events(bytes: &[u8]) -> ProcessReviewerResult<()> {
                     .and_then(serde_json::Value::as_str)
                     .ok_or(ProcessReviewerError::Input("untyped Codex item event"))?;
                 if !matches!(item_type, "reasoning" | "agent_message") {
-                    return Err(ProcessReviewerError::Input(
-                        "Codex emitted a forbidden tool event",
-                    ));
+                    return Err(ProcessReviewerError::Protocol(format!(
+                        "forbidden Codex item type {item_type}"
+                    )));
                 }
             }
             _ => {
-                return Err(ProcessReviewerError::Input(
-                    "unknown Codex event in no-tools mode",
-                ));
+                return Err(ProcessReviewerError::Protocol(format!(
+                    "unknown Codex event type {event_type}"
+                )));
             }
         }
     }
