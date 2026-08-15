@@ -1,0 +1,10 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_head_artifact_archive.v1",
+  "encoding": "base64",
+  "archive_format": "tar.gz",
+  "archive_path": "artifacts.tar.gz.base64",
+  "decoded_archive_sha256": "sha256:06f1d39c413ca78148a7e8151d68f7961a4f70d72c91bd27c71b6109f99cc4e9",
+  "encoded_file_sha256": "sha256:8fd4960201713c69d0515e6a58c87188ee88c81293482d24acebbab1e1ae421b",
+  "contents": "per-unit proposal JSON, exact generated test/fix patches, and exact Cargo stdout/stderr bytes",
+  "reconstruction": "base64 -d artifacts.tar.gz.base64 > artifacts.tar.gz; tar -xzf artifacts.tar.gz"
+}
