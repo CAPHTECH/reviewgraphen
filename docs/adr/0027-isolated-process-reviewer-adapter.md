@@ -44,6 +44,16 @@ an exhausted output allowance is a protocol-invalid observation, not an
 abstention and not eligible for retry. The exact profile/model and the
 fallback-limit warning are retained in the experiment record and report.
 
+The pre-model M7 local-factorial preparation also exposed an adapter-side
+confound: 26 of the 40 frozen G3 inputs exceeded the original 2 MiB
+materialized-prompt cap, while the largest exact input was 8,127,461 bytes.
+That cap would reject G3 before the local provider could express either schema
+conformance or a context-limit failure. The fixed cap is therefore raised to
+12 MiB, which admits every unchanged M7-real-v1 input but remains an exact,
+tested boundary. No source, obligation, projection, or candidate schema is
+truncated or normalized. Provider refusal or empty final content after
+admission remains an observed protocol-invalid result.
+
 ## Context
 
 The D2 execution contract intentionally admits exactly the deterministic fake/no-tools reviewer. ReviewGraphen has no HTTP client, model SDK, or async runtime, and the only supported review CLI is the fixed `double-submit` fixture. Local `codex exec`, Codex App Server, and `claude --print` processes make a live reviewer technically possible without adding a network crate. They do not make model output deterministic or authoritative.

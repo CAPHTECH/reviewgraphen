@@ -71,12 +71,21 @@
     "arms": ["b1_free_form", "g3_proxy", "full_reviewgraphen"],
     "positive_units_per_arm": 20,
     "replicates": 1,
+    "replicate_index": 3,
     "semantic_trials": 60,
     "execution_order": "deterministic_hash_order_blocked_by_unit_with_arm_order_rotated_by_unit",
     "no_semantic_retry": true,
     "source_and_oracle": "frozen_m7-real-v1_without_modification",
     "input_blinding": "same_commit_issue_test_oracle_private_exclusions_as_m7-real-v1",
     "full_context_bound": {"maximum_files_per_obligation": 8, "maximum_bytes_per_obligation": 262144},
+    "adapter_materialized_prompt_limit_bytes": 12582912,
+    "pre_model_input_preflight": {
+      "model_calls_observed_before_decision": 0,
+      "original_limit_bytes": 2097152,
+      "g3_inputs_over_original_limit_among_all_40_frozen_snapshots": 26,
+      "largest_frozen_input_bytes": 8127461,
+      "decision": "raise_adapter_limit_without_truncating_or_changing_any_arm_input_so_the_provider_not_the_adapter_determines_context_admission"
+    },
     "observed_operational_warnings": [
       "Model metadata for qwen3.8:27b-mlx not found. Defaulting to fallback metadata",
       "failed to refresh available models: missing field models"

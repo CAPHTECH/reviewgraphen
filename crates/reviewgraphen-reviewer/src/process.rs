@@ -19,7 +19,7 @@ const RECORD_SCHEMA: &str = "reviewgraphen.process_reviewer_record.v1";
 const PROMPT_VERSION: &str = "reviewgraphen.process_reviewer_prompt.v1";
 const TOOL_POLICY_VERSION: &str = "reviewgraphen.process_reviewer.bwrap-no-tools.v1";
 const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
-const MAX_MATERIALIZED_PROMPT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_MATERIALIZED_PROMPT_BYTES: usize = 12 * 1024 * 1024;
 const MAX_CODEX_PROFILE_BYTES: u64 = 64 * 1024;
 const CODEX_ENVIRONMENT_ALLOW_LIST: [&str; 1] = ["OLLAMA_PRIV_API_KEY"];
 const CODEX_DISABLED_FEATURES: [&str; 16] = [
@@ -1035,6 +1035,25 @@ mod tests {
         assert!(ProcessReviewerInput::admit(root.path().to_path_buf(), expected).is_err());
         fs::write(root.path().join("private-oracle.json"), b"{}").unwrap();
         assert!(inventory(root.path()).is_err());
+    }
+
+    #[test]
+    fn materialized_prompt_bound_accepts_exact_and_refuses_plus_one() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("source.rs");
+        fs::write(&path, b"").unwrap();
+        let empty = ProcessReviewerInput::admit_current(root.path().to_path_buf()).unwrap();
+        let overhead = materialize_prompt(&empty).unwrap().len();
+        let body_bytes = MAX_MATERIALIZED_PROMPT_BYTES.checked_sub(overhead).unwrap();
+        fs::write(&path, vec![b'x'; body_bytes]).unwrap();
+        let exact = ProcessReviewerInput::admit_current(root.path().to_path_buf()).unwrap();
+        assert_eq!(
+            materialize_prompt(&exact).unwrap().len(),
+            MAX_MATERIALIZED_PROMPT_BYTES
+        );
+        fs::write(&path, vec![b'x'; body_bytes + 1]).unwrap();
+        let plus_one = ProcessReviewerInput::admit_current(root.path().to_path_buf()).unwrap();
+        assert!(materialize_prompt(&plus_one).is_err());
     }
 
     #[test]

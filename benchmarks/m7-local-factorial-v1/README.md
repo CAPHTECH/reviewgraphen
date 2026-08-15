@@ -1,6 +1,7 @@
 # M7 local-model × review-scaffold factorial v1
 
-Status: preregistered; Codex-profile adapter implementation in progress.
+Status: Codex-profile adapter implemented; schema-probe inputs frozen before
+the first experiment semantic call.
 
 This additive experiment estimates whether the measured scaffold effect on the
 twenty `m7-real-v1` known regression targets differs between the historical
@@ -17,3 +18,9 @@ No Ollama pull is performed by repository tooling. The verified local route is
 Codex CLI 0.147 profile `ollama-priv`, provider `ollama-priv`, model
 `qwen3.8:27b-mlx`. Its profile hash and effective fallback metadata warning
 must be recorded before the first probe.
+
+The frozen control-only probe plan is `schema-probe/plan.json`. Its stage 1
+uses `snapshot-06` (minimum B1 admitted bytes) and `snapshot-34` (maximum),
+with all three arms for each. The pre-model input audit found that the
+historical G3 packets exceed the original process-adapter prompt cap in 26 of
+40 snapshots, so ADR 0027 raises the fixed cap without truncating an arm.

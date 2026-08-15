@@ -1,0 +1,19 @@
+{
+  "budget": {
+    "session_limit": "one isolated session per trial",
+    "wall_clock_seconds": null
+  },
+  "inference_settings": {
+    "codex_profile": "ollama-priv",
+    "profile_sha256": "b37ae2f0f9403f7b9664e9b7d73408572822a9ee8ce814714032d75f4e3201db",
+    "sampling_seed": "not exposed by verified Codex 0.147 profile route",
+    "sampling_temperature": "not exposed by verified Codex 0.147 profile route"
+  },
+  "model": "qwen3.8:27b-mlx",
+  "model_revision": "unknown",
+  "prompt_template_version": "reviewgraphen.process_reviewer_prompt.v1",
+  "provider": "ollama-priv",
+  "reasoning_effort": "high",
+  "runner_version": "reviewgraphen-codex-profile.v1+codex-cli-0.147.0",
+  "tool_policy_version": "reviewgraphen.process_reviewer.bwrap-no-tools.v1"
+}
