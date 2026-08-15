@@ -1,0 +1,20 @@
+
+running 1 test
+lint_recursively_expands_directories_and_accepts_canonical_control_references --- FAILED
+
+failures:
+
+---- lint_recursively_expands_directories_and_accepts_canonical_control_references stdout ----
+
+thread 'lint_recursively_expands_directories_and_accepts_canonical_control_references' (1512594) panicked at fslc/tests/edition_migrator.rs:285:5:
+assertion `left == right` failed
+  left: ["/tmp/fsl-edition-migrator-1512593-1786768400411773585-0/nested/../z.fsl", "/tmp/fsl-edition-migrator-1512593-1786768400411773585-0/nested/a.fsl", "/tmp/fsl-edition-migrator-1512593-1786768400411773585-0/z.fsl"]
+ right: ["/tmp/fsl-edition-migrator-1512593-1786768400411773585-0/nested/a.fsl", "/tmp/fsl-edition-migrator-1512593-1786768400411773585-0/z.fsl"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    lint_recursively_expands_directories_and_accepts_canonical_control_references
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.01s
+

@@ -1,0 +1,18 @@
+
+running 1 test
+native_release_unit_is_atomic_pinned_and_platform_closed --- FAILED
+
+failures:
+
+---- native_release_unit_is_atomic_pinned_and_platform_closed stdout ----
+
+thread 'native_release_unit_is_atomic_pinned_and_platform_closed' (1450485) panicked at fslc/tests/native_integration.rs:349:5:
+assertion failed: workflow.contains("toolchain: 1.88.0")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    native_release_unit_is_atomic_pinned_and_platform_closed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
