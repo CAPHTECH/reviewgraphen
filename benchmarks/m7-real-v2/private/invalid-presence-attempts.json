@@ -1,0 +1,26 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_real_v2_invalid_presence_attempts.v1",
+  "attempts": [
+    {
+      "attempt_id": "sandbox-restricted-tmp-run",
+      "processed_records": 46,
+      "records_with_test_attempts": 12,
+      "records_with_checkout_disk_failure": 33,
+      "records_with_other_precondition_failure": 1,
+      "artifact_tree_sha256": "sha256:7a5ad423d80dd5fec09263388536f3546eebd884f0a4be1c9d8650116aeeafa7",
+      "valid_for_eligibility": false,
+      "reason": "restricted dependency access and later tmp exhaustion made the run heterogeneous"
+    },
+    {
+      "attempt_id": "network-enabled-tmp-full-run",
+      "processed_records": 84,
+      "records_with_test_attempts": 0,
+      "records_with_checkout_disk_failure": 84,
+      "records_with_other_precondition_failure": 0,
+      "artifact_tree_sha256": "sha256:56e866aa619c3be80322c234b00cb678925a5c884561f10c227a9475cd3d5d67",
+      "valid_for_eligibility": false,
+      "reason": "all disposable clone checkouts failed because tmp was full"
+    }
+  ],
+  "eligibility_decisions_reused": 0
+}

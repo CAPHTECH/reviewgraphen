@@ -16,6 +16,18 @@ from pathlib import Path
 FSL = Path("/home/rizumita/github/fsl")
 MANIFEST = "rust/Cargo.toml"
 TIMEOUT_STATUS = 124
+INFRASTRUCTURE_PATTERNS = (
+    b"failed to download from",
+    b"failed to get `",
+    b"could not resolve host",
+    b"could not resolve hostname",
+    b"no space left on device",
+    b"out of diskspace",
+)
+
+
+class InfrastructureError(RuntimeError):
+    pass
 
 
 def canonical(value: object) -> bytes:
@@ -26,6 +38,11 @@ def canonical(value: object) -> bytes:
 
 def sha256(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def infrastructure_failure(stderr: bytes) -> bool:
+    lowered = stderr.lower()
+    return any(pattern in lowered for pattern in INFRASTRUCTURE_PATTERNS)
 
 
 def write_json(path: Path, value: object) -> None:
@@ -126,6 +143,7 @@ def process_candidate(
     cargo: Path,
     target_dir: Path,
     artifact_dir: Path,
+    work_parent: Path,
 ) -> dict[str, object]:
     fix = str(record["fix_commit"]).removeprefix("git:")
     parent = str(record["parent_commit"]).removeprefix("git:")
@@ -138,7 +156,9 @@ def process_candidate(
     if not patch:
         raise RuntimeError("empty test-only backport")
 
-    work_root = Path(tempfile.mkdtemp(prefix="m7-real-v2-presence-", dir="/tmp"))
+    work_root = Path(
+        tempfile.mkdtemp(prefix="m7-real-v2-presence-", dir=work_parent)
+    )
     fix_clone = work_root / "fix"
     parent_clone = work_root / "parent"
     attempts: list[dict[str, object]] = []
@@ -150,13 +170,17 @@ def process_candidate(
                 timeout=120,
             )
             if status != 0:
-                raise RuntimeError(f"clone failed: {stderr.decode(errors='replace')}")
+                raise InfrastructureError(
+                    f"clone failed: {sha256(stderr)}"
+                )
             status, _, stderr = run(
                 ["git", "-C", str(clone), "checkout", "--detach", "--quiet", revision],
                 timeout=120,
             )
             if status != 0:
-                raise RuntimeError(f"checkout failed: {stderr.decode(errors='replace')}")
+                raise InfrastructureError(
+                    f"checkout failed: {sha256(stderr)}"
+                )
         status, _, stderr = run(
             ["git", "-C", str(parent_clone), "apply", "--whitespace=nowarn", "-"],
             stdin=patch,
@@ -176,6 +200,10 @@ def process_candidate(
             fix_status, fix_stdout, fix_stderr = run(
                 command, cwd=fix_clone, env=environment
             )
+            if infrastructure_failure(fix_stderr):
+                raise InfrastructureError(
+                    f"fix test infrastructure failure for {fix}: {sha256(fix_stderr)}"
+                )
             parent_status = -1
             parent_stdout = b""
             parent_stderr = b""
@@ -183,6 +211,10 @@ def process_candidate(
                 parent_status, parent_stdout, parent_stderr = run(
                     command, cwd=parent_clone, env=environment
                 )
+                if infrastructure_failure(parent_stderr):
+                    raise InfrastructureError(
+                        f"parent test infrastructure failure for {fix}: {sha256(parent_stderr)}"
+                    )
             attempt = {
                 "test_selector": f'{option["test_bin"]}::{option["test_name"]}',
                 "fix_exit_status": fix_status,
@@ -288,15 +320,19 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cargo", type=Path, required=True)
     parser.add_argument("--target-dir", type=Path, required=True)
+    parser.add_argument("--work-root", type=Path, required=True)
     parser.add_argument("--max-new", type=int)
     args = parser.parse_args()
     if not args.cargo.is_absolute() or not args.cargo.is_file():
         raise SystemExit("--cargo must be an absolute existing file")
+    if not args.target_dir.is_absolute() or not args.work_root.is_absolute():
+        raise SystemExit("--target-dir and --work-root must be absolute")
     frame = json.loads(args.frame.read_bytes())
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "results").mkdir(exist_ok=True)
     (args.output / "artifacts").mkdir(exist_ok=True)
     args.target_dir.mkdir(parents=True, exist_ok=True)
+    args.work_root.mkdir(parents=True, exist_ok=True)
     candidates = sorted(
         (
             record
@@ -316,8 +352,15 @@ def main() -> None:
         print(f"presence {ordinal}/{len(candidates)} {fix}", flush=True)
         try:
             result = process_candidate(
-                record, args.cargo, args.target_dir, args.output / "artifacts"
+                record,
+                args.cargo,
+                args.target_dir,
+                args.output / "artifacts",
+                args.work_root,
             )
+        except InfrastructureError as error:
+            print(f"infrastructure_error {fix} {error}", flush=True)
+            raise
         except RuntimeError as error:
             result = {
                 "schema": "reviewgraphen.benchmark.m7_real_v2_presence_result.v1",
