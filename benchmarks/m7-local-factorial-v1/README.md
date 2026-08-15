@@ -1,7 +1,7 @@
 # M7 local-model × review-scaffold factorial v1
 
-Status: Codex-profile adapter implemented; schema-probe inputs frozen before
-the first experiment semantic call.
+Status: schema probe stopped at the preregistered threshold (4/6 candidate
+outputs compliant); stage 2 and positive trials were not run.
 
 This additive experiment estimates whether the measured scaffold effect on the
 twenty `m7-real-v1` known regression targets differs between the historical
@@ -31,3 +31,6 @@ conservative target is 83, so this experiment reports descriptive cells and
 does not test or claim a significant interaction. A later multi-repository
 Rust corpus is the preregistered route to a larger denominator if the local
 protocol proves usable.
+
+The observed result and immutable raw artifacts are under
+`schema-probe/results/`. This v1 experiment did not measure target detection.

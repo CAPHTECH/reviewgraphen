@@ -1,0 +1,99 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_local_schema_probe_summary.v1",
+  "experiment": "m7-local-factorial-v1",
+  "stage": "stage_1",
+  "planned_trials": 6,
+  "completed_trials": 6,
+  "candidate_output_compliant": 4,
+  "candidate_output_compliance_rate": 0.6666666666666666,
+  "original_execution_process_record_success": 1,
+  "original_execution_protocol_invalid": 5,
+  "decision_rule": "stop_if_4_or_fewer_of_6_exact_schema_valid",
+  "decision": "measurement_infeasible_do_not_run_stage_2_or_60_positive_trials",
+  "latency_is_a_decision_variable": false,
+  "arms": {
+    "b1_free_form": {"completed": 2, "candidate_output_compliant": 1},
+    "g3_proxy": {"completed": 2, "candidate_output_compliant": 1},
+    "full_reviewgraphen": {"completed": 2, "candidate_output_compliant": 2}
+  },
+  "trials": [
+    {
+      "trial_id": "m7-real:snapshot-06:b1:3",
+      "arm": "b1_free_form",
+      "admitted_input_bytes": 40619,
+      "observed_elapsed_seconds": 1039.166,
+      "candidate_output_compliant": true,
+      "manifest_and_denominator_binding_valid": true,
+      "process_record_created": false,
+      "original_execution_outcome": "adapter_event_allowlist_rejection_before_item_type_diagnostics",
+      "raw_response_file": "candidates/snapshot-06-b1.json",
+      "raw_response_file_sha256": "sha256:bbb00cbf852f46b3879d83979394f08e5e08e1ad3f152fe794a0e7ce5644d12c"
+    },
+    {
+      "trial_id": "m7-real:snapshot-06:g3_proxy:3",
+      "arm": "g3_proxy",
+      "admitted_input_bytes": 403488,
+      "observed_elapsed_seconds": 3241.539,
+      "candidate_output_compliant": true,
+      "manifest_and_denominator_binding_valid": true,
+      "process_record_created": false,
+      "original_execution_outcome": "adapter_event_allowlist_rejection_before_item_type_diagnostics",
+      "raw_response_file": "candidates/snapshot-06-g3.json",
+      "raw_response_file_sha256": "sha256:8a72c8983761de7272d9c96db1575d40be39fe8a1b0e1aa6022e8e1af014cbca"
+    },
+    {
+      "trial_id": "m7-real:snapshot-06:full_review_graphen:3",
+      "arm": "full_reviewgraphen",
+      "admitted_input_bytes": 94261,
+      "observed_elapsed_seconds": 670.628,
+      "candidate_output_compliant": true,
+      "manifest_and_denominator_binding_valid": true,
+      "process_record_created": false,
+      "original_execution_outcome": "adapter_rejected_non_tool_error_item_before_classification_fix",
+      "raw_response_file": "candidates/snapshot-06-full.json",
+      "raw_response_file_sha256": "sha256:038b36bd8720b05fb0871d93b4e4f37b5da4e8e318698ef9515de8a2230bf9e2"
+    },
+    {
+      "trial_id": "m7-real:snapshot-34:b1:3",
+      "arm": "b1_free_form",
+      "admitted_input_bytes": 867764,
+      "observed_elapsed_seconds": 4458.289,
+      "candidate_output_compliant": false,
+      "manifest_and_denominator_binding_valid": false,
+      "process_record_created": false,
+      "original_execution_outcome": "empty_final_response_after_process_completion",
+      "raw_response_file": null,
+      "raw_response_file_sha256": null
+    },
+    {
+      "trial_id": "m7-real:snapshot-34:g3_proxy:3",
+      "arm": "g3_proxy",
+      "admitted_input_bytes": 8127461,
+      "observed_elapsed_seconds": 0.744,
+      "candidate_output_compliant": false,
+      "manifest_and_denominator_binding_valid": false,
+      "process_record_created": false,
+      "original_execution_outcome": "provider_input_too_large_max_1048576_actual_8131409_characters",
+      "raw_response_file": null,
+      "raw_response_file_sha256": null
+    },
+    {
+      "trial_id": "m7-real:snapshot-34:full_review_graphen:3",
+      "arm": "full_reviewgraphen",
+      "admitted_input_bytes": 341222,
+      "observed_elapsed_seconds": 1725.206,
+      "candidate_output_compliant": true,
+      "manifest_and_denominator_binding_valid": true,
+      "process_record_created": true,
+      "original_execution_outcome": "valid",
+      "raw_response_file": "candidates/snapshot-34-full.json",
+      "raw_response_file_sha256": "sha256:da86cff04735f826ed819d4db8365a4e74206270435fb882fdf9e28c44d232c1"
+    }
+  ],
+  "interpretation_limits": [
+    "The first three raw responses deterministically pass candidate validation and collection, but no successful process record exists; they are schema observations only.",
+    "The pilot measures protocol feasibility on matched controls, not known-target detection or defect-finding performance.",
+    "No local positive trial was run, so neither ReviewGraphen usefulness nor local-model usefulness was measured.",
+    "The frozen v1 rules forbid response repair, normalization, schema relaxation, and schema-invalid retry."
+  ]
+}
