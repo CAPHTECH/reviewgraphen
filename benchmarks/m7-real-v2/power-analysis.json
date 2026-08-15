@@ -1,0 +1,149 @@
+{
+  "alpha": 0.05,
+  "conservative_case": {
+    "assumed_b1_detection_rate": 0.4,
+    "assumed_scaffold_detection_rate": 0.7,
+    "b1_only_probability": 0.3,
+    "discordance_probability": 0.9,
+    "minimum_n": 83,
+    "power_at_minimum_n": 0.8026810848951896,
+    "power_at_n_minus_1": 0.7988212491208312,
+    "scaffold_only_probability": 0.6
+  },
+  "feasible": false,
+  "infeasibility_reasons": [
+    "presence eligible population is smaller than the preregistered calibration sample",
+    "no untouched holdout remains for the powered final corpus",
+    "even using all presence-eligible units without calibration would provide fewer than the conservative required final n"
+  ],
+  "marginal_rate_cases": [
+    {
+      "b1_detection_rate": 0.4,
+      "conservative_endpoint": {
+        "b1_only_probability": 0.3,
+        "discordance_probability": 0.9,
+        "minimum_n": 83,
+        "power_at_minimum_n": 0.8026810848951896,
+        "power_at_n_minus_1": 0.7988212491208312,
+        "scaffold_only_probability": 0.6
+      },
+      "maximum_discordance_probability": 0.9,
+      "minimum_discordance_probability": 0.3,
+      "scaffold_detection_rate": 0.7
+    },
+    {
+      "b1_detection_rate": 0.5,
+      "conservative_endpoint": {
+        "b1_only_probability": 0.2,
+        "discordance_probability": 0.7,
+        "minimum_n": 64,
+        "power_at_minimum_n": 0.8035786062854383,
+        "power_at_n_minus_1": 0.7965080980147834,
+        "scaffold_only_probability": 0.5
+      },
+      "maximum_discordance_probability": 0.7,
+      "minimum_discordance_probability": 0.3,
+      "scaffold_detection_rate": 0.8
+    },
+    {
+      "b1_detection_rate": 0.6,
+      "conservative_endpoint": {
+        "b1_only_probability": 0.1,
+        "discordance_probability": 0.5,
+        "minimum_n": 46,
+        "power_at_minimum_n": 0.8053172590209375,
+        "power_at_n_minus_1": 0.7956615184936021,
+        "scaffold_only_probability": 0.4
+      },
+      "maximum_discordance_probability": 0.5,
+      "minimum_discordance_probability": 0.3,
+      "scaffold_detection_rate": 0.9
+    },
+    {
+      "b1_detection_rate": 0.7,
+      "conservative_endpoint": {
+        "b1_only_probability": 0.0,
+        "discordance_probability": 0.3,
+        "minimum_n": 25,
+        "power_at_minimum_n": 0.8065115579119336,
+        "power_at_n_minus_1": 0.7711916069860154,
+        "scaffold_only_probability": 0.3
+      },
+      "maximum_discordance_probability": 0.3,
+      "minimum_discordance_probability": 0.3,
+      "scaffold_detection_rate": 1.0
+    }
+  ],
+  "method": "unconditional_power_of_exact_two_sided_paired_mcnemar",
+  "observed_holdout_n": 0,
+  "observed_presence_eligible_population": 28,
+  "replicates_count_toward_n": false,
+  "required_calibration_n": 30,
+  "required_final_n": 83,
+  "schema": "reviewgraphen.benchmark.m7_real_v2_power_analysis.v1",
+  "sensitivity": [
+    {
+      "b1_only_probability": 0.0,
+      "discordance_probability": 0.3,
+      "minimum_n": 25,
+      "power_at_minimum_n": 0.8065115579119336,
+      "power_at_n_minus_1": 0.7711916069860154,
+      "scaffold_only_probability": 0.3
+    },
+    {
+      "b1_only_probability": 0.05,
+      "discordance_probability": 0.4,
+      "minimum_n": 36,
+      "power_at_minimum_n": 0.8130785033343423,
+      "power_at_n_minus_1": 0.7985709024922388,
+      "scaffold_only_probability": 0.35
+    },
+    {
+      "b1_only_probability": 0.1,
+      "discordance_probability": 0.5,
+      "minimum_n": 46,
+      "power_at_minimum_n": 0.8053172590209375,
+      "power_at_n_minus_1": 0.7956615184936021,
+      "scaffold_only_probability": 0.4
+    },
+    {
+      "b1_only_probability": 0.15,
+      "discordance_probability": 0.6,
+      "minimum_n": 56,
+      "power_at_minimum_n": 0.8053944779169212,
+      "power_at_n_minus_1": 0.7966332862397646,
+      "scaffold_only_probability": 0.45
+    },
+    {
+      "b1_only_probability": 0.2,
+      "discordance_probability": 0.7,
+      "minimum_n": 64,
+      "power_at_minimum_n": 0.8035786062854383,
+      "power_at_n_minus_1": 0.7965080980147834,
+      "scaffold_only_probability": 0.5
+    },
+    {
+      "b1_only_probability": 0.25,
+      "discordance_probability": 0.8,
+      "minimum_n": 73,
+      "power_at_minimum_n": 0.8003022797629669,
+      "power_at_n_minus_1": 0.7946456682874032,
+      "scaffold_only_probability": 0.55
+    },
+    {
+      "b1_only_probability": 0.3,
+      "discordance_probability": 0.9,
+      "minimum_n": 83,
+      "power_at_minimum_n": 0.8026810848951896,
+      "power_at_n_minus_1": 0.7988212491208312,
+      "scaffold_only_probability": 0.6
+    }
+  ],
+  "target_absolute_detection_rate_difference": 0.3,
+  "target_b1_detection_rate_band": [
+    0.4,
+    0.7
+  ],
+  "target_power": 0.8,
+  "unit": "independent_positive-unit_arm_pair"
+}
