@@ -1,0 +1,117 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_local_factorial_preregistration.v2",
+  "experiment": "m7-local-factorial-v2",
+  "status": "frozen_before_first_v2_semantic_model_call",
+  "predecessor": {
+    "experiment": "m7-local-factorial-v1",
+    "rewrite": false,
+    "observed_candidate_schema_compliance": "4_of_6",
+    "stop_decision_preserved": true
+  },
+  "question": "does full ReviewGraphen improve Qwen known-target detection relative to Qwen B1",
+  "local_row": {
+    "arms": ["b1_free_form", "full_reviewgraphen"],
+    "model": "qwen3.8:27b-mlx",
+    "architecture": "qwen3_5",
+    "parameter_count": 27781081984,
+    "parameter_size_label": "27.8B",
+    "quantization": "nvfp4",
+    "host": "Mac Studio",
+    "loaded_size_gb_operator_observation": 22.8,
+    "provider": "ollama-priv",
+    "codex_version": "0.147.0",
+    "profile": "ollama-priv-v2",
+    "replicate_index": 4,
+    "replicates": 1,
+    "positive_units_per_arm": 20,
+    "semantic_trials": 40,
+    "execution_order": "deterministic_unit_order_with_arm_order_rotated_by_unit",
+    "no_semantic_retry": true,
+    "time_is_decision_variable": false
+  },
+  "transport_correction": {
+    "model_context_window_tokens": 262144,
+    "model_context_source": "ollama_api_show_qwen3_5.context_length_observed_before_preregistration",
+    "max_output_tokens": 65536,
+    "max_output_binding": "profile_hash_bound_static_header_checked_and_injected_by_reviewgraphen.responses-limit-shaper.v1",
+    "codex_0_147_observation": "model_context_window_is_valid_but_no_max_output_tokens_config_key_exists_and_captured_Responses_request_omitted_the_field",
+    "construct_statement": "transport metadata correction only; prompt projection obligation schema oracle and scoring are unchanged",
+    "frontier_comparability_statement": "the correction lets the selected model complete the same assigned review and does not add scaffold content"
+  },
+  "g3_exclusion": {
+    "included_in_local_v2": false,
+    "v1_observed_input_characters": 8131409,
+    "reason": "admission_requires_projection_reduction_which_would_change_the_historical_G3_scaffold",
+    "interpretation": "local_G3_remains_unmeasured_and_is_not_imputed"
+  },
+  "endpoint": {
+    "primary": "strict_m7_real_v1_known_target_detection_bit",
+    "authority": "mechanically_scored_against_frozen_private_location_oracle",
+    "protocol_invalid_primary_handling": "count_as_not_detected_intention_to_measure",
+    "secondary": ["protocol_invalid_count_and_rate", "finding_count", "detected_target_identity_and_overlap"],
+    "ai_adjudication_is_not_primary": true
+  },
+  "schema_probe": {
+    "uses_controls_only": true,
+    "valid_definition": "successful_record_exact_limit_binding_allowlisted_no_tool_events_nonempty_final_exact_candidate_schema_trial_binding_and_full_denominator",
+    "stage_1": {
+      "selection": "minimum_and_maximum_B1_admitted_input_bytes_among_twenty_controls_ties_by_snapshot_id",
+      "units": 2,
+      "arms_per_unit": 2,
+      "calls": 4,
+      "proceed_if": "4_of_4_valid",
+      "expand_if": "exactly_3_of_4_valid",
+      "stop_if": "2_or_fewer_of_4_valid"
+    },
+    "stage_2_if_expanded": {
+      "selection": "one_based_ranks_6_and_13_by_B1_admitted_bytes_among_the_eighteen_remaining_controls",
+      "additional_units": 2,
+      "additional_calls": 4,
+      "proceed_if": "at_least_7_of_8_overall_and_at_least_3_of_4_in_each_arm",
+      "otherwise": "stop"
+    },
+    "absolute_stop_conditions": [
+      "empty_final_response_recurrence",
+      "recorded_context_or_output_limit_mismatch",
+      "request_shaper_did_not_inject_exactly_one_matching_responses_request"
+    ],
+    "response_repair": "forbidden",
+    "schema_relaxation": "forbidden",
+    "postprocessing_normalization": "forbidden",
+    "semantic_retry": "forbidden"
+  },
+  "frontier_row": {
+    "reuse_only_no_rerun": true,
+    "b1_source": "m7-real-v1/results/replicate-1",
+    "full_source": "m7-real-v1/results/full-reviewgraphen-replicate-2",
+    "observed_detection": {"b1_free_form": 1, "full_reviewgraphen": 1},
+    "role": "historical_descriptive_reference_only",
+    "known_asymmetries": [
+      "frontier_B1_and_full_are_different_historical_replicates",
+      "frontier_B1_used_the_original_workspace_scoped_runner_while_frontier_full_and_local_v2_use_the_no_tools_adapter",
+      "provider_prompt_rendering_tokenization_quantization_context_and_generation_settings_differ_by_model_row",
+      "local_v2_uses_an_explicit_loopback_request_shaper_and_limit_binding",
+      "frontier_runs_included_controls_while_local_positive_sessions_are_independent_and_positive_only"
+    ]
+  },
+  "analysis": {
+    "unit_of_pairing": "benchmark_unit_id",
+    "cell_estimate": "detected_count_over_20_with_Wilson_95_percent_interval",
+    "within_local_comparison": "descriptive_paired_table_and_McNemar_discordant_counts_without_significance_claim",
+    "interaction_test": "not_performed",
+    "same_floor_rule": "if_both_local_cells_are_at_the_floor_report_floor_limited_not_no_effect",
+    "not_measured_rule": "if_probe_stops_do_not_report_target_detection"
+  },
+  "power": {
+    "local_n": 20,
+    "fsl_presence_eligible_population": 28,
+    "conservative_required_n": 83,
+    "claim_boundary": "descriptive_only_no_significance_equivalence_or_interaction_claim",
+    "future_option": "expand_the_same_presence_oracle_protocol_across_additional_Rust_repositories"
+  },
+  "preservation": {
+    "existing_results_rewritten": false,
+    "fsl_repository_mutability": "read_only",
+    "upstream_issue_or_pr_creation": false
+  }
+}

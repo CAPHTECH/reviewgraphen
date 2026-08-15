@@ -3,6 +3,35 @@
 - Status: Accepted
 - Date: 2026-08-14
 
+## 2026-08-16 amendment: explicit local-model limits
+
+The `m7-local-factorial-v1` schema probe showed two independent metadata
+failures: one Qwen turn exhausted its generation before producing a final
+message, and Codex's fallback model metadata rejected an 8,131,409-character
+G3 input.  The model host subsequently reported the selected model's exact
+`qwen3_5.context_length` as 262,144 tokens.  Codex 0.147 accepts
+`model_context_window` but has no accepted `max_output_tokens` config key and,
+in a captured local Responses request, emitted no `max_output_tokens` body
+field.
+
+A named profile may therefore declare one atomic local limit binding: a
+positive `model_context_window` plus the static provider header
+`X-ReviewGraphen-Max-Output-Tokens`.  Either both are absent, preserving old
+profiles, or both are present with `0 < max_output_tokens <
+model_context_window`.  The adapter records both values in
+`inference_settings` and the profile hash binds their source bytes.  It does
+not claim that Codex itself interprets the experiment-specific header.  A
+separately versioned, deterministic loopback request shaper must require that
+header and inject the identical integer into the Responses JSON body; its
+configuration and logs are experiment evidence, not reviewer authority.
+
+For `m7-local-factorial-v2`, the frozen values are 262,144 context tokens and
+65,536 maximum output tokens.  They correct transport metadata only: no
+review instruction, source packet, projection, obligation, schema, oracle, or
+scoring rule changes.  The loopback shaper receives only the already-admitted
+request, has no reviewer tool surface, and forwards to the same local provider.
+Its presence and version are recorded as a known model-row asymmetry.
+
 ## 2026-08-15 amendment: named Codex profiles
 
 Codex CLI 0.147 can route the same `codex exec` protocol through a named v2

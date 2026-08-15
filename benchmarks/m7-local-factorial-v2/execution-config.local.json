@@ -1,0 +1,21 @@
+{
+  "budget": {
+    "session_limit": "one isolated session per trial",
+    "wall_clock_seconds": null
+  },
+  "inference_settings": {
+    "codex_profile": "ollama-priv-v2",
+    "max_output_tokens": 65536,
+    "model_context_window": 262144,
+    "profile_sha256": "e31b7a2a4040ccb52f4ecf3c5a828d78e926bba932ee4ca2c06d0294a1bb2be9",
+    "sampling_seed": "not exposed by verified Codex 0.147 profile route",
+    "sampling_temperature": "not exposed by verified Codex 0.147 profile route"
+  },
+  "model": "qwen3.8:27b-mlx",
+  "model_revision": "unknown",
+  "prompt_template_version": "reviewgraphen.process_reviewer_prompt.v1",
+  "provider": "ollama-priv-v2-loopback-to-ollama-priv",
+  "reasoning_effort": "high",
+  "runner_version": "reviewgraphen-codex-profile-limits.v2+codex-cli-0.147.0",
+  "tool_policy_version": "reviewgraphen.process_reviewer.bwrap-no-tools.v1"
+}

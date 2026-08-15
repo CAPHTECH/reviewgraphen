@@ -232,7 +232,19 @@ impl ProcessReviewerBackend {
                                     .collect::<Vec<_>>()
                                     .join(","),
                             ),
-                        ]),
+                        ])
+                        .into_iter()
+                        .chain(
+                            observed.model_context_window.map(|value| {
+                                ("model_context_window".to_owned(), value.to_string())
+                            }),
+                        )
+                        .chain(
+                            observed
+                                .max_output_tokens
+                                .map(|value| ("max_output_tokens".to_owned(), value.to_string())),
+                        )
+                        .collect(),
                     )
                 } else {
                     ("openai".to_owned(), model.clone(), BTreeMap::new())
@@ -286,6 +298,8 @@ struct ObservedCodexProfile {
     provider: String,
     model: String,
     base_url: String,
+    model_context_window: Option<u64>,
+    max_output_tokens: Option<u64>,
     hash: ContentHash,
 }
 
@@ -843,17 +857,54 @@ fn observe_codex_profile(
         .ok_or(ProcessReviewerError::Input("Codex profile provider"))?;
     let base_url = required_toml_string(provider_table, "base_url")?;
     let env_key = required_toml_string(provider_table, "env_key")?;
+    let model_context_window = optional_positive_toml_integer(table, "model_context_window")?;
+    let max_output_tokens = provider_table
+        .get("http_headers")
+        .and_then(toml::Value::as_table)
+        .and_then(|headers| headers.get("X-ReviewGraphen-Max-Output-Tokens"))
+        .and_then(toml::Value::as_str)
+        .map(str::parse::<u64>)
+        .transpose()
+        .map_err(|_| ProcessReviewerError::Input("Codex profile max output tokens"))?
+        .filter(|value| *value > 0);
     if openai_base_url != base_url || profile.environment_variables != BTreeSet::from([env_key]) {
         return Err(ProcessReviewerError::Input(
             "Codex profile provider binding mismatch",
+        ));
+    }
+    if model_context_window.is_some() != max_output_tokens.is_some()
+        || model_context_window
+            .zip(max_output_tokens)
+            .is_some_and(|(context, output)| output >= context)
+    {
+        return Err(ProcessReviewerError::Input(
+            "Codex profile context/output limit binding",
         ));
     }
     Ok(ObservedCodexProfile {
         provider,
         model,
         base_url,
+        model_context_window,
+        max_output_tokens,
         hash: ContentHash::sha256(&bytes),
     })
+}
+
+fn optional_positive_toml_integer(
+    table: &toml::map::Map<String, toml::Value>,
+    key: &'static str,
+) -> ProcessReviewerResult<Option<u64>> {
+    table
+        .get(key)
+        .map(|value| {
+            value
+                .as_integer()
+                .and_then(|value| u64::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .ok_or(ProcessReviewerError::Input("Codex profile integer"))
+        })
+        .transpose()
 }
 
 fn required_toml_string(
@@ -1154,6 +1205,61 @@ env_key = "OLLAMA_PRIV_API_KEY"
                 .get("profile_hash")
                 .map(String::as_str),
             Some(ContentHash::sha256(profile_bytes).as_str())
+        );
+        assert!(
+            !record
+                .inference_settings
+                .contains_key("model_context_window")
+        );
+        assert!(!record.inference_settings.contains_key("max_output_tokens"));
+    }
+
+    #[test]
+    fn codex_profile_records_an_atomic_context_and_output_limit_binding() {
+        let credentials = tempdir().unwrap();
+        let profile_bytes = br#"
+openai_base_url = "http://127.0.0.1:12080/v1/"
+model_provider = "ollama-priv-v2"
+model = "qwen3.8:27b-mlx"
+model_context_window = 262144
+
+[model_providers.ollama-priv-v2]
+name = "Ollama through fixed request shaper"
+base_url = "http://127.0.0.1:12080/v1/"
+env_key = "OLLAMA_PRIV_API_KEY"
+
+[model_providers.ollama-priv-v2.http_headers]
+X-ReviewGraphen-Max-Output-Tokens = "65536"
+"#;
+        fs::write(
+            credentials.path().join("ollama-priv-v2.config.toml"),
+            profile_bytes,
+        )
+        .unwrap();
+        let backend = ProcessReviewerBackend::codex_cli_with_profile(
+            "/absolute/codex",
+            "qwen3.8:27b-mlx",
+            "high",
+            "ollama-priv-v2",
+            ["OLLAMA_PRIV_API_KEY".to_owned()],
+        )
+        .unwrap();
+        let record = backend
+            .record("codex-exec@0.147.0".to_owned(), credentials.path())
+            .unwrap();
+        assert_eq!(
+            record
+                .inference_settings
+                .get("model_context_window")
+                .map(String::as_str),
+            Some("262144")
+        );
+        assert_eq!(
+            record
+                .inference_settings
+                .get("max_output_tokens")
+                .map(String::as_str),
+            Some("65536")
         );
     }
 

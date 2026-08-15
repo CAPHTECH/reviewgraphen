@@ -1,0 +1,19 @@
+# Frozen m7-local-factorial-v2 profile. The loopback request shaper forwards to
+# the same cch-normalizing local endpoint used by v1.
+#
+# Never add forced_login_method = "api". Codex 0.147 can delete the shared
+# ChatGPT auth.json when that setting is used by a profile.
+openai_base_url = "http://127.0.0.1:12080/v1/"
+model_provider = "ollama-priv-v2"
+model = "qwen3.8:27b-mlx"
+model_context_window = 262144
+
+[model_providers.ollama-priv-v2]
+name = "Ollama through ReviewGraphen v2 request shaper"
+base_url = "http://127.0.0.1:12080/v1/"
+env_key = "OLLAMA_PRIV_API_KEY"
+request_max_retries = 0
+stream_max_retries = 0
+
+[model_providers.ollama-priv-v2.http_headers]
+X-ReviewGraphen-Max-Output-Tokens = "65536"
