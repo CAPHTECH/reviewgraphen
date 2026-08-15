@@ -1,0 +1,139 @@
+--- rust/fslc/src/main.rs:1-138 ---
+000001  // SPDX-License-Identifier: Apache-2.0
+000002  
+000003  use std::fmt::Write as _;
+000004  use std::future::Future;
+000005  use std::io::{Read as _, Write as _};
+000006  use std::path::{Path, PathBuf};
+000007  use std::pin::pin;
+000008  use std::task::{Context, Poll, Waker};
+000009  use std::time::Instant;
+000010  
+000011  use fsl_core::{
+000012      Annotations, FslValue, KernelExpr, KernelLValue, KernelModel, KernelSpec, KernelStatement,
+000013      ParamDef, TraceStep, TypeDef, TypeRef, insert_requirement_metadata, model_warnings,
+000014      requirement_metadata,
+000015  };
+000016  use fslc_rust::spec_load::{
+000017      SemanticDiagnostic, SpecLoadError, kernel_load_error, surface_parse_failure,
+000018  };
+000019  use serde_json::{Map, Value, json};
+000020  
+000021  mod approval;
+000022  mod causal;
+000023  mod code_audit;
+000024  mod verification;
+000025  
+000026  use causal::{causal_command, run_causal_check};
+000027  use verification::{
+000028      BmcRequest, DeadlockMode, ExplicitRequest, InductionRequest, ModelSelection,
+000029      VerificationEngine, run_auto_filtered, run_bmc_filtered, run_explicit_filtered,
+000030      run_induction_filtered, run_verify_cli,
+000031  };
+000032  
+000033  const CLI_CONTRACT: &str = include_str!("../cli-contract.json");
+000034  const DEFAULT_EXPLICIT_BUDGET: usize = 1_000_000;
+000035  
+000036  /// [benchmark issue metadata redacted]
+000037  /// [benchmark issue metadata redacted]
+000038  /// [benchmark issue metadata redacted]
+000039  /// [benchmark issue metadata redacted]
+000040  /// [benchmark issue metadata redacted]
+000041  /// [benchmark issue metadata redacted]
+000042  /// [benchmark issue metadata redacted]
+000043  const DEFAULT_MAX_MUTANTS: usize = 200;
+000044  
+000045  struct LiterateState {
+000046      path: PathBuf,
+000047  }
+000048  
+000049  impl Drop for LiterateState {
+000050      fn drop(&mut self) {
+000051          let _ = std::fs::remove_file(&self.path);
+000052      }
+000053  }
+000054  
+000055  fn materialize_literate(path: &Path) -> Result<Option<LiterateState>, String> {
+000056      if path.extension().and_then(std::ffi::OsStr::to_str) != Some("md") {
+000057          return Ok(None);
+000058      }
+000059      let raw =
+000060          std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+000061      let blanked = fsl_syntax::extract_literate_fsl(&raw).ok_or_else(|| {
+000062          format!(
+000063              "{}: Markdown file does not contain any ```fsl fenced code blocks",
+000064              path.display()
+000065          )
+000066      })?;
+000067      let stem = path
+000068          .file_stem()
+000069          .and_then(std::ffi::OsStr::to_str)
+000070          .unwrap_or("literate");
+000071      // Each CLI process owns its materialization. The original Markdown path is
+000072      // passed separately as the stable verify-cache identity, so physical
+000073      // isolation does not trade away cache hits across invocations.
+000074      let materialized = literate_materialization_path(path, stem, std::process::id());
+000075      std::fs::write(&materialized, &blanked).map_err(|error| error.to_string())?;
+000076      Ok(Some(LiterateState { path: materialized }))
+000077  }
+000078  
+000079  fn literate_materialization_path(path: &Path, stem: &str, process_id: u32) -> PathBuf {
+000080      path.with_file_name(format!(".{stem}.literate-{process_id}.fsl"))
+000081  }
+000082  
+000083  #[derive(Clone, Debug, Default, Eq, PartialEq)]
+000084  struct ScopeBounds {
+000085      instances: std::collections::BTreeMap<String, i64>,
+000086      values: std::collections::BTreeMap<String, (i64, i64)>,
+000087  }
+000088  
+000089  #[derive(Clone, Debug)]
+000090  struct CliVerifyOptions {
+000091      depth: usize,
+000092      deadlock: String,
+000093      engine: String,
+000094      explicit_budget: usize,
+000095      k_ind: usize,
+000096      vacuity: String,
+000097      property: Option<String>,
+000098      exclude_properties: Vec<String>,
+000099      scope: ScopeBounds,
+000100      strict_tags: bool,
+000101      requirements: Option<PathBuf>,
+000102      use_cache: bool,
+000103      lemmas: Vec<String>,
+000104      from_state: Option<PathBuf>,
+000105      edition: String,
+000106  }
+000107  
+000108  impl Default for CliVerifyOptions {
+000109      fn default() -> Self {
+000110          Self {
+000111              depth: 8,
+000112              deadlock: "warn".to_owned(),
+000113              engine: "bmc".to_owned(),
+000114              explicit_budget: DEFAULT_EXPLICIT_BUDGET,
+000115              k_ind: 1,
+000116              vacuity: "warn".to_owned(),
+000117              property: None,
+000118              exclude_properties: Vec::new(),
+000119              scope: ScopeBounds::default(),
+000120              strict_tags: false,
+000121              requirements: None,
+000122              use_cache: true,
+000123              lemmas: Vec::new(),
+000124              from_state: None,
+000125              edition: "current".to_owned(),
+000126          }
+000127      }
+000128  }
+000129  
+000130  fn required_option_value(
+000131      args: &mut impl Iterator<Item = String>,
+000132      option: &str,
+000133  ) -> Result<String, String> {
+000134      args.next()
+000135          .ok_or_else(|| format!("{option} requires a value"))
+000136  }
+000137  
+000138  fn parse_instance_override(raw: &str) -> Result<(String, i64), String> {

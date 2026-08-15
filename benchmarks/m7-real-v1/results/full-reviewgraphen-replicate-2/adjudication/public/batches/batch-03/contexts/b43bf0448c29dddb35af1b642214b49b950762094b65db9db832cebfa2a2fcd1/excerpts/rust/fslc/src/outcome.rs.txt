@@ -1,0 +1,165 @@
+--- rust/fslc/src/outcome.rs:23-186 ---
+000023  //! [benchmark issue metadata redacted]
+000024  //! [benchmark issue metadata redacted]
+000025  //! [benchmark issue metadata redacted]
+000026  //! [benchmark issue metadata redacted]
+000027  //! [benchmark issue metadata redacted]
+000028  //! [benchmark issue metadata redacted]
+000029  //! [benchmark issue metadata redacted]
+000030  //! [benchmark issue metadata redacted]
+000031  //! [benchmark issue metadata redacted]
+000032  //! [benchmark issue metadata redacted]
+000033  //! [benchmark issue metadata redacted]
+000034  //! [benchmark issue metadata redacted]
+000035  //! [benchmark issue metadata redacted]
+000036  //! [benchmark issue metadata redacted]
+000037  //! [benchmark issue metadata redacted]
+000038  //! [benchmark issue metadata redacted]
+000039  //! [benchmark issue metadata redacted]
+000040  //! [benchmark issue metadata redacted]
+000041  //! [benchmark issue metadata redacted]
+000042  //! [benchmark issue metadata redacted]
+000043  //! [benchmark issue metadata redacted]
+000044  //! [benchmark issue metadata redacted]
+000045  //! [benchmark issue metadata redacted]
+000046  //! [benchmark issue metadata redacted]
+000047  //! [benchmark issue metadata redacted]
+000048  
+000049  use serde_json::{Map, Value};
+000050  
+000051  /// The two classes the Verdict Conservation Law is stated over.
+000052  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+000053  pub enum OutcomeClass {
+000054      /// Exit zero is permitted.
+000055      Success,
+000056      /// Exit zero is forbidden.
+000057      Failure,
+000058  }
+000059  
+000060  impl OutcomeClass {
+000061      /// Whether this class permits a zero exit status.
+000062      #[must_use]
+000063      pub fn is_success(self) -> bool {
+000064          matches!(self, Self::Success)
+000065      }
+000066  }
+000067  
+000068  /// [benchmark issue metadata redacted]
+000069  /// [benchmark issue metadata redacted]
+000070  /// [benchmark issue metadata redacted]
+000071  /// [benchmark issue metadata redacted]
+000072  /// [benchmark issue metadata redacted]
+000073  /// [benchmark issue metadata redacted]
+000074  /// [benchmark issue metadata redacted]
+000075  /// [benchmark issue metadata redacted]
+000076  /// [benchmark issue metadata redacted]
+000077  /// [benchmark issue metadata redacted]
+000078  /// [benchmark issue metadata redacted]
+000079  /// [benchmark issue metadata redacted]
+000080  /// [benchmark issue metadata redacted]
+000081  /// [benchmark issue metadata redacted]
+000082  #[must_use]
+000083  #[allow(clippy::match_same_arms)]
+000084  pub fn outcome_class(output: &Value) -> OutcomeClass {
+000085      let Some(result) = output.get("result").and_then(Value::as_str) else {
+000086          // No `result` field at all is not a passing verdict. `chain` layer
+000087          // entries and the raw `fmt` source path are the only outputs without
+000088          // one, and neither is classified here.
+000089          return OutcomeClass::Failure;
+000090      };
+000091      match result {
+000092          // ---- Values whose verdict lives in a sibling field ---------------
+000093          //
+000094          // These are why this function takes `&Value`. Each mirrors the exit
+000095          // code its producing site computes today.
+000096  
+000097          // [benchmark issue metadata redacted]
+000098          // [benchmark issue metadata redacted]
+000099          // [benchmark issue metadata redacted]
+000100          // [benchmark issue metadata redacted]
+000101          "approval_check" => {
+000102              class_of(output.get("status").and_then(Value::as_str) != Some("signature-invalid"))
+000103          }
+000104          // `main.rs` `run_fmt_check`: `i32::from(any_changed)`.
+000105          "format_check" => class_of(output.get("changed") != Some(&Value::Bool(true))),
+000106          // `main.rs` `run_lint`: `i32::from(finding_count > 0)`.
+000107          "lint" => class_of(
+000108              output
+000109                  .get("finding_count")
+000110                  .and_then(Value::as_u64)
+000111                  .is_none_or(|count| count == 0),
+000112          ),
+000113          // `main.rs` `run_diff`: `i32::from(!violations.is_empty())`.
+000114          "semantic_diff" => class_of(
+000115              output
+000116                  .get("violations")
+000117                  .and_then(Value::as_array)
+000118                  .is_none_or(Vec::is_empty),
+000119          ),
+000120          // `main.rs` `run_diff_git` batch: the same gate, aggregated. The
+000121          // envelope publishes the decision as `gate.passed`.
+000122          "semantic_diff_batch" => class_of(
+000123              output
+000124                  .get("gate")
+000125                  .and_then(|gate| gate.get("passed"))
+000126                  .and_then(Value::as_bool)
+000127                  .unwrap_or(false),
+000128          ),
+000129  
+000130          // ---- Success class ----------------------------------------------
+000131          //
+000132          // Every value below exits 0 at its producing site.
+000133  
+000134          // Core verification and checking verdicts.
+000135          "ok"
+000136          | "verified"
+000137          | "proved"
+000138          | "refines"
+000139          | "conformant"
+000140          // Bounded sweep grid over a clean spec.
+000141          | "sweep_passed"
+000142          // Derived artifacts: `ledger`, `testgen`, `html`, `document`,
+000143          // `domain generate`, `db import`, `approval record`.
+000144          | "generated"
+000145          | "created"
+000146          | "imported"
+000147          | "imported_with_warnings"
+000148          // Analyses and projections that either succeed or error out.
+000149          | "analyzed"
+000150          | "expanded"
+000151          | "explained"
+000152          | "kernel"
+000153          | "typestate"
+000154          | "scenarios"
+000155          | "mutated"
+000156          | "migrated"
+000157          | "compared"
+000158          | "compat_profile_generated"
+000159          // Conformance projections and replay evidence.
+000160          | "conformance"
+000161          | "conformance_coverage"
+000162          | "testgen_trace"
+000163          | "conformance_checked"
+000164          | "document_conformant"
+000165          | "observed_conformant"
+000166          | "replay_conformant"
+000167          // [benchmark issue metadata redacted]
+000168          // [benchmark issue metadata redacted]
+000169          | "observed_supported"
+000170          // Specialized dialects: a clean verdict under the declared
+000171          // assumptions (`fsl-tools` `ai.rs`, `domain.rs`, `db.rs`, `agent.rs`).
+000172          | "verified_under_assumptions"
+000173          | "agent_analyzed"
+000174          | "ai_project_analyzed"
+000175          // Causal dialect (`fsl-tools/src/causal_analysis.rs`, `causal.rs`).
+000176          | "causal_analyzed"
+000177          | "causal_model_checked"
+000178          | "causal_diffed"
+000179          | "causal_ledger"
+000180          | "causal_expectations_checked"
+000181          | "causal_expectations_observed"
+000182          // `fsl-ai` statistical evaluation that met its requirement.
+000183          | "statistically_supported"
+000184          // A `chain` layer the manifest did not request. Its own entry
+000185          // declares `exit_code: 0` (`main.rs` `skipped_layer_entry`).
+000186          | "skipped" => OutcomeClass::Success,

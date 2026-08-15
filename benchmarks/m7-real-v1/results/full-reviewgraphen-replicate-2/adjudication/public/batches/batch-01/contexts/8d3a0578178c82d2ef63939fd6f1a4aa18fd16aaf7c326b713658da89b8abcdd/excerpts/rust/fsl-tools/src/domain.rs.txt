@@ -1,0 +1,99 @@
+--- rust/fsl-tools/src/domain.rs:1-98 ---
+000001  // SPDX-License-Identifier: Apache-2.0
+000002  
+000003  use fsl_syntax::{DomainEffect, DomainSpec, SyntaxExpr};
+000004  use serde_json::{Value, json};
+000005  
+000006  use crate::domain_naming::snake;
+000007  
+000008  /// The standing `fsl-domain` assumptions for a domain document. Exposed for
+000009  /// `fslc domain replay`'s wiring, which needs the same finite-domain-model /
+000010  /// generated-scaffold / saga-observed-history set that `check`/`analyze`
+000011  /// already compute here, rather than a duplicated copy.
+000012  #[must_use]
+000013  pub fn assumptions(domain: &DomainSpec) -> Vec<Value> {
+000014      let mut values = vec![
+000015          json!({"id":"DOMAIN-ASSUME-FINITE-DOMAIN-MODEL","text":"domain IDs and undeclared scalar input types are modeled as finite 0..1 ranges unless declared explicitly"}),
+000016          json!({"id":"DOMAIN-ASSUME-GENERATED-SCAFFOLD","text":"generated Functional DDD code is an implementation scaffold; runtime conformance still requires an adapter/replay evidence boundary"}),
+000017      ];
+000018      if !domain.sagas.is_empty() {
+000019          values.push(json!({"id":"DOMAIN-ASSUME-SAGA-OBSERVED-HISTORY","text":"saga awaits and compensation 'after' clauses are lowered with per-step event observations; durable process history requires runtime replay evidence"}));
+000020      }
+000021      values
+000022  }
+000023  fn effect_findings(
+000024      domain: &DomainSpec,
+000025      effect: &DomainEffect,
+000026      assumptions: &[Value],
+000027  ) -> Vec<Value> {
+000028      let mut out = Vec::new();
+000029      let mut add = |kind: &str, severity: &str, rule: &str, witness: Value| {
+000030          out.push(json!({"schema_version":"fsl-domain-finding.v0","fsl":"fsl-domain-effect.v0","result":"violated","kind":kind,"severity":severity,"domain":domain.name,"failed_rule":rule,"guarantee_kind":"structural","evidence":{"kind":"static_check","formal_proof":false},"witness":witness,"repair_candidates":[],"assumptions":assumptions,"effect":effect.name}));
+000031      };
+000032      if effect.irreversible && effect.idempotency_key.is_none() {
+000033          add(
+000034              "irreversible_effect_without_idempotency_key",
+000035              "error",
+000036              "idempotency_for_irreversible_effect",
+000037              json!({"effect":effect.name,"irreversible":true}),
+000038          );
+000039      }
+000040      if effect.async_effect && effect.timeout_event.is_none() && effect.retry.max_attempts.is_none()
+000041      {
+000042          add(
+000043              "pending_effect_without_timeout_or_fallback",
+000044              "warning",
+000045              "timeout_or_fallback_for_pending_effect",
+000046              json!({"effect":effect.name}),
+000047          );
+000048      }
+000049      if effect.irreversible && effect.compensation_events.is_empty() {
+000050          add(
+000051              "missing_compensation_for_irreversible_effect",
+000052              "warning",
+000053              "irreversible_effect_has_compensation_or_acceptance",
+000054              json!({"effect":effect.name,"irreversible":true}),
+000055          );
+000056      }
+000057      if effect.reliable && effect.outbox.is_none() {
+000058          add(
+000059              "reliable_effect_without_outbox_boundary",
+000060              "warning",
+000061              "reliable_effect_has_outbox",
+000062              json!({"effect":effect.name}),
+000063          );
+000064      }
+000065      out
+000066  }
+000067  fn actions(domain: &DomainSpec) -> Vec<String> {
+000068      let mut out = Vec::new();
+000069      for aggregate in &domain.aggregates {
+000070          for decide in &aggregate.decides {
+000071              out.push(format!(
+000072                  "{}_{}",
+000073                  snake(&aggregate.name),
+000074                  snake(&decide.command)
+000075              ));
+000076          }
+000077      }
+000078      for effect in &domain.effects {
+000079          for outcome in effect.outcome_events() {
+000080              out.push(format!(
+000081                  "{}_complete_{}",
+000082                  snake(&effect.name),
+000083                  snake(outcome)
+000084              ));
+000085          }
+000086          if effect.retry.max_attempts.is_some() {
+000087              out.push(format!("{}_retry", snake(&effect.name)));
+000088          }
+000089      }
+000090      for saga in &domain.sagas {
+000091          for event in saga.steps.iter().flat_map(|step| step.awaits.iter()) {
+000092              out.push(format!(
+000093                  "saga_{}_observe_{}",
+000094                  snake(&saga.name),
+000095                  snake(event)
+000096              ));
+000097          }
+000098          for step in &saga.steps {

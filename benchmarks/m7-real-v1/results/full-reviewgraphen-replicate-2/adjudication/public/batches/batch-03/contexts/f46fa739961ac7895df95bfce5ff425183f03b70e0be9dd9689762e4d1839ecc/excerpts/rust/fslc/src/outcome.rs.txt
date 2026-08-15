@@ -1,0 +1,150 @@
+--- rust/fslc/src/outcome.rs:23-171 ---
+000023  //! [benchmark issue metadata redacted]
+000024  //! [benchmark issue metadata redacted]
+000025  //! [benchmark issue metadata redacted]
+000026  //! [benchmark issue metadata redacted]
+000027  //! [benchmark issue metadata redacted]
+000028  //! [benchmark issue metadata redacted]
+000029  //! [benchmark issue metadata redacted]
+000030  //! [benchmark issue metadata redacted]
+000031  //! [benchmark issue metadata redacted]
+000032  //! [benchmark issue metadata redacted]
+000033  //! [benchmark issue metadata redacted]
+000034  //! [benchmark issue metadata redacted]
+000035  //! [benchmark issue metadata redacted]
+000036  //! [benchmark issue metadata redacted]
+000037  //! [benchmark issue metadata redacted]
+000038  //! [benchmark issue metadata redacted]
+000039  
+000040  use serde_json::Value;
+000041  
+000042  /// The two classes the Verdict Conservation Law is stated over.
+000043  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+000044  pub enum OutcomeClass {
+000045      /// Exit zero is permitted.
+000046      Success,
+000047      /// Exit zero is forbidden.
+000048      Failure,
+000049  }
+000050  
+000051  impl OutcomeClass {
+000052      /// Whether this class permits a zero exit status.
+000053      #[must_use]
+000054      pub fn is_success(self) -> bool {
+000055          matches!(self, Self::Success)
+000056      }
+000057  }
+000058  
+000059  /// [benchmark issue metadata redacted]
+000060  /// [benchmark issue metadata redacted]
+000061  /// [benchmark issue metadata redacted]
+000062  /// [benchmark issue metadata redacted]
+000063  /// [benchmark issue metadata redacted]
+000064  /// [benchmark issue metadata redacted]
+000065  /// [benchmark issue metadata redacted]
+000066  /// [benchmark issue metadata redacted]
+000067  /// [benchmark issue metadata redacted]
+000068  /// [benchmark issue metadata redacted]
+000069  /// [benchmark issue metadata redacted]
+000070  /// [benchmark issue metadata redacted]
+000071  /// [benchmark issue metadata redacted]
+000072  /// [benchmark issue metadata redacted]
+000073  #[must_use]
+000074  #[allow(clippy::match_same_arms)]
+000075  pub fn outcome_class(output: &Value) -> OutcomeClass {
+000076      let Some(result) = output.get("result").and_then(Value::as_str) else {
+000077          // No `result` field at all is not a passing verdict. `chain` layer
+000078          // entries and the raw `fmt` source path are the only outputs without
+000079          // one, and neither is classified here.
+000080          return OutcomeClass::Failure;
+000081      };
+000082      match result {
+000083          // ---- Values whose verdict lives in a sibling field ---------------
+000084          //
+000085          // These are why this function takes `&Value`. Each mirrors the exit
+000086          // code its producing site computes today.
+000087  
+000088          // [benchmark issue metadata redacted]
+000089          // [benchmark issue metadata redacted]
+000090          // [benchmark issue metadata redacted]
+000091          // [benchmark issue metadata redacted]
+000092          "approval_check" => {
+000093              class_of(output.get("status").and_then(Value::as_str) != Some("signature-invalid"))
+000094          }
+000095          // `main.rs` `run_fmt_check`: `i32::from(any_changed)`.
+000096          "format_check" => class_of(output.get("changed") != Some(&Value::Bool(true))),
+000097          // `main.rs` `run_lint`: `i32::from(finding_count > 0)`.
+000098          "lint" => class_of(
+000099              output
+000100                  .get("finding_count")
+000101                  .and_then(Value::as_u64)
+000102                  .is_none_or(|count| count == 0),
+000103          ),
+000104          // `main.rs` `run_diff`: `i32::from(!violations.is_empty())`.
+000105          "semantic_diff" => class_of(
+000106              output
+000107                  .get("violations")
+000108                  .and_then(Value::as_array)
+000109                  .is_none_or(Vec::is_empty),
+000110          ),
+000111          // `main.rs` `run_diff_git` batch: the same gate, aggregated. The
+000112          // envelope publishes the decision as `gate.passed`.
+000113          "semantic_diff_batch" => class_of(
+000114              output
+000115                  .get("gate")
+000116                  .and_then(|gate| gate.get("passed"))
+000117                  .and_then(Value::as_bool)
+000118                  .unwrap_or(false),
+000119          ),
+000120  
+000121          // ---- Success class ----------------------------------------------
+000122          //
+000123          // Every value below exits 0 at its producing site.
+000124  
+000125          // Core verification and checking verdicts.
+000126          "ok"
+000127          | "verified"
+000128          | "proved"
+000129          | "refines"
+000130          | "conformant"
+000131          // Bounded sweep grid over a clean spec.
+000132          | "sweep_passed"
+000133          // Derived artifacts: `ledger`, `testgen`, `html`, `document`,
+000134          // `domain generate`, `db import`, `approval record`.
+000135          | "generated"
+000136          | "created"
+000137          | "imported"
+000138          | "imported_with_warnings"
+000139          // Analyses and projections that either succeed or error out.
+000140          | "analyzed"
+000141          | "expanded"
+000142          | "explained"
+000143          | "kernel"
+000144          | "typestate"
+000145          | "scenarios"
+000146          | "mutated"
+000147          | "migrated"
+000148          | "compared"
+000149          | "compat_profile_generated"
+000150          // Conformance projections and replay evidence.
+000151          | "conformance"
+000152          | "conformance_coverage"
+000153          | "testgen_trace"
+000154          | "conformance_checked"
+000155          | "document_conformant"
+000156          | "observed_conformant"
+000157          | "replay_conformant"
+000158          // [benchmark issue metadata redacted]
+000159          // [benchmark issue metadata redacted]
+000160          | "observed_supported"
+000161          // Specialized dialects: a clean verdict under the declared
+000162          // assumptions (`fsl-tools` `ai.rs`, `domain.rs`, `db.rs`, `agent.rs`).
+000163          | "verified_under_assumptions"
+000164          | "agent_analyzed"
+000165          | "ai_project_analyzed"
+000166          // Causal dialect (`fsl-tools/src/causal_analysis.rs`, `causal.rs`).
+000167          | "causal_analyzed"
+000168          | "causal_model_checked"
+000169          | "causal_diffed"
+000170          | "causal_ledger"
+000171          | "causal_expectations_checked"

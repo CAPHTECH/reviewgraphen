@@ -1,0 +1,129 @@
+--- rust/fsl-tools/src/domain.rs:1-128 ---
+000001  // SPDX-License-Identifier: Apache-2.0
+000002  
+000003  use std::collections::BTreeSet;
+000004  
+000005  use fsl_syntax::{DomainEffect, DomainSpec, SyntaxExpr};
+000006  use serde_json::{Value, json};
+000007  
+000008  use crate::domain_naming::snake;
+000009  
+000010  /// The standing `fsl-domain` assumptions for a domain document. Exposed for
+000011  /// `fslc domain replay`'s wiring, which needs the same finite-domain-model /
+000012  /// generated-scaffold / saga-observed-history set that `check`/`analyze`
+000013  /// already compute here, rather than a duplicated copy.
+000014  #[must_use]
+000015  pub fn assumptions(domain: &DomainSpec) -> Vec<Value> {
+000016      let mut values = vec![
+000017          json!({"id":"DOMAIN-ASSUME-FINITE-DOMAIN-MODEL","text":"domain IDs and undeclared scalar input types are modeled as finite 0..1 ranges unless declared explicitly"}),
+000018          json!({"id":"DOMAIN-ASSUME-GENERATED-SCAFFOLD","text":"generated Functional DDD code is an implementation scaffold; runtime conformance still requires an adapter/replay evidence boundary"}),
+000019      ];
+000020      if !domain.sagas.is_empty() {
+000021          values.push(json!({"id":"DOMAIN-ASSUME-SAGA-OBSERVED-HISTORY","text":"saga awaits and compensation 'after' clauses are lowered with per-step event observations; durable process history requires runtime replay evidence"}));
+000022      }
+000023      values
+000024  }
+000025  fn effect_findings(
+000026      domain: &DomainSpec,
+000027      effect: &DomainEffect,
+000028      assumptions: &[Value],
+000029  ) -> Vec<Value> {
+000030      let mut out = Vec::new();
+000031      let mut add = |kind: &str, severity: &str, rule: &str, witness: Value| {
+000032          out.push(json!({"schema_version":"fsl-domain-finding.v0","fsl":"fsl-domain-effect.v0","result":"violated","kind":kind,"severity":severity,"domain":domain.name,"failed_rule":rule,"guarantee_kind":"structural","evidence":{"kind":"static_check","formal_proof":false},"witness":witness,"repair_candidates":[],"assumptions":assumptions,"effect":effect.name}));
+000033      };
+000034      if effect.irreversible && effect.idempotency_key.is_none() {
+000035          add(
+000036              "irreversible_effect_without_idempotency_key",
+000037              "error",
+000038              "idempotency_for_irreversible_effect",
+000039              json!({"effect":effect.name,"irreversible":true}),
+000040          );
+000041      }
+000042      if effect.async_effect && effect.timeout_event.is_none() && effect.retry.max_attempts.is_none()
+000043      {
+000044          add(
+000045              "pending_effect_without_timeout_or_fallback",
+000046              "warning",
+000047              "timeout_or_fallback_for_pending_effect",
+000048              json!({"effect":effect.name}),
+000049          );
+000050      }
+000051      if effect.irreversible && effect.compensation_events.is_empty() {
+000052          add(
+000053              "missing_compensation_for_irreversible_effect",
+000054              "warning",
+000055              "irreversible_effect_has_compensation_or_acceptance",
+000056              json!({"effect":effect.name,"irreversible":true}),
+000057          );
+000058      }
+000059      if effect.reliable && effect.outbox.is_none() {
+000060          add(
+000061              "reliable_effect_without_outbox_boundary",
+000062              "warning",
+000063              "reliable_effect_has_outbox",
+000064              json!({"effect":effect.name}),
+000065          );
+000066      }
+000067      out
+000068  }
+000069  fn actions(domain: &DomainSpec) -> Vec<String> {
+000070      let mut out = Vec::new();
+000071      for aggregate in &domain.aggregates {
+000072          for decide in &aggregate.decides {
+000073              out.push(format!(
+000074                  "{}_{}",
+000075                  snake(&aggregate.name),
+000076                  snake(&decide.command)
+000077              ));
+000078          }
+000079      }
+000080      for effect in &domain.effects {
+000081          for outcome in effect.outcome_events() {
+000082              out.push(format!(
+000083                  "{}_complete_{}",
+000084                  snake(&effect.name),
+000085                  snake(outcome)
+000086              ));
+000087          }
+000088          if effect.retry.max_attempts.is_some() {
+000089              out.push(format!("{}_retry", snake(&effect.name)));
+000090          }
+000091      }
+000092      for saga in &domain.sagas {
+000093          let mut observed = BTreeSet::new();
+000094          for step in &saga.steps {
+000095              observed.extend(step.awaits.iter());
+000096          }
+000097          for compensation in &saga.compensations {
+000098              observed.insert(&compensation.trigger_event);
+000099              observed.insert(&compensation.after_event);
+000100          }
+000101          for event in observed {
+000102              if fsl_core::domain_effect_owns_event(domain, event) {
+000103                  continue;
+000104              }
+000105              out.push(format!(
+000106                  "saga_{}_observe_{}",
+000107                  snake(&saga.name),
+000108                  snake(event)
+000109              ));
+000110          }
+000111          for step in &saga.steps {
+000112              out.push(format!("saga_{}_{}", snake(&saga.name), snake(&step.name)));
+000113              if step.timeout_event.is_some() {
+000114                  out.push(format!(
+000115                      "saga_{}_{}_timeout",
+000116                      snake(&saga.name),
+000117                      snake(&step.name)
+000118                  ));
+000119              }
+000120          }
+000121          for item in &saga.compensations {
+000122              out.push(format!(
+000123                  "saga_{}_compensate_{}_after_{}",
+000124                  snake(&saga.name),
+000125                  snake(&item.trigger_event),
+000126                  snake(&item.after_event)
+000127              ));
+000128          }

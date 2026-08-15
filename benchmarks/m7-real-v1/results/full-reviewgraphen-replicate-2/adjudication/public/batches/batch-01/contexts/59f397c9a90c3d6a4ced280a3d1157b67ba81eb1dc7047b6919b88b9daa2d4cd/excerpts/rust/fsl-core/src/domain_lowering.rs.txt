@@ -1,0 +1,132 @@
+--- rust/fsl-core/src/domain_lowering.rs:84-214 ---
+000084              } else {
+000085                  '_'
+000086              }
+000087          })
+000088          .collect::<String>();
+000089      if value.is_empty() {
+000090          value.push('x');
+000091      }
+000092      if value.starts_with(|character: char| character.is_ascii_digit()) {
+000093          value.insert(0, '_');
+000094      }
+000095      value
+000096  }
+000097  
+000098  fn lower_name(name: &str) -> String {
+000099      let mut output = String::new();
+000100      let characters = name.chars().collect::<Vec<_>>();
+000101      for (index, character) in characters.iter().enumerate() {
+000102          let previous = index.checked_sub(1).and_then(|index| characters.get(index));
+000103          let next = characters.get(index + 1);
+000104          if character.is_ascii_uppercase()
+000105              && index > 0
+000106              && (previous.is_some_and(char::is_ascii_lowercase)
+000107                  || previous.is_some_and(char::is_ascii_digit)
+000108                  || next.is_some_and(char::is_ascii_lowercase))
+000109          {
+000110              output.push('_');
+000111          }
+000112          output.push(character.to_ascii_lowercase());
+000113      }
+000114      safe(&output)
+000115  }
+000116  
+000117  fn state_name(aggregate: &DomainAggregate, field: &str) -> String {
+000118      format!("{}_{}", lower_name(&aggregate.name), safe(field))
+000119  }
+000120  
+000121  fn event_flag(event: &str) -> String {
+000122      format!("event_{}", safe(event))
+000123  }
+000124  
+000125  fn status_type(effect: &DomainEffect) -> String {
+000126      format!("{}EffectStatus", safe(&effect.name))
+000127  }
+000128  
+000129  fn status_member(effect: &DomainEffect, member: &str) -> String {
+000130      format!("{}EffectStatus_{member}", safe(&effect.name))
+000131  }
+000132  
+000133  fn status_var(effect: &DomainEffect) -> String {
+000134      format!("{}_status", lower_name(&effect.name))
+000135  }
+000136  
+000137  fn attempt_type(effect: &DomainEffect) -> String {
+000138      format!("{}Attempt", safe(&effect.name))
+000139  }
+000140  
+000141  fn attempt_var(effect: &DomainEffect) -> String {
+000142      format!("{}_attempts", lower_name(&effect.name))
+000143  }
+000144  
+000145  /// Return whether an event is owned by an effect's completion lifecycle.
+000146  #[must_use]
+000147  pub fn domain_effect_owns_event(domain: &DomainSpec, event_name: &str) -> bool {
+000148      domain.effects.iter().any(|effect| {
+000149          effect
+000150              .outcome_events()
+000151              .into_iter()
+000152              .any(|outcome| outcome == event_name)
+000153      })
+000154  }
+000155  
+000156  pub(crate) fn effect_outcome_member(effect: &DomainEffect, event: &str) -> &'static str {
+000157      if effect.success_event.as_deref() == Some(event) {
+000158          return "Succeeded";
+000159      }
+000160      if effect.failure_event.as_deref() == Some(event) {
+000161          return "Failed";
+000162      }
+000163      if effect.timeout_event.as_deref() == Some(event) {
+000164          return "TimedOut";
+000165      }
+000166      let lowered = event.to_ascii_lowercase();
+000167      if lowered.contains("timeout") || lowered.contains("timedout") {
+000168          "TimedOut"
+000169      } else if lowered.contains("fail") {
+000170          "Failed"
+000171      } else if lowered.contains("cancel") {
+000172          "Cancelled"
+000173      } else {
+000174          "Succeeded"
+000175      }
+000176  }
+000177  
+000178  pub(crate) fn validate_effect_outcome_roles(domain: &DomainSpec) -> Result<(), CoreError> {
+000179      for effect in &domain.effects {
+000180          if let Some(message) = effect.outcome_role_conflict() {
+000181              return Err(error_at(message, span_at(effect.loc)));
+000182          }
+000183          for event in effect.explicit_outcome_events() {
+000184              if !domain
+000185                  .aggregates
+000186                  .iter()
+000187                  .flat_map(|aggregate| &aggregate.events)
+000188                  .any(|candidate| candidate.name == *event)
+000189              {
+000190                  return Err(error_at(
+000191                      format!("unknown domain event '{event}'"),
+000192                      span_at(effect.loc),
+000193                  ));
+000194              }
+000195          }
+000196      }
+000197      Ok(())
+000198  }
+000199  
+000200  fn and_all(mut values: Vec<Expr>) -> Expr {
+000201      if values.is_empty() {
+000202          return Expr::Bool(true);
+000203      }
+000204      let first = values.remove(0);
+000205      values.into_iter().fold(first, |left, right| Expr::Binary {
+000206          op: "and".to_owned(),
+000207          left: Box::new(left),
+000208          right: Box::new(right),
+000209      })
+000210  }
+000211  
+000212  fn or_all(mut values: Vec<Expr>) -> Expr {
+000213      if values.is_empty() {
+000214          return Expr::Bool(false);

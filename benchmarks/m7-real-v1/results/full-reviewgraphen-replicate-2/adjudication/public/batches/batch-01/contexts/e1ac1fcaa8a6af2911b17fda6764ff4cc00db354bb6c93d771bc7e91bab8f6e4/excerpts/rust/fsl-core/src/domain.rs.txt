@@ -1,0 +1,202 @@
+--- rust/fsl-core/src/domain.rs:63-263 ---
+000063              _ => None,
+000064          },
+000065          _ => None,
+000066      }
+000067  }
+000068  
+000069  fn synthetic_num(value: i64, loc: DomainLoc) -> SyntaxExpr {
+000070      let position = SourcePos {
+000071          offset: 0,
+000072          line: loc.line,
+000073          column: loc.column,
+000074      };
+000075      SyntaxExpr {
+000076          kind: SyntaxExprKind::Num(value),
+000077          span: Span {
+000078              start: position,
+000079              end: position,
+000080          },
+000081      }
+000082  }
+000083  
+000084  fn safe(name: &str) -> String {
+000085      let mut value = name
+000086          .chars()
+000087          .map(|character| {
+000088              if character.is_ascii_alphanumeric() || character == '_' {
+000089                  character
+000090              } else {
+000091                  '_'
+000092              }
+000093          })
+000094          .collect::<String>();
+000095      if value.is_empty() {
+000096          value.push('x');
+000097      }
+000098      if value.starts_with(|character: char| character.is_ascii_digit()) {
+000099          value.insert(0, '_');
+000100      }
+000101      value
+000102  }
+000103  
+000104  fn lower_name(name: &str) -> String {
+000105      let mut output = String::new();
+000106      let characters = name.chars().collect::<Vec<_>>();
+000107      for (index, character) in characters.iter().enumerate() {
+000108          let previous = index.checked_sub(1).and_then(|index| characters.get(index));
+000109          let next = characters.get(index + 1);
+000110          if character.is_ascii_uppercase()
+000111              && index > 0
+000112              && (previous.is_some_and(char::is_ascii_lowercase)
+000113                  || previous.is_some_and(char::is_ascii_digit)
+000114                  || next.is_some_and(char::is_ascii_lowercase))
+000115          {
+000116              output.push('_');
+000117          }
+000118          output.push(character.to_ascii_lowercase());
+000119      }
+000120      safe(&output)
+000121  }
+000122  
+000123  fn identifiers(type_ref: &str) -> Vec<String> {
+000124      let mut output = Vec::new();
+000125      let mut current = String::new();
+000126      for character in type_ref.chars().chain(std::iter::once(' ')) {
+000127          if character.is_ascii_alphanumeric() || character == '_' {
+000128              current.push(character);
+000129          } else if !current.is_empty() {
+000130              if matches!(
+000131                  current.as_str(),
+000132                  "Int" | "Bool" | "Map" | "Set" | "Seq" | "Option" | "relation"
+000133              ) {
+000134                  current.clear();
+000135              } else {
+000136                  output.push(std::mem::take(&mut current));
+000137              }
+000138          }
+000139      }
+000140      output
+000141  }
+000142  
+000143  fn replace_identifier(source: &str, from: &str, to: &str) -> String {
+000144      let mut output = String::new();
+000145      let bytes = source.as_bytes();
+000146      let mut index = 0;
+000147      while index < bytes.len() {
+000148          let matches = source[index..].starts_with(from);
+000149          let before = index
+000150              .checked_sub(1)
+000151              .and_then(|position| bytes.get(position))
+000152              .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+000153          let after = bytes
+000154              .get(index + from.len())
+000155              .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+000156          if matches && !before && !after {
+000157              output.push_str(to);
+000158              index += from.len();
+000159          } else {
+000160              let character = source[index..].chars().next().expect("valid char boundary");
+000161              output.push(character);
+000162              index += character.len_utf8();
+000163          }
+000164      }
+000165      output
+000166  }
+000167  
+000168  fn compact(expression: &str) -> String {
+000169      expression.split_whitespace().collect::<Vec<_>>().join(" ")
+000170  }
+000171  
+000172  #[derive(Clone)]
+000173  struct Context<'a> {
+000174      domain: &'a DomainSpec,
+000175      types: Vec<DomainType>,
+000176      enum_members: BTreeMap<(String, String), String>,
+000177  }
+000178  
+000179  impl<'a> Context<'a> {
+000180      fn new(domain: &'a DomainSpec) -> Self {
+000181          let mut types = domain.types.clone();
+000182          let declared = types
+000183              .iter()
+000184              .map(|ty| ty.name.clone())
+000185              .collect::<BTreeSet<_>>();
+000186          let mut references = BTreeSet::new();
+000187          for aggregate in &domain.aggregates {
+000188              if let Some(id) = &aggregate.id_type {
+000189                  references.insert(id.clone());
+000190              }
+000191              for field in aggregate
+000192                  .state
+000193                  .iter()
+000194                  .chain(
+000195                      aggregate
+000196                          .commands
+000197                          .iter()
+000198                          .flat_map(|command| &command.inputs),
+000199                  )
+000200                  .chain(aggregate.events.iter().flat_map(|event| &event.fields))
+000201              {
+000202                  references.extend(identifiers(&field.type_name));
+000203              }
+000204          }
+000205          for name in references {
+000206              if !declared.contains(&name) {
+000207                  types.push(DomainType {
+000208                      name,
+000209                      kind: "external".to_owned(),
+000210                      members: Vec::new(),
+000211                      member_spans: Vec::new(),
+000212                      lo: Some(synthetic_num(0, domain.loc)),
+000213                      hi: Some(synthetic_num(1, domain.loc)),
+000214                      fields: Vec::new(),
+000215                      invariants: Vec::new(),
+000216                      source_form: DomainTypeSourceForm::External,
+000217                      span: domain.loc.span(),
+000218                      loc: domain.loc,
+000219                  });
+000220              }
+000221          }
+000222          let enum_members = types
+000223              .iter()
+000224              .filter(|ty| ty.kind == "enum")
+000225              .flat_map(|ty| {
+000226                  ty.members.iter().map(|member| {
+000227                      (
+000228                          (ty.name.clone(), member.clone()),
+000229                          format!("{}_{}", ty.name, member),
+000230                      )
+000231                  })
+000232              })
+000233              .collect();
+000234          Self {
+000235              domain,
+000236              types,
+000237              enum_members,
+000238          }
+000239      }
+000240  
+000241      fn ty(&self, name: &str) -> Option<&DomainType> {
+000242          self.types.iter().find(|ty| ty.name == name)
+000243      }
+000244  
+000245      fn enum_value(&self, ty: &str, value: &str) -> String {
+000246          self.enum_members
+000247              .get(&(ty.to_owned(), value.to_owned()))
+000248              .cloned()
+000249              .unwrap_or_else(|| value.to_owned())
+000250      }
+000251  
+000252      fn state_name(aggregate: &DomainAggregate, field: &str) -> String {
+000253          format!("{}_{}", lower_name(&aggregate.name), safe(field))
+000254      }
+000255  
+000256      fn event_flag(event: &str) -> String {
+000257          format!("event_{}", safe(event))
+000258      }
+000259  
+000260      fn status_type(effect: &DomainEffect) -> String {
+000261          format!("{}EffectStatus", safe(&effect.name))
+000262      }
+000263  

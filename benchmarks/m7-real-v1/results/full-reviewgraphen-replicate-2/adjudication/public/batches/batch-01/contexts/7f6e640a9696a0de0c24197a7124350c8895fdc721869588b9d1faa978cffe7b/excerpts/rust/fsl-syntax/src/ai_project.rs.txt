@@ -1,0 +1,134 @@
+--- rust/fsl-syntax/src/ai_project.rs:328-460 ---
+000328              }),
+000329              _ => {}
+000330          }
+000331      }
+000332      reject_duplicates(
+000333          project
+000334              .statistical_properties
+000335              .iter()
+000336              .map(|p| p.name.as_str()),
+000337          "statistical_property",
+000338      )?;
+000339      reject_duplicates(
+000340          project.observed_properties.iter().map(|p| p.name.as_str()),
+000341          "observed_property",
+000342      )?;
+000343      reject_duplicates(
+000344          project.migrations.iter().map(|p| p.name.as_str()),
+000345          "ai_migration",
+000346      )?;
+000347      Ok(project)
+000348  }
+000349  
+000350  fn reject_duplicates<'a>(names: impl Iterator<Item = &'a str>, label: &str) -> Result<(), String> {
+000351      let mut seen = std::collections::BTreeSet::new();
+000352      for name in names {
+000353          if !seen.insert(name) {
+000354              return Err(format!("duplicate {label} '{name}'"));
+000355          }
+000356      }
+000357      Ok(())
+000358  }
+000359  
+000360  // --- brace-matching block scanner (mirrors `_top_blocks` et al.) ----------
+000361  
+000362  struct RawBlock {
+000363      kind: String,
+000364      name: String,
+000365      /// The exact original text of the block, header included (`"kind name {
+000366      /// ... }"`), used to hand `ai_component` blocks to the strict token
+000367      /// parser unmodified.
+000368      text: String,
+000369      body: String,
+000370  }
+000371  
+000372  struct BlockHeader {
+000373      start: usize,
+000374      kind: String,
+000375      name: String,
+000376      brace: usize,
+000377  }
+000378  
+000379  fn is_ident_start(c: char) -> bool {
+000380      c.is_ascii_alphabetic() || c == '_'
+000381  }
+000382  
+000383  fn is_ident_continue(c: char) -> bool {
+000384      c.is_ascii_alphanumeric() || c == '_'
+000385  }
+000386  
+000387  #[allow(clippy::many_single_char_names)]
+000388  fn try_match_header(chars: &[char], start: usize) -> Option<BlockHeader> {
+000389      let n = chars.len();
+000390      let mut p = start;
+000391      while p < n && is_ident_continue(chars[p]) {
+000392          p += 1;
+000393      }
+000394      let kind: String = chars[start..p].iter().collect();
+000395      let mut q = p;
+000396      while q < n && chars[q].is_whitespace() {
+000397          q += 1;
+000398      }
+000399      if q > p && q < n && is_ident_start(chars[q]) {
+000400          let name_start = q;
+000401          let mut r = q;
+000402          while r < n && is_ident_continue(chars[r]) {
+000403              r += 1;
+000404          }
+000405          let mut s = r;
+000406          while s < n && chars[s].is_whitespace() {
+000407              s += 1;
+000408          }
+000409          if s < n && chars[s] == '{' {
+000410              return Some(BlockHeader {
+000411                  start,
+000412                  kind,
+000413                  name: chars[name_start..r].iter().collect(),
+000414                  brace: s,
+000415              });
+000416          }
+000417      }
+000418      let mut s = p;
+000419      while s < n && chars[s].is_whitespace() {
+000420          s += 1;
+000421      }
+000422      if s < n && chars[s] == '{' {
+000423          return Some(BlockHeader {
+000424              start,
+000425              kind,
+000426              name: String::new(),
+000427              brace: s,
+000428          });
+000429      }
+000430      None
+000431  }
+000432  
+000433  fn find_block_header(chars: &[char], from: usize) -> Option<BlockHeader> {
+000434      let n = chars.len();
+000435      let mut pos = from;
+000436      while pos < n {
+000437          if is_ident_start(chars[pos])
+000438              && (pos == 0 || !is_ident_continue(chars[pos - 1]))
+000439              && let Some(header) = try_match_header(chars, pos)
+000440          {
+000441              return Some(header);
+000442          }
+000443          pos += 1;
+000444      }
+000445      None
+000446  }
+000447  
+000448  fn matching_brace(chars: &[char], brace: usize) -> Option<usize> {
+000449      let mut depth = 0i32;
+000450      let mut in_string = false;
+000451      let mut escaped = false;
+000452      for (i, &ch) in chars.iter().enumerate().skip(brace) {
+000453          if in_string {
+000454              if escaped {
+000455                  escaped = false;
+000456              } else if ch == '\\' {
+000457                  escaped = true;
+000458              } else if ch == '"' {
+000459                  in_string = false;
+000460              }

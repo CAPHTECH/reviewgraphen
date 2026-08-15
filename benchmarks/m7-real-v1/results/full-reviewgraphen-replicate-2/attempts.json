@@ -1,0 +1,32 @@
+{
+  "schema": "reviewgraphen.verification.m7_generic_v2_attempts.v1",
+  "successful_live_trials": 40,
+  "successful_adjudication_batches": 3,
+  "excluded_attempts": [
+    {
+      "scope": "snapshot-01",
+      "count": 1,
+      "reason": "provider rejected the benchmark candidate schema because uniqueItems is outside its Structured Outputs subset",
+      "accepted": false
+    },
+    {
+      "scope": "all_snapshots",
+      "count": 40,
+      "reason": "pre-scoring inventory audit found collision with the existing full arm replicate-1 trial IDs",
+      "accepted": false
+    },
+    {
+      "scope": "all_snapshots",
+      "count": 40,
+      "reason": "initial collection helper appended one newline to replay bytes; exact record replay regenerated candidates before scoring",
+      "accepted": false
+    },
+    {
+      "scope": "adjudication_wrapper_after_batch-03",
+      "count": 1,
+      "reason": "post-run glob included batch-index.json and the wrapper correctly refused it after all three indexed batches had exited zero",
+      "accepted": false
+    }
+  ],
+  "rule": "Only replicate-2, exit-zero, exact-replay, schema-valid, manifest-bound outputs and complete item-bijective adjudication batches entered the result."
+}

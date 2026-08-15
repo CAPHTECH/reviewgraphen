@@ -1,0 +1,75 @@
+{
+  "schema": "reviewgraphen.verification.m7_generic_v2_comparison.v1",
+  "corpus": "m7-real-v1",
+  "fix_pairs": 20,
+  "provider": "openai",
+  "model": "gpt-5.6-sol",
+  "model_revision": "unknown",
+  "reasoning_effort": "high",
+  "primary_arms": [
+    {
+      "arm": "b1_free_form",
+      "replicate": 1,
+      "known_target_detected": 1,
+      "known_target_denominator": 20,
+      "known_target_recall": 0.05,
+      "wilson_95_low": 0.008881448800795402,
+      "wilson_95_high": 0.23613119344674205,
+      "detected_units": ["real-unit-02"],
+      "positive_findings": 115,
+      "control_findings_unlabeled": 96
+    },
+    {
+      "arm": "g3_proxy",
+      "replicate": 1,
+      "known_target_detected": 1,
+      "known_target_denominator": 20,
+      "known_target_recall": 0.05,
+      "wilson_95_low": 0.008881448800795402,
+      "wilson_95_high": 0.23613119344674205,
+      "detected_units": ["real-unit-02"],
+      "positive_findings": 47,
+      "control_findings_unlabeled": 38
+    },
+    {
+      "arm": "full_review_graphen",
+      "replicate": 2,
+      "known_target_detected": 1,
+      "known_target_denominator": 20,
+      "known_target_recall": 0.05,
+      "wilson_95_low": 0.008881448800795402,
+      "wilson_95_high": 0.23613119344674205,
+      "detected_units": ["real-unit-15"],
+      "positive_findings": 17,
+      "positive_unresolved": 16,
+      "control_findings_unlabeled": 18,
+      "blind_valid_novel_positive": 3,
+      "blind_valid_novel_control": 4
+    }
+  ],
+  "paired_known_target_comparisons": [
+    {
+      "left": "b1_free_form_r1",
+      "right": "full_review_graphen_r2",
+      "left_only": 1,
+      "right_only": 1,
+      "exact_mcnemar_two_sided_p": 1.0
+    },
+    {
+      "left": "g3_proxy_r1",
+      "right": "full_review_graphen_r2",
+      "left_only": 1,
+      "right_only": 1,
+      "exact_mcnemar_two_sided_p": 1.0
+    },
+    {
+      "left": "full_review_graphen_r1",
+      "right": "full_review_graphen_r2",
+      "left_only": 0,
+      "right_only": 0,
+      "exact_mcnemar_two_sided_p": null,
+      "note": "no discordant pairs; both detected real-unit-15"
+    }
+  ],
+  "interpretation": "B1 replicate 1, G3-proxy replicate 1, and full ReviewGraphen replicate 2 each measured 1/20 known-target recall. The run is at the floor and does not distinguish detection performance."
+}

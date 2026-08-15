@@ -1,0 +1,140 @@
+--- rust/fslc/src/frontend_output.rs:1-139 ---
+000001  // SPDX-License-Identifier: Apache-2.0
+000002  
+000003  //! Shared frontend diagnostics used by native and browser delivery surfaces.
+000004  
+000005  use serde_json::{Map, Value, json};
+000006  
+000007  /// Render a surface-parser diagnostic using the public check/verify envelope.
+000008  #[must_use]
+000009  pub fn render_surface_parse_error(
+000010      mut output: Map<String, Value>,
+000011      error: &fsl_syntax::ParseError,
+000012  ) -> Value {
+000013      output.insert("result".to_owned(), json!("error"));
+000014      output.insert("kind".to_owned(), json!("parse"));
+000015      output.insert("message".to_owned(), json!(error.to_string()));
+000016      output.insert("diagnostic_code".to_owned(), json!(error.code()));
+000017      output.insert("loc".to_owned(), error.span.python_loc());
+000018      if matches!(
+000019          error.code(),
+000020          "FSL-DIALECT-EMPTY" | "FSL-DIALECT-ANNOTATION-TARGET" | "FSL-DIALECT-UNKNOWN"
+000021      ) {
+000022          output.insert(
+000023              "supported_dialects".to_owned(),
+000024              json!(fsl_syntax::DIALECT_KEYWORDS),
+000025          );
+000026      }
+000027      Value::Object(output)
+000028  }
+000029  
+000030  /// The `ai_project` name project commands report -- the source's file stem,
+000031  /// mirroring the frozen reference's `parse_ai_project(src, name=Path(path).stem)`.
+000032  #[must_use]
+000033  pub fn ai_project_name(source_file: &str) -> &str {
+000034      std::path::Path::new(source_file)
+000035          .file_stem()
+000036          .and_then(std::ffi::OsStr::to_str)
+000037          .unwrap_or("AiProject")
+000038  }
+000039  
+000040  /// [benchmark issue metadata redacted]
+000041  /// [benchmark issue metadata redacted]
+000042  /// [benchmark issue metadata redacted]
+000043  /// [benchmark issue metadata redacted]
+000044  /// [benchmark issue metadata redacted]
+000045  /// [benchmark issue metadata redacted]
+000046  /// [benchmark issue metadata redacted]
+000047  /// [benchmark issue metadata redacted]
+000048  /// [benchmark issue metadata redacted]
+000049  /// [benchmark issue metadata redacted]
+000050  /// [benchmark issue metadata redacted]
+000051  /// [benchmark issue metadata redacted]
+000052  pub fn parse_checked_ai_project(
+000053      source: &str,
+000054      name: &str,
+000055  ) -> Result<fsl_syntax::AiProject, AiProjectParseError> {
+000056      let project =
+000057          fsl_syntax::parse_ai_project(source, name).map_err(|message| AiProjectParseError {
+000058              message,
+000059              position: None,
+000060          })?;
+000061      let unparsed = project.unparsed_clauses();
+000062      if unparsed.is_empty() {
+000063          return Ok(project);
+000064      }
+000065      let detail = unparsed
+000066          .iter()
+000067          .map(|clause| {
+000068              format!(
+000069                  "{} '{}' (slice '{}'): require {}",
+000070                  clause.declaration_kind, clause.declaration, clause.slice, clause.source
+000071              )
+000072          })
+000073          .collect::<Vec<_>>()
+000074          .join("; ");
+000075      // `unparsed_clauses` walks declarations in source order, so the first entry
+000076      // is the first offending clause; report its own line, not its block's.
+000077      let first = &unparsed[0];
+000078      Err(AiProjectParseError {
+000079          message: format!(
+000080              "require clause matches no known fsl-ai evidence clause grammar \
+000081               (min_samples, ci_lower, ci_upper, a point estimate, observed, or drift): {detail}"
+000082          ),
+000083          position: Some((first.line, first.column)),
+000084      })
+000085  }
+000086  
+000087  /// [benchmark issue metadata redacted]
+000088  /// [benchmark issue metadata redacted]
+000089  /// [benchmark issue metadata redacted]
+000090  pub struct AiProjectParseError {
+000091      pub message: String,
+000092      pub position: Option<(u32, u32)>,
+000093  }
+000094  
+000095  /// Render the multi-declaration AI project check result when applicable,
+000096  /// paired with its process exit code.
+000097  #[must_use]
+000098  pub fn ai_project_check_output(
+000099      source: &str,
+000100      source_file: &str,
+000101      mut output: Map<String, Value>,
+000102  ) -> Option<(Value, i32)> {
+000103      if !is_ai_project(source) {
+000104          return None;
+000105      }
+000106      let spec = ai_project_name(source_file);
+000107      if let Err(error) = parse_checked_ai_project(source, spec) {
+000108          output.insert("result".to_owned(), json!("error"));
+000109          output.insert("kind".to_owned(), json!("parse"));
+000110          output.insert("message".to_owned(), json!(error.message));
+000111          if let Some((line, column)) = error.position {
+000112              output.insert("loc".to_owned(), json!({"line": line, "column": column}));
+000113          }
+000114          return Some((Value::Object(output), 2));
+000115      }
+000116      output.insert("result".to_owned(), json!("ok"));
+000117      output.insert("spec".to_owned(), json!(spec));
+000118      output.insert("dialect".to_owned(), json!("fsl-ai-project.v0"));
+000119      output.insert("warnings".to_owned(), json!([]));
+000120      output.insert(
+000121          "ai_analysis_result".to_owned(),
+000122          json!("ai_project_analyzed"),
+000123      );
+000124      Some((Value::Object(output), 0))
+000125  }
+000126  
+000127  /// Return whether source uses the legacy multi-declaration AI project dialect.
+000128  #[must_use]
+000129  pub fn is_ai_project(source: &str) -> bool {
+000130      const PROJECT_BLOCKS: &[&str] = &[
+000131          "ai_action",
+000132          "ai_component",
+000133          "ai_contract",
+000134          "ai_migration",
+000135          "authority",
+000136          "dataset",
+000137          "evaluator",
+000138          "failure_mode",
+000139          "observed_property",

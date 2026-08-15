@@ -1,0 +1,223 @@
+--- rust/fsl-tools/src/domain.rs:1-100 ---
+000001  // SPDX-License-Identifier: Apache-2.0
+000002  
+000003  use std::collections::BTreeSet;
+000004  
+000005  use fsl_syntax::{DomainEffect, DomainSpec, SyntaxExpr};
+000006  use serde_json::{Value, json};
+000007  
+000008  use crate::domain_naming::snake;
+000009  
+000010  /// The standing `fsl-domain` assumptions for a domain document. Exposed for
+000011  /// `fslc domain replay`'s wiring, which needs the same finite-domain-model /
+000012  /// generated-scaffold / saga-observed-history set that `check`/`analyze`
+000013  /// already compute here, rather than a duplicated copy.
+000014  #[must_use]
+000015  pub fn assumptions(domain: &DomainSpec) -> Vec<Value> {
+000016      let mut values = vec![
+000017          json!({"id":"DOMAIN-ASSUME-FINITE-DOMAIN-MODEL","text":"domain IDs and undeclared scalar input types are modeled as finite 0..1 ranges unless declared explicitly"}),
+000018          json!({"id":"DOMAIN-ASSUME-GENERATED-SCAFFOLD","text":"generated Functional DDD code is an implementation scaffold; runtime conformance still requires an adapter/replay evidence boundary"}),
+000019      ];
+000020      if !domain.sagas.is_empty() {
+000021          values.push(json!({"id":"DOMAIN-ASSUME-SAGA-OBSERVED-HISTORY","text":"saga awaits and compensation 'after' clauses are lowered with per-step event observations; durable process history requires runtime replay evidence"}));
+000022      }
+000023      values
+000024  }
+000025  fn effect_findings(
+000026      domain: &DomainSpec,
+000027      effect: &DomainEffect,
+000028      assumptions: &[Value],
+000029  ) -> Vec<Value> {
+000030      let mut out = Vec::new();
+000031      let mut add = |kind: &str, severity: &str, rule: &str, witness: Value| {
+000032          out.push(json!({"schema_version":"fsl-domain-finding.v0","fsl":"fsl-domain-effect.v0","result":"violated","kind":kind,"severity":severity,"domain":domain.name,"failed_rule":rule,"guarantee_kind":"structural","evidence":{"kind":"static_check","formal_proof":false},"witness":witness,"repair_candidates":[],"assumptions":assumptions,"effect":effect.name}));
+000033      };
+000034      if effect.irreversible && effect.idempotency_key.is_none() {
+000035          add(
+000036              "irreversible_effect_without_idempotency_key",
+000037              "error",
+000038              "idempotency_for_irreversible_effect",
+000039              json!({"effect":effect.name,"irreversible":true}),
+000040          );
+000041      }
+000042      if effect.async_effect && effect.timeout_event.is_none() && effect.retry.max_attempts.is_none()
+000043      {
+000044          add(
+000045              "pending_effect_without_timeout_or_fallback",
+000046              "warning",
+000047              "timeout_or_fallback_for_pending_effect",
+000048              json!({"effect":effect.name}),
+000049          );
+000050      }
+000051      if effect.irreversible && effect.compensation_events.is_empty() {
+000052          add(
+000053              "missing_compensation_for_irreversible_effect",
+000054              "warning",
+000055              "irreversible_effect_has_compensation_or_acceptance",
+000056              json!({"effect":effect.name,"irreversible":true}),
+000057          );
+000058      }
+000059      if effect.reliable && effect.outbox.is_none() {
+000060          add(
+000061              "reliable_effect_without_outbox_boundary",
+000062              "warning",
+000063              "reliable_effect_has_outbox",
+000064              json!({"effect":effect.name}),
+000065          );
+000066      }
+000067      out
+000068  }
+000069  fn actions(domain: &DomainSpec) -> Vec<String> {
+000070      let mut out = Vec::new();
+000071      for aggregate in &domain.aggregates {
+000072          for decide in &aggregate.decides {
+000073              out.push(format!(
+000074                  "{}_{}",
+000075                  snake(&aggregate.name),
+000076                  snake(&decide.command)
+000077              ));
+000078          }
+000079      }
+000080      for effect in &domain.effects {
+000081          for outcome in effect.outcome_events() {
+000082              out.push(format!(
+000083                  "{}_complete_{}",
+000084                  snake(&effect.name),
+000085                  snake(outcome)
+000086              ));
+000087          }
+000088          if effect.retry.max_attempts.is_some() {
+000089              out.push(format!("{}_retry", snake(&effect.name)));
+000090          }
+000091      }
+000092      for saga in &domain.sagas {
+000093          let mut observed = BTreeSet::new();
+000094          for step in &saga.steps {
+000095              observed.extend(step.awaits.iter());
+000096          }
+000097          for compensation in &saga.compensations {
+000098              observed.insert(&compensation.trigger_event);
+000099              observed.insert(&compensation.after_event);
+000100          }
+--- rust/fsl-tools/src/domain.rs:189-309 ---
+000189  /// Returns an error when the domain AST has conflicting explicit outcome roles.
+000190  pub fn domain_kernel_source(domain: &DomainSpec) -> Result<String, fsl_core::CoreError> {
+000191      fsl_core::domain_kernel_source(domain)
+000192  }
+000193  
+000194  /// Generate the native implementation scaffold for a supported target.
+000195  ///
+000196  /// # Errors
+000197  ///
+000198  /// Returns an error for an unsupported target instead of silently treating it
+000199  /// as TypeScript.
+000200  /// Project only the source-level grouping and spelling that the closed Public
+000201  /// Kernel contract cannot represent. Emitters consume the resulting JSON, not
+000202  /// this private frontend model.
+000203  #[must_use]
+000204  pub fn domain_scaffold_metadata(domain: &DomainSpec) -> Value {
+000205      let field = |value: &fsl_syntax::DomainField| json!({"name":value.name.text,"type_name":value.type_name.render_source()});
+000206      json!({
+000207          "$schema":crate::domain_codegen::METADATA_SCHEMA_ID,
+000208          "schema_version":crate::domain_codegen::METADATA_SCHEMA_VERSION,
+000209          "name":domain.name,
+000210          "types":domain.types.iter().map(|value|json!({
+000211              "name":value.name,
+000212              "kind":value.kind,
+000213              "members":value.members,
+000214              "fields":value.fields.iter().map(&field).collect::<Vec<_>>()
+000215          })).collect::<Vec<_>>(),
+000216          "aggregates":domain.aggregates.iter().map(|aggregate|json!({
+000217              "name":aggregate.name,
+000218              "id_type":aggregate.id_type,
+000219              "state":aggregate.state.iter().map(&field).collect::<Vec<_>>(),
+000220              "commands":aggregate.commands.iter().map(|value|json!({
+000221                  "name":value.name,
+000222                  "inputs":value.inputs.iter().map(&field).collect::<Vec<_>>()
+000223              })).collect::<Vec<_>>(),
+000224              "events":aggregate.events.iter().map(|value|json!({
+000225                  "name":value.name,
+000226                  "fields":value.fields.iter().map(&field).collect::<Vec<_>>()
+000227              })).collect::<Vec<_>>(),
+000228              "errors":aggregate.errors.iter().map(|value|&value.name).collect::<Vec<_>>(),
+000229              "decides":aggregate.decides.iter().map(|value|json!({
+000230                  "command":value.command,
+000231                  "requires":value.requires.iter().map(SyntaxExpr::render_source).collect::<Vec<_>>(),
+000232                  "rejects":value.rejects.iter().map(|reject|json!({
+000233                      "error":reject.error,
+000234                      "condition":reject.condition.render_source()
+000235                  })).collect::<Vec<_>>(),
+000236                  "emits":value.emits
+000237              })).collect::<Vec<_>>(),
+000238              "evolves":aggregate.evolves.iter().map(|value|json!({
+000239                  "event":value.event,
+000240                  "assignments":value.assignments.iter().map(|assignment|json!({
+000241                      "target":assignment.target.render_source(),
+000242                      "value":assignment.value.render_source()
+000243                  })).collect::<Vec<_>>()
+000244              })).collect::<Vec<_>>()
+000245          })).collect::<Vec<_>>(),
+000246          "effects":domain.effects.iter().map(|value|json!({
+000247              "name":value.name,
+000248              "handles":value.handles,
+000249              "request_event":value.request_event,
+000250              "outcomes":value.outcome_events(),
+000251              "retry_max_attempts":value.retry.max_attempts
+000252          })).collect::<Vec<_>>(),
+000253          "sagas":domain.sagas.iter().map(|value|json!({
+000254              "name":value.name,
+000255              "starts_on":value.starts_on,
+000256              "steps":value.steps.iter().map(|step|json!({
+000257                  "name":step.name,
+000258                  "emits":step.emits,
+000259                  "timeout_event":step.timeout_event
+000260              })).collect::<Vec<_>>(),
+000261              "compensations":value.compensations.iter().map(|item|json!({
+000262                  "trigger_event":item.trigger_event,
+000263                  "after_event":item.after_event,
+000264                  "emits":item.emits
+000265              })).collect::<Vec<_>>()
+000266          })).collect::<Vec<_>>()
+000267      })
+000268  }
+000269  
+000270  /// Generate target files from Public Kernel v1 plus the versioned compatibility
+000271  /// metadata needed for source-level DDD names that lowering does not retain.
+000272  ///
+000273  /// # Errors
+000274  ///
+000275  /// Returns an error when either input contract is incompatible or inconsistent,
+000276  /// or when the target is unsupported.
+000277  pub fn domain_scaffold(kernel: &Value, metadata: &Value, target: &str) -> Result<Value, String> {
+000278      let files = crate::domain_codegen::generate(kernel, metadata, target)?;
+000279      let domain = kernel
+000280          .pointer("/spec/name")
+000281          .and_then(Value::as_str)
+000282          .ok_or_else(|| "public Kernel root.spec.name must be a string".to_owned())?;
+000283      Ok(json!({
+000284          "result":"generated",
+000285          "dialect":"fsl-domain-effect.v0",
+000286          "domain":domain,
+000287          "target":target,
+000288          "files":files.into_iter().map(|(path, content)| json!({"path":path,"content":content})).collect::<Vec<_>>()
+000289      }))
+000290  }
+000291  
+000292  /// Reuse the TypeScript generator for the adapter snippets embedded by
+000293  /// `domain testgen`; this prevents a second adapter/effect implementation.
+000294  ///
+000295  /// # Errors
+000296  ///
+000297  /// Returns an error when the Public Kernel or metadata contract is invalid or
+000298  /// inconsistent.
+000299  pub fn domain_adapter_files(
+000300      kernel: &Value,
+000301      metadata: &Value,
+000302  ) -> Result<Vec<(String, String)>, String> {
+000303      let mut files = crate::domain_codegen::generate(kernel, metadata, "typescript")?
+000304          .into_iter()
+000305          .filter(|(path, _)| path.ends_with("/adapter.ts") || path == "effects.ts")
+000306          .collect::<Vec<_>>();
+000307      files.sort_by_key(|(path, _)| (path == "effects.ts", path.clone()));
+000308      Ok(files)
+000309  }

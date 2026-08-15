@@ -1,0 +1,151 @@
+--- rust/fsl-syntax/src/ai_project.rs:116-265 ---
+000116  #[derive(Clone, Debug, PartialEq)]
+000117  pub struct AiObservedProperty {
+000118      pub name: String,
+000119      pub target: Option<String>,
+000120      pub source: Option<String>,
+000121      pub window: Option<String>,
+000122      pub requirements: Vec<AiObservedRequirement>,
+000123  }
+000124  
+000125  #[derive(Clone, Debug, PartialEq)]
+000126  pub struct AiDataset {
+000127      pub name: String,
+000128      pub source: Option<String>,
+000129  }
+000130  
+000131  /// A declaration recognized only as a block boundary (`RAW_BLOCKS`).
+000132  #[derive(Clone, Debug, PartialEq)]
+000133  pub struct AiRawBlock {
+000134      pub kind: String,
+000135      pub name: String,
+000136  }
+000137  
+000138  /// [benchmark issue metadata redacted]
+000139  /// [benchmark issue metadata redacted]
+000140  /// [benchmark issue metadata redacted]
+000141  /// [benchmark issue metadata redacted]
+000142  /// [benchmark issue metadata redacted]
+000143  /// [benchmark issue metadata redacted]
+000144  /// [benchmark issue metadata redacted]
+000145  /// [benchmark issue metadata redacted]
+000146  #[derive(Clone, Debug, PartialEq)]
+000147  pub struct AiUnparsedClause {
+000148      /// `"statistical_property"` or `"observed_property"`.
+000149      pub declaration_kind: &'static str,
+000150      pub declaration: String,
+000151      /// `"all"` for a clause declared directly in the block body, else the
+000152      /// enclosing `slice` name.
+000153      pub slice: String,
+000154      /// The clause exactly as written, without its `require ` keyword.
+000155      pub source: String,
+000156      /// 1-based position of the clause in the project source.
+000157      pub line: u32,
+000158      pub column: u32,
+000159  }
+000160  
+000161  #[derive(Clone, Debug, Default, PartialEq)]
+000162  pub struct AiProject {
+000163      pub name: String,
+000164      pub components: Vec<AiComponent>,
+000165      pub datasets: Vec<AiDataset>,
+000166      pub statistical_properties: Vec<AiStatisticalProperty>,
+000167      pub observed_properties: Vec<AiObservedProperty>,
+000168      pub migrations: Vec<AiMigration>,
+000169      pub raw_blocks: Vec<AiRawBlock>,
+000170  }
+000171  
+000172  impl AiProject {
+000173      /// [benchmark issue metadata redacted]
+000174      /// [benchmark issue metadata redacted]
+000175      /// [benchmark issue metadata redacted]
+000176      /// [benchmark issue metadata redacted]
+000177      #[must_use]
+000178      pub fn unparsed_clauses(&self) -> Vec<AiUnparsedClause> {
+000179          let statistical = self.statistical_properties.iter().flat_map(|property| {
+000180              property
+000181                  .requirements
+000182                  .iter()
+000183                  .filter(|requirement| requirement.kind == "inconclusive")
+000184                  .map(|requirement| AiUnparsedClause {
+000185                      declaration_kind: "statistical_property",
+000186                      declaration: property.name.clone(),
+000187                      slice: requirement.slice.clone(),
+000188                      source: requirement.source.clone(),
+000189                      line: requirement.line,
+000190                      column: requirement.column,
+000191                  })
+000192          });
+000193          let observed = self.observed_properties.iter().flat_map(|property| {
+000194              property
+000195                  .requirements
+000196                  .iter()
+000197                  .filter(|requirement| requirement.kind == "inconclusive")
+000198                  .map(|requirement| AiUnparsedClause {
+000199                      declaration_kind: "observed_property",
+000200                      declaration: property.name.clone(),
+000201                      slice: requirement.slice.clone(),
+000202                      source: requirement.source.clone(),
+000203                      line: requirement.line,
+000204                      column: requirement.column,
+000205                  })
+000206          });
+000207          statistical.chain(observed).collect()
+000208      }
+000209  
+000210      /// Resolve the source JSONL path declared by `dataset <name> { source
+000211      /// "..."; }`, matching `_records_path`'s dataset-source fallback used
+000212      /// when `fslc ai eval` is invoked without `--records` (`docs/LANGUAGE.md`
+000213      /// documents this exact usage).
+000214      #[must_use]
+000215      pub fn dataset_source(&self, name: &str) -> Option<&str> {
+000216          self.datasets
+000217              .iter()
+000218              .find(|dataset| dataset.name == name)
+000219              .and_then(|dataset| dataset.source.as_deref())
+000220      }
+000221  
+000222      /// Select the `statistical_property` an `fslc ai eval` invocation
+000223      /// targets: an explicit `--property` name, else the unique property
+000224      /// declared for `--dataset`, else the project's only property.
+000225      ///
+000226      /// # Errors
+000227      ///
+000228      /// Returns a message naming an unknown, missing, or ambiguous selection.
+000229      pub fn select_statistical_property(
+000230          &self,
+000231          property_name: Option<&str>,
+000232          dataset_name: Option<&str>,
+000233      ) -> Result<&AiStatisticalProperty, String> {
+000234          if let Some(property_name) = property_name {
+000235              return self
+000236                  .statistical_properties
+000237                  .iter()
+000238                  .find(|prop| prop.name == property_name)
+000239                  .ok_or_else(|| format!("unknown statistical_property '{property_name}'"));
+000240          }
+000241          if let Some(dataset_name) = dataset_name {
+000242              let matching = self
+000243                  .statistical_properties
+000244                  .iter()
+000245                  .filter(|prop| prop.dataset.as_deref() == Some(dataset_name))
+000246                  .collect::<Vec<_>>();
+000247              if matching.len() == 1 {
+000248                  return Ok(matching[0]);
+000249              }
+000250              if matching.len() > 1 {
+000251                  return Err(format!(
+000252                      "multiple statistical_property declarations use dataset '{dataset_name}'; pass --property"
+000253                  ));
+000254              }
+000255          }
+000256          match self.statistical_properties.len() {
+000257              1 => Ok(&self.statistical_properties[0]),
+000258              0 => Err("no statistical_property declaration found".to_owned()),
+000259              _ => {
+000260                  Err("multiple statistical_property declarations found; pass --property".to_owned())
+000261              }
+000262          }
+000263      }
+000264  
+000265      /// Select the `ai_migration` an `fslc ai regress` invocation targets.

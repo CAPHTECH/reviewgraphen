@@ -1,0 +1,241 @@
+--- rust/fsl-core/src/lib.rs:210-449 ---
+000210      pub fn origins(&self) -> &OriginRegistry {
+000211          &self.origins
+000212      }
+000213  
+000214      /// Bind one typed annotation to a stable semantic target.
+000215      pub fn bind_annotation(&mut self, target: impl Into<String>, annotation: Annotation) {
+000216          self.annotations.bind(target, annotation);
+000217      }
+000218  
+000219      #[must_use]
+000220      pub fn annotations(&self) -> &AnnotationRegistry {
+000221          &self.annotations
+000222      }
+000223  
+000224      #[must_use]
+000225      pub fn projections(&self) -> &[ProjectionDef] {
+000226          &self.projections
+000227      }
+000228  
+000229      #[must_use]
+000230      pub fn diagnostics(&self) -> &[Value] {
+000231          &self.diagnostics
+000232      }
+000233  
+000234      pub(crate) fn set_projections(&mut self, projections: Vec<ProjectionDef>) {
+000235          self.projections = projections;
+000236      }
+000237  
+000238      #[must_use]
+000239      pub fn with_source_file(mut self, source_file: impl AsRef<str>) -> Self {
+000240          self.origins.set_source_file(source_file.as_ref());
+000241          self
+000242      }
+000243  }
+000244  
+000245  /// Parse and lower one direct kernel `spec` source.
+000246  ///
+000247  /// This first Phase-1 slice performs the same named-predicate validation and
+000248  /// capture-safe inlining as the Python reference. Dialect and file-based
+000249  /// lowering are separate resolver-backed slices.
+000250  ///
+000251  /// # Errors
+000252  ///
+000253  /// Returns [`CoreError`] for parse failures, non-`spec` documents, invalid
+000254  /// predicate definitions, recursion, arity mismatches, or variable capture.
+000255  pub fn parse_direct_kernel_spec(source: &str) -> Result<KernelSpec, CoreError> {
+000256      let parsed = parse_document(SourceFile::new(source))?;
+000257      let SurfaceDocument::Spec(spec) = parsed.surface else {
+000258          return Err(CoreError {
+000259              message: "expected direct kernel spec".to_owned(),
+000260              line: 1,
+000261              column: 1,
+000262              origin: None,
+000263          });
+000264      };
+000265      let mut kernel = lower_direct_spec(spec)?;
+000266      kernel.annotations.extend(SPEC_TARGET, parsed.annotations);
+000267      Ok(kernel)
+000268  }
+000269  
+000270  fn validate_direct_scope_overrides(
+000271      spec: &SurfaceSpec,
+000272      instances: &std::collections::BTreeMap<String, i64>,
+000273      values: &std::collections::BTreeMap<String, (i64, i64)>,
+000274  ) -> Result<(), CoreError> {
+000275      let entities = spec
+000276          .items
+000277          .iter()
+000278          .filter_map(|item| match item {
+000279              SpecItem::Entity(name, _) => Some(name.as_str()),
+000280              _ => None,
+000281          })
+000282          .collect::<std::collections::BTreeSet<_>>();
+000283      let numbers = spec
+000284          .items
+000285          .iter()
+000286          .filter_map(|item| match item {
+000287              SpecItem::Number(name, _) => Some(name.as_str()),
+000288              _ => None,
+000289          })
+000290          .collect::<std::collections::BTreeSet<_>>();
+000291      let error = |message| CoreError {
+000292          message,
+000293          line: 1,
+000294          column: 1,
+000295          origin: None,
+000296      };
+000297      if (!instances.is_empty() || !values.is_empty()) && entities.is_empty() && numbers.is_empty() {
+000298          return Err(error(
+000299              "--instances/--values only apply to specs with entity/number declarations; this spec declares neither".to_owned(),
+000300          ));
+000301      }
+000302      if let Some(name) = instances
+000303          .keys()
+000304          .find(|name| !entities.contains(name.as_str()))
+000305      {
+000306          return Err(error(format!(
+000307              "verify instances references undeclared entity '{name}'"
+000308          )));
+000309      }
+000310      if let Some(name) = values.keys().find(|name| !numbers.contains(name.as_str())) {
+000311          return Err(error(format!(
+000312              "verify values references undeclared number '{name}'"
+000313          )));
+000314      }
+000315      Ok(())
+000316  }
+000317  
+000318  /// Parse a direct spec/business/requirements document with temporary verify-bound overrides.
+000319  ///
+000320  /// This is the semantic seam used by the `sweep` driver; it does not mutate
+000321  /// source files or the ordinary parser result.
+000322  ///
+000323  /// # Errors
+000324  ///
+000325  /// Returns [`CoreError`] for parse, lowering, or unsupported top-level input.
+000326  pub fn parse_kernel_source_with_bounds(
+000327      source: &str,
+000328      instances: &std::collections::BTreeMap<String, i64>,
+000329      values: &std::collections::BTreeMap<String, (i64, i64)>,
+000330  ) -> Result<KernelSpec, CoreError> {
+000331      fn update_bounds(
+000332          items: &mut [VerifyItem],
+000333          instances: &std::collections::BTreeMap<String, i64>,
+000334          values: &std::collections::BTreeMap<String, (i64, i64)>,
+000335      ) {
+000336          for bound in items {
+000337              match bound {
+000338                  VerifyItem::Instances(name, count, _) => {
+000339                      if let Some(value) = instances.get(name) {
+000340                          *count = *value;
+000341                      }
+000342                  }
+000343                  VerifyItem::Values(name, lo, hi, _) => {
+000344                      if let Some((new_lo, new_hi)) = values.get(name) {
+000345                          **lo = Expr::Num(*new_lo);
+000346                          **hi = Expr::Num(*new_hi);
+000347                      }
+000348                  }
+000349              }
+000350          }
+000351      }
+000352      fn update(
+000353          item: &mut SpecItem,
+000354          instances: &std::collections::BTreeMap<String, i64>,
+000355          values: &std::collections::BTreeMap<String, (i64, i64)>,
+000356      ) {
+000357          if let SpecItem::VerifyBounds { items, .. } = item {
+000358              update_bounds(items, instances, values);
+000359          }
+000360      }
+000361  
+000362      let parsed = parse_document(SourceFile::new(source))?;
+000363      let mut kernel = match parsed.surface {
+000364          SurfaceDocument::Spec(mut spec) => {
+000365              validate_direct_scope_overrides(&spec, instances, values)?;
+000366              for item in &mut spec.items {
+000367                  update(item, instances, values);
+000368              }
+000369              lower_direct_spec(spec)
+000370          }
+000371          SurfaceDocument::Business(mut business) => {
+000372              for item in &mut business.items {
+000373                  if let BusinessItem::VerifyBounds { items, .. } = item {
+000374                      update_bounds(items, instances, values);
+000375                  }
+000376              }
+000377              lower_business(business)
+000378          }
+000379          SurfaceDocument::Requirements(mut requirements) => {
+000380              for item in &mut requirements.items {
+000381                  if let RequirementsItem::Common(item) = item {
+000382                      update(item, instances, values);
+000383                  }
+000384              }
+000385              lower_requirements(requirements)
+000386          }
+000387          _ => Err(CoreError {
+000388              message: "scope overrides only support spec, business, or requirements".to_owned(),
+000389              line: 1,
+000390              column: 1,
+000391              origin: None,
+000392          }),
+000393      }?;
+000394      kernel.annotations.extend(SPEC_TARGET, parsed.annotations);
+000395      Ok(kernel)
+000396  }
+000397  
+000398  /// Lower a parsed direct `spec` into the kernel representation.
+000399  ///
+000400  /// # Errors
+000401  ///
+000402  /// Returns [`CoreError`] when named predicate validation or expansion fails.
+000403  pub fn lower_direct_spec(spec: SurfaceSpec) -> Result<KernelSpec, CoreError> {
+000404      lower_direct_spec_with_origins(spec, OriginRegistry::default())
+000405  }
+000406  
+000407  fn lower_direct_spec_with_origins(
+000408      spec: SurfaceSpec,
+000409      origins: OriginRegistry,
+000410  ) -> Result<KernelSpec, CoreError> {
+000411      let spec = PredicateExpander::new(&spec)?.expand(spec)?;
+000412      let spec = expand_spec_domains(spec)?;
+000413      Ok(KernelSpec {
+000414          spec,
+000415          origins,
+000416          annotations: AnnotationRegistry::default(),
+000417          projections: Vec::new(),
+000418          diagnostics: Vec::new(),
+000419      })
+000420  }
+000421  
+000422  #[allow(clippy::too_many_lines)]
+000423  fn expand_spec_domains(mut spec: SurfaceSpec) -> Result<SurfaceSpec, CoreError> {
+000424      if !spec
+000425          .items
+000426          .iter()
+000427          .any(|item| matches!(item, SpecItem::Entity(..) | SpecItem::Number(..)))
+000428      {
+000429          return Ok(spec);
+000430      }
+000431      let mut instances = HashMap::new();
+000432      let mut values = HashMap::new();
+000433      for item in &spec.items {
+000434          if let SpecItem::VerifyBounds { items, .. } = item {
+000435              for bound in items {
+000436                  match bound {
+000437                      VerifyItem::Instances(name, value, span) => {
+000438                          if instances.insert(name.clone(), (*value, *span)).is_some() {
+000439                              return Err(core_error(
+000440                                  format!("duplicate instances bound for '{name}'"),
+000441                                  *span,
+000442                              ));
+000443                          }
+000444                      }
+000445                      VerifyItem::Values(name, lo, hi, span) => {
+000446                          if values
+000447                              .insert(
+000448                                  name.clone(),
+000449                                  (lo.as_ref().clone(), hi.as_ref().clone(), *span),

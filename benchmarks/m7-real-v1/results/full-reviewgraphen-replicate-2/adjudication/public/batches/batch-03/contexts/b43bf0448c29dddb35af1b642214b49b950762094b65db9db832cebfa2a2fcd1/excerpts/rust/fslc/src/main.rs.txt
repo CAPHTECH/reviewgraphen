@@ -1,0 +1,148 @@
+--- rust/fslc/src/main.rs:270-416 ---
+000270                      .ok_or_else(|| "--engine requires a value".to_owned())?;
+000271                  if !matches!(engine.as_str(), "bmc" | "induction") {
+000272                      return Err("--engine must be bmc or induction".to_owned());
+000273                  }
+000274              }
+000275              "--edition" if allow_edition => edition = parse_edition(args)?,
+000276              _ => return Err(format!("unknown specialized check option '{option}'")),
+000277          }
+000278      }
+000279      Ok((depth, deadlock, engine, edition))
+000280  }
+000281  
+000282  fn parse_optional_output(
+000283      args: &mut impl Iterator<Item = String>,
+000284  ) -> Result<Option<PathBuf>, String> {
+000285      match args.next() {
+000286          None => Ok(None),
+000287          Some(option) if matches!(option.as_str(), "-o" | "--output") => {
+000288              let output = PathBuf::from(
+000289                  args.next()
+000290                      .ok_or_else(|| "--output requires a path".to_owned())?,
+000291              );
+000292              if args.next().is_some() {
+000293                  return Err("unexpected argument after --output".to_owned());
+000294              }
+000295              Ok(Some(output))
+000296          }
+000297          Some(option) => Err(format!("unknown output option '{option}'")),
+000298      }
+000299  }
+000300  
+000301  /// [benchmark issue metadata redacted]
+000302  /// [benchmark issue metadata redacted]
+000303  /// [benchmark issue metadata redacted]
+000304  /// [benchmark issue metadata redacted]
+000305  /// [benchmark issue metadata redacted]
+000306  /// [benchmark issue metadata redacted]
+000307  /// [benchmark issue metadata redacted]
+000308  /// [benchmark issue metadata redacted]
+000309  /// [benchmark issue metadata redacted]
+000310  /// [benchmark issue metadata redacted]
+000311  /// [benchmark issue metadata redacted]
+000312  /// [benchmark issue metadata redacted]
+000313  /// [benchmark issue metadata redacted]
+000314  /// [benchmark issue metadata redacted]
+000315  /// [benchmark issue metadata redacted]
+000316  /// [benchmark issue metadata redacted]
+000317  /// [benchmark issue metadata redacted]
+000318  const STACK_SIZE: usize = 8 * 1024 * 1024;
+000319  
+000320  fn main() {
+000321      // `run` on an explicitly sized thread rather than the process's main
+000322      // thread, whose size the OS picks.
+000323      let worker = std::thread::Builder::new()
+000324          .stack_size(STACK_SIZE)
+000325          .name("fslc".to_owned())
+000326          .spawn(run)
+000327          .expect("spawn the fslc worker thread");
+000328      if worker.join().is_err() {
+000329          // The panic message has already been printed by the default hook.
+000330          // Exit as a panicking `main` would, so a crash is never mistaken for
+000331          // a verdict.
+000332          std::process::exit(101);
+000333      }
+000334  }
+000335  
+000336  fn run() {
+000337      if print_cli_metadata() {
+000338          return;
+000339      }
+000340      if let Some((output, status)) = fmt_command() {
+000341          match output {
+000342              FmtCliOutput::Source(source) => print!("{source}"),
+000343              FmtCliOutput::Json(value) => println!(
+000344                  "{}",
+000345                  serde_json::to_string_pretty(&value).expect("serialize fmt output")
+000346              ),
+000347          }
+000348          if status != 0 {
+000349              std::process::exit(status);
+000350          }
+000351          return;
+000352      }
+000353      let (output, reported_status) = match command() {
+000354          Ok(result) => result,
+000355          Err(error) => (error_output("usage", &error), 2),
+000356      };
+000357      let status = normalized_exit_status(&output, reported_status);
+000358      println!(
+000359          "{}",
+000360          serde_json::to_string_pretty(&output).expect("serialize CLI output")
+000361      );
+000362      if status != 0 {
+000363          std::process::exit(status);
+000364      }
+000365  }
+000366  
+000367  enum FmtCliOutput {
+000368      Source(String),
+000369      Json(Value),
+000370  }
+000371  
+000372  fn fmt_command() -> Option<(FmtCliOutput, i32)> {
+000373      let mut args = std::env::args().skip(1);
+000374      if args.next().as_deref() != Some("fmt") {
+000375          return None;
+000376      }
+000377      Some(match parse_fmt_options(args) {
+000378          Ok(options) => run_fmt(&options),
+000379          Err(error) => (FmtCliOutput::Json(error_output("usage", &error)), 2),
+000380      })
+000381  }
+000382  
+000383  struct FmtOptions {
+000384      paths: Vec<PathBuf>,
+000385      check: bool,
+000386      edition: fsl_syntax::FormatEdition,
+000387  }
+000388  
+000389  fn parse_fmt_options(args: impl Iterator<Item = String>) -> Result<FmtOptions, String> {
+000390      let mut args = args.peekable();
+000391      let mut paths = Vec::new();
+000392      let mut check = false;
+000393      let mut edition = fsl_syntax::FormatEdition::Current;
+000394      while let Some(argument) = args.next() {
+000395          match argument.as_str() {
+000396              "--check" => check = true,
+000397              "--edition" => {
+000398                  edition = fsl_syntax::FormatEdition::parse(&required_option_value(
+000399                      &mut args,
+000400                      "--edition",
+000401                  )?)?;
+000402              }
+000403              option if option.starts_with('-') && option != "-" => {
+000404                  return Err(format!("unknown fmt option '{option}'"));
+000405              }
+000406              path => paths.push(PathBuf::from(path)),
+000407          }
+000408      }
+000409      if paths.is_empty() {
+000410          return Err("usage: fslc fmt FILE [--check] [--edition current|next]".to_owned());
+000411      }
+000412      if !check && paths.len() != 1 {
+000413          return Err("fmt accepts multiple paths only with --check".to_owned());
+000414      }
+000415      if paths.iter().filter(|path| path.as_os_str() == "-").count() > 1
+000416          || paths.len() > 1 && paths.iter().any(|path| path.as_os_str() == "-")

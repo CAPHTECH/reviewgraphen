@@ -1,0 +1,126 @@
+--- rust/fslc/src/main.rs:1-125 ---
+000001  // SPDX-License-Identifier: Apache-2.0
+000002  
+000003  use std::fmt::Write as _;
+000004  use std::future::Future;
+000005  use std::io::{Read as _, Write as _};
+000006  use std::path::{Path, PathBuf};
+000007  use std::pin::pin;
+000008  use std::task::{Context, Poll, Waker};
+000009  use std::time::Instant;
+000010  
+000011  use fsl_core::{
+000012      Annotations, FslValue, KernelExpr, KernelLValue, KernelModel, KernelSpec, KernelStatement,
+000013      ParamDef, TraceStep, TypeDef, TypeRef, insert_requirement_metadata, model_warnings,
+000014      requirement_metadata,
+000015  };
+000016  use serde_json::{Map, Value, json};
+000017  
+000018  mod approval;
+000019  mod causal;
+000020  mod code_audit;
+000021  mod verification;
+000022  
+000023  use causal::{causal_command, run_causal_check};
+000024  use verification::{
+000025      BmcRequest, DeadlockMode, ExplicitRequest, InductionRequest, ModelSelection,
+000026      VerificationEngine, run_auto_filtered, run_bmc_filtered, run_explicit_filtered,
+000027      run_induction_filtered, run_verify_cli,
+000028  };
+000029  
+000030  const CLI_CONTRACT: &str = include_str!("../cli-contract.json");
+000031  const DEFAULT_EXPLICIT_BUDGET: usize = 1_000_000;
+000032  
+000033  struct LiterateState {
+000034      path: PathBuf,
+000035  }
+000036  
+000037  impl Drop for LiterateState {
+000038      fn drop(&mut self) {
+000039          let _ = std::fs::remove_file(&self.path);
+000040      }
+000041  }
+000042  
+000043  fn materialize_literate(path: &Path) -> Result<Option<LiterateState>, String> {
+000044      if path.extension().and_then(std::ffi::OsStr::to_str) != Some("md") {
+000045          return Ok(None);
+000046      }
+000047      let raw =
+000048          std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+000049      let blanked = fsl_syntax::extract_literate_fsl(&raw).ok_or_else(|| {
+000050          format!(
+000051              "{}: Markdown file does not contain any ```fsl fenced code blocks",
+000052              path.display()
+000053          )
+000054      })?;
+000055      let stem = path
+000056          .file_stem()
+000057          .and_then(std::ffi::OsStr::to_str)
+000058          .unwrap_or("literate");
+000059      // Each CLI process owns its materialization. The original Markdown path is
+000060      // passed separately as the stable verify-cache identity, so physical
+000061      // isolation does not trade away cache hits across invocations.
+000062      let materialized = literate_materialization_path(path, stem, std::process::id());
+000063      std::fs::write(&materialized, &blanked).map_err(|error| error.to_string())?;
+000064      Ok(Some(LiterateState { path: materialized }))
+000065  }
+000066  
+000067  fn literate_materialization_path(path: &Path, stem: &str, process_id: u32) -> PathBuf {
+000068      path.with_file_name(format!(".{stem}.literate-{process_id}.fsl"))
+000069  }
+000070  
+000071  #[derive(Clone, Debug, Default, Eq, PartialEq)]
+000072  struct ScopeBounds {
+000073      instances: std::collections::BTreeMap<String, i64>,
+000074      values: std::collections::BTreeMap<String, (i64, i64)>,
+000075  }
+000076  
+000077  #[derive(Clone, Debug)]
+000078  struct CliVerifyOptions {
+000079      depth: usize,
+000080      deadlock: String,
+000081      engine: String,
+000082      explicit_budget: usize,
+000083      k_ind: usize,
+000084      vacuity: String,
+000085      property: Option<String>,
+000086      exclude_properties: Vec<String>,
+000087      scope: ScopeBounds,
+000088      strict_tags: bool,
+000089      requirements: Option<PathBuf>,
+000090      use_cache: bool,
+000091      lemmas: Vec<String>,
+000092      from_state: Option<PathBuf>,
+000093      edition: String,
+000094  }
+000095  
+000096  impl Default for CliVerifyOptions {
+000097      fn default() -> Self {
+000098          Self {
+000099              depth: 8,
+000100              deadlock: "warn".to_owned(),
+000101              engine: "bmc".to_owned(),
+000102              explicit_budget: DEFAULT_EXPLICIT_BUDGET,
+000103              k_ind: 1,
+000104              vacuity: "warn".to_owned(),
+000105              property: None,
+000106              exclude_properties: Vec::new(),
+000107              scope: ScopeBounds::default(),
+000108              strict_tags: false,
+000109              requirements: None,
+000110              use_cache: true,
+000111              lemmas: Vec::new(),
+000112              from_state: None,
+000113              edition: "current".to_owned(),
+000114          }
+000115      }
+000116  }
+000117  
+000118  fn required_option_value(
+000119      args: &mut impl Iterator<Item = String>,
+000120      option: &str,
+000121  ) -> Result<String, String> {
+000122      args.next()
+000123          .ok_or_else(|| format!("{option} requires a value"))
+000124  }
+000125  

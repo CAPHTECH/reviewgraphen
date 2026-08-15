@@ -1,0 +1,130 @@
+--- rust/fsl-runtime/src/explicit.rs:330-458 ---
+000330              name: instance.action.clone(),
+000331              params: instance.params.clone(),
+000332          }),
+000333          changes: state_changes(before, state),
+000334      }
+000335  }
+000336  
+000337  fn state_changes(before: &State, after: &State) -> BTreeMap<String, TraceChange> {
+000338      after
+000339          .iter()
+000340          .filter_map(|(name, value)| {
+000341              let old = &before[name];
+000342              (old != value).then(|| {
+000343                  (
+000344                      name.clone(),
+000345                      TraceChange {
+000346                          from: old.clone(),
+000347                          to: value.clone(),
+000348                      },
+000349                  )
+000350              })
+000351          })
+000352          .collect()
+000353  }
+000354  
+000355  /// Per-root definite-assignment coverage tracked at component granularity.
+000356  ///
+000357  /// A `Map` root is fully assigned only once every concrete key in its
+000358  /// key-type domain has been written; a `Named` struct root is fully assigned
+000359  /// only once every declared field has been (recursively) fully assigned.
+000360  /// Anything else stays binary (`Full` or unassigned) because there is no
+000361  /// finer component structure to track.
+000362  #[derive(Clone, Debug, Eq, PartialEq)]
+000363  enum Coverage {
+000364      Full,
+000365      Keys(BTreeSet<Value>),
+000366      Fields(BTreeMap<String, Coverage>),
+000367  }
+000368  
+000369  /// [benchmark issue metadata redacted]
+000370  /// [benchmark issue metadata redacted]
+000371  /// [benchmark issue metadata redacted]
+000372  /// [benchmark issue metadata redacted]
+000373  /// [benchmark issue metadata redacted]
+000374  /// [benchmark issue metadata redacted]
+000375  /// [benchmark issue metadata redacted]
+000376  /// [benchmark issue metadata redacted]
+000377  /// [benchmark issue metadata redacted]
+000378  /// [benchmark issue metadata redacted]
+000379  /// [benchmark issue metadata redacted]
+000380  /// [benchmark issue metadata redacted]
+000381  /// [benchmark issue metadata redacted]
+000382  /// [benchmark issue metadata redacted]
+000383  /// [benchmark issue metadata redacted]
+000384  /// [benchmark issue metadata redacted]
+000385  /// [benchmark issue metadata redacted]
+000386  /// [benchmark issue metadata redacted]
+000387  /// [benchmark issue metadata redacted]
+000388  /// [benchmark issue metadata redacted]
+000389  /// [benchmark issue metadata redacted]
+000390  pub(crate) fn unassigned_init_state_vars(model: &KernelModel) -> Vec<(String, TypeRef)> {
+000391      let mut assigned = BTreeSet::new();
+000392      collect_assigned_init_roots(&model.init, &mut assigned);
+000393      model
+000394          .state
+000395          .iter()
+000396          .filter(|(name, _)| !assigned.contains(name.as_str()))
+000397          .map(|(name, ty)| (name.clone(), ty.clone()))
+000398          .collect()
+000399  }
+000400  
+000401  fn collect_assigned_init_roots(statements: &[Statement], assigned: &mut BTreeSet<String>) {
+000402      for statement in statements {
+000403          match statement {
+000404              Statement::Assign { target, .. } => {
+000405                  if let Some(name) = logical_var(target) {
+000406                      assigned.insert(name.to_owned());
+000407                  }
+000408              }
+000409              Statement::If {
+000410                  then_statements,
+000411                  else_statements,
+000412                  ..
+000413              } => {
+000414                  collect_assigned_init_roots(then_statements, assigned);
+000415                  collect_assigned_init_roots(else_statements, assigned);
+000416              }
+000417              Statement::ForAll { statements, .. } => {
+000418                  collect_assigned_init_roots(statements, assigned);
+000419              }
+000420          }
+000421      }
+000422  }
+000423  
+000424  pub(crate) fn check_deterministic_init(model: &KernelModel) -> Result<(), RuntimeError> {
+000425      let (assigned, _) = walk_init(
+000426          &model.init,
+000427          BTreeMap::new(),
+000428          BTreeSet::new(),
+000429          false,
+000430          &BTreeMap::new(),
+000431          model,
+000432      )?;
+000433      let mut missing_is_partial = false;
+000434      let mut missing = model
+000435          .state
+000436          .iter()
+000437          .filter(|(name, ty)| {
+000438              let coverage = assigned.get(name);
+000439              if coverage_is_full(coverage, ty, model) {
+000440                  false
+000441              } else {
+000442                  missing_is_partial = missing_is_partial || coverage.is_some();
+000443                  true
+000444              }
+000445          })
+000446          .map(|(name, _)| name.clone())
+000447          .collect::<Vec<_>>();
+000448      missing.sort();
+000449      if missing.is_empty() {
+000450          Ok(())
+000451      } else {
+000452          let suffix = if missing_is_partial {
+000453              " (partial component initialization is rejected by the explicit engine)"
+000454          } else {
+000455              ""
+000456          };
+000457          Err(runtime_error(format!(
+000458              "init does not assign state variable(s): {}{suffix}",

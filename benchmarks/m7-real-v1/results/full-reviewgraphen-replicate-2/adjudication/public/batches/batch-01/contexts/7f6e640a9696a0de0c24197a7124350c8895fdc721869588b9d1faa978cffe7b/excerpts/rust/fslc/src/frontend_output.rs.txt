@@ -1,0 +1,148 @@
+--- rust/fslc/src/frontend_output.rs:46-192 ---
+000046  /// [benchmark issue metadata redacted]
+000047  /// [benchmark issue metadata redacted]
+000048  /// [benchmark issue metadata redacted]
+000049  /// [benchmark issue metadata redacted]
+000050  /// [benchmark issue metadata redacted]
+000051  pub fn parse_checked_ai_project(source: &str, name: &str) -> Result<fsl_syntax::AiProject, String> {
+000052      let project = fsl_syntax::parse_ai_project(source, name)?;
+000053      let unparsed = project.unparsed_clauses();
+000054      if unparsed.is_empty() {
+000055          return Ok(project);
+000056      }
+000057      let detail = unparsed
+000058          .iter()
+000059          .map(|clause| {
+000060              format!(
+000061                  "{} '{}' (slice '{}'): require {}",
+000062                  clause.declaration_kind, clause.declaration, clause.slice, clause.source
+000063              )
+000064          })
+000065          .collect::<Vec<_>>()
+000066          .join("; ");
+000067      Err(format!(
+000068          "require clause matches no known fsl-ai evidence clause grammar \
+000069           (min_samples, ci_lower, ci_upper, a point estimate, observed, or drift): {detail}"
+000070      ))
+000071  }
+000072  
+000073  /// Render the multi-declaration AI project check result when applicable,
+000074  /// paired with its process exit code.
+000075  #[must_use]
+000076  pub fn ai_project_check_output(
+000077      source: &str,
+000078      source_file: &str,
+000079      mut output: Map<String, Value>,
+000080  ) -> Option<(Value, i32)> {
+000081      if !is_ai_project(source) {
+000082          return None;
+000083      }
+000084      let spec = ai_project_name(source_file);
+000085      if let Err(message) = parse_checked_ai_project(source, spec) {
+000086          output.insert("result".to_owned(), json!("error"));
+000087          output.insert("kind".to_owned(), json!("parse"));
+000088          output.insert("message".to_owned(), json!(message));
+000089          return Some((Value::Object(output), 2));
+000090      }
+000091      output.insert("result".to_owned(), json!("ok"));
+000092      output.insert("spec".to_owned(), json!(spec));
+000093      output.insert("dialect".to_owned(), json!("fsl-ai-project.v0"));
+000094      output.insert("warnings".to_owned(), json!([]));
+000095      output.insert(
+000096          "ai_analysis_result".to_owned(),
+000097          json!("ai_project_analyzed"),
+000098      );
+000099      Some((Value::Object(output), 0))
+000100  }
+000101  
+000102  /// Return whether source uses the legacy multi-declaration AI project dialect.
+000103  #[must_use]
+000104  pub fn is_ai_project(source: &str) -> bool {
+000105      const PROJECT_BLOCKS: &[&str] = &[
+000106          "ai_action",
+000107          "ai_component",
+000108          "ai_contract",
+000109          "ai_migration",
+000110          "authority",
+000111          "dataset",
+000112          "evaluator",
+000113          "failure_mode",
+000114          "observed_property",
+000115          "retriever",
+000116          "statistical_property",
+000117          "trust_boundary",
+000118      ];
+000119      let has_project_property = source.lines().any(|line| {
+000120          let line = line.trim_start();
+000121          line.starts_with("statistical_property ")
+000122              || line.starts_with("ai_migration ")
+000123              || line.starts_with("observed_property ")
+000124      });
+000125      has_project_property
+000126          && fsl_syntax::declaration_keyword(source)
+000127              .is_ok_and(|keyword| PROJECT_BLOCKS.contains(&keyword.as_str()))
+000128  }
+000129  
+000130  /// Return deterministic warnings for omitted domain/requirements initial values.
+000131  #[must_use]
+000132  pub fn implicit_initial_value_warnings(source: &str, source_file: &str) -> Vec<Value> {
+000133      let Ok(document) = fsl_syntax::parse_surface_document(source) else {
+000134          return Vec::new();
+000135      };
+000136      match document {
+000137          fsl_syntax::SurfaceDocument::Domain(domain) => {
+000138              domain_implicit_warnings(source_file, &domain)
+000139          }
+000140          fsl_syntax::SurfaceDocument::Requirements(requirements) => {
+000141              requirements_implicit_warnings(source_file, &requirements)
+000142          }
+000143          _ => Vec::new(),
+000144      }
+000145  }
+000146  
+000147  fn domain_implicit_warnings(path: &str, domain: &fsl_syntax::DomainSpec) -> Vec<Value> {
+000148      let declared = domain
+000149          .types
+000150          .iter()
+000151          .map(|ty| (ty.name.as_str(), ty))
+000152          .collect::<std::collections::BTreeMap<_, _>>();
+000153      domain
+000154          .aggregates
+000155          .iter()
+000156          .flat_map(|aggregate| {
+000157              aggregate.state.iter().filter_map(|field| {
+000158                  let type_name = field.type_name.render_source();
+000159                  let selected = omitted_domain_value(&type_name, field.default.as_ref(), &declared)?;
+000160                  Some(implicit_initial_value_warning(
+000161                      path,
+000162                      &format!("{}.{}", aggregate.name, field.name.text),
+000163                      field.span,
+000164                      field.type_name.span.end.offset,
+000165                      &selected.0,
+000166                      &selected.1,
+000167                  ))
+000168              })
+000169          })
+000170          .collect()
+000171  }
+000172  
+000173  fn omitted_domain_value(
+000174      type_name: &str,
+000175      default: Option<&fsl_syntax::SyntaxExpr>,
+000176      declared: &std::collections::BTreeMap<&str, &fsl_syntax::DomainType>,
+000177  ) -> Option<(String, String)> {
+000178      if default.is_some() {
+000179          return None;
+000180      }
+000181      if type_name == "Bool" {
+000182          return Some(("false".to_owned(), "Bool defaults to false".to_owned()));
+000183      }
+000184      if type_name == "Int" {
+000185          return None;
+000186      }
+000187      if let Some(definition) = declared.get(type_name) {
+000188          return match definition.kind.as_str() {
+000189              "enum" => definition.members.first().map(|member| {
+000190                  (
+000191                      member.clone(),
+000192                      format!(

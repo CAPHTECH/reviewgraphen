@@ -1,0 +1,263 @@
+--- rust/fsl-syntax/src/ai_project.rs:1-115 ---
+000001  // SPDX-License-Identifier: Apache-2.0
+000002  // Copyright 2026 Ryoichi Izumita
+000003  
+000004  //! [benchmark issue metadata redacted]
+000005  //! [benchmark issue metadata redacted]
+000006  //! [benchmark issue metadata redacted]
+000007  //! [benchmark issue metadata redacted]
+000008  //! [benchmark issue metadata redacted]
+000009  //! [benchmark issue metadata redacted]
+000010  //! [benchmark issue metadata redacted]
+000011  //! [benchmark issue metadata redacted]
+000012  //! [benchmark issue metadata redacted]
+000013  //! [benchmark issue metadata redacted]
+000014  //! [benchmark issue metadata redacted]
+000015  
+000016  use crate::ai::{AiComponent, parse_ai_component};
+000017  
+000018  /// Top-level declaration kinds this parser recognizes as fsl-ai project
+000019  /// blocks. A block whose kind is not in this set is ignored (mirrors the
+000020  /// frozen reference's `raw_blocks` for `ai_action`/`authority`/`retriever`/
+000021  /// `trust_boundary`/`ai_contract`/`evaluator`/`failure_mode`: these are
+000022  /// accepted as un-descended block boundaries but carry no evidence-execution
+000023  /// semantics in `fslc ai eval`/`regress`/`drift`/`compat`).
+000024  const PROJECT_BLOCKS: &[&str] = &[
+000025      "ai_action",
+000026      "ai_component",
+000027      "ai_contract",
+000028      "ai_migration",
+000029      "authority",
+000030      "dataset",
+000031      "evaluator",
+000032      "failure_mode",
+000033      "observed_property",
+000034      "retriever",
+000035      "statistical_property",
+000036      "trust_boundary",
+000037  ];
+000038  
+000039  /// Nested block kinds that may appear without a name and are only
+000040  /// meaningful inside a specific parent (`statistical_property`/
+000041  /// `observed_property`'s `slice`, `ai_migration`'s `preserve`/
+000042  /// `no_regression`).
+000043  const NESTED_BLOCKS: &[&str] = &["slice", "preserve", "no_regression"];
+000044  
+000045  /// Top-level kinds recognized only as block *boundaries*: the parser never
+000046  /// descends into their body, so their contents carry no checked meaning and
+000047  /// are echoed as bare `{kind, name}` entries (`skills/fsl/reference.md`).
+000048  const RAW_BLOCKS: &[&str] = &[
+000049      "ai_action",
+000050      "ai_contract",
+000051      "authority",
+000052      "retriever",
+000053      "trust_boundary",
+000054  ];
+000055  
+000056  #[derive(Clone, Debug, PartialEq)]
+000057  pub struct AiMetricRequirement {
+000058      /// `"min_samples"` | `"ci_lower"` | `"ci_upper"` | `"point_estimate"` |
+000059      /// `"inconclusive"`.
+000060      pub kind: String,
+000061      pub metric: Option<String>,
+000062      pub confidence: Option<f64>,
+000063      pub comparator: Option<String>,
+000064      pub threshold: Option<f64>,
+000065      pub slice: String,
+000066      pub min_samples: Option<u64>,
+000067      pub source: String,
+000068  }
+000069  
+000070  #[derive(Clone, Debug, PartialEq)]
+000071  pub struct AiStatisticalProperty {
+000072      pub name: String,
+000073      pub target: Option<String>,
+000074      pub dataset: Option<String>,
+000075      pub evaluator: Option<String>,
+000076      pub confidence: f64,
+000077      pub requirements: Vec<AiMetricRequirement>,
+000078  }
+000079  
+000080  #[derive(Clone, Debug, PartialEq)]
+000081  pub struct AiRegressionRequirement {
+000082      pub metric: String,
+000083      /// `"drop"` | `"increase"`.
+000084      pub direction: String,
+000085      pub comparator: String,
+000086      pub threshold: f64,
+000087      pub dataset: Option<String>,
+000088  }
+000089  
+000090  #[derive(Clone, Debug, Default, PartialEq)]
+000091  pub struct AiMigration {
+000092      pub name: String,
+000093      pub regression_requirements: Vec<AiRegressionRequirement>,
+000094  }
+000095  
+000096  #[derive(Clone, Debug, PartialEq)]
+000097  pub struct AiObservedRequirement {
+000098      /// `"observed"` | `"drift"` | `"inconclusive"`.
+000099      pub kind: String,
+000100      pub metric: String,
+000101      pub comparator: String,
+000102      pub threshold: f64,
+000103      pub compared_to: Option<String>,
+000104      pub slice: String,
+000105      pub source: String,
+000106  }
+000107  
+000108  #[derive(Clone, Debug, PartialEq)]
+000109  pub struct AiObservedProperty {
+000110      pub name: String,
+000111      pub target: Option<String>,
+000112      pub source: Option<String>,
+000113      pub window: Option<String>,
+000114      pub requirements: Vec<AiObservedRequirement>,
+000115  }
+--- rust/fsl-syntax/src/ai_project.rs:259-404 ---
+000259                  .iter()
+000260                  .find(|migration| migration.name == migration_name)
+000261                  .ok_or_else(|| format!("unknown ai_migration '{migration_name}'"));
+000262          }
+000263          match self.migrations.len() {
+000264              1 => Ok(&self.migrations[0]),
+000265              0 => Err("no ai_migration declaration found".to_owned()),
+000266              _ => Err("multiple ai_migration declarations found; pass --migration".to_owned()),
+000267          }
+000268      }
+000269  
+000270      /// Select the `observed_property` an `fslc ai drift` invocation targets.
+000271      ///
+000272      /// # Errors
+000273      ///
+000274      /// Returns a message naming an unknown, missing, or ambiguous selection.
+000275      pub fn select_observed_property(
+000276          &self,
+000277          property_name: Option<&str>,
+000278      ) -> Result<&AiObservedProperty, String> {
+000279          if let Some(property_name) = property_name {
+000280              return self
+000281                  .observed_properties
+000282                  .iter()
+000283                  .find(|prop| prop.name == property_name)
+000284                  .ok_or_else(|| format!("unknown observed_property '{property_name}'"));
+000285          }
+000286          match self.observed_properties.len() {
+000287              1 => Ok(&self.observed_properties[0]),
+000288              0 => Err("no observed_property declaration found".to_owned()),
+000289              _ => Err("multiple observed_property declarations found; pass --property".to_owned()),
+000290          }
+000291      }
+000292  }
+000293  
+000294  /// Parse one fsl-ai project source into its typed declarations.
+000295  ///
+000296  /// # Errors
+000297  ///
+000298  /// Returns a message when no recognized top-level block is found, a block is
+000299  /// unterminated, or a `statistical_property`/`observed_property`/
+000300  /// `ai_migration` name is declared more than once.
+000301  pub fn parse_ai_project(source: &str, name: &str) -> Result<AiProject, String> {
+000302      let blocks = top_blocks(source)?;
+000303      if blocks.is_empty() {
+000304          return Err("expected fsl-ai project declarations".to_owned());
+000305      }
+000306      let mut project = AiProject {
+000307          name: name.to_owned(),
+000308          ..AiProject::default()
+000309      };
+000310      for block in &blocks {
+000311          match block.kind.as_str() {
+000312              "ai_component" => {
+000313                  project
+000314                      .components
+000315                      .push(parse_ai_component(&block.text).map_err(|error| error.to_string())?);
+000316              }
+000317              "dataset" => project.datasets.push(parse_dataset(block)),
+000318              "statistical_property" => project
+000319                  .statistical_properties
+000320                  .push(parse_statistical_property(block)?),
+000321              "observed_property" => project
+000322                  .observed_properties
+000323                  .push(parse_observed_property(block)?),
+000324              "ai_migration" => project.migrations.push(parse_migration(block)?),
+000325              kind if RAW_BLOCKS.contains(&kind) => project.raw_blocks.push(AiRawBlock {
+000326                  kind: block.kind.clone(),
+000327                  name: block.name.clone(),
+000328              }),
+000329              _ => {}
+000330          }
+000331      }
+000332      reject_duplicates(
+000333          project
+000334              .statistical_properties
+000335              .iter()
+000336              .map(|p| p.name.as_str()),
+000337          "statistical_property",
+000338      )?;
+000339      reject_duplicates(
+000340          project.observed_properties.iter().map(|p| p.name.as_str()),
+000341          "observed_property",
+000342      )?;
+000343      reject_duplicates(
+000344          project.migrations.iter().map(|p| p.name.as_str()),
+000345          "ai_migration",
+000346      )?;
+000347      Ok(project)
+000348  }
+000349  
+000350  fn reject_duplicates<'a>(names: impl Iterator<Item = &'a str>, label: &str) -> Result<(), String> {
+000351      let mut seen = std::collections::BTreeSet::new();
+000352      for name in names {
+000353          if !seen.insert(name) {
+000354              return Err(format!("duplicate {label} '{name}'"));
+000355          }
+000356      }
+000357      Ok(())
+000358  }
+000359  
+000360  // --- brace-matching block scanner (mirrors `_top_blocks` et al.) ----------
+000361  
+000362  struct RawBlock {
+000363      kind: String,
+000364      name: String,
+000365      /// The exact original text of the block, header included (`"kind name {
+000366      /// ... }"`), used to hand `ai_component` blocks to the strict token
+000367      /// parser unmodified.
+000368      text: String,
+000369      body: String,
+000370  }
+000371  
+000372  struct BlockHeader {
+000373      start: usize,
+000374      kind: String,
+000375      name: String,
+000376      brace: usize,
+000377  }
+000378  
+000379  fn is_ident_start(c: char) -> bool {
+000380      c.is_ascii_alphabetic() || c == '_'
+000381  }
+000382  
+000383  fn is_ident_continue(c: char) -> bool {
+000384      c.is_ascii_alphanumeric() || c == '_'
+000385  }
+000386  
+000387  #[allow(clippy::many_single_char_names)]
+000388  fn try_match_header(chars: &[char], start: usize) -> Option<BlockHeader> {
+000389      let n = chars.len();
+000390      let mut p = start;
+000391      while p < n && is_ident_continue(chars[p]) {
+000392          p += 1;
+000393      }
+000394      let kind: String = chars[start..p].iter().collect();
+000395      let mut q = p;
+000396      while q < n && chars[q].is_whitespace() {
+000397          q += 1;
+000398      }
+000399      if q > p && q < n && is_ident_start(chars[q]) {
+000400          let name_start = q;
+000401          let mut r = q;
+000402          while r < n && is_ident_continue(chars[r]) {
+000403              r += 1;
+000404          }

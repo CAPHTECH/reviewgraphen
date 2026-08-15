@@ -1,0 +1,257 @@
+--- rust/fslc/src/lib.rs:60-183 ---
+000060                      current.get(key).unwrap_or(&Value::Null),
+000061                      out,
+000062                  );
+000063              }
+000064          } else if !path.is_empty() {
+000065              out.insert(path.to_owned(), json!({"from": previous, "to": current}));
+000066          }
+000067      }
+000068  
+000069      let mut changes = serde_json::Map::new();
+000070      walk("", previous, current, &mut changes);
+000071      changes
+000072  }
+000073  
+000074  pub const CONFORMANCE_V1_SCHEMA_VERSION: &str = "1.0.0";
+000075  pub const CONFORMANCE_V1_SCHEMA_ID: &str =
+000076      "https://fsl.dev/schemas/fslc/kernel/conformance.v1.schema.json";
+000077  pub const CONFORMANCE_V2_SCHEMA_VERSION: &str = "2.0.0";
+000078  pub const CONFORMANCE_V2_SCHEMA_ID: &str =
+000079      "https://fsl.dev/schemas/fslc/kernel/conformance.v2.schema.json";
+000080  pub const CONFORMANCE_SCHEMA_VERSION: &str = CONFORMANCE_V1_SCHEMA_VERSION;
+000081  pub const CONFORMANCE_SCHEMA_ID: &str = CONFORMANCE_V1_SCHEMA_ID;
+000082  
+000083  type ActionCall = (String, BTreeMap<String, FslValue>);
+000084  
+000085  /// Build deterministic, language-neutral concrete transition vectors.
+000086  ///
+000087  /// Every bounded action instance is represented for every explored state.
+000088  /// Disabled instances and runtime violations retain the input state, making
+000089  /// failure semantics directly testable by an external implementation.
+000090  ///
+000091  /// # Errors
+000092  ///
+000093  /// Returns an error when initialization, bounded parameter enumeration, guard
+000094  /// evaluation, or a concrete step cannot be evaluated.
+000095  pub fn conformance_vectors(model: &KernelModel, depth: usize) -> Result<Value, String> {
+000096      conformance_vectors_for_version(model, depth, fsl_core::PublicKernelVersion::V1)
+000097  }
+000098  
+000099  /// Build conformance vectors corresponding to an explicitly negotiated Kernel major.
+000100  ///
+000101  /// # Errors
+000102  ///
+000103  /// Returns an error when concrete initialization or exploration fails.
+000104  pub fn conformance_vectors_for_version(
+000105      model: &KernelModel,
+000106      depth: usize,
+000107      version: fsl_core::PublicKernelVersion,
+000108  ) -> Result<Value, String> {
+000109      let all_calls = action_calls(model)?;
+000110      let initial = fsl_runtime::Monitor::new(model.clone()).map_err(|error| error.to_string())?;
+000111      let initial_json = conformance_state_json(model, &initial.state)?;
+000112      let initial_key = serde_json::to_string(&initial_json).map_err(|error| error.to_string())?;
+000113      let mut seen = BTreeMap::from([(initial_key, "s0".to_owned())]);
+000114      let mut queue = VecDeque::from([("s0".to_owned(), 0_usize, initial)]);
+000115      let mut states = vec![json!({"id":"s0","depth":0,"state":initial_json})];
+000116      let mut vectors = Vec::new();
+000117  
+000118      while let Some((state_id, state_depth, monitor)) = queue.pop_front() {
+000119          let before = conformance_state_json(model, &monitor.state)?;
+000120          for (action, params) in &all_calls {
+000121              let action_json = json!({
+000122                  "name":display_name(action),
+000123                  "params":params.iter().map(|(name,value)|(name.clone(),fsl_value_json(value))).collect::<serde_json::Map<_,_>>()
+000124              });
+000125              let mut successor = monitor.clone();
+000126              let result = successor
+000127                  .attempt(action, params)
+000128                  .map_err(|error| error.to_string())?;
+000129              let after = conformance_state_json(model, &result.state)?;
+000130              if let Some(violation) = result.violation {
+000131                  let attempted = result
+000132                      .attempted_state
+000133                      .as_ref()
+000134                      .map(|state| conformance_state_json(model, state))
+000135                      .transpose()?;
+000136                  vectors.push(json!({
+000137                      "state":state_id,"action":action_json,
+000138                      "outcome":{
+000139                          "kind":violation.kind,"name":violation.name,
+000140                          "state_changed":after != before,"state":after,
+000141                          "attempted_state":attempted
+000142                      }
+000143                  }));
+000144                  continue;
+000145              }
+000146  
+000147              let changes = compute_changes(&before, &after);
+000148              vectors.push(json!({
+000149                  "state":state_id,"action":action_json,
+000150                  "outcome":{"kind":"ok","state_changed":after != before,"state":after,"changes":changes}
+000151              }));
+000152              if state_depth >= depth {
+000153                  continue;
+000154              }
+000155              let key = serde_json::to_string(&after).map_err(|error| error.to_string())?;
+000156              if let std::collections::btree_map::Entry::Vacant(entry) = seen.entry(key) {
+000157                  let id = format!("s{}", states.len());
+000158                  entry.insert(id.clone());
+000159                  states.push(json!({"id":id,"depth":state_depth+1,"state":after}));
+000160                  queue.push_back((id, state_depth + 1, successor));
+000161              }
+000162          }
+000163      }
+000164  
+000165      let (schema_id, schema_version) = match version {
+000166          fsl_core::PublicKernelVersion::V1 => {
+000167              (CONFORMANCE_V1_SCHEMA_ID, CONFORMANCE_V1_SCHEMA_VERSION)
+000168          }
+000169          fsl_core::PublicKernelVersion::V2 => {
+000170              (CONFORMANCE_V2_SCHEMA_ID, CONFORMANCE_V2_SCHEMA_VERSION)
+000171          }
+000172      };
+000173      Ok(json!({
+000174          "$schema":schema_id,
+000175          "schema_version":schema_version,
+000176          "kernel_schema_version":version.schema_version(),
+000177          "result":"conformance",
+000178          "spec":model.name,
+000179          "depth":depth,
+000180          "states":states,
+000181          "vectors":vectors,
+000182      }))
+000183  }
+--- rust/fslc/src/lib.rs:251-381 ---
+000251          value ^= (value << 15) & 0xefc6_0000;
+000252          value ^= value >> 18;
+000253          value
+000254      }
+000255  
+000256      fn below(&mut self, upper: usize) -> usize {
+000257          let bits = usize::BITS - upper.leading_zeros();
+000258          loop {
+000259              let value = self.next_u32() >> (32 - bits);
+000260              let value = usize::try_from(value).expect("u32 fits usize on supported targets");
+000261              if value < upper {
+000262                  return value;
+000263              }
+000264          }
+000265      }
+000266  }
+000267  
+000268  fn ordered_object(value: &Value, order: &[String]) -> Value {
+000269      let Some(values) = value.as_object() else {
+000270          return value.clone();
+000271      };
+000272      let mut result = serde_json::Map::new();
+000273      for key in order {
+000274          if let Some(value) = values.get(key) {
+000275              result.insert(key.clone(), value.clone());
+000276          }
+000277      }
+000278      for (key, value) in values {
+000279          if !result.contains_key(key) {
+000280              result.insert(key.clone(), value.clone());
+000281          }
+000282      }
+000283      Value::Object(result)
+000284  }
+000285  
+000286  /// Build the versioned fixed-seed conformance trace consumed by native testgen.
+000287  ///
+000288  /// Unlike the exhaustive bounded conformance corpus, this contract records one
+000289  /// deterministic path and retains ordinary Monitor JSON values so existing
+000290  /// generated harness bytes remain stable.
+000291  ///
+000292  /// # Errors
+000293  ///
+000294  /// Returns an error when concrete initialization, enabled-action enumeration,
+000295  /// or stepping fails.
+000296  pub fn testgen_trace_vectors(model: &KernelModel) -> Result<Value, String> {
+000297      let mut monitor =
+000298          fsl_runtime::Monitor::new(model.clone()).map_err(|error| error.to_string())?;
+000299      let state_order = model
+000300          .state
+000301          .iter()
+000302          .map(|(name, _)| name.clone())
+000303          .collect::<Vec<_>>();
+000304      let initial = ordered_object(&state_json(&monitor.state), &state_order);
+000305      let mut steps = Vec::new();
+000306      let mut random = PythonRandom::seeded_zero();
+000307      for _ in 0..100 {
+000308          let enabled = monitor.enabled().map_err(|error| error.to_string())?;
+000309          if enabled.is_empty() {
+000310              break;
+000311          }
+000312          let choice = &enabled[random.below(enabled.len())];
+000313          let action = choice.action.clone();
+000314          let param_order = model
+000315              .actions
+000316              .iter()
+000317              .find(|candidate| candidate.name == action)
+000318              .map(|candidate| {
+000319                  candidate
+000320                      .params
+000321                      .iter()
+000322                      .map(|param| param.name().to_owned())
+000323                      .collect::<Vec<_>>()
+000324              })
+000325              .ok_or_else(|| format!("enabled action '{action}' is absent from the model"))?;
+000326          let params = choice
+000327              .params
+000328              .iter()
+000329              .map(|(name, value)| (name.clone(), fsl_value_json(value)))
+000330              .collect::<serde_json::Map<_, _>>();
+000331          let params = ordered_object(&Value::Object(params), &param_order);
+000332          monitor.step(choice).map_err(|error| error.to_string())?;
+000333          steps.push(json!({
+000334              "action": display_name(&action),
+000335              "params": params,
+000336              "expected": ordered_object(&state_json(&monitor.state), &state_order)
+000337          }));
+000338      }
+000339      Ok(json!({
+000340          "$schema": fsl_core::TESTGEN_TRACE_V1_SCHEMA_ID,
+000341          "schema_version": fsl_core::TESTGEN_TRACE_V1_SCHEMA_VERSION,
+000342          "kernel_schema_version": fsl_core::KERNEL_SCHEMA_VERSION,
+000343          "result": "testgen_trace",
+000344          "spec": model.name,
+000345          "initial": initial,
+000346          "steps": steps
+000347      }))
+000348  }
+000349  
+000350  fn conformance_state_json(
+000351      model: &KernelModel,
+000352      state: &BTreeMap<String, FslValue>,
+000353  ) -> Result<Value, String> {
+000354      Ok(Value::Object(
+000355          model
+000356              .state
+000357              .iter()
+000358              .map(|(name, ty)| {
+000359                  let value = state
+000360                      .get(name)
+000361                      .ok_or_else(|| format!("missing state variable '{name}'"))?;
+000362                  Ok((
+000363                      display_name(name),
+000364                      conformance_value_json(model, ty, value)?,
+000365                  ))
+000366              })
+000367              .collect::<Result<_, String>>()?,
+000368      ))
+000369  }
+000370  
+000371  fn conformance_value_json(
+000372      model: &KernelModel,
+000373      ty: &fsl_core::TypeRef,
+000374      value: &FslValue,
+000375  ) -> Result<Value, String> {
+000376      use fsl_core::{TypeDef, TypeRef};
+000377      match (ty, value) {
+000378          (TypeRef::Option(_), FslValue::None) => Ok(json!({"kind":"none"})),
+000379          (TypeRef::Option(inner), FslValue::Some(value)) => Ok(json!({
+000380              "kind":"some",
+000381              "value":conformance_value_json(model, inner, value)?

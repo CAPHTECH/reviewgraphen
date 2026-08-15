@@ -1,0 +1,1 @@
+{"finding":{"locations":[{"end_line":51,"path":"rust/fslc/src/main.rs","start_line":48},{"end_line":78,"path":"rust/fslc/src/main.rs","start_line":69}],"mechanism_tags":["check_write_gap","cross_file_effect","repeatable_entry","unstable_token"]},"item_id":"adj:sha256:b5ff5c34d8bb8cba2385a6ff9ba0ba7cef6aafb3b383063ed37e3704502abc01"}
