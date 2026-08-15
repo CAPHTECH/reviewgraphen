@@ -1,0 +1,105 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_head_issue_v1_preregistration.v1",
+  "experiment": "m7-head-issue-v1",
+  "decision_timing": "after_m7_head_test_generator_failure_before_issue_judge_calibration",
+  "primary_endpoint": "ai_issue_should_be_created_disposition_count",
+  "endpoint_authority": "model_disposition_only",
+  "actual_upstream_issue_creation": false,
+  "judge_calibration": {
+    "source_units": "m7-real-v1-20-presence-verified-pairs",
+    "positive_count": 20,
+    "negative_count": 20,
+    "positive_revision": "known_defective_parent",
+    "negative_revision": "canonical_fix",
+    "claim": "targeted production behavior does not satisfy the attached regression scenario",
+    "candidate_generation": "deterministic_template_not_model_generated",
+    "revision_and_label_blinding": true,
+    "pair_identifier_blinding": true,
+    "order": "content_hash_sorted",
+    "judge_backends": [
+      {
+        "backend": "codex_cli",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high"
+      },
+      {
+        "backend": "claude_cli",
+        "model": "opus",
+        "reasoning_effort": "high"
+      }
+    ],
+    "dispositions": [
+      "issue_should_be_created",
+      "should_not_be_created",
+      "unable_to_decide"
+    ],
+    "thresholds_required_for_each_judge": {
+      "positive_sensitivity_minimum": 0.75,
+      "negative_specificity_minimum": 0.75,
+      "balanced_accuracy_minimum": 0.75,
+      "unable_rate_maximum": 0.2
+    },
+    "stop_if_either_judge_fails": true
+  },
+  "production": {
+    "source_repository": "/home/rizumita/github/fsl",
+    "source_mutability": "read_only",
+    "revision": "freeze_before_packet_construction",
+    "scope": "all_frozen_head_production_rust_files",
+    "sampling": false,
+    "primary_file_ownership": "exactly_once",
+    "cross_file_context": "deterministic_recorded_duplication",
+    "arms": [
+      "b1_free_form",
+      "g3_proxy",
+      "full_reviewgraphen"
+    ],
+    "generator_backends_per_arm": [
+      {
+        "backend": "codex_cli",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "judge_backend": "claude_cli"
+      },
+      {
+        "backend": "claude_cli",
+        "model": "opus",
+        "reasoning_effort": "high",
+        "judge_backend": "codex_cli"
+      }
+    ],
+    "replicates_per_arm_backend": 1,
+    "judge_sees_arm": false,
+    "judge_sees_generator_backend": false,
+    "issue_dispositions": [
+      "issue_should_be_created",
+      "should_not_be_created",
+      "unable_to_decide"
+    ]
+  },
+  "reported_metrics": [
+    "reported_findings_per_arm",
+    "issue_should_be_created_count_per_arm",
+    "issue_should_be_created_fraction_per_arm",
+    "human_reading_volume_per_arm",
+    "yield_per_reported_finding",
+    "cross_arm_finding_overlap",
+    "generator_and_judge_family_stratification",
+    "judge_known_case_calibration"
+  ],
+  "interpretation_limits": [
+    "production_dispositions_are_ai_judgments_not_verified_defects",
+    "calibration_uses_regression_scenario_evidence_and_is_optimistic_for_prose_only_novel_findings",
+    "no_recall_denominator_exists",
+    "issue_should_be_created_is_a_label_not_an_external_write"
+  ],
+  "preserved_predecessors": [
+    "m7-pilot-v1",
+    "m7-pilot-v2",
+    "m7-real-v1",
+    "m7-real-v2",
+    "full-reviewgraphen-replicate-1",
+    "full-reviewgraphen-replicate-2",
+    "m7-head-v1"
+  ]
+}
