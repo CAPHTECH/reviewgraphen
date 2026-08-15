@@ -1,0 +1,20 @@
+
+running 1 test
+mutate_attributes_trace_oracle_kills_to_attached_requirements --- FAILED
+
+failures:
+
+---- mutate_attributes_trace_oracle_kills_to_attached_requirements stdout ----
+
+thread 'mutate_attributes_trace_oracle_kills_to_attached_requirements' (1057312) panicked at fslc/tests/cli_regression.rs:245:5:
+assertion `left == right` failed: {"fsl":"1.0","result":"mutated","spec":"MutateRequirementAttribution","depth":8,"baseline":"verified","mutants":[{"id":"acceptance","op":"external","loc":null,"target":"acceptance","status":"killed","killed_by":"acceptance","requirement":null,"source":"external","input_kind":"replacement","line":1},{"id":"forbidden","op":"external","loc":null,"target":"forbidden","status":"killed","killed_by":"forbidden","requirement":null,"source":"external","input_kind":"replacement","line":2},{"id":"forbidden-setup","op":"external","loc":null,"target":"forbidden-setup","status":"killed","killed_by":"forbidden","requirement":null,"source":"external","input_kind":"replacement","line":3}],"summary":{"total":3,"killed":3,"survived":0,"invalid":0,"kill_rate":1.0,"by_source":{"builtin":{"total":0,"killed":0,"survived":0,"invalid":0,"kill_rate":null},"external":{"total":3,"killed":3,"survived":0,"invalid":0,"kill_rate":1.0}}},"by_requirement":{"finish":{"kills":0,"warning":"empty_formalization"}},"notes":["possible equivalent mutants should be reviewed manually; survivors are a review queue, not a hard failure","mutant cap 0 reached: 22 dropped","by_requirement kills are an observed lower bound within this mutant set and depth","invalid external mutants are generation-quality findings and are excluded from kill-rate denominators"]}
+  left: Null
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mutate_attributes_trace_oracle_kills_to_attached_requirements
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.60s
+

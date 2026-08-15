@@ -1,0 +1,239 @@
+
+running 1 test
+sweep_does_not_mask_a_typo_d_instances_name_as_sweep_passed --- FAILED
+
+failures:
+
+---- sweep_does_not_mask_a_typo_d_instances_name_as_sweep_passed stdout ----
+
+thread 'sweep_does_not_mask_a_typo_d_instances_name_as_sweep_passed' (1118936) panicked at fslc/tests/sweep_contract.rs:64:5:
+assertion `left == right` failed: typo'd --instances must not pass: {
+  "fsl": "1.0",
+  "result": "sweep_passed",
+  "spec": null,
+  "sweep": {
+    "minimality_order": [
+      "instances",
+      "values",
+      "depth"
+    ],
+    "ranges": {
+      "instances": {
+        "Amountt": [
+          1,
+          2
+        ]
+      },
+      "values": {},
+      "depth": [
+        0,
+        3
+      ]
+    },
+    "results": [
+      {
+        "scope": {
+          "instances": {
+            "Amountt": 1
+          },
+          "values": {},
+          "depth": 0
+        },
+        "summary": {
+          "result": "error"
+        },
+        "verification": {
+          "fsl": "1.0",
+          "result": "error",
+          "kind": "semantics",
+          "message": "--instances/--values only apply to specs with entity/number declarations; this spec declares neither",
+          "bounds_overrides": {
+            "instances": {
+              "Amountt": 1
+            },
+            "values": {}
+          }
+        }
+      },
+      {
+        "scope": {
+          "instances": {
+            "Amountt": 1
+          },
+          "values": {},
+          "depth": 1
+        },
+        "summary": {
+          "result": "error"
+        },
+        "verification": {
+          "fsl": "1.0",
+          "result": "error",
+          "kind": "semantics",
+          "message": "--instances/--values only apply to specs with entity/number declarations; this spec declares neither",
+          "bounds_overrides": {
+            "instances": {
+              "Amountt": 1
+            },
+            "values": {}
+          }
+        }
+      },
+      {
+        "scope": {
+          "instances": {
+            "Amountt": 1
+          },
+          "values": {},
+          "depth": 2
+        },
+        "summary": {
+          "result": "error"
+        },
+        "verification": {
+          "fsl": "1.0",
+          "result": "error",
+          "kind": "semantics",
+          "message": "--instances/--values only apply to specs with entity/number declarations; this spec declares neither",
+          "bounds_overrides": {
+            "instances": {
+              "Amountt": 1
+            },
+            "values": {}
+          }
+        }
+      },
+      {
+        "scope": {
+          "instances": {
+            "Amountt": 1
+          },
+          "values": {},
+          "depth": 3
+        },
+        "summary": {
+          "result": "error"
+        },
+        "verification": {
+          "fsl": "1.0",
+          "result": "error",
+          "kind": "semantics",
+          "message": "--instances/--values only apply to specs with entity/number declarations; this spec declares neither",
+          "bounds_overrides": {
+            "instances": {
+              "Amountt": 1
+            },
+            "values": {}
+          }
+        }
+      },
+      {
+        "scope": {
+          "instances": {
+            "Amountt": 2
+          },
+          "values": {},
+          "depth": 0
+        },
+        "summary": {
+          "result": "error"
+        },
+        "verification": {
+          "fsl": "1.0",
+          "result": "error",
+          "kind": "semantics",
+          "message": "--instances/--values only apply to specs with entity/number declarations; this spec declares neither",
+          "bounds_overrides": {
+            "instances": {
+              "Amountt": 2
+            },
+            "values": {}
+          }
+        }
+      },
+      {
+        "scope": {
+          "instances": {
+            "Amountt": 2
+          },
+          "values": {},
+          "depth": 1
+        },
+        "summary": {
+          "result": "error"
+        },
+        "verification": {
+          "fsl": "1.0",
+          "result": "error",
+          "kind": "semantics",
+          "message": "--instances/--values only apply to specs with entity/number declarations; this spec declares neither",
+          "bounds_overrides": {
+            "instances": {
+              "Amountt": 2
+            },
+            "values": {}
+          }
+        }
+      },
+      {
+        "scope": {
+          "instances": {
+            "Amountt": 2
+          },
+          "values": {},
+          "depth": 2
+        },
+        "summary": {
+          "result": "error"
+        },
+        "verification": {
+          "fsl": "1.0",
+          "result": "error",
+          "kind": "semantics",
+          "message": "--instances/--values only apply to specs with entity/number declarations; this spec declares neither",
+          "bounds_overrides": {
+            "instances": {
+              "Amountt": 2
+            },
+            "values": {}
+          }
+        }
+      },
+      {
+        "scope": {
+          "instances": {
+            "Amountt": 2
+          },
+          "values": {},
+          "depth": 3
+        },
+        "summary": {
+          "result": "error"
+        },
+        "verification": {
+          "fsl": "1.0",
+          "result": "error",
+          "kind": "semantics",
+          "message": "--instances/--values only apply to specs with entity/number declarations; this spec declares neither",
+          "bounds_overrides": {
+            "instances": {
+              "Amountt": 2
+            },
+            "values": {}
+          }
+        }
+      }
+    ],
+    "minimal_counterexample": null
+  }
+}
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    sweep_does_not_mask_a_typo_d_instances_name_as_sweep_passed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.04s
+

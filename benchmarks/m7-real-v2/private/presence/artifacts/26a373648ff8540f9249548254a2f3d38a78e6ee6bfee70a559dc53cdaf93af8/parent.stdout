@@ -1,0 +1,20 @@
+
+running 1 test
+lint_directory_reports_nested_fsl_errors_instead_of_skipping_them --- FAILED
+
+failures:
+
+---- lint_directory_reports_nested_fsl_errors_instead_of_skipping_them stdout ----
+
+thread 'lint_directory_reports_nested_fsl_errors_instead_of_skipping_them' (1285936) panicked at fslc/tests/edition_migrator.rs:311:5:
+assertion `left == right` failed
+  left: String("io")
+ right: "parse"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    lint_directory_reports_nested_fsl_errors_instead_of_skipping_them
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+

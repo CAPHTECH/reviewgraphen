@@ -1,0 +1,20 @@
+
+running 1 test
+editable_slot_is_bound_separately_from_the_canonical_rendering --- FAILED
+
+failures:
+
+---- editable_slot_is_bound_separately_from_the_canonical_rendering stdout ----
+
+thread 'editable_slot_is_bound_separately_from_the_canonical_rendering' (1310951) panicked at fslc/tests/issue_333_approval_requirements_document.rs:329:5:
+assertion `left == right` failed
+  left: Null
+ right: "fsl-reviewed-requirements-document-v1+sha256"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    editable_slot_is_bound_separately_from_the_canonical_rendering
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.02s
+

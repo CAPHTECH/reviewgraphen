@@ -1,0 +1,25 @@
+
+running 1 test
+domain_testgen_propagates_a_violated_result_from_the_generic_path --- FAILED
+
+failures:
+
+---- domain_testgen_propagates_a_violated_result_from_the_generic_path stdout ----
+
+thread 'domain_testgen_propagates_a_violated_result_from_the_generic_path' (1326546) panicked at fslc/tests/issue_472_testgen_violated_propagation.rs:137:5:
+assertion `left == right` failed: {
+  "fsl": "1.0",
+  "result": "error",
+  "kind": "semantics",
+  "message": "testgen scenarios.scenarios must be an array"
+}
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    domain_testgen_propagates_a_violated_result_from_the_generic_path
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.02s
+

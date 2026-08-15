@@ -1,0 +1,20 @@
+
+running 1 test
+does_not_recommend_a_used_candidate_until_the_target_is_proved --- FAILED
+
+failures:
+
+---- does_not_recommend_a_used_candidate_until_the_target_is_proved stdout ----
+
+thread 'does_not_recommend_a_used_candidate_until_the_target_is_proved' (1046060) panicked at fslc/tests/induction_lemmas.rs:154:5:
+assertion `left == right` failed
+  left: String("rejected")
+ right: "proved"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    does_not_recommend_a_used_candidate_until_the_target_is_proved
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.35s
+

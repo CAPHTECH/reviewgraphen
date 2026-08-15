@@ -1,0 +1,29 @@
+
+running 1 test
+batch_preserves_explicit_unsupported_files_instead_of_silently_dropping_them --- FAILED
+
+failures:
+
+---- batch_preserves_explicit_unsupported_files_instead_of_silently_dropping_them stdout ----
+
+thread 'batch_preserves_explicit_unsupported_files_instead_of_silently_dropping_them' (1090172) panicked at fslc/tests/issue_496_analyze_batch_explicit_files.rs:50:5:
+assertion `left == right` failed: {
+  "fsl": "1.0",
+  "result": "analyzed",
+  "analysis": "structure",
+  "mode": "batch",
+  "projection": "tsg",
+  "profile": null,
+  "files": [],
+  "errors": []
+}
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    batch_preserves_explicit_unsupported_files_instead_of_silently_dropping_them
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+

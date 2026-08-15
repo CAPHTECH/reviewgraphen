@@ -20,6 +20,16 @@
       "artifact_tree_sha256": "sha256:56e866aa619c3be80322c234b00cb678925a5c884561f10c227a9475cd3d5d67",
       "valid_for_eligibility": false,
       "reason": "all disposable clone checkouts failed because tmp was full"
+    },
+    {
+      "attempt_id": "runtime-without-prebuild-run",
+      "processed_records": 1,
+      "records_with_test_attempts": 1,
+      "records_with_checkout_disk_failure": 0,
+      "records_with_other_precondition_failure": 0,
+      "artifact_tree_sha256": "sha256:efdece675e1af0cb97bce6f86aaae62c6dae9f200354385058e12a19a5e980b5",
+      "valid_for_eligibility": false,
+      "reason": "a parent compile failure was incorrectly classified as a failing regression test because both revisions were not prebuilt before exact test execution"
     }
   ],
   "eligibility_decisions_reused": 0

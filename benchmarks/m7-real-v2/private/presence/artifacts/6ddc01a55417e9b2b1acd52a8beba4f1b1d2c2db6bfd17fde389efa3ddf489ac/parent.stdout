@@ -1,0 +1,20 @@
+
+running 1 test
+domain_check_preserves_duplicate_enum_name_classification_and_location --- FAILED
+
+failures:
+
+---- domain_check_preserves_duplicate_enum_name_classification_and_location stdout ----
+
+thread 'domain_check_preserves_duplicate_enum_name_classification_and_location' (1255915) panicked at fslc/tests/domain_origin_diagnostics.rs:88:5:
+assertion `left == right` failed
+  left: String("semantics")
+ right: "name"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    domain_check_preserves_duplicate_enum_name_classification_and_location
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+

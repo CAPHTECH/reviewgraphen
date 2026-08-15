@@ -1,0 +1,20 @@
+
+running 1 test
+canonical_requirements_spec_with_a_missing_implements_target_still_fails_lint_and_migrate --- FAILED
+
+failures:
+
+---- canonical_requirements_spec_with_a_missing_implements_target_still_fails_lint_and_migrate stdout ----
+
+thread 'canonical_requirements_spec_with_a_missing_implements_target_still_fails_lint_and_migrate' (1280793) panicked at fslc/tests/edition_migrator.rs:752:5:
+assertion `left == right` failed
+  left: Some(0)
+ right: Some(2)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    canonical_requirements_spec_with_a_missing_implements_target_still_fails_lint_and_migrate
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.01s
+

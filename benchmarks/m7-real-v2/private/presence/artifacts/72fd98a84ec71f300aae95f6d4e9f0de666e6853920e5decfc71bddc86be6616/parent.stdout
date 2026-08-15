@@ -1,0 +1,20 @@
+
+running 1 test
+induction_property_selection_keeps_unknown_and_unsupported_kinds_rejected --- FAILED
+
+failures:
+
+---- induction_property_selection_keeps_unknown_and_unsupported_kinds_rejected stdout ----
+
+thread 'induction_property_selection_keeps_unknown_and_unsupported_kinds_rejected' (1372314) panicked at fslc/tests/verification_ownership.rs:378:13:
+assertion `left == right` failed: {"fsl":"1.0","spec":"ExplicitReachableWitnessed","result":"proved","engine":"induction","completeness":"unbounded","checked_to_depth":8,"k_used":{"_bounds_count":1},"base_depth":8,"invariants_checked":["_bounds_count"],"transitions_checked":[],"action_coverage":{"inc":true},"reachables":{"HitTwo":{"witnessed_at_step":2,"witness":[{"step":0,"state":{"count":0}},{"step":1,"state":{"count":1},"action":{"name":"inc","params":{},"loc":{"line":9,"column":3}},"changes":{"count":{"from":0,"to":1}}},{"step":2,"state":{"count":2},"action":{"name":"inc","params":{},"loc":{"line":9,"column":3}},"changes":{"count":{"from":1,"to":2}}}]}},"warnings":[],"cost":{"elapsed_s":0.012282718,"solver":{"checks":16,"check_elapsed_s":0.0045433819999999995,"conflicts":4,"decisions":1,"propagations":29,"memory_mb":17.27},"properties":[{"kind":"action_coverage","name":"inc","checks":1,"elapsed_s":0.000032962},{"kind":"deadlock","name":"deadlock","checks":5,"elapsed_s":0.000567365},{"kind":"init","name":"initial_state","checks":1,"elapsed_s":0.001735239},{"kind":"partial_op","name":"HitTwo","checks":3,"elapsed_s":0.000029284999999999995},{"kind":"reachable","name":"HitTwo","checks":4,"elapsed_s":0.000514636},{"kind":"type_bound","name":"_bounds_count","checks":1,"elapsed_s":0.000261111},{"kind":"vacuity","name":"session","checks":1,"elapsed_s":0.001402784}]},"lemmas":[{"expression":"true","name":"AuxiliaryLemma1","status":"proved","used":false,"proof":{"result":"proved","k":1,"checked_to_depth":8,"completeness":"unbounded"}}],"lemma_cti_exclusions":[],"versions":{"verifier":{"name":"fslc-rust","version":"4.2.0"},"core":{"name":"fsl-core","version":"4.2.0"},"solver":{"name":"z3","backend":"native-z3","version":"Z3 4.16.0.0"}}}
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    induction_property_selection_keeps_unknown_and_unsupported_kinds_rejected
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.04s
+

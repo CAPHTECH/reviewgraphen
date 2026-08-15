@@ -1,0 +1,25 @@
+
+running 1 test
+chain_clean_manifest_runs_five_layers_and_verifies --- FAILED
+
+failures:
+
+---- chain_clean_manifest_runs_five_layers_and_verifies stdout ----
+
+thread 'chain_clean_manifest_runs_five_layers_and_verifies' (1315752) panicked at fslc/tests/chain_cli.rs:136:5:
+clean manifest chain failed: Layer  Check  Status  Result  Detail
+-----  -----  ------  ------  ------
+business  verify  passed  verified  depth=1
+requirements  check  passed  ok  -
+design  verify  passed  verified  depth=2
+design->requirements  refine  passed  refines  depth=2
+impl  command  failed  error  -
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    chain_clean_manifest_runs_five_layers_and_verifies
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.03s
+

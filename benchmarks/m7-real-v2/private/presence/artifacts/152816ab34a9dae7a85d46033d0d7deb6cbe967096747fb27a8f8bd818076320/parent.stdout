@@ -1,0 +1,20 @@
+
+running 1 test
+domain_bare_int_fields_warn_like_every_other_scalar_shape --- FAILED
+
+failures:
+
+---- domain_bare_int_fields_warn_like_every_other_scalar_shape stdout ----
+
+thread 'domain_bare_int_fields_warn_like_every_other_scalar_shape' (1242084) panicked at fslc/tests/issue_250_initialization.rs:579:5:
+assertion `left == right` failed: {"fsl":"1.0","result":"ok","spec":"BareIntDefault","warnings":[{"message":"spec declares no user invariants (only implicit type bounds are checked)"},{"kind":"implicit_initial_value","code":"implicit_initial_value","severity":"warning","edition_severity":{"current":"warning","next":"error"},"message":"field 'Counter.flag' implicitly selects false; add an explicit initializer","field":"Counter.flag","selected_value":"false","reason":"Bool defaults to false","loc":{"file":"/tmp/fsl-issue-250-bare-int-default-1242083-1786765081938058274.fsl","line":7,"column":7,"end_line":7,"end_column":18},"canonical_replacement":" = false","suggestion":{"kind":"insert","replacement":" = false","span":{"start":125,"end":125},"machine_applicable":true}}],"versions":{"verifier":{"name":"fslc-rust","version":"4.2.0"},"core":{"name":"fsl-core","version":"4.2.0"},"solver":{"name":"z3","backend":"native-z3","version":"Z3 4.16.0.0"}}}
+  left: ["Counter.flag"]
+ right: ["Counter.flag", "Counter.raw"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    domain_bare_int_fields_warn_like_every_other_scalar_shape
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.01s
+

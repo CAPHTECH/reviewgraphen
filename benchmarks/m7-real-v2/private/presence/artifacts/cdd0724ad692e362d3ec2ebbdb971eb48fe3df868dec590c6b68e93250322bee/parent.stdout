@@ -1,0 +1,65 @@
+
+running 1 test
+explain_readable_branch_action_uses_authored_name_not_lowered_bn_form --- FAILED
+
+failures:
+
+---- explain_readable_branch_action_uses_authored_name_not_lowered_bn_form stdout ----
+
+thread 'explain_readable_branch_action_uses_authored_name_not_lowered_bn_form' (1205364) panicked at fslc/tests/explain_cli.rs:58:5:
+authored `submit` identity must appear twice (once per branch): Spec: ReturnSystemReq (depth 3)
+
+Verification world:
+  - Amount: values 0..3 (4 values)
+  - CaseId: 3 instances (0..2)
+
+State:
+  - paid_count: Int
+  - sys: Map<CaseId, RCase>
+
+Actions:
+  - submit.b1(c: CaseId, a: Amount) [fair]
+    requirement: REQ-1: Returns at or below the threshold are auto-approved
+    requires:
+      - requires sys[c].st == New
+      - requires a > 0
+      - requires a <= AUTO_LIMIT
+    writes: sys
+  - submit.b2(c: CaseId, a: Amount) [fair]
+    requirement: REQ-1: Returns at or below the threshold are auto-approved
+    requires:
+      - requires sys[c].st == New
+      - requires a > 0
+      - requires a > AUTO_LIMIT
+    writes: sys
+  - mgr_approve(c: CaseId) [fair]
+    requirement: REQ-2: Returns above the threshold are decided by a manager
+    requires:
+      - requires sys[c].st == MgrQueue
+    writes: sys
+  - mgr_reject(c: CaseId) [fair]
+    requirement: REQ-2: Returns above the threshold are decided by a manager
+    requires:
+      - requires sys[c].st == MgrQueue
+    writes: sys
+  - pay(c: CaseId) [fair]
+    requirement: REQ-3: Payment only after approval; ledger stays consistent
+    requires:
+      - requires sys[c].st == AutoApproved or sys[c].st == MgrApproved
+    writes: paid_count, sys
+
+Properties:
+  - invariant PaidLedger
+    body: paid_count == count(c: CaseId where sys[c].st == Paid)
+
+Automatic checks:
+  - type_bound: sys (implicit bounded-domain check)
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    explain_readable_branch_action_uses_authored_name_not_lowered_bn_form
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 15.84s
+

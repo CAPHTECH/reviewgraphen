@@ -1,0 +1,20 @@
+
+running 1 test
+avoids_a_binder_collision_with_a_map_named_k --- FAILED
+
+failures:
+
+---- avoids_a_binder_collision_with_a_map_named_k stdout ----
+
+thread 'avoids_a_binder_collision_with_a_map_named_k' (1260625) panicked at fslc/tests/induction_suggestions.rs:186:5:
+assertion `left == right` failed
+  left: Array [String("forall k: Case { k[k] >= 0 }")]
+ right: Array [String("forall key: Case { k[key] >= 0 }")]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    avoids_a_binder_collision_with_a_map_named_k
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.39s
+

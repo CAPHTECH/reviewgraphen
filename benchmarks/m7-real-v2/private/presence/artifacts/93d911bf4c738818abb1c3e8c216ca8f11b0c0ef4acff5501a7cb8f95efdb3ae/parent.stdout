@@ -1,0 +1,24 @@
+
+running 1 test
+lint_deduplicates_recursive_alias_and_repeated_paths --- FAILED
+
+failures:
+
+---- lint_deduplicates_recursive_alias_and_repeated_paths stdout ----
+
+thread 'lint_deduplicates_recursive_alias_and_repeated_paths' (1183559) panicked at fslc/tests/edition_migrator.rs:281:5:
+{
+  "fsl": "1.0",
+  "result": "error",
+  "kind": "usage",
+  "message": "the same migration path cannot be supplied twice"
+}
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    lint_deduplicates_recursive_alias_and_repeated_paths
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+

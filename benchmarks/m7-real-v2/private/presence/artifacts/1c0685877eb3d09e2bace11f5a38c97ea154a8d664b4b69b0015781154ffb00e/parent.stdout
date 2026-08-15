@@ -1,0 +1,48 @@
+
+running 1 test
+domain_check_preserves_violation_evidence_in_the_nested_kernel --- FAILED
+
+failures:
+
+---- domain_check_preserves_violation_evidence_in_the_nested_kernel stdout ----
+
+thread 'domain_check_preserves_violation_evidence_in_the_nested_kernel' (1382735) panicked at fslc/tests/issue_515_domain_check_false_green.rs:78:5:
+{
+  "fsl": "1.0",
+  "result": "violated",
+  "dialect": "fsl-domain-effect.v0",
+  "finding_schema_version": "fsl-domain-finding.v0",
+  "domain": "BrokenDomain",
+  "spec": "BrokenDomain",
+  "formal_result": "violated",
+  "kernel": {
+    "result": "violated",
+    "spec": "BrokenDomain",
+    "checked_to_depth": 1,
+    "completeness": "bounded",
+    "invariant": "neverClosed",
+    "violation_kind": "invariant"
+  },
+  "findings": [],
+  "assumptions": [
+    {
+      "id": "DOMAIN-ASSUME-FINITE-DOMAIN-MODEL",
+      "text": "domain IDs and undeclared scalar input types are modeled as finite 0..1 ranges unless declared explicitly"
+    },
+    {
+      "id": "DOMAIN-ASSUME-GENERATED-SCAFFOLD",
+      "text": "generated Functional DDD code is an implementation scaffold; runtime conformance still requires an adapter/replay evidence boundary"
+    }
+  ],
+  "generated_actions": [
+    "doc_close_doc"
+  ]
+}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    domain_check_preserves_violation_evidence_in_the_nested_kernel
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.02s
+

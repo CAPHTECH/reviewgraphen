@@ -1,0 +1,21 @@
+
+running 1 test
+check_reports_a_deeply_nested_mapping_as_a_diagnostic_not_a_crash --- FAILED
+
+failures:
+
+---- check_reports_a_deeply_nested_mapping_as_a_diagnostic_not_a_crash stdout ----
+
+thread 'check_reports_a_deeply_nested_mapping_as_a_diagnostic_not_a_crash' (1306189) panicked at fslc/tests/deep_nesting.rs:182:9:
+`fslc check` on a 200-stage witness died on a signal instead of exiting -- a stack overflow returns neither an exit code nor a JSON envelope, so it escapes the outcome contract entirely (#620). stderr=
+thread 'fslc' (1306191) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    check_reports_a_deeply_nested_mapping_as_a_diagnostic_not_a_crash
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s
+

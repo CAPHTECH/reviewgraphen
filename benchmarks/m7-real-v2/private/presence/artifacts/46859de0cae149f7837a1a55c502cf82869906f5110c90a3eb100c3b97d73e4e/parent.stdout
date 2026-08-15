@@ -1,0 +1,20 @@
+
+running 1 test
+every_spec_reading_command_classifies_a_name_resolution_failure_as_name --- FAILED
+
+failures:
+
+---- every_spec_reading_command_classifies_a_name_resolution_failure_as_name stdout ----
+
+thread 'every_spec_reading_command_classifies_a_name_resolution_failure_as_name' (1228733) panicked at fslc/tests/issue_484_parse_diagnostic_matrix.rs:407:9:
+assertion `left == right` failed: check: {"fsl":"1.0","result":"error","kind":"io","message":"examples/gallery/errors/name_duplicate_state_variable.fsl: No such file or directory (os error 2)","versions":{"verifier":{"name":"fslc-rust","version":"3.1.0"},"core":{"name":"fsl-core","version":"3.1.0"},"solver":{"name":"z3","backend":"native-z3","version":"Z3 4.16.0.0"}}}
+  left: String("io")
+ right: "name"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    every_spec_reading_command_classifies_a_name_resolution_failure_as_name
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+

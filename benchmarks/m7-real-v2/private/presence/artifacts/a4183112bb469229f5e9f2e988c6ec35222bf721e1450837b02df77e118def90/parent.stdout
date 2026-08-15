@@ -1,0 +1,18 @@
+
+running 1 test
+unrelatable_forbidden_is_unknown_and_can_fail_the_gate --- FAILED
+
+failures:
+
+---- unrelatable_forbidden_is_unknown_and_can_fail_the_gate stdout ----
+
+thread 'unrelatable_forbidden_is_unknown_and_can_fail_the_gate' (1129726) panicked at fslc/tests/issue_460_semantic_diff_forbidden.rs:177:32:
+missing forbidden unknown: {"fsl":"1.0","result":"semantic_diff","old":{"file":"/tmp/fslc-issue-460-1129725/old.fsl","spec":"Old"},"new":{"file":"/tmp/fslc-issue-460-1129725/missing.fsl","spec":"New"},"bounded":{"depth":2,"completeness":"bounded"},"scope":{"old":{"instances":{},"values":{}},"new":{"instances":{},"values":{}},"comparison":"new","applied_to_old":{"instances":{},"values":{}}},"directions":{"new_to_old":{"result":"unknown","reason":"state_or_action_names_differ","mismatch":{"state":{"only_impl":[],"only_abs":[]},"actions":{"only_impl":["other"],"only_abs":["reject"]}}},"old_to_new":{"result":"unknown","reason":"state_or_action_names_differ","mismatch":{"state":{"only_impl":[],"only_abs":[]},"actions":{"only_impl":["reject"],"only_abs":["other"]}}}},"summary":["unknown"],"findings":[{"kind":"unknown","direction":"new_to_old","reason":"state_or_action_names_differ","detail":{"state":{"only_impl":[],"only_abs":[]},"actions":{"only_impl":["other"],"only_abs":["reject"]}}},{"kind":"unknown","direction":"old_to_new","reason":"state_or_action_names_differ","detail":{"state":{"only_impl":[],"only_abs":[]},"actions":{"only_impl":["reject"],"only_abs":["other"]}}}],"gate":{"forbidden":["unknown"],"violations":["unknown"],"passed":false}}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    unrelatable_forbidden_is_unknown_and_can_fail_the_gate
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+

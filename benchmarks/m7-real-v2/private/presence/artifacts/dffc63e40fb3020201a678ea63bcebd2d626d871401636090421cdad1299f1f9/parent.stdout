@@ -1,0 +1,69 @@
+
+running 1 test
+diff_reports_impl_violated_and_fails_the_gate_unconditionally --- FAILED
+
+failures:
+
+---- diff_reports_impl_violated_and_fails_the_gate_unconditionally stdout ----
+
+thread 'diff_reports_impl_violated_and_fails_the_gate_unconditionally' (1267317) panicked at fslc/tests/issue_466_refine_impl_self_violation.rs:109:5:
+assertion `left == right` failed: {
+  "fsl": "1.0",
+  "result": "semantic_diff",
+  "old": {
+    "file": "/tmp/fslc-issue-466-diff-1267316/clean.fsl",
+    "spec": "DiffTarget"
+  },
+  "new": {
+    "file": "/tmp/fslc-issue-466-diff-1267316/broken.fsl",
+    "spec": "DiffTarget"
+  },
+  "bounded": {
+    "depth": 4,
+    "completeness": "bounded"
+  },
+  "scope": {
+    "old": {
+      "instances": {},
+      "values": {}
+    },
+    "new": {
+      "instances": {},
+      "values": {}
+    },
+    "comparison": "new",
+    "applied_to_old": {
+      "instances": {},
+      "values": {}
+    }
+  },
+  "directions": {
+    "new_to_old": {
+      "result": "refines",
+      "checked_to_depth": 4
+    },
+    "old_to_new": {
+      "result": "refines",
+      "checked_to_depth": 4
+    }
+  },
+  "summary": [
+    "no_semantic_change"
+  ],
+  "findings": [],
+  "gate": {
+    "forbidden": [],
+    "violations": [],
+    "passed": true
+  }
+}
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    diff_reports_impl_violated_and_fails_the_gate_unconditionally
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+

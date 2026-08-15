@@ -1,0 +1,20 @@
+
+running 1 test
+selected_trans_properties_accept_lemma_candidates --- FAILED
+
+failures:
+
+---- selected_trans_properties_accept_lemma_candidates stdout ----
+
+thread 'selected_trans_properties_accept_lemma_candidates' (1233466) panicked at fslc/tests/induction_lemmas.rs:132:5:
+assertion `left == right` failed: {"fsl":"1.0","result":"error","kind":"usage","message":"--lemma can strengthen invariant induction, but cannot be used to prove a trans property","versions":{"verifier":{"name":"fslc-rust","version":"3.0.0"},"core":{"name":"fsl-core","version":"3.0.0"},"solver":{"name":"z3","backend":"native-z3","version":"Z3 4.16.0.0"}}}
+  left: 2
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    selected_trans_properties_accept_lemma_candidates
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+

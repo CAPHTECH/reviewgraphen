@@ -1,0 +1,91 @@
+
+running 1 test
+test ledger_exit_status_agrees_with_its_verify_baseline has been running for over 60 seconds
+ledger_exit_status_agrees_with_its_verify_baseline --- FAILED
+
+failures:
+
+---- ledger_exit_status_agrees_with_its_verify_baseline stdout ----
+
+thread 'ledger_exit_status_agrees_with_its_verify_baseline' (1169326) panicked at fslc/tests/corpus_check_sweep.rs:386:5:
+examples/agentic_rag/agentic_rag_business.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/agentic_rag/agentic_rag_design.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/agentic_rag/agentic_rag_requirements.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/agentic_rag/mutation_slices/answer_safety_slice.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/agentic_rag/mutation_slices/backported_constraints_slice.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/agentic_rag/mutation_slices/retry_liveness_slice.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/agentic_rag/mutation_slices/tool_approval_slice.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/consulting/asis_expense.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/consulting/tobe_expense.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/db/unsafe_annotated_drop_with_old_server.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/db/unsafe_drop_column_with_old_server.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/db/unsafe_drop_column_with_worker.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/db/unsafe_not_null_before_backfill.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/e2e/1_business.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/adversarial/deep_nested_if_invariant.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/adversarial/governance_semantic_before.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/adversarial/quantifier_boundary_break.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/adversarial/seq_empty_head_boundary.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/adversarial/seq_full_push_boundary.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/errors/error_acceptance_false_expect.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/errors/forbidden_op_accepted.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/errors/vacuous_contradictory_init.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/errors/violated_ensures_wrong_postcondition.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/errors/violated_invariant_counter.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/errors/violated_leads_to_starvation.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/errors/violated_partial_op_unchecked_pop.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/errors/violated_type_bound_missing_guard.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/injected/bank__boundary_flip.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/injected/bank__guard_weakening.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/injected/bank__over_strengthened_guard.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/injected/order_workflow__boundary_flip.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/injected/order_workflow__guard_weakening.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/injected/order_workflow__omission.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/injected/order_workflow__over_strengthened_guard.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/injected/return_system__boundary_flip.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/injected/return_system__guard_weakening.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/injected/return_system__over_strengthened_guard.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/valid/large_order_workflow.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/valid/medium_dining_philosophers_deadlock_demo.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/valid/medium_two_phase_commit.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/valid/small_elevator.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/valid/small_vending_machine.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/gallery/valid/tiny_bounded_counter.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/layers/return_policy.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/multi_agent_system/multi_agent_business.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/multi_agent_system/multi_agent_design.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/multi_agent_system/multi_agent_requirements.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/nfr/sla_worker.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/nfr/sla_worker_design.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/nfr/sla_worker_kernel.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/nfr/support_sla.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/pm/cancel_flow.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/self/fslc_monitor.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/self/fslc_session.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/self/no_actions.fsl: verify exit=2 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/self/refinement_algebra.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/structural/rbac.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/ui_spike/return_ui.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/validation/order_refund.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+examples/validation/order_refund_windowed.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/audit_log.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/auth_lockout.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/bank_system.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/cart_v1.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/cart_v1_buggy.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/inventory_reservation.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/job_pipeline.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/mutex_queue.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/order_system.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/order_workflow.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/payment.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/rate_limiter.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+specs/repair_loop.fsl: verify exit=1 but ledger exit=0 at the same depth/deadlock/engine -- ledger must not hide a verify verdict (issue #592)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ledger_exit_status_agrees_with_its_verify_baseline
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 69.36s
+

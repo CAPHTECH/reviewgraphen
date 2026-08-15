@@ -1,0 +1,20 @@
+
+running 1 test
+a_genuine_semantic_or_type_error_keeps_its_own_classification --- FAILED
+
+failures:
+
+---- a_genuine_semantic_or_type_error_keeps_its_own_classification stdout ----
+
+thread 'a_genuine_semantic_or_type_error_keeps_its_own_classification' (1034537) panicked at fslc/tests/issue_484_parse_diagnostic_matrix.rs:169:13:
+assertion `left == right` failed: semantics/mutate: {"fsl":"1.0","result":"error","kind":"semantics","message":"spec has no state block"}
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_genuine_semantic_or_type_error_keeps_its_own_classification
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.01s
+
