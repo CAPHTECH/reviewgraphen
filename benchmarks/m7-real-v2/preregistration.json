@@ -1,0 +1,87 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_real_v2_preregistration.v1",
+  "frozen_at": "2026-08-15T02:08:28Z",
+  "source_repository": "/home/rizumita/github/fsl",
+  "source_read_only": true,
+  "history_date_start": "2026-06-11",
+  "history_date_end": "2026-08-09",
+  "prior_corpus_exclusion": "benchmarks/m7-real-v1/private/units/*.json",
+  "split": {
+    "algorithm": "sha256_nul_salted_fix_oid_order",
+    "salt": "reviewgraphen.m7-real-v2.split.v1",
+    "calibration_units": 30,
+    "holdout": "all_remaining_eligible_units"
+  },
+  "calibration": {
+    "arm": "b1_free_form",
+    "replicates_per_unit": 2,
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "target_band_low": 0.4,
+    "target_band_high": 0.7,
+    "band_may_be_widened": false,
+    "calibration_units_forbidden_from_final_corpus": true
+  },
+  "features": [
+    "production_changed_lines",
+    "production_file_count",
+    "production_hunk_count",
+    "production_crate_count",
+    "production_cross_crate",
+    "largest_production_file_changed_line_fraction",
+    "test_changed_lines",
+    "test_to_production_changed_line_ratio",
+    "projected_production_file_count",
+    "projected_production_bytes"
+  ],
+  "prohibited_features": [
+    "commit_message",
+    "issue_metadata",
+    "branch_name",
+    "regression_test_contents",
+    "oracle_roots",
+    "mechanism_ontology",
+    "candidate_output",
+    "prior_m7_private_or_candidate_output"
+  ],
+  "difficulty_model": {
+    "family": "binomial_logistic",
+    "l2_penalty": 1.0,
+    "standardization": "calibration_only",
+    "out_of_sample_check": "leave_one_unit_out",
+    "selection_order_after_band_filter": "split_hash"
+  },
+  "power": {
+    "test": "exact_two_sided_paired_mcnemar",
+    "alpha": 0.05,
+    "target_power": 0.8,
+    "minimum_absolute_detection_rate_difference": 0.3,
+    "unit_is_independent_pair": true,
+    "replicates_do_not_increase_n": true,
+    "sensitivity_over_admissible_discordance": true
+  },
+  "final_arms": [
+    "b1_free_form",
+    "g3_proxy",
+    "full_review_graphen"
+  ],
+  "presence_oracle": "fix_regression_test_backported_to_parent",
+  "control_semantics": "unlabeled_requires_adjudication",
+  "q2": {
+    "unit": "linked_defect_cluster",
+    "linkage": "deterministic_location_mechanism_candidates_then_role_arm_blind_adjudication",
+    "dispositions": [
+      "valid_novel_defect",
+      "false_positive",
+      "insufficient",
+      "duplicate"
+    ],
+    "private_arm_bitmap_restored_after_blind_decision": true
+  },
+  "stop_conditions": [
+    "fewer_than_30_mechanically_eligible_calibration_units",
+    "no_out_of_sample_difficulty_signal",
+    "holdout_band_smaller_than_powered_n",
+    "presence_oracle_or_blind_projection_failure"
+  ]
+}
