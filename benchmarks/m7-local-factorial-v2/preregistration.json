@@ -80,6 +80,40 @@
     "postprocessing_normalization": "forbidden",
     "semantic_retry": "forbidden"
   },
+  "thinking_boundary_observation": {
+    "status": "exploratory_single_matched_control_observation_not_confirmatory_evidence",
+    "source": "frozen_m7-local-factorial-v1_schema_probe",
+    "snapshot_id": "snapshot-34",
+    "b1": {
+      "admitted_input_bytes": 867764,
+      "elapsed_seconds": 4458.289,
+      "outcome": "empty_final_response_after_process_completion"
+    },
+    "full_reviewgraphen": {
+      "admitted_input_bytes": 341222,
+      "elapsed_seconds": 1725.206,
+      "outcome": "valid"
+    },
+    "ratio_note": "full_input_was_about_39_percent_of_B1_and_elapsed_was_about_39_percent",
+    "hypothesis_use": "identifies_input_pressure_to_final_content_as_a_v2_measurement_not_proof_of_scaffold_effect"
+  },
+  "per_trial_generation_metrics": {
+    "admitted_input_bytes": "exact_ProcessReviewerInput_regular_file_sum",
+    "provider_input_tokens": "Responses_completed_usage_input_tokens_when_emitted_otherwise_null",
+    "provider_output_tokens": "Responses_completed_usage_output_tokens_when_emitted_otherwise_null",
+    "thinking_tokens": "Responses_completed_usage_output_tokens_details.reasoning_tokens_when_emitted_otherwise_null",
+    "final_content_tokens": "provider_output_tokens_minus_thinking_tokens_only_when_both_are_observed_otherwise_null",
+    "final_content_bytes": "exact_Codex_output_last_message_bytes_when_materialized_otherwise_null",
+    "empty_final": "true_only_when_the_materialized_output_last_message_exists_and_has_zero_bytes",
+    "elapsed_seconds": "host_wall_clock_integer_seconds_per_trial",
+    "failure_classes": [
+      "empty_final_after_process_completion",
+      "candidate_schema_invalid",
+      "transport_or_process_invalid",
+      "valid"
+    ],
+    "interpretation_rule": "distinguish_more_time_with_no_final_from_successful_final_generation; do_not_impute_unavailable_token_fields"
+  },
   "frontier_row": {
     "reuse_only_no_rerun": true,
     "b1_source": "m7-real-v1/results/replicate-1",

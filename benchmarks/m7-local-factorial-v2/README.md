@@ -19,3 +19,11 @@ is reproduction metadata and never a stopping or sample-size variable.
 The local row is descriptive: n=20, the FSL presence-eligible population is
 28, and the conservative target is 83.  No significance, equivalence, or
 factorial-interaction claim is permitted.
+
+Each trial also records the admitted bytes, provider-reported input/output and
+reasoning tokens when available, derived final-content tokens, exact final
+bytes, empty-final state, failure class, and elapsed time.  These metrics test
+the exploratory v1 observation that snapshot-34 B1 exhausted thinking without
+a final message while the smaller full input completed.  One matched control
+identifies a boundary to measure; it is not evidence that establishes the
+hypothesis.

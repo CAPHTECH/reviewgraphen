@@ -17,6 +17,7 @@ LISTEN_PORT = 12080
 UPSTREAM_HOST = "192.168.68.71"
 UPSTREAM_PORT = 11999
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
+MAX_RESPONSE_BYTES_FOR_METRICS = 32 * 1024 * 1024
 MAX_OUTPUT_TOKENS = 65536
 EXPECTED_MODEL = "qwen3.8:27b-mlx"
 LIMIT_HEADER = "X-ReviewGraphen-Max-Output-Tokens"
@@ -37,6 +38,55 @@ HOP_BY_HOP = {
 
 def digest(body: bytes) -> str:
     return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def completed_usage(body: bytes) -> dict[str, int | None]:
+    observed: dict[str, object] | None = None
+    for line in body.splitlines():
+        if not line.startswith(b"data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == b"[DONE]":
+            continue
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        candidates = [event, event.get("response")]
+        for candidate in candidates:
+            if isinstance(candidate, dict) and isinstance(candidate.get("usage"), dict):
+                observed = candidate["usage"]
+    if observed is None:
+        return {
+            "provider_input_tokens": None,
+            "provider_output_tokens": None,
+            "thinking_tokens": None,
+            "final_content_tokens": None,
+        }
+    input_tokens = observed.get("input_tokens")
+    output_tokens = observed.get("output_tokens")
+    details = observed.get("output_tokens_details")
+    reasoning_tokens = details.get("reasoning_tokens") if isinstance(details, dict) else None
+    input_tokens = input_tokens if isinstance(input_tokens, int) and input_tokens >= 0 else None
+    output_tokens = output_tokens if isinstance(output_tokens, int) and output_tokens >= 0 else None
+    reasoning_tokens = (
+        reasoning_tokens if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0 else None
+    )
+    final_tokens = (
+        output_tokens - reasoning_tokens
+        if output_tokens is not None
+        and reasoning_tokens is not None
+        and output_tokens >= reasoning_tokens
+        else None
+    )
+    return {
+        "provider_input_tokens": input_tokens,
+        "provider_output_tokens": output_tokens,
+        "thinking_tokens": reasoning_tokens,
+        "final_content_tokens": final_tokens,
+    }
 
 
 class Server(ThreadingHTTPServer):
@@ -102,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
         value["max_output_tokens"] = MAX_OUTPUT_TOKENS
         rewritten = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
         started = time.monotonic()
-        status = self.forward(rewritten)
+        observation = self.forward(rewritten)
         self.server.record(
             {
                 "schema": "reviewgraphen.benchmark.responses_limit_transport.v1",
@@ -114,18 +164,24 @@ class Handler(BaseHTTPRequestHandler):
                 "original_request_sha256": digest(body),
                 "rewritten_request_bytes": len(rewritten),
                 "rewritten_request_sha256": digest(rewritten),
-                "upstream_status": status,
+                "upstream_status": observation["status"],
+                "upstream_response_bytes": observation["response_bytes"],
+                "upstream_response_sha256": observation["response_sha256"],
                 "elapsed_seconds": round(time.monotonic() - started, 3),
+                **observation["usage"],
             }
         )
 
-    def forward(self, body: bytes) -> int:
+    def forward(self, body: bytes) -> dict[str, object]:
         headers = {
             name: value
             for name, value in self.headers.items()
             if name.lower() not in HOP_BY_HOP and name.lower() != LIMIT_HEADER.lower()
         }
         connection = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=None)
+        response_body = bytearray()
+        response_hash = hashlib.sha256()
+        response_bytes = 0
         try:
             connection.request(self.command, self.path, body=body or None, headers=headers)
             response = connection.getresponse()
@@ -136,13 +192,32 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
             self.end_headers()
             while chunk := response.read(65536):
+                response_bytes += len(chunk)
+                response_hash.update(chunk)
+                if len(response_body) + len(chunk) <= MAX_RESPONSE_BYTES_FOR_METRICS:
+                    response_body.extend(chunk)
                 self.wfile.write(chunk)
                 self.wfile.flush()
             self.close_connection = True
-            return response.status
+            usage = (
+                completed_usage(bytes(response_body))
+                if response_bytes == len(response_body)
+                else completed_usage(b"")
+            )
+            return {
+                "status": response.status,
+                "response_bytes": response_bytes,
+                "response_sha256": "sha256:" + response_hash.hexdigest(),
+                "usage": usage,
+            }
         except (OSError, http.client.HTTPException) as error:
             self.send_error(502, explain=type(error).__name__)
-            return 502
+            return {
+                "status": 502,
+                "response_bytes": response_bytes,
+                "response_sha256": "sha256:" + response_hash.hexdigest(),
+                "usage": completed_usage(b""),
+            }
         finally:
             connection.close()
 

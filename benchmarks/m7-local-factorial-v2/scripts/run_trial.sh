@@ -47,7 +47,7 @@ benchmark="$root/target/debug/reviewgraphen-benchmark"
 bwrap=/home/rizumita/.local/share/mise/installs/codex/0.147.0/codex-resources/bwrap
 codex=/home/rizumita/.local/share/mise/installs/codex/0.147.0/bin/codex
 before_requests=$(wc -l < "$M7_V2_SHAPER_LOG")
-started_epoch=$(date +%s)
+started_nanoseconds=$(date +%s%N)
 set +e
 "$benchmark" run-process-reviewer-codex-profile \
   ollama-priv-v2 OLLAMA_PRIV_API_KEY "$trial_dir" agent_input/candidate-output.schema.json \
@@ -56,9 +56,10 @@ set +e
   >"$result_dir/adapter.stdout" 2>"$result_dir/adapter.stderr"
 process_status=$?
 set -e
-finished_epoch=$(date +%s)
+finished_nanoseconds=$(date +%s%N)
+elapsed_milliseconds=$(((finished_nanoseconds-started_nanoseconds)/1000000))
 printf '%s\n' "$process_status" > "$result_dir/process-status"
-printf '%s\n' "$((finished_epoch-started_epoch))" > "$result_dir/elapsed-seconds"
+printf '%s\n' "$elapsed_milliseconds" > "$result_dir/elapsed-milliseconds"
 after_requests=$(wc -l < "$M7_V2_SHAPER_LOG")
 if (( after_requests != before_requests + 1 )); then
   echo "expected exactly one shaped Responses request" >&2
@@ -71,7 +72,44 @@ jq -e '
   .max_output_tokens == 65536 and
   .upstream_status == 200
 ' "$result_dir/transport-record.json" >/dev/null
+admitted_input_bytes=$(find "$trial_dir" -type f -printf '%s\n' | awk '{total += $1} END {print total + 0}')
+final_content_bytes=null
+empty_final=false
+if [[ -f "$result_dir/process-output/raw-response.json" ]]; then
+  final_content_bytes=$(wc -c < "$result_dir/process-output/raw-response.json")
+  if (( final_content_bytes == 0 )); then
+    empty_final=true
+  fi
+fi
+write_metrics() {
+  local failure_class=$1
+  jq -n \
+    --slurpfile transport "$result_dir/transport-record.json" \
+    --argjson admitted_input_bytes "$admitted_input_bytes" \
+    --argjson elapsed_milliseconds "$elapsed_milliseconds" \
+    --argjson final_content_bytes "$final_content_bytes" \
+    --argjson empty_final "$empty_final" \
+    --arg failure_class "$failure_class" \
+    '{
+      schema: "reviewgraphen.benchmark.local_generation_metrics.v1",
+      admitted_input_bytes: $admitted_input_bytes,
+      provider_input_tokens: $transport[0].provider_input_tokens,
+      provider_output_tokens: $transport[0].provider_output_tokens,
+      thinking_tokens: $transport[0].thinking_tokens,
+      final_content_tokens: $transport[0].final_content_tokens,
+      final_content_bytes: $final_content_bytes,
+      empty_final: $empty_final,
+      elapsed_milliseconds: $elapsed_milliseconds,
+      elapsed_seconds: ($elapsed_milliseconds / 1000),
+      failure_class: $failure_class
+    }' > "$result_dir/generation-metrics.json"
+}
 if (( process_status != 0 )); then
+  if [[ "$empty_final" == true ]]; then
+    write_metrics empty_final_after_process_completion
+  else
+    write_metrics transport_or_process_invalid
+  fi
   exit "$process_status"
 fi
 jq -e '
@@ -89,6 +127,7 @@ candidate_status=$?
 set -e
 printf '%s\n' "$candidate_status" > "$result_dir/candidate-status"
 if (( candidate_status != 0 )); then
+  write_metrics candidate_schema_invalid
   exit "$candidate_status"
 fi
 set +e
@@ -97,4 +136,9 @@ set +e
 collection_status=$?
 set -e
 printf '%s\n' "$collection_status" > "$result_dir/collection-status"
+if (( collection_status == 0 )); then
+  write_metrics valid
+else
+  write_metrics candidate_schema_invalid
+fi
 exit "$collection_status"

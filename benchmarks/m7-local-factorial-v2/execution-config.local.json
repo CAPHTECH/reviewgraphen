@@ -5,8 +5,8 @@
   },
   "inference_settings": {
     "codex_profile": "ollama-priv-v2",
-    "max_output_tokens": 65536,
-    "model_context_window": 262144,
+    "max_output_tokens": "65536",
+    "model_context_window": "262144",
     "profile_sha256": "e31b7a2a4040ccb52f4ecf3c5a828d78e926bba932ee4ca2c06d0294a1bb2be9",
     "sampling_seed": "not exposed by verified Codex 0.147 profile route",
     "sampling_temperature": "not exposed by verified Codex 0.147 profile route"
