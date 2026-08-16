@@ -1,0 +1,18 @@
+{
+  "schema": "reviewgraphen.benchmark.local_reasoning_control_probe_result.v1",
+  "classification": "not_verified_due_to_server_chat_unresponsive",
+  "input": "snapshot-06/b1/replicate-4",
+  "reasoning_effort": "none",
+  "elapsed_milliseconds": 1178580,
+  "process_status": 130,
+  "wrapper_status": 70,
+  "shaped_response_records": 0,
+  "raw_response_artifacts": 0,
+  "candidate_present": false,
+  "control_plane_version": "0.32.13",
+  "control_plane_version_elapsed_seconds": 0.004758,
+  "counts_as_success": false,
+  "counts_as_protocol_invalid": false,
+  "production_gate_passed": false,
+  "retry_performed_after_server_classification": false
+}
