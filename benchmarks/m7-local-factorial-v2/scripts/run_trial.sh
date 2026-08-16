@@ -70,11 +70,13 @@ for _ in {1..50}; do
   sleep 0.1
   after_requests=$(wc -l < "$M7_V2_SHAPER_LOG")
 done
-if (( after_requests != before_requests + 1 )); then
-  echo "expected exactly one shaped Responses request" >&2
+request_count=$((after_requests - before_requests))
+if (( request_count < 1 )); then
+  echo "expected at least one shaped Responses request" >&2
   exit 70
 fi
-sed -n "${after_requests}p" "$M7_V2_SHAPER_LOG" > "$result_dir/transport-record.json"
+sed -n "$((before_requests + 1)),${after_requests}p" "$M7_V2_SHAPER_LOG" > "$result_dir/transport-record.jsonl"
+tail -n1 "$result_dir/transport-record.jsonl" > "$result_dir/transport-record.json"
 jq -e --arg reasoning_effort "$reasoning_effort" '
   .model == "qwen3.8:27b-mlx" and
   .model_context_window == 262144 and
@@ -86,16 +88,22 @@ jq -e --arg reasoning_effort "$reasoning_effort" '
 ' "$result_dir/transport-record.json" >/dev/null
 raw_artifact=$(jq -r '.raw_response_artifact' "$result_dir/transport-record.json")
 raw_source="$M7_V2_SHAPER_CAPTURE_DIR/$raw_artifact"
-if [[ ! -f "$raw_source" ]] || ! gzip -t -- "$raw_source"; then
-  echo "provider raw response artifact is missing or corrupt" >&2
-  exit 70
-fi
-raw_expected_hash=$(jq -r '.raw_response_compressed_sha256 | sub("^sha256:"; "")' "$result_dir/transport-record.json")
-raw_observed_hash=$(sha256sum "$raw_source" | awk '{print $1}')
-if [[ "$raw_observed_hash" != "$raw_expected_hash" ]]; then
-  echo "provider raw response artifact hash mismatch" >&2
-  exit 70
-fi
+mkdir -p "$result_dir/provider-responses"
+while IFS= read -r transport; do
+  artifact=$(jq -r '.raw_response_artifact' <<<"$transport")
+  source="$M7_V2_SHAPER_CAPTURE_DIR/$artifact"
+  if [[ ! -f "$source" ]] || ! gzip -t -- "$source"; then
+    echo "provider raw response artifact is missing or corrupt: $artifact" >&2
+    exit 70
+  fi
+  expected_hash=$(jq -r '.raw_response_compressed_sha256 | sub("^sha256:"; "")' <<<"$transport")
+  observed_hash=$(sha256sum "$source" | awk '{print $1}')
+  if [[ "$observed_hash" != "$expected_hash" ]]; then
+    echo "provider raw response artifact hash mismatch: $artifact" >&2
+    exit 70
+  fi
+  cp -- "$source" "$result_dir/provider-responses/$artifact"
+done < "$result_dir/transport-record.jsonl"
 cp -- "$raw_source" "$result_dir/provider-response.sse.gz"
 upstream_status=$(jq -r '.upstream_status' "$result_dir/transport-record.json")
 admitted_input_bytes=$(find "$trial_dir" -type f -printf '%s\n' | awk '{total += $1} END {print total + 0}')
@@ -116,6 +124,7 @@ write_metrics() {
     --slurpfile transport "$result_dir/transport-record.json" \
     --argjson admitted_input_bytes "$admitted_input_bytes" \
     --argjson elapsed_milliseconds "$elapsed_milliseconds" \
+    --argjson request_count "$request_count" \
     --argjson final_content_bytes "$final_content_bytes" \
     --argjson empty_final "$empty_final" \
     --arg failure_class "$failure_class" \
@@ -128,6 +137,7 @@ write_metrics() {
       provider_reported_reasoning_tokens: $transport[0].provider_reported_reasoning_tokens,
       thinking_tokens: $transport[0].thinking_tokens,
       provider_non_reasoning_output_tokens: $transport[0].provider_non_reasoning_output_tokens,
+      request_count: $request_count,
       final_content_tokens: $transport[0].final_content_tokens,
       token_attribution: $transport[0].token_attribution,
       reasoning_delta_events: $transport[0].reasoning_delta_events,

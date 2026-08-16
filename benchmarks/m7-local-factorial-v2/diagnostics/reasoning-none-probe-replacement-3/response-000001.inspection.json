@@ -1,0 +1,104 @@
+{
+  "artifact": "response-000001.sse.gz",
+  "completed_response": {
+    "error": null,
+    "id": "resp_185111",
+    "incomplete_details": null,
+    "output_items": [
+      {
+        "content_types": null,
+        "role": null,
+        "status": "completed",
+        "text_fields": [],
+        "type": "function_call"
+      },
+      {
+        "content_types": [
+          "output_text"
+        ],
+        "role": "assistant",
+        "status": "completed",
+        "text_fields": [
+          {
+            "path": "content[0].text",
+            "sha256": "sha256:37b129237ec831d78415847aaa46f39eff3ab370f368a7250d012d2dc72857df",
+            "utf8_bytes": 120
+          }
+        ],
+        "type": "message"
+      }
+    ],
+    "present": true,
+    "status": "completed",
+    "usage": {
+      "input_tokens": 16247,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 139,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 16386
+    }
+  },
+  "compressed_bytes": 10961,
+  "compressed_sha256": "sha256:cacc009765b614771293e6d0baaf64312f56bf0624c03d04818a05e8f18ce4c4",
+  "created_response": {
+    "id": "resp_185111",
+    "max_output_tokens": 65536,
+    "model": "qwen3.8:27b-mlx",
+    "present": true,
+    "reasoning": {
+      "effort": "none",
+      "summary": "auto"
+    }
+  },
+  "data_lines": 33,
+  "event_counts": {
+    "response.completed": 1,
+    "response.content_part.added": 1,
+    "response.created": 1,
+    "response.function_call_arguments.delta": 1,
+    "response.function_call_arguments.done": 1,
+    "response.in_progress": 1,
+    "response.output_item.added": 2,
+    "response.output_item.done": 1,
+    "response.output_text.delta": 24
+  },
+  "gzip_complete": true,
+  "invalid_data_lines": 0,
+  "raw_bytes": 80298,
+  "raw_sha256": "sha256:2fe06e6af41957fb4e15ddf9c6122dfb0efc2b0c31cf9ab3c37d2c2d184b10e6",
+  "schema": "reviewgraphen.benchmark.provider_response_inspection.v1",
+  "text_fields_by_event": {
+    "response.completed:response.output[1].content[0].text": {
+      "occurrences": 1,
+      "utf8_bytes": 120
+    },
+    "response.completed:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.content_part.added:part.text": {
+      "occurrences": 1,
+      "utf8_bytes": 0
+    },
+    "response.created:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.function_call_arguments.delta:delta": {
+      "occurrences": 1,
+      "utf8_bytes": 408
+    },
+    "response.in_progress:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.output_text.delta:delta": {
+      "occurrences": 24,
+      "utf8_bytes": 120
+    }
+  }
+}

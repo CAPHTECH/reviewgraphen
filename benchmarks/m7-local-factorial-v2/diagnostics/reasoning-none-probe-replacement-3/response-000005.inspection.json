@@ -1,0 +1,105 @@
+{
+  "artifact": "response-000005.sse.gz",
+  "completed_response": {
+    "error": null,
+    "id": "resp_551677",
+    "incomplete_details": null,
+    "output_items": [
+      {
+        "content_types": [
+          "output_text"
+        ],
+        "role": "assistant",
+        "status": "completed",
+        "text_fields": [
+          {
+            "path": "content[0].text",
+            "sha256": "sha256:e344ed0f22bf80a6d4e60866030061bfb02083039e89d8f7b217b97d48c41bcb",
+            "utf8_bytes": 2119
+          }
+        ],
+        "type": "message"
+      }
+    ],
+    "present": true,
+    "status": "completed",
+    "usage": {
+      "input_tokens": 16647,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 466,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 17113
+    }
+  },
+  "compressed_bytes": 23919,
+  "compressed_sha256": "sha256:3d4dd2fa68a7750714ec0189fe2c21edefcebde15f4dfcf2d11e5b2306c9df95",
+  "created_response": {
+    "id": "resp_551677",
+    "max_output_tokens": 65536,
+    "model": "qwen3.8:27b-mlx",
+    "present": true,
+    "reasoning": {
+      "effort": "none",
+      "summary": "auto"
+    }
+  },
+  "data_lines": 473,
+  "event_counts": {
+    "response.completed": 1,
+    "response.content_part.added": 1,
+    "response.content_part.done": 1,
+    "response.created": 1,
+    "response.in_progress": 1,
+    "response.output_item.added": 1,
+    "response.output_item.done": 1,
+    "response.output_text.delta": 465,
+    "response.output_text.done": 1
+  },
+  "gzip_complete": true,
+  "invalid_data_lines": 0,
+  "raw_bytes": 169620,
+  "raw_sha256": "sha256:c321630c32923d77f973a005351407a931f3e9ddf5e784a736af93488bdfb15b",
+  "schema": "reviewgraphen.benchmark.provider_response_inspection.v1",
+  "text_fields_by_event": {
+    "response.completed:response.output[0].content[0].text": {
+      "occurrences": 1,
+      "utf8_bytes": 2119
+    },
+    "response.completed:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.content_part.added:part.text": {
+      "occurrences": 1,
+      "utf8_bytes": 0
+    },
+    "response.content_part.done:part.text": {
+      "occurrences": 1,
+      "utf8_bytes": 2119
+    },
+    "response.created:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.in_progress:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.output_item.done:item.content[0].text": {
+      "occurrences": 1,
+      "utf8_bytes": 2119
+    },
+    "response.output_text.delta:delta": {
+      "occurrences": 465,
+      "utf8_bytes": 2119
+    },
+    "response.output_text.done:text": {
+      "occurrences": 1,
+      "utf8_bytes": 2119
+    }
+  }
+}

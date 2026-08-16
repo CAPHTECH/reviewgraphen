@@ -1,0 +1,16 @@
+{
+  "schema": "reviewgraphen.benchmark.local_factorial_v2_preregistration_amendment.v1",
+  "parent": "preregistration.json",
+  "amendment": "reasoning-control-recovery-and-adapter-allowlist",
+  "frozen_before_local_production": true,
+  "local_model": "qwen3.8:27b-mlx",
+  "reasoning_effort": "none",
+  "reasoning_suppression_verified": true,
+  "reasoning_token_cap_required": false,
+  "b1_gate_replacement_3": "valid",
+  "protocol_invalid_in_replacement_2": "adapter_forbidden_todo_list_before_fix",
+  "frontier_reasoning_setting": "historical_high_or_unrecorded_original_setting",
+  "known_asymmetry": "frontier rows are historical and were not rerun with none; local rows use none",
+  "production_gate": "schema_adherence_threshold_remains_required",
+  "existing_results_modified": false
+}
