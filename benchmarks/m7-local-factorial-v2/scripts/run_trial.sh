@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "usage: $0 <prepared-trial-dir> <fresh-result-dir>" >&2
+if [[ ( $# -ne 2 && $# -ne 3 ) || ( $# -eq 3 && "$3" != high && "$3" != none ) ]]; then
+  echo "usage: $0 <prepared-trial-dir> <fresh-result-dir> [high|none]" >&2
   exit 64
 fi
 : "${OLLAMA_PRIV_API_KEY:?OLLAMA_PRIV_API_KEY must be set}"
@@ -11,6 +11,7 @@ fi
 
 trial_dir=$(realpath -e -- "$1")
 result_dir=$2
+reasoning_effort=${3:-high}
 case "$trial_dir" in
   /tmp/m7-local-factorial-v2-prepared-b1/snapshot-*/b1/replicate-4|\
   /tmp/m7-local-factorial-v2-prepared-full/snapshot-*/full_review_graphen/replicate-4) ;;
@@ -53,7 +54,7 @@ set +e
 "$benchmark" run-process-reviewer-codex-profile \
   ollama-priv-v2 OLLAMA_PRIV_API_KEY "$trial_dir" agent_input/candidate-output.schema.json \
   "$result_dir/process-output" "$result_dir/process-record.json" \
-  "$bwrap" "$credential_home" "$codex" qwen3.8:27b-mlx high \
+  "$bwrap" "$credential_home" "$codex" qwen3.8:27b-mlx "$reasoning_effort" \
   >"$result_dir/adapter.stdout" 2>"$result_dir/adapter.stderr"
 process_status=$?
 set -e
@@ -74,7 +75,7 @@ if (( after_requests != before_requests + 1 )); then
   exit 70
 fi
 sed -n "${after_requests}p" "$M7_V2_SHAPER_LOG" > "$result_dir/transport-record.json"
-jq -e '
+jq -e --arg reasoning_effort "$reasoning_effort" '
   .model == "qwen3.8:27b-mlx" and
   .model_context_window == 262144 and
   .max_output_tokens == 65536 and
@@ -163,11 +164,12 @@ if (( process_status != 0 )); then
   fi
   exit "$process_status"
 fi
-jq -e '
+jq -e --arg reasoning_effort "$reasoning_effort" '
   .backend.provider == "ollama-priv-v2" and
   .backend.model == "qwen3.8:27b-mlx" and
   .backend.inference_settings.model_context_window == "262144" and
-  .backend.inference_settings.max_output_tokens == "65536"
+  .backend.inference_settings.max_output_tokens == "65536" and
+  .backend.inference_settings.reasoning_effort == $reasoning_effort
 ' "$result_dir/process-record.json" >/dev/null
 
 jq -j '.raw_response' "$result_dir/process-record.json" > "$result_dir/candidate.json"

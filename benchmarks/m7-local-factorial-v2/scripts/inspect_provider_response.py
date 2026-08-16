@@ -51,6 +51,7 @@ def main() -> None:
         lambda: {"occurrences": 0, "utf8_bytes": 0}
     )
     completed: dict[str, object] | None = None
+    created: dict[str, object] | None = None
     invalid_data_lines = 0
     data_lines = 0
     for line in raw.splitlines():
@@ -76,6 +77,8 @@ def main() -> None:
             text_by_event[key]["utf8_bytes"] += len(value.encode("utf-8"))
         if event_type == "response.completed" and isinstance(event.get("response"), dict):
             completed = event["response"]
+        if event_type == "response.created" and isinstance(event.get("response"), dict):
+            created = event["response"]
 
     output_items = []
     if completed is not None and isinstance(completed.get("output"), list):
@@ -120,6 +123,13 @@ def main() -> None:
                 "invalid_data_lines": invalid_data_lines,
                 "event_counts": dict(sorted(events.items())),
                 "text_fields_by_event": dict(sorted(text_by_event.items())),
+                "created_response": {
+                    "present": created is not None,
+                    "id": created.get("id") if created else None,
+                    "model": created.get("model") if created else None,
+                    "reasoning": created.get("reasoning") if created else None,
+                    "max_output_tokens": created.get("max_output_tokens") if created else None,
+                },
                 "completed_response": {
                     "present": completed is not None,
                     "id": completed.get("id") if completed else None,
