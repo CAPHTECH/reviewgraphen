@@ -5,14 +5,22 @@ from __future__ import annotations
 
 import argparse
 import collections
-import gzip
 import hashlib
 import json
 import pathlib
+import zlib
 
 
 def sha256(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def decompress_capture(value: bytes) -> tuple[bytes, bool]:
+    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    raw = decoder.decompress(value)
+    if decoder.eof:
+        raw += decoder.flush()
+    return raw, decoder.eof
 
 
 def text_fields(value: object, path: str = "") -> list[tuple[str, str]]:
@@ -36,7 +44,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("response", type=pathlib.Path)
     args = parser.parse_args()
-    raw = gzip.decompress(args.response.read_bytes())
+    compressed = args.response.read_bytes()
+    raw, gzip_complete = decompress_capture(compressed)
     events: collections.Counter[str] = collections.Counter()
     text_by_event: dict[str, dict[str, int]] = collections.defaultdict(
         lambda: {"occurrences": 0, "utf8_bytes": 0}
@@ -103,7 +112,8 @@ def main() -> None:
                 "schema": "reviewgraphen.benchmark.provider_response_inspection.v1",
                 "artifact": args.response.name,
                 "compressed_bytes": args.response.stat().st_size,
-                "compressed_sha256": sha256(args.response.read_bytes()),
+                "compressed_sha256": sha256(compressed),
+                "gzip_complete": gzip_complete,
                 "raw_bytes": len(raw),
                 "raw_sha256": sha256(raw),
                 "data_lines": data_lines,

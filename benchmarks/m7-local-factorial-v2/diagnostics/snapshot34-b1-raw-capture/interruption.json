@@ -1,0 +1,19 @@
+{
+  "schema": "reviewgraphen.benchmark.interrupted_raw_capture.v1",
+  "experiment": "m7-local-factorial-v2",
+  "snapshot_id": "snapshot-34",
+  "arm": "b1_free_form",
+  "attempt": "snapshot34-b1-raw-capture",
+  "outcome": "diagnostic_interrupted_not_success",
+  "interruption_reason": "cause_visible_reasoning_only_stream_user_authorized_stop",
+  "process_exit_status": 130,
+  "batch_exit_status": 70,
+  "elapsed_milliseconds": 2825256,
+  "transport_record_written": false,
+  "gzip_complete": false,
+  "compressed_bytes": 90228,
+  "compressed_sha256": "sha256:00039f0c4b5db1a7645e226b799aabe2a6eea17af6409ed40de86754a9cae3fa",
+  "encoding": "base64_of_interrupted_gzip",
+  "decode_command": "base64 -d response-000001.sse.gz.base64 > response-000001.sse.gz",
+  "inspection": "inspection.json"
+}

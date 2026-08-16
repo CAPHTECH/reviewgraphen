@@ -1,5 +1,11 @@
 # M7 local-model × ReviewGraphen factorial v2
 
+Interpretation correction: the snapshot-34 B1 diagnostic rerun retained a raw
+stream containing 12,898 reasoning-summary deltas and no output-text event
+through sequence 12,900. The earlier usage-derived `thinking_tokens=0` and
+`final_content_tokens=49,624` labels did not measure event semantics. See
+`THINKING_MEASUREMENT_CORRECTION.md`; the original observations remain frozen.
+
 Status: preregistered before the first v2 semantic model call.
 
 This additive experiment keeps `m7-local-factorial-v1` frozen and compares
@@ -20,10 +26,11 @@ The local row is descriptive: n=20, the FSL presence-eligible population is
 28, and the conservative target is 83.  No significance, equivalence, or
 factorial-interaction claim is permitted.
 
-Each trial also records the admitted bytes, provider-reported input/output and
-reasoning tokens when available, derived final-content tokens, exact final
+Each new trial also records admitted bytes, provider-reported input/output and
+reasoning usage when available, event-attributed thinking/final tokens when
+unambiguous, reasoning/output-text delta counts and bytes, exact final
 bytes, empty-final state, failure class, and elapsed time.  These metrics test
-the exploratory v1 observation that snapshot-34 B1 exhausted thinking without
-a final message while the smaller full input completed.  One matched control
+the exploratory v1 observation that snapshot-34 B1 emitted no final message
+while the smaller full input completed. One matched control
 identifies a boundary to measure; it is not evidence that establishes the
 hypothesis.

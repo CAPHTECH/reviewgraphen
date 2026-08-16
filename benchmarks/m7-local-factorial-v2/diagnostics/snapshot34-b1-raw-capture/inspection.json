@@ -1,0 +1,40 @@
+{
+  "artifact": "response-000001.sse.gz",
+  "completed_response": {
+    "error": null,
+    "id": null,
+    "incomplete_details": null,
+    "output_items": [],
+    "present": false,
+    "status": null,
+    "usage": null
+  },
+  "compressed_bytes": 90228,
+  "compressed_sha256": "sha256:00039f0c4b5db1a7645e226b799aabe2a6eea17af6409ed40de86754a9cae3fa",
+  "data_lines": 12902,
+  "event_counts": {
+    "response.created": 1,
+    "response.in_progress": 1,
+    "response.output_item.added": 1,
+    "response.reasoning_summary_text.delta": 12898
+  },
+  "gzip_complete": false,
+  "invalid_data_lines": 1,
+  "raw_bytes": 2593856,
+  "raw_sha256": "sha256:1cadfc71f5beebabac25ed97db83fd23e2688da6462535f7a671ce49aa62e7ab",
+  "schema": "reviewgraphen.benchmark.provider_response_inspection.v1",
+  "text_fields_by_event": {
+    "response.created:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.in_progress:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.reasoning_summary_text.delta:delta": {
+      "occurrences": 12898,
+      "utf8_bytes": 62351
+    }
+  }
+}
