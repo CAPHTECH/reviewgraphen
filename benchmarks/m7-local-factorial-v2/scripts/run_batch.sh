@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -u
 
-if [[ $# -ne 2 || ! "$2" =~ ^[0-9]+$ ]]; then
-  echo "usage: $0 <stage_1|stage_2_if_expanded|positive> <zero-based-start-index>" >&2
+if [[ $# -ne 3 || ! "$2" =~ ^[0-9]+$ || ! "$3" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]]; then
+  echo "usage: $0 <stage_1|stage_2_if_expanded|positive> <zero-based-start-index> <attempt-label>" >&2
   exit 64
 fi
 : "${OLLAMA_PRIV_API_KEY:?OLLAMA_PRIV_API_KEY must be set}"
 mode=$1
 start=$2
+attempt=$3
 if [[ "$mode" != stage_1 && "$mode" != stage_2_if_expanded && "$mode" != positive ]]; then
   echo "invalid v2 batch mode" >&2
   exit 64
@@ -17,15 +18,29 @@ root=/home/rizumita/workspace/reviewgraphen
 plan="$root/benchmarks/m7-local-factorial-v2/plan.private.json"
 runner="$root/benchmarks/m7-local-factorial-v2/scripts/run_trial.sh"
 run_root=/tmp/m7-local-factorial-v2-runs
-mkdir -p -- "$run_root"
-shaper_log="$run_root/request-shaper-${mode}-${start}.jsonl"
+batch_root="$run_root/$attempt"
+mkdir -p -- "$batch_root"
+health_root="$batch_root/server-health-${mode}-${start}"
+if [[ -e "$health_root" ]]; then
+  echo "server health record must be fresh: $health_root" >&2
+  exit 64
+fi
+mkdir -- "$health_root"
+if ! curl -fsS --connect-timeout 3 --max-time 5 \
+  http://192.168.68.71:11999/api/version > "$health_root/version.json" ||
+   ! curl -fsS --connect-timeout 3 --max-time 5 \
+  http://192.168.68.71:11999/api/ps > "$health_root/ps.json"; then
+  echo "upstream server health preflight failed" >&2
+  exit 71
+fi
+shaper_log="$batch_root/request-shaper-${mode}-${start}.jsonl"
 if [[ -e "$shaper_log" ]]; then
   echo "request shaper log must be fresh: $shaper_log" >&2
   exit 64
 fi
 python3 "$root/benchmarks/m7-local-factorial-v2/scripts/request_shaper.py" --log "$shaper_log" \
-  >"$run_root/request-shaper-${mode}-${start}.stdout" \
-  2>"$run_root/request-shaper-${mode}-${start}.stderr" &
+  >"$batch_root/request-shaper-${mode}-${start}.stdout" \
+  2>"$batch_root/request-shaper-${mode}-${start}.stderr" &
 shaper_pid=$!
 cleanup() {
   kill "$shaper_pid" 2>/dev/null || true
@@ -56,9 +71,9 @@ while IFS=$'\t' read -r snapshot arm input; do
     ((index += 1))
     continue
   fi
-  result="$run_root/$mode/$snapshot/$arm"
-  printf 'START index=%d snapshot=%s arm=%s completed=%d valid=%d protocol_invalid=%d\n' \
-    "$index" "$snapshot" "$arm" "$completed" "$valid" "$invalid"
+  result="$batch_root/$mode/$snapshot/$arm"
+  printf 'START attempt=%s index=%d snapshot=%s arm=%s completed=%d valid=%d protocol_invalid=%d\n' \
+    "$attempt" "$index" "$snapshot" "$arm" "$completed" "$valid" "$invalid"
   bash "$runner" "$input" "$result"
   trial_status=$?
   if (( trial_status == 0 )); then
@@ -78,6 +93,11 @@ while IFS=$'\t' read -r snapshot arm input; do
     printf 'BATCH_STOP reason=request_count_mismatch completed=%d valid=%d protocol_invalid=%d\n' \
       "$completed" "$valid" "$invalid"
     exit 70
+  fi
+  if (( trial_status == 71 )); then
+    printf 'BATCH_STOP reason=upstream_server_failure completed=%d valid=%d protocol_invalid=%d\n' \
+      "$completed" "$valid" "$invalid"
+    exit 71
   fi
   if (( consecutive_invalid >= 3 )); then
     printf 'BATCH_STOP reason=three_consecutive_invalid completed=%d valid=%d protocol_invalid=%d\n' \

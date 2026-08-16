@@ -61,15 +61,19 @@ def completed_usage(body: bytes) -> dict[str, int | None]:
     if observed is None:
         return {
             "provider_input_tokens": None,
+            "cached_input_tokens": None,
             "provider_output_tokens": None,
             "thinking_tokens": None,
             "final_content_tokens": None,
         }
     input_tokens = observed.get("input_tokens")
+    input_details = observed.get("input_tokens_details")
+    cached_tokens = input_details.get("cached_tokens") if isinstance(input_details, dict) else None
     output_tokens = observed.get("output_tokens")
     details = observed.get("output_tokens_details")
     reasoning_tokens = details.get("reasoning_tokens") if isinstance(details, dict) else None
     input_tokens = input_tokens if isinstance(input_tokens, int) and input_tokens >= 0 else None
+    cached_tokens = cached_tokens if isinstance(cached_tokens, int) and cached_tokens >= 0 else None
     output_tokens = output_tokens if isinstance(output_tokens, int) and output_tokens >= 0 else None
     reasoning_tokens = (
         reasoning_tokens if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0 else None
@@ -83,6 +87,7 @@ def completed_usage(body: bytes) -> dict[str, int | None]:
     )
     return {
         "provider_input_tokens": input_tokens,
+        "cached_input_tokens": cached_tokens,
         "provider_output_tokens": output_tokens,
         "thinking_tokens": reasoning_tokens,
         "final_content_tokens": final_tokens,

@@ -77,8 +77,9 @@ jq -e '
   .model == "qwen3.8:27b-mlx" and
   .model_context_window == 262144 and
   .max_output_tokens == 65536 and
-  .upstream_status == 200
+  (.upstream_status | type == "number")
 ' "$result_dir/transport-record.json" >/dev/null
+upstream_status=$(jq -r '.upstream_status' "$result_dir/transport-record.json")
 admitted_input_bytes=$(find "$trial_dir" -type f -printf '%s\n' | awk '{total += $1} END {print total + 0}')
 final_content_bytes=null
 empty_final=false
@@ -104,6 +105,7 @@ write_metrics() {
       schema: "reviewgraphen.benchmark.local_generation_metrics.v1",
       admitted_input_bytes: $admitted_input_bytes,
       provider_input_tokens: $transport[0].provider_input_tokens,
+      cached_input_tokens: $transport[0].cached_input_tokens,
       provider_output_tokens: $transport[0].provider_output_tokens,
       thinking_tokens: $transport[0].thinking_tokens,
       final_content_tokens: $transport[0].final_content_tokens,
@@ -114,8 +116,16 @@ write_metrics() {
       failure_class: $failure_class
     }' > "$result_dir/generation-metrics.json"
 }
+if (( upstream_status >= 500 )); then
+  write_metrics upstream_server_failure
+  exit 71
+fi
 if (( process_status != 0 )); then
-  if [[ "$empty_final" == true ]]; then
+  if rg -q 'stream (disconnected|closed) before (completion|response\.completed)' \
+    "$result_dir/adapter.stderr"; then
+    write_metrics upstream_server_stream_incomplete
+    exit 71
+  elif [[ "$empty_final" == true ]]; then
     write_metrics empty_final_after_process_completion
   else
     write_metrics transport_or_process_invalid

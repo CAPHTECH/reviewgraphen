@@ -1,0 +1,74 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_local_factorial_resume_amendment.v1",
+  "experiment": "m7-local-factorial-v2",
+  "status": "frozen_before_resumed_stage_1_semantic_calls",
+  "does_not_rewrite": [
+    "m7-local-factorial-v1 observations",
+    "m7-local-factorial-v2 preregistration",
+    "completed or interrupted v2 attempt records"
+  ],
+  "causal_interpretation_correction": {
+    "prior_hypothesis": "Qwen thinking failed to terminate before final content",
+    "current_interpretation": "not established; the observations are consistent with the Ollama MLX runner hang later identified and corrected by the operator",
+    "v1_snapshot_34_b1_observation_retained": {
+      "admitted_input_bytes": 867764,
+      "elapsed_seconds": 4458.289,
+      "outcome": "empty_final_response_after_process_completion"
+    },
+    "v2_interrupted_snapshot_34_b1_observation_retained": {
+      "admitted_input_bytes": 867861,
+      "elapsed_seconds": 3301.536,
+      "outcome": "stream_closed_before_response_completed"
+    },
+    "claim_boundary": "neither retained observation may be attributed to nonterminating thinking without independent evidence"
+  },
+  "operator_authorized_resume": {
+    "reason": "server-side MLX runner adjustment followed by a successful health and chat check",
+    "interrupted_trials_may_be_reexecuted": true,
+    "attempt_lineage_required": true,
+    "resume_attempt_label": "stage1-resumed-server-adjustment",
+    "retained_prior_valid_trial": "m7-real:snapshot-06:b1:4",
+    "resumed_trial_indices": [1, 2, 3],
+    "no_unrecorded_retry": true
+  },
+  "independent_pre_resume_probe": {
+    "endpoint": "http://192.168.68.71:11999",
+    "version_http_status": 200,
+    "version_seconds": 0.004914,
+    "version": "0.32.13",
+    "ps_http_status": 200,
+    "ps_seconds": 0.005341,
+    "loaded_model": "qwen3.8:27b-mlx",
+    "chat_http_status": 200,
+    "chat_seconds": 1.006144,
+    "chat_content": "OK",
+    "chat_done_reason": "stop",
+    "prompt_tokens": 15,
+    "completion_tokens": 36,
+    "sampling_parameters_overridden": false,
+    "benchmark_trial": false
+  },
+  "server_failure_policy": {
+    "health_preflight": ["/api/version", "/api/ps"],
+    "upstream_http_500_or_greater": "record_invalid_then_stop_batch_without_retry",
+    "stream_closed_before_response_completed": "record_invalid_then_stop_batch_without_retry",
+    "elapsed_time_alone": "never_a_failure_or_stop_condition",
+    "automatic_retry": false
+  },
+  "endpoint_and_profile_constraints": {
+    "only_upstream": "http://192.168.68.71:11999",
+    "mdns": false,
+    "direct_ollama_11434": false,
+    "forced_login_method": "forbidden",
+    "credential_environment": "OLLAMA_PRIV_API_KEY",
+    "sampling_parameter_override": false
+  },
+  "prefix_cache_decision": {
+    "prompt_reordering_adopted": false,
+    "reason": "the existing byte-frozen prompt already starts with a common adapter prefix; extending the common prefix would reorder admitted files or execution and could create arm-asymmetric warm state",
+    "automatic_exact_prefix_cache": "permitted_as_provider_behavior",
+    "cached_input_tokens": "record_when_provider_emits_input_tokens_details.cached_tokens_otherwise_null",
+    "used_for_validity_or_scoring": false
+  },
+  "schema_threshold": "unchanged_from_preregistration"
+}
