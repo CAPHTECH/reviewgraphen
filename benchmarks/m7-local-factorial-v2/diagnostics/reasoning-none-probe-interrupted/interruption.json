@@ -1,0 +1,16 @@
+{
+  "schema": "reviewgraphen.benchmark.local_probe_interruption.v1",
+  "classification": "operator_interrupted_before_observable_response",
+  "input": "snapshot-06/b1/replicate-4",
+  "reasoning_effort": "none",
+  "elapsed_milliseconds": 480498,
+  "process_status": 130,
+  "wrapper_status": 70,
+  "shaped_response_records": 0,
+  "raw_response_artifacts": 0,
+  "candidate_present": false,
+  "counts_as_evaluable_compatibility_attempt": false,
+  "counts_as_protocol_invalid": false,
+  "counts_as_success": false,
+  "automatic_retry_performed": false
+}
