@@ -11,7 +11,7 @@ fi
 
 trial_dir=$(realpath -e -- "$1")
 result_dir=$2
-reasoning_effort=${3:-high}
+reasoning_effort=${M7_V2_REASONING_EFFORT:-${3:-high}}
 case "$trial_dir" in
   /tmp/m7-local-factorial-v2-prepared-b1/snapshot-*/b1/replicate-4|\
   /tmp/m7-local-factorial-v2-prepared-full/snapshot-*/full_review_graphen/replicate-4) ;;
