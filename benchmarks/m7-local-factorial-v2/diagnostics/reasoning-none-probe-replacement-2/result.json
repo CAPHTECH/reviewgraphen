@@ -1,0 +1,18 @@
+{
+  "schema": "reviewgraphen.benchmark.local_reasoning_control_probe_result.v1",
+  "classification": "reasoning_suppressed_but_adapter_protocol_invalid",
+  "input": "snapshot-06/b1/replicate-4",
+  "reasoning_effort": "none",
+  "request_count": 4,
+  "reasoning_delta_events_total": 0,
+  "output_text_delta_events_by_request": [0, 14, 317, 262],
+  "provider_reasoning_tokens_by_request": [0, 0, 0, 0],
+  "completed_requests": 4,
+  "nonempty_output_text_requests": 3,
+  "process_status": 1,
+  "failure_class": "protocol_invalid_forbidden_codex_item_type_todo_list",
+  "reasoning_suppression_verified": true,
+  "reasoning_token_cap_required": false,
+  "b1_measurement_gate_passed": false,
+  "candidate_score_assigned": false
+}
