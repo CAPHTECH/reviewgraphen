@@ -78,9 +78,13 @@ Two observed Codex warnings are experimental metadata, not ignored facts:
   refresh path expects, although semantic responses succeed.
 
 Codex 0.147 serializes that model-list refresh diagnostic as an `error` item
-even when the semantic request and final message succeed. The no-tools event
-allowlist admits `error` as a non-tool diagnostic alongside reasoning and the
-agent message; command execution, file change, MCP, web, and every unknown
+even when the semantic request and final message succeed. It also normalizes
+the internal `update_plan` function call as a `todo_list` item. The captured
+Responses SSE contains `response.output_item` with `name=update_plan` and no
+shell, file, MCP, web, or other execution call; therefore `todo_list` is a
+non-tool plan diagnostic, not a tool surface. The no-tools event allowlist
+admits `error` and `todo_list` as non-tool diagnostics alongside reasoning and
+the agent message; command execution, file change, MCP, web, and every unknown
 item remain rejected. Three frozen control probes independently produced
 schema-valid, manifest-valid final messages together with this exact item type
 before the distinction was implemented; those raw responses are retained as

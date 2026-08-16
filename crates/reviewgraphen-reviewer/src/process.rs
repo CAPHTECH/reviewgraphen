@@ -959,7 +959,13 @@ fn validate_codex_no_tool_events(bytes: &[u8]) -> ProcessReviewerResult<()> {
                     .and_then(|item| item.get("type"))
                     .and_then(serde_json::Value::as_str)
                     .ok_or(ProcessReviewerError::Input("untyped Codex item event"))?;
-                if !matches!(item_type, "reasoning" | "agent_message" | "error") {
+                // Codex CLI normalizes its internal `update_plan` function
+                // call into `todo_list`. It is a diagnostic plan item, not an
+                // execution surface; command/file/MCP items remain refused.
+                if !matches!(
+                    item_type,
+                    "reasoning" | "agent_message" | "error" | "todo_list"
+                ) {
                     return Err(ProcessReviewerError::Protocol(format!(
                         "forbidden Codex item type {item_type}"
                     )));
@@ -1364,6 +1370,8 @@ env_key = "OLLAMA_PRIV_API_KEY"
         assert!(validate_codex_no_tool_events(command).is_err());
         let file_change = b"{\"type\":\"item.completed\",\"item\":{\"type\":\"file_change\"}}\n";
         assert!(validate_codex_no_tool_events(file_change).is_err());
+        let plan = b"{\"type\":\"item.completed\",\"item\":{\"type\":\"todo_list\"}}\n";
+        assert!(validate_codex_no_tool_events(plan).is_ok());
         assert!(validate_codex_no_tool_events(b"{\"type\":\"future.event\"}\n").is_err());
     }
 
