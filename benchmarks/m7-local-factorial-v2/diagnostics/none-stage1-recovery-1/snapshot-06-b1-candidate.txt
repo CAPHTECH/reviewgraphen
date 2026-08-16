@@ -1,0 +1,3 @@
+I was unable to locate or open any input files in the provided directory. The file-reading tool returned "unsupported call" for every path I attempted, so I cannot inspect the source material or confirm the exact output schema shape. Per the instruction I must not guess or fabricate findings or schema fields, so the only schema-consistent result is an abstention with empty findings and obligation results.
+
+{"schema":"reviewgraphen.benchmark.candidate_output.v1","trial_id":"m7-real:snapshot-06:b1:4","outcome":"abstained","findings":[],"obligation_results":[]}

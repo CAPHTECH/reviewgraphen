@@ -1,0 +1,17 @@
+{
+  "schema": "reviewgraphen.benchmark.local_schema_pilot_stage1_result.v1",
+  "reasoning_effort": "none",
+  "trials": 4,
+  "valid": 1,
+  "candidate_schema_invalid": 2,
+  "upstream_server_failure": 1,
+  "empty_final": 0,
+  "reasoning_delta_events": 0,
+  "provider_reasoning_tokens": 0,
+  "threshold": "4_of_4_valid",
+  "threshold_met": false,
+  "production_started": false,
+  "model_output_contract_failures": 2,
+  "environment_failures": 1,
+  "results_rewritten": false
+}
