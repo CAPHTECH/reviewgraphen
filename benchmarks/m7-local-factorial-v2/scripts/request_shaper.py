@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Inject one frozen Responses output limit without retaining request bodies."""
+"""Inject one frozen Responses output limit and retain every provider response."""
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import http.client
 import json
 import pathlib
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -40,6 +42,14 @@ def digest(body: bytes) -> str:
     return "sha256:" + hashlib.sha256(body).hexdigest()
 
 
+def digest_file(path: pathlib.Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            value.update(chunk)
+    return "sha256:" + value.hexdigest()
+
+
 def completed_usage(body: bytes) -> dict[str, int | None]:
     observed: dict[str, object] | None = None
     for line in body.splitlines():
@@ -64,6 +74,7 @@ def completed_usage(body: bytes) -> dict[str, int | None]:
             "cached_input_tokens": None,
             "provider_output_tokens": None,
             "thinking_tokens": None,
+            "provider_non_reasoning_output_tokens": None,
             "final_content_tokens": None,
         }
     input_tokens = observed.get("input_tokens")
@@ -78,7 +89,7 @@ def completed_usage(body: bytes) -> dict[str, int | None]:
     reasoning_tokens = (
         reasoning_tokens if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0 else None
     )
-    final_tokens = (
+    non_reasoning_tokens = (
         output_tokens - reasoning_tokens
         if output_tokens is not None
         and reasoning_tokens is not None
@@ -90,16 +101,28 @@ def completed_usage(body: bytes) -> dict[str, int | None]:
         "cached_input_tokens": cached_tokens,
         "provider_output_tokens": output_tokens,
         "thinking_tokens": reasoning_tokens,
-        "final_content_tokens": final_tokens,
+        # Usage does not prove that non-reasoning output was emitted as final
+        # assistant content. The raw response inspector establishes that fact.
+        "provider_non_reasoning_output_tokens": non_reasoning_tokens,
+        "final_content_tokens": None,
     }
 
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, log_path: pathlib.Path):
+    def __init__(self, log_path: pathlib.Path, capture_dir: pathlib.Path):
         super().__init__((LISTEN_HOST, LISTEN_PORT), Handler)
         self.log_path = log_path
+        self.capture_dir = capture_dir
+        self.capture_lock = threading.Lock()
+        self.capture_sequence = 0
+
+    def next_capture(self) -> tuple[int, pathlib.Path]:
+        with self.capture_lock:
+            self.capture_sequence += 1
+            sequence = self.capture_sequence
+        return sequence, self.capture_dir / f"response-{sequence:06d}.sse.gz"
 
     def record(self, value: dict[str, object]) -> None:
         line = json.dumps(value, separators=(",", ":"), sort_keys=True) + "\n"
@@ -157,7 +180,8 @@ class Handler(BaseHTTPRequestHandler):
         value["max_output_tokens"] = MAX_OUTPUT_TOKENS
         rewritten = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
         started = time.monotonic()
-        observation = self.forward(rewritten)
+        sequence, capture_path = self.server.next_capture()
+        observation = self.forward(rewritten, capture_path)
         self.server.record(
             {
                 "schema": "reviewgraphen.benchmark.responses_limit_transport.v1",
@@ -172,12 +196,17 @@ class Handler(BaseHTTPRequestHandler):
                 "upstream_status": observation["status"],
                 "upstream_response_bytes": observation["response_bytes"],
                 "upstream_response_sha256": observation["response_sha256"],
+                "raw_response_artifact": capture_path.name,
+                "raw_response_compressed_bytes": capture_path.stat().st_size,
+                "raw_response_compressed_sha256": digest_file(capture_path),
+                "response_complete": observation["response_complete"],
+                "request_sequence": sequence,
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 **observation["usage"],
             }
         )
 
-    def forward(self, body: bytes) -> dict[str, object]:
+    def forward(self, body: bytes, capture_path: pathlib.Path) -> dict[str, object]:
         headers = {
             name: value
             for name, value in self.headers.items()
@@ -187,22 +216,36 @@ class Handler(BaseHTTPRequestHandler):
         response_body = bytearray()
         response_hash = hashlib.sha256()
         response_bytes = 0
+        response_complete = False
+        response_status = 502
+        client_connected = True
         try:
             connection.request(self.command, self.path, body=body or None, headers=headers)
             response = connection.getresponse()
+            response_status = response.status
             self.send_response(response.status)
             for name, value in response.getheaders():
                 if name.lower() not in HOP_BY_HOP:
                     self.send_header(name, value)
             self.send_header("Connection", "close")
             self.end_headers()
-            while chunk := response.read(65536):
-                response_bytes += len(chunk)
-                response_hash.update(chunk)
-                if len(response_body) + len(chunk) <= MAX_RESPONSE_BYTES_FOR_METRICS:
-                    response_body.extend(chunk)
-                self.wfile.write(chunk)
-                self.wfile.flush()
+            with capture_path.open("xb") as compressed:
+                with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as archive:
+                    while chunk := response.read(65536):
+                        response_bytes += len(chunk)
+                        response_hash.update(chunk)
+                        archive.write(chunk)
+                        if len(response_body) + len(chunk) <= MAX_RESPONSE_BYTES_FOR_METRICS:
+                            response_body.extend(chunk)
+                        if client_connected:
+                            try:
+                                self.wfile.write(chunk)
+                                self.wfile.flush()
+                            except (BrokenPipeError, ConnectionResetError):
+                                # A disconnected consumer must not make the provider
+                                # response disappear from the audit record.
+                                client_connected = False
+            response_complete = True
             self.close_connection = True
             usage = (
                 completed_usage(bytes(response_body))
@@ -210,17 +253,27 @@ class Handler(BaseHTTPRequestHandler):
                 else completed_usage(b"")
             )
             return {
-                "status": response.status,
+                "status": response_status,
                 "response_bytes": response_bytes,
                 "response_sha256": "sha256:" + response_hash.hexdigest(),
+                "response_complete": response_complete,
                 "usage": usage,
             }
         except (OSError, http.client.HTTPException) as error:
-            self.send_error(502, explain=type(error).__name__)
+            if not capture_path.exists():
+                with capture_path.open("xb") as compressed:
+                    with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0):
+                        pass
+            if client_connected:
+                try:
+                    self.send_error(502, explain=type(error).__name__)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             return {
-                "status": 502,
+                "status": response_status,
                 "response_bytes": response_bytes,
                 "response_sha256": "sha256:" + response_hash.hexdigest(),
+                "response_complete": response_complete,
                 "usage": completed_usage(b""),
             }
         finally:
@@ -233,11 +286,15 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--log", required=True, type=pathlib.Path)
+    parser.add_argument("--capture-dir", required=True, type=pathlib.Path)
     args = parser.parse_args()
     if args.log.exists() or not args.log.parent.is_dir():
         raise SystemExit("log path must be fresh under an existing directory")
+    if args.capture_dir.exists() or not args.capture_dir.parent.is_dir():
+        raise SystemExit("capture directory must be fresh under an existing directory")
+    args.capture_dir.mkdir(mode=0o700)
     args.log.touch(mode=0o600, exist_ok=False)
-    Server(args.log).serve_forever()
+    Server(args.log, args.capture_dir).serve_forever()
 
 
 if __name__ == "__main__":

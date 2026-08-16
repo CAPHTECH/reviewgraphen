@@ -1,0 +1,164 @@
+{
+  "actual_completed_pilot_requests": [
+    {
+      "admitted_input_bytes": 40716,
+      "observed_bytes_per_provider_input_token": 2.500522016827366,
+      "provider_input_tokens": 16283,
+      "source": "results/schema-probe/stage-1/snapshot-06/b1_free_form/generation-metrics.json"
+    },
+    {
+      "admitted_input_bytes": 94358,
+      "observed_bytes_per_provider_input_token": 2.396697993395987,
+      "provider_input_tokens": 39370,
+      "source": "results/schema-probe/stage-1-resumed-server-adjustment/trials/snapshot-06/full_reviewgraphen/generation-metrics.json"
+    },
+    {
+      "admitted_input_bytes": 867861,
+      "observed_bytes_per_provider_input_token": 4.083667419536985,
+      "provider_input_tokens": 212520,
+      "source": "results/schema-probe/stage-1-resumed-server-adjustment/trials/snapshot-34/b1_free_form/generation-metrics.json"
+    }
+  ],
+  "b1_positive_units": [
+    {
+      "admitted_input_bytes": 637863,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 155577,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-01"
+    },
+    {
+      "admitted_input_bytes": 179486,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 43778,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-03"
+    },
+    {
+      "admitted_input_bytes": 40807,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 9953,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-05"
+    },
+    {
+      "admitted_input_bytes": 642428,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 156690,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-07"
+    },
+    {
+      "admitted_input_bytes": 119847,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 29231,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-09"
+    },
+    {
+      "admitted_input_bytes": 248024,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 60494,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-11"
+    },
+    {
+      "admitted_input_bytes": 621972,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 151701,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-13"
+    },
+    {
+      "admitted_input_bytes": 620578,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 151361,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-15"
+    },
+    {
+      "admitted_input_bytes": 723889,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 176559,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-17"
+    },
+    {
+      "admitted_input_bytes": 134437,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 32790,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-19"
+    },
+    {
+      "admitted_input_bytes": 650637,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 158692,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-21"
+    },
+    {
+      "admitted_input_bytes": 612133,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 149301,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-23"
+    },
+    {
+      "admitted_input_bytes": 660453,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 161087,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-25"
+    },
+    {
+      "admitted_input_bytes": 616386,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 150339,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-27"
+    },
+    {
+      "admitted_input_bytes": 685005,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 167075,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-29"
+    },
+    {
+      "admitted_input_bytes": 119570,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 29164,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-31"
+    },
+    {
+      "admitted_input_bytes": 865036,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 210985,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-33"
+    },
+    {
+      "admitted_input_bytes": 599565,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 146236,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-35"
+    },
+    {
+      "admitted_input_bytes": 115962,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 28284,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-37"
+    },
+    {
+      "admitted_input_bytes": 114920,
+      "estimated_input_tokens_at_4p1_bytes_per_token": 28030,
+      "point_estimate_exceeds_262144": false,
+      "snapshot_id": "snapshot-39"
+    }
+  ],
+  "empirical_interval_from_existing_audit": {
+    "context_budget_definition": "provider_input_tokens + frozen_max_output_tokens > model_context_window_tokens",
+    "input_limit_definition": "provider_input_tokens > model_context_window_tokens",
+    "kind": "empirical_admitted_bytes_per_provider_input_token_interval",
+    "observed_bytes_per_token_max": 4.083667419536985,
+    "observed_bytes_per_token_min": 2.396697993395987,
+    "warning": "byte ratios vary by content and arm; rows are risk intervals, not exact tokenization"
+  },
+  "experiment": "m7-local-factorial-v2",
+  "point_estimate": {
+    "basis": "operator-requested rounded snapshot-34 B1 observed ratio",
+    "bytes_per_token": 4.1,
+    "warning": "admitted bytes omit fixed request overhead and tokenization varies by content and arm; this point estimate is not an exact tokenizer result"
+  },
+  "relationship": "additive_view_does_not_replace_capacity-audit.private.json",
+  "schema": "reviewgraphen.benchmark.m7_local_capacity_point_amendment.v1",
+  "summary": {
+    "b1_positive_units": 20,
+    "point_estimate_over_input_limit": 0
+  }
+}

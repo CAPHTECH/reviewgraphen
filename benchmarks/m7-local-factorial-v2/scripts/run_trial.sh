@@ -7,6 +7,7 @@ if [[ $# -ne 2 ]]; then
 fi
 : "${OLLAMA_PRIV_API_KEY:?OLLAMA_PRIV_API_KEY must be set}"
 : "${M7_V2_SHAPER_LOG:?M7_V2_SHAPER_LOG must be set}"
+: "${M7_V2_SHAPER_CAPTURE_DIR:?M7_V2_SHAPER_CAPTURE_DIR must be set}"
 
 trial_dir=$(realpath -e -- "$1")
 result_dir=$2
@@ -77,8 +78,24 @@ jq -e '
   .model == "qwen3.8:27b-mlx" and
   .model_context_window == 262144 and
   .max_output_tokens == 65536 and
-  (.upstream_status | type == "number")
+  (.upstream_status | type == "number") and
+  (.response_complete | type == "boolean") and
+  (.raw_response_artifact | test("^response-[0-9]{6}\\.sse\\.gz$")) and
+  (.raw_response_compressed_sha256 | test("^sha256:[0-9a-f]{64}$"))
 ' "$result_dir/transport-record.json" >/dev/null
+raw_artifact=$(jq -r '.raw_response_artifact' "$result_dir/transport-record.json")
+raw_source="$M7_V2_SHAPER_CAPTURE_DIR/$raw_artifact"
+if [[ ! -f "$raw_source" ]] || ! gzip -t -- "$raw_source"; then
+  echo "provider raw response artifact is missing or corrupt" >&2
+  exit 70
+fi
+raw_expected_hash=$(jq -r '.raw_response_compressed_sha256 | sub("^sha256:"; "")' "$result_dir/transport-record.json")
+raw_observed_hash=$(sha256sum "$raw_source" | awk '{print $1}')
+if [[ "$raw_observed_hash" != "$raw_expected_hash" ]]; then
+  echo "provider raw response artifact hash mismatch" >&2
+  exit 70
+fi
+cp -- "$raw_source" "$result_dir/provider-response.sse.gz"
 upstream_status=$(jq -r '.upstream_status' "$result_dir/transport-record.json")
 admitted_input_bytes=$(find "$trial_dir" -type f -printf '%s\n' | awk '{total += $1} END {print total + 0}')
 final_content_bytes=null
@@ -108,6 +125,7 @@ write_metrics() {
       cached_input_tokens: $transport[0].cached_input_tokens,
       provider_output_tokens: $transport[0].provider_output_tokens,
       thinking_tokens: $transport[0].thinking_tokens,
+      provider_non_reasoning_output_tokens: $transport[0].provider_non_reasoning_output_tokens,
       final_content_tokens: $transport[0].final_content_tokens,
       final_content_bytes: $final_content_bytes,
       empty_final: $empty_final,
