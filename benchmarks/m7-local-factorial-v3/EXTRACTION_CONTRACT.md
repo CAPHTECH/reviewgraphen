@@ -1,6 +1,6 @@
 # v3 candidate extraction contract
 
-This document is frozen before v3 model calls and implements ADR 0028.
+This document is frozen before v3 model calls and implements ADR 0037.
 
 Extraction chooses location only. It never repairs or normalizes a candidate.
 The selected object is passed to the unchanged

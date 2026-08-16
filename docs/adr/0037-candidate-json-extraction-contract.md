@@ -1,4 +1,4 @@
-# ADR 0028: Reviewer candidate JSON extraction contract
+# ADR 0037: Reviewer candidate JSON extraction contract
 
 - Status: Accepted for `m7-local-factorial-v3` preregistration
 - Date: 2026-08-16
