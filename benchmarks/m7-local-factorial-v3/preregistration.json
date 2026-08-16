@@ -1,0 +1,67 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_local_factorial_preregistration.v3",
+  "experiment": "m7-local-factorial-v3",
+  "status": "frozen_before_v3_model_call",
+  "predecessor": {
+    "experiment": "m7-local-factorial-v2",
+    "rewrite": false,
+    "results_frozen": true,
+    "stage1_result": "1_valid_2_model_output_contract_failures_1_environment_failure"
+  },
+  "question": "does full ReviewGraphen improve Qwen known-target detection relative to Qwen B1",
+  "local_row": {
+    "arms": ["b1_free_form", "full_reviewgraphen"],
+    "model": "qwen3.8:27b-mlx",
+    "provider": "ollama-priv",
+    "profile": "ollama-priv-v2",
+    "codex_version": "0.147.0",
+    "reasoning_effort": "none",
+    "replicates": 1,
+    "positive_units_per_arm": 20,
+    "semantic_trials": 40,
+    "no_semantic_retry": true
+  },
+  "only_change_from_v2": "deterministic_candidate_json_extraction_before_the_unchanged_candidate_schema_validator",
+  "extraction_contract": {
+    "fenced_json_precedence": true,
+    "fenced_scan_order": "first_document_order_object",
+    "fallback": "first_left_to_right_well_formed_json_object",
+    "multiple_candidates": "first_selected_by_the_rule",
+    "trailing_prose": "ignored_after_selected_object",
+    "field_repair_or_normalization": false,
+    "schema_version": "reviewgraphen.benchmark.candidate_output.v1",
+    "schema_unchanged_from_v2": true
+  },
+  "schema_probe": {
+    "controls_only": true,
+    "stage_1_calls": 4,
+    "proceed_if": "4_of_4_valid_after_extraction_and_unchanged_schema_validation",
+    "otherwise": "stop_before_positive_trials"
+  },
+  "http_500_policy": {
+    "temporary_high_demand": "record_status_body_and_timestamp",
+    "retry_budget": 1,
+    "retry_must_be_explicitly_sequential": true,
+    "if_second_failure": "stop_and_report_environment_failure",
+    "no_automatic_retry_loop": true
+  },
+  "primary_endpoint": "frozen_private_presence_oracle_machine_score",
+  "protocol_invalid_handling": "count_as_not_detected_intention_to_measure",
+  "frontier_known_asymmetry": [
+    "v1_v2_frontier_rows_used_bare_whole_response_JSON",
+    "v3_local_rows_use_the_new_extraction_contract",
+    "frontier_rows_are_historical_and_not_rerun",
+    "local_B1_vs_full_uses_the_same_extraction_contract_in_both_arms"
+  ],
+  "power": {
+    "local_n": 20,
+    "presence_eligible_population_fsl": 28,
+    "conservative_required_n": 83,
+    "claim_boundary": "descriptive_only_no_interaction_significance_claim"
+  },
+  "preservation": {
+    "existing_results_rewritten": false,
+    "fsl_repository_read_only": true,
+    "upstream_issue_or_pr": false
+  }
+}
