@@ -1,0 +1,400 @@
+{
+  "experiment": "m7-local-factorial-v2",
+  "frozen_max_output_tokens": 65536,
+  "method": {
+    "context_budget_definition": "provider_input_tokens + frozen_max_output_tokens > model_context_window_tokens",
+    "input_limit_definition": "provider_input_tokens > model_context_window_tokens",
+    "kind": "empirical_admitted_bytes_per_provider_input_token_interval",
+    "observed_bytes_per_token_max": 4.083667419536985,
+    "observed_bytes_per_token_min": 2.396697993395987,
+    "warning": "byte ratios vary by content and arm; rows are risk intervals, not exact tokenization"
+  },
+  "model_context_window_tokens": 262144,
+  "observed_pilot": {
+    "snapshot_34_b1": {
+      "outcome": "context_budget_exhausted_before_final",
+      "provider_input_tokens": 212520,
+      "provider_output_tokens": 49624,
+      "sum": 262144
+    }
+  },
+  "schema": "reviewgraphen.benchmark.m7_local_capacity_audit.v1",
+  "summary": {
+    "b1_free_form": {
+      "context_budget_definite": 1,
+      "context_budget_possible": 11,
+      "input_limit_definite": 0,
+      "input_limit_possible": 7,
+      "units": 20
+    },
+    "full_reviewgraphen": {
+      "context_budget_definite": 0,
+      "context_budget_possible": 0,
+      "input_limit_definite": 0,
+      "input_limit_possible": 0,
+      "units": 20
+    }
+  },
+  "trials": [
+    {
+      "admitted_input_bytes": 637863,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 266143,
+      "estimated_provider_input_tokens_low": 156198,
+      "input_limit_risk": "possible",
+      "snapshot_id": "snapshot-01"
+    },
+    {
+      "admitted_input_bytes": 158785,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 66252,
+      "estimated_provider_input_tokens_low": 38882,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-01"
+    },
+    {
+      "admitted_input_bytes": 151603,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 63255,
+      "estimated_provider_input_tokens_low": 37124,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-03"
+    },
+    {
+      "admitted_input_bytes": 179486,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 74889,
+      "estimated_provider_input_tokens_low": 43952,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-03"
+    },
+    {
+      "admitted_input_bytes": 40807,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 17027,
+      "estimated_provider_input_tokens_low": 9992,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-05"
+    },
+    {
+      "admitted_input_bytes": 94294,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 39344,
+      "estimated_provider_input_tokens_low": 23090,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-05"
+    },
+    {
+      "admitted_input_bytes": 159365,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 66494,
+      "estimated_provider_input_tokens_low": 39024,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-07"
+    },
+    {
+      "admitted_input_bytes": 642428,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 268048,
+      "estimated_provider_input_tokens_low": 157316,
+      "input_limit_risk": "possible",
+      "snapshot_id": "snapshot-07"
+    },
+    {
+      "admitted_input_bytes": 119847,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 50006,
+      "estimated_provider_input_tokens_low": 29347,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-09"
+    },
+    {
+      "admitted_input_bytes": 92655,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 38660,
+      "estimated_provider_input_tokens_low": 22689,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-09"
+    },
+    {
+      "admitted_input_bytes": 272040,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 113507,
+      "estimated_provider_input_tokens_low": 66616,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-11"
+    },
+    {
+      "admitted_input_bytes": 248024,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 103486,
+      "estimated_provider_input_tokens_low": 60735,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-11"
+    },
+    {
+      "admitted_input_bytes": 621972,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 259513,
+      "estimated_provider_input_tokens_low": 152307,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-13"
+    },
+    {
+      "admitted_input_bytes": 95945,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 40033,
+      "estimated_provider_input_tokens_low": 23494,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-13"
+    },
+    {
+      "admitted_input_bytes": 95833,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 39986,
+      "estimated_provider_input_tokens_low": 23467,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-15"
+    },
+    {
+      "admitted_input_bytes": 620578,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 258931,
+      "estimated_provider_input_tokens_low": 151965,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-15"
+    },
+    {
+      "admitted_input_bytes": 723889,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 302036,
+      "estimated_provider_input_tokens_low": 177264,
+      "input_limit_risk": "possible",
+      "snapshot_id": "snapshot-17"
+    },
+    {
+      "admitted_input_bytes": 219795,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 91708,
+      "estimated_provider_input_tokens_low": 53822,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-17"
+    },
+    {
+      "admitted_input_bytes": 148890,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 62123,
+      "estimated_provider_input_tokens_low": 36459,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-19"
+    },
+    {
+      "admitted_input_bytes": 134437,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 56093,
+      "estimated_provider_input_tokens_low": 32920,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-19"
+    },
+    {
+      "admitted_input_bytes": 650637,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 271473,
+      "estimated_provider_input_tokens_low": 159326,
+      "input_limit_risk": "possible",
+      "snapshot_id": "snapshot-21"
+    },
+    {
+      "admitted_input_bytes": 155927,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 65060,
+      "estimated_provider_input_tokens_low": 38183,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-21"
+    },
+    {
+      "admitted_input_bytes": 95773,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 39961,
+      "estimated_provider_input_tokens_low": 23452,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-23"
+    },
+    {
+      "admitted_input_bytes": 612133,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 255407,
+      "estimated_provider_input_tokens_low": 149897,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-23"
+    },
+    {
+      "admitted_input_bytes": 660453,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 275568,
+      "estimated_provider_input_tokens_low": 161730,
+      "input_limit_risk": "possible",
+      "snapshot_id": "snapshot-25"
+    },
+    {
+      "admitted_input_bytes": 200727,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 83752,
+      "estimated_provider_input_tokens_low": 49153,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-25"
+    },
+    {
+      "admitted_input_bytes": 95957,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 40038,
+      "estimated_provider_input_tokens_low": 23497,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-27"
+    },
+    {
+      "admitted_input_bytes": 616386,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 257182,
+      "estimated_provider_input_tokens_low": 150939,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-27"
+    },
+    {
+      "admitted_input_bytes": 685005,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 285812,
+      "estimated_provider_input_tokens_low": 167742,
+      "input_limit_risk": "possible",
+      "snapshot_id": "snapshot-29"
+    },
+    {
+      "admitted_input_bytes": 270939,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 113047,
+      "estimated_provider_input_tokens_low": 66346,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-29"
+    },
+    {
+      "admitted_input_bytes": 99898,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 41682,
+      "estimated_provider_input_tokens_low": 24462,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-31"
+    },
+    {
+      "admitted_input_bytes": 119570,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 49890,
+      "estimated_provider_input_tokens_low": 29280,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-31"
+    },
+    {
+      "admitted_input_bytes": 865036,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "definite",
+      "estimated_provider_input_tokens_high": 360929,
+      "estimated_provider_input_tokens_low": 211828,
+      "input_limit_risk": "possible",
+      "snapshot_id": "snapshot-33"
+    },
+    {
+      "admitted_input_bytes": 340603,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 142114,
+      "estimated_provider_input_tokens_low": 83406,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-33"
+    },
+    {
+      "admitted_input_bytes": 96473,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 40253,
+      "estimated_provider_input_tokens_low": 23624,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-35"
+    },
+    {
+      "admitted_input_bytes": 599565,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "possible",
+      "estimated_provider_input_tokens_high": 250163,
+      "estimated_provider_input_tokens_low": 146820,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-35"
+    },
+    {
+      "admitted_input_bytes": 115962,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 48385,
+      "estimated_provider_input_tokens_low": 28396,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-37"
+    },
+    {
+      "admitted_input_bytes": 99898,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 41682,
+      "estimated_provider_input_tokens_low": 24462,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-37"
+    },
+    {
+      "admitted_input_bytes": 99898,
+      "arm": "full_reviewgraphen",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 41682,
+      "estimated_provider_input_tokens_low": 24462,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-39"
+    },
+    {
+      "admitted_input_bytes": 114920,
+      "arm": "b1_free_form",
+      "context_budget_risk_with_frozen_output_limit": "not_indicated_by_empirical_range",
+      "estimated_provider_input_tokens_high": 47950,
+      "estimated_provider_input_tokens_low": 28141,
+      "input_limit_risk": "not_indicated_by_empirical_range",
+      "snapshot_id": "snapshot-39"
+    }
+  ]
+}

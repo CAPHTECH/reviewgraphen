@@ -1,0 +1,7 @@
+process reviewer command failed with exit code 1: stderr=Reading prompt from stdin...
+ stdout={"type":"thread.started","thread_id":"01a00832-73cd-79d2-9bfe-eb0fc5da74d4"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `qwen3.8:27b-mlx` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"We're currently experiencing high demand, which may cause temporary errors."}
+{"type":"turn.failed","error":{"message":"We're currently experiencing high demand, which may cause temporary errors."}}
+

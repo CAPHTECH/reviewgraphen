@@ -1,0 +1,92 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_local_schema_pilot_summary.v1",
+  "experiment": "m7-local-factorial-v2",
+  "status": "stopped_before_production",
+  "assigned_stage_1_trials": 4,
+  "reconciled_outcomes": {
+    "valid": 2,
+    "context_budget_exhausted_before_final": 1,
+    "upstream_server_failure": 1,
+    "candidate_schema_invalid": 0
+  },
+  "schema_conformance": {
+    "valid_over_assigned": "2/4",
+    "valid_over_nonempty_final_responses": "2/2",
+    "preregistered_gate_met": false,
+    "production_started": false,
+    "reason": "two or fewer of four assigned trials were valid; the final trial also triggered the no-retry upstream-server stop"
+  },
+  "trials": [
+    {
+      "trial_id": "m7-real:snapshot-06:b1:4",
+      "arm": "b1_free_form",
+      "attempt_lineage": "initial_with_request_log_race_reconciled",
+      "outcome": "valid",
+      "admitted_input_bytes": 40716,
+      "provider_input_tokens": 16283,
+      "provider_output_tokens": 38880,
+      "provider_reasoning_tokens": 0,
+      "final_content_bytes": 3151,
+      "elapsed_seconds": 980.899
+    },
+    {
+      "trial_id": "m7-real:snapshot-06:full_review_graphen:4",
+      "arm": "full_reviewgraphen",
+      "attempt_lineage": "stage1-resumed-server-adjustment",
+      "outcome": "valid",
+      "admitted_input_bytes": 94358,
+      "provider_input_tokens": 39370,
+      "provider_output_tokens": 6606,
+      "provider_reasoning_tokens": 0,
+      "final_content_bytes": 1030,
+      "elapsed_seconds": 331.331
+    },
+    {
+      "trial_id": "m7-real:snapshot-34:b1:4",
+      "arm": "b1_free_form",
+      "attempt_lineage": "stage1-resumed-server-adjustment",
+      "outcome": "context_budget_exhausted_before_final",
+      "admitted_input_bytes": 867861,
+      "provider_input_tokens": 212520,
+      "provider_output_tokens": 49624,
+      "provider_reasoning_tokens": 0,
+      "input_plus_output_tokens": 262144,
+      "model_context_window_tokens": 262144,
+      "final_content_bytes": 0,
+      "elapsed_seconds": 4243.771,
+      "input_truncation_observed": false,
+      "note": "the input itself was below the context limit; generation consumed the exact remaining context before a final message"
+    },
+    {
+      "trial_id": "m7-real:snapshot-34:full_review_graphen:4",
+      "arm": "full_reviewgraphen",
+      "attempt_lineage": "stage1-resumed-server-adjustment",
+      "outcome": "upstream_server_failure",
+      "admitted_input_bytes": 341319,
+      "upstream_http_status": 500,
+      "provider_input_tokens": null,
+      "final_content_bytes": null,
+      "elapsed_seconds": 690.177,
+      "diagnostic": "We're currently experiencing high demand, which may cause temporary errors.",
+      "automatic_retry": false
+    }
+  ],
+  "thinking_accounting": {
+    "disabled_by_reviewgraphen": false,
+    "profile_reasoning_effort": "high",
+    "independent_health_chat_exposed_nonempty_thinking": true,
+    "provider_reasoning_tokens_reported_for_completed_pilot_requests": 0,
+    "interpretation": "the proxy usage field does not reliably separate Qwen thinking; zero is not evidence that thinking was absent",
+    "evidence": "snapshot-34 B1 emitted 49624 output tokens and 9338114 response bytes but no final content"
+  },
+  "capacity_audit": {
+    "artifact": "capacity-audit.private.json",
+    "b1_input_limit_definite": 0,
+    "b1_input_limit_possible": 7,
+    "b1_context_budget_definite": 1,
+    "b1_context_budget_possible": 11,
+    "full_input_limit_definite_or_possible": 0,
+    "full_context_budget_definite_or_possible": 0,
+    "claim_boundary": "risk intervals derived from three empirical byte/token ratios, not exact tokenization"
+  }
+}

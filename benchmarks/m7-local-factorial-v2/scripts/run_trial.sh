@@ -125,6 +125,13 @@ if (( process_status != 0 )); then
     "$result_dir/adapter.stderr"; then
     write_metrics upstream_server_stream_incomplete
     exit 71
+  elif [[ "$empty_final" == true ]] && jq -e '
+    (.provider_input_tokens | type == "number") and
+    (.provider_output_tokens | type == "number") and
+    (.provider_input_tokens + .provider_output_tokens >= .model_context_window)
+  ' "$result_dir/transport-record.json" >/dev/null; then
+    write_metrics context_budget_exhausted_before_final
+    exit 72
   elif [[ "$empty_final" == true ]]; then
     write_metrics empty_final_after_process_completion
   else
