@@ -63,6 +63,7 @@ if (( ready == 0 )); then
 fi
 export M7_V3_SHAPER_LOG="$shaper_log"
 export M7_V3_SHAPER_CAPTURE_DIR="$capture_dir"
+export M7_V3_TRIAL_KEY="${attempt}-${mode}-${start}"
 
 index=0
 completed=0

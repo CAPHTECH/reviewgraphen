@@ -178,6 +178,35 @@ document takes no position on that separate decision; it exists so the
 decision can be made from the recorded rate rather than from the gate result
 alone.
 
+## 3.6 Sequential-restart plumbing defect (zero semantic attempts)
+
+The first sequential-restart attempt after this document's revert,
+`v3-lm-studio-stage1-sequential-1`, failed before any provider request. The
+parallel-2 preregistration (`5958ac2`) had made `run_trial.sh` require
+`M7_V3_TRIAL_KEY` unconditionally for every invocation, but
+`scripts/run_batch.sh` (the sequential runner, unchanged since before
+parallel-2) never set it. All three attempted cells failed at
+`run_trial.sh`'s parameter check before `mkdir -p -- "$result_dir"`, before
+the shaper health check, and before any HTTP request; `run_batch.sh`'s own
+`three_consecutive_invalid` safety stop then ended the batch after cell 3.
+Verified directly:
+`request-shaper-stage_1-0.jsonl` is 0 bytes, the response capture directory
+is empty, and no `request_shaper.py` process was left running. This consumed
+zero semantic attempts and issued zero provider requests; it is the same
+class of defect as the extractor-argument-count bug in
+`LM_STUDIO_STAGE1_PROGRESS.md`'s "Runner plumbing interruption," not a model
+or server outcome.
+
+`scripts/run_batch.sh` now exports `M7_V3_TRIAL_KEY="${attempt}-${mode}-${start}"`
+before its trial loop, matching the pattern `run_trial.sh` requires and the
+constant-key precedent already used for sequential execution. This is a
+plumbing fix, not an execution-condition change: it does not touch the
+model, reasoning effort, sampling, context/output limits, idle timeout,
+retry count, candidate schema, or ADR 0037 extraction. The next attempt uses
+a new label, `v3-lm-studio-stage1-sequential-2`, to avoid colliding with the
+already-created (and harmless, zero-content) health-check directory left by
+`-sequential-1`.
+
 ## 4. Authoritative execution condition going forward
 
 Per `LM_STUDIO_IDLE_TIMEOUT_AMENDMENT.md` and `PARALLEL2_REVERT_AMENDMENT.md`,
