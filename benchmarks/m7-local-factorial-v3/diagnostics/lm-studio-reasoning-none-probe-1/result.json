@@ -1,0 +1,174 @@
+{
+  "backend": "LM Studio behind cch",
+  "client": "Codex CLI 0.147.0",
+  "model": "qwen3.8:27b-mlx",
+  "reasoning_effort": "none",
+  "process_status": 0,
+  "final": "\n\nOK",
+  "transport": {
+    "cached_input_tokens": 0,
+    "elapsed_seconds": 29.46,
+    "final_content_tokens": null,
+    "max_output_tokens": 65536,
+    "model": "qwen3.8:27b-mlx",
+    "model_context_window": 262144,
+    "original_request_bytes": 31388,
+    "original_request_sha256": "sha256:33839ba1746cb85daa21ec6be0c91e3587f39d76377058a1450cfa0f7fa40c42",
+    "output_text_delta_events": 2,
+    "output_text_delta_utf8_bytes": 4,
+    "protocol": "reviewgraphen.responses-limit-shaper.v1",
+    "provider_input_tokens": 6996,
+    "provider_non_reasoning_output_tokens": 2,
+    "provider_output_tokens": 36,
+    "provider_reported_reasoning_tokens": 34,
+    "raw_response_artifact": "response-000001.sse.gz",
+    "raw_response_compressed_bytes": 20774,
+    "raw_response_compressed_sha256": "sha256:475da2223f415b2e8df2ee7cb95d7bf645d09d6dff7658cbb9cdedcb05122d51",
+    "reasoning_delta_events": 34,
+    "reasoning_delta_utf8_bytes": 141,
+    "request_sequence": 1,
+    "response_complete": true,
+    "rewritten_request_bytes": 31414,
+    "rewritten_request_sha256": "sha256:e901f2ca7c89d95c39ecbef48847b759bfdaef7ac019a77d458e525b749f0102",
+    "schema": "reviewgraphen.benchmark.responses_limit_transport.v1",
+    "thinking_tokens": null,
+    "token_attribution": "ambiguous_mixed_or_absent_content_events",
+    "upstream_response_bytes": 90838,
+    "upstream_response_sha256": "sha256:cd646343aac4ac0dd6adc10a392c49b13677a31561c85495d355801c5c2a7351",
+    "upstream_status": 200
+  },
+  "inspection": {
+    "artifact": "response-000001.sse.gz",
+    "completed_response": {
+      "error": null,
+      "id": "resp_5d7cb8a2a8a0117ebeff1c61e4cf47c2fcef6da9456d18df",
+      "incomplete_details": null,
+      "output_items": [
+        {
+          "content_types": [
+            "reasoning_text"
+          ],
+          "role": null,
+          "status": "completed",
+          "text_fields": [
+            {
+              "path": "content[0].text",
+              "sha256": "sha256:c2d74893d92c39ad053ff0d67fd47099519870c77257370793d1673d8b7ed36e",
+              "utf8_bytes": 141
+            }
+          ],
+          "type": "reasoning"
+        },
+        {
+          "content_types": [
+            "output_text"
+          ],
+          "role": "assistant",
+          "status": "completed",
+          "text_fields": [
+            {
+              "path": "content[0].text",
+              "sha256": "sha256:db8b8e836881534b3e62cf633db64f28af421e09feaae85bd3f3249912053c65",
+              "utf8_bytes": 4
+            }
+          ],
+          "type": "message"
+        }
+      ],
+      "present": true,
+      "status": "completed",
+      "usage": {
+        "input_tokens": 6996,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 36,
+        "output_tokens_details": {
+          "reasoning_tokens": 34
+        },
+        "total_tokens": 7032
+      }
+    },
+    "compressed_bytes": 20774,
+    "compressed_sha256": "sha256:475da2223f415b2e8df2ee7cb95d7bf645d09d6dff7658cbb9cdedcb05122d51",
+    "created_response": {
+      "id": "resp_5d7cb8a2a8a0117ebeff1c61e4cf47c2fcef6da9456d18df",
+      "max_output_tokens": 65536,
+      "model": "qwen3.8-27b-mlx",
+      "present": true,
+      "reasoning": {
+        "effort": "none",
+        "summary": "auto"
+      }
+    },
+    "data_lines": 49,
+    "event_counts": {
+      "response.completed": 1,
+      "response.content_part.added": 2,
+      "response.content_part.done": 2,
+      "response.created": 1,
+      "response.in_progress": 1,
+      "response.output_item.added": 2,
+      "response.output_item.done": 2,
+      "response.output_text.delta": 2,
+      "response.output_text.done": 1,
+      "response.reasoning_text.delta": 34,
+      "response.reasoning_text.done": 1
+    },
+    "gzip_complete": true,
+    "invalid_data_lines": 0,
+    "raw_bytes": 90838,
+    "raw_sha256": "sha256:cd646343aac4ac0dd6adc10a392c49b13677a31561c85495d355801c5c2a7351",
+    "schema": "reviewgraphen.benchmark.provider_response_inspection.v1",
+    "text_fields_by_event": {
+      "response.completed:response.output[0].content[0].text": {
+        "occurrences": 1,
+        "utf8_bytes": 141
+      },
+      "response.completed:response.output[1].content[0].text": {
+        "occurrences": 1,
+        "utf8_bytes": 4
+      },
+      "response.completed:response.reasoning.summary": {
+        "occurrences": 1,
+        "utf8_bytes": 4
+      },
+      "response.content_part.added:part.text": {
+        "occurrences": 2,
+        "utf8_bytes": 0
+      },
+      "response.content_part.done:part.text": {
+        "occurrences": 2,
+        "utf8_bytes": 145
+      },
+      "response.created:response.reasoning.summary": {
+        "occurrences": 1,
+        "utf8_bytes": 4
+      },
+      "response.in_progress:response.reasoning.summary": {
+        "occurrences": 1,
+        "utf8_bytes": 4
+      },
+      "response.output_item.done:item.content[0].text": {
+        "occurrences": 2,
+        "utf8_bytes": 145
+      },
+      "response.output_text.delta:delta": {
+        "occurrences": 2,
+        "utf8_bytes": 4
+      },
+      "response.output_text.done:text": {
+        "occurrences": 1,
+        "utf8_bytes": 4
+      },
+      "response.reasoning_text.delta:delta": {
+        "occurrences": 34,
+        "utf8_bytes": 141
+      },
+      "response.reasoning_text.done:text": {
+        "occurrences": 1,
+        "utf8_bytes": 141
+      }
+    }
+  }
+}

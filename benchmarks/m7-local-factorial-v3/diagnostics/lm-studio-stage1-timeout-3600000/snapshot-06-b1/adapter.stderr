@@ -1,0 +1,6 @@
+process reviewer command failed with exit code 1: stderr=Reading prompt from stdin...
+ stdout={"type":"thread.started","thread_id":"01a00cda-7287-7c53-8be1-1719e6f0b152"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `qwen3.8:27b-mlx` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"stream disconnected before completion: Model unloaded."}
+{"type":"turn.failed","error":{"message":"stream disconnected before completion: Model unloaded."}}

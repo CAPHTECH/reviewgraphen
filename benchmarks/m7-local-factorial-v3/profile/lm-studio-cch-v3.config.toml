@@ -1,0 +1,18 @@
+# v3 profile for LM Studio behind the cch-normalizing proxy and the local
+# ReviewGraphen response-capture shaper.
+# Never add forced_login_method = "api"; Codex 0.147 may delete shared auth.
+openai_base_url = "http://127.0.0.1:12080/v1/"
+model_provider = "lm-studio-cch-v3"
+model = "qwen3.8:27b-mlx"
+model_context_window = 262144
+
+[model_providers.lm-studio-cch-v3]
+name = "LM Studio through cch and ReviewGraphen v3 request shaper"
+base_url = "http://127.0.0.1:12080/v1/"
+env_key = "OLLAMA_PRIV_API_KEY"
+request_max_retries = 0
+stream_max_retries = 0
+stream_idle_timeout_ms = 3600000
+
+[model_providers.lm-studio-cch-v3.http_headers]
+X-ReviewGraphen-Max-Output-Tokens = "65536"

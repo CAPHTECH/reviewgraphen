@@ -1,0 +1,17 @@
+{
+  "schema": "reviewgraphen.benchmark.local_stage1_upstream_failure.v1",
+  "snapshot_id": "snapshot-34",
+  "arm": "b1_free_form",
+  "classification": "upstream_server_unresponsive",
+  "client": "Codex CLI 0.147.0",
+  "noticed_at": "2026-08-17T08:07:19+09:00",
+  "elapsed_milliseconds": 300305,
+  "process_status": 1,
+  "admitted_input_bytes": 867861,
+  "approximate_input_tokens_from_frozen_v2": 212520,
+  "provider_input_tokens": null,
+  "response_header_received": false,
+  "raw_partial_bytes": 0,
+  "retry_issued": false,
+  "semantic_attempt_consumed": false
+}

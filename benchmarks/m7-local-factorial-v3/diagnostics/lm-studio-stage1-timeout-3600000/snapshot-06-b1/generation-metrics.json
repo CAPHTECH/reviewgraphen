@@ -1,0 +1,22 @@
+{
+  "schema": "reviewgraphen.benchmark.local_generation_metrics.v1",
+  "admitted_input_bytes": 40716,
+  "provider_input_tokens": null,
+  "cached_input_tokens": null,
+  "provider_output_tokens": null,
+  "provider_reported_reasoning_tokens": null,
+  "thinking_tokens": null,
+  "provider_non_reasoning_output_tokens": null,
+  "request_count": 1,
+  "final_content_tokens": null,
+  "token_attribution": "unavailable_without_completed_usage",
+  "reasoning_delta_events": 25530,
+  "reasoning_delta_utf8_bytes": 95192,
+  "output_text_delta_events": 0,
+  "output_text_delta_utf8_bytes": 0,
+  "final_content_bytes": null,
+  "empty_final": false,
+  "elapsed_milliseconds": 9536248,
+  "elapsed_seconds": 9536.248,
+  "failure_class": "upstream_server_stream_incomplete"
+}
