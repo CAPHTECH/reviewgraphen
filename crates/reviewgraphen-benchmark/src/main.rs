@@ -2,12 +2,14 @@ use reviewgraphen_benchmark::{
     PrivateAdjudicationReconciliation, Score, TrialCollection, collect_trial,
     import_blind_adjudication, parse_candidate, parse_collection, parse_execution_config,
     parse_inventory, parse_manifest, parse_oracle, parse_score,
+    prepare::{prepare_from_ingest_request, prepare_real_b1, prepare_real_full_review},
     real::{
         RealScore, blind_real_adjudication_export, parse_real_inventory, parse_real_oracle,
         parse_real_score, parse_real_unit, score_real, summarize_real_full_run, summarize_real_run,
     },
     score, summarize_run,
 };
+use reviewgraphen_ingest::IngestRequest;
 use reviewgraphen_reviewer::process::{
     NonAuthorityProcessRecord, ProcessReviewer, ProcessReviewerBackend, ProcessReviewerInput,
     ProcessSandbox,
@@ -118,6 +120,22 @@ fn main() -> ExitCode {
         [command, manifest_path, candidate_path, output_path] if command == "collect" => {
             run_collect(manifest_path, candidate_path, Path::new(output_path))
         }
+        [
+            command,
+            unit_id,
+            workspace_root,
+            repository_root,
+            base_revision,
+            head_revision,
+            output_dir,
+        ] if command == "prepare-head-local-unit" => run_prepare_head_local_unit(
+            unit_id,
+            Path::new(workspace_root),
+            Path::new(repository_root),
+            base_revision,
+            head_revision,
+            Path::new(output_dir),
+        ),
         [command, record] if command == "replay-process-reviewer" => {
             run_replay_process_reviewer(record)
         }
@@ -444,6 +462,71 @@ fn run_prepare_real_full(
             ExitCode::from(1)
         }
     }
+}
+
+/// Builds b1 and full_reviewgraphen `agent_input/` packets for one
+/// m7-head-local-v1 unit from an already-staged single-commit Git snapshot
+/// (no diff, no oracle/presence-evidence binding — this experiment has no
+/// known-target ground truth). Reuses the same oracle-free construction
+/// primitives (`prepare_from_ingest_request`, `prepare_real_b1`,
+/// `prepare_real_full_review`) that `prepare_real`/`prepare_real_full` use
+/// internally, so the emitted scaffold is byte-for-byte the same
+/// construction path as every other arm in this benchmark family.
+fn run_prepare_head_local_unit(
+    unit_id: &str,
+    workspace_root: &Path,
+    repository_root: &Path,
+    base_revision: &str,
+    head_revision: &str,
+    output_dir: &Path,
+) -> ExitCode {
+    if output_dir.exists() {
+        eprintln!("output directory must be fresh");
+        return ExitCode::from(2);
+    }
+    let request = IngestRequest::new(
+        workspace_root,
+        repository_root,
+        format!("m7-head-local:{unit_id}"),
+        base_revision,
+        head_revision,
+    );
+    let input = match prepare_from_ingest_request(unit_id.to_owned(), &request, Vec::new()) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    let b1 = match prepare_real_b1(&input) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    let full = match prepare_real_full_review(&input) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = b1.write_isolated(&output_dir.join("b1")) {
+        eprintln!("{error}");
+        return ExitCode::from(1);
+    }
+    if let Err(error) = full.agent_input.write_isolated(&output_dir.join("full")) {
+        eprintln!("{error}");
+        return ExitCode::from(1);
+    }
+    emit(&serde_json::json!({
+        "schema": "reviewgraphen.benchmark.prepare_head_local_unit.v1",
+        "unit_id": unit_id,
+        "input_tree_hash": input.input_tree_hash,
+        "b1_file_hashes": b1.hashes(),
+        "full_file_hashes": full.agent_input.hashes(),
+    }))
 }
 
 fn run_prepare_pilot(
