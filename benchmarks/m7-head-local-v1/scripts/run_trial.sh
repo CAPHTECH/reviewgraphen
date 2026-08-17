@@ -191,6 +191,15 @@ if (( process_status != 0 )); then
     "$result_dir/adapter.stderr"; then
     if rg -qi 'model has crashed' "$result_dir/adapter.stderr"; then
       write_metrics upstream_model_crash
+    elif rg -q 'stream closed before response\.completed' "$result_dir/adapter.stderr" \
+      && ! rg -qi 'model unloaded' "$result_dir/adapter.stderr"; then
+      # Codex's own generic no-reason fallback message (the server supplied
+      # no specific cause, unlike "Model unloaded." or "model has crashed"),
+      # distinguished per OUTPUT_CAP_AMENDMENT.md follow-up: head-local-01
+      # under the 131072-token cap disconnected after 1436.126s with zero
+      # reasoning_delta_events and zero output_text_delta_events (silence,
+      # then disconnect — not a reasoning-budget failure).
+      write_metrics upstream_stream_closed_before_completion
     else
       write_metrics upstream_server_stream_incomplete
     fi
