@@ -29,7 +29,8 @@ result_dir=$2
 reasoning_effort=${M7_HEAD_LOCAL_REASONING_EFFORT:-${3:-high}}
 case "$trial_dir" in
   /tmp/m7-head-local-v1-prepared/head-local-*/b1|\
-  /tmp/m7-head-local-v1-prepared/head-local-*/full) ;;
+  /tmp/m7-head-local-v1-prepared/head-local-*/full|\
+  /tmp/m7-head-local-v1-skill-prepared/head-local-*) ;;
   *) echo "refusing input outside m7-head-local-v1 prepared packets: $trial_dir" >&2; exit 64 ;;
 esac
 case "$result_dir" in
