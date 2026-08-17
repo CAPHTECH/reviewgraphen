@@ -151,6 +151,10 @@ output as proof that a defect exists. Your job is to estimate, as
 carefully and skeptically as you can from reading the actual code, whether
 a competent maintainer would want a tracked issue opened for each finding.
 
+Before judging individual findings, first read through all of them once to
+notice which ones describe the same underlying problem in different words —
+you will be asked to record this.
+
 For every finding_id in 01-findings.json, in the schema-mandated output,
 provide exactly one judgment with:
 
@@ -168,7 +172,17 @@ provide exactly one judgment with:
      genuinely insufficient to decide either way. Use this when you are
      stuck, not as a default for findings you merely find uninteresting.
 
-2. quality.specificity — exactly one of:
+2. duplicate_of — the finding_id values of every OTHER finding in this same
+   pool (01-findings.json) that you believe describes substantially the
+   same underlying defect as this one, even if worded differently, phrased
+   at different granularity, or pointing at a slightly different line
+   within the same root cause. Do not include this finding's own
+   finding_id. Leave empty if none. Judge duplication on substance (same
+   root cause, same place in the code, same triggering behavior), not on
+   surface wording. You do not know or need to know why some findings might
+   be near-duplicates of each other — judge only whether they are.
+
+3. quality.specificity — exactly one of:
    - "file_and_line_identified_and_relevant": the locations point at real,
      existing lines in sources/ that are actually relevant to the claim.
    - "file_and_line_identified_but_questionable": locations resolve to
@@ -177,30 +191,41 @@ provide exactly one judgment with:
      missing, absurdly broad, or clearly wrong (e.g. out of file bounds).
    - "absent": no usable location information.
 
-3. quality.reproduction_conditions_stated — true only if the rationale
+4. quality.unresolvable_location — true only if you positively verified
+   that at least one claimed location does not resolve: the path is not
+   present under sources/ for this unit at all, or the line range falls
+   outside that file's actual total line count. This is independent of
+   specificity above — a location can be vague (e.g. a huge line range)
+   without being verified-wrong, and a location can be precise-looking
+   (an exact single line) while still pointing at a file or line that does
+   not exist. Set this true whenever you positively confirmed
+   non-existence, regardless of what you chose for specificity.
+
+5. quality.reproduction_conditions_stated — true only if the rationale
    states a concrete triggering condition, input, or sequence of calls
    under which the claimed problem manifests, not just an abstract
    description of a risk.
 
-4. quality.false_positive_suspected — true if, after reading the code, you
+6. quality.false_positive_suspected — true if, after reading the code, you
    suspect the finding misreads or misunderstands what the code actually
    does (independent of your disposition above; you can suspect a false
    positive and still choose issue_should_be_created if you are not
    certain enough to rule the finding out).
 
-5. quality.design_intent_confusion_suspected — true if the finding appears
+7. quality.design_intent_confusion_suspected — true if the finding appears
    to flag behavior that the surrounding code, comments, or naming make
    clear is intentional (e.g. a documented invariant, an explicit
    assertion, a deliberately partial implementation marked as such).
 
-6. quality.notes — one or two sentences (max 2048 characters) giving your
+8. quality.notes — one or two sentences (max 2048 characters) giving your
    concrete reasoning, citing the specific code you checked. Do not
    speculate about who or what produced the finding.
 
 Read every file under sources/ that a finding references before judging
 it. If a finding references a path not present under sources/, or a line
 range outside the file's actual length, treat that as strong evidence
-toward should_not_be_created or unable_to_determine, and say so in notes.
+toward should_not_be_created or unable_to_determine, set
+quality.unresolvable_location to true, and say so in notes.
 
 Return only the single JSON object required by the output schema. Do not
 include Markdown formatting, commentary, or any text outside that JSON
@@ -221,9 +246,81 @@ unjudged — they are not silently dropped from the finding count, only from
 the disposition tally. After validation, `judgments[].finding_id` must be
 exactly the set of `finding_id`s sent in `01-findings.json` for that unit
 (no fewer, no extra, no duplicates); a mismatch is also recorded as
-`judge_call_failed` rather than partially accepted.
+`judge_call_failed` rather than partially accepted. Additionally, every
+`duplicate_of` entry must be a `finding_id` present in the same unit's
+`01-findings.json` and must not equal the judgment's own `finding_id`; a
+violation is also `judge_call_failed` for that unit, not silently repaired
+by dropping the offending entry.
 
-## 7. Untested execution path — required smoke test before production
+## 7. Distinct-issue clustering and redundancy metrics
+
+Raw per-finding counts and per-finding disposition tallies are not directly
+comparable across arms, because one arm can report the same underlying
+defect multiple times in different words while the other reports it once;
+counting raw findings or raw `issue_should_be_created` labels would then
+reward repetition instead of distinct defect coverage. This section defines
+the mechanical, judge-blind-compatible post-processing that corrects for
+this, computed after the judge's output is unblinded against `truth.json`
+(§3) — the judge itself never sees arm identity, only finding content and
+its own `duplicate_of` judgments.
+
+**Clustering.** For each unit, build an undirected graph whose nodes are
+every `finding_id` in that unit's pool. Add an edge between `f` and `g`
+whenever `g` appears in `f`'s `duplicate_of` **or** `f` appears in `g`'s
+`duplicate_of` (the union of both directions — this makes clustering robust
+to the judge asserting a duplicate relationship asymmetrically, e.g. only
+from the more detailed finding to the terser one). Connected components of
+this graph are **clusters**. A finding with an empty `duplicate_of` that no
+other finding points back at is its own singleton cluster.
+
+**Per-arm distinct counts**, using `truth.json`'s `contributing_arms` to
+attribute cluster membership by arm:
+
+- `raw_findings_count(arm)` — the length of that arm's own `candidate.json`
+  `findings` array for the unit, counted before any pooling or clustering.
+  This is the pre-existing, uncorrected count, reported as a secondary
+  metric per the operator's instruction, never as the primary comparison.
+- `distinct_count(arm)` — the number of clusters that contain at least one
+  finding contributed by that arm (by `contributing_arms`, unioned across
+  every member of the cluster). This measures how many distinct claims that
+  arm raised, independent of how many times it repeated any one of them.
+- `redundancy_ratio(arm) = raw_findings_count(arm) / distinct_count(arm)`
+  (undefined, reported as `null`, when `raw_findings_count(arm)` is 0).
+  A ratio of 1.0 means the arm never repeated a claim; higher values mean
+  more repetition. This ratio, and the two counts behind it, are reported
+  for both arms regardless of the disposition comparison below, because
+  redundancy itself is an independent, useful observation (see
+  `preregistration.json` `usefulness_determination` and the operator's
+  m7-real-v1 precedent: B1 115 raw findings vs 58 judged valid_novel_defect,
+  full 14-17 raw vs 7-9 valid — similar per-finding yield, different volume).
+- `high_confidence_cluster(cluster)` — true if at least one member finding
+  has `disposition = issue_should_be_created` AND
+  `quality.specificity = "file_and_line_identified_and_relevant"` AND
+  `quality.unresolvable_location = false` AND
+  `quality.reproduction_conditions_stated = true` AND
+  `quality.false_positive_suspected = false` AND
+  `quality.design_intent_confusion_suspected = false`. This is the one and
+  only high-confidence bar defined in this experiment; it is stated once,
+  here, and applied at the cluster level everywhere it is used, including
+  in `preregistration.json`.
+- `distinct_issue_worthy_count(arm)` — the number of clusters that are both
+  `high_confidence_cluster = true` and contain at least one finding
+  contributed by that arm. **This is the primary metric for
+  `preregistration.json` `usefulness_determination` rule (b)**, in place of
+  any unclustered, raw finding-level count. An arm is
+  credited for a distinct high-confidence issue as soon as it contributed
+  any finding to a cluster the judge found compelling, even if the specific
+  finding that met the high-confidence bar came from its cluster-mate in
+  the other arm — this is deliberate: "did this arm surface this issue,"
+  not "did this arm phrase it in the exact way the judge liked best."
+
+**Unresolvable-location rate**, reported per arm, independent of the above:
+`unresolvable_location_count(arm) / raw_findings_count(arm)`, counted at the
+raw finding level (not clustered), since a hallucinated location is a
+property of the individual finding regardless of whether a cluster-mate
+also exists.
+
+## 8. Untested execution path — required smoke test before production
 
 `reviewgraphen-benchmark run-process-reviewer claude` (the generic,
 non-Codex-profile isolated backend) has never been exercised end-to-end in

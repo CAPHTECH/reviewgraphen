@@ -81,7 +81,7 @@
     "trial_order": "units in unit_index order 0..8; within each unit, qwen_b1 before qwen_full; strictly sequential (one provider request in flight at a time), matching the concurrency=1 decision recorded in m7-local-factorial-v3 PARALLEL2_REVERT_AMENDMENT.md",
     "total_generation_trials": 18,
     "judge_calls": "at most 9 (one per unit), skipped for any unit whose pooled finding set is empty (JUDGE_PROTOCOL.md section 2.4)",
-    "smoke_test_required": "one synthetic-input smoke test of the claude_cli judge backend (JUDGE_PROTOCOL.md section 7) must complete and be recorded before the first real judge call; this backend has never been exercised end-to-end in this repository",
+    "smoke_test_required": "one synthetic-input smoke test of the claude_cli judge backend (JUDGE_PROTOCOL.md section 8) must complete and be recorded before the first real judge call; this backend has never been exercised end-to-end in this repository",
     "failure_taxonomy": "unchanged from m7-local-factorial-v3 STAGE1_STATUS_SUMMARY.md: valid, candidate_schema_invalid, empty_final_after_process_completion, upstream_server_stream_incomplete (subtype upstream_model_crash), upstream_server_unresponsive, client_idle_timeout, operator_terminated, infrastructure",
     "stop_conditions": [
       "upstream 5xx",
@@ -105,18 +105,22 @@
   },
   "reported_metrics": [
     "generation completion rate per arm (fraction of 9 trials reaching valid schema-conformant output)",
-    "total findings per arm across all units",
-    "issue_should_be_created count and fraction per arm",
+    "raw_findings_count per arm across all units (secondary metric only — inflated by within-arm and cross-arm near-duplicate repetition, see JUDGE_PROTOCOL.md section 7)",
+    "distinct_count per arm (clustered, JUDGE_PROTOCOL.md section 7): number of distinct underlying claims that arm raised, correcting for repetition",
+    "redundancy_ratio per arm = raw_findings_count / distinct_count (higher = more repetitive)",
+    "issue_should_be_created count and fraction per arm, both raw and clustered",
     "should_not_be_created and unable_to_determine counts per arm",
-    "quality-rubric distribution per arm (specificity, reproduction_conditions_stated, false_positive_suspected, design_intent_confusion_suspected)",
-    "high_confidence_issue_worthy count per arm: issue_should_be_created AND specificity in {file_and_line_identified_and_relevant} AND reproduction_conditions_stated=true AND false_positive_suspected=false AND design_intent_confusion_suspected=false",
-    "cross-arm finding overlap (by finding_id collapse, see JUDGE_PROTOCOL.md section 2.1)",
-    "per-unit breakdown table (unit, arm, completion outcome, finding count, disposition tally)"
+    "quality-rubric distribution per arm (specificity, unresolvable_location, reproduction_conditions_stated, false_positive_suspected, design_intent_confusion_suspected)",
+    "unresolvable_location_count and rate per arm (raw finding level; a hallucinated-location rate distinct from vagueness, see JUDGE_PROTOCOL.md section 7)",
+    "distinct_issue_worthy_count per arm (JUDGE_PROTOCOL.md section 7, cluster-level high_confidence_cluster credited to every contributing arm) — this is the PRIMARY count-based metric; the equivalent raw (unclustered) finding-level count is reported alongside it, never in place of it",
+    "cross-arm finding overlap (both the pre-clustering byte-identical collapse, JUDGE_PROTOCOL.md section 2.1, and the judge-asserted duplicate clusters that span both arms, section 7)",
+    "per-unit breakdown table (unit, arm, completion outcome, raw finding count, cluster membership, disposition tally)"
   ],
   "usefulness_determination": {
     "status": "descriptive synthesis, not a binary pass/fail gate — consistent with this benchmark family's existing analysis philosophy (m7-local-factorial-v2 preregistration.json 'analysis': descriptive, no significance claim)",
-    "predetermined_reporting_rule": "qwen_full is reported as showing more evidence of usefulness than qwen_b1 only if, after generation and blind judging complete: (a) qwen_full's generation completion rate is not lower than qwen_b1's, AND (b) qwen_full's high_confidence_issue_worthy count is higher than qwen_b1's, AND (c) qwen_full's false_positive_suspected rate among issue_should_be_created findings is not substantially higher (defined as not more than 15 percentage points higher) than qwen_b1's. If these do not all hold, the report states which held and which did not, without averaging them into a single verdict. If either arm's completion rate is near zero, the report states plainly that this experiment could not evaluate usefulness for that arm and says so rather than reporting a misleadingly precise quality comparison over a tiny surviving sample.",
-    "reported_regardless_of_the_rule_above": "absolute issue_should_be_created counts and rates for each arm are always reported, since a near-zero count for both arms is itself informative about whether local qwen+ReviewGraphen finds anything worth a maintainer's attention on live code, independent of the b1-vs-full comparison",
+    "predetermined_reporting_rule": "qwen_full is reported as showing more evidence of usefulness than qwen_b1 only if, after generation and blind judging complete: (a) qwen_full's generation completion rate is not lower than qwen_b1's, AND (b) qwen_full's distinct_issue_worthy_count (cluster-based, JUDGE_PROTOCOL.md section 7 — NOT the raw finding-level count) is higher than qwen_b1's, AND (c) qwen_full's false_positive_suspected rate among issue_should_be_created findings is not substantially higher (defined as not more than 15 percentage points higher) than qwen_b1's. If these do not all hold, the report states which held and which did not, without averaging them into a single verdict. If either arm's completion rate is near zero, the report states plainly that this experiment could not evaluate usefulness for that arm and says so rather than reporting a misleadingly precise quality comparison over a tiny surviving sample.",
+    "why_distinct_not_raw": "raw finding counts reward an arm for repeating the same underlying claim in different words rather than for finding more distinct problems; m7-real-v1 observed B1 producing roughly 6-8x more raw findings than full_reviewgraphen (115 vs 14-17) while judged-valid rates per finding were similar, so an unclustered count comparison in m7-head-local-v1 would very likely just reward whichever arm is more repetitive, not whichever arm found more real problems. distinct_issue_worthy_count is defined precisely to remove this bias; see JUDGE_PROTOCOL.md section 7.",
+    "reported_regardless_of_the_rule_above": "absolute issue_should_be_created counts and rates for each arm (both raw and distinct) are always reported, since a near-zero count for both arms is itself informative about whether local qwen+ReviewGraphen finds anything worth a maintainer's attention on live code, independent of the b1-vs-full comparison. redundancy_ratio per arm is also always reported as an independent finding about generation behavior, regardless of which arm 'wins' on distinct_issue_worthy_count.",
     "not_claimed": "statistical significance, verified-defect counts, or generalization beyond the 9 selected units"
   },
   "known_limitations": [

@@ -18,7 +18,7 @@
     "judgment": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["finding_id", "disposition", "quality"],
+      "required": ["finding_id", "disposition", "duplicate_of", "quality"],
       "properties": {
         "finding_id": {
           "type": "string",
@@ -31,11 +31,22 @@
             "unable_to_determine"
           ]
         },
+        "duplicate_of": {
+          "type": "array",
+          "maxItems": 255,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^finding:[0-9a-f]{32}$"
+          },
+          "description": "Other finding_id values in this same pool that describe substantially the same underlying defect as this finding. Empty if none. Must not contain this judgment's own finding_id."
+        },
         "quality": {
           "type": "object",
           "additionalProperties": false,
           "required": [
             "specificity",
+            "unresolvable_location",
             "reproduction_conditions_stated",
             "false_positive_suspected",
             "design_intent_confusion_suspected",
@@ -49,6 +60,10 @@
                 "file_only_or_vague",
                 "absent"
               ]
+            },
+            "unresolvable_location": {
+              "type": "boolean",
+              "description": "True only if you verified that at least one claimed location does not resolve: the path is not present under sources/ for this unit, or the line range falls outside that file's actual length. Independent of specificity — a location can be vague without being verified-wrong, and vice versa."
             },
             "reproduction_conditions_stated": { "type": "boolean" },
             "false_positive_suspected": { "type": "boolean" },
