@@ -34,3 +34,19 @@ the exploratory v1 observation that snapshot-34 B1 emitted no final message
 while the smaller full input completed. One matched control
 identifies a boundary to measure; it is not evidence that establishes the
 hypothesis.
+
+## Addendum (2026-08-17, appended, not a rewrite)
+
+A later investigation
+(`docs/measurement-validity-obligation-synthesis-capability-gap.md`)
+directly checked this experiment's `full_review_graphen` obligations
+(built agent_input packets, snapshot-06 and snapshot-40) and found all 5
+obligations in each are `reviewgraphen.capability_gap`, not substantive
+review obligations — the same degeneration found across every
+`full_reviewgraphen` packet checked in this benchmark program. Any
+comparison in this experiment's records between the `full_reviewgraphen`
+and `b1_free_form` arms measured a scaffold whose obligation content never
+carried a real review target; it does not establish anything about
+ReviewGraphen's obligation-driven review capability. This does not change
+any recorded trial outcome; it corrects how the `full_reviewgraphen` arm's
+obligation content should be understood.

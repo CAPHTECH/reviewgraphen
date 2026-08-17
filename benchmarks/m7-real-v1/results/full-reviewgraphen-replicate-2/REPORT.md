@@ -57,3 +57,26 @@ This retrospective, purposive corpus contains already discovered and fixed bugs 
 3. Full ReviewGraphen replicate 2 detected 1/20 selected roots, the same measured rate as B1, G3-proxy, and full replicate 1.
 4. The current data do not distinguish detection performance among the arms.
 5. The generic product still lacks a general correctness-obligation synthesis contract; the M7 profile demonstrates a bounded consumer integration, not a universal solution.
+
+## Addendum (2026-08-17, appended, not a rewrite)
+
+This report's "What the generic path contributes" section states the M7
+consumer "explicitly supplies... five admitted obligations per snapshot"
+as "the missing explicit review profile." A later investigation
+(`docs/measurement-validity-obligation-synthesis-capability-gap.md`)
+directly reconstructed this replicate's snapshot-01 packet from its
+manifest-declared source hashes and regenerated its obligations through
+the same code path this replicate used
+(`benchmarks/m7-head-local-v1/diagnostics/m7-real-v1-full-obligation-
+regeneration/`). The five admitted obligations are the same
+`reviewgraphen.capability_gap` obligations this report's own summary point
+5 already describes as measuring "analyzer capability gaps rather than
+code-defect detection" for the ordinary path — not a distinct, substantive
+review profile. No adapter in this repository has ever declared the
+capabilities `MvpRulePack`'s rules require at `Complete`, nor set the
+`changed` artifact attribute its one capability-reachable rule needs; see
+the linked finding for the full root-cause analysis. This does not change
+the recorded detection counts above, which remain frozen; it corrects how
+"the missing explicit review profile" should be read: as packaging
+(mechanism ontology, context envelopes, excerpt selection), not as
+substantive obligation content.
