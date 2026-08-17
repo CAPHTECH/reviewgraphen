@@ -1,0 +1,134 @@
+{
+  "artifact": "response-000001.sse.gz",
+  "completed_response": {
+    "error": null,
+    "id": "resp_9e535e557a4d9f74e657db82b700fe633031fd70d8f3630b",
+    "incomplete_details": null,
+    "output_items": [
+      {
+        "content_types": [
+          "reasoning_text"
+        ],
+        "role": null,
+        "status": "completed",
+        "text_fields": [
+          {
+            "path": "content[0].text",
+            "sha256": "sha256:c2d74893d92c39ad053ff0d67fd47099519870c77257370793d1673d8b7ed36e",
+            "utf8_bytes": 141
+          }
+        ],
+        "type": "reasoning"
+      },
+      {
+        "content_types": [
+          "output_text"
+        ],
+        "role": "assistant",
+        "status": "completed",
+        "text_fields": [
+          {
+            "path": "content[0].text",
+            "sha256": "sha256:db8b8e836881534b3e62cf633db64f28af421e09feaae85bd3f3249912053c65",
+            "utf8_bytes": 4
+          }
+        ],
+        "type": "message"
+      }
+    ],
+    "present": true,
+    "status": "completed",
+    "usage": {
+      "input_tokens": 6989,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 36,
+      "output_tokens_details": {
+        "reasoning_tokens": 34
+      },
+      "total_tokens": 7025
+    }
+  },
+  "compressed_bytes": 20780,
+  "compressed_sha256": "sha256:87c274a6910d0c82416fdc84057809c565417aab113347e82820af6bcaac0ba4",
+  "created_response": {
+    "id": "resp_9e535e557a4d9f74e657db82b700fe633031fd70d8f3630b",
+    "max_output_tokens": 65536,
+    "model": "qwen3.8-27b-mlx",
+    "present": true,
+    "reasoning": {
+      "effort": "low",
+      "summary": "auto"
+    }
+  },
+  "data_lines": 49,
+  "event_counts": {
+    "response.completed": 1,
+    "response.content_part.added": 2,
+    "response.content_part.done": 2,
+    "response.created": 1,
+    "response.in_progress": 1,
+    "response.output_item.added": 2,
+    "response.output_item.done": 2,
+    "response.output_text.delta": 2,
+    "response.output_text.done": 1,
+    "response.reasoning_text.delta": 34,
+    "response.reasoning_text.done": 1
+  },
+  "gzip_complete": true,
+  "invalid_data_lines": 0,
+  "raw_bytes": 90835,
+  "raw_sha256": "sha256:2ef24ad9ff81d6e072714d686f4f0239842a6cf11a636d6613f1cbe96ca8d863",
+  "schema": "reviewgraphen.benchmark.provider_response_inspection.v1",
+  "text_fields_by_event": {
+    "response.completed:response.output[0].content[0].text": {
+      "occurrences": 1,
+      "utf8_bytes": 141
+    },
+    "response.completed:response.output[1].content[0].text": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.completed:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.content_part.added:part.text": {
+      "occurrences": 2,
+      "utf8_bytes": 0
+    },
+    "response.content_part.done:part.text": {
+      "occurrences": 2,
+      "utf8_bytes": 145
+    },
+    "response.created:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.in_progress:response.reasoning.summary": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.output_item.done:item.content[0].text": {
+      "occurrences": 2,
+      "utf8_bytes": 145
+    },
+    "response.output_text.delta:delta": {
+      "occurrences": 2,
+      "utf8_bytes": 4
+    },
+    "response.output_text.done:text": {
+      "occurrences": 1,
+      "utf8_bytes": 4
+    },
+    "response.reasoning_text.delta:delta": {
+      "occurrences": 34,
+      "utf8_bytes": 141
+    },
+    "response.reasoning_text.done:text": {
+      "occurrences": 1,
+      "utf8_bytes": 141
+    }
+  }
+}
