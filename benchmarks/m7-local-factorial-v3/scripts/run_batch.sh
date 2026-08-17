@@ -63,7 +63,6 @@ if (( ready == 0 )); then
 fi
 export M7_V3_SHAPER_LOG="$shaper_log"
 export M7_V3_SHAPER_CAPTURE_DIR="$capture_dir"
-export M7_V3_TRIAL_KEY="${attempt}-${mode}-${start}"
 
 index=0
 completed=0
@@ -78,6 +77,7 @@ while IFS=$'\t' read -r snapshot arm input; do
     continue
   fi
   result="$batch_root/$mode/$snapshot/$arm"
+  export M7_V3_TRIAL_KEY="${attempt}-${mode}-${index}"
   printf 'START attempt=%s index=%d snapshot=%s arm=%s completed=%d valid=%d protocol_invalid=%d unexecutable=%d server_failure=%d\n' \
     "$attempt" "$index" "$snapshot" "$arm" "$completed" "$valid" "$invalid" "$unexecutable" "$server_failure"
   bash "$runner" "$input" "$result"

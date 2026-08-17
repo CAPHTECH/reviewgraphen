@@ -237,7 +237,186 @@ required only to satisfy the Codex profile's `env_key`, per the server
 administrator) and `M7_V3_REASONING_EFFORT=none` before invoking
 `run_batch.sh`.
 
-## 4. Authoritative execution condition going forward
+## 3.8 Cell-2 transport-attribution bug (discovered after sequential-3 cells 1-2 completed)
+
+§3.6 above stated that a single `M7_V3_TRIAL_KEY` constant for the whole
+attempt (`"${attempt}-${mode}-${start}"`) was a safe "constant-key precedent
+already used for sequential execution." That claim was wrong and is
+corrected here rather than edited away.
+
+After cell 2 (snapshot-06 full) completed, its `transport-record.json` and
+derived `generation-metrics.json` were found to contain **cell 1's** transport
+data (`raw_response_artifact: "response-000001.sse.gz"`,
+`provider_output_tokens: 65535`, `reasoning_delta_events: 65289` — identical
+to cell 1's own recorded values), not cell 2's own. Root cause: `run_trial.sh`
+waits only for `request_count >= 1` matching rows for its trial key before
+reading `transport-record.jsonl`; with one constant key shared across the
+whole attempt, cell 2's very first poll already found cell 1's row a match
+and could read `transport-record.jsonl` before cell 2's own row had been
+appended to the shaper's master log, then take the (at that instant) only
+matching row via `tail -n1` — cell 1's stale row. This is a race, not a
+deterministic failure, which is why cell 1 (the first cell, with no prior
+row to race against) was unaffected and its own transport-record.jsonl
+correctly held exactly its own one row.
+
+**Scope of the bug**: it corrupts only the transport-derived telemetry fields
+in cell 2's `generation-metrics.json` (`provider_*_tokens`,
+`*_delta_events`, `*_delta_utf8_bytes`, `cached_input_tokens`,
+`token_attribution`). It does **not** affect `candidate.json`,
+`candidate-validation`, `collection.json`, `elapsed_milliseconds`, or the
+`valid` outcome for cell 2 — those are read from cell 2's own
+`process-record.json` and process-output files, produced by cell 2's own
+`bwrap`/codex invocation, independent of the shaper's JSONL bookkeeping.
+The schema-gate result for cell 2 is unaffected; only its descriptive
+telemetry was wrong.
+
+**Corrected cell 2 transport values**, read directly from
+`request-shaper-stage_1-0.jsonl` row 2 (`request_sequence: 2`,
+`raw_response_artifact: "response-000002.sse.gz"`, verified against
+`raw_response_compressed_sha256:
+sha256:e117f158f9fb2bf230ab17f8b4cd815e611dd375bd741e62be96ee6e7de49b8a`):
+
+| Field | Cell 2 corrected value |
+| --- | --- |
+| `elapsed_seconds` | 805.675 |
+| `provider_input_tokens` | 39,647 |
+| `cached_input_tokens` | 6,144 |
+| `provider_output_tokens` | 15,159 |
+| `provider_reported_reasoning_tokens` | 14,706 |
+| `provider_non_reasoning_output_tokens` | 453 |
+| `reasoning_delta_events` | 14,569 |
+| `reasoning_delta_utf8_bytes` | 57,133 |
+| `output_text_delta_events` | 453 |
+| `output_text_delta_utf8_bytes` | 955 |
+| `token_attribution` | `ambiguous_mixed_or_absent_content_events` |
+
+The already-committed per-cell `generation-metrics.json` and
+`transport-record.json` files for cell 2 are **not** retroactively edited in
+place — they are an authentic record of what the script actually produced,
+bug included. This table is the correction of record; any future reader
+comparing per-cell diagnostics against this document must use this table,
+not the cell's own `generation-metrics.json`, for cell 2's transport
+telemetry.
+
+**Fix applied**: `scripts/run_batch.sh` now exports a per-trial-unique
+`M7_V3_TRIAL_KEY="${attempt}-${mode}-${index}"` inside the trial loop
+(previously a single constant set once before the loop), so no cell can ever
+match an earlier cell's stale row. This restores, for sequential execution,
+the same per-trial-uniqueness invariant that `PARALLEL2_AMENDMENT.md`
+required for concurrent execution — the invariant this document's §3.6 fix
+incorrectly relaxed to a constant. This fix is plumbing only: it does not
+touch the model, reasoning effort, sampling, context/output limits, idle
+timeout, retry count, candidate schema, or ADR 0037 extraction.
+
+## 4. Sequential-3 cells 3-4 stopped and v3 final result
+
+The user redirected the overall benchmark program (see conversation record)
+from re-detecting known frozen-oracle targets to searching for previously
+undiscovered defects in `fsl` HEAD, under a new experiment
+`m7-head-local-v1`. This section closes out v3 stage1 under its own frozen
+rules before that pivot; it does not itself change any v3 rule.
+
+### 4.1 Cell 3 (snapshot-34 B1): operator-terminated
+
+Cell 3 started at 2026-08-17T07:17:13Z (per `run_batch.sh`'s `START` line)
+and was terminated by the operator at approximately 2026-08-17T07:27:53Z–
+07:28:00Z UTC, roughly 10-11 minutes after starting, because (a) the 4/4
+gate was already mathematically unreachable once cell 1 recorded an invalid
+outcome (§4.2), making the marginal value of completing cells 3-4 low, and
+(b) the user redirected the experiment. This is **not** a time-based stop:
+cell 1 alone had already run 5,146 seconds (85.8 minutes) without being
+treated as anomalous, and the stop reason here is the gate arithmetic and
+the redirect, not elapsed time.
+
+Verified before and after termination: `response-000003.sse.partial` is 0
+bytes both before and after the kill, `request-shaper-stage_1-0.jsonl`
+contains no row for this cell, and no `process-status` file was ever written
+for `stage_1/snapshot-34/b1_free_form`. The process tree (`run_trial.sh`,
+`reviewgraphen-benchmark`, both `bwrap` sandboxes) was confirmed fully
+terminated and the request shaper confirmed down (`healthz` connection
+refused) before this document was written. Cell 3 consumed **zero semantic
+attempts** — it is `operator_terminated`, a new outcome distinct from every
+excluded server-side or client-side category already defined, because the
+stop originated from the operator/user, not from the provider or transport.
+
+Cell 4 (snapshot-34 full) was never issued.
+
+### 4.2 Final v3 4/4 gate tally under the current execution condition
+
+| Cell | Outcome | Elapsed | Counts toward gate? |
+| --- | --- | --- | --- |
+| snapshot-06 B1 | `empty_final_after_process_completion` (reasoning_runaway: reasoning consumed 65,535 of 65,536 output tokens, zero final content) | 5,146.477 s | yes — **invalid** |
+| snapshot-06 full | `valid`, candidate hash `sha256:dd2c2215dbc6d4f50c02fbe1ce9979facd50cb3b078b782031ae6317c46bcd47`, 0 findings (correct abstention on a control unit — see §4.4) | 805.675 s | yes — **valid** |
+| snapshot-34 B1 | `operator_terminated` | ~10-11 min in flight | no — excluded |
+| snapshot-34 full | never issued | — | no |
+
+**v3 4/4 gate: FAILED.** 1 valid, 1 invalid, 2 not attempted. The gate was
+already mathematically unreachable after cell 1 (a maximum of 3 of 4 cells
+could ever be valid once cell 1 recorded invalid), independent of the later
+decision to stop cells 3-4. This is the frozen final result for
+`m7-local-factorial-v3` stage1 under its currently-authoritative execution
+condition (§5). It is not pooled with the earlier, superseded 300,000 ms
+idle-timeout condition's 1-valid/1-invalid result (§2), which remains a
+separate, non-pooled observation.
+
+### 4.3 Why the gate failed: cause characterization
+
+Across every natural-conclusion provider request issued anywhere in v3
+stage1 (all conditions, n=8; see §1.2 and this section), exactly three
+requests ever produced non-empty final content: the original pre-amendment
+snapshot-06 B1 (valid), the pre-amendment snapshot-06 full (schema-invalid —
+the model itself wrote `reviewgraphen.bandidate_output.v1`), and this
+attempt's snapshot-06 full (valid). Of those three, two passed the unchanged
+candidate schema and one failed on a self-inflicted spelling error — a 2-of-3
+pass rate when the model does emit content. The other five natural-conclusion
+requests never reached final content at all: one client idle timeout, one
+`Model unloaded`, two `upstream_model_crash`, and this attempt's cell 1
+(reasoning consumed the entire output budget). None of those five was a
+candidate-schema rejection.
+
+This supports characterizing the v3 4/4 gate failure as driven primarily by
+**failure to reach final content** — upstream/transport failures beyond this
+experiment's control, plus at least one clear case of reasoning consuming
+the entire output budget before any candidate text — rather than by the
+model's inability to conform to the candidate schema once it does produce
+content. This is a description of the observed pattern across a small n (3
+non-empty-final requests, 5 empty-final requests), not a statistical claim
+about the model's true rate of either behavior.
+
+### 4.4 Arm asymmetry: an unconfirmed hypothesis carried forward
+
+Within this attempt's own two completed cells, arm and outcome coincide with
+a large gap:
+
+| Arm | Elapsed | Provider output tokens (of 65,536 max) | Reasoning share | Final content | Outcome |
+| --- | --- | --- | --- | --- | --- |
+| B1 (no scaffold) | 5,146.477 s (85.8 min) | 65,535 (99.998%) | 65,535 reasoning / 0 non-reasoning | 0 bytes | invalid (reasoning_runaway) |
+| full (ReviewGraphen scaffold) | 805.675 s (13.4 min) | 15,159 (23.1%) | 14,706 reasoning / 453 non-reasoning | 955 bytes | valid |
+
+Elapsed time differs by a factor of ~6.4×; output-token consumption differs
+by a factor of ~4.3×. This is the opposite direction from a prior
+(now-withdrawn) prediction in this experiment's history that the
+scaffolded arm's larger input would drive longer reasoning and more
+runaway risk; observed here, the unscaffolded arm ran longer and ran away,
+the scaffolded arm converged quickly and passed.
+
+**No causal claim is made.** This is one paired observation (n=1 per arm)
+from two different snapshots' B1 and full cells being compared across two
+different underlying inputs (snapshot-06 B1's input differs from
+snapshot-06 full's input in content and byte size, though both are the same
+snapshot/unit), under a schema-probe design not built to test this
+question, with cell 1's own duration itself confounded with its failure (a
+request that runs to the output cap necessarily also runs long). Confounds
+are not excluded. The hypothesis is carried forward explicitly for
+`m7-head-local-v1` to examine with more units per arm: **does the
+ReviewGraphen scaffold reduce reasoning-runaway risk and shorten
+time-to-completion relative to unscaffolded B1, on this model and backend?**
+If the same direction recurs across more units, it becomes evidence
+relevant to the user's second research question (does ReviewGraphen with a
+local LLM help); if it does not recur, the single observation here was
+noise.
+
+## 5. Authoritative execution condition going forward
 
 Per `LM_STUDIO_IDLE_TIMEOUT_AMENDMENT.md` and `PARALLEL2_REVERT_AMENDMENT.md`,
 combined:
@@ -254,4 +433,10 @@ combined:
 - Retries: zero, no automatic or operator retry on any failure
 - Concurrency: 1 (sequential), reverted by `PARALLEL2_REVERT_AMENDMENT.md`
 - Candidate schema and ADR 0037 extraction: unchanged
-- v3 4/4 gate: unchanged, zero of four cells consumed under this condition
+- v3 4/4 gate: **closed, failed** (§4.2) — 1 valid, 1 invalid, 2 not
+  attempted (1 operator-terminated, 1 never issued). `m7-local-factorial-v3`
+  stage1 does not proceed to positive trials, per its own preregistered
+  `otherwise: stop_before_positive_trials` rule. This execution condition
+  (backend, model, reasoning effort, sampling, context/output limits, idle
+  timeout, retry policy, concurrency=1) remains the reference condition
+  carried into `m7-head-local-v1`'s own separate preregistration.
