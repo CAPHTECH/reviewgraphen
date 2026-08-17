@@ -1,0 +1,231 @@
+[
+  {
+    "unit": "head-local-00",
+    "judgments": [
+      {
+        "finding_id": "finding:60f1d871dd43fefe99ea68787d64974c",
+        "disposition": "should_not_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": true,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": true,
+          "notes": "db.rs:45-54 does join sanitized parts with the literal \"QqDbSepqQ\" and safe() (db.rs:17-35) preserves alphanumerics, so the collision arithmetic is correct and the cited call sites (not_null invariant name, artifact-compatibility invariant name) are the right ones. But the in-function comment shows the token was deliberately chosen as an improbable separator because `__` is reserved for composed-name display; a collision requires an identifier literally containing \"QqDbSepqQ\", and the finding itself concedes no user-visible impact was established."
+        }
+      },
+      {
+        "finding_id": "finding:6a84d1d6bc12a7da125f3fb1fbc6d8e3",
+        "disposition": "issue_should_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": true,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": false,
+          "notes": "compose.rs:340-350 is exactly the ComposeItem::Common(SpecItem::Init) arm calling rewrite_compose_statements, and that helper collects Result values then discards the error with .expect(\"compose alias validation occurs during lowering\"), while sibling paths (rewrite_compose_item, resolve_alias_param, resolve_alias_action_item) propagate with `?`. resolve_alias_statement can genuinely fail: a ForAll binder or a quantified/aggregate binder reaches resolve_alias_binder -> resolve_alias_qualified_name, which returns Err(\"unknown alias\") for an undeclared namespace, turning lower_compose's documented CoreError contract into a panic."
+        }
+      },
+      {
+        "finding_id": "finding:6cc26ce11e31ccbb151cd4bf3a6011a4",
+        "disposition": "issue_should_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": true,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": false,
+          "notes": "column_member (db.rs:37-39) is format!(\"col_{}_{}\", safe(table), safe(column)) and safe() keeps '_', so ('a','b_c') and ('a_b','c') both yield col_a_b_c; underscores in table/column names are ordinary in real schemas, unlike the improbable-separator case. The consequences are visible in the cited code: Column enum members come straight from columns.keys().map(column_member), and the init loop (~343-363) writes column_exists/column_backfilled/column_not_null at the same map key for both columns so the later BTreeMap entry silently overwrites the earlier one."
+        }
+      },
+      {
+        "finding_id": "finding:c77fc5faebd28975f4c00fb23310577e",
+        "disposition": "issue_should_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": true,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": false,
+          "notes": "fsl-parse-kernel.rs:17 is literally `|path| fs::read_to_string(path).expect(\"read FSL source file\")`, while lines 29-32 handle parse/lowering failures with eprintln + exit(2), so a nonexistent root path aborts with a Rust panic (exit 101) instead of the binary's own diagnostic channel. The inconsistency with FsResolver::read (compose.rs:40-48), which converts the same io::Error into a CoreError for dependency files, is real and minor but trackable."
+        }
+      }
+    ],
+    "clusters": {
+      "finding:60f1d871dd43fefe99ea68787d64974c": [
+        "finding:60f1d871dd43fefe99ea68787d64974c"
+      ],
+      "finding:6a84d1d6bc12a7da125f3fb1fbc6d8e3": [
+        "finding:6a84d1d6bc12a7da125f3fb1fbc6d8e3"
+      ],
+      "finding:6cc26ce11e31ccbb151cd4bf3a6011a4": [
+        "finding:6cc26ce11e31ccbb151cd4bf3a6011a4"
+      ],
+      "finding:c77fc5faebd28975f4c00fb23310577e": [
+        "finding:c77fc5faebd28975f4c00fb23310577e"
+      ]
+    }
+  },
+  {
+    "unit": "head-local-01",
+    "judgments": [
+      {
+        "finding_id": "finding:90fe3a1a125bd5b1bfb77b288f838a2f",
+        "disposition": "issue_should_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": false,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": false,
+          "notes": "Confirmed in model.rs: the validate_statement_types, validate_model_expression_types and KPI-projection map_err closures build a fresh model_error(..).with_origin(..) so span stays None, while the state-field path at the cited lines does .with_origin(origin) then .map_err(|e| e.at(field.span)). Given ModelError.span's own doc comment ('The CLI reports this as the loc that docs/DESIGN-v1.md 7.2 guarantees'), these three paths lose the structured location even though the origin carries a span; the exact user impact depends on CLI code not present under sources/, so it is plausible rather than proven."
+        }
+      },
+      {
+        "finding_id": "finding:a266668f9e54ff5763f6a6b3e5af7661",
+        "disposition": "issue_should_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": false,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": false,
+          "notes": "The annotations.validate() map_err in build() calls source_origin(\"annotation\", error.span, None), and source_origin unconditionally emits OriginId(\"kernel:inline-initializer:{name}:..\"), declaration_path [\"state\", name] and a lowering step kind \"inline_initializer\" with detail 'normalized to init assignment'; for an annotation diagnostic that provenance is factually false, and the neighbouring type_diagnostic_origin(span) is the neutral alternative. Display renders only the span, so this is a low-severity provenance-fidelity bug rather than a user-facing message failure."
+        }
+      },
+      {
+        "finding_id": "finding:d1764a230ff84da111af70f5cbca814d",
+        "disposition": "issue_should_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": true,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": false,
+          "notes": "collect_types' SpecItem::Type arm inserts TypeDef::Domain{lo,hi} straight from const_int with no lo<=hi check, and resolve_type's TypeExpr::Range arm likewise, whereas action_param's Param::Range explicitly rejects lo>hi with 'action parameter range is empty'. With lo>hi, domain_values ((*lo..=*hi)) yields an empty vec while default_value returns Value::Int(*lo) (line 218), a default outside its own domain, accepted silently; the inconsistency with the parameter check is a genuine gap worth tracking even though surface reachability was not demonstrated."
+        }
+      },
+      {
+        "finding_id": "finding:db87675561b5b8c9ce7d00e957bc1e8a",
+        "disposition": "issue_should_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": true,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": false,
+          "notes": "eval_const_binary's '/' arm only rejects right==0 and then calls left.div_euclid(right), which overflows for i64::MIN / -1, unlike the '+'/'-'/'*' arms (checked_int), Expr::Neg (checked_neg) and abs (checked_abs) that all return a clean 'integer overflow' ModelError; i64::MIN is reachable through consts (e.g. -9223372036854775807 - 1 via checked_sub). One detail of the rationale is off (division overflow panics in release too, rather than wrapping) and the adjacent '%' arm's rem_euclid has the same hole, but the core defect, a panic instead of a diagnostic from a single const declaration, holds."
+        }
+      },
+      {
+        "finding_id": "finding:f04de18c8b8c88a22a2270d9d4fafdef",
+        "disposition": "issue_should_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": true,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": false,
+          "notes": "domain_values materializes (*lo..=*hi).map(Value::Int).collect() with no cap, map_key_values derives hi from max(consts) so an unrelated large integer const inflates every default Map<Int,_> value, and static_leadsto_bindings builds the full cross product cloning a BTreeMap per combination while only rejecting where-filters and collection binders. No bound or diagnostic exists on these paths, so a large but finite domain exhausts memory instead of producing a ModelError; enumeration itself is clearly intended, so the actionable part is the missing bound, not the enumeration."
+        }
+      }
+    ],
+    "clusters": {
+      "finding:90fe3a1a125bd5b1bfb77b288f838a2f": [
+        "finding:90fe3a1a125bd5b1bfb77b288f838a2f"
+      ],
+      "finding:a266668f9e54ff5763f6a6b3e5af7661": [
+        "finding:a266668f9e54ff5763f6a6b3e5af7661"
+      ],
+      "finding:d1764a230ff84da111af70f5cbca814d": [
+        "finding:d1764a230ff84da111af70f5cbca814d"
+      ],
+      "finding:db87675561b5b8c9ce7d00e957bc1e8a": [
+        "finding:db87675561b5b8c9ce7d00e957bc1e8a"
+      ],
+      "finding:f04de18c8b8c88a22a2270d9d4fafdef": [
+        "finding:f04de18c8b8c88a22a2270d9d4fafdef"
+      ]
+    }
+  },
+  {
+    "unit": "head-local-02",
+    "judgments": [
+      {
+        "finding_id": "finding:56454b389d6051568ffac0b93d1451df",
+        "disposition": "should_not_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": true,
+          "false_positive_suspected": true,
+          "design_intent_confusion_suspected": true,
+          "notes": "Locations resolve exactly: version() is lines 18-28 and the pin check (required_prefix = \"Z3 4.16.0.\") is lines 70-77 of rust/fsl-solver-z3/src/lib.rs. The premise depends on z3::full_version() lacking a fourth component, but Z3_get_full_version conventionally reports four components (\"Z3 4.16.0.0\"), and two in-file tests (linked_version_uses_the_public_z3_prefix and pinned_backend_checks_and_projects_a_model) assert the same trailing-dot prefix, so a green build proves the pin matches; the finding itself concedes it is unverified and degrades to a style preference (parse components instead of prefix-match) on a deliberately fail-closed, test-locked pin."
+        }
+      },
+      {
+        "finding_id": "finding:648554cdb9019d621aedf4489161efd4",
+        "disposition": "issue_should_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": true,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": false,
+          "notes": "Confirmed from the code as written: init_write_key (explicit.rs ~911-931) only emits ConcreteIndex for Expr::Num or an Expr::Var not in bound_names, so a forall-binder index collapses to InitWriteKey::Root(map), and walk_init's Assign arm (~657-663) rejects any repeat of that key with \"assigned more than once in init forall\"; possibly_assigned is threaded through the ForAll recursion and returned to the caller, so two sequential foralls writing disjoint key ranges of the same map root are rejected even though the coverage layer (assignment_coverage plus join_coverage's Keys union, and compute_binder_values, which already computes the binder's finite domain) can represent both contributions. No comment marks this coarsening as intended, and the diagnostic text is inaccurate for disjoint domains, so the conservative over-rejection is worth tracking."
+        }
+      },
+      {
+        "finding_id": "finding:8ed459b3089bd70d5df14dc243ae4950",
+        "disposition": "should_not_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": false,
+          "false_positive_suspected": false,
+          "design_intent_confusion_suspected": true,
+          "notes": "Lines 30-67 are indeed the KEYWORDS literal and it does not contain \"use\", and rename_identifier_validation_is_closed does assert !valid_identifier(\"use\"), so the factual observation holds. But KEYWORDS is plainly a curated completion list rather than a mirror of index::is_keyword: it also omits \"internal\", \"aggregate\", \"as\", \"from\", \"or\", \"not\" and \"and\", all of which appear in this file's own fixtures (`internal lib.bump`, `ready or not ready`, `aggregate Order`), and no code or comment asserts the two sets coincide. The finding singles out one item of a general, cosmetic, non-behavioral gap; not actionable as a tracked defect."
+        }
+      },
+      {
+        "finding_id": "finding:da2382e421d27a2bc560488e82315c0b",
+        "disposition": "should_not_be_created",
+        "duplicate_of": [],
+        "quality": {
+          "specificity": "file_and_line_identified_and_relevant",
+          "unresolvable_location": false,
+          "reproduction_conditions_stated": true,
+          "false_positive_suspected": true,
+          "design_intent_confusion_suspected": false,
+          "notes": "The cited asymmetry exists (didChange sets document.version = params.text_document.version near line 202; the didSave arm at ~206-213 only sets document.text), but the finding's premise is wrong: DidSaveTextDocumentParams in lsp_types carries a plain TextDocumentIdentifier (uri only) plus optional text, so params.text_document.version does not exist and there is nothing to record \u2014 a save does not bump the document version in LSP. publish_diagnostics correctly reuses the stored version from the last didOpen/didChange, so no stale-version condition arises."
+        }
+      }
+    ],
+    "clusters": {
+      "finding:56454b389d6051568ffac0b93d1451df": [
+        "finding:56454b389d6051568ffac0b93d1451df"
+      ],
+      "finding:648554cdb9019d621aedf4489161efd4": [
+        "finding:648554cdb9019d621aedf4489161efd4"
+      ],
+      "finding:8ed459b3089bd70d5df14dc243ae4950": [
+        "finding:8ed459b3089bd70d5df14dc243ae4950"
+      ],
+      "finding:da2382e421d27a2bc560488e82315c0b": [
+        "finding:da2382e421d27a2bc560488e82315c0b"
+      ]
+    }
+  }
+]

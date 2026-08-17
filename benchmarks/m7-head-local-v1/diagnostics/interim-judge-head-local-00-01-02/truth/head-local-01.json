@@ -1,0 +1,41 @@
+{
+  "schema": "reviewgraphen.benchmark.head_local_judge_truth.v1",
+  "unit_id": "head-local-01",
+  "entries": [
+    {
+      "finding_id": "finding:db87675561b5b8c9ce7d00e957bc1e8a",
+      "contributing_arms": [
+        "qwen_skill"
+      ],
+      "original_local_id": "finding-const-div-euclid-overflow"
+    },
+    {
+      "finding_id": "finding:f04de18c8b8c88a22a2270d9d4fafdef",
+      "contributing_arms": [
+        "qwen_skill"
+      ],
+      "original_local_id": "finding-unbounded-domain-enumeration"
+    },
+    {
+      "finding_id": "finding:90fe3a1a125bd5b1bfb77b288f838a2f",
+      "contributing_arms": [
+        "qwen_skill"
+      ],
+      "original_local_id": "finding-typecheck-errors-lose-cli-loc"
+    },
+    {
+      "finding_id": "finding:a266668f9e54ff5763f6a6b3e5af7661",
+      "contributing_arms": [
+        "qwen_skill"
+      ],
+      "original_local_id": "finding-annotation-origin-mislabel"
+    },
+    {
+      "finding_id": "finding:d1764a230ff84da111af70f5cbca814d",
+      "contributing_arms": [
+        "qwen_skill"
+      ],
+      "original_local_id": "finding-inverted-range-type-accepted"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "schema": "reviewgraphen.benchmark.head_local_judge_truth.v1",
+  "unit_id": "head-local-02",
+  "entries": [
+    {
+      "finding_id": "finding:648554cdb9019d621aedf4489161efd4",
+      "contributing_arms": [
+        "qwen_skill"
+      ],
+      "original_local_id": "finding-init-forall-double-write"
+    },
+    {
+      "finding_id": "finding:56454b389d6051568ffac0b93d1451df",
+      "contributing_arms": [
+        "qwen_skill"
+      ],
+      "original_local_id": "finding-z3-version-pin"
+    },
+    {
+      "finding_id": "finding:da2382e421d27a2bc560488e82315c0b",
+      "contributing_arms": [
+        "qwen_skill"
+      ],
+      "original_local_id": "finding-didsave-version-stale"
+    },
+    {
+      "finding_id": "finding:8ed459b3089bd70d5df14dc243ae4950",
+      "contributing_arms": [
+        "qwen_skill"
+      ],
+      "original_local_id": "finding-keywords-use-missing"
+    }
+  ]
+}

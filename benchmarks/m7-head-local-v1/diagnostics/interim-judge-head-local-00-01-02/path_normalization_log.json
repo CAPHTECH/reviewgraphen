@@ -1,0 +1,194 @@
+[
+  {
+    "unit": "head-local-00",
+    "finding": "finding-1",
+    "original_path": "agent_input/source/rust/fsl-core/src/compose.rs",
+    "normalized_path": "rust/fsl-core/src/compose.rs"
+  },
+  {
+    "unit": "head-local-00",
+    "finding": "finding-1",
+    "original_path": "agent_input/source/rust/fsl-core/src/compose.rs",
+    "normalized_path": "rust/fsl-core/src/compose.rs"
+  },
+  {
+    "unit": "head-local-00",
+    "finding": "finding-2",
+    "original_path": "agent_input/source/rust/fsl-core/src/db.rs",
+    "normalized_path": "rust/fsl-core/src/db.rs"
+  },
+  {
+    "unit": "head-local-00",
+    "finding": "finding-2",
+    "original_path": "agent_input/source/rust/fsl-core/src/db.rs",
+    "normalized_path": "rust/fsl-core/src/db.rs"
+  },
+  {
+    "unit": "head-local-00",
+    "finding": "finding-2",
+    "original_path": "agent_input/source/rust/fsl-core/src/db.rs",
+    "normalized_path": "rust/fsl-core/src/db.rs"
+  },
+  {
+    "unit": "head-local-00",
+    "finding": "finding-3",
+    "original_path": "agent_input/source/rust/fsl-core/src/db.rs",
+    "normalized_path": "rust/fsl-core/src/db.rs"
+  },
+  {
+    "unit": "head-local-00",
+    "finding": "finding-3",
+    "original_path": "agent_input/source/rust/fsl-core/src/db.rs",
+    "normalized_path": "rust/fsl-core/src/db.rs"
+  },
+  {
+    "unit": "head-local-00",
+    "finding": "finding-3",
+    "original_path": "agent_input/source/rust/fsl-core/src/db.rs",
+    "normalized_path": "rust/fsl-core/src/db.rs"
+  },
+  {
+    "unit": "head-local-00",
+    "finding": "finding-4",
+    "original_path": "agent_input/source/rust/fsl-core/src/bin/fsl-parse-kernel.rs",
+    "normalized_path": "rust/fsl-core/src/bin/fsl-parse-kernel.rs"
+  },
+  {
+    "unit": "head-local-00",
+    "finding": "finding-4",
+    "original_path": "agent_input/source/rust/fsl-core/src/bin/fsl-parse-kernel.rs",
+    "normalized_path": "rust/fsl-core/src/bin/fsl-parse-kernel.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-const-div-euclid-overflow",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-const-div-euclid-overflow",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-unbounded-domain-enumeration",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-unbounded-domain-enumeration",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-unbounded-domain-enumeration",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-typecheck-errors-lose-cli-loc",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-typecheck-errors-lose-cli-loc",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-typecheck-errors-lose-cli-loc",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-typecheck-errors-lose-cli-loc",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-annotation-origin-mislabel",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-annotation-origin-mislabel",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-inverted-range-type-accepted",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-inverted-range-type-accepted",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-inverted-range-type-accepted",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-01",
+    "finding": "finding-inverted-range-type-accepted",
+    "original_path": "agent_input/source/rust/fsl-core/src/model.rs",
+    "normalized_path": "rust/fsl-core/src/model.rs"
+  },
+  {
+    "unit": "head-local-02",
+    "finding": "finding-init-forall-double-write",
+    "original_path": "source/rust/fsl-runtime/src/explicit.rs",
+    "normalized_path": "rust/fsl-runtime/src/explicit.rs"
+  },
+  {
+    "unit": "head-local-02",
+    "finding": "finding-init-forall-double-write",
+    "original_path": "source/rust/fsl-runtime/src/explicit.rs",
+    "normalized_path": "rust/fsl-runtime/src/explicit.rs"
+  },
+  {
+    "unit": "head-local-02",
+    "finding": "finding-z3-version-pin",
+    "original_path": "source/rust/fsl-solver-z3/src/lib.rs",
+    "normalized_path": "rust/fsl-solver-z3/src/lib.rs"
+  },
+  {
+    "unit": "head-local-02",
+    "finding": "finding-z3-version-pin",
+    "original_path": "source/rust/fsl-solver-z3/src/lib.rs",
+    "normalized_path": "rust/fsl-solver-z3/src/lib.rs"
+  },
+  {
+    "unit": "head-local-02",
+    "finding": "finding-didsave-version-stale",
+    "original_path": "source/rust/fsl-lsp/src/server.rs",
+    "normalized_path": "rust/fsl-lsp/src/server.rs"
+  },
+  {
+    "unit": "head-local-02",
+    "finding": "finding-didsave-version-stale",
+    "original_path": "source/rust/fsl-lsp/src/server.rs",
+    "normalized_path": "rust/fsl-lsp/src/server.rs"
+  },
+  {
+    "unit": "head-local-02",
+    "finding": "finding-keywords-use-missing",
+    "original_path": "source/rust/fsl-lsp/src/server.rs",
+    "normalized_path": "rust/fsl-lsp/src/server.rs"
+  }
+]
