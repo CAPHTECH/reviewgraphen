@@ -1,0 +1,137 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_head_local_v1_preregistration.v1",
+  "experiment": "m7-head-local-v1",
+  "status": "frozen_before_first_generation_or_judge_call",
+  "supersedes_nothing": true,
+  "reuses_without_rewriting": [
+    "m7-head-issue-v1 (ADR 0035 design philosophy, blinding pattern, isolated claude_cli backend, non-authority disposition contract)",
+    "m7-local-factorial-v3 (frozen execution condition, candidate schema, ADR 0037 extraction contract, failure-class taxonomy)"
+  ],
+  "question": "does ReviewGraphen with qwen3.8:27b-mlx surface findings on live, previously-unexamined fsl HEAD code that a cross-family judge would plausibly want tracked, and does the ReviewGraphen scaffold change this relative to unscaffolded qwen (B1)",
+  "target": {
+    "source_repository": "/home/rizumita/github/fsl",
+    "source_mutability": "read_only",
+    "revision": "git:e589014d1655b1224f5b83a7f2de99532a0dcdba",
+    "revision_pin_source": "UNIT_SELECTION.md",
+    "no_upstream_effects": [
+      "no_issue_creation",
+      "no_branch_creation",
+      "no_commit",
+      "no_patch_submission",
+      "no_pull_request"
+    ],
+    "ground_truth": "none — this is undiscovered-defect search on live code, not known-target re-detection"
+  },
+  "units": {
+    "definition_file": "units.json",
+    "selection_rule_document": "UNIT_SELECTION.md",
+    "count": 9,
+    "algorithm_summary": "global lexicographic file order under rust/*/src (excluding rust/spikes and tests/), greedy 120000-byte packet packing, 4 single-files-over-cap excluded and disclosed, 9-of-31 packets chosen by fixed-stride systematic sampling packet_index(i)=floor(i*31/9)",
+    "same_file_set_both_arms": true
+  },
+  "arms": {
+    "list": ["qwen_b1", "qwen_full"],
+    "qwen_b1": {
+      "description": "qwen3.8:27b-mlx given the unit's raw source files only, no ReviewGraphen scaffold",
+      "role": "baseline comparator; required so 'is ReviewGraphen useful' has an answer, not just 'does qwen find anything'"
+    },
+    "qwen_full": {
+      "description": "qwen3.8:27b-mlx given the unit's raw source files plus the standard ReviewGraphen review scaffold",
+      "scaffold_construction": "reuses the existing full_reviewgraphen packet-construction path used for m7-local-factorial-v2/v3 (arm b1_free_form vs full_reviewgraphen), adapted to build fresh packets from the units in units.json instead of the frozen m7-real-v1 corpus; exact adaptation is an implementation detail finalized and smoke-tested (see execution.smoke_test_required) before the first real generation call, and must not change unit file sets, the candidate schema, or ADR 0037 extraction",
+      "role": "primary arm of interest per the operator's stated research question"
+    },
+    "extraction_contract": "unchanged ADR 0037 (docs/adr/0037-candidate-json-extraction-contract.md): fenced-block-first, then left-to-right first JSON object, no repair or normalization",
+    "candidate_schema": "unchanged reviewgraphen.benchmark.candidate_output.v1 (same schema as m7-local-factorial-v2/v3); obligation_results is expected to be an empty array for every trial in this experiment, since no obligations are declared for open-ended discovery",
+    "trial_id_convention": "m7-head-local:<unit_id>:<arm>, e.g. m7-head-local:head-local-00:qwen_b1",
+    "scoring": "reviewgraphen-benchmark's 'validate candidate' (schema check) is reused unchanged; 'collect' (scoring against a private oracle) is NOT used anywhere in this experiment because there is no oracle — findings are counted and passed to the judge, never mechanically scored for detection"
+  },
+  "generation_execution_condition": {
+    "frozen_from": "m7-local-factorial-v3 STAGE1_STATUS_SUMMARY.md section 5, as closed",
+    "backend": "LM Studio behind cch, endpoint http://192.168.68.71:11999 only",
+    "model": "qwen3.8:27b-mlx",
+    "client": "Codex CLI 0.147.0 via run-process-reviewer-codex-profile (unchanged adapter)",
+    "reasoning_effort": "none",
+    "note_on_reasoning_effort": "does not suppress reasoning on this backend (observed in m7-local-factorial-v3); retained anyway for continuity with the frozen v3 condition, not because it is expected to work",
+    "sampling": "provider default, unmodified — temperature/top_p never overridden",
+    "context_window_tokens": 262144,
+    "max_output_tokens": 65536,
+    "stream_idle_timeout_ms": 3600000,
+    "retries": 0,
+    "concurrency": 1,
+    "no_semantic_retry": true,
+    "amendment_required_to_change": "any change to this block after seeing any m7-head-local-v1 result requires a dated, committed amendment before the next call, per the discipline already applied throughout m7-local-factorial-v3"
+  },
+  "judge": {
+    "backend": "claude_cli via reviewgraphen-benchmark run-process-reviewer claude (generic isolated backend, distinct from the codex-profile adapter)",
+    "model": "opus",
+    "effort": "high",
+    "provider_constrained": true,
+    "protocol_document": "JUDGE_PROTOCOL.md",
+    "output_schema": "schemas/reviewgraphen.benchmark.head_local_judge_output.v1.schema.json",
+    "dispositions": [
+      "issue_should_be_created",
+      "should_not_be_created",
+      "unable_to_determine"
+    ],
+    "blind": true,
+    "blinding_mechanism": "JUDGE_PROTOCOL.md section 2-4: content-hash finding_id excluding arm/generator/local_id, hash-sorted pooling across both arms per unit, --no-session-persistence, --tools \"\", forbidden-marker scan before packet construction",
+    "authority": "non-authoritative model disposition only, per ADR 0035; never itself creates an upstream object"
+  },
+  "execution": {
+    "trial_order": "units in unit_index order 0..8; within each unit, qwen_b1 before qwen_full; strictly sequential (one provider request in flight at a time), matching the concurrency=1 decision recorded in m7-local-factorial-v3 PARALLEL2_REVERT_AMENDMENT.md",
+    "total_generation_trials": 18,
+    "judge_calls": "at most 9 (one per unit), skipped for any unit whose pooled finding set is empty (JUDGE_PROTOCOL.md section 2.4)",
+    "smoke_test_required": "one synthetic-input smoke test of the claude_cli judge backend (JUDGE_PROTOCOL.md section 7) must complete and be recorded before the first real judge call; this backend has never been exercised end-to-end in this repository",
+    "failure_taxonomy": "unchanged from m7-local-factorial-v3 STAGE1_STATUS_SUMMARY.md: valid, candidate_schema_invalid, empty_final_after_process_completion, upstream_server_stream_incomplete (subtype upstream_model_crash), upstream_server_unresponsive, client_idle_timeout, operator_terminated, infrastructure",
+    "stop_conditions": [
+      "upstream 5xx",
+      "model crash",
+      "control endpoints respond but a generation or judge request never returns",
+      "operator redirect, recorded the same way m7-local-factorial-v3 cell 3 was recorded"
+    ],
+    "not_a_stop_condition": "elapsed time alone; m7-local-factorial-v3 observed single trials completing successfully after more than 45 minutes and running past 85 minutes before failing, so duration alone is not evidence of a problem"
+  },
+  "completion_rate_tracking": {
+    "unit_of_record": "per (unit, arm) generation trial and per (unit) judge call",
+    "recorded_per_trial": [
+      "failure_class (taxonomy above)",
+      "elapsed_seconds",
+      "provider_output_tokens, provider_reported_reasoning_tokens (generation trials)",
+      "finding_count (generation trials that reach valid)",
+      "judgment_count and disposition tally (judge calls)"
+    ],
+    "reported_separately_per_arm": true,
+    "explicit_hypothesis_carried_from_v3": "m7-local-factorial-v3 STAGE1_STATUS_SUMMARY.md section 4.4 observed one B1 trial exhaust its entire output budget on reasoning with zero final content (85.8 minutes) while the paired full_reviewgraphen trial on the same unit completed quickly (13.4 minutes, 23% of budget) and validated. This is an unconfirmed n=1 observation, not a claim. m7-head-local-v1 tracks per-arm completion rate explicitly so this can be checked with up to 9 more paired observations; a low qwen_b1 completion rate is itself a reportable result, not a nuisance to be explained away."
+  },
+  "reported_metrics": [
+    "generation completion rate per arm (fraction of 9 trials reaching valid schema-conformant output)",
+    "total findings per arm across all units",
+    "issue_should_be_created count and fraction per arm",
+    "should_not_be_created and unable_to_determine counts per arm",
+    "quality-rubric distribution per arm (specificity, reproduction_conditions_stated, false_positive_suspected, design_intent_confusion_suspected)",
+    "high_confidence_issue_worthy count per arm: issue_should_be_created AND specificity in {file_and_line_identified_and_relevant} AND reproduction_conditions_stated=true AND false_positive_suspected=false AND design_intent_confusion_suspected=false",
+    "cross-arm finding overlap (by finding_id collapse, see JUDGE_PROTOCOL.md section 2.1)",
+    "per-unit breakdown table (unit, arm, completion outcome, finding count, disposition tally)"
+  ],
+  "usefulness_determination": {
+    "status": "descriptive synthesis, not a binary pass/fail gate — consistent with this benchmark family's existing analysis philosophy (m7-local-factorial-v2 preregistration.json 'analysis': descriptive, no significance claim)",
+    "predetermined_reporting_rule": "qwen_full is reported as showing more evidence of usefulness than qwen_b1 only if, after generation and blind judging complete: (a) qwen_full's generation completion rate is not lower than qwen_b1's, AND (b) qwen_full's high_confidence_issue_worthy count is higher than qwen_b1's, AND (c) qwen_full's false_positive_suspected rate among issue_should_be_created findings is not substantially higher (defined as not more than 15 percentage points higher) than qwen_b1's. If these do not all hold, the report states which held and which did not, without averaging them into a single verdict. If either arm's completion rate is near zero, the report states plainly that this experiment could not evaluate usefulness for that arm and says so rather than reporting a misleadingly precise quality comparison over a tiny surviving sample.",
+    "reported_regardless_of_the_rule_above": "absolute issue_should_be_created counts and rates for each arm are always reported, since a near-zero count for both arms is itself informative about whether local qwen+ReviewGraphen finds anything worth a maintainer's attention on live code, independent of the b1-vs-full comparison",
+    "not_claimed": "statistical significance, verified-defect counts, or generalization beyond the 9 selected units"
+  },
+  "known_limitations": [
+    "no ground truth: issue_should_be_created is a judge disposition, not a verified defect; recall cannot be estimated",
+    "single judge, single model family (Claude, opus, high effort); no calibration pass has been run because there is no known-defect calibration set for live-HEAD findings (unlike ADR 0035's matched-pair calibration, which m7-head-local-v1 does not attempt)",
+    "qwen (generator) and Claude (judge) are both LLMs; cross-family judging reduces but does not eliminate correlated error, and the judge's own competence at reading unfamiliar Rust/FSL code is itself unverified here",
+    "n=9 units is an exploratory sample, not powered for any significance claim; see UNIT_SELECTION.md for coverage limits",
+    "4 files (including the single largest file in the workspace) are excluded from scope entirely by the oversize rule",
+    "the claude_cli judge backend has never been exercised end-to-end before this experiment (see execution.smoke_test_required)",
+    "generation completion rate is expected to be low based on m7-local-factorial-v3 (0/3 natural-conclusion requests reached final content under the identical execution condition before this experiment's redirect); m7-head-local-v1 may yield very few or zero judged findings per arm, and that is itself a reportable result about local-LLM operational feasibility, not a failure of this design"
+  ],
+  "preservation": {
+    "m7_head_issue_v1_rewritten": false,
+    "m7_local_factorial_v3_rewritten": false,
+    "fsl_repository_mutability": "read_only",
+    "upstream_issue_or_pr_creation": false
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "$id": "https://capht.tech/schemas/reviewgraphen/benchmark/head-local-judge-output.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "unit_id", "judgments"],
+  "properties": {
+    "schema": { "const": "reviewgraphen.benchmark.head_local_judge_output.v1" },
+    "unit_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "judgments": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/judgment" }
+    }
+  },
+  "$defs": {
+    "judgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finding_id", "disposition", "quality"],
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "pattern": "^finding:[0-9a-f]{32}$"
+        },
+        "disposition": {
+          "enum": [
+            "issue_should_be_created",
+            "should_not_be_created",
+            "unable_to_determine"
+          ]
+        },
+        "quality": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "specificity",
+            "reproduction_conditions_stated",
+            "false_positive_suspected",
+            "design_intent_confusion_suspected",
+            "notes"
+          ],
+          "properties": {
+            "specificity": {
+              "enum": [
+                "file_and_line_identified_and_relevant",
+                "file_and_line_identified_but_questionable",
+                "file_only_or_vague",
+                "absent"
+              ]
+            },
+            "reproduction_conditions_stated": { "type": "boolean" },
+            "false_positive_suspected": { "type": "boolean" },
+            "design_intent_confusion_suspected": { "type": "boolean" },
+            "notes": { "type": "string", "maxLength": 2048 }
+          }
+        }
+      }
+    }
+  }
+}

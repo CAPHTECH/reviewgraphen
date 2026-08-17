@@ -1,0 +1,290 @@
+{
+  "head_commit": "e589014d1655b1224f5b83a7f2de99532a0dcdba",
+  "cap_bytes": 120000,
+  "total_eligible_files": 114,
+  "total_oversized_excluded": 4,
+  "oversized_excluded": [
+    {
+      "path": "rust/fsl-core/src/dialect.rs",
+      "bytes": 125448,
+      "sha256": "c98cca4390f015c1a618f20f4b88a527b137a8db9c32fb1d03d80a971be50bab"
+    },
+    {
+      "path": "rust/fsl-core/src/domain_lowering.rs",
+      "bytes": 135929,
+      "sha256": "9134750f663ceebb2bae08dd1415e4e37efed767cacbad2c46864fbf02ea2b86"
+    },
+    {
+      "path": "rust/fsl-runtime/src/lib.rs",
+      "bytes": 127280,
+      "sha256": "8d83e151d314bc1ca6e6da2bd9086a26c4251def77eae3fe1f879504877be45d"
+    },
+    {
+      "path": "rust/fslc/src/main.rs",
+      "bytes": 630350,
+      "sha256": "7d05cd4db5031976d6c76a6935f3fce995fd9e31c854c7045169146689457074"
+    }
+  ],
+  "total_packets": 31,
+  "units_wanted": 9,
+  "selected_packet_indices": [
+    0,
+    3,
+    6,
+    10,
+    13,
+    17,
+    20,
+    24,
+    27
+  ],
+  "units": [
+    {
+      "unit_index": 0,
+      "packet_index": 0,
+      "unit_id": "head-local-00",
+      "total_bytes": 82622,
+      "files": [
+        {
+          "path": "rust/fsl-core/src/bin/fsl-parse-kernel.rs",
+          "bytes": 1028,
+          "sha256": "178fe72140f7952759e014a71f36bb1d57c37a746f22ecc3fee215c7256a0389"
+        },
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "bytes": 48117,
+          "sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567"
+        },
+        {
+          "path": "rust/fsl-core/src/db.rs",
+          "bytes": 29506,
+          "sha256": "4934408e1782a2aa7cd5c917da89f8b66f6cbfacc55626a87564fa78ab17bd1d"
+        },
+        {
+          "path": "rust/fsl-core/src/diagnostics.rs",
+          "bytes": 3971,
+          "sha256": "b8b91b65d1e7f160b5c8eede378af797af5b4685b7c16a6cd656a37849c8ce18"
+        }
+      ]
+    },
+    {
+      "unit_index": 1,
+      "packet_index": 3,
+      "unit_id": "head-local-01",
+      "total_bytes": 77937,
+      "files": [
+        {
+          "path": "rust/fsl-core/src/model.rs",
+          "bytes": 72105,
+          "sha256": "fe113db7786d16d4f1ffb6f4540a5189a60c1cfd56cf8a578313ac5fa54a662d"
+        },
+        {
+          "path": "rust/fsl-core/src/origin.rs",
+          "bytes": 5832,
+          "sha256": "ae3d125cb55de03b45359fe6c0439030d9da877c38620c86591243c7c9d13198"
+        }
+      ]
+    },
+    {
+      "unit_index": 2,
+      "packet_index": 6,
+      "unit_id": "head-local-02",
+      "total_bytes": 111393,
+      "files": [
+        {
+          "path": "rust/fsl-lsp/src/server.rs",
+          "bytes": 48039,
+          "sha256": "483c46a7cdfc38467a8c41238565ef60168d0566ba345b49aad4256f05c97efc"
+        },
+        {
+          "path": "rust/fsl-runtime/src/bin/fsl-bfs.rs",
+          "bytes": 2020,
+          "sha256": "e9034d3d8ec7f21048188ea563399a48425f70dea5687c38e9db00793a12406e"
+        },
+        {
+          "path": "rust/fsl-runtime/src/bin/fsl-explicit.rs",
+          "bytes": 2815,
+          "sha256": "86f05d94aa403bd4c0b620076744b0a4d646004b224a035481e1f11191571b20"
+        },
+        {
+          "path": "rust/fsl-runtime/src/explicit.rs",
+          "bytes": 34502,
+          "sha256": "bc91fd9d3f454532092a914fb5a48f649848ddb5c79548211b53a6cf83382d0b"
+        },
+        {
+          "path": "rust/fsl-runtime/src/trace.rs",
+          "bytes": 3283,
+          "sha256": "60876396b02791c4d3843793d1356e3a1aa749da6ccfbc59051d5df3b022fe9f"
+        },
+        {
+          "path": "rust/fsl-solver-z3/src/lib.rs",
+          "bytes": 20734,
+          "sha256": "d184801fdafd5861188366437bae738f7ee3773a223b38b3ac0e7ad80e1b0bcc"
+        }
+      ]
+    },
+    {
+      "unit_index": 3,
+      "packet_index": 10,
+      "unit_id": "head-local-03",
+      "total_bytes": 83264,
+      "files": [
+        {
+          "path": "rust/fsl-syntax/src/parser.rs",
+          "bytes": 80225,
+          "sha256": "c091ef56de64faa2d2cf2ac1bdd688c8047466ddd1342d2bc0ef515f71d18536"
+        },
+        {
+          "path": "rust/fsl-syntax/src/recursion.rs",
+          "bytes": 3039,
+          "sha256": "791ad7cd1125937092137b472f5282130ba0a7a4a489c26339f55cb6b10bd87a"
+        }
+      ]
+    },
+    {
+      "unit_index": 4,
+      "packet_index": 13,
+      "unit_id": "head-local-04",
+      "total_bytes": 78723,
+      "files": [
+        {
+          "path": "rust/fsl-tools/src/analysis.rs",
+          "bytes": 51082,
+          "sha256": "e7369ba3210ac446a43112f4c21fd7d93cf9862d5ca3f57397e095a2fb6595be"
+        },
+        {
+          "path": "rust/fsl-tools/src/analysis_export.rs",
+          "bytes": 5477,
+          "sha256": "a004302fd7ce921e53c69aa7cfe063178c364c678f7e68a293fec01d4d424bcc"
+        },
+        {
+          "path": "rust/fsl-tools/src/analysis_graph.rs",
+          "bytes": 22164,
+          "sha256": "adb1ca249998b7bcde14438778da4bd703d3b0728e86f592b8c7bed1d5c63cdf"
+        }
+      ]
+    },
+    {
+      "unit_index": 5,
+      "packet_index": 17,
+      "unit_id": "head-local-05",
+      "total_bytes": 59681,
+      "files": [
+        {
+          "path": "rust/fsl-tools/src/document_markers.rs",
+          "bytes": 14368,
+          "sha256": "9f77c600df7630739699baf252cf0e628e8b9d0c49e002178f6559aa87f10876"
+        },
+        {
+          "path": "rust/fsl-tools/src/document_presentation.rs",
+          "bytes": 725,
+          "sha256": "c959d25eec58803dd7e844743a72aa8e95b1fdfeaf1bf6232914fe3e07dc770e"
+        },
+        {
+          "path": "rust/fsl-tools/src/document_project.rs",
+          "bytes": 44588,
+          "sha256": "d84e82323f85ea09333b562d3bf9ec986abbed6323404e6f82bee95e9a8e59be"
+        }
+      ]
+    },
+    {
+      "unit_index": 6,
+      "packet_index": 20,
+      "unit_id": "head-local-06",
+      "total_bytes": 100036,
+      "files": [
+        {
+          "path": "rust/fsl-tools/src/ledger.rs",
+          "bytes": 43902,
+          "sha256": "629d30eff9d8c0da07cc419e50bab15e13eb1cf27da99b342695502638774716"
+        },
+        {
+          "path": "rust/fsl-tools/src/lib.rs",
+          "bytes": 5052,
+          "sha256": "7da5a79983a28852e86af70cef32eebc6ffd1680ed2ab568f1289b43b9b7e924"
+        },
+        {
+          "path": "rust/fsl-tools/src/mutate.rs",
+          "bytes": 37540,
+          "sha256": "122762ad3aa3e3559fd93a65134d82fbe7e4ea89138f6d525c67d307c875da32"
+        },
+        {
+          "path": "rust/fsl-tools/src/public_kernel.rs",
+          "bytes": 1669,
+          "sha256": "c2508567f012f8e8a7823590ced09b3b2836c443fb5ac5afc8c437d732187ed7"
+        },
+        {
+          "path": "rust/fsl-tools/src/refinement_analysis.rs",
+          "bytes": 11873,
+          "sha256": "155af72bbee8712848c7450c6e34130bd5ade9ad22269c2e66701f4ceb43fd7d"
+        }
+      ]
+    },
+    {
+      "unit_index": 7,
+      "packet_index": 24,
+      "unit_id": "head-local-07",
+      "total_bytes": 116094,
+      "files": [
+        {
+          "path": "rust/fsl-verifier/src/refinement.rs",
+          "bytes": 3896,
+          "sha256": "6327aac17b949b800cda27d0b2d0bf4e61ade61cca6f8a5eb227cd38ecffa8bc"
+        },
+        {
+          "path": "rust/fsl-verifier/src/symmetry.rs",
+          "bytes": 9640,
+          "sha256": "55a5ece4bcbadb963f16c010b2f944ef587682deeb87e451d58aeb95b768627c"
+        },
+        {
+          "path": "rust/fsl-verifier/src/trace.rs",
+          "bytes": 2887,
+          "sha256": "abe574443b20b762b7db30bae35581e30249553a364128c928f7c57ad68a7739"
+        },
+        {
+          "path": "rust/fsl-verifier/src/transition.rs",
+          "bytes": 30256,
+          "sha256": "5ebad3eff605e00d9bf227c363e2f48a5c67ed096618fb06c71cfc82f7e2dfcb"
+        },
+        {
+          "path": "rust/fsl-verifier/src/vacuity.rs",
+          "bytes": 30333,
+          "sha256": "7f20363fcfd4ddafa1e10052f83618edf4b1679a810637d9e46e36e990b8e28b"
+        },
+        {
+          "path": "rust/fsl-verifier/src/value.rs",
+          "bytes": 39082,
+          "sha256": "dfe17a34b23dc37689e90e378c5d533aa7d3c2ec828a4f944596143b75fe93e1"
+        }
+      ]
+    },
+    {
+      "unit_index": 8,
+      "packet_index": 27,
+      "unit_id": "head-local-08",
+      "total_bytes": 115132,
+      "files": [
+        {
+          "path": "rust/fslc/src/frontend_output.rs",
+          "bytes": 18728,
+          "sha256": "3e92f63ca1ff6e5aa50ba8289471c2d2aa8533b7592b58a277672ec2cff1a2ee"
+        },
+        {
+          "path": "rust/fslc/src/lib.rs",
+          "bytes": 18399,
+          "sha256": "baed95be3dd3f20ee84a227582940bbc084403a2c9868182ba918db6a85546cc"
+        },
+        {
+          "path": "rust/fslc/src/literate_access.rs",
+          "bytes": 26217,
+          "sha256": "d772da17fd0fad5c9ecc63097b7fbf8c0f824bd96d2ca098ba84ddcbc99b521e"
+        },
+        {
+          "path": "rust/fslc/src/migration.rs",
+          "bytes": 51788,
+          "sha256": "cc99750b72c6b45c75a966b735c31ce51c7759155ace3b6c7b340bdc1e310c19"
+        }
+      ]
+    }
+  ]
+}
