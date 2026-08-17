@@ -114,7 +114,45 @@ directionally consistent fact across all three denominators is that no
 request under the current (post-idle-timeout-amendment) execution condition
 has yet reached final content, regardless of concurrency.
 
-### 3.3 Scale of the planned production run
+### 3.3 Duration-correlated failure risk (unconfirmed)
+
+Re-reading §3.1 by outcome: the two requests that reached final content ran
+2,546.122 s and 2,658.716 s (both under 45 minutes); the two requests that
+ended in an excluded server-side failure without final content ran 3,449.289
+s / 3,449.481 s (57.5 min) and 9,536.248 s (158.9 min). Every request under
+45 minutes reached final content; every request over 45 minutes did not.
+
+This is an observation, not a finding. With n=6 and no controlled
+manipulation of duration, no correlation between elapsed time and failure is
+asserted here, and confounds are not excluded — snapshot-06 full and B1
+differ in input size and arm content, and the two long-running failures
+occurred under different execution conditions (300,000 ms and 3,600,000 ms
+idle timeout, sequential and parallel concurrency) from each other and from
+the two successes.
+
+The risk this observation raises, if a duration-dependent failure mode is
+real, is recorded here because of its consequence for the experiment rather
+than its current evidentiary strength: if longer-running generations fail
+systematically more often than shorter ones, then units that provoke longer
+reasoning — plausibly the harder detection targets — would be dropped from
+the recorded sample at a higher rate than easier units. Because
+`no_semantic_retry: true` is preregistered, such trials are not retried and
+recovered; they are simply excluded. A detection-capability measurement
+built from a sample that has silently lost its harder cases would be biased
+toward the easier end of the difficulty distribution, independent of
+whatever the model's true detection capability is on the full unit set.
+
+No mitigation is adopted from this observation alone — the 4/4 gate, the
+current execution condition, and the no-retry policy are all unchanged. The
+concrete action is measurement: every subsequent trial, in stage1 and in any
+later production run, must have its elapsed time and final-content outcome
+recorded (already implied by `generation-metrics.json`), so this question can
+be re-evaluated with a larger n once more trials complete. If a real
+duration-dependent failure pattern later becomes evident, addressing it would
+require a new amendment decided before further results are seen, per the
+same discipline applied to this experiment throughout.
+
+### 3.4 Scale of the planned production run
 
 The preregistered production run (`preregistration.json`) is 20 positive
 units × 2 arms = 40 semantic trials, each under the same no-retry policy as
@@ -127,7 +165,7 @@ preregistered — those trials would not be recovered by retrying. This is an
 inference from the observed rates, not a measured production-run result; no
 production trial has been run.
 
-### 3.4 Separation from the gate decision
+### 3.5 Separation from the gate decision
 
 Passing the 4/4 stage1 gate establishes only that the candidate schema and
 ADR 0037 extraction are reachable under this execution condition on four
