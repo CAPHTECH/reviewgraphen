@@ -74,6 +74,7 @@ pub enum ProcessReviewerBackend {
         executable: PathBuf,
         model: String,
         effort: String,
+        max_budget_usd: Option<String>,
     },
     CodexAppServer {
         executable: PathBuf,
@@ -135,6 +136,26 @@ impl ProcessReviewerBackend {
             executable: executable.into(),
             model: model.into(),
             effort: effort.into(),
+            max_budget_usd: None,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Same as `claude_cli`, with an enforced per-call spend ceiling passed
+    /// to the Claude CLI's own `--max-budget-usd` flag. The CLI itself
+    /// refuses to exceed this; it is not tracked or enforced by this crate.
+    pub fn claude_cli_with_budget(
+        executable: impl Into<PathBuf>,
+        model: impl Into<String>,
+        effort: impl Into<String>,
+        max_budget_usd: impl Into<String>,
+    ) -> ProcessReviewerResult<Self> {
+        let value = Self::ClaudeCli {
+            executable: executable.into(),
+            model: model.into(),
+            effort: effort.into(),
+            max_budget_usd: Some(max_budget_usd.into()),
         };
         value.validate()?;
         Ok(value)
@@ -164,6 +185,7 @@ impl ProcessReviewerBackend {
                 executable,
                 model,
                 effort,
+                max_budget_usd: _,
             } => (executable, vec![model, effort]),
             Self::CodexAppServer {
                 executable,
@@ -668,7 +690,12 @@ impl ProcessReviewer {
                 }
                 command.args(["-o", "/workspace/output/raw-response.json"]);
             }
-            ProcessReviewerBackend::ClaudeCli { model, effort, .. } => {
+            ProcessReviewerBackend::ClaudeCli {
+                model,
+                effort,
+                max_budget_usd,
+                ..
+            } => {
                 let schema = fs::read_to_string(input.root.join(output_schema_relative_path))?;
                 command
                     .args(["--setenv", "CLAUDE_CONFIG_DIR", "/home/reviewer/.claude"])
@@ -689,6 +716,9 @@ impl ProcessReviewer {
                     ])
                     .arg(model)
                     .args(["--effort", effort]);
+                if let Some(budget) = max_budget_usd {
+                    command.args(["--max-budget-usd", budget]);
+                }
                 if provider_constrained {
                     command.args(["--json-schema", &schema]);
                 }
