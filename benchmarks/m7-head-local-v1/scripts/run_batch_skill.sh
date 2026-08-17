@@ -8,13 +8,14 @@ set -euo pipefail
 # the batch continues, per the operator's instruction that a reasoning-
 # budget failure is itself a measured result, not a reason to stop early.
 
-if [[ $# -ne 1 ]]; then
-  echo "usage: $0 <attempt-label>" >&2
+if [[ $# -ne 1 && $# -ne 2 ]]; then
+  echo "usage: $0 <attempt-label> [start-unit-index-inclusive]" >&2
   exit 64
 fi
 : "${OLLAMA_PRIV_API_KEY:?OLLAMA_PRIV_API_KEY must be set}"
 : "${M7_HEAD_LOCAL_REASONING_EFFORT:?M7_HEAD_LOCAL_REASONING_EFFORT must be set}"
 attempt=$1
+start_index=${2:-0}
 
 root=/home/rizumita/workspace/reviewgraphen
 units_json="$root/benchmarks/m7-head-local-v1/units.json"
@@ -64,7 +65,7 @@ export M7_HEAD_LOCAL_SHAPER_CAPTURE_DIR="$capture_dir"
 
 count=$(jq '.units | length' "$units_json")
 trial_index=0
-for ((i = 0; i < count; i++)); do
+for ((i = start_index; i < count; i++)); do
   unit_id=$(jq -r ".units[$i].unit_id" "$units_json")
   trial_dir="$prepared_root/$unit_id"
   result="$batch_root/$unit_id/skill"
