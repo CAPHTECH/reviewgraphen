@@ -178,7 +178,11 @@ fi
 if (( process_status != 0 )); then
   if rg -q 'stream (disconnected|closed) before (completion|response\.completed)' \
     "$result_dir/adapter.stderr"; then
-    write_metrics upstream_server_stream_incomplete
+    if rg -qi 'model has crashed' "$result_dir/adapter.stderr"; then
+      write_metrics upstream_model_crash
+    else
+      write_metrics upstream_server_stream_incomplete
+    fi
     exit 71
   elif [[ "$empty_final" == true ]] && jq -e '
     (.provider_input_tokens | type == "number") and
