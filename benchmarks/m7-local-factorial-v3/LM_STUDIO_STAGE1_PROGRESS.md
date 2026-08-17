@@ -114,3 +114,47 @@ payload size because SSE framing and repeated event metadata dominate it.
 The divergent trajectory is descriptive support for treating validity as a
 stochastic rate; it does not identify what the interrupted run would have
 produced had the model remained loaded.
+
+## Server-recovery restart decision
+
+After the server administrator verified a separate minimal chat completion
+(57 prompt tokens, 34 completion tokens, `finish_reason=stop`, 13.97 seconds),
+provider requests were re-authorized. The model alias
+`qwen3.8:27b-mlx` resolved to `qwen3.8-27b-mlx`; this name difference is not
+treated as a cause of the preceding interruption.
+
+The interrupted attempt remains frozen and is not pooled. Because
+`upstream_server_stream_incomplete` is excluded from the semantic denominator,
+a new attempt starts all four cells from the beginning under exactly the same
+LM Studio/cch, Codex 0.147.0, provider-default sampling, context, output,
+reasoning-effort, timeout, and zero-retry condition. This is recovery from a
+server failure, not a changed semantic condition.
+
+The earlier Ollama run ended after an eight-hour wait with 502 responses; the
+LM Studio run instead began an HTTP 200 reasoning stream and later ended with
+`Model unloaded.` These are distinct transport symptoms. Both nevertheless
+show that long-running generation did not complete under two provider-server
+implementations, which is evidence consistent with a failure below the
+provider-specific surface. It does not identify the shared lower-layer cause.
+
+Operational feasibility is assessed separately from the schema gate. A
+single snapshot-06 B1 run can exceed 9,536 seconds and can still fail to
+complete. The planned production run is 20 units by 2 arms, or 40 trials.
+Elapsed time remains descriptive and is not a stopping criterion, but a low
+completion rate would be an execution-feasibility limit rather than merely a
+runtime cost.
+
+## Parallel-2 amendment
+
+The sequential recovery attempt was interrupted after the administrator made
+two-way server parallelism available. Despite the runner's eventual
+`request_count_mismatch` surface, raw evidence proves that one provider request
+had been issued: 1,245,184 partial SSE bytes containing 6,136
+`response.reasoning_text.delta` events and no output-text delta were retained.
+Codex status 130 after 305,555 ms records an experimenter interruption. No
+completed shaper row or semantic output exists, so this attempt is not pooled
+and consumes no semantic attempt.
+
+The prospective parallel execution contract is frozen separately in
+`PARALLEL2_AMENDMENT.md`. A fresh four-cell attempt will use waves of at most
+two, with unique trial routing keys and unchanged semantic conditions.

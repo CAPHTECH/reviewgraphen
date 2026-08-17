@@ -16,3 +16,4 @@ stream_idle_timeout_ms = 3600000
 
 [model_providers.lm-studio-cch-v3.http_headers]
 X-ReviewGraphen-Max-Output-Tokens = "65536"
+X-ReviewGraphen-Trial-Key = "__M7_V3_TRIAL_KEY__"

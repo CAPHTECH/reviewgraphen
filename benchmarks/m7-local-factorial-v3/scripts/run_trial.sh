@@ -8,6 +8,11 @@ fi
 : "${OLLAMA_PRIV_API_KEY:?OLLAMA_PRIV_API_KEY must be set}"
 : "${M7_V3_SHAPER_LOG:?M7_V3_SHAPER_LOG must be set}"
 : "${M7_V3_SHAPER_CAPTURE_DIR:?M7_V3_SHAPER_CAPTURE_DIR must be set}"
+: "${M7_V3_TRIAL_KEY:?M7_V3_TRIAL_KEY must be set}"
+if [[ ! "$M7_V3_TRIAL_KEY" =~ ^[A-Za-z0-9._:-]{1,128}$ ]]; then
+  echo "invalid trial routing key" >&2
+  exit 64
+fi
 
 trial_dir=$(realpath -e -- "$1")
 result_dir=$2
@@ -33,22 +38,35 @@ mkdir -p -- "$result_dir"
 
 root=/home/rizumita/workspace/reviewgraphen
 profile_source="$root/benchmarks/m7-local-factorial-v3/profile/lm-studio-cch-v3.config.toml"
-profile_hash=fb0f91dd6cc9615e95cc07a733d48d18a65eb6e2f215569dc2ea8f7bed078b85
+profile_hash=0fe8cda539e2d74e17e98cbef5742791e0cfd0de812a753cfa1746c9b176d79e
 credential_home=$(mktemp -d /tmp/m7-local-factorial-v3-codex-home.XXXXXX)
 cleanup() { rm -rf -- "$credential_home"; }
 trap cleanup EXIT INT TERM
 chmod 700 "$credential_home"
-cp -- "$profile_source" "$credential_home/lm-studio-cch-v3.config.toml"
-observed_profile_hash=$(sha256sum "$credential_home/lm-studio-cch-v3.config.toml" | awk '{print $1}')
-if [[ "$observed_profile_hash" != "$profile_hash" ]]; then
+observed_source_profile_hash=$(sha256sum "$profile_source" | awk '{print $1}')
+if [[ "$observed_source_profile_hash" != "$profile_hash" ]]; then
   echo "profile hash drift" >&2
   exit 65
 fi
+sed "s/__M7_V3_TRIAL_KEY__/$M7_V3_TRIAL_KEY/" "$profile_source" \
+  > "$credential_home/lm-studio-cch-v3.config.toml"
+effective_profile_hash=$(sha256sum "$credential_home/lm-studio-cch-v3.config.toml" | awk '{print $1}')
+jq -n \
+  --arg trial_key "$M7_V3_TRIAL_KEY" \
+  --arg source_profile_sha256 "sha256:$observed_source_profile_hash" \
+  --arg effective_profile_sha256 "sha256:$effective_profile_hash" \
+  '{
+    schema: "reviewgraphen.benchmark.parallel_trial_routing.v1",
+    trial_key: $trial_key,
+    shaper_endpoint: "http://127.0.0.1:12080/v1/",
+    source_profile_sha256: $source_profile_sha256,
+    effective_profile_sha256: $effective_profile_sha256,
+    routing_header_forwarded_upstream: false
+  }' > "$result_dir/routing-record.json"
 
 benchmark="$root/target/debug/reviewgraphen-benchmark"
 bwrap=/home/rizumita/.local/share/mise/installs/codex/0.147.0/codex-resources/bwrap
 codex=/home/rizumita/.local/share/mise/installs/codex/0.147.0/bin/codex
-before_requests=$(wc -l < "$M7_V3_SHAPER_LOG")
 started_nanoseconds=$(date +%s%N)
 set +e
 "$benchmark" run-process-reviewer-codex-profile \
@@ -62,20 +80,22 @@ finished_nanoseconds=$(date +%s%N)
 elapsed_milliseconds=$(((finished_nanoseconds-started_nanoseconds)/1000000))
 printf '%s\n' "$process_status" > "$result_dir/process-status"
 printf '%s\n' "$elapsed_milliseconds" > "$result_dir/elapsed-milliseconds"
-after_requests=$(wc -l < "$M7_V3_SHAPER_LOG")
 for _ in {1..50}; do
-  if (( after_requests >= before_requests + 1 )); then
+  request_count=$(jq -c --arg key "$M7_V3_TRIAL_KEY" 'select(.trial_key == $key)' \
+    "$M7_V3_SHAPER_LOG" | wc -l)
+  if (( request_count >= 1 )); then
     break
   fi
   sleep 0.1
-  after_requests=$(wc -l < "$M7_V3_SHAPER_LOG")
 done
-request_count=$((after_requests - before_requests))
+request_count=$(jq -c --arg key "$M7_V3_TRIAL_KEY" 'select(.trial_key == $key)' \
+  "$M7_V3_SHAPER_LOG" | wc -l)
 if (( request_count < 1 )); then
   echo "expected at least one shaped Responses request" >&2
   exit 70
 fi
-sed -n "$((before_requests + 1)),${after_requests}p" "$M7_V3_SHAPER_LOG" > "$result_dir/transport-record.jsonl"
+jq -c --arg key "$M7_V3_TRIAL_KEY" 'select(.trial_key == $key)' \
+  "$M7_V3_SHAPER_LOG" > "$result_dir/transport-record.jsonl"
 tail -n1 "$result_dir/transport-record.jsonl" > "$result_dir/transport-record.json"
 jq -e --arg reasoning_effort "$reasoning_effort" '
   .model == "qwen3.8:27b-mlx" and

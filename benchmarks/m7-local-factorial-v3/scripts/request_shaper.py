@@ -23,6 +23,7 @@ MAX_RESPONSE_BYTES_FOR_METRICS = 32 * 1024 * 1024
 MAX_OUTPUT_TOKENS = 65536
 EXPECTED_MODEL = "qwen3.8:27b-mlx"
 LIMIT_HEADER = "X-ReviewGraphen-Max-Output-Tokens"
+TRIAL_HEADER = "X-ReviewGraphen-Trial-Key"
 PROTOCOL = "reviewgraphen.responses-limit-shaper.v1"
 HOP_BY_HOP = {
     "connection",
@@ -151,6 +152,7 @@ class Server(ThreadingHTTPServer):
         self.capture_dir = capture_dir
         self.capture_lock = threading.Lock()
         self.capture_sequence = 0
+        self.record_lock = threading.Lock()
         self.failure_lock = threading.Lock()
         self.upstream_failure_seen = False
 
@@ -163,9 +165,10 @@ class Server(ThreadingHTTPServer):
 
     def record(self, value: dict[str, object]) -> None:
         line = json.dumps(value, separators=(",", ":"), sort_keys=True) + "\n"
-        with self.log_path.open("a", encoding="utf-8") as stream:
-            stream.write(line)
-            stream.flush()
+        with self.record_lock:
+            with self.log_path.open("a", encoding="utf-8") as stream:
+                stream.write(line)
+                stream.flush()
 
     def may_forward(self) -> bool:
         with self.failure_lock:
@@ -225,6 +228,14 @@ class Handler(BaseHTTPRequestHandler):
         if prior is not None and prior != MAX_OUTPUT_TOKENS:
             self.send_error(409)
             return
+        trial_key = self.headers.get(TRIAL_HEADER)
+        if (
+            trial_key is None
+            or not 1 <= len(trial_key) <= 128
+            or any(not (character.isalnum() or character in "._:-") for character in trial_key)
+        ):
+            self.send_error(400, explain="missing or invalid trial key")
+            return
         value["max_output_tokens"] = MAX_OUTPUT_TOKENS
         rewritten = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
         started = time.monotonic()
@@ -251,6 +262,7 @@ class Handler(BaseHTTPRequestHandler):
                 "raw_response_compressed_sha256": digest_file(capture_path),
                 "response_complete": observation["response_complete"],
                 "request_sequence": sequence,
+                "trial_key": trial_key,
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 **observation["usage"],
             }
@@ -263,6 +275,7 @@ class Handler(BaseHTTPRequestHandler):
             name: value
             for name, value in self.headers.items()
             if name.lower() not in HOP_BY_HOP and name.lower() != LIMIT_HEADER.lower()
+            and name.lower() != TRIAL_HEADER.lower()
         }
         connection = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=None)
         response_body = bytearray()

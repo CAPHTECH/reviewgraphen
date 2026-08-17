@@ -1,0 +1,18 @@
+{
+  "schema": "reviewgraphen.benchmark.interrupted_trial_observation.v1",
+  "attempt": "v3-lm-studio-stage1-recovery-1",
+  "snapshot_id": "snapshot-06",
+  "arm": "b1_free_form",
+  "classification": "experimenter_interruption_for_parallelism_amendment",
+  "semantic_attempt_consumed": false,
+  "provider_request_issued": true,
+  "process_status": 130,
+  "elapsed_milliseconds": 305555,
+  "partial_sse_bytes": 1245184,
+  "partial_sse_sha256": "sha256:6d819b9d7a9414778d0a899bbe8dd3398523a44300c7223e16f8f9f9b31477c3",
+  "reasoning_text_delta_events": 6136,
+  "output_text_delta_events": 0,
+  "deterministic_gzip_sha256": "sha256:b131f61bae3d2537d9030ccaaf665e0e95d6899b5edf2c207fde103a44fd32b5",
+  "completed_transport_row_present": false,
+  "pooled_with_parallel_attempt": false
+}
