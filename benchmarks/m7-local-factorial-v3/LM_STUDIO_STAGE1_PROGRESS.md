@@ -158,3 +158,11 @@ and consumes no semantic attempt.
 The prospective parallel execution contract is frozen separately in
 `PARALLEL2_AMENDMENT.md`. A fresh four-cell attempt will use waves of at most
 two, with unique trial routing keys and unchanged semantic conditions.
+
+The parallel wave subsequently demonstrated that the routing design worked,
+but both model executions crashed after approximately 3,449 seconds. B1
+streamed 32,876 reasoning deltas and no final text; full streamed no reasoning
+or final-text deltas. Both HTTP 200 SSE responses terminated with
+`response.failed` and the same model-crash internal error. They are excluded
+server failures, so the remaining two cells were not issued and the 4/4 gate
+was not evaluated.

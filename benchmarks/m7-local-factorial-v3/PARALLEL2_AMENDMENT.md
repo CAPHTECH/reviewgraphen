@@ -43,3 +43,34 @@ and no output-text delta was retained. Codex exited 130 after 305,555 ms; the
 shaper was then stopped before it could write a completed transport row. This
 is an experimenter interruption, not `protocol_invalid`, and consumes no
 semantic attempt.
+
+## Observed result
+
+The first parallel wave started at approximately
+2026-08-17T11:12:52+09:00 and both trials ended at
+2026-08-17T12:10:22+09:00. Routing keys correctly associated each transport
+row and raw artifact with its trial. No third request was issued.
+
+Both upstream responses used HTTP 200 and ended with a
+`response.failed`/`internal_error` event reporting that the model had crashed.
+Codex surfaced `stream disconnected before completion: The model has crashed
+without additional information. (Exit code: null)` for both trials. These are
+recorded as the `upstream_model_crash` subtype of the existing
+`upstream_server_stream_incomplete` exclusion, not semantic failures.
+
+- snapshot-06 B1 ran 3,449.481 seconds and retained 7,085,799 raw SSE bytes,
+  32,876 reasoning delta events (132,892 UTF-8 payload bytes), and zero output
+  text events.
+- snapshot-06 full ran 3,449.289 seconds and retained 72,632 raw SSE bytes,
+  zero reasoning delta events, and zero output text events.
+
+Thus the parallel-2 stage1 attempt has zero semantic completions, two excluded
+server failures, and two unissued cells. The v3 4/4 gate is not evaluated from
+this attempt. The simultaneous failures are compatible with the preregistered
+resource-contention risk, but do not establish that parallelism caused the
+crash: the earlier sequential LM Studio run also ended in a model unload.
+
+This result materially limits operational feasibility. Two small stage1 cells
+occupied the server for about 57.5 minutes and neither completed. The issue is
+completion reliability, not an elapsed-time stopping policy. No retry was
+issued after the failures.

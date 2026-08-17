@@ -31,3 +31,19 @@ the same rule:
 
 The `Model unloaded.` error event and all other diagnostic bytes are
 otherwise unchanged.
+
+Both parallel-2 snapshot-06 `adapter.stderr` files were normalized by deleting
+exactly one trailing blank line for `git diff --check`:
+
+- B1: 696 bytes and SHA-256
+  `377a8e5e917b2df6bff701d88f5a24c5d146cc68cbe77e4758e4654a26387ffa`
+  before; 695 bytes and SHA-256
+  `34b512ee28df1d057cd6e1a69dc3b38b0aadebe249d0a980e87d94cee9e2cf40`
+  after.
+- full: 696 bytes and SHA-256
+  `0f47e013504fbad10095479b778a54415437f1a7f76fd4cec711dad588713d80`
+  before; 695 bytes and SHA-256
+  `b809059fa175046c83ef489298807a8da027f5dd1db895406bf601611d0f4a2f`
+  after.
+
+No model-crash event or other diagnostic content changed.

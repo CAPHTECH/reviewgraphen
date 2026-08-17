@@ -1,0 +1,8 @@
+{
+  "schema": "reviewgraphen.benchmark.parallel_trial_routing.v1",
+  "trial_key": "v3-lm-studio-stage1-parallel2-1:0:snapshot-06:b1_free_form",
+  "shaper_endpoint": "http://127.0.0.1:12080/v1/",
+  "source_profile_sha256": "sha256:0fe8cda539e2d74e17e98cbef5742791e0cfd0de812a753cfa1746c9b176d79e",
+  "effective_profile_sha256": "sha256:82b3db8b5a880d8b844ede58627d78fdbeb53608ab40e8852ea42d79cdb46a4e",
+  "routing_header_forwarded_upstream": false
+}
