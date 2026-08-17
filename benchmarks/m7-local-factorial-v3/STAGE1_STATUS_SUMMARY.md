@@ -207,6 +207,36 @@ a new label, `v3-lm-studio-stage1-sequential-2`, to avoid colliding with the
 already-created (and harmless, zero-content) health-check directory left by
 `-sequential-1`.
 
+## 3.7 Launch-time reasoning-effort misconfiguration (caught, zero attempts consumed)
+
+The second sequential-restart launch,
+`v3-lm-studio-stage1-sequential-2`, was started by invoking
+`scripts/run_batch.sh` directly without exporting
+`M7_V3_REASONING_EFFORT=none` first. `scripts/run_batch.sh` does not set
+this variable itself and never has; every prior successful v3 stage1
+invocation set it in a small `/tmp` wrapper script that exports it before
+calling `run_batch.sh` (for example, the already-used
+`/tmp/m7-local-factorial-v3-stage1-recovery.sh`). Without it,
+`run_trial.sh`'s `reasoning_effort=${M7_V3_REASONING_EFFORT:-${3:-high}}`
+fell back to `high`, which is not the preregistered condition.
+
+This was caught by inspecting the live process command line
+(`-c model_reasoning_effort='high'` visible under the spawned `codex`
+process) approximately 15-20 seconds after launch, before any data reached
+the request shaper. The process tree was killed immediately. Verified after
+the kill: `request-shaper-stage_1-0.jsonl` is 0 bytes, the sole partial
+response capture file is 0 bytes, and no `process-status` was ever written
+for the cell. This consumed zero semantic attempts under any reasoning
+condition. Whether the upstream server itself received and briefly began
+processing a `reasoning_effort=high` request in that ~20-second window before
+the kill reached it is not established either way; no output was produced or
+captured regardless. The next attempt,
+`v3-lm-studio-stage1-sequential-3`, uses the same `/tmp` wrapper pattern as
+prior attempts, exporting both `OLLAMA_PRIV_API_KEY` (a non-secret constant
+required only to satisfy the Codex profile's `env_key`, per the server
+administrator) and `M7_V3_REASONING_EFFORT=none` before invoking
+`run_batch.sh`.
+
 ## 4. Authoritative execution condition going forward
 
 Per `LM_STUDIO_IDLE_TIMEOUT_AMENDMENT.md` and `PARALLEL2_REVERT_AMENDMENT.md`,
