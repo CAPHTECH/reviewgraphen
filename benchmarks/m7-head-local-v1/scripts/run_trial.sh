@@ -48,8 +48,8 @@ fi
 mkdir -p -- "$result_dir"
 
 root=/home/rizumita/workspace/reviewgraphen
-profile_source="$root/benchmarks/m7-local-factorial-v3/profile/lm-studio-cch-v3.config.toml"
-profile_hash=0fe8cda539e2d74e17e98cbef5742791e0cfd0de812a753cfa1746c9b176d79e
+profile_source="$root/benchmarks/m7-head-local-v1/profile/lm-studio-cch-head-local-v1.config.toml"
+profile_hash=59b17a94c088ddd92d9fa14d52789b8a9770c381152987e9ca06529078b37801
 credential_home=$(mktemp -d /tmp/m7-head-local-v1-codex-home.XXXXXX)
 cleanup() { rm -rf -- "$credential_home"; }
 trap cleanup EXIT INT TERM
@@ -60,8 +60,8 @@ if [[ "$observed_source_profile_hash" != "$profile_hash" ]]; then
   exit 65
 fi
 sed "s/__M7_V3_TRIAL_KEY__/$M7_HEAD_LOCAL_TRIAL_KEY/" "$profile_source" \
-  > "$credential_home/lm-studio-cch-v3.config.toml"
-effective_profile_hash=$(sha256sum "$credential_home/lm-studio-cch-v3.config.toml" | awk '{print $1}')
+  > "$credential_home/lm-studio-cch-head-local-v1.config.toml"
+effective_profile_hash=$(sha256sum "$credential_home/lm-studio-cch-head-local-v1.config.toml" | awk '{print $1}')
 jq -n \
   --arg trial_key "$M7_HEAD_LOCAL_TRIAL_KEY" \
   --arg source_profile_sha256 "sha256:$observed_source_profile_hash" \
@@ -81,7 +81,7 @@ codex=/home/rizumita/.local/share/mise/installs/codex/0.147.0/bin/codex
 started_nanoseconds=$(date +%s%N)
 set +e
 "$benchmark" run-process-reviewer-codex-profile \
-  lm-studio-cch-v3 OLLAMA_PRIV_API_KEY "$trial_dir" agent_input/candidate-output.schema.json \
+  lm-studio-cch-head-local-v1 OLLAMA_PRIV_API_KEY "$trial_dir" agent_input/candidate-output.schema.json \
   "$result_dir/process-output" "$result_dir/process-record.json" \
   "$bwrap" "$credential_home" "$codex" qwen3.8:27b-mlx "$reasoning_effort" \
   >"$result_dir/adapter.stdout" 2>"$result_dir/adapter.stderr"
@@ -111,7 +111,7 @@ tail -n1 "$result_dir/transport-record.jsonl" > "$result_dir/transport-record.js
 jq -e --arg reasoning_effort "$reasoning_effort" '
   .model == "qwen3.8:27b-mlx" and
   .model_context_window == 262144 and
-  .max_output_tokens == 65536 and
+  .max_output_tokens == 131072 and
   (.upstream_status | type == "number") and
   (.response_complete | type == "boolean") and
   (.raw_response_artifact | test("^response-[0-9]{6}\\.sse\\.gz$")) and
@@ -210,10 +210,10 @@ if (( process_status != 0 )); then
   exit "$process_status"
 fi
 jq -e --arg reasoning_effort "$reasoning_effort" '
-  .backend.provider == "lm-studio-cch-v3" and
+  .backend.provider == "lm-studio-cch-head-local-v1" and
   .backend.model == "qwen3.8:27b-mlx" and
   .backend.inference_settings.model_context_window == "262144" and
-  .backend.inference_settings.max_output_tokens == "65536" and
+  .backend.inference_settings.max_output_tokens == "131072" and
   .backend.inference_settings.reasoning_effort == $reasoning_effort
 ' "$result_dir/process-record.json" >/dev/null
 

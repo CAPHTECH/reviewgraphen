@@ -1,0 +1,23 @@
+# m7-head-local-v1 profile for LM Studio behind the cch-normalizing proxy
+# and the local ReviewGraphen response-capture shaper. Forked from
+# m7-local-factorial-v3's lm-studio-cch-v3.config.toml (not modified in
+# place, per OUTPUT_CAP_AMENDMENT.md — that file remains v3's own frozen,
+# closed-experiment artifact) with only max_output_tokens raised from
+# 65536 to 131072.
+# Never add forced_login_method = "api"; Codex 0.147 may delete shared auth.
+openai_base_url = "http://127.0.0.1:12080/v1/"
+model_provider = "lm-studio-cch-head-local-v1"
+model = "qwen3.8:27b-mlx"
+model_context_window = 262144
+
+[model_providers.lm-studio-cch-head-local-v1]
+name = "LM Studio through cch and ReviewGraphen head-local-v1 request shaper"
+base_url = "http://127.0.0.1:12080/v1/"
+env_key = "OLLAMA_PRIV_API_KEY"
+request_max_retries = 0
+stream_max_retries = 0
+stream_idle_timeout_ms = 3600000
+
+[model_providers.lm-studio-cch-head-local-v1.http_headers]
+X-ReviewGraphen-Max-Output-Tokens = "131072"
+X-ReviewGraphen-Trial-Key = "__M7_V3_TRIAL_KEY__"

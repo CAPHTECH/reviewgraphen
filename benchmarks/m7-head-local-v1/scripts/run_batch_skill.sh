@@ -38,7 +38,7 @@ if [[ -e "$shaper_log" ]]; then
   echo "request shaper log must be fresh: $shaper_log" >&2
   exit 64
 fi
-python3 "$root/benchmarks/m7-local-factorial-v3/scripts/request_shaper.py" --log "$shaper_log" --capture-dir "$capture_dir" \
+python3 "$root/benchmarks/m7-head-local-v1/scripts/request_shaper.py" --log "$shaper_log" --capture-dir "$capture_dir" \
   >"$batch_root/request-shaper.stdout" \
   2>"$batch_root/request-shaper.stderr" &
 shaper_pid=$!
