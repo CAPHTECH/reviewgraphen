@@ -94,7 +94,7 @@
     }
   ],
   "totals": {
-    "units_with_judge_call": 5,
+    "units_with_judge_call": 4,
     "qwen_skill_findings": 15,
     "claude_skill_findings": 20,
     "pool_total_findings": 35

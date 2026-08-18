@@ -39,6 +39,14 @@ CASES_MUST_CATCH: list[tuple[str, bytes]] = [
     ("b1_free_form (pre-existing marker)", b"packet arm=b1_free_form"),
     ("full_reviewgraphen (pre-existing marker)", b"scaffold=full_reviewgraphen"),
     ("local_id (pre-existing marker)", b'"local_id": "finding-1"'),
+    ("title case Codex, natural-language self-reference", b"Codex judged this finding carefully"),
+    ("all caps CODEX", b"CODEX REVIEW OUTPUT"),
+    ("gpt lowercase embedded in sentence", b"running gpt at high reasoning effort produced this"),
+    ("GPT title/caps", b"GPT-5.4 reasoned about the double-submit path"),
+    ("openai lowercase", b"a model trained by openai on safety-relevant data"),
+    ("OpenAI title case", b"OpenAI's Codex model wrote this rationale"),
+    ("self-referential rationale, codex-judge realistic text",
+     b'{"notes": "As Codex, built by OpenAI, I confirmed this finding via GPT reasoning"}'),
 ]
 
 CASES_MUST_PASS: list[tuple[str, bytes]] = [
