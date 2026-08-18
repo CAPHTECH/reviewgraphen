@@ -1,0 +1,102 @@
+{
+  "schema": "reviewgraphen.benchmark.m7_head_local_v1_pool_source_manifest.v2",
+  "status": "REVISED after /tmp data loss (see RECOVERY.md). Supersedes the original manifest (7 qwen_skill entries pointing into /tmp/m7-head-local-v1-runs, all destroyed by an unrelated PC restart). This v2 manifest is the sole input the pool builder reads -- still no glob/search, still hash-verified, but two source_type values now exist: raw_candidate (verify a full candidate.json's hash and extract its findings, as before) and recovered_pooled_findings (verify an already-pooled/blinded findings file's hash against its own historical judge-record.json, use its findings directly -- see RECOVERY.md for why this is valid).",
+  "entries": [
+    {
+      "unit_id": "head-local-00",
+      "arm": "qwen_skill",
+      "source_type": "recovered_pooled_findings",
+      "path": "benchmarks/m7-head-local-v1/diagnostics/interim-judge-head-local-00-01-02/head-local-00/pooled-findings-shown-to-judge.json",
+      "sha256": "723268ae04d25fed731883204e601a34c95b0d256a9a151ac400c285124cf4a6",
+      "findings": 4,
+      "provenance": "RECOVERED (original gen-2 candidate.json lost in /tmp wipe). Hash verified against the interim judge-record.json's own recorded input hash (unaltered since actually consumed by the interim call); every finding_id independently recomputed and confirmed self-consistent. See RECOVERY.md."
+    },
+    {
+      "unit_id": "head-local-00",
+      "arm": "claude_skill",
+      "source_type": "raw_candidate",
+      "path": "benchmarks/m7-head-local-v1/diagnostics/claude-skill-generation-head-local-00-01-02/head-local-00/candidate.json",
+      "sha256": "73e032b5d03295fa15a1d3ec0b1c0099c72943ec91a847e119f6a33b878d5f68",
+      "findings": 9,
+      "provenance": "unaffected by the /tmp loss (repo-committed); hash reverified unchanged."
+    },
+    {
+      "unit_id": "head-local-01",
+      "arm": "qwen_skill",
+      "source_type": "recovered_pooled_findings",
+      "path": "benchmarks/m7-head-local-v1/diagnostics/interim-judge-head-local-00-01-02/head-local-01/pooled-findings-shown-to-judge.json",
+      "sha256": "833dc7f54707edae06f6831efb78f65db016355ba014b69944f1a891977e267f",
+      "findings": 5,
+      "provenance": "RECOVERED (original gen-3 candidate.json lost). Same two-check verification as head-local-00 above. See RECOVERY.md."
+    },
+    {
+      "unit_id": "head-local-01",
+      "arm": "claude_skill",
+      "source_type": "raw_candidate",
+      "path": "benchmarks/m7-head-local-v1/diagnostics/claude-skill-generation-head-local-00-01-02/head-local-01/candidate.json",
+      "sha256": "d2668a02ad01fde67b00ff9f875dd976b1fcc10d47f57f2c52f89e4e15a9de43",
+      "findings": 5,
+      "provenance": "unaffected by the /tmp loss; hash reverified unchanged."
+    },
+    {
+      "unit_id": "head-local-02",
+      "arm": "qwen_skill",
+      "source_type": "recovered_pooled_findings",
+      "path": "benchmarks/m7-head-local-v1/diagnostics/interim-judge-head-local-00-01-02/head-local-02/pooled-findings-shown-to-judge.json",
+      "sha256": "e3b8a4fe2fc4b28e66b683ac6844f6990733a8415597ec0825e35a4720e705a4",
+      "findings": 4,
+      "provenance": "RECOVERED (original gen-3 candidate.json lost). Same two-check verification as head-local-00 above. See RECOVERY.md."
+    },
+    {
+      "unit_id": "head-local-02",
+      "arm": "claude_skill",
+      "source_type": "raw_candidate",
+      "path": "benchmarks/m7-head-local-v1/diagnostics/claude-skill-generation-head-local-00-01-02/head-local-02/candidate.json",
+      "sha256": "3782984eae5059af1f51ff8c6012d022e9cc89b7f9c731a06f6bea32e49e8842",
+      "findings": 6,
+      "provenance": "unaffected by the /tmp loss; hash reverified unchanged."
+    },
+    {
+      "unit_id": "head-local-04",
+      "arm": "qwen_skill",
+      "source_type": "raw_candidate",
+      "path": "benchmarks/m7-head-local-v1/diagnostics/silent-truncation-retry-1/head-local-04-attempt1/candidate.json",
+      "sha256": "698b612989f4104bb31afc3d8ea1697b56fff716b14d89bf81eaaf911e14e2fd",
+      "findings": 2,
+      "provenance": "unaffected by the /tmp loss (repo-committed); hash reverified unchanged."
+    }
+  ],
+  "excluded_units": [
+    {
+      "unit_id": "head-local-03",
+      "reason": "artifact_lost",
+      "detail": "qwen_skill's only candidate.json (1 finding, gen-3, valid) was never copied out of /tmp/m7-head-local-v1-runs and was destroyed by a PC restart. Not regenerated (operator Plan B decision). See RECOVERY.md."
+    },
+    {
+      "unit_id": "head-local-05",
+      "reason": "artifact_lost",
+      "detail": "qwen_skill's only candidate.json (1 finding, gen-3, valid) was never copied out of /tmp/m7-head-local-v1-runs and was destroyed by a PC restart. Not regenerated (operator Plan B decision). See RECOVERY.md."
+    },
+    {
+      "unit_id": "head-local-06",
+      "reason": "artifact_lost",
+      "detail": "qwen_skill's only candidate.json (3 findings, gen-3, valid) was never copied out of /tmp/m7-head-local-v1-runs and was destroyed by a PC restart. Not regenerated (operator Plan B decision). See RECOVERY.md."
+    },
+    {
+      "unit_id": "head-local-07",
+      "reason": "empty_pool",
+      "detail": "unaffected by the /tmp loss -- qwen_skill's only attempt is valid/structured but produced 0 findings (8/8 obligations issue_absent/inconclusive, verified legitimate). No claude_skill coverage. Per JUDGE_PROTOCOL.md section 2.4, no judge call is issued."
+    },
+    {
+      "unit_id": "head-local-08",
+      "reason": "upstream_blocked",
+      "detail": "unaffected by the /tmp loss -- 2/2 consecutive upstream_silent_truncation attempts, excluded per RESTART_PROTOCOL_AND_UPSTREAM_HISTORY.md section 4. No candidate.json was ever produced by either attempt."
+    }
+  ],
+  "totals": {
+    "units_with_judge_call": 5,
+    "qwen_skill_findings": 15,
+    "claude_skill_findings": 20,
+    "pool_total_findings": 35
+  }
+}
