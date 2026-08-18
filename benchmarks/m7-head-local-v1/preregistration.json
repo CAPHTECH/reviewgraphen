@@ -30,7 +30,7 @@
     "same_file_set_both_arms": true
   },
   "arms": {
-    "list": ["qwen_b1", "qwen_full", "qwen_skill"],
+    "list": ["qwen_b1", "qwen_full", "qwen_skill", "claude_skill"],
     "measurement_target_distinction": "STATED EXPLICITLY per QWEN_SKILL_ARM_AMENDMENT.md: qwen_full measures ReviewGraphen the IMPLEMENTATION (obligations synthesized by the running code, confirmed capability_gap-only for all real input, see CAPABILITY_GAP_DIAGNOSIS.md and docs/measurement-validity-obligation-synthesis-capability-gap.md). qwen_skill measures ReviewGraphen the METHODOLOGY (the model performs the obligation-enumeration-through-claim process itself, guided only by .claude/skills/reviewgraphen-methodology/SKILL.md, derived strictly from docs/03,06,07,08,09,10 and ADR 0011). These are never conflated in reporting; a qwen_skill result says nothing about the implementation, and vice versa.",
     "qwen_b1": {
       "description": "qwen3.8:27b-mlx given the unit's raw source files only, no ReviewGraphen scaffold",
@@ -49,6 +49,17 @@
       "obligation_cap": "8 self-enumerated obligations per unit maximum; experiment-side constraint (empirically justified in QWEN_SKILL_ARM_AMENDMENT.md), not derived from ReviewGraphen's design documents",
       "known_risk": "reasoning-budget exhaustion is assessed, before execution, as plausibly MORE likely than for qwen_b1 (2/2 failures already observed in this program), because self-enumeration plus per-obligation claim/citation/evidence-status reasoning is strictly more generation work than the degenerate qwen_full packet ever required. This risk is not preempted by loosening any condition; a failure is recorded as reasoning_runaway and reported as a measured result.",
       "role": "primary arm of interest going forward, per the operator's methodology-vs-implementation pivot"
+    },
+    "claude_skill": {
+      "description": "claude opus (effort: high) given the identical frozen skill scaffold as qwen_skill, on 3 of the 9 units (head-local-00/01/02 only), run via the isolated Claude CLI backend instead of the LM Studio/qwen path",
+      "amendment_document": "CLAUDE_SKILL_ARM_AMENDMENT.md",
+      "skill_freeze": "identical to qwen_skill: commit a092c32, body SHA-256 a43d6984f9b58d5e47256afed68cddc1598ae84d6fc564e05f1cf462228d670a — reuses qwen_skill's already-built packets byte-for-byte, hash-verified before this amendment, not rebuilt",
+      "scope": "n=3 units only (head-local-00, head-local-01, head-local-02), narrower than qwen_skill's n=9; not generalized to the remaining 6 units by this amendment",
+      "generation_backend": "reviewgraphen-benchmark run-process-reviewer-constrained claude, model=opus, effort=high, provider_constrained=true, --no-session-persistence and --tools \"\" (same isolation guarantee the judge backend already relies on)",
+      "generation_budget": "separate $8 total cap for this arm's 3 generation calls, tracked independently from the existing $30 judge cap; --max-budget-usd 2.66 per call (8/3, worst-case total $7.98); see CLAUDE_SKILL_ARM_AMENDMENT.md Budget section for the per-call-vs-cumulative reasoning",
+      "known_risk": "SAME-FAMILY, and in fact same specific model+effort, as the judge (both claude opus/high) — a strictly stronger correlated-error risk than qwen_skill's cross-family case (ADR 0035). No magnitude or direction is claimed. Not preempted by this amendment; blind judge protocol runs unchanged. Planned mitigation (not yet executed): GPT-family cross-validation pass after 2026-08-20.",
+      "pooling": "joins qwen_skill in the SAME per-unit pool for the single primary blind judge pass over all 9 units, run after qwen_skill generation completes — explicitly distinct from, and does not alter, the already-completed qwen-only interim judge pass on these same 3 units (diagnostics/interim-judge-head-local-00-01-02/)",
+      "role": "secondary arm; does not replace qwen_skill as primary, does not pause or interfere with the ongoing qwen_skill 9-unit generation"
     },
     "extraction_contract": "unchanged ADR 0037 (docs/adr/0037-candidate-json-extraction-contract.md): fenced-block-first, then left-to-right first JSON object, no repair or normalization",
     "candidate_schema": "unchanged reviewgraphen.benchmark.candidate_output.v1 (same schema as m7-local-factorial-v2/v3, same schema across all three arms — no schema change was needed). obligation_results is expected empty for qwen_b1 (no obligations declared). For qwen_skill, obligation_results holds the model's own self-enumerated obligations: packet_id is a self-assigned identifier (e.g. obligation-1), disposition is the model's claim polarity (issue_present/issue_absent/inconclusive/not_applicable/abstained), and finding_local_ids links only issue_present obligations to findings — see SKILL.md 'Output mapping' and QWEN_SKILL_ARM_AMENDMENT.md.",
@@ -141,6 +152,7 @@
     "no ground truth: issue_should_be_created is a judge disposition, not a verified defect; recall cannot be estimated",
     "single judge, single model family (Claude, opus, high effort); no calibration pass has been run because there is no known-defect calibration set for live-HEAD findings (unlike ADR 0035's matched-pair calibration, which m7-head-local-v1 does not attempt)",
     "qwen (generator) and Claude (judge) are both LLMs; cross-family judging reduces but does not eliminate correlated error, and the judge's own competence at reading unfamiliar Rust/FSL code is itself unverified here",
+    "claude_skill's generator and the judge are the SAME model and effort tier (claude opus/high) — a strictly stronger same-provenance overlap than qwen_skill's cross-family case above; no magnitude or direction of resulting bias is claimed; see CLAUDE_SKILL_ARM_AMENDMENT.md 'Known risk' and the planned (not yet executed) post-2026-08-20 GPT-family cross-validation",
     "n=9 units is an exploratory sample, not powered for any significance claim; see UNIT_SELECTION.md for coverage limits",
     "4 files (including the single largest file in the workspace) are excluded from scope entirely by the oversize rule",
     "the claude_cli judge backend has never been exercised end-to-end before this experiment (see execution.smoke_test_required)",
