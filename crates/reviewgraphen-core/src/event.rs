@@ -129,6 +129,117 @@ pub struct RunGenesisSnapshot {
     v3_wire: bool,
 }
 
+/// Whether the rule pack compiled into this binary reproduces a decoded run
+/// genesis from its own ProgramSpace.
+///
+/// Recorded runs outlive the analyzer that wrote them. A rule-pack revision
+/// legitimately makes an honestly recorded genesis stop reproducing, so the
+/// verdict is reported rather than treated as a decode failure -- otherwise
+/// every stored run becomes unloadable the moment a rule changes, which
+/// contradicts the durability the event log exists to provide.
+///
+/// The verdict is not a judgement about honesty. `NotReproducible` is exactly
+/// what a forged obligation body produces *and* exactly what an older rule
+/// pack produces; nothing in the record distinguishes them. That is why paths
+/// which extend a run must still refuse it (see
+/// [`RunGenesisSnapshot::rebuild_aggregate`]) while read-only paths may accept
+/// it and carry the verdict forward to whatever a human eventually reads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GenesisReproduction {
+    /// Fresh synthesis equals the recorded universe and obligations exactly.
+    Reproduced,
+    /// Fresh synthesis differs; the mismatch describes how.
+    NotReproducible(GenesisReproductionMismatch),
+}
+
+impl GenesisReproduction {
+    /// Whether the running rule pack reproduced the record exactly.
+    #[must_use]
+    pub const fn is_reproduced(&self) -> bool {
+        matches!(self, Self::Reproduced)
+    }
+
+    /// The mismatch detail, when the record did not reproduce.
+    #[must_use]
+    pub const fn mismatch(&self) -> Option<&GenesisReproductionMismatch> {
+        match self {
+            Self::Reproduced => None,
+            Self::NotReproducible(mismatch) => Some(mismatch),
+        }
+    }
+}
+
+/// How a recorded run genesis differs from what the running rule pack
+/// synthesizes for the same ProgramSpace.
+///
+/// The three obligation-ID sets separate the two situations that produce a
+/// `NotReproducible` verdict, which a single boolean would conflate: a rule
+/// revision that changes which obligations exist moves IDs between
+/// `recorded_only` and `running_only`, whereas a forged or drifted obligation
+/// *body* under an unchanged ID lands in `body_differs`. `recorded_universe`
+/// and `running_universe` move only when the obligation ID set or the
+/// universe's own identity inputs change, so a mismatch confined to
+/// `body_differs` leaves them equal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenesisReproductionMismatch {
+    recorded_universe: StableId,
+    running_universe: StableId,
+    recorded_rule_pack_version: String,
+    running_rule_pack_version: String,
+    recorded_only: BTreeSet<StableId>,
+    running_only: BTreeSet<StableId>,
+    body_differs: BTreeSet<StableId>,
+}
+
+impl GenesisReproductionMismatch {
+    /// Universe identity the record carries.
+    #[must_use]
+    pub const fn recorded_universe(&self) -> &StableId {
+        &self.recorded_universe
+    }
+
+    /// Universe identity fresh synthesis produced.
+    #[must_use]
+    pub const fn running_universe(&self) -> &StableId {
+        &self.running_universe
+    }
+
+    /// Rule-pack version the record carries.
+    ///
+    /// Deliberately reported alongside, never used as the discriminator: this
+    /// field names the *pack*, not the rules in it, so a revision to one rule
+    /// leaves it unchanged while the run stops reproducing. Reporting it lets
+    /// a reader see whether the pack itself also moved.
+    #[must_use]
+    pub fn recorded_rule_pack_version(&self) -> &str {
+        &self.recorded_rule_pack_version
+    }
+
+    /// Rule-pack version this binary synthesizes under.
+    #[must_use]
+    pub fn running_rule_pack_version(&self) -> &str {
+        &self.running_rule_pack_version
+    }
+
+    /// Obligation IDs the record carries that fresh synthesis does not produce.
+    #[must_use]
+    pub const fn recorded_only(&self) -> &BTreeSet<StableId> {
+        &self.recorded_only
+    }
+
+    /// Obligation IDs fresh synthesis produces that the record does not carry.
+    #[must_use]
+    pub const fn running_only(&self) -> &BTreeSet<StableId> {
+        &self.running_only
+    }
+
+    /// Obligation IDs present on both sides whose bodies differ.
+    #[must_use]
+    pub const fn body_differs(&self) -> &BTreeSet<StableId> {
+        &self.body_differs
+    }
+}
+
 struct BorrowedGenesisObligations<'a>(&'a ReviewAggregate);
 
 struct VersionTupleStreamingRef<'a>(&'a crate::VersionTuple);
@@ -514,6 +625,29 @@ impl RunGenesisSnapshot {
     /// noncanonical encodings, malformed ProgramSpace records, and any
     /// inconsistent universe/obligation tuple.
     pub fn from_canonical_bytes(input: &[u8]) -> Result<Self> {
+        let (snapshot, reproduction) = Self::from_canonical_bytes_with_reproduction(input)?;
+        if !reproduction.is_reproduced() {
+            return Err(DomainError::Validation(
+                "run genesis obligations and universe must equal deterministic MVP re-synthesis"
+                    .to_owned(),
+            ));
+        }
+        Ok(snapshot)
+    }
+
+    /// Strictly decodes canonical v2 genesis bytes and reports whether the
+    /// running rule pack reproduces them, instead of refusing when it does
+    /// not.
+    ///
+    /// Every structural guarantee [`Self::from_canonical_bytes`] provides
+    /// still applies: unknown fields, noncanonical encodings, malformed
+    /// ProgramSpace records, misordered or duplicated obligations, and a
+    /// non-pristine aggregate are all still hard errors. Only the authorship
+    /// comparison becomes a reported verdict, so a run recorded by an older
+    /// rule pack stays readable.
+    pub fn from_canonical_bytes_with_reproduction(
+        input: &[u8],
+    ) -> Result<(Self, GenesisReproduction)> {
         let snapshot: Self =
             serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))?;
         if snapshot.schema != RUN_GENESIS_SCHEMA || snapshot.canonical_bytes()? != input {
@@ -521,9 +655,9 @@ impl RunGenesisSnapshot {
                 "run genesis snapshot must use the supported canonical schema".to_owned(),
             ));
         }
-        let aggregate = snapshot.rebuild_aggregate()?;
+        let (aggregate, reproduction) = snapshot.rebuild_aggregate_with_reproduction()?;
         aggregate.validate_pristine_for_event_log()?;
-        Ok(snapshot)
+        Ok((snapshot, reproduction))
     }
 
     fn from_canonical_bytes_v3(input: &[u8]) -> Result<Self> {
@@ -561,8 +695,10 @@ impl RunGenesisSnapshot {
         &self.program_space
     }
 
-    /// Reconstructs exactly the pristine aggregate represented by this DTO.
-    pub fn rebuild_aggregate(&self) -> Result<ReviewAggregate> {
+    /// Structural checks every decoded genesis must pass regardless of whether
+    /// the running rule pack reproduces it: schema, per-record validity, and
+    /// strict `StableId` ordering/uniqueness of the obligation list.
+    fn validate_structure(&self) -> Result<()> {
         if self.schema != RUN_GENESIS_SCHEMA {
             return Err(DomainError::Validation(
                 "unsupported run genesis snapshot schema".to_owned(),
@@ -582,21 +718,111 @@ impl RunGenesisSnapshot {
             }
             previous = Some(obligation.id().clone());
         }
+        Ok(())
+    }
+
+    /// Whether the rule pack compiled into this binary reproduces this
+    /// genesis's recorded universe and obligations from its own ProgramSpace.
+    ///
+    /// This is the authorship check, isolated from the decision of what to do
+    /// about it. Re-synthesis is the only thing standing between whoever can
+    /// write genesis bytes and an arbitrary coverage universe: CAS addressing
+    /// and canonical-byte equality already cover corruption and transport
+    /// tampering, but they accept a well-formed record whose obligation
+    /// weights, applicability, required capabilities, or accepted evidence
+    /// modes were chosen by the writer rather than derived by the rule pack --
+    /// all with identical `StableId`s, so nothing keyed on IDs notices. See
+    /// `docs/durability-finding-run-genesis-resynthesis-couples-stored-history-to-current-rule-pack.md`.
+    ///
+    /// A [`GenesisReproduction::NotReproducible`] verdict does not by itself
+    /// mean the record is forged: a rule-pack revision produces exactly the
+    /// same verdict for an honestly recorded run. Separating the two is a
+    /// caller decision, which is why this reports rather than refuses.
+    pub fn reproduction(&self) -> Result<GenesisReproduction> {
+        self.validate_structure()?;
         let (expected_universe, mut expected_obligations) =
             MvpRulePack::synthesize(&self.program_space)?.into_parts();
         expected_obligations.sort_by(|left, right| left.id().cmp(right.id()));
-        if expected_universe != self.universe || expected_obligations != self.obligations {
-            return Err(DomainError::Validation(
-                "run genesis obligations and universe must equal deterministic MVP re-synthesis"
-                    .to_owned(),
-            ));
+        if expected_universe == self.universe && expected_obligations == self.obligations {
+            return Ok(GenesisReproduction::Reproduced);
         }
+        let recorded_by_id = self
+            .obligations
+            .iter()
+            .map(|obligation| (obligation.id().clone(), obligation))
+            .collect::<BTreeMap<_, _>>();
+        let running_by_id = expected_obligations
+            .iter()
+            .map(|obligation| (obligation.id().clone(), obligation))
+            .collect::<BTreeMap<_, _>>();
+        let recorded_only = recorded_by_id
+            .keys()
+            .filter(|id| !running_by_id.contains_key(*id))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let running_only = running_by_id
+            .keys()
+            .filter(|id| !recorded_by_id.contains_key(*id))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let body_differs = recorded_by_id
+            .iter()
+            .filter_map(|(id, recorded)| {
+                running_by_id
+                    .get(id)
+                    .filter(|running| *recorded != **running)
+                    .map(|_| id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        Ok(GenesisReproduction::NotReproducible(
+            GenesisReproductionMismatch {
+                recorded_universe: self.universe.id().clone(),
+                running_universe: expected_universe.id().clone(),
+                recorded_rule_pack_version: self.universe.rule_pack_version().to_owned(),
+                running_rule_pack_version: expected_universe.rule_pack_version().to_owned(),
+                recorded_only,
+                running_only,
+                body_differs,
+            },
+        ))
+    }
+
+    /// Reconstructs the pristine aggregate this DTO represents together with
+    /// the authorship verdict, without deciding what the verdict means.
+    ///
+    /// Read paths (audit, replay of recorded history, index projection)
+    /// legitimately accept a [`GenesisReproduction::NotReproducible`] record so
+    /// that a run written by an older rule pack stays readable. Any path that
+    /// *extends* a run must refuse one; see [`Self::rebuild_aggregate`].
+    pub fn rebuild_aggregate_with_reproduction(
+        &self,
+    ) -> Result<(ReviewAggregate, GenesisReproduction)> {
+        let reproduction = self.reproduction()?;
         let aggregate = ReviewAggregate::new(
             self.program_space.clone(),
             self.universe.clone(),
             self.obligations.clone(),
         )?;
         aggregate.validate_pristine_for_event_log()?;
+        Ok((aggregate, reproduction))
+    }
+
+    /// Reconstructs exactly the pristine aggregate represented by this DTO,
+    /// refusing any record the running rule pack does not reproduce.
+    ///
+    /// This is the strict form every caller used before the verdict existed,
+    /// and it remains correct for anything that extends a run. A caller that
+    /// only reads recorded history should use
+    /// [`Self::rebuild_aggregate_with_reproduction`] and carry the verdict
+    /// forward instead of refusing.
+    pub fn rebuild_aggregate(&self) -> Result<ReviewAggregate> {
+        let (aggregate, reproduction) = self.rebuild_aggregate_with_reproduction()?;
+        if !reproduction.is_reproduced() {
+            return Err(DomainError::Validation(
+                "run genesis obligations and universe must equal deterministic MVP re-synthesis"
+                    .to_owned(),
+            ));
+        }
         Ok(aggregate)
     }
 

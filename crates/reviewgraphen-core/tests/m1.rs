@@ -4949,3 +4949,70 @@ fn changed_public_symbol_rule_requires_extractor_established_concurrency() {
          receive an `async.concurrent_reentry` obligation"
     );
 }
+
+/// A genesis this binary's rule pack synthesized reproduces exactly, and the
+/// strict decode that every extension path uses still accepts it.
+#[test]
+fn genesis_written_by_the_running_rule_pack_reproduces() {
+    let log = EventLog::new_v3(id("run:reproduction"), aggregate()).unwrap();
+    let snapshot = log.run_genesis_snapshot().unwrap();
+    assert_eq!(
+        snapshot.reproduction().unwrap(),
+        reviewgraphen_core::GenesisReproduction::Reproduced
+    );
+    let (_, verdict) = snapshot.rebuild_aggregate_with_reproduction().unwrap();
+    assert!(verdict.is_reproduced());
+    assert!(verdict.mismatch().is_none());
+    assert!(snapshot.rebuild_aggregate().is_ok());
+}
+
+/// A genesis whose obligation *body* was altered under an unchanged
+/// `StableId` -- the forgery shape every other genesis check accepts, since it
+/// preserves IDs, ordering, uniqueness, canonical encoding and per-record
+/// validity -- is reported as not reproducible, attributed to the exact
+/// obligation, and still refused by the strict decode.
+#[test]
+fn genesis_with_a_forged_obligation_body_is_not_reproducible_and_stays_refused() {
+    let log = EventLog::new_v3(id("run:reproduction"), aggregate()).unwrap();
+    let bytes = log
+        .run_genesis_snapshot()
+        .unwrap()
+        .canonical_bytes()
+        .unwrap();
+    let mut value: Value = serde_json::from_slice(&bytes).unwrap();
+    let forged_id = value["obligations"][0]["id"].as_str().unwrap().to_owned();
+    let original_weight = value["obligations"][0]["weight"].clone();
+    value["obligations"][0]["weight"] = json!(99.0);
+    assert_ne!(value["obligations"][0]["weight"], original_weight);
+    let forged = canonical_json(&value).unwrap();
+
+    let (snapshot, verdict) =
+        reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes_with_reproduction(&forged)
+            .expect("a forged body is still structurally decodable");
+    let mismatch = verdict.mismatch().expect("not reproducible");
+    assert_eq!(
+        mismatch.body_differs(),
+        &BTreeSet::from([StableId::parse(&forged_id).unwrap()]),
+        "the altered obligation is named, not merely counted"
+    );
+    assert!(
+        mismatch.recorded_only().is_empty() && mismatch.running_only().is_empty(),
+        "no obligation appeared or disappeared, so only the body differs"
+    );
+    assert_eq!(
+        mismatch.recorded_universe(),
+        mismatch.running_universe(),
+        "a body-only change leaves the universe identity untouched, which is \
+         exactly why the universe ID alone cannot detect this"
+    );
+    assert_eq!(
+        mismatch.recorded_rule_pack_version(),
+        mismatch.running_rule_pack_version(),
+        "the pack version is equal here, so it cannot be the discriminator"
+    );
+
+    assert!(
+        snapshot.rebuild_aggregate().is_err(),
+        "the strict decode every extension path uses must still refuse a forged body"
+    );
+}
