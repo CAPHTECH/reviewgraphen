@@ -1,0 +1,103 @@
+{
+  "acceptance_test_still_failing": false,
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "reviewgraphen-ingest"
+    ],
+    "exit_code": 0,
+    "stderr": "   Compiling reviewgraphen-ingest v0.1.0 (/tmp/m8-scratch-t2-meth/crates/reviewgraphen-ingest)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.19s\n",
+    "stdout": ""
+  },
+  "build_warning_count": 0,
+  "candidate_declares_verified": false,
+  "candidate_evidence_statuses": [
+    "requested"
+  ],
+  "candidate_obligation_count": 6,
+  "candidate_outcome": "completed",
+  "clippy": {
+    "exit_code": 0,
+    "warning_count": 0
+  },
+  "compiles": true,
+  "diff_line_count": 30,
+  "edit_application": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "index": 0,
+      "new_bytes": 1436,
+      "old_bytes": 274,
+      "old_occurrences": 1,
+      "status": "applied"
+    }
+  ],
+  "result_dir": "/tmp/m8-impl-local-v1-runs/task2-rerun-methodology",
+  "schema": "reviewgraphen.benchmark.m8_impl_local_verification.v1",
+  "schema_validated_against": "schemas/implementation-candidate-output.schema.json",
+  "schema_validation": {
+    "command": [
+      "python3",
+      "-c",
+      "import json,sys,jsonschema;schema=json.load(open(sys.argv[1]));instance=json.load(open(sys.argv[2]));jsonschema.validate(instance,schema);print('valid')",
+      "/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/benchmarks/m8-impl-local-v1/schemas/implementation-candidate-output.schema.json",
+      "/tmp/m8-impl-local-v1-runs/task2-rerun-methodology/candidate.json"
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "valid\n"
+  },
+  "scratch_creation": {
+    "command": [
+      "bash",
+      "/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/benchmarks/m8-impl-local-v1/scripts/make_scratch.sh",
+      "/tmp/m8-scratch-t2-meth"
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "/tmp/m8-scratch-t2-meth\n"
+  },
+  "scratch_dir": "/tmp/m8-scratch-t2-meth",
+  "test": {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "reviewgraphen-ingest"
+    ],
+    "exit_code": 0,
+    "stderr": "   Compiling reviewgraphen-ingest v0.1.0 (/tmp/m8-scratch-t2-meth/crates/reviewgraphen-ingest)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.26s\n     Running unittests src/lib.rs (/tmp/claude-1000/-home-rizumita-workspace-reviewgraphen/0d42d984-55de-424b-ad9a-e8b8f298b722/scratchpad/cargo-target/debug/deps/reviewgraphen_ingest-1dc09aceaad12694)\n     Running tests/extraction_report_schema.rs (/tmp/claude-1000/-home-rizumita-workspace-reviewgraphen/0d42d984-55de-424b-ad9a-e8b8f298b722/scratchpad/cargo-target/debug/deps/extraction_report_schema-111510c0da7c4230)\n     Running tests/m2.rs (/tmp/claude-1000/-home-rizumita-workspace-reviewgraphen/0d42d984-55de-424b-ad9a-e8b8f298b722/scratchpad/cargo-target/debug/deps/m2-98d1776abe9a9712)\nCloning into '/tmp/.tmpnBkvmP/fixture/sub'...\ndone.\n     Running tests/m8_extern_block_shadow.rs (/tmp/claude-1000/-home-rizumita-workspace-reviewgraphen/0d42d984-55de-424b-ad9a-e8b8f298b722/scratchpad/cargo-target/debug/deps/m8_extern_block_shadow-f2b87b08bf51abcd)\n   Doc-tests reviewgraphen_ingest\n",
+    "stdout": "\nrunning 67 tests\ntest adapter_set_hash_tests::a_different_cargo_resolver_policy_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_git_version_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_git_command_policy_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_max_file_bytes_limit_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_cargo_version_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_max_files_limit_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_quote_version_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_proc_macro2_version_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::the_proc_macro2_version_constant_is_the_real_workspace_pin_not_a_placeholder ... ok\ntest adapter_set_hash_tests::a_different_unavailable_cargo_failure_kind_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::an_unavailable_cargo_version_changes_the_adapter_set_hash_and_never_panics ... ok\ntest adapter_set_hash_tests::a_different_syn_version_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::the_quote_version_constant_is_the_real_workspace_pin_not_a_placeholder ... ok\ntest adapter_set_hash_tests::the_syn_version_constant_is_the_real_workspace_pin_not_a_placeholder ... ok\ntest adapter_set_hash_tests::the_same_cargo_failure_kind_hashes_identically_even_with_a_different_diagnostic ... ok\ntest git::bounded_exec_tests::a_reader_thread_panic_becomes_a_typed_error_not_an_empty_result ... ok\ntest adapter_set_hash_tests::profile_and_policy_identity_do_not_affect_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::identical_inputs_produce_an_identical_adapter_set_hash ... ok\ntest git::cargo_admission_tests::a_non_executable_admitted_file_fails_closed ... ok\ntest git::cargo_admission_tests::a_relative_admitted_path_fails_closed ... ok\ntest git::cargo_admission_tests::a_nonexistent_admitted_path_fails_closed ... ok\ntest cargo_failure_identity_tests::the_same_cargo_failure_kind_with_deliberately_different_diagnostics_matches_completely ... ok\ntest git::cargo_admission_tests::cargo_command_declares_only_the_fixed_env_allowlist ... ok\ntest cargo_failure_identity_tests::a_different_cargo_version_failure_kind_changes_the_hash_and_limitation_id ... ok\ntest git::cargo_dependency_resolution_tests::registry_dependency_is_always_external_even_if_a_same_named_local_package_exists ... ok\ntest git::cargo_admission_tests::a_directory_admitted_path_fails_closed ... ok\ntest git::cargo_dependency_resolution_tests::same_named_local_packages_are_not_mis_bound_without_a_disambiguating_path ... ok\ntest cargo_failure_identity_tests::the_same_cargo_version_failure_from_two_different_staged_tempdirs_hashes_and_identifies_identically ... ok\ntest git::cargo_admission_tests::disabled_admission_never_attempts_cargo_version ... ok\ntest git::cargo_dependency_resolution_tests::same_named_local_packages_are_disambiguated_by_an_exact_path_match ... ok\ntest git::bounded_exec_tests::output_exceeding_the_cap_is_a_typed_error_even_when_the_child_exits_successfully ... ok\ntest git::cargo_version_precondition_tests::an_unavailable_cargo_version_blocks_cargo_metadata_even_though_the_manifest_would_otherwise_succeed ... ok\ntest git::cargo_dependency_resolution_tests::unambiguous_local_dependency_resolves_to_its_accepted_package ... ok\ntest git::bounded_exec_tests::stderr_exceeding_the_cap_is_also_a_typed_error ... ok\ntest git::cargo_dependency_resolution_tests::unmatched_local_dependency_is_unresolved_not_guessed ... ok\ntest git::git_command_policy_tests::the_built_command_disables_pager_optional_locks_and_the_default_attributes_file ... ok\ntest git::git_command_policy_tests::the_built_command_strips_ambient_environment_to_the_allowlist_and_disables_config ... ok\ntest git::git_command_policy_tests::the_changed_lines_command_disables_ext_diff_and_textconv_and_fixes_the_diff_algorithm ... ok\ntest git::git_command_policy_tests::the_changes_command_disables_ext_diff_and_textconv_and_fixes_rename_detection ... ok\ntest git::git_command_policy_tests::the_show_file_command_disables_ext_diff_and_textconv ... ok\ntest git::cargo_version_precondition_tests::cargo_metadata_extraction_refuses_to_proceed_if_cargo_version_is_ok_without_a_staged_snapshot - should panic ... ok\ntest git::tool_version_tests::a_missing_binary_is_a_typed_command_io_error ... ok\ntest rust::anchor_tests::rust_anchor_v1_ignores_only_comments_formatting_and_spans ... ok\ntest rust::anchor_tests::rust_anchor_v1_changes_for_identifier_signature_or_body_mutation ... ok\ntest source_key_resolution_tests::capability_with_no_declared_source_keys_falls_back_to_the_snapshot ... ok\ntest source_key_resolution_tests::capability_with_all_known_source_keys_resolves_normally ... ok\ntest git::cargo_version_precondition_tests::cargo_metadata_reads_the_exact_staged_directory_cargo_version_was_determined_from ... ok\ntest source_key_resolution_tests::capability_with_one_unknown_key_among_multiple_fails_closed ... ok\ntest source_key_resolution_tests::capability_with_only_unknown_source_keys_fails_closed ... ok\ntest source_key_resolution_tests::issue_with_all_known_source_keys_resolves_normally ... ok\ntest source_key_resolution_tests::issue_with_one_unknown_key_among_multiple_fails_closed ... ok\ntest source_key_resolution_tests::issue_with_empty_source_keys_still_falls_back_to_the_snapshot ... ok\ntest source_key_resolution_tests::issue_with_only_unknown_source_keys_fails_closed ... ok\ntest source_key_resolution_tests::relation_endpoint_order_changes_accepted_identity_and_body ... ok\ntest git::bounded_exec_tests::a_well_behaved_process_completes_normally_through_the_bounded_wrapper ... ok\ntest git::bounded_exec_tests::unbounded_output_does_not_leave_the_process_running_and_never_returns_a_truncated_ok ... ok\ntest git::bounded_exec_tests::output_exactly_at_the_cap_boundary_is_accepted ... ok\ntest git::cargo_admission_tests::a_valid_trusted_executable_is_admitted_and_its_real_version_is_reported ... ok\ntest git::cargo_version_precondition_tests::a_verified_cargo_version_lets_the_same_manifest_produce_accepted_package_facts ... ok\ntest git::tool_version_tests::a_nonzero_exit_is_a_typed_command_failed_error ... ok\ntest git::tool_version_tests::a_successful_command_returns_its_trimmed_stdout ... ok\ntest git::tool_version_tests::empty_stdout_on_success_is_a_typed_adapter_output_error ... ok\ntest git::cargo_admission_tests::cargo_subprocesses_never_inherit_the_real_ambient_path ... ok\ntest git::cargo_admission_tests::cargo_version_and_cargo_metadata_run_the_same_admitted_executable_from_the_same_cwd ... ok\ntest cargo_executable_path_independence_tests::different_admitted_cargo_paths_with_identical_output_hash_and_canonicalize_identically ... ok\ntest git::source_bundle_limit_tests::aggregate_source_limit_stops_before_the_next_git_show ... ok\ntest git::bounded_exec_tests::a_slow_process_is_killed_at_the_timeout_bound_instead_of_awaited_to_completion ... ok\n\ntest result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n\nrunning 8 tests\ntest checked_in_example_matches_its_pinned_canonical_sha256 ... ok\ntest schema_itself_is_a_valid_json_schema ... ok\ntest invalid_capability_state_enum_value_is_rejected ... ok\ntest wrong_schema_discriminator_is_rejected ... ok\ntest empty_obstruction_source_ids_is_rejected ... ok\ntest missing_required_field_is_rejected ... ok\ntest unknown_top_level_field_is_rejected ... ok\ntest checked_in_example_validates_against_the_schema ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n\n\nrunning 40 tests\ntest concurrency_model_facts_are_read_off_local_rust_syntax ... ok\ntest configured_blob_bound_is_enforced ... ok\ntest excluded_entry_unchanged_between_base_and_target_does_not_downgrade_changed_structure ... ok\ntest capability_and_limitation_source_ids_resolve_within_the_program_space ... ok\ntest default_disabled_admission_never_runs_cargo_metadata_even_with_a_real_cargo_on_path ... ok\ntest a_changed_public_async_function_synthesizes_a_substantive_obligation ... ok\ntest capability_gap_obligation_reason_and_qualification_trace_are_verified ... ok\ntest external_registry_dependency_is_still_marked_external ... ok\ntest block_local_tuple_and_unit_struct_constructors_are_tracked_as_value_namespace_shadows ... ok\ntest block_local_use_const_static_and_glob_imports_are_tracked_as_shadows ... ok\ntest m2_output_feeds_m1_synthesis_without_a_migration_gap ... ok\ntest a_real_ingest_run_extraction_report_validates_against_the_public_schema ... ok\ntest different_limits_produce_a_different_adapter_set_hash ... ok\ntest clone_local_binary_attribute_override_does_not_change_changed_lines_or_hashes ... ok\ntest opaque_local_pattern_without_a_subsequent_call_is_still_recorded_as_an_obstruction ... ok\ntest ingests_a_bounded_git_snapshot_with_rust_facts_and_changed_structure ... ok\ntest git_submodule_entry_is_retained_as_a_typed_obstruction_without_aborting_ingestion ... ok\ntest opaque_pattern_in_closure_arm_and_for_loop_without_a_subsequent_call_is_still_recorded ... ok\ntest malformed_cargo_manifest_blocks_cargo_metadata_instead_of_being_treated_as_safe ... ok\ntest a_replacement_ref_present_in_only_one_clone_does_not_change_accepted_facts_or_hashes ... ok\ntest package_workspace_pointing_outside_the_snapshot_blocks_cargo_metadata ... ok\ntest parse_failure_is_retained_without_aborting_other_snapshot_facts ... ok\ntest qualified_call_to_an_unrelated_module_is_not_matched_to_a_same_named_local_target ... ok\ntest pat_macro_and_verbatim_patterns_conservatively_block_naked_call_resolution ... ok\ntest workspace_escape_is_rejected_before_git_ingestion ... ok\ntest source_handoff_accepts_an_all_zero_byte_snapshot_at_a_zero_byte_limit ... ok\ntest same_module_naked_call_lookup_never_matches_an_impl_method ... ok\ntest sibling_workspace_path_dependency_within_the_snapshot_does_not_block_cargo_metadata ... ok\ntest target_worktree_is_not_modified ... ok\ntest tracked_symlinks_are_not_followed_and_remain_explicitly_excluded ... ok\ntest divergent_repo_config_does_not_change_accepted_facts_or_hashes ... ok\ntest ufcs_style_call_is_not_matched_to_a_same_named_method_without_type_proof ... ok\ntest snapshot_and_fact_ids_are_independent_of_the_diff_base_revision ... ok\ntest unresolved_macro_and_dynamic_dispatch_remain_explicit_unknowns ... ok\ntest unqualified_call_shadowed_by_a_local_binding_is_never_matched_to_a_module_function ... ok\ntest unsafe_cargo_path_dependency_is_not_followed ... ok\ntest unqualified_call_is_not_matched_by_crate_wide_short_name_uniqueness ... ok\ntest stable_repository_identity_is_independent_of_the_local_clone_path ... ok\ntest source_handoff_is_exact_bounded_deterministic_and_reuses_accepted_file_bytes ... ok\ntest canonical_output_is_deterministic_across_generated_repository_shapes ... ok\n\ntest result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.09s\n\n\nrunning 5 tests\ntest block_local_extern_static_shadows_a_same_named_module_function ... ok\ntest an_extern_block_not_naming_the_called_symbol_does_not_block_resolution ... ok\ntest an_unshadowed_call_still_resolves ... ok\ntest extern_block_shadow_does_not_leak_past_its_block ... ok\ntest block_local_extern_fn_shadows_a_same_named_module_function ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
+  },
+  "test_result_lines": [
+    [
+      "ok",
+      "67",
+      "0"
+    ],
+    [
+      "ok",
+      "8",
+      "0"
+    ],
+    [
+      "ok",
+      "40",
+      "0"
+    ],
+    [
+      "ok",
+      "5",
+      "0"
+    ],
+    [
+      "ok",
+      "0",
+      "0"
+    ]
+  ],
+  "tests_pass": true,
+  "verdict": "verified"
+}
