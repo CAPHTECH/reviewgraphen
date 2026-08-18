@@ -207,7 +207,45 @@ struct VerifiedV5GenesisIdentity {
 }
 
 impl JournalIdentity {
+    /// Opens a journal identity for any use, including extending the run.
+    ///
+    /// Strict: a V5 genesis the running rule pack does not reproduce is
+    /// refused here, which is what keeps the authorship guarantee at the write
+    /// boundary. Every caller that appends, publishes, seals, or otherwise
+    /// mutates durable run state uses this constructor and therefore cannot
+    /// accept such a record -- the refusal is by construction, not by
+    /// remembering to check.
+    ///
+    /// A caller that only reads recorded history should use
+    /// [`Self::new_for_read`], which reports the verdict instead of refusing
+    /// so a run written by an older analyzer stays projectable. See
+    /// `docs/durability-finding-run-genesis-resynthesis-couples-stored-history-to-current-rule-pack.md`.
     pub fn new(run_id: StableId, genesis: JournalGenesis) -> Result<Self, JournalError> {
+        let (identity, reproduction) = Self::new_for_read(run_id, genesis)?;
+        if reproduction.is_some_and(|verdict| !verdict.is_reproduced()) {
+            return Err(JournalError::Identity(
+                "journal genesis is not reproduced by the running rule pack",
+            ));
+        }
+        Ok(identity)
+    }
+
+    /// Opens a journal identity for reading recorded history, reporting
+    /// whether the running rule pack reproduces its genesis rather than
+    /// refusing when it does not.
+    ///
+    /// `None` is returned for every genesis wire except V5: v2/v3/v4 keep the
+    /// strict decode, so on those wires this constructor is exactly
+    /// [`Self::new`]. That is deliberate -- their projections cannot yet carry
+    /// a verdict to a reader, and accepting a version-crossed run into a
+    /// projection that renders it as ordinary is the defect this whole change
+    /// exists to avoid.
+    ///
+    /// The identity this returns must not be used to extend the run.
+    pub fn new_for_read(
+        run_id: StableId,
+        genesis: JournalGenesis,
+    ) -> Result<(Self, Option<reviewgraphen_core::GenesisReproduction>), JournalError> {
         if run_id.kind() != "run" {
             return Err(JournalError::Identity("journal requires a run StableId"));
         }
@@ -260,12 +298,12 @@ impl JournalIdentity {
         } else {
             None
         };
+        let mut reproduction = None;
         let verified_v5 = if let JournalGenesis::V5Shared(bytes) = &genesis {
-            let snapshot = RunGenesisSnapshot::from_canonical_v4_bytes_for_store(bytes)
-                .map_err(map_bounded_domain_error)?;
-            let _ = snapshot
-                .rebuild_aggregate()
-                .map_err(map_bounded_domain_error)?;
+            let (_, verdict) =
+                RunGenesisSnapshot::from_canonical_v4_bytes_for_store_with_reproduction(bytes)
+                    .map_err(map_bounded_domain_error)?;
+            reproduction = Some(verdict);
             Some(Arc::new(VerifiedV5GenesisIdentity {
                 run_id: run_id.clone(),
                 genesis_hash: ContentHash::sha256(bytes),
@@ -273,14 +311,17 @@ impl JournalIdentity {
         } else {
             None
         };
-        Ok(Self {
-            run_id,
-            genesis,
-            verified_v2,
-            verified_v3,
-            verified_v4,
-            verified_v5,
-        })
+        Ok((
+            Self {
+                run_id,
+                genesis,
+                verified_v2,
+                verified_v3,
+                verified_v4,
+                verified_v5,
+            },
+            reproduction,
+        ))
     }
     #[must_use]
     pub fn version(&self) -> EventContractVersion {

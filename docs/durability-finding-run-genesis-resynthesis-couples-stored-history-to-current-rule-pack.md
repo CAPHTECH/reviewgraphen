@@ -182,6 +182,43 @@ its identity or trigger — before it could serve as the discriminator. That is
 a new standing maintenance obligation, not a free win, and nothing today
 enforces the bump.
 
+## How the write boundary is actually held (option C, step 2)
+
+The obvious implementation of "refuse at every extension point" is to
+enumerate the extension points and add a guard to each. A sweep of
+`reviewgraphen-store` found that would have been fragile:
+
+- `JournalIdentity::new` is the **only** construction site for that type in the
+  workspace; every other value is a clone. So whatever that constructor
+  admits, every consumer inherits.
+- Several read-named functions write. `EventJournal::recover_terminal_proof_v5`
+  puts a terminal proof object into CAS. `replayed_v2_session`,
+  `replayed_v3_session` and `replayed_v4_session` each take the *exclusive*
+  journal lock and hand back a full `append_*` surface, and are called from
+  read-only report and index code. `inspect_recovery_v4` mints a capability
+  that authorizes destructive tail truncation.
+- Several write-named functions do not write —
+  `seal_static_verification_attempt_v3` is an in-memory core operation.
+- The two functions every durable path funnels through, `validate_prefix` and
+  `chain_genesis`, are shared with the read paths, so neither is a safe gate.
+
+Gating by name or by enumeration would therefore have had to be right about a
+list where the names actively mislead in both directions, and a single miss is
+a silent hole.
+
+So the boundary is held by construction instead. `JournalIdentity::new` stays
+strict and refuses any V5 genesis the running rule pack does not reproduce;
+`JournalIdentity::new_for_read` is the opt-in that reports the verdict rather
+than refusing. Every extension point takes a `JournalIdentity`, and the only
+way to get a non-reproduced one is to have asked for it explicitly. Missing a
+consumer now fails closed — it keeps the old strict behaviour — rather than
+opening a hole.
+
+`new_for_read` returns a verdict only for the V5 wire. On v2/v3/v4 it is
+exactly `new`, because those projections cannot yet carry a verdict to a
+reader, and admitting a version-crossed run into a projection that renders it
+as ordinary is the defect this change exists to avoid.
+
 ## A separate defect found while tracing the paths
 
 `decode_index_v5_genesis` (`crates/reviewgraphen-store/src/journal.rs`) is the

@@ -3509,6 +3509,29 @@ pub(crate) mod tests {
         );
     }
 
+    /// The two identity constructors differ only in what they do about the
+    /// authorship verdict, and only on the V5 wire. Extension points take the
+    /// strict one, so a genesis the running pack does not reproduce cannot
+    /// reach them -- the refusal is by construction, which matters here
+    /// because the sweep of this crate found read-named functions that write
+    /// (`recover_terminal_proof_v5` puts into CAS) and write-named ones that
+    /// do not, so gating by enumerating names would have been fragile.
+    #[test]
+    fn read_only_identity_reports_a_v5_verdict_and_the_strict_one_governs_extension() {
+        let genesis = include_bytes!("../tests/fixtures/terminal-v5-gluing-genesis.json");
+        let run = || StableId::parse("run:m6-gluing-positive-s1").unwrap();
+
+        let (_, verdict) =
+            JournalIdentity::new_for_read(run(), JournalGenesis::V5(genesis.to_vec())).unwrap();
+        let verdict = verdict.expect("a V5 genesis carries an authorship verdict");
+        assert!(
+            verdict.is_reproduced(),
+            "the running rule pack reproduces this fixture today, so both \
+             constructors must agree"
+        );
+        assert!(JournalIdentity::new(run(), JournalGenesis::V5(genesis.to_vec())).is_ok());
+    }
+
     #[test]
     fn v6_terminal_legacy_body_hash_fixture_is_rejected_before_target_only_recovery() {
         let workspace = tempfile::tempdir().unwrap();
@@ -3519,7 +3542,13 @@ pub(crate) mod tests {
         // must reject it before a target-only recovery path is even reached.
         assert!(TerminalProofV5::from_canonical_bytes(proof_bytes).is_ok());
         let genesis = include_bytes!("../tests/fixtures/terminal-v5-gluing-genesis.json");
-        let identity = JournalIdentity::new(
+        // Read-only construction on purpose. This corpus is historical: its
+        // genesis was synthesized by whatever rule pack wrote it, so a later
+        // pack need not reproduce it, and refusing to *load* it would stop
+        // this test reaching the rejection it exists to prove. Publication
+        // below is still expected to fail -- on the marker's non-contract
+        // `body_hash`, which is the assertion that matters.
+        let (identity, _reproduction) = JournalIdentity::new_for_read(
             StableId::parse("run:m6-gluing-positive-s1").unwrap(),
             JournalGenesis::V5(genesis.to_vec()),
         )

@@ -700,6 +700,19 @@ impl RunGenesisSnapshot {
     }
 
     fn from_canonical_bytes_v3(input: &[u8]) -> Result<Self> {
+        let (snapshot, reproduction) = Self::from_canonical_bytes_v3_with_reproduction(input)?;
+        if !reproduction.is_reproduced() {
+            return Err(DomainError::Validation(
+                "run genesis obligations and universe must equal deterministic MVP re-synthesis"
+                    .to_owned(),
+            ));
+        }
+        Ok(snapshot)
+    }
+
+    fn from_canonical_bytes_v3_with_reproduction(
+        input: &[u8],
+    ) -> Result<(Self, GenesisReproduction)> {
         preflight_v3_genesis(input)?;
         let mut snapshot: Self =
             serde_json::from_slice(input).map_err(|error| DomainError::Json(error.to_string()))?;
@@ -709,9 +722,21 @@ impl RunGenesisSnapshot {
                 "run genesis snapshot must use the supported canonical v3 schema".to_owned(),
             ));
         }
-        let aggregate = snapshot.rebuild_aggregate()?;
+        let reproduction = snapshot.reproduction()?;
+        if matches!(reproduction, GenesisReproduction::NotSynthesizable { .. }) {
+            // See `from_canonical_bytes_with_reproduction`: no aggregate is
+            // built, because none can be, and the snapshot therefore carries
+            // the structural guarantees and explicitly not the
+            // pristine-aggregate guarantee.
+            return Ok((snapshot, reproduction));
+        }
+        let aggregate = ReviewAggregate::new(
+            snapshot.program_space.clone(),
+            snapshot.universe.clone(),
+            snapshot.obligations.clone(),
+        )?;
         aggregate.validate_pristine_for_event_log()?;
-        Ok(snapshot)
+        Ok((snapshot, reproduction))
     }
 
     /// Index-only bounded decode seam. The structural cap is operational and
@@ -725,6 +750,21 @@ impl RunGenesisSnapshot {
     #[doc(hidden)]
     pub fn from_canonical_v4_bytes_for_store(input: &[u8]) -> Result<Self> {
         Self::from_canonical_bytes_v3(input)
+    }
+
+    /// Store-only inert decode of the V3/V4 genesis wire inherited by V5,
+    /// reporting the authorship verdict instead of refusing when the running
+    /// rule pack does not reproduce the record.
+    ///
+    /// This is the seam a read-only V5 consumer uses so a run recorded by an
+    /// older analyzer stays projectable. Callers that extend a run must use
+    /// [`Self::from_canonical_v4_bytes_for_store`], which refuses anything not
+    /// [`GenesisReproduction::Reproduced`].
+    #[doc(hidden)]
+    pub fn from_canonical_v4_bytes_for_store_with_reproduction(
+        input: &[u8],
+    ) -> Result<(Self, GenesisReproduction)> {
+        Self::from_canonical_bytes_v3_with_reproduction(input)
     }
 
     /// Accepted ProgramSpace rebuilt from this strictly decoded genesis.
