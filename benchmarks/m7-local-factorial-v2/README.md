@@ -50,3 +50,9 @@ carried a real review target; it does not establish anything about
 ReviewGraphen's obligation-driven review capability. This does not change
 any recorded trial outcome; it corrects how the `full_reviewgraphen` arm's
 obligation content should be understood.
+
+**Further addendum (2026-08-18):** the capability gap described above was
+partially closed on 2026-08-18 for one rule (`node.changed_public_symbol`,
+concurrency-evidence-gated); see `docs/23_current_capability_status.md`
+for the current, verified state. This experiment's recorded results are
+unaffected and remain a measurement of the pre-fix system.

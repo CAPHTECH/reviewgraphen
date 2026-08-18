@@ -112,6 +112,7 @@ repository / diff / tests / policies
 
 ## 読み始める場所
 
+- **今のReviewGraphenが実コードに対して何をできるか**: [`docs/23_current_capability_status.md`](docs/23_current_capability_status.md)（正典、日付入り。以下の文書群より新しい）
 - 全体像: [`docs/index.md`](docs/index.md)
 - 目的と非目的: [`docs/00_vision_and_scope.md`](docs/00_vision_and_scope.md)
 - 研究上の位置: [`docs/02_research_foundation.md`](docs/02_research_foundation.md)
@@ -161,6 +162,8 @@ ReviewGraphenの価値は「AIがレビューした」という文ではなく�
 ## 文書の性格
 
 本ドキュメント群は実装前の設計基準です。HigherGraphen 0.7.1の公開構造と既存の `pr-review` / `test-gap` 契約を基準にしていますが、ReviewGraphen自体の実装が存在することを意味しません。
+
+**追記（2026-08-18）**: 上の一文は本ドキュメント群が最初に書かれた時点のものです。現在は `crates/` 配下に実装が存在し、テストスイートも整備されています（[`DEVELOPMENT.md`](DEVELOPMENT.md)）。実コードに対して現在何ができるかは [`docs/23_current_capability_status.md`](docs/23_current_capability_status.md) を参照してください。この一文は書き換えず、経緯として残します。
 
 ## Bundle artifacts
 

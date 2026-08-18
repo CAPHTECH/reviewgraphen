@@ -218,3 +218,23 @@ outside the scope of a diagnosis.
 
 No fix is proposed or implemented by this document, per the operator's
 instruction. This is a report for the operator's decision.
+
+## Addendum, 2026-08-18: the fix this document sized was implemented — see docs/23
+
+**Everything above this addendum was true when written and is left
+unedited.** This document's own "If fixable, what would it take?"
+section predicted precisely what was implemented on 2026-08-18:
+`concurrency_model` extraction was added to `rust.rs`, rule 1
+(`node.changed_public_symbol`) now produces real per-function
+`async.concurrent_reentry` obligations on real Rust code with
+concurrency evidence, and — exactly as predicted — rules 2 through 5
+were not fixed and remain scoped to the double-submit payment fixture.
+This diagnosis's finding that ReviewGraphen (as of 2026-08-17) could not
+generate substantive review obligations for fsl was correct **for that
+date**; it is not the current state of the system.
+
+Full detail, independently verified against the actual commits and this
+repository's own test suite: see `docs/23_current_capability_status.md`,
+the current canonical answer to "what can ReviewGraphen do." This
+diagnosis remains the accurate historical record of what m7-head-local-v1
+actually measured and why.

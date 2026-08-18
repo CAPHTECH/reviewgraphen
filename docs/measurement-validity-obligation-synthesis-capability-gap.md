@@ -158,3 +158,25 @@ touching any existing content:
 - `benchmarks/m7-pilot-v2/README.md` (or nearest record)
 - `benchmarks/m7-real-v1/results/full-reviewgraphen-replicate-2/REPORT.md`
 - `benchmarks/m7-local-factorial-v2/` (relevant record)
+
+## Addendum, 2026-08-18: rule 1 is now reachable — see docs/23
+
+**Everything above this addendum was true when written (2026-08-17) and
+is left unedited, per the append-only discipline stated throughout this
+document.** As of 2026-08-18, the two root causes this document
+diagnoses — `is_changed_public_symbol` never seeing `changed`, and no
+adapter declaring `concurrency_model` complete — are closed for
+`node.changed_public_symbol` specifically, which now produces genuine
+`async.concurrent_reentry` obligations on real Rust code with syntactic
+concurrency evidence. This document's own prediction, quoted from the
+paragraph above the corrective-addenda list, was correct: fixing this
+"would let rule 1 produce real per-function obligations about concurrent
+re-entry... It would not fix rules 2-5," and rules 2 through 5 remain
+exactly where this document found them.
+
+Full detail, verified independently against the actual commits and this
+repository's own test suite, not copied from any commit message: see
+`docs/23_current_capability_status.md`. That document is the current,
+canonical answer to "what can ReviewGraphen do"; this diagnosis remains
+the accurate historical record of the defect it found and its root
+cause.

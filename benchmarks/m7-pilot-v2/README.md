@@ -21,3 +21,9 @@ therefore not driven by ReviewGraphen obligation content; whatever drove
 it came from something else in the packet (program-space facts, context
 visibility, or chance). This does not change the recorded scores; it
 corrects the inference that g3's obligation layer contributed to them.
+
+**Further addendum (2026-08-18):** the capability gap described above was
+partially closed on 2026-08-18 for one rule (`node.changed_public_symbol`,
+concurrency-evidence-gated); see `docs/23_current_capability_status.md`
+for the current, verified state. This pilot's recorded results are
+unaffected and remain a measurement of the pre-fix system.
