@@ -35,6 +35,18 @@ for task in "" "-t2"; do
 done
 
 # Judge pool and result, including the withheld truth mapping.
+if [[ -d /tmp/m8-judge2/task2 ]]; then
+  mkdir -p "$dest/judge-task2/pool"
+  cp /tmp/m8-judge2/task2/*.md "$dest/judge-task2/pool/"
+  cp /tmp/m8-judge2/task2-truth.json "$dest/judge-task2/truth.json"
+fi
+if [[ -d /tmp/m8-judge2-results/task2 ]]; then
+  mkdir -p "$dest/judge-task2"
+  cp /tmp/m8-judge2-results/task2/judgment.json "$dest/judge-task2/judgment.json"
+  cp /tmp/m8-judge2-results/task2/judge-output.txt "$dest/judge-task2/judge-output.txt"
+  cp /tmp/m8-judge2-results/task2/prompt.sha256 "$dest/judge-task2/prompt.sha256"
+  cp /tmp/m8-judge2-results/task2/judge-elapsed-seconds "$dest/judge-task2/judge-elapsed-seconds"
+fi
 if [[ -d /tmp/m8-judge/task1 ]]; then
   mkdir -p "$dest/judge-task1/pool"
   cp /tmp/m8-judge/task1/*.md "$dest/judge-task1/pool/"
