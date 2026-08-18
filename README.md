@@ -165,6 +165,12 @@ ReviewGraphenの価値は「AIがレビューした」という文ではなく�
 
 **追記（2026-08-18）**: 上の一文は本ドキュメント群が最初に書かれた時点のものです。現在は `crates/` 配下に実装が存在し、テストスイートも整備されています（[`DEVELOPMENT.md`](DEVELOPMENT.md)）。実コードに対して現在何ができるかは [`docs/23_current_capability_status.md`](docs/23_current_capability_status.md) を参照してください。この一文は書き換えず、経緯として残します。
 
+## FSLとの関係
+
+`benchmarks/`配下の一部の実験（m7-real-v1、m7-head-local-v1など）は、[FSL](https://github.com/ymm-oss/fsl)という別組織(`ymm-oss`)配下の公開リポジトリを実コードのレビュー対象として使っています。このリポジトリの運営者は`ymm-oss/fsl`のadminでもあります。
+
+実験期間中、FSLは読み取り専用として扱われ、upstreamへのissue・branch・commit・pull requestは一切作成していません。実験完了後、運営者の判断でissue作成のみ別途許可を得て行い、投稿前に各指摘をコードリーディングと機械的な再現テストで個別に検証しました（`upstream-issues/`配下に検証記録と投稿記録があります）。投稿済みの5件は[ymm-oss/fsl](https://github.com/ymm-oss/fsl/issues)で確認できます。埋め込まれたFSLソースの帰属については[`/NOTICE`](NOTICE)を参照してください。
+
 ## Bundle artifacts
 
 - [`MANIFEST.md`](MANIFEST.md) — 文書・schema・example・skillの構成。

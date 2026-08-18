@@ -34,3 +34,12 @@ checked in; their hashes are bound by the execution records, while every shell
 command is retained in JSONL. Full adjudication source copies are also omitted
 because the exact bounded excerpts actually supplied to the adjudicator are
 included.
+
+## Attribution
+
+The `public/snapshot-*/snapshot/rust/...` trees under this corpus are
+unmodified source excerpts from [FSL](https://github.com/ymm-oss/fsl), a
+separate public repository, used as real-code review targets. FSL is
+licensed Apache License, Version 2.0; see [`/NOTICE`](../../NOTICE) at
+the repository root for the full third-party attribution, including the
+exact file list and scope.
