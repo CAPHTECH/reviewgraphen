@@ -211,6 +211,21 @@ if (( process_status != 0 )); then
   ' "$result_dir/transport-record.json" >/dev/null; then
     write_metrics context_budget_exhausted_before_final
     exit 72
+  elif [[ "$empty_final" == true ]] && python3 "$root/benchmarks/m7-head-local-v1/scripts/detect_silent_truncation.py" \
+    "$result_dir/provider-response.sse.gz" >/dev/null 2>&1; then
+    # Upstream reports a clean finish (status=completed, error=null,
+    # incomplete_details=null) but never produced a message-type output
+    # item, well short of max_output_tokens -- the model's turn was cut
+    # off mid-reasoning while the server claims success. Distinct from
+    # every other upstream_* class, which all report failure explicitly;
+    # this is the only one that reports success. Excluded from the
+    # semantic denominator like every other upstream_* class (exit 71),
+    # per RESTART_PROTOCOL_AND_UPSTREAM_HISTORY.md section 6. Established
+    # from head-local-04/head-local-08
+    # (diagnostics/empty-final-content-investigation-head-local-04-08/REPORT.md),
+    # not assumed for any other unit.
+    write_metrics upstream_silent_truncation
+    exit 71
   elif [[ "$empty_final" == true ]]; then
     write_metrics empty_final_after_process_completion
   else
