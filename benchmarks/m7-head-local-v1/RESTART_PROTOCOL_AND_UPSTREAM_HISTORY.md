@@ -131,3 +131,109 @@ Generation resumes from `head-local-01` under the unchanged 131,072-token
 condition. `head-local-00` is not re-run (already `valid` under the current
 condition). The two-strikes-then-`upstream_blocked` rule (§4) applies from
 this point forward for every remaining unit.
+
+## 6. `upstream_silent_truncation` — a new upstream class, added after the 9-unit batch completed
+
+Status: recorded after the operator reviewed
+`diagnostics/empty-final-content-investigation-head-local-04-08/REPORT.md`
+(a fact-finding investigation the operator requested into
+`head-local-08`'s `"raw response size"` adapter rejection and
+`head-local-04`'s zero-content stop at 59% of the output-token budget).
+Amends the failure taxonomy and this section's restart rule; does not
+change the generation execution condition.
+
+### What was established, directly from the raw SSE (not from the ambiguous adapter.stderr text)
+
+Both `head-local-04` (77,520/131,072 output tokens, 59.1% of cap) and
+`head-local-08` (27,305/131,072, 20.8% of cap) show, in their
+`response.completed` event:
+- `status: "completed"`, `error: null`, `incomplete_details: null` — the
+  server itself reports a clean, non-truncated finish.
+- `output`: exactly one item, `{"type": "reasoning"}` — no
+  `message`-type item was ever created, so no final answer of any kind
+  (not even an explicit `outcome: abstained` JSON) was ever produced.
+- `usage.output_tokens` well under `max_output_tokens` in both cases —
+  ruling out genuine budget exhaustion.
+- Reading the actual `reasoning_text` transcript for both: the content
+  stops mid-sentence, mid-analysis, with no sign of concluding or
+  transitioning toward an answer.
+
+**Conclusion, from these four converged observations, not inferred from
+any single one alone:** the upstream server silently truncated the
+response while reporting success. This is a measurement failure, not a
+model failure — the model was never given the chance to finish; there is
+no way to know from what was returned whether it would have found
+anything.
+
+### Why this is a new class, not a use of an existing one
+
+Every other `upstream_*` class in this taxonomy
+(`upstream_server_failure`, `upstream_server_stream_incomplete`,
+`upstream_model_crash`, `upstream_stream_closed_before_completion`)
+reports failure explicitly — a 5xx, a disconnect, a crash message.
+**`upstream_silent_truncation` is the only class where the server claims
+success.** Operationally this is the most dangerous kind, precisely
+because nothing else in the taxonomy would catch it without inspecting
+the response body's own structure (no message item) rather than trusting
+its status field.
+
+### Detection
+
+`scripts/detect_silent_truncation.py`, wired into `scripts/run_trial.sh`
+as a new branch ahead of the `empty_final_after_process_completion`
+fallback. Checks, from the raw `provider-response.sse.gz`, exactly the
+three conditions above (status/error/incomplete_details clean,
+no `message`-type output item, `output_tokens < 0.95 * max_output_tokens`
+— an operator-chosen margin, disclosed as chosen rather than derived).
+Verified by test (`scripts/test_detect_silent_truncation.py`) against the
+real recorded responses: `head-local-04` and `head-local-08` classify
+`true`; `head-local-07` (a genuinely valid unit from the same batch, a
+similar reasoning-token count) classifies `false`. Excluded from the
+semantic denominator and consumes zero semantic attempts, same as every
+other `upstream_*` class (exit 71, §4's two-strikes rule applies).
+
+### Known code defect, recorded but not fixed during this experiment
+
+`crates/reviewgraphen-reviewer/src/process.rs:775`:
+```rust
+if raw.is_empty() || raw.len() > MAX_CAPTURE_BYTES {
+    return Err(ProcessReviewerError::Input("raw response size"));
+}
+```
+Both branches of this `||` produce the identical error string. **This
+ambiguity is not hypothetical — it actually misled this investigation's
+starting point.** The operator's first hypothesis, based on reading
+`head-local-08`'s adapter.stderr (`process reviewer input rejected: raw
+response size`) alone, was that the 4 MiB `MAX_CAPTURE_BYTES` cap had
+incorrectly rejected an oversized-but-valid response. Only decompressing
+the raw SSE and measuring `raw-response.json` directly (0 bytes, not
+oversized) ruled this out. Had the error string distinguished "empty"
+from "exceeds 4 MiB," this dead end would not have been necessary.
+
+Per operator instruction, `crates/reviewgraphen-reviewer` is not modified
+during this experiment. This defect is recorded here as the concrete
+incident of its cost, for a fix after the experiment completes — not
+fixed now.
+
+A second, related but non-blocking defect found in the same
+investigation: `scripts/run_trial.sh`'s pre-existing classifier line
+(`rg -q 'raw response size 0 is outside' adapter.stderr`) is dead code —
+that exact substring never appears in the real Rust error text, which is
+just `raw response size`. It did not affect any classification outcome
+in this experiment, because an earlier, independent file-existence check
+already correctly determined emptiness before that branch is ever
+reached. Left in place (unreachable, harmless) rather than removed
+mid-experiment, since removing dead code is itself a code change to a
+file this section's own new branch was just added to — deferred to the
+same post-experiment cleanup as the `process.rs` defect above.
+
+### head-local-04 / head-local-08: re-run authorized
+
+Per §4's excluded-attempt rule, both units' prior `upstream_silent_truncation`
+attempts consumed zero semantic attempts, so re-issuing either is a
+**first** semantic attempt, not a retry. Operator-authorized: re-run both
+under the **unchanged** execution condition (same 131,072-token cap, same
+everything) — no condition is loosened to try to avoid a recurrence.
+Bounded per §4: at most 2 consecutive same-unit attempts; if a unit fails
+identically twice, it is marked `upstream_blocked` and excluded, and no
+third request is issued for it.
