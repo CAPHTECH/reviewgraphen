@@ -1,0 +1,9 @@
+RETRY_START attempt=m7-head-local-v1-skill-retry-1 unit=head-local-04 attempt_number=1
+RETRY_DONE attempt=m7-head-local-v1-skill-retry-1 unit=head-local-04 attempt_number=1 outcome=valid trial_status=0
+UNIT_SETTLED unit=head-local-04 final_outcome=valid attempts_used=1
+RETRY_START attempt=m7-head-local-v1-skill-retry-1 unit=head-local-08 attempt_number=1
+RETRY_DONE attempt=m7-head-local-v1-skill-retry-1 unit=head-local-08 attempt_number=1 outcome=upstream_silent_truncation trial_status=71
+RETRY_START attempt=m7-head-local-v1-skill-retry-1 unit=head-local-08 attempt_number=2
+RETRY_DONE attempt=m7-head-local-v1-skill-retry-1 unit=head-local-08 attempt_number=2 outcome=upstream_silent_truncation trial_status=71
+UPSTREAM_BLOCKED unit=head-local-08 after 2 consecutive upstream_silent_truncation
+RETRY_BATCH_DONE attempt=m7-head-local-v1-skill-retry-1
