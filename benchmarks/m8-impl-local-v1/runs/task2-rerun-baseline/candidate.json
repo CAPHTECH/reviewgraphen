@@ -1,0 +1,16 @@
+{
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "    /// the block ends. A nested `fn`/`const`/`static` item, every name a\n    /// block-local foreign module's `fn`/`static` declaration introduces,\n    /// and every name a block-local `use` item introduces, is hoisted -- bound for the",
+      "old": "    /// the block ends. A nested `fn`/`const`/`static` item, and every name\n    /// a block-local `use` item introduces, is hoisted -- bound for the"
+    },
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                syn::Stmt::Item(Item::ForeignMod(nested)) => {\n                    for declaration in &nested.items {\n                        match declaration {\n                            syn::ForeignItem::Fn(decl) => hoisted.push(decl.sig.ident.to_string()),\n                            syn::ForeignItem::Static(decl) => hoisted.push(decl.ident.to_string()),\n                            _ => {}\n                        }\n                    }\n                }",
+      "old": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }"
+    }
+  ],
+  "outcome": "completed",
+  "schema": "reviewgraphen.benchmark.implementation_candidate_edit.v1"
+}
