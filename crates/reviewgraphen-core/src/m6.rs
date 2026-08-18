@@ -20515,7 +20515,7 @@ mod tests {
     #[test]
     fn obligation_dependency_cycles_and_external_ids_are_typed_invalid_universe() {
         let (_closure, _mappings, source, _target, _phase) = correspondence_phase();
-        let template = source.obligations().next().unwrap();
+        let template = source.obligations_by_semantic_key().next().unwrap();
         let make = |id_value: &str, dependencies: &[&str]| {
             let mut value = serde_json::to_value(template).unwrap();
             value["id"] = Value::String(id_value.to_owned());
@@ -20669,7 +20669,7 @@ mod tests {
     #[test]
     fn correspondence_dependency_stages_cross_255_without_truncation() {
         let (_closure, _mappings, source, _target, _phase) = correspondence_phase();
-        let template = source.obligations().next().unwrap();
+        let template = source.obligations_by_semantic_key().next().unwrap();
         let obligations = (0..300)
             .map(|index| {
                 let mut value = serde_json::to_value(template).unwrap();
@@ -20874,7 +20874,7 @@ mod tests {
     #[test]
     fn source_only_change_stays_one_candidate_and_is_modified_by_complete_body() {
         let (_closure, mappings, _source, target, _phase) = correspondence_phase();
-        let obligation = target.obligations().next().unwrap();
+        let obligation = target.obligations_by_semantic_key().next().unwrap();
         let target_domain = target.program().known_ids();
         let obligation_domain = target
             .obligations()

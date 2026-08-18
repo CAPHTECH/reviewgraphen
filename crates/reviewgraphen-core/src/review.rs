@@ -3363,6 +3363,32 @@ impl ReviewAggregate {
         self.obligations.values()
     }
 
+    /// Obligations in `semantic_key` order -- the order a fixture must use
+    /// when it needs *a* representative obligation rather than one specific
+    /// obligation.
+    ///
+    /// [`Self::obligations`] iterates a `BTreeMap` keyed by [`StableId`], so
+    /// taking its first element selects by hash order. That silently
+    /// re-selects a *different* obligation whenever anything bound into
+    /// `StableId::derived` changes -- a rule version, a profile, a snapshot --
+    /// even though no obligation was added, removed, or altered. A fixture
+    /// pinned that way does not fail visibly when that happens: it starts
+    /// exercising a different subject and reports a semantic failure (a
+    /// preserved record turning stale, a correspondence losing its successor)
+    /// that reads as a regression in the code under test rather than as the
+    /// fixture having moved.
+    ///
+    /// `semantic_key` is `property_id|target_refs`, deliberately excluding the
+    /// rule version -- it is what `docs/12` §11 uses to correspond
+    /// obligations across a rule revision, and it is stable across exactly the
+    /// identity changes that perturb `StableId` order.
+    #[cfg(test)]
+    pub(crate) fn obligations_by_semantic_key(&self) -> impl Iterator<Item = &Obligation> {
+        let mut ordered = self.obligations.values().collect::<Vec<_>>();
+        ordered.sort_by(|left, right| left.semantic_key().cmp(right.semantic_key()));
+        ordered.into_iter()
+    }
+
     /// Internal context-builder lookup; registrations are event-derived
     /// metadata and remain unavailable as a general mutation surface.
     #[cfg(test)]

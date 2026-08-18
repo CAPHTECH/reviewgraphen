@@ -67821,10 +67821,39 @@ mod tests {
         ))?;
         let plan = plan(log.aggregate(), PlanBudget::new(16, 16)?)?;
         log.append(EventCommand::review_plan_recorded(plan.clone()))?;
-        let (obligation_id, built) = plan
+        // Candidates are scanned in `semantic_key` order, not plan-wave
+        // order. Wave order comes from the risk-first scheduler, which breaks
+        // weight ties by `StableId` -- so scanning it makes *which*
+        // `payment.at_most_once` obligation this fixture grounds depend on
+        // obligation ID derivation. The double-submit program has two
+        // (`path.external_side_effect@1`'s and
+        // `invariant.payment_at_most_once@1`'s), so an unrelated identity
+        // change (a rule version, a profile) silently switches the subject
+        // and surfaces as a semantic failure in the M5/M6 preservation
+        // assertions downstream rather than as an obviously moved fixture.
+        // `semantic_key` is stable across exactly those changes.
+        let mut candidates = plan
             .waves()
             .iter()
             .flat_map(|wave| wave.obligation_ids())
+            .collect::<Vec<_>>();
+        // M4's fixed-fixture verifier verifies a counterexample *path*, so the
+        // path-targeted obligation -- not the invariant-targeted one that
+        // shares `payment.at_most_once` -- is the intended subject. Pinning
+        // that intent explicitly is what makes the choice stable; ordering by
+        // `semantic_key` alone would deterministically select the *invariant*
+        // obligation instead and silently re-point every M4/M5/M6 fixture
+        // built on top of this one.
+        candidates.sort_by_key(|candidate| {
+            log.aggregate().obligation(candidate).map(|obligation| {
+                (
+                    obligation.target_kind() != "path",
+                    obligation.semantic_key().to_owned(),
+                )
+            })
+        });
+        let (obligation_id, built) = candidates
+            .into_iter()
             .find_map(|candidate| {
                 (log.aggregate().obligation(candidate)?.property_id() == M4_PROPERTY_ID).then(
                     || {
@@ -73619,8 +73648,19 @@ mod tests {
 
     #[test]
     fn v1_event_hash_remains_a_historical_golden() {
+        // The subject is selected by `semantic_key`, not by `StableId` order,
+        // so this pin stays fixed across any later change to obligation
+        // identity derivation. It was re-pinned once when that selection
+        // changed; it should not need re-pinning again for an identity
+        // change, only for a real change to V1 envelope encoding.
         let mut log = EventLog::new_v1_for_test(id("run:v1-golden"), aggregate()).unwrap();
-        let obligation = log.aggregate().obligations().next().unwrap().id().clone();
+        let obligation = log
+            .aggregate()
+            .obligations_by_semantic_key()
+            .next()
+            .unwrap()
+            .id()
+            .clone();
         log.append(EventCommand::obligation_transition(
             obligation,
             ObligationLifecycle::Planned,
@@ -73630,7 +73670,7 @@ mod tests {
         assert_eq!(envelope.schema, EventContractVersion::V1.schema());
         assert_eq!(
             envelope.event_hash.to_string(),
-            "sha256:088674a66c49436fe9b654ea3d47a434b511c31a635357d947bafb87f41bb021"
+            "sha256:888755be60f6cbf89c4f9d34884aee7ed2daeacc265fc05ebc4f461098d43372"
         );
     }
 
@@ -74446,7 +74486,13 @@ mod tests {
     fn offline_v2_rejects_legacy_claims_and_completed_transitions() {
         let log = v2_log("run:offline-v2-legacy");
         let manifest = log.events[0].envelope.clone();
-        let obligation = log.aggregate().obligations().next().unwrap().id().clone();
+        let obligation = log
+            .aggregate()
+            .obligations_by_semantic_key()
+            .next()
+            .unwrap()
+            .id()
+            .clone();
         let claim = ReviewClaim::propose_ai(
             id("claim:offline-v2-legacy"),
             id("execution:fixture"),
@@ -74583,7 +74629,13 @@ mod tests {
     #[test]
     fn offline_projection_is_bound_to_the_exact_validated_view_events() {
         let mut log = EventLog::new_v1_for_test(id("run:offline-exact-view"), aggregate()).unwrap();
-        let obligation = log.aggregate().obligations().next().unwrap().id().clone();
+        let obligation = log
+            .aggregate()
+            .obligations_by_semantic_key()
+            .next()
+            .unwrap()
+            .id()
+            .clone();
         log.append(EventCommand::obligation_transition(
             obligation.clone(),
             ObligationLifecycle::Planned,
