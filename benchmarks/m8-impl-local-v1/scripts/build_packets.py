@@ -85,6 +85,49 @@ Rules for `edits`:
   `edits` array.
 """
 
+CONTROL_OUTPUT_CONTRACT = """\
+# Output contract
+
+Emit exactly one JSON object and nothing else after it. No prose after the
+JSON. If you use a fenced code block, use one ```json fence containing only
+the object.
+
+Schema `reviewgraphen.benchmark.implementation_candidate_edit.v1`:
+
+```json
+{
+  "schema": "reviewgraphen.benchmark.implementation_candidate_edit.v1",
+  "outcome": "completed",
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-cli/src/lib.rs",
+      "old": "<an exact, contiguous, unique excerpt of the current file>",
+      "new": "<the text that replaces it>"
+    }
+  ]
+}
+```
+
+Rules for `edits`:
+
+- `file` must be exactly `crates/reviewgraphen-cli/src/lib.rs`. No other
+  file may appear.
+- `old` must be an **exact, byte-for-byte, contiguous excerpt** of the
+  current contents of that file as given to you below, including
+  indentation, and must occur **exactly once** in it. It will be replaced
+  by `new` by literal string substitution. If `old` does not match exactly
+  and uniquely, the edit is discarded and the run counts as producing no
+  applicable change.
+- Keep `old` as small as possible while still unique.
+- Alternatively, a single edit entry may carry `"full_content"` instead of
+  `"old"`/`"new"`, holding the complete new text of the file. Use this only
+  if you cannot produce a reliable excerpt; it is more output.
+- If you decide not to attempt the change, emit `"outcome": "abstained"`
+  with an `"abstention_reason"` and an empty `edits` array.
+
+No other fields are permitted.
+"""
+
 METHODOLOGY_PREAMBLE = """\
 # Methodology you must follow
 
@@ -126,7 +169,7 @@ def main() -> None:
     test = (EXP / "task/review_flag_order.rs").read_text(encoding="utf-8")
     skill = (EXP / "skill/IMPLEMENTATION_SKILL.md").read_text(encoding="utf-8")
 
-    common = (
+    shared = (
         TASK_PREAMBLE
         + task
         + f"\n\n# Current contents of `{TARGET_FILE}` (revision {revision})\n\n"
@@ -137,12 +180,21 @@ def main() -> None:
         + "```rust\n"
         + test
         + "```\n\n"
-        + OUTPUT_CONTRACT
     )
 
+    # The control gets a minimal edits-only contract. Its first version
+    # reused the treatment's schema, whose `obligations` and
+    # `evidence_status` fields imported the treatment's own vocabulary into
+    # the control and made the evidence-discipline measure meaningless
+    # (RESULTS.md section 1.4, AMENDMENT-002.md section 1). The manipulated
+    # variable is now the methodology as a whole -- its procedure AND its
+    # reporting surface -- which is what "with the method vs without it"
+    # actually means.
     packets = {
-        "baseline": common,
-        "methodology": METHODOLOGY_PREAMBLE + skill + "\n\n---\n\n" + common,
+        "baseline": shared + CONTROL_OUTPUT_CONTRACT,
+        "methodology": (
+            METHODOLOGY_PREAMBLE + skill + "\n\n---\n\n" + shared + OUTPUT_CONTRACT
+        ),
     }
 
     manifest = {
@@ -155,6 +207,7 @@ def main() -> None:
         "task_sha256": sha256(task),
         "skill_sha256": sha256(skill),
         "output_contract_sha256": sha256(OUTPUT_CONTRACT),
+        "control_output_contract_sha256": sha256(CONTROL_OUTPUT_CONTRACT),
         "packets": {},
     }
     for name, body in packets.items():

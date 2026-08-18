@@ -31,6 +31,15 @@ from pathlib import Path
 
 BASE_URL = "http://192.168.68.71:11999/v1/responses"
 MODEL = "qwen3.8:27b-mlx"
+# The alias above is what is SENT. This is what the server must report back in
+# `response.completed.model`. Added after the operator disclosed that the
+# server's model list grew to include `qwen3.8-27b-mlx@8bit`,
+# `qwen3.8-27b-mlx@4bit` and `qwen3.8-27b-mtp`: a silent alias re-point to a
+# different quantization would look exactly like a methodology effect, so the
+# resolved id is pinned and verified rather than assumed. The new variants are
+# never used; comparing across them needs its own preregistration.
+EXPECTED_RESOLVED_MODEL = "qwen3.8-27b-mlx"
+MODELS_URL = "http://192.168.68.71:11999/v1/models"
 MAX_OUTPUT_TOKENS = 131072
 MODEL_CONTEXT_WINDOW = 262144
 REASONING_EFFORT = "high"
@@ -48,6 +57,19 @@ def main() -> None:
     if result_dir.exists():
         raise SystemExit(f"result directory must be fresh: {result_dir}")
     result_dir.mkdir(parents=True)
+
+    # Control-endpoint capture of the server's advertised model list at run
+    # time. Not a generation request. A responsive control endpoint is NOT
+    # evidence that generation is healthy; this is recorded for provenance
+    # only, so a later reader can see exactly which variants existed.
+    try:
+        with urllib.request.urlopen(MODELS_URL, timeout=30) as models_response:
+            advertised_models = json.loads(models_response.read().decode("utf-8"))
+    except Exception as error:  # noqa: BLE001
+        advertised_models = {"error": f"{type(error).__name__}: {error}"}
+    (result_dir / "advertised-models.json").write_text(
+        json.dumps(advertised_models, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
     packet = packet_path.read_text(encoding="utf-8")
     body = {
@@ -128,6 +150,9 @@ def main() -> None:
     final = completed_text or "".join(final_text)
     (result_dir / "final-content.txt").write_text(final, encoding="utf-8")
 
+    resolved_model = (completed or {}).get("model")
+    model_identity_verified = resolved_model == EXPECTED_RESOLVED_MODEL
+
     failure_class = classify(
         transport_error=transport_error,
         upstream_status=upstream_status,
@@ -169,12 +194,33 @@ def main() -> None:
             key: (completed or {}).get(key)
             for key in ("temperature", "top_p", "presence_penalty", "frequency_penalty")
         },
+        "model_sent": MODEL,
+        "expected_resolved_model": EXPECTED_RESOLVED_MODEL,
+        "resolved_model_reported_by_server": resolved_model,
+        "model_identity_verified": model_identity_verified,
+        "advertised_model_ids": (
+            sorted(
+                str(entry.get("id"))
+                for entry in (advertised_models.get("data") or [])
+                if isinstance(entry, dict)
+            )
+            if isinstance(advertised_models, dict)
+            else None
+        ),
         "failure_class": failure_class,
     }
     (result_dir / "generation-metrics.json").write_text(
         json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(json.dumps(metrics, indent=2, sort_keys=True))
+    if failure_class == "generation_ok" and not model_identity_verified:
+        # Never silently accept a model other than the frozen one.
+        print(
+            f"MODEL IDENTITY MISMATCH: sent {MODEL!r}, expected resolved "
+            f"{EXPECTED_RESOLVED_MODEL!r}, server reported {resolved_model!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     sys.exit(0 if failure_class == "generation_ok" else 1)
 
 

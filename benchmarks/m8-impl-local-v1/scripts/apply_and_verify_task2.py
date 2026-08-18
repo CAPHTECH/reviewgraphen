@@ -100,6 +100,15 @@ def main() -> None:
         o.get("evidence_status") == "verified" for o in (candidate.get("obligations") or [])
     )
 
+    # The two arms answer to different contracts: the treatment's full
+    # schema, and the control's minimal edits-only one. The candidate's own
+    # `schema` field selects which, so a control that invented obligation
+    # fields would fail validation rather than pass unnoticed.
+    schema_file = {
+        "reviewgraphen.benchmark.implementation_candidate_output.v1": "schemas/implementation-candidate-output.schema.json",
+        "reviewgraphen.benchmark.implementation_candidate_edit.v1": "schemas/implementation-candidate-edit.schema.json",
+    }.get(candidate.get("schema"), "schemas/implementation-candidate-output.schema.json")
+    report["schema_validated_against"] = schema_file
     schema_check = run(
         [
             "python3",
@@ -109,7 +118,7 @@ def main() -> None:
             "instance=json.load(open(sys.argv[2]));"
             "jsonschema.validate(instance,schema);"
             "print('valid')",
-            str(EXP / "schemas/implementation-candidate-output.schema.json"),
+            str(EXP / schema_file),
             str(result_dir / "candidate.json"),
         ]
     )
