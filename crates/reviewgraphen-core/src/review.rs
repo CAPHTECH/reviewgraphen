@@ -1961,9 +1961,30 @@ impl ReviewAggregate {
                     .target_refs()
                     .iter()
                     .all(|id| self.program.invariant(id).is_some()),
+                // A subgraph-targeted obligation is a coverage-gap record: it
+                // names the snapshot rather than any symbol, carries no
+                // determinate applicability, and says which rule's requirement
+                // went unmet. Those three facts are what make it well-formed,
+                // and all three are checked here.
+                //
+                // What is deliberately *not* checked is which rule version
+                // minted it. This arm used to require
+                // `version().rule() == "capability_gap.origin_rule@1"` -- an
+                // authorship assertion inside a structural check, and the
+                // fourth of that shape found in this constructor. It was the
+                // most dangerous of them: every obligation real ingestion
+                // produces today is a capability gap, so versioning that rule
+                // would have made every stored genesis fail to construct an
+                // aggregate, all at once. The property ID is the right
+                // discriminator because it is stable across exactly that
+                // change -- `property_version` versions the property
+                // separately, and the rule string versions the trigger.
+                // Authorship belongs to `RunGenesisSnapshot::reproduction`;
+                // see
+                // `docs/durability-finding-run-genesis-resynthesis-couples-stored-history-to-current-rule-pack.md`.
                 "subgraph" => {
                     obligation.applicability_status() == "unknown"
-                        && obligation.version().rule() == "capability_gap.origin_rule@1"
+                        && obligation.property_id() == crate::synthesize::CAPABILITY_GAP_PROPERTY
                         && obligation
                             .applicability_reasons()
                             .iter()

@@ -182,6 +182,50 @@ its identity or trigger — before it could serve as the discriminator. That is
 a new standing maintenance obligation, not a free win, and nothing today
 enforces the bump.
 
+## The authorship-in-validation pattern, and why it is now closed
+
+Four instances of one mistake were found, across two functions, all reached
+from `ReviewAggregate::new`. Each asserted something about *who wrote a
+record* inside a check whose job is whether the record is internally
+well-formed, and each therefore discarded a verdict that had already been
+computed correctly:
+
+| # | Where | The assertion | Now |
+| --- | --- | --- | --- |
+| 1 | `UniverseDescriptor::validate_against` | `rule_pack_version != "m1.fixture@1"` | replaced by "the field must be present" (`ae805f4`) |
+| 2 | `MvpRulePack::synthesize`'s profile gate, propagated by `?` | the pack declines the profile ⇒ decode error | reported as `GenesisReproduction::NotSynthesizable` (`8906e65`) |
+| 3 | `UniverseDescriptor::validate_against` | recomputes the universe `StableId` through `universe_id`, which binds the running pack's literal | unchanged, but no longer reached for a record this pack cannot synthesize |
+| 4 | `ReviewAggregate::validate`, `subgraph` arm | `version().rule() == "capability_gap.origin_rule@1"` | replaced by the property ID, which is stable across a rule revision |
+
+Only the first was found by looking. The second surfaced when the verdict was
+made reachable, the third when the second was fixed, and the fourth only
+because the third prompted a deliberate search for more. That is three of four
+discovered by consequence, which is why the closing search was done by asking
+what *shape* to look for rather than waiting for the next break.
+
+**Closed** means: every remaining check in `ReviewAggregate::validate` and in
+`UniverseDescriptor::validate_against` is either a structural property of the
+record (a reference resolves, a namespace matches, an ID set agrees, a field
+is present) or a coherence property tied to the target kind (a subgraph
+obligation names the snapshot and carries no determinate applicability).
+Nothing left in either function asks which rule pack, rule version, or profile
+produced the record. Authorship is established in exactly one place —
+`RunGenesisSnapshot::reproduction` — and reported as a verdict rather than
+raised as a validation error.
+
+Instance 4 was the most dangerous of the four and the only one that had not
+yet bitten. Every obligation real ingestion produces today is a capability
+gap, so versioning `capability_gap.origin_rule` would have made every stored
+genesis fail to construct an aggregate simultaneously. It is pinned by
+`a_capability_gap_from_a_later_rule_version_is_still_a_well_formed_subgraph_obligation`.
+
+Instance 3 is worth stating precisely because it is the one that still bites,
+by design: a universe minted by a genuinely different rule pack cannot be
+rebuilt into an aggregate, because this pack's `universe_id` derivation cannot
+reproduce its identity. That is why
+`from_canonical_bytes_with_reproduction` returns such a record with its
+verdict and *without* an aggregate, and says so at the call site.
+
 ## How the write boundary is actually held (option C, step 2)
 
 The obvious implementation of "refuse at every extension point" is to

@@ -5124,3 +5124,64 @@ fn genesis_under_an_unhandled_profile_is_readable_and_reports_that_it_cannot_be_
         "the strict decode every extension path uses must still refuse it"
     );
 }
+
+/// A capability-gap obligation minted by a *later* version of the gap rule is
+/// still structurally well-formed, because what makes it well-formed is the
+/// shape of the record -- snapshot target, indeterminate applicability, an
+/// origin-rule reason -- and not which rule version produced it.
+///
+/// This matters more than it looks: every obligation real ingestion produces
+/// today is a capability gap, so an aggregate check that pinned the gap rule's
+/// version would make every stored genesis fail to construct the moment that
+/// rule were revised.
+#[test]
+fn a_capability_gap_from_a_later_rule_version_is_still_a_well_formed_subgraph_obligation() {
+    let log = EventLog::new_v3(id("run:gap-version"), aggregate()).unwrap();
+    let bytes = log
+        .run_genesis_snapshot()
+        .unwrap()
+        .canonical_bytes()
+        .unwrap();
+    let mut value: Value = serde_json::from_slice(&bytes).unwrap();
+
+    let mut revised = 0;
+    for obligation in value["obligations"].as_array_mut().unwrap() {
+        if obligation["target_kind"] == "subgraph" {
+            obligation["version"]["rule"] = json!("capability_gap.origin_rule@2");
+            revised += 1;
+        }
+    }
+    assert!(
+        revised > 0,
+        "the fixture must contain capability-gap obligations"
+    );
+
+    let outcome = reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes_with_reproduction(
+        &canonical_json(&value).unwrap(),
+    );
+    let (_, verdict) = outcome.expect(
+        "a later gap-rule version must not make the record structurally malformed; \
+         only re-synthesis may object",
+    );
+    assert!(
+        !verdict.is_reproduced(),
+        "the running pack still declines to vouch for obligations it did not mint"
+    );
+
+    // The property is what the structural check keys on, so breaking *that*
+    // is still a hard error rather than a verdict.
+    let mut wrong_property: Value = serde_json::from_slice(&bytes).unwrap();
+    for obligation in wrong_property["obligations"].as_array_mut().unwrap() {
+        if obligation["target_kind"] == "subgraph" {
+            obligation["property_id"] = json!("something.else");
+        }
+    }
+    assert!(
+        reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes_with_reproduction(
+            &canonical_json(&wrong_property).unwrap()
+        )
+        .is_err(),
+        "a subgraph obligation that is not a capability gap is malformed, not merely \
+         unreproduced"
+    );
+}
