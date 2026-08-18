@@ -1,0 +1,25 @@
+{
+  "acceptance_test_file": "crates/reviewgraphen-ingest/tests/m8_extern_block_shadow.rs",
+  "acceptance_test_included_in_packet": false,
+  "acceptance_test_sha256": "dd79b76edd5b0bfea46611cde32bdd1ff5ef9bc1d6a94c3a98f0ffd4adf754ef",
+  "packets": {
+    "baseline": {
+      "bytes": 88183,
+      "path": "/tmp/m8-t2-packets/packet-baseline.txt",
+      "sha256": "3f7f116e31afea8a7e7171195b0a91b2566e92c594fbafa3c8dd553acf8edf6f"
+    },
+    "methodology": {
+      "bytes": 102298,
+      "path": "/tmp/m8-t2-packets/packet-methodology.txt",
+      "sha256": "dd06c8ba09f50db4cbcc75de23e997a38974f66a532da15ca932a57ec6cb2816"
+    }
+  },
+  "pinned_revision": "05573bb6b3491b6849512e75e055d4cf6279b606",
+  "schema": "reviewgraphen.benchmark.m8_impl_local_v1_packet_manifest.v1",
+  "skill_sha256": "9d888647caf1452c72ee5ee084c2d18f0f21f062b75c8daa432cb97c0179c0f6",
+  "target_file": "crates/reviewgraphen-ingest/src/rust.rs",
+  "target_file_bytes": 80875,
+  "target_file_sha256": "104c76d15a4161ec32bc1a5f2b9e9110cba4f0d6d222d703babbaff7c293030b",
+  "task": "task2-extern-block-shadow",
+  "task_sha256": "b35796b03c8d8341d9ef2d76260ddb4e58a82d89dd4ec3b4efba0c2925b02cae"
+}

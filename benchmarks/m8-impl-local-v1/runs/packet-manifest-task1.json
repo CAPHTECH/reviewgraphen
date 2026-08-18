@@ -1,0 +1,23 @@
+{
+  "acceptance_test_file": "crates/reviewgraphen-cli/tests/review_flag_order.rs",
+  "acceptance_test_sha256": "47fd74b43cfc1090fd6d662a8b0835709563f378728b598012fa772151fded92",
+  "output_contract_sha256": "3266ba5dd01988a40f3ddad62eeaccb0be4eb1426101bf48fdfb321245e297c9",
+  "packets": {
+    "baseline": {
+      "bytes": 23119,
+      "path": "/tmp/m8-impl-local-v1-packets/packet-baseline.txt",
+      "sha256": "a329fd112963fd888648f9201c9f94424d541b1dc7317e34b283f31b37be6008"
+    },
+    "methodology": {
+      "bytes": 37234,
+      "path": "/tmp/m8-impl-local-v1-packets/packet-methodology.txt",
+      "sha256": "b1f9d5f412ff35609eb7103e9217cb98e47d98bada1364aa5f837f302800ea06"
+    }
+  },
+  "pinned_revision": "05573bb6b3491b6849512e75e055d4cf6279b606",
+  "schema": "reviewgraphen.benchmark.m8_impl_local_v1_packet_manifest.v1",
+  "skill_sha256": "9d888647caf1452c72ee5ee084c2d18f0f21f062b75c8daa432cb97c0179c0f6",
+  "target_file": "crates/reviewgraphen-cli/src/lib.rs",
+  "target_file_sha256": "0306984af8cc058bafa883560119bfa47a5ff82a3daca7c5b7cbcc1e63016d02",
+  "task_sha256": "40de684e87587554eac820b44caa1dec82c558e44c61ca8b2eae0cacea5e92d1"
+}

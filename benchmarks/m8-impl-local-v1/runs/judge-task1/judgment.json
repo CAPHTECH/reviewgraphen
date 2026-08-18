@@ -1,0 +1,36 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "1b3e1e8b79ad9952",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm is a positional pattern over the whole slice, not a special case for particular values: `[command, artifacts_flag, artifact_root, request_flag, request_path] if command == \"review\" && artifacts_flag == \"--artifacts\" && request_flag == \"--request\"`. It matches every five-token `review --artifacts X --request Y` line regardless of what X and Y are, including flag-looking tokens, and dispatches with the same call the original arm uses: `generic_review(Path::new(request_path), Path::new(artifact_root))`. Since two flag/value pairs admit exactly two orders, enumerating the second order is the full rule, not a narrowed slice of it. Nothing keys on fixture names, path shapes, or argument content."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "The diff contains only additions: the twelve lines from `[` through `}` forming the new match arm. `usage()`'s string is untouched (`\"usage: reviewgraphen review --request <request.json> --artifacts <fresh-absolute-dir> | schema list|print <schema-id>|validate <json-file>\"` appears only as context), the three `schema` arms and the `_ => CommandOutcome::failure(2, usage())` catch-all are unmodified context, and `generic_review`'s body is unmodified context. No renaming, no reformatting of the existing `--request`-first arm."
+      },
+      "convention_fit": {
+        "verdict": "fits",
+        "justification": "The new arm is a byte-for-byte structural mirror of the existing one: the same vertical one-binding-per-line slice pattern, the same `if command == \"review\" && ... && ... =>` guard chain wrapped the same way, the same braced body containing a single `generic_review(...)` call. Binding names reuse the file's vocabulary exactly (`artifacts_flag`, `artifact_root`, `request_flag`, `request_path`), and it adds no comment, consistent with the original arm carrying none and the only doc comment living on `run` itself (`/// Executes the closed command surface. ...`)."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "none",
+        "justification": "Preservation clause 2's worked example still lands on the original arm: for `[\"review\", \"--request\", \"--artifacts\", \"--artifacts\", dir]` the first arm's guard `request_flag == \"--request\" && artifacts_flag == \"--artifacts\"` holds against positions 1 and 3, so `request_path` binds the literal `--artifacts`. The mirror case `review --artifacts --request --request Y` falls to the new arm and binds `artifact_root` to the literal `--request`, which is the positional reading. Rejections survive: a repeated flag such as `review --artifacts --request --artifacts Y` fails arm one (position 1 is not `--request`) and arm two (position 3 is not `--request`), reaching `_ => CommandOutcome::failure(2, usage())`; every arity other than five with `command == \"review\"` reaches the same catch-all because the two- and three-element arms all guard on `command == \"schema\"`. No token is inspected for a leading `--`, so the prohibited flag-scanning implementation is avoided."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "some",
+        "justification": "The line `generic_review(Path::new(request_path), Path::new(artifact_root))` now exists verbatim in two arms; if the call's argument order or wrapping ever changes, both copies must change together and nothing in the file enforces that — a small duplicated invariant that can drift. There is no ordering hazard between the two arms (their guards `request_flag == \"--request\"` at position 1 and `artifacts_flag == \"--artifacts\"` at position 1 are mutually exclusive), but the enumeration scales factorially: a third flag pair would require six arms rather than two."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "The arm reads as its own documentation — the binding names in order (`artifacts_flag, artifact_root, request_flag, request_path`) plus the guard `artifacts_flag == \"--artifacts\" && request_flag == \"--request\"` state exactly which command line is accepted, and the body shows the values reaching `generic_review` in the same order as the original arm. A maintainer sees the two arms side by side and infers 'both orders, everything else falls to `_ => CommandOutcome::failure(2, usage())`' without external context."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "Smallest correct change consistent with the constraints: one added arm, no helper function needed, no other function touched, `usage()` and the `schema` arms untouched. It implements the specified rule generally rather than for tested inputs, preserves positional value consumption including the `--request --artifacts --artifacts <dir>` case, and reads as a mirror of the surrounding idiom. The only reservation — the duplicated `generic_review(Path::new(request_path), Path::new(artifact_root))` line — is not worth trading a helper or a rewrite of the existing arm for at this size."
+      }
+    }
+  ]
+}

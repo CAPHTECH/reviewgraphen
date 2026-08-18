@@ -1,0 +1,13 @@
+{
+  "arm_count": 2,
+  "change_to_arms": {
+    "1b3e1e8b79ad9952": [
+      "methodology",
+      "baseline"
+    ]
+  },
+  "distinct_change_count": 1,
+  "note": "Arm identity mapping. Kept OUTSIDE the judge packet directory contents that are sent; never admitted to the judge.",
+  "schema": "reviewgraphen.benchmark.m8_judge_pool_truth.v1",
+  "task": "task1"
+}
