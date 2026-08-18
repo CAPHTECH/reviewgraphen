@@ -1,6 +1,6 @@
 # Durability finding: a stored run genesis becomes unloadable whenever the rule pack changes
 
-- Status: diagnosis and options, no fix implemented
+- Status: diagnosis and options; option C accepted by the operator and being implemented in stages. Corrections are marked inline and dated.
 - Date found: 2026-08-18
 - Scope: `RunGenesisSnapshot::rebuild_aggregate`
   (`crates/reviewgraphen-core/src/event.rs`), every store and core path that
@@ -57,12 +57,17 @@ whose obligations were synthesized under `node.changed_public_symbol@1`.
    ×5) and from several places in core's own `event.rs`. All of them fail the
    same way on a genesis from a different pack.
 
-4. **A second, independent coupling exists in the universe check.**
-   `UniverseDescriptor::validate_against` (`synthesize.rs`) rejects on
+4. **A second, independent coupling existed in the universe check.**
+   `UniverseDescriptor::validate_against` (`synthesize.rs`) rejected on
    `self.rule_pack_version != "m1.fixture@1"` — a hardcoded comparison against
    today's constant, not against anything recorded. A genesis that truthfully
-   records a *future* pack version is rejected by this check even before the
-   re-synthesis comparison is reached.
+   records a *different* pack version was rejected by this check even before
+   the re-synthesis comparison was reached. Worse for option C specifically:
+   `validate_against` runs inside `ReviewAggregate::new`, which the decode path
+   calls *after* computing the verdict, so the verdict would have been computed
+   and then discarded by a hard error two lines later — option C's read path was
+   unreachable until this was removed. **Fixed in `ae805f4`**, replaced by the
+   version-agnostic invariant that the field must be present.
 
 5. **A third coupling narrows it further.** `MvpRulePack::synthesize` returns
    an error unless `program.profile_key()` is `code-review@1` or the fixed M5
@@ -142,14 +147,26 @@ insufficient as maintained**. Three separate observations:
    a constant, not something derived from the pack's contents.
 
 2. **It is persisted and projected, but never consulted as a discriminator.**
-   It is bound into the universe's own `StableId` (the `rule_pack` binding in
-   `synthesize.rs`), stored in the derived-index `universe` table in all three
-   index generations (`index.rs`, `index_v4.rs`, `index_v6.rs`), and carried
-   into the coverage projection (`coverage.rs`). The only place anything
-   *reads* it to make a decision is
-   `UniverseDescriptor::validate_against`, and that compares it to the
-   hardcoded current value — the coupling in root cause (4), not a
-   discriminator.
+   It is stored in the derived-index `universe` table in all three index
+   generations (`index.rs`, `index_v4.rs`, `index_v6.rs`) and carried into the
+   coverage projection (`coverage.rs`). The only place anything *reads* it to
+   make a decision was `UniverseDescriptor::validate_against`, and that
+   compared it to the hardcoded current value — the coupling in root cause
+   (4), not a discriminator. That comparison has since been removed
+   (`ae805f4`); see the correction below.
+
+   **Correction (2026-08-18).** An earlier revision of this document said the
+   field "is bound into the universe's own `StableId`". It is not. The
+   `rule_pack` binding in `universe()` (`synthesize.rs`) binds the *running*
+   pack's literal, not `self.rule_pack_version`, so a recorded universe's own
+   identity is blind to that field being altered — a genesis whose
+   `rule_pack_version` is tampered keeps its recorded universe ID unchanged.
+   Re-synthesis catches it only because it compares the whole
+   `UniverseDescriptor` by value, which makes re-synthesis *more* load-bearing
+   than this document originally credited, not less: it is the only check in
+   the system that sees that field at all. Pinned by
+   `universe_identity_check_admits_a_foreign_rule_pack_and_leaves_authorship_to_re_synthesis`
+   in `crates/reviewgraphen-core/tests/m1.rs`.
 
 3. **Decisively: it does not track rule versions.** `node.changed_public_symbol@1`
    → `@2` changes individual obligation IDs and therefore the universe ID
@@ -164,6 +181,24 @@ a genuinely maintained version — bumped whenever any rule in the pack changes
 its identity or trigger — before it could serve as the discriminator. That is
 a new standing maintenance obligation, not a free win, and nothing today
 enforces the bump.
+
+## A separate defect found while tracing the paths
+
+`decode_index_v5_genesis` (`crates/reviewgraphen-store/src/journal.rs`) is the
+only genesis decode in the workspace that does not go through one of core's
+`RunGenesisSnapshot::from_canonical_bytes*` seams. It calls
+`serde_json::from_slice` directly and then `rebuild_aggregate()`, so it never
+checks `snapshot.canonical_bytes()? == bytes`.
+
+`serde`'s `deny_unknown_fields` and `rebuild_aggregate`'s own structural and
+authorship checks still apply, so a forged obligation body is still refused
+there. What is missing is the canonical-encoding equality every other path
+enforces: a noncanonical byte encoding of an otherwise valid genesis is
+accepted on this path and rejected on all the others.
+
+This is unrelated to the durability finding above and is not fixed as part of
+it. It is recorded here and at the call site so the next person to touch that
+function finds it deliberately rather than by accident.
 
 ## Options, and what each gives up
 

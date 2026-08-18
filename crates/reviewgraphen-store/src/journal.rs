@@ -8788,6 +8788,20 @@ fn v4_timestamp() -> Result<u64, JournalError> {
         .map(|value| value.as_secs())
 }
 
+// KNOWN GAP, recorded deliberately rather than fixed here: this is the only
+// genesis decode in the workspace that does not go through one of core's
+// `RunGenesisSnapshot::from_canonical_bytes*` seams, so it is the only one
+// that never checks `snapshot.canonical_bytes()? == bytes`. `serde`'s
+// `deny_unknown_fields` and `rebuild_aggregate`'s own structural and
+// authorship checks still apply, so a forged obligation body is still
+// refused; what is missing is the canonical-encoding equality every other
+// path enforces, which means a noncanonical byte encoding of an otherwise
+// valid genesis is accepted here and rejected everywhere else.
+//
+// Left as its own investigation on purpose -- it is a separate defect from the
+// durability finding, and closing it belongs with someone who has looked at
+// what the V5 index path expects to be able to feed this. See
+// `docs/durability-finding-run-genesis-resynthesis-couples-stored-history-to-current-rule-pack.md`.
 fn decode_index_v5_genesis(bytes: &[u8]) -> Result<RunGenesisSnapshot, JournalError> {
     let snapshot: RunGenesisSnapshot = serde_json::from_slice(bytes)
         .map_err(|error| reviewgraphen_core::DomainError::Json(error.to_string()))?;
