@@ -1261,9 +1261,9 @@ fn deterministic_reorder_and_fixed_fixture_bytes_are_stable() {
     assert_eq!(original.universe().id(), reordered.universe().id());
     assert_eq!(
         original.contract().canonical().hash().to_string(),
-        "sha256:9b42d50274db50c8ccf9a2c93c3f412beec4449f73ab59b18b8ce5a149f22282"
+        "sha256:a3620de4c751958c1bb3ead1dcb22ed3f7c0ba8286fd259dc61d9a8b18aa90ba"
     );
-    assert_eq!(original.contract().canonical().bytes().len(), 17352);
+    assert_eq!(original.contract().canonical().bytes().len(), 17632);
 }
 
 #[test]

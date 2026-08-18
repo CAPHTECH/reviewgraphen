@@ -1438,7 +1438,8 @@ fn rule_contract(rule: &str) -> Result<RuleContract> {
             exposure: 0.8,
             uncertainty: 0.4,
             structural_reach: 1.0,
-            rationale: "External payment side effect is reachable from a repeatable UI event.",
+            rationale: "A changed public symbol with extractor-established concurrency \
+                        may be re-entered while its own earlier invocation is still in flight.",
         },
         "relation.concurrent_reentry@1" => RuleContract {
             required_capabilities: &["direct_calls", "concurrency_model"],
@@ -1450,7 +1451,8 @@ fn rule_contract(rule: &str) -> Result<RuleContract> {
             exposure: 0.8,
             uncertainty: 0.4,
             structural_reach: 1.0,
-            rationale: "External payment side effect is reachable from a repeatable UI event.",
+            rationale: "An event handler declared to admit unbounded re-entry can run \
+                        again before a previous invocation has settled its effects.",
         },
         "relation.changed_call_contract@1" => RuleContract {
             required_capabilities: &["direct_calls"],
@@ -1462,7 +1464,8 @@ fn rule_contract(rule: &str) -> Result<RuleContract> {
             exposure: 1.0,
             uncertainty: 0.4,
             structural_reach: 1.0,
-            rationale: "External payment side effect is reachable from a repeatable UI event.",
+            rationale: "A call reaches an external side effect without forwarding an \
+                        idempotency key, so a retry cannot be shown to be harmless.",
         },
         "path.external_side_effect@1" => RuleContract {
             required_capabilities: &["direct_calls", "concurrency_model", "test_mapping"],
@@ -1474,7 +1477,8 @@ fn rule_contract(rule: &str) -> Result<RuleContract> {
             exposure: 1.0,
             uncertainty: 0.4,
             structural_reach: 3.0,
-            rationale: "External payment side effect is reachable from a repeatable UI event.",
+            rationale: "External side effect is reachable from a repeatable event along \
+                        this path, so one user action may cause more than one effect.",
         },
         "invariant.payment_at_most_once@1" => RuleContract {
             required_capabilities: &["direct_calls", "concurrency_model", "test_mapping"],
@@ -1486,7 +1490,8 @@ fn rule_contract(rule: &str) -> Result<RuleContract> {
             exposure: 1.0,
             uncertainty: 0.4,
             structural_reach: 3.0,
-            rationale: "External payment side effect is reachable from a repeatable UI event.",
+            rationale: "A business invariant bounds this scope to at most one external \
+                        effect, and the accepted facts do not yet show the bound holds.",
         },
         CAPABILITY_GAP_RULE => RuleContract {
             required_capabilities: &[],
