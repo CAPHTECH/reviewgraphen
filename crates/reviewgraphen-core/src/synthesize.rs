@@ -188,11 +188,38 @@ impl UniverseDescriptor {
             || self.rule_set_hash != *program.rule_set_hash()
             || self.extractor_set_hash != *program.extractor_set_hash()
             || self.policy_version != program.policy_version()
-            || self.rule_pack_version != "m1.fixture@1"
         {
             return Err(DomainError::Validation(
                 "universe identity and version tuple must match ProgramSpace".to_owned(),
             ));
+        }
+        // `rule_pack_version` is deliberately *not* compared to the running
+        // pack's own literal here. It is the one field in this tuple with no
+        // ProgramSpace counterpart -- it describes the synthesizer, not the
+        // program -- so a literal comparison is not an identity check against
+        // the ProgramSpace at all, it is an authorship claim in the wrong
+        // place. Made against a hardcoded constant, it also rejected any
+        // universe truthfully recording a different pack, which is exactly
+        // what a stored run written by an older or newer analyzer carries;
+        // because this runs inside `ReviewAggregate::new`, it fired even for
+        // callers that only wanted to read recorded history. See
+        // `docs/durability-finding-run-genesis-resynthesis-couples-stored-history-to-current-rule-pack.md`.
+        //
+        // Nothing is given up. Authorship of a universe is established where
+        // it can actually be established: by construction on the synthesis
+        // path, and by `RunGenesisSnapshot::reproduction` on the decode path,
+        // which compares the whole universe *and* every obligation against
+        // fresh synthesis. That comparison is by value, so it still catches a
+        // tampered `rule_pack_version` -- and it is the only thing that does.
+        // The universe `StableId` binds the *running* pack's literal (see
+        // `universe`, below), not `self.rule_pack_version`, so a recorded
+        // universe's own identity is blind to that field being altered. What
+        // remains here is the invariant that holds regardless of which pack
+        // wrote the record.
+        if self.rule_pack_version.trim().is_empty() {
+            return Err(DomainError::EmptyField {
+                field: "universe.rule_pack_version",
+            });
         }
         let program_ids = program.known_ids();
         let mut limitation_ids = program

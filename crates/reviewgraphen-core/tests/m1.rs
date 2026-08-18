@@ -5016,3 +5016,63 @@ fn genesis_with_a_forged_obligation_body_is_not_reproducible_and_stays_refused()
         "the strict decode every extension path uses must still refuse a forged body"
     );
 }
+
+/// A universe that truthfully records a different rule pack is no longer
+/// rejected by the ProgramSpace identity check, which had no business
+/// asserting authorship against a hardcoded literal -- but it is still caught
+/// by the mechanism that can actually establish authorship, and an absent
+/// pack version is still refused.
+#[test]
+fn universe_identity_check_admits_a_foreign_rule_pack_and_leaves_authorship_to_re_synthesis() {
+    let log = EventLog::new_v3(id("run:pack-version"), aggregate()).unwrap();
+    let bytes = log
+        .run_genesis_snapshot()
+        .unwrap()
+        .canonical_bytes()
+        .unwrap();
+
+    let mut foreign: Value = serde_json::from_slice(&bytes).unwrap();
+    foreign["universe"]["rule_pack_version"] = json!("some.other.pack@7");
+    let foreign_bytes = canonical_json(&foreign).unwrap();
+    let (_, verdict) =
+        reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes_with_reproduction(
+            &foreign_bytes,
+        )
+        .expect("a foreign pack version is a readable record, not a decode failure");
+    assert!(
+        !verdict.is_reproduced(),
+        "re-synthesis still refuses to vouch for a universe this pack did not produce"
+    );
+    let mismatch = verdict.mismatch().expect("not reproducible");
+    assert_eq!(mismatch.recorded_rule_pack_version(), "some.other.pack@7");
+    assert_eq!(mismatch.running_rule_pack_version(), "m1.fixture@1");
+    assert_eq!(
+        mismatch.recorded_universe(),
+        mismatch.running_universe(),
+        "the universe StableId binds the running pack's literal, not the recorded \
+         field, so the identity is blind to this tamper -- full-value re-synthesis \
+         is the only thing that catches it"
+    );
+    assert!(
+        mismatch.recorded_only().is_empty()
+            && mismatch.running_only().is_empty()
+            && mismatch.body_differs().is_empty(),
+        "every obligation is untouched; the differing pack version is the whole \
+         of the mismatch, and the reported versions are what explain it"
+    );
+    assert!(
+        reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes(&foreign_bytes).is_err(),
+        "the strict decode still refuses it"
+    );
+
+    let mut empty: Value = serde_json::from_slice(&bytes).unwrap();
+    empty["universe"]["rule_pack_version"] = json!("   ");
+    assert!(
+        reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes_with_reproduction(
+            &canonical_json(&empty).unwrap()
+        )
+        .is_err(),
+        "an absent pack version is still a hard error: it is the invariant that \
+         holds regardless of which pack wrote the record"
+    );
+}
