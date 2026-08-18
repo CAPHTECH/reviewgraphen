@@ -69,10 +69,21 @@ arrays are pooled:
   name, trial ID, run label, snapshot ID, or ReviewGraphen-scaffold-specific
   file path. Before a packet is sent, a mechanical scan checks every file in
   it for the literal substrings `b1_free_form`, `full_reviewgraphen`,
-  `qwen`, `codex`, `lm-studio`, `local_id`, and the unit's own internal
-  packet index string; a match aborts packet construction rather than
-  silently redacting, matching the "forbidden marker" pattern in
-  `m7-head-issue-v1/scripts/prepare_judge_calibration.py`.
+  `qwen`, `codex`, `lm-studio`, `local_id`, `claude`, `opus`, `anthropic`
+  (case-insensitive for the latter three, since they are natural-language
+  words a generator's free-text `rationale` could plausibly self-reference
+  in title case or sentence case, unlike the all-lowercase technical
+  identifiers before them), and the unit's own internal packet index
+  string; a match aborts packet construction rather than silently
+  redacting, matching the "forbidden marker" pattern in
+  `m7-head-issue-v1/scripts/prepare_judge_calibration.py`. The `claude`/
+  `opus`/`anthropic` terms were added by `CLAUDE_SKILL_ARM_AMENDMENT.md`
+  when the `claude_skill` arm introduced a generator whose own free-text
+  output could plausibly self-reference these words (qwen/codex never
+  had a comparable self-reference risk); the scan implementation is
+  `scripts/scan_forbidden_markers.py`, exercised by
+  `scripts/test_scan_forbidden_markers.py` before first use against real
+  judge packets.
 - Findings from both arms are interleaved by hash-sort, not grouped by arm,
   so even relative position within `findings.json` carries no arm signal.
 
