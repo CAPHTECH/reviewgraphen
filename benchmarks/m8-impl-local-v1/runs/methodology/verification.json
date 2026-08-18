@@ -1,0 +1,98 @@
+{
+  "acceptance_test_still_failing": false,
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "reviewgraphen-cli"
+    ],
+    "exit_code": 0,
+    "stderr": "   Compiling reviewgraphen-cli v0.1.0 (/tmp/m8-scratch-methodology/crates/reviewgraphen-cli)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.74s\n",
+    "stdout": ""
+  },
+  "build_warning_count": 0,
+  "candidate_declares_verified": false,
+  "candidate_evidence_statuses": [
+    "claimed",
+    "requested"
+  ],
+  "candidate_obligation_count": 6,
+  "candidate_outcome": "completed",
+  "clippy": {
+    "exit_code": 0,
+    "warning_count": 0
+  },
+  "compiles": true,
+  "diff_line_count": 21,
+  "edit_application": [
+    {
+      "file": "crates/reviewgraphen-cli/src/lib.rs",
+      "index": 0,
+      "new_bytes": 723,
+      "old_bytes": 361,
+      "old_occurrences": 1,
+      "status": "applied"
+    }
+  ],
+  "result_dir": "/tmp/m8-impl-local-v1-runs/methodology",
+  "schema": "reviewgraphen.benchmark.m8_impl_local_verification.v1",
+  "schema_validation": {
+    "command": [
+      "python3",
+      "-c",
+      "import json,sys,jsonschema;schema=json.load(open(sys.argv[1]));instance=json.load(open(sys.argv[2]));jsonschema.validate(instance,schema);print('valid')",
+      "/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/benchmarks/m8-impl-local-v1/schemas/implementation-candidate-output.schema.json",
+      "/tmp/m8-impl-local-v1-runs/methodology/candidate.json"
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "valid\n"
+  },
+  "scratch_creation": {
+    "command": [
+      "bash",
+      "/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/benchmarks/m8-impl-local-v1/scripts/make_scratch.sh",
+      "/tmp/m8-scratch-methodology"
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "/tmp/m8-scratch-methodology\n"
+  },
+  "scratch_dir": "/tmp/m8-scratch-methodology",
+  "test": {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "reviewgraphen-cli"
+    ],
+    "exit_code": 0,
+    "stderr": "   Compiling reviewgraphen-cli v0.1.0 (/tmp/m8-scratch-methodology/crates/reviewgraphen-cli)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.72s\n     Running unittests src/lib.rs (/tmp/claude-1000/-home-rizumita-workspace-reviewgraphen/0d42d984-55de-424b-ad9a-e8b8f298b722/scratchpad/cargo-target/debug/deps/reviewgraphen_cli-edcd462d6cf8a198)\n     Running unittests src/main.rs (/tmp/claude-1000/-home-rizumita-workspace-reviewgraphen/0d42d984-55de-424b-ad9a-e8b8f298b722/scratchpad/cargo-target/debug/deps/reviewgraphen-4ccc3c514dacb37b)\n     Running tests/review_flag_order.rs (/tmp/claude-1000/-home-rizumita-workspace-reviewgraphen/0d42d984-55de-424b-ad9a-e8b8f298b722/scratchpad/cargo-target/debug/deps/review_flag_order-c78b23d07a40f804)\n   Doc-tests reviewgraphen_cli\n",
+    "stdout": "\nrunning 3 tests\ntest tests::fixed_fixture_review_is_completely_rejected_before_input_access ... ok\ntest tests::detached_report_gate_command_is_not_supported ... ok\ntest tests::schema_surface_is_closed_and_canonical ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 6 tests\ntest artifacts_before_request_is_accepted ... ok\ntest duplicate_flags_are_rejected ... ok\ntest flag_values_are_not_reinterpreted_as_flags ... ok\ntest incomplete_forms_are_rejected ... ok\ntest unknown_flags_are_rejected ... ok\ntest request_before_artifacts_is_accepted ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
+  },
+  "test_result_lines": [
+    [
+      "ok",
+      "3",
+      "0"
+    ],
+    [
+      "ok",
+      "0",
+      "0"
+    ],
+    [
+      "ok",
+      "6",
+      "0"
+    ],
+    [
+      "ok",
+      "0",
+      "0"
+    ]
+  ],
+  "tests_pass": true,
+  "verdict": "verified"
+}

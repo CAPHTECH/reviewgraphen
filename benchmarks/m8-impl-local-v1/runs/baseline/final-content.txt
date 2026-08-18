@@ -1,0 +1,59 @@
+
+
+{
+  "schema": "reviewgraphen.benchmark.implementation_candidate_output.v1",
+  "outcome": "completed",
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-cli/src/lib.rs",
+      "old": "        [\n            command,\n            request_flag,\n            request_path,\n            artifacts_flag,\n            artifact_root,\n        ] if command == \"review\"\n            && request_flag == \"--request\"\n            && artifacts_flag == \"--artifacts\" =>\n        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }",
+      "new": "        [\n            command,\n            request_flag,\n            request_path,\n            artifacts_flag,\n            artifact_root,\n        ] if command == \"review\"\n            && request_flag == \"--request\"\n            && artifacts_flag == \"--artifacts\" =>\n        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }\n        [\n            command,\n            artifacts_flag,\n            artifact_root,\n            request_flag,\n            request_path,\n        ] if command == \"review\"\n            && artifacts_flag == \"--artifacts\"\n            && request_flag == \"--request\" =>\n        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }"
+    }
+  ],
+  "obligations": [
+    {
+      "id": "obligation-1",
+      "target_kind": "Invariant",
+      "target": "review flag order acceptance",
+      "property": "accepts_request_then_artifacts_and_artifacts_then_request_with_positional_values",
+      "context_requirement": "run match arms in crates/reviewgraphen-cli/src/lib.rs and acceptance test review_flag_order.rs",
+      "evidence_requirement": "static inspection of the added slice pattern arm; harness will run cargo build and cargo test -p reviewgraphen-cli",
+      "risk": "wrong parsing could accept invalid forms or reject valid opposite order",
+      "provenance": "task requires both flag orders to reach generic_review with the same two values",
+      "claim": "satisfied",
+      "evidence_status": "claimed",
+      "note": "Added a second five-token slice pattern for review --artifacts <value> --request <value>; values are consumed positionally and not reinterpreted as flags. Not compiled in this session."
+    },
+    {
+      "id": "obligation-2",
+      "target_kind": "Invariant",
+      "target": "closed review rejection",
+      "property": "invalid_review_forms_use_unchanged_usage_exit_2_empty_stdout",
+      "context_requirement": "run catch-all arm and usage function in crates/reviewgraphen-cli/src/lib.rs",
+      "evidence_requirement": "static inspection that all non-matching review forms fall through to the existing catch-all; harness will run acceptance tests",
+      "risk": "invalid forms could be accepted or produce changed diagnostics",
+      "provenance": "task requires every non-exact review form to be rejected with unchanged usage text",
+      "claim": "satisfied",
+      "evidence_status": "claimed",
+      "note": "All review forms not matching the two exact five-token patterns fall through to existing catch-all; usage function untouched."
+    },
+    {
+      "id": "obligation-3",
+      "target_kind": "Invariant",
+      "target": "unchanged schema and unit tests",
+      "property": "no_other_behavior_change",
+      "context_requirement": "schema arms, usage text, and in-file tests in crates/reviewgraphen-cli/src/lib.rs",
+      "evidence_requirement": "static inspection that only the review match arm was added; harness will run in-file unit tests",
+      "risk": "unintended behavior change for schema commands or existing tests",
+      "provenance": "task requires preserving all other command surface behavior",
+      "claim": "satisfied",
+      "evidence_status": "claimed",
+      "note": "Only the review match arm was added; schema arms, usage text, and in-file tests are unchanged."
+    }
+  ],
+  "limitations": [
+    "No cargo build or cargo test was executed in this session; the edit is statically reasoned only.",
+    "Not checked against full workspace lints, non-Linux cfg paths, or the supplied acceptance test file beyond static inspection.",
+    "Assumes the harness applies the literal edit to the pinned revision and supplies tests/review_flag_order.rs unchanged."
+  ]
+}

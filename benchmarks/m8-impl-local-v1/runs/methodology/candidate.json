@@ -1,0 +1,98 @@
+{
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-cli/src/lib.rs",
+      "new": "        [\n            command,\n            request_flag,\n            request_path,\n            artifacts_flag,\n            artifact_root,\n        ] if command == \"review\"\n            && request_flag == \"--request\"\n            && artifacts_flag == \"--artifacts\" =>\n        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }\n        [\n            command,\n            artifacts_flag,\n            artifact_root,\n            request_flag,\n            request_path,\n        ] if command == \"review\"\n            && artifacts_flag == \"--artifacts\"\n            && request_flag == \"--request\" =>\n        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }",
+      "old": "        [\n            command,\n            request_flag,\n            request_path,\n            artifacts_flag,\n            artifact_root,\n        ] if command == \"review\"\n            && request_flag == \"--request\"\n            && artifacts_flag == \"--artifacts\" =>\n        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }"
+    }
+  ],
+  "limitations": [
+    "No compiler or test runner was available in this session, so `verified` is unavailable for every obligation: all six are at Claim level (requested/claimed). The harness's `cargo build -p reviewgraphen-cli` and `cargo test -p reviewgraphen-cli` are the first independent checks; until they run, nothing here is a Verification.",
+    "I have not seen any file other than lib.rs (no main.rs, no workspace or crate manifests, no reviewgraphen_core/runtime/report sources); cross-file effects are bounded only by the fact that `run`'s public signature is unchanged.",
+    "Preservation claims (obligations 2, 4, 5) are negative claims bounded to the input vectors present in the two given test files; inputs outside those vectors were not individually enumerated, though by construction they reach unchanged arms.",
+    "The acceptance tests exercise only deliberately missing paths (exit 3); the full generic_review success path with real request files and artifact roots is not checked by any test I can see, and I cannot run it.",
+    "Cross-platform behaviour (the non-Linux bounded_regular_file stub) is untouched but unverified: no build was run in any environment, so the `environment valid` and `independent` verification facets are unmet \u2014 my analysis is the same model reasoning about its own edit, not an independent mechanism."
+  ],
+  "obligations": [
+    {
+      "claim": "satisfied",
+      "context_requirement": "the current `run` match arms and the `generic_review(&Path, &Path)` signature as given in lib.rs",
+      "evidence_requirement": "cargo test -p reviewgraphen-cli: tests/review_flag_order.rs::artifacts_before_request_is_accepted and ::request_before_artifacts_is_accepted both pass",
+      "evidence_status": "requested",
+      "id": "obligation-1",
+      "note": "Added a second 5-element slice-pattern arm whose guard (args[1]==\"--artifacts\" && args[3]==\"--request\") is mutually exclusive with the first arm's guard, so at most one fires; its bindings are named for the flag whose value each holds, and the call passes request (token 5) before artifacts (token 3). Traced all six acceptance vectors against the new arm order; nothing was executed in this session, so this is a Claim pending the named cargo test.",
+      "property": "baseline.changed-symbol: `run` accepts both `review --request <v> --artifacts <v>` and the reversed order, and in both cases calls generic_review(Path::new(<request.json>), Path::new(<artifact-root>)) with the same two values (request path first, artifact root second)",
+      "provenance": "task specification 'What must change'",
+      "risk": "high impact (the specified feature); exposure = every CLI invocation; likelihood of a value-swap error in the new arm = medium",
+      "target": "the S0->S1 change to `run`'s review dispatch in crates/reviewgraphen-cli/src/lib.rs",
+      "target_kind": "Morphism"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "all match arms plus the catch-all in lib.rs, and the rejection vectors in tests/review_flag_order.rs (incomplete_forms_are_rejected, duplicate_flags_are_rejected, unknown_flags_are_rejected)",
+      "evidence_requirement": "cargo test -p reviewgraphen-cli: the three named rejection tests pass; they compare stderr byte-for-byte against run([\"review\"]) and assert empty stdout",
+      "evidence_status": "requested",
+      "id": "obligation-2",
+      "note": "Traced all 11 rejection vectors in the acceptance file (missing pair, bare flag, repeated --request, repeated --artifacts, --fixture forms, trailing extra token) plus the in-file fixture/gate cases: each fails both review guards and falls to the unchanged catch-all, so stderr is usage() in every case. Negative claim: bounded to the vectors present in the two given test files; other malformed lines were not individually enumerated, though by construction they reach the same catch-all. Not executed.",
+      "property": "baseline.error-propagation: every review line that is not exactly one --request <value> pair plus one --artifacts <value> pair (in either order) is rejected with CommandOutcome::failure(2, usage()) \u2014 exit 2, empty stdout, unchanged usage() on stderr",
+      "provenance": "task 'What must be preserved' item 1; docs/07 \u00a73.6 invariant preservation",
+      "risk": "high impact (contract); exposure = all malformed invocations; likelihood of regression = low, since both review guards are mutually exclusive and the catch-all is untouched",
+      "target": "`run`'s rejection contract for malformed review command lines",
+      "target_kind": "Invariant"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the fixed-length slice-pattern structure of `run` as given, and tests/review_flag_order.rs::flag_values_are_not_reinterpreted_as_flags",
+      "evidence_requirement": "cargo test -p reviewgraphen-cli: flag_values_are_not_reinterpreted_as_flags passes (expects exit 3, i.e. the form was accepted and generic_review then failed to read the absent request file)",
+      "evidence_status": "requested",
+      "id": "obligation-3",
+      "note": "The edit keeps fixed-length slice patterns, which bind by position only; no token is re-examined for flag-ness. Traced the specific vector: arm 1's guard passes (args[1]==\"--request\", args[3]==\"--artifacts\") and request_path binds the literal \"--artifacts\" token. Not executed.",
+      "property": "domain.positional-value-consumption: the token immediately after --request (or --artifacts) is that flag's value even if it looks like a flag; no scanning for flag-looking tokens (e.g. `review --request --artifacts --artifacts <dir>` is accepted with request path the literal string `--artifacts`)",
+      "provenance": "task 'What must be preserved' item 2, which explicitly forbids implementing this by scanning for flag-looking tokens",
+      "risk": "medium impact; exposure = invocations with flag-looking values; likelihood of breakage would be high if a scanning parser were introduced \u2014 avoided by keeping slice patterns",
+      "target": "`run`'s positional consumption of flag values",
+      "target_kind": "Invariant"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "match arms 2-5 and usage() in lib.rs; in-file tests schema_surface_is_closed_and_canonical and detached_report_gate_command_is_not_supported",
+      "evidence_requirement": "cargo test -p reviewgraphen-cli: the two named in-file tests pass; cargo build -p reviewgraphen-cli exits 0",
+      "evidence_status": "requested",
+      "id": "obligation-4",
+      "note": "The single edit replaces one match arm with two adjacent arms; no schema arm, catch-all byte, or usage() character is touched. Not executed in this session.",
+      "property": "baseline.public-api: `schema list`, `schema print <name>`, `schema validate <path>` dispatch, the catch-all rejection, and usage()'s string are all byte-identical in behaviour to S0",
+      "provenance": "task 'What must be preserved' items 3-4; docs/07 \u00a73.6 interface preservation",
+      "risk": "medium impact; exposure = schema users and all unknown commands; likelihood of regression = low because the edit is confined to the review arm",
+      "target": "`run`'s schema subcommands, final catch-all, and usage() text",
+      "target_kind": "Invariant"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the complete mod tests block as given in lib.rs",
+      "evidence_requirement": "cargo test -p reviewgraphen-cli (lib target): the three named in-file tests pass",
+      "evidence_status": "requested",
+      "id": "obligation-5",
+      "note": "Traced each in-file test's inputs against the new arm order: none of their vectors satisfies either review guard, so each reaches exactly the same arm (schema arms or catch-all) as in S0. Not executed.",
+      "property": "baseline.test-relation: schema_surface_is_closed_and_canonical, detached_report_gate_command_is_not_supported, and fixed_fixture_review_is_completely_rejected_before_input_access all keep passing",
+      "provenance": "task 'What must be preserved' item 5; docs/07 \u00a73.6 lost test relation",
+      "risk": "medium impact; exposure = CI gate; likelihood of regression = low because their vectors (1-, 2-, or 3-token lines, and --fixture forms) match neither review arm",
+      "target": "test-to-code relations of the three existing in-file #[cfg(test)] tests",
+      "target_kind": "Relation"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the entire given lib.rs, to bound the literal substitution",
+      "evidence_requirement": "cargo build -p reviewgraphen-cli exits 0 after the harness applies the substitution (settles the file is still valid Rust); confinement itself is settled only by inspection of the emitted edit, which I performed",
+      "evidence_status": "claimed",
+      "id": "obligation-6",
+      "note": "The edit adds one match arm; no imports, constants, other functions, or test code are touched, and a helper was deliberately not added because two guarded arms are the smaller morphism. Confinement is verified by my own inspection of the emitted edit (a Claim, not an executed procedure); the build is a secondary requested check. Not run in this session.",
+      "property": "architecture.context-boundary: the edit is confined to `run` (one arm replaced by two); no other function, import, constant, test code, file, or dependency is touched",
+      "provenance": "task constraint 'Do not change any function other than run'; docs/07 \u00a73.6 minimal-morphism / newly-introduced-dependency rule",
+      "risk": "low impact if honored; a larger morphism (refactors, renames, helpers) would add un-obligated surface per docs/07 \u00a73.6",
+      "target": "the emitted edit's boundary within crates/reviewgraphen-cli/src/lib.rs",
+      "target_kind": "Morphism"
+    }
+  ],
+  "outcome": "completed",
+  "schema": "reviewgraphen.benchmark.implementation_candidate_output.v1"
+}

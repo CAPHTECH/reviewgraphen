@@ -1,0 +1,21 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-cli/src/lib.rs	2026-08-19 04:38:56.426367255 +0900
++++ /tmp/m8-scratch-t1r-baseline/crates/reviewgraphen-cli/src/lib.rs	2026-08-19 06:57:38.234385580 +0900
+@@ -59,6 +59,18 @@
+         {
+             generic_review(Path::new(request_path), Path::new(artifact_root))
+         }
++        [
++            command,
++            artifacts_flag,
++            artifact_root,
++            request_flag,
++            request_path,
++        ] if command == "review"
++            && artifacts_flag == "--artifacts"
++            && request_flag == "--request" =>
++        {
++            generic_review(Path::new(request_path), Path::new(artifact_root))
++        }
+         [command, subcommand] if command == "schema" && subcommand == "list" => schema_list(),
+         [command, subcommand, name] if command == "schema" && subcommand == "print" => {
+             schema_print(name)

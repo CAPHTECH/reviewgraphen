@@ -1,0 +1,98 @@
+{
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-cli/src/lib.rs",
+      "new": "        [\n            command,\n            request_flag,\n            request_path,\n            artifacts_flag,\n            artifact_root,\n        ] if command == \"review\"\n            && request_flag == \"--request\"\n            && artifacts_flag == \"--artifacts\" =>\n        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }\n        [\n            command,\n            artifacts_flag,\n            artifact_root,\n            request_flag,\n            request_path,\n        ] if command == \"review\"\n            && artifacts_flag == \"--artifacts\"\n            && request_flag == \"--request\" =>\n        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }",
+      "old": "        [\n            command,\n            request_flag,\n            request_path,\n            artifacts_flag,\n            artifact_root,\n        ] if command == \"review\"\n            && request_flag == \"--request\"\n            && artifacts_flag == \"--artifacts\" =>\n        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }"
+    }
+  ],
+  "limitations": [
+    "No compiler and no test runner were available in this session, so `verified` is unavailable for every obligation; all six claims are reasoned (Claim level) and their settling procedures (`cargo build -p reviewgraphen-cli`, `cargo test -p reviewgraphen-cli`) were not run by me \u2014 they are `requested` and will be executed by the harness.",
+    "I could not see the binary entry point that calls run(), nor any test files in reviewgraphen-cli beyond the three in-file tests and the provided acceptance file; `cargo test -p reviewgraphen-cli` will also run any other tests I cannot inspect, so the preservation claim is bounded to what I could trace.",
+    "Obligation 2's rejection claim covers only the specific invalid forms enumerated in the spec and acceptance test, not all possible malformed inputs; it is a negative claim with that explicit bound.",
+    "The edit was not checked against cross-crate effects or run_generic_review internals; the acceptance path fails at the request-file read, so those are not exercised by the named checks.",
+    "Verification facets `environment valid` and `independent`: the harness's build+test is a different mechanism than my reasoning, but I did not run it; until the harness reports results, no obligation has machine evidence."
+  ],
+  "obligations": [
+    {
+      "claim": "satisfied",
+      "context_requirement": "the current 5-element match arm in run() and generic_review's signature (request_path first, artifact_root second)",
+      "evidence_requirement": "`cargo test -p reviewgraphen-cli` \u2014 tests `request_before_artifacts_is_accepted` and `artifacts_before_request_is_accepted` in tests/review_flag_order.rs must pass (exit 3, empty stdout)",
+      "evidence_status": "requested",
+      "id": "obligation-1",
+      "note": "Added one mutually-exclusive match arm (position 1 == --artifacts, position 3 == --request) that calls generic_review(Path::new(request_path), Path::new(artifact_root)) with values in the same roles as the original arm. Traced both acceptance cases by hand; ran nothing, so this is a Claim pending the named test run.",
+      "property": "domain.specific_property: review-flag-order-symmetry (both flag orders accepted, values passed to generic_review in the same roles)",
+      "provenance": "task specification: the opposite flag order must be accepted and call generic_review with the same two values",
+      "risk": "high impact / high exposure: the specified new behaviour is the whole point of the change; likelihood of regression if values are swapped or a guard is wrong",
+      "target": "run() review arm: the morphism S0->S1 must newly accept `review --artifacts <v> --request <v>`",
+      "target_kind": "Morphism"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "all match arms of run() plus usage(); the specific invalid forms enumerated in the spec and acceptance test",
+      "evidence_requirement": "`cargo test -p reviewgraphen-cli` \u2014 tests `incomplete_forms_are_rejected`, `duplicate_flags_are_rejected`, `unknown_flags_are_rejected` must pass (exit 2, empty stdout, stderr == baseline usage)",
+      "evidence_status": "requested",
+      "id": "obligation-2",
+      "note": "Traced each enumerated invalid shape: 3-token and 2-token forms never match a 5-element arm; the 5-token duplicate/unknown-flag shapes fail both arms' guards (position-1 and position-3 flag checks) and fall to the catch-all. Bounded to the enumerated forms, not all possible inputs.",
+      "property": "public-api + error-propagation: invalid-form-rejection-preserved (no-args, missing pair, flag-with-no-value, repeated --request, repeated --artifacts, unknown flags, extra trailing arg)",
+      "provenance": "spec preservation item 1 (morphism: interface + error-path preservation)",
+      "risk": "high impact / high exposure: silently accepting an invalid form would change the closed command surface; likelihood low because both new/old arms fail their guards on these shapes and fall to the catch-all",
+      "target": "run() catch-all: every invalid review form still rejected with exit 2, empty stdout, unchanged usage() on stderr",
+      "target_kind": "Invariant"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the original 5-element arm's binding of request_path to the token immediately after --request",
+      "evidence_requirement": "`cargo test -p reviewgraphen-cli` \u2014 test `flag_values_are_not_reinterpreted_as_flags` must pass (exit 3, i.e. accepted with request path == literal `--artifacts`)",
+      "evidence_status": "requested",
+      "id": "obligation-3",
+      "note": "`review --request --artifacts --artifacts <dir>` still matches the ORIGINAL arm (position 1 == --request, position 3 == --artifacts), so request_path binds to the literal `--artifacts`. The new arm cannot capture it (its position-1 guard requires --artifacts). No scanner introduced.",
+      "property": "domain.specific_property: positional-value-consumption (no scanning for flag-looking tokens)",
+      "provenance": "spec preservation item 2 (morphism: invariant preservation)",
+      "risk": "medium impact / medium exposure: re-implementing via flag-scanning would break this contract; likelihood low because the edit adds a guard-based arm, not a scanner",
+      "target": "run() value consumption: a token that looks like a flag is still consumed positionally as the preceding flag's value",
+      "target_kind": "Invariant"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the schema match arms, usage(), and the three in-file test bodies",
+      "evidence_requirement": "`cargo test -p reviewgraphen-cli` \u2014 `schema_surface_is_closed_and_canonical`, `detached_report_gate_command_is_not_supported`, `fixed_fixture_review_is_completely_rejected_before_input_access` must pass",
+      "evidence_status": "requested",
+      "id": "obligation-4",
+      "note": "The edit replaces only the first review arm and appends one sibling arm; schema arms, usage(), generic_review, and all other fns are untouched. `run([\"review\"])` (1 token) still hits the catch-all, preserving the in-file assertions.",
+      "property": "test-relation (schema list/print/validate arms and the three in-file tests keep passing)",
+      "provenance": "spec preservation items 3 and 5 (morphism: lost test relation must not occur)",
+      "risk": "medium impact / low exposure: the edit touches only the review arm; schema arms and usage() are byte-identical, so likelihood of breakage is low",
+      "target": "the three in-file #[cfg(test)] tests and the schema command forms remain related to unchanged behaviour",
+      "target_kind": "Relation"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the full current file text as given, to confirm only run()'s arm list changed",
+      "evidence_requirement": "`cargo build -p reviewgraphen-cli` exits 0 with no new warnings, plus inspection that usage()'s body and all other fn bodies are unchanged",
+      "evidence_status": "requested",
+      "id": "obligation-5",
+      "note": "The single edit adds one match arm inside run(); usage()'s string literal and every other function are left byte-identical. All five bindings in the new arm are used (no unused-variable warning expected). Not machine-verified \u2014 no compiler run in this session.",
+      "property": "changed-symbol + public-api: usage-text-unchanged (and no other fn body altered)",
+      "provenance": "spec preservation items 4 and the constraint 'do not change any function other than run' (morphism: no newly introduced surface)",
+      "risk": "medium impact / low exposure: a stray edit to usage() or another fn would be an un-obligated morphism expansion; likelihood low because the edit is a single added arm",
+      "target": "usage() and every function other than run(): byte-identical, no new symbols or dependencies",
+      "target_kind": "Node"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "generic_review's first step (bounded_regular_file on request_path) and the acceptance test's observability note",
+      "evidence_requirement": "`cargo test -p reviewgraphen-cli` \u2014 the accepted-form assertions in tests/review_flag_order.rs must observe exit_code == 3 and empty stdout",
+      "evidence_status": "requested",
+      "id": "obligation-6",
+      "note": "New arm calls generic_review(Path::new(request_path), ...); with the deliberately absent request path, bounded_regular_file errors (NotFound on linux; unsupported-platform error otherwise) yielding failure(3). Holds across platforms. Not machine-verified.",
+      "property": "error-propagation: accepted-form-reaches-generic-review (exit 3, empty stdout)",
+      "provenance": "acceptance test observability note distinguishing 'accepted' (exit 3) from 'rejected' (exit 2)",
+      "risk": "medium impact / medium exposure: if the new arm routed to a rejection or swapped arguments so the artifacts path were read first, exit code would differ; likelihood low because generic_review reads request_path first and the new arm passes request_path in that slot",
+      "target": "the accepted review path reaches generic_review and fails at the request-file read with exit 3 (not a rejection exit 2)",
+      "target_kind": "Path"
+    }
+  ],
+  "outcome": "completed",
+  "schema": "reviewgraphen.benchmark.implementation_candidate_output.v1"
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capht.tech/schemas/reviewgraphen/benchmark/implementation-candidate-edit.v1.schema.json",
+  "title": "reviewgraphen.benchmark.implementation_candidate_edit.v1",
+  "description": "Minimal control-arm output contract for m8-impl-local-v1. Carries the edit and nothing else. Deliberately contains no obligation, claim, evidence-status, or limitation field: those are methodology vocabulary, and naming them in the control's own schema is what contaminated the first task-1 control (RESULTS.md section 1.4, AMENDMENT-002.md section 1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "outcome", "edits"],
+  "properties": {
+    "schema": {
+      "const": "reviewgraphen.benchmark.implementation_candidate_edit.v1"
+    },
+    "outcome": {
+      "enum": ["completed", "abstained"]
+    },
+    "abstention_reason": {
+      "type": "string"
+    },
+    "edits": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file"],
+        "properties": {
+          "file": { "type": "string" },
+          "old": { "type": "string" },
+          "new": { "type": "string" },
+          "full_content": { "type": "string" }
+        }
+      }
+    }
+  }
+}

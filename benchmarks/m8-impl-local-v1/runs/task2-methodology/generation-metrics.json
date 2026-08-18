@@ -1,0 +1,42 @@
+{
+  "cached_input_tokens": null,
+  "effective_sampling_reported_by_server": {
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "temperature": null,
+    "top_p": null
+  },
+  "elapsed_minutes": 2.23,
+  "elapsed_seconds": 134.066,
+  "empty_final": true,
+  "endpoint": "http://192.168.68.71:11999/v1/responses",
+  "failure_class": "upstream_stream_closed_before_completion",
+  "final_content_bytes": 0,
+  "max_output_tokens": 131072,
+  "message_item_created": false,
+  "model": "qwen3.8:27b-mlx",
+  "model_context_window": 262144,
+  "output_item_types": [],
+  "output_text_delta_utf8_bytes": 0,
+  "packet": "/tmp/m8-t2-packets/packet-methodology.txt",
+  "packet_bytes": 102298,
+  "provider_input_tokens": null,
+  "provider_output_tokens": null,
+  "provider_reported_reasoning_tokens": null,
+  "reasoning_delta_utf8_bytes": 176,
+  "reasoning_effort_requested": "high",
+  "reasoning_share_of_output": null,
+  "response_error": null,
+  "response_incomplete_details": null,
+  "response_status": null,
+  "schema": "reviewgraphen.benchmark.m8_impl_local_generation_metrics.v1",
+  "sse_event_counts": {
+    "response.content_part.added": 1,
+    "response.created": 1,
+    "response.in_progress": 1,
+    "response.output_item.added": 1,
+    "response.reasoning_text.delta": 40
+  },
+  "transport_error": "ConnectionResetError: [Errno 104] Connection reset by peer",
+  "upstream_status": 200
+}

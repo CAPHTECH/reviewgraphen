@@ -1,0 +1,67 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "8b6a4b6e707df101",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm is name-agnostic and iterates every declaration: `syn::Stmt::Item(Item::ForeignMod(nested)) => { for declaration in &nested.items { match declaration { syn::ForeignItem::Fn(decl) => hoisted.push(decl.sig.ident.to_string()), syn::ForeignItem::Static(decl) => hoisted.push(decl.ident.to_string()), _ => {} } } }`. Nothing keys on `target` or on any other fixture-specific identifier, and the shadow is produced by pushing the declared name into `hoisted`, i.e. through the same general mechanism as the pre-existing `Item::Fn`/`Item::Static` arms. Spec point 4 (other names must not block) falls out of the same general rule rather than being special-cased: only the actually-declared names are hoisted, and `conservative_unresolved` is left untouched."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "Two edits only: the new `Item::ForeignMod` arm, and the doc comment on the very function being changed, updated from \"A nested `fn`/`const`/`static` item, and every name a block-local `use` item introduces, is hoisted\" to also name \"every name a block-local foreign module's `fn`/`static` declaration introduces\". That doc comment enumerates exactly what `visit_block` hoists, so leaving it stale would have been the defect; nothing else in the file is touched, no reformatting, no renames."
+      },
+      "convention_fit": {
+        "verdict": "mixed",
+        "justification": "The match arm itself matches local idiom well — `syn::Stmt::Item(Item::ForeignMod(nested))` reuses the surrounding binding name `nested`, and `hoisted.push(decl.sig.ident.to_string())` mirrors `syn::Stmt::Item(Item::Fn(nested)) => hoisted.push(nested.sig.ident.to_string())` verbatim. The blemish is in the doc comment: the inserted text leaves `/// and every name a block-local `use` item introduces, is hoisted -- bound for the` noticeably wider than every neighbouring comment line, which are wrapped consistently narrower (`/// the block ends. A nested `fn`/`const`/`static` item, and every name a`). rustfmt will not re-wrap a comment, so this ragged line is what lands. Also, unlike the surrounding prose, the added clause states *what* is hoisted but not *why* a foreign `fn`/`static` is value-namespace — the rest of this doc comment is scrupulous about that distinction (see the named-field-struct paragraph)."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "some",
+        "justification": "`_ => {}` inside the inner match silently drops `syn::ForeignItem::Macro` and `syn::ForeignItem::Verbatim`. A macro invocation inside `extern \"C\" { ... }` can expand to `fn` or `static` declarations whose names this pass cannot enumerate — precisely the situation the crate elsewhere answers with conservatism (`let (names, has_glob) = use_item_bindings(&nested.tree); conservative_unresolved |= has_glob;` for glob `use`, and `if has_unknown { self.mark_current_scope_conservative(); }` for patterns). Here an unenumerable foreign declaration yields no shadow and no conservatism, so a naked call can still be wrongly matched — the same unsound match the spec's opening paragraph calls out. `ForeignItem::Type` being ignored is correct (type namespace only) but is not stated anywhere in this change."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "some",
+        "justification": "The catch-all `_ => {}` over `syn::ForeignItem` is non-exhaustive by construction, so if syn grows a value-namespace-binding foreign item variant, or if the fixture corpus starts containing macro-generated foreign declarations, this arm silently does the wrong thing rather than falling back to `conservative_unresolved`. Otherwise the change piggybacks entirely on the existing `self.push_scope(hoisted, conservative_unresolved); ... self.pop_scope();` lifetime, so spec point 3 (no leak past the block) needs no new invariant and cannot drift."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "A maintainer sees the new arm sitting directly beneath `syn::Stmt::Item(Item::Fn(nested)) => hoisted.push(nested.sig.ident.to_string())` and pushing the same kind of string into the same `hoisted` vector, and the function doc now names the case: \"every name a block-local foreign module's `fn`/`static` declaration introduces ... is hoisted -- bound for the *whole* block\". The reason foreign `Type` is skipped is left implicit, but the adjacent named-field-struct paragraph (\"puts a named-field struct's name only in the *type* namespace, never the value namespace\") supplies the reasoning by analogy."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "Small, general, correct for all five behavioural points: `hoisted.push(decl.sig.ident.to_string())` / `hoisted.push(decl.ident.to_string())` give points 1 and 2, the untouched `push_scope`/`pop_scope` pair gives point 3, hoisting only declared names and never setting `conservative_unresolved` gives point 4, and the unchanged remaining arms give points 5 and 6. Contains no `unsafe`, adds no dependency, touches one file. The over-wide doc line and the silently-ignored `ForeignItem::Macro` are worth a follow-up but neither makes the change unsound for what the spec asks."
+      }
+    },
+    {
+      "change_id": "fe6e01320b1f9c84",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The arm implements the rule, not the examples: `for foreign_item in &nested.items { match foreign_item { syn::ForeignItem::Fn(decl) => { hoisted.push(decl.sig.ident.to_string()); } syn::ForeignItem::Static(decl) => { hoisted.push(decl.ident.to_string()); } _ => {} } }`. No identifier, arity, ABI string, or block-position check narrows it to a tested path. Spec point 4 — `extern \"C\" { fn unrelated(); }` must not block a naked `target()` — is satisfied structurally, because only the names actually declared reach `hoisted` and `conservative_unresolved` is never set from this arm, rather than by excluding a particular case."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "The diff adds exactly one match arm plus its explanatory comment inside `visit_block`; every other line in the 25-line context window (`syn::Stmt::Item(Item::Use(nested)) => { ... }`, `self.push_scope(hoisted, conservative_unresolved);`, `fn visit_local`) is unchanged. No reformatting, no renaming, no touching of `use_item_bindings` or the obstruction ledger."
+      },
+      "convention_fit": {
+        "verdict": "fits",
+        "justification": "The arm shape copies its neighbours (`syn::Stmt::Item(Item::ForeignMod(nested))` reusing the local binding name `nested`; `decl.sig.ident.to_string()` mirroring `nested.sig.ident.to_string()` in the `Item::Fn` arm). The comment adopts the file's voice and its exact vocabulary and reasoning pattern: \"put their names in the *value* namespace of the enclosing block, exactly as a block-local `fn`/`static` item does (see the arms above)\" and \"A foreign type alias is type-namespace-only (like a named-field struct, never hoisted), so it blocks nothing\" — that second sentence deliberately echoes the doc comment's named-field-struct paragraph. One small mismatch: the file's rationale for `visit_block` lives in the function doc comment, which still enumerates only \"`fn`/`const`/`static` item, and every name a block-local `use` item introduces\" and is now incomplete, with the new rationale sited inline instead."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "some",
+        "justification": "The inner `_ => {}` silently ignores `syn::ForeignItem::Macro` and `syn::ForeignItem::Verbatim`. The comment claims coverage only for the type-alias case (\"A foreign type alias is type-namespace-only ... so it blocks nothing\"), which is right, but a macro inside `extern \"C\" { ... }` may expand to value-namespace `fn`/`static` declarations that cannot be enumerated here. The crate's stated posture for unenumerable bindings is conservatism — `conservative_unresolved |= has_glob;` for glob `use`, `if has_unknown { self.mark_current_scope_conservative(); }` for patterns — and this arm does neither, so such a block yields no shadow and a naked call is still matched, the unsound outcome the spec's first paragraph forbids."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "some",
+        "justification": "The wildcard over `syn::ForeignItem` means any future value-binding variant, or a macro-expanded declaration, falls through to `_ => {}` with no signal — a construct that quietly does the wrong thing as the input corpus grows. Beyond that there is no new state: scoping still comes from the untouched `self.push_scope(hoisted, conservative_unresolved); visit::visit_block(self, block); self.pop_scope();`, so nothing about the no-leak requirement can drift out of sync, and no invariant is duplicated."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "The comment states the correctness argument at the point of the change — foreign `fn`/`static` names are in the value namespace \"exactly as a block-local `fn`/`static` item does (see the arms above), so they shadow a same-named module-level function for a naked call in this block and must be hoisted the same way\" — and explicitly justifies the omission a reader would otherwise question (foreign type aliases). A maintainer can verify correctness from the arm plus its neighbours without external context."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "Minimal and general: `hoisted.push(decl.sig.ident.to_string())` and `hoisted.push(decl.ident.to_string())` deliver spec points 1 and 2, the reused `push_scope`/`pop_scope` pair delivers point 3, hoisting only the declared names without setting `conservative_unresolved` delivers point 4 (the trap the spec calls out), and the untouched arms preserve points 5 and 6. One file, no `unsafe`, no dependency change, and the inline comment carries the rationale in the file's own voice. The unhandled `ForeignItem::Macro` case and the now-incomplete function doc comment are worth a follow-up, not a rejection."
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-cli/src/lib.rs",
+      "new": "        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }\n        [\n            command,\n            artifacts_flag,\n            artifact_root,\n            request_flag,\n            request_path,\n        ] if command == \"review\"\n            && artifacts_flag == \"--artifacts\"\n            && request_flag == \"--request\" =>\n        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }\n        [command, subcommand] if command == \"schema\" && subcommand == \"list\" => schema_list(),",
+      "old": "        {\n            generic_review(Path::new(request_path), Path::new(artifact_root))\n        }\n        [command, subcommand] if command == \"schema\" && subcommand == \"list\" => schema_list(),"
+    }
+  ],
+  "outcome": "completed",
+  "schema": "reviewgraphen.benchmark.implementation_candidate_edit.v1"
+}

@@ -1,0 +1,30 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m8-scratch-t2-base/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 07:38:56.279344793 +0900
+@@ -1806,8 +1806,9 @@
+ 
+     /// Every nested block introduces its own lexical scope, so a shadow
+     /// introduced inside it never leaks to sibling or enclosing code once
+-    /// the block ends. A nested `fn`/`const`/`static` item, and every name
+-    /// a block-local `use` item introduces, is hoisted -- bound for the
++    /// the block ends. A nested `fn`/`const`/`static` item, every name a
++    /// block-local foreign module's `fn`/`static` declaration introduces,
++    /// and every name a block-local `use` item introduces, is hoisted -- bound for the
+     /// *whole* block, not just after its textual position -- matching
+     /// Rust's own item-scoping rule and preventing a call positioned
+     /// before such a local item from wrongly falling through to a
+@@ -1852,6 +1853,15 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    for declaration in &nested.items {
++                        match declaration {
++                            syn::ForeignItem::Fn(decl) => hoisted.push(decl.sig.ident.to_string()),
++                            syn::ForeignItem::Static(decl) => hoisted.push(decl.ident.to_string()),
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }
