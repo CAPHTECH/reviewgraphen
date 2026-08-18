@@ -1,0 +1,311 @@
+# Durability finding: a stored run genesis becomes unloadable whenever the rule pack changes
+
+- Status: diagnosis and options, no fix implemented
+- Date found: 2026-08-18
+- Scope: `RunGenesisSnapshot::rebuild_aggregate`
+  (`crates/reviewgraphen-core/src/event.rs`), every store and core path that
+  decodes a genesis through it, and `UniverseDescriptor::validate_against`
+  (`crates/reviewgraphen-core/src/synthesize.rs`). This is a durability-model
+  finding about ReviewGraphen the implementation, not about any one milestone
+  or fixture.
+
+## Finding
+
+Every decode of a persisted run genesis re-runs `MvpRulePack::synthesize`
+against the genesis's own `ProgramSpace` and requires the freshly synthesized
+universe and obligations to equal the stored ones **byte for byte**. A genesis
+written by any rule pack other than the one compiled into the running binary
+therefore fails to load at all.
+
+Not degraded. Not flagged stale. Not loadable-with-a-warning. The failure is a
+`DomainError::Validation` raised inside `rebuild_aggregate`, which is reached
+from `JournalIdentity::new` and every other genesis entry point, so it fires
+before any caller can inspect, migrate, or even report on the record. The
+stored run is inert.
+
+For a system whose stated purpose is durable, auditable review provenance,
+this makes durability conditional on the analyzer never changing.
+
+Nothing caused this recently. It has always been the behaviour;
+`node.changed_public_symbol@2` (branch `wip-rule-version-at2`, unmerged) is
+simply the first change that ever tried to exercise it, and it surfaced as
+`index::v6::tests::v6_terminal_legacy_body_hash_fixture_is_rejected_before_target_only_recovery`
+failing inside `JournalIdentity::new` on the checked-in
+`crates/reviewgraphen-store/tests/fixtures/terminal-v5-gluing-genesis.json`,
+whose obligations were synthesized under `node.changed_public_symbol@1`.
+
+## Root cause, precisely
+
+1. **The re-synthesis equality is unconditional.**
+   `rebuild_aggregate` (`event.rs`, the block ending
+   `"run genesis obligations and universe must equal deterministic MVP
+   re-synthesis"`) calls `MvpRulePack::synthesize(&self.program_space)` and
+   compares the result to the stored `universe` and `obligations`. There is no
+   version branch, no compatibility path, and no migration hook anywhere in
+   that function. The only field it consults before comparing is `schema`,
+   which distinguishes the genesis *wire format*, not the rule pack.
+
+2. **Both decode entry points route through it.** `from_canonical_bytes` (v2
+   wire) and `from_canonical_bytes_v3` (the v3/v4 wire inherited by v5) each
+   call `rebuild_aggregate` before returning. `from_canonical_bytes_for_index`
+   and `from_canonical_v4_bytes_for_store` delegate to those two. There is no
+   raw-deserialize path that skips it: `RunGenesisSnapshot`'s fields are
+   private and every constructor validates.
+
+3. **Every consumer inherits it.** `rebuild_aggregate` is called from
+   `reviewgraphen-store` (`journal.rs` ×5, `index.rs` ×3, `test_support.rs`
+   ×5) and from several places in core's own `event.rs`. All of them fail the
+   same way on a genesis from a different pack.
+
+4. **A second, independent coupling exists in the universe check.**
+   `UniverseDescriptor::validate_against` (`synthesize.rs`) rejects on
+   `self.rule_pack_version != "m1.fixture@1"` — a hardcoded comparison against
+   today's constant, not against anything recorded. A genesis that truthfully
+   records a *future* pack version is rejected by this check even before the
+   re-synthesis comparison is reached.
+
+5. **A third coupling narrows it further.** `MvpRulePack::synthesize` returns
+   an error unless `program.profile_key()` is `code-review@1` or the fixed M5
+   double-submit fixture profile. A stored genesis under any third profile
+   cannot be validated at all, for the same structural reason: the loader
+   assumes exactly one rule pack and exactly two profiles.
+
+6. **The only migration API in the crate does not cover this.**
+   `migrate_program_space_v1_to_v2` migrates a `ProgramSpace` wire version. No
+   equivalent exists for a genesis, a universe, or an obligation set.
+
+## What the re-synthesis check actually defends — measured, not inferred
+
+This check is not redundant, and any fix must keep what it provides.
+
+I probed it directly by mutating a freshly built, otherwise-valid genesis and
+observing which validation rejected each mutation. Every mutation below
+preserves obligation `StableId`s, strict ordering, uniqueness, canonical
+encoding, and per-record `validate_full()`:
+
+| Mutation | Rejected by |
+| --- | --- |
+| `obligations[0].weight` 3.0 → 99.0 | re-synthesis only |
+| `obligations[0].applicability_status` `unknown` → `applicable` (with reasons and qualification IDs cleared to stay self-consistent) | re-synthesis only |
+| `obligations[0].required_capabilities` narrowed to `["ast"]` | re-synthesis only |
+| `obligations[0].accepted_evidence_modes` narrowed to `["test"]` | re-synthesis only |
+| `universe.rule_pack_version` → `m1.fixture@2` | re-synthesis only |
+
+Nothing else in the decode path catches any of them. The other genesis
+defences — canonical-bytes equality, unknown-field rejection, strict
+`StableId` ordering, duplicate rejection, malformed-ID rejection — all pass
+these mutations, because the mutations are well-formed.
+
+So the guarantee is: **a genesis's obligations and universe are exactly what
+the rule pack produces from that ProgramSpace, and not what the writer chose
+to put there.** Without it, anyone who can write genesis bytes can lower a
+critical obligation's weight (which drives risk-first planning order and the
+coverage denominator's weighting), mark an obligation inapplicable, relax the
+evidence modes it will accept, or shrink its required capabilities — all
+while keeping the same obligation IDs, so nothing downstream that keys on IDs
+notices. That is a direct attack on ADR 0003's premise that obligations define
+the coverage universe.
+
+Note what the check is *not*: it is not an integrity check on the bytes. CAS
+addressing and the canonical-bytes equality already cover corruption and
+transport tampering. This check specifically covers **authorship** — that the
+content was produced by the rule pack rather than asserted by the writer.
+
+## Is the intent documented?
+
+**No.** ADR 0014 §"`RunGenesisSnapshot`" specifies the DTO and states that
+"Core alone decodes it with unknown fields denied, reconstructs it through
+`ReviewAggregate::new`, requires pristine state, and checks snapshot/profile
+values against the manifest." It does not mention re-synthesis-and-compare.
+The only in-code statement of intent is the doc comment on
+`from_canonical_bytes`, which says the decode "rejects unknown fields,
+noncanonical encodings, malformed ProgramSpace records, and any inconsistent
+universe/obligation tuple" — "inconsistent" being the only word covering this
+behaviour, and it does not say inconsistent *with what*.
+
+ADR 0014 does, however, state the opposing concern explicitly: "V1 replay
+alone retains the old `sha256(canonical_json(initial ReviewAggregate))`
+formula, so **historical hashes remain valid**." Preserving the readability of
+already-written history is a value the ADR names; this check works against it.
+
+`grep` over `docs/` finds no occurrence of `rule_pack_version` at all, and no
+ADR discusses rule-pack evolution against stored runs.
+
+## Is `rule_pack_version` the intended discriminator?
+
+It is the only field shaped like one, and it is **written truthfully but is
+insufficient as maintained**. Three separate observations:
+
+1. **It is written from one hardcoded literal.** `synthesize.rs` sets
+   `rule_pack_version: "m1.fixture@1"` in `universe()`. There is exactly one
+   rule pack, so this is currently truthful rather than fabricated — but it is
+   a constant, not something derived from the pack's contents.
+
+2. **It is persisted and projected, but never consulted as a discriminator.**
+   It is bound into the universe's own `StableId` (the `rule_pack` binding in
+   `synthesize.rs`), stored in the derived-index `universe` table in all three
+   index generations (`index.rs`, `index_v4.rs`, `index_v6.rs`), and carried
+   into the coverage projection (`coverage.rs`). The only place anything
+   *reads* it to make a decision is
+   `UniverseDescriptor::validate_against`, and that compares it to the
+   hardcoded current value — the coupling in root cause (4), not a
+   discriminator.
+
+3. **Decisively: it does not track rule versions.** `node.changed_public_symbol@1`
+   → `@2` changes individual obligation IDs and therefore the universe ID
+   (measured: `universe:sha256:6b554b4a…` → `universe:sha256:e7a9c6ca…`), but
+   leaves `rule_pack_version` at `m1.fixture@1`, because the literal is
+   unrelated to the rules in the pack. A fix that branched on "same recorded
+   `rule_pack_version` ⇒ safe to re-synthesize and compare" would take the
+   *same* path that fails today and produce the *same* failure.
+
+So `rule_pack_version` is a plausible-looking field that would need to become
+a genuinely maintained version — bumped whenever any rule in the pack changes
+its identity or trigger — before it could serve as the discriminator. That is
+a new standing maintenance obligation, not a free win, and nothing today
+enforces the bump.
+
+## Options, and what each gives up
+
+### A. Validate against the recorded version rather than the current one
+
+Re-synthesize only when the genesis's recorded pack version equals the running
+pack version; otherwise skip the comparison and accept the stored tuple after
+the existing structural checks.
+
+- **Gives up:** the authorship guarantee entirely, for any genesis claiming a
+  different version. A hostile corpus writes `rule_pack_version:
+  "m1.fixture@99"` and every obligation body becomes attacker-chosen —
+  weights, applicability, evidence modes, capabilities — while still loading
+  cleanly. This is strictly worse than the status quo unless the version field
+  is itself authenticated.
+- **Requires:** `rule_pack_version` to become genuinely maintained (see above),
+  and some binding that prevents a writer from simply declaring an unknown
+  version to opt out of validation.
+
+### B. Store the synthesized result as the authority; never re-derive
+
+Treat the genesis as the record of what was synthesized, and drop
+re-synthesis. Authorship is then guaranteed at *write* time only.
+
+- **Gives up:** the ability to detect a genesis that was never produced by any
+  rule pack. Every mutation in the table above becomes accepted. Whoever can
+  write bytes into CAS controls the review universe.
+- **Mitigation that would be needed:** an authenticity binding over the
+  genesis independent of its content hash — a signature or a MAC from the
+  producing run — so authorship is proven cryptographically rather than by
+  re-derivation. That is a trust-boundary change (ADR 0028 territory), not a
+  local fix.
+
+### C. Keep re-synthesis, but make mismatch a typed outcome instead of a load error
+
+Decode succeeds and returns the stored tuple together with an explicit,
+typed verdict: `Reproduced` (fresh synthesis matched) or
+`NotReproducible { recorded_pack, running_pack }`. Callers decide. Read-only
+consumers — audit, replay of history, index projection, the M6 staleness
+comparison — accept `NotReproducible` and mark downstream results as
+version-crossed. Anything that *extends* a run (appending events, accepting
+new evidence, minting new obligations) refuses unless the verdict is
+`Reproduced`.
+
+- **Gives up:** nothing at the write/extend boundary — the authorship
+  guarantee is preserved exactly where it protects the coverage universe.
+- **Gives up, at the read boundary:** the assurance that a *displayed*
+  historical universe was rule-pack-authored. A hostile corpus could be
+  read and shown with forged weights, so any surface that renders a
+  `NotReproducible` run must carry the verdict with it rather than presenting
+  it as equivalent to a reproduced one. The verdict has to propagate into the
+  index and the report, not stop at the decode call.
+- **Note:** this is the only option that distinguishes the two things the
+  current code conflates — "is this genesis well-formed and authored" and "was
+  it authored by *this* binary".
+
+### D. Version the genesis wire and migrate
+
+Treat a pack change as a genesis schema change: bump `schema`, and write a
+migration for each older version, mirroring `migrate_program_space_v1_to_v2`.
+
+- **Gives up:** little in guarantee terms, but it is the most expensive
+  option and scales badly — a migration per rule-pack revision, each of which
+  must reconstruct what the old pack would have produced, which in practice
+  means keeping every historical rule pack compiled in forever.
+- **Worth noting** only because it is the pattern the codebase already uses
+  for `ProgramSpace`, so it is the "consistent" answer even though the cost
+  profile is different.
+
+### E. Narrow the comparison to what the guarantee needs
+
+Re-derive and compare only the fields an attacker could profit from and that
+are stable across rule revisions, rather than the whole tuple. In practice
+this is hard to make meaningful: the profitable fields (weight, applicability,
+evidence modes, capabilities) are exactly the ones a rule revision legitimately
+changes. Recorded here because it is the obvious first idea and it does not
+survive contact with the measurement above.
+
+## My reading
+
+Option **C** is the only one that keeps the measured guarantee where it
+matters while making stored history readable. It is also the smallest change
+in guarantee terms, and it matches the shape the codebase already uses
+elsewhere — ADR 0023's staleness model is built on typed verdicts about
+historical records rather than on refusing to load them, and
+`StaleReasonV5::RuleChanged` already exists to express "the rule that produced
+this differs from the current one" for obligations. Extending that vocabulary
+to the genesis itself would be consistent rather than novel.
+
+Option A is a trap: it looks like the minimal fix and it silently removes the
+guarantee for exactly the inputs an attacker controls.
+
+This is a recommendation, not a decision. It changes production durability
+semantics and belongs to the operator.
+
+## What is established, and what is inference
+
+**Established by direct measurement or by reading the code paths:**
+
+- The re-synthesis comparison is unconditional; both decode entry points reach
+  it; there is no version branch, compatibility path, or migration hook in it.
+- The five mutations in the table are rejected only by that comparison, and
+  nothing else in the decode path catches them.
+- `validate_against` hardcodes `rule_pack_version != "m1.fixture@1"`.
+- `MvpRulePack::synthesize` errors for any profile other than `code-review@1`
+  and the M5 double-submit fixture profile.
+- `rule_pack_version` is written from one literal, persisted into the universe
+  ID, all three index generations, and the coverage projection, and is read as
+  a decision input in exactly one place — the hardcoded comparison above.
+- `rule_pack_version` does not change when a rule version changes; the
+  `@1`→`@2` measurement confirms it stays `m1.fixture@1` while the universe ID
+  moves.
+- No ADR or doc states the re-synthesis intent; ADR 0014 describes the decode
+  without it, and explicitly values keeping historical hashes valid.
+
+**Inference, stated as such:**
+
+- That the guarantee's *purpose* is authorship rather than integrity. The code
+  carries no comment saying so; I am reading it off what the check uniquely
+  catches versus what CAS addressing and canonical-bytes equality already
+  cover.
+- That the affected population is "every stored genesis". I verified the code
+  paths are unconditional and reproduced the failure on one real stored
+  genesis; I did not enumerate every genesis artifact in the repository and
+  load each one.
+- The severity ranking of the options, and the claim that Option C is
+  smallest-in-guarantee. That is engineering judgement, not measurement.
+
+## Not done, deliberately
+
+`crates/reviewgraphen-store/tests/fixtures/terminal-v5-gluing-genesis.json`
+was **not** regenerated. It is one leg of a frozen hostile-corpus chain
+(`terminal-v5-gluing.jsonl`, `terminal-proof-v5-gluing.json`) whose genesis
+hash is embedded in every chained event hash, and whose stated purpose is that
+it "predates the strict terminal DTO and persists a non-contract `body_hash`".
+Regenerating the genesis alone changes its hash, the chain stops matching, and
+`publish_fixture_v5` still returns `Err` — but for the wrong reason, so
+`v6_terminal_legacy_body_hash_fixture_is_rejected_before_target_only_recovery`
+would pass vacuously and the vacuity would be invisible. Regenerating the whole
+chain with current code would produce a well-formed corpus, which is the
+opposite of what the test needs.
+
+`node.changed_public_symbol@2` is complete and preserved on the unmerged
+branch `wip-rule-version-at2`, red on exactly this one test. It should land
+after this finding is settled, if it still should.
