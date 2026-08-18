@@ -626,27 +626,37 @@ method and tool version. The adapter emits the following bounded facts:
 | imports/module dependencies | syntactic `use` targets, explicitly marked `syntactic_only` |
 | test mapping | `covers` only for a test's resolved direct calls |
 | state writes | direct path/field/index assignment targets only |
-| changed structure | Git name-status entries plus `changed_by` relations from every touched record to a `change:*` artifact carrying the changed hunk lines |
+| changed structure | Git name-status entries plus a reciprocal `changed_by`/`contains` relation pair between every touched record and a `change:*` artifact carrying the changed hunk lines and `changed: true` |
+| concurrency model | per function/method: declared `async`, syntactic `.await` points (also emitted as `awaits` self-edges), spawn/channel call paths, and shared-state type-name occurrences |
 
 `changed_by` describes source-tree change, not semantic equivalence or safety.
 Cargo package/dependency facts likewise describe metadata, not a build or a
 verification result.
 
 All base-comparison-specific data -- whether a target path was added,
-modified, deleted, renamed, copied, or type-changed, and which target lines
-changed -- lives exclusively on the `change:*` artifact and the `changed_by`
-relations pointing at it. A file, module, function, method, type, test, or
-state record gets a `changed_by` relation to a `change:*` artifact when its
-location overlaps that change's changed lines (files always link to their
-own change entry, regardless of location); it never carries a `changed` or
-`changed_lines` attribute itself. This is what makes the ID-stability
-promise above actually hold at the level ADR 0011 cares about: two ingests
-of the same target revision with different `base_revision` values produce
-byte-identical `Artifact`/`Relation` records (attributes included, not only
-IDs) for everything except the `change:*` artifacts and their `changed_by`
-edges. This is a bugfix to M2's existing output, not a shape change --
-`change:*`, `changed_by`, and their attribute names already existed -- so no
-schema version bump or ADR was required for it.
+modified, deleted, renamed, copied, or type-changed, which target lines
+changed, and the `changed: true` flag itself -- lives exclusively on the
+`change:*` artifact and the relations tying it to the records it changed. A
+file, module, function, method, type, test, or state record gets a
+`changed_by` relation to a `change:*` artifact when its location overlaps
+that change's changed lines (files always link to their own change entry,
+regardless of location); it never carries a `changed` or `changed_lines`
+attribute itself. Every non-file record that gets a `changed_by` edge also
+gets the reciprocal `contains` edge from the same `change:*` artifact, so a
+consumer walking containment down from a change reaches the individual
+symbols it touched -- this is the path by which `changed` reaches an
+individual function at all, and it is why obligation synthesis never needs a
+base-relative attribute on the function itself. This is what makes the
+ID-stability promise above actually hold at the level ADR 0011 cares about:
+two ingests of the same target revision with different `base_revision`
+values produce byte-identical `Artifact`/`Relation` records (attributes
+included, not only IDs) for everything except the `change:*` artifacts and
+the change family's own edges -- identified by their
+`reviewgraphen.ingest.git.changed_structure.v1` extraction method, not by
+relation kind, since `contains` is otherwise an ordinary base-invariant Rust
+containment kind. This is a bugfix to M2's existing output, not a shape
+change -- `change:*`, `changed_by`, and their attribute names already
+existed -- so no schema version bump or ADR was required for it.
 
 Every accepted `package` and `depends_on` edge is bound to exactly one of two
 provable states, never a guess: a `depends_on` target is either an existing
@@ -698,7 +708,8 @@ already existed -- not a shape change, so no schema version bump or ADR was
 required for it.
 
 - Rust parse failure: retain the file fact, emit `parse_failure`, and mark
-  the affected snapshot's `ast`/`containment` capabilities `partial`.
+  the affected snapshot's `ast`/`containment`/`concurrency_model`
+  capabilities `partial`.
 - Macro invocation: emit `macro_expansion_unresolved`; M2 does not expand it.
 - Pattern-position macro invocation (`Pat::Macro`, for example `let
   mymac!(target) = ..;`): emit `macro_expansion_unresolved`, grounded to the
@@ -716,6 +727,20 @@ required for it.
 - Cargo metadata unavailable (no manifest, unsafe path dependency, or a
   staging/`cargo metadata` failure): emit `capability_missing` and mark
   `cargo_metadata` `missing`.
+
+`concurrency_model` is declared exactly like `ast` and `containment`, and
+for the same reason: its facts -- declared `async`, syntactic `.await`
+points, spawn/channel call paths, and shared-state type-name occurrences --
+are read straight off the same unexpanded syntax tree with no resolution
+step of their own, so a parse failure is the only observed condition that
+leaves any of them unread. It is deliberately *not* a semantic concurrency
+model: it never claims which runtime a `spawn` belongs to, that a named
+`Mutex` is any particular crate's type, or that two invocations can actually
+interleave. Like every other fact read off that tree, it is bounded to the
+unexpanded source; a construct a macro would have generated is reported
+through `macro_expansion_unresolved`, exactly as it is for `ast`, rather
+than by weakening a syntax-scoped capability that is complete with respect
+to the tree the adapter actually has.
 
 No such condition creates an `issue_absent`, `verified`, or accepted review
 claim. The bounded direct-call, import, module-dependency, test-mapping, and

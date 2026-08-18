@@ -11,9 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
-    Arm, Attribute, Block, Expr, ExprAssign, ExprBinary, ExprCall, ExprClosure, ExprForLoop,
-    ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn, ItemImpl,
-    ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
+    Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
+    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
 };
 
 /// Extracts only the M2 Rust AST subset from immutable Git file bytes.
@@ -40,7 +40,15 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
                 ),
                 source_keys: BTreeSet::from([format!("file:{}", source.path)]),
                 paths: BTreeSet::from([source.path.clone()]),
-                related_capabilities: BTreeSet::from(["ast".to_owned(), "containment".to_owned()]),
+                related_capabilities: BTreeSet::from([
+                    "ast".to_owned(),
+                    "containment".to_owned(),
+                    // An unparsed file's declarations, `await` points, and
+                    // concurrency-primitive occurrences are just as unread
+                    // as its containment, so the same limitation justifies
+                    // the same downgrade for all three.
+                    "concurrency_model".to_owned(),
+                ]),
             }),
         }
     }
@@ -127,6 +135,27 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
             CapabilityState::Complete
         },
     );
+    // Scoped exactly like `ast`/`containment` above, and complete under the
+    // same single condition, because it is read off the same unexpanded
+    // syntax tree with no resolution step of its own: see
+    // `ConcurrencyMarkers` for what this capability does and does not
+    // claim. A parse failure is the only observed condition that leaves
+    // part of that tree unread, so it is the only one that downgrades this
+    // capability -- and when it does, the same `parse_failure` limitation
+    // that justifies `ast`/`containment`'s downgrade names
+    // `concurrency_model` too (ADR 0011 point 5 requires every
+    // non-`complete` state to have a related, source-backed limitation).
+    // Deliberately *not* one of the five permanently-`partial`,
+    // resolution-bounded capabilities below: none of the facts behind this
+    // one are claims about which item a name refers to.
+    capabilities.insert(
+        "concurrency_model".to_owned(),
+        if parse_failed {
+            CapabilityState::Partial
+        } else {
+            CapabilityState::Complete
+        },
+    );
     capabilities.insert("direct_calls".to_owned(), CapabilityState::Partial);
     capabilities.insert("imports".to_owned(), CapabilityState::Partial);
     capabilities.insert("module_dependencies".to_owned(), CapabilityState::Partial);
@@ -163,7 +192,7 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
         related_capabilities: bounded_capabilities.iter().cloned().collect(),
     });
     let mut capability_sources = BTreeMap::<String, BTreeSet<String>>::new();
-    for capability in ["ast", "containment"]
+    for capability in ["ast", "concurrency_model", "containment"]
         .into_iter()
         .map(ToOwned::to_owned)
         .chain(bounded_capabilities)
@@ -616,7 +645,8 @@ fn collect_function(
     let location = location(&file.path, function.span());
     let function_key = symbol_key(&file.path, "function", &logical_name, &location);
     let is_test = context.test_scope || is_test(&function.attrs);
-    let mut attributes = function_attributes(&function.vis);
+    let markers = ConcurrencyMarkers::scan(&function.sig, &function.block);
+    let mut attributes = function_attributes(&function.vis, &markers);
     attributes.insert("test_function".to_owned(), Value::Bool(is_test));
     artifacts.push(ArtifactDraft {
         key: function_key.clone(),
@@ -631,6 +661,10 @@ fn collect_function(
         extraction_method: "reviewgraphen.ingest.rust_syn.v1",
     });
     relations.push(containment(&context.module_key, &function_key, &file.path));
+    // Grounded on the function symbol itself, never the separate `test:`
+    // record a `#[test]` function also mints below: an `await` point is a
+    // property of the declared function's own body.
+    relations.extend(markers.await_relations(&function_key, &file.path));
     // Scoped to the exact declaring module (see `same_module_call_key`): an
     // unqualified 1-segment call only ever resolves against this key, never
     // the bare short name, which used to match by crate-wide short-name
@@ -693,6 +727,7 @@ fn collect_impl(
         let logical_name = format!("{}::{}::{owner}", context.module_label, method.sig.ident);
         let location = location(&file.path, method.span());
         let key = symbol_key(&file.path, "method", &logical_name, &location);
+        let markers = ConcurrencyMarkers::scan(&method.sig, &method.block);
         artifacts.push(ArtifactDraft {
             key: key.clone(),
             id_kind: "method",
@@ -701,11 +736,12 @@ fn collect_impl(
             language: Some("rust"),
             location: Some(location.clone()),
             content_hash: Some(file.content_hash.clone()),
-            attributes: function_attributes(&method.vis),
+            attributes: function_attributes(&method.vis, &markers),
             source_path: Some(file.path.clone()),
             extraction_method: "reviewgraphen.ingest.rust_syn.v1",
         });
         relations.push(containment(&context.module_key, &key, &file.path));
+        relations.extend(markers.await_relations(&key, &file.path));
         // Deliberately never registered under `same_module_call_key`
         // (unlike a free function in `collect_function`): an `impl` method
         // is never callable via bare `name()` call syntax in real Rust --
@@ -862,11 +898,209 @@ fn containment(source_key: &str, target_key: &str, path: &str) -> RelationDraft 
     }
 }
 
-fn function_attributes(visibility: &Visibility) -> Map<String, Value> {
-    Map::from_iter([(
+fn function_attributes(
+    visibility: &Visibility,
+    markers: &ConcurrencyMarkers,
+) -> Map<String, Value> {
+    let mut attributes = Map::from_iter([(
         "public".to_owned(),
         Value::Bool(matches!(visibility, Visibility::Public(_))),
-    )])
+    )]);
+    markers.write_attributes(&mut attributes);
+    attributes
+}
+
+/// Shared-state and synchronization type names this adapter recognizes by
+/// *syntactic name occurrence only*. A match records that the identifier
+/// literally appears in the scanned signature or body -- never that it
+/// refers to `std::sync::Mutex` (or `tokio::sync::Mutex`, or any other
+/// specific item): proving that would need the cross-crate/type resolution
+/// this adapter explicitly does not do (see the module's bounded
+/// `direct_calls`/`imports` note). The names are the ones whose whole
+/// purpose in any crate that defines them is cross-task/cross-thread
+/// sharing, so a same-named local type is still a shared-state-shaped
+/// occurrence worth showing a reviewer, not a silent mis-resolution.
+const SHARED_STATE_TYPE_NAMES: &[&str] = &[
+    "Arc",
+    "Barrier",
+    "Condvar",
+    "LazyLock",
+    "Mutex",
+    "Notify",
+    "OnceLock",
+    "RwLock",
+    "Semaphore",
+];
+
+/// Final call-path segments this adapter reads as spawning concurrent work.
+/// Matched only on an `Expr::Call` with a path callee, never on method-call
+/// syntax: `.spawn(..)` on an arbitrary receiver is exactly as unresolved
+/// here as any other method call (see `visit_expr_method_call`), and
+/// `std::process::Command::spawn` shares the name without sharing the
+/// meaning.
+const SPAWN_CALL_NAMES: &[&str] = &["spawn", "spawn_blocking", "spawn_local"];
+
+/// Final call-path segments this adapter reads as constructing a channel.
+/// Matched the same path-call-only way as [`SPAWN_CALL_NAMES`].
+const CHANNEL_CALL_NAMES: &[&str] = &["channel", "sync_channel", "unbounded_channel"];
+
+/// The local-syntactic concurrency surface of exactly one function or
+/// method, read straight off the unexpanded `syn` tree the `ast` capability
+/// already covers.
+///
+/// This is what the `concurrency_model` capability claims, and all it
+/// claims: for every function/method this adapter accepted, whether it is
+/// *declared* `async`, at which lines its body syntactically `.await`s,
+/// which spawn-shaped and channel-constructing call paths it names, and
+/// which shared-state/synchronization type names occur in its signature or
+/// body. Every one of those is decided by the syntax tree alone, with no
+/// resolution step, so -- unlike `direct_calls`/`imports`/
+/// `module_dependencies`/`test_mapping`/`state_writes`, which are
+/// permanently `partial` because they *do* claim which item a name refers
+/// to -- there is no unresolved instance of this fact kind to report.
+///
+/// It is deliberately not a semantic concurrency model. It does not claim
+/// which runtime a `spawn` belongs to, that a named `Mutex` is any
+/// particular crate's, that two invocations can actually interleave, or
+/// that an `.await` inside a nested `async` block belongs to the enclosing
+/// function's own suspension points rather than the spawned future's. Like
+/// every other fact read off this tree -- `ast` and `containment`
+/// included -- it is bounded to the *unexpanded* source: a construct a
+/// macro would have generated is not visible here, exactly as it is not
+/// visible to `ast`, and is reported through the same
+/// `macro_expansion_unresolved` obstruction rather than by silently
+/// weakening a syntax-scoped capability that is complete with respect to
+/// the tree the adapter actually has.
+#[derive(Default)]
+struct ConcurrencyMarkers {
+    declared_async: bool,
+    await_lines: BTreeSet<u64>,
+    spawn_calls: BTreeSet<String>,
+    primitives: BTreeSet<String>,
+}
+
+impl ConcurrencyMarkers {
+    fn scan(signature: &Signature, block: &Block) -> Self {
+        let mut scan = ConcurrencyScan::default();
+        // The signature is scanned as well as the body: an `async fn
+        // handler(State(state): State<Arc<Mutex<..>>>)` names its shared
+        // state only there.
+        scan.visit_signature(signature);
+        scan.visit_block(block);
+        let mut markers = scan.markers;
+        markers.declared_async = signature.asyncness.is_some();
+        markers
+    }
+
+    fn write_attributes(&self, attributes: &mut Map<String, Value>) {
+        // Always written, for every accepted function and method, so an
+        // absent marker is a recorded negative fact rather than an omission
+        // a consumer has to guess about.
+        attributes.insert("async".to_owned(), Value::Bool(self.declared_async));
+        attributes.insert(
+            "awaits".to_owned(),
+            Value::Bool(!self.await_lines.is_empty()),
+        );
+        attributes.insert(
+            "spawns".to_owned(),
+            Value::Bool(!self.spawn_calls.is_empty()),
+        );
+        attributes.insert(
+            "concurrency_primitives".to_owned(),
+            Value::Array(
+                self.primitives
+                    .iter()
+                    .chain(self.spawn_calls.iter())
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
+    }
+
+    /// One `awaits` relation per syntactic `.await` point, as a self-edge on
+    /// the awaiting symbol -- the same shape the reference ProgramSpace
+    /// fixture uses (`examples/double-submit-payment/program-space.json`),
+    /// and the relation kind `node.changed_public_symbol@1`'s own contract
+    /// already names in its context cover.
+    fn await_relations(&self, source_key: &str, path: &str) -> Vec<RelationDraft> {
+        self.await_lines
+            .iter()
+            .map(|line| RelationDraft {
+                kind: "awaits",
+                source_key: source_key.to_owned(),
+                target_keys: vec![source_key.to_owned()],
+                attributes: Map::from_iter([("line".to_owned(), Value::Number((*line).into()))]),
+                source_path: Some(path.to_owned()),
+                extraction_method: "reviewgraphen.ingest.rust_syn.v1",
+            })
+            .collect()
+    }
+}
+
+/// Walks exactly one function/method's signature and body collecting
+/// [`ConcurrencyMarkers`]. Nested items are skipped rather than folded into
+/// the enclosing symbol: a nested `fn`/`impl` in a block is its own
+/// declaration, and `syn`'s default traversal would otherwise attribute its
+/// `await`s and primitives to whatever function happens to enclose it.
+/// Macro token streams are never descended into (`syn` does not parse
+/// them), so an unexpanded macro leaves a `macro_expansion_unresolved`
+/// obstruction and no marker, exactly as it does for `ast`.
+#[derive(Default)]
+struct ConcurrencyScan {
+    markers: ConcurrencyMarkers,
+}
+
+impl ConcurrencyScan {
+    fn record_call_path(&mut self, call: &ExprCall) {
+        let Expr::Path(path) = call.func.as_ref() else {
+            return;
+        };
+        let segments = path
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        let Some(last) = segments.last() else {
+            return;
+        };
+        let full = segments.join("::");
+        if SPAWN_CALL_NAMES.contains(&last.as_str()) {
+            self.markers.spawn_calls.insert(full);
+        } else if CHANNEL_CALL_NAMES.contains(&last.as_str()) {
+            self.markers.primitives.insert(full);
+        }
+    }
+}
+
+impl Visit<'_> for ConcurrencyScan {
+    fn visit_ident(&mut self, ident: &proc_macro2::Ident) {
+        let name = ident.to_string();
+        if SHARED_STATE_TYPE_NAMES.contains(&name.as_str())
+            || (name.starts_with("Atomic") && name.len() > "Atomic".len())
+        {
+            self.markers.primitives.insert(name);
+        }
+    }
+
+    fn visit_expr_await(&mut self, expression: &ExprAwait) {
+        self.markers.await_lines.insert(
+            u64::try_from(expression.await_token.span.start().line).expect("usize fits u64"),
+        );
+        visit::visit_expr_await(self, expression);
+    }
+
+    fn visit_expr_call(&mut self, call: &ExprCall) {
+        self.record_call_path(call);
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_item_fn(&mut self, _: &ItemFn) {}
+
+    fn visit_impl_item_fn(&mut self, _: &syn::ImplItemFn) {}
 }
 
 fn symbol_key(path: &str, kind: &str, label: &str, location: &LocationDraft) -> String {

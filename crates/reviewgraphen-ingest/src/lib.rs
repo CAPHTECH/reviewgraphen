@@ -555,6 +555,17 @@ fn ingest_pipeline(
             "target_path".to_owned(),
             Value::String(change.target_path.clone()),
         );
+        // The change-family artifact is the one record in a snapshot whose
+        // whole existence is already base-relative (its key carries
+        // `base_path`, and it exists at all only because Git's own diff
+        // reported this path changed), so it is the only record that can
+        // carry the base-relative `changed` fact without making a
+        // same-ID artifact's canonical body depend on the diff base. Every
+        // consumer that asks "was this symbol changed?" -- obligation
+        // synthesis included -- reads it from here, through the
+        // change-family `contains` edges built below, never from the
+        // symbol's own attributes.
+        attributes.insert("changed".to_owned(), Value::Bool(true));
         // `changed_lines` is comparison-specific (it depends on
         // `base_revision`), so it lives only on this change-family artifact,
         // never on the target file/function/method/type record it describes:
@@ -602,7 +613,7 @@ fn ingest_pipeline(
             });
             // Every other accepted record at this path (function, method,
             // type, test, state, ...) links to the change through this
-            // relation too, rather than carrying its own base-relative
+            // relation pair too, rather than carrying its own base-relative
             // `changed`/`changed_lines` attribute.
             for draft in &drafts {
                 if draft.id_kind == "file" {
@@ -620,6 +631,25 @@ fn ingest_pipeline(
                     kind: "changed_by",
                     source_key: draft.key.clone(),
                     target_keys: vec![key.clone()],
+                    attributes: Map::new(),
+                    source_path: Some(change.target_path.clone()),
+                    extraction_method: "reviewgraphen.ingest.git.changed_structure.v1",
+                });
+                // The same membership, in the direction a consumer reading
+                // containment travels: the change-family artifact contains
+                // exactly the accepted records whose source region it
+                // changed. This is what carries `changed` down to an
+                // individual function/method/type/test/state record --
+                // `changed_by` alone points the other way, so nothing
+                // walking down from the change could reach them. Both edges
+                // are change-family facts, are the only relations whose
+                // existence depends on `base_revision`, and are excluded
+                // from the base-invariance contract for exactly that reason
+                // (see docs/20_m2_ingestion_contract.md).
+                relation_drafts.push(RelationDraft {
+                    kind: "contains",
+                    source_key: key.clone(),
+                    target_keys: vec![draft.key.clone()],
                     attributes: Map::new(),
                     source_path: Some(change.target_path.clone()),
                     extraction_method: "reviewgraphen.ingest.git.changed_structure.v1",
@@ -889,10 +919,10 @@ pub(crate) struct IssueDraft {
 }
 
 /// Whether a location falls within a base-comparison's changed-line set.
-/// Only ever consulted while building `changed_by` change-family relations:
-/// the result must never be folded into a target artifact's own attributes,
-/// since that would make the same-ID artifact's canonical body depend on
-/// `base_revision`.
+/// Only ever consulted while building the change family's own
+/// `changed_by`/`contains` relations: the result must never be folded into
+/// a target artifact's own attributes, since that would make the same-ID
+/// artifact's canonical body depend on `base_revision`.
 fn intersects_changed(changed_lines: &BTreeSet<u64>, location: &LocationDraft) -> bool {
     changed_lines
         .range(location.start_line..=location.end_line)

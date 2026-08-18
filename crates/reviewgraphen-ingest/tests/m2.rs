@@ -14,6 +14,12 @@ use tempfile::TempDir;
 /// tests; it must never be derived from a temporary clone's absolute path.
 const FIXTURE_IDENTITY: &str = "reviewgraphen.test/m2-fixture";
 
+/// The one extraction method whose facts are deliberately base-relative:
+/// the `change:*` artifacts and the `changed_by`/`contains` edges that tie
+/// them to the records they changed (see
+/// `docs/20_m2_ingestion_contract.md`).
+const CHANGED_STRUCTURE_EXTRACTION_METHOD: &str = "reviewgraphen.ingest.git.changed_structure.v1";
+
 const EXTRACTION_REPORT_SCHEMA: &[u8] =
     include_bytes!("../../../schemas/reviewgraphen.extraction_report.v1.schema.json");
 
@@ -2586,38 +2592,51 @@ fn snapshot_and_fact_ids_are_independent_of_the_diff_base_revision() {
          provenance) must be byte-identical across different diff bases for the same target"
     );
 
-    let non_changed_by_relations_by_id = |result: &reviewgraphen_ingest::IngestResult| {
+    // Selected by the change family's own extraction method rather than by
+    // relation kind: the family emits both a `changed_by` edge (symbol ->
+    // change) and the reciprocal `contains` edge (change -> symbol) that
+    // carries the change down to the symbol, and `contains` is also a
+    // perfectly ordinary base-invariant Rust containment kind. Only a
+    // relation actually produced by the changed-structure extractor is
+    // exempt here; a base-relative edge sneaking in under any other
+    // extraction method still fails this assertion.
+    let non_change_family_relations_by_id = |result: &reviewgraphen_ingest::IngestResult| {
         result
             .program_space
             .relations()
             .iter()
-            .filter(|relation| relation.kind != "changed_by")
+            .filter(|relation| {
+                relation.provenance.extraction_method() != CHANGED_STRUCTURE_EXTRACTION_METHOD
+            })
             .map(|relation| (relation.id.clone(), relation.clone()))
             .collect::<BTreeMap<_, _>>()
     };
     assert_eq!(
-        non_changed_by_relations_by_id(&result_a),
-        non_changed_by_relations_by_id(&result_b),
-        "every non-`changed_by` relation must be byte-identical across different diff bases"
+        non_change_family_relations_by_id(&result_a),
+        non_change_family_relations_by_id(&result_b),
+        "every relation outside the change family must be byte-identical across different \
+         diff bases"
     );
 
-    let changed_by_relation_count = |result: &reviewgraphen_ingest::IngestResult| {
+    let change_family_relation_count = |result: &reviewgraphen_ingest::IngestResult| {
         result
             .program_space
             .relations()
             .iter()
-            .filter(|relation| relation.kind == "changed_by")
+            .filter(|relation| {
+                relation.provenance.extraction_method() == CHANGED_STRUCTURE_EXTRACTION_METHOD
+            })
             .count()
     };
     assert!(
-        changed_by_relation_count(&result_a) > 0,
-        "the original base actually changed src/api.rs, so at least one `changed_by` \
+        change_family_relation_count(&result_a) > 0,
+        "the original base actually changed src/api.rs, so at least one change-family \
          relation is expected"
     );
     assert_eq!(
-        changed_by_relation_count(&result_b),
+        change_family_relation_count(&result_b),
         0,
-        "the self-diff base has no changes, so no `changed_by` relation is expected"
+        "the self-diff base has no changes, so no change-family relation is expected"
     );
 }
 
@@ -2654,6 +2673,206 @@ fn capability_and_limitation_source_ids_resolve_within_the_program_space() {
             );
         }
     }
+}
+
+/// A repository whose target revision changes the body of a public `async`
+/// function that shares state through `Arc<Mutex<..>>` -- the archetype
+/// `node.changed_public_symbol@1`/`async.concurrent_reentry` targets -- plus
+/// a non-`async` function that spawns a thread and opens a channel.
+fn async_fixture_repository() -> TempGitRepository {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let repository = workspace.path().join("fixture");
+    fs::create_dir(&repository).expect("repository directory");
+    git(&repository, ["init", "--quiet"]);
+    git(
+        &repository,
+        ["config", "user.email", "reviewgraphen@example.test"],
+    );
+    git(&repository, ["config", "user.name", "ReviewGraphen test"]);
+    write(
+        &repository,
+        "Cargo.toml",
+        "[package]\nname = \"m2-async-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    );
+    write(
+        &repository,
+        "src/lib.rs",
+        "use std::sync::Arc;\nuse std::sync::Mutex;\n\n\
+         pub async fn handler(shared: Arc<Mutex<u64>>) -> u64 {\n    \
+         let value = load().await;\n    value\n}\n\n\
+         pub async fn load() -> u64 {\n    0\n}\n\n\
+         pub fn background() {\n    \
+         let (_sender, _receiver) = std::sync::mpsc::channel::<u64>();\n    \
+         std::thread::spawn(background_worker);\n}\n\n\
+         fn background_worker() {}\n",
+    );
+    git(&repository, ["add", "."]);
+    git(&repository, ["commit", "--quiet", "-m", "base"]);
+    let base = git_stdout(&repository, ["rev-parse", "HEAD"]);
+    write(
+        &repository,
+        "src/lib.rs",
+        "use std::sync::Arc;\nuse std::sync::Mutex;\n\n\
+         pub async fn handler(shared: Arc<Mutex<u64>>) -> u64 {\n    \
+         let value = load().await;\n    \
+         let doubled = value + value;\n    doubled\n}\n\n\
+         pub async fn load() -> u64 {\n    0\n}\n\n\
+         pub fn background() {\n    \
+         let (_sender, _receiver) = std::sync::mpsc::channel::<u64>();\n    \
+         std::thread::spawn(background_worker);\n}\n\n\
+         fn background_worker() {}\n",
+    );
+    git(&repository, ["add", "."]);
+    git(&repository, ["commit", "--quiet", "-m", "target"]);
+    let target = git_stdout(&repository, ["rev-parse", "HEAD"]);
+    TempGitRepository {
+        workspace,
+        repository,
+        identity: "reviewgraphen.test/m2-async-fixture".to_owned(),
+        base,
+        target,
+    }
+}
+
+#[test]
+fn concurrency_model_facts_are_read_off_local_rust_syntax() {
+    let repository = async_fixture_repository();
+    let result = ingest(&repository.request()).expect("M2 ingest succeeds");
+
+    assert_eq!(
+        result.extraction_report.capabilities["concurrency_model"],
+        CapabilityState::Complete,
+        "every Rust file parsed, so nothing left part of the tree these facts are read \
+         off unread"
+    );
+
+    let function = |label: &str| {
+        result
+            .program_space
+            .artifacts()
+            .iter()
+            .find(|artifact| artifact.kind == "function" && artifact.label == label)
+            .unwrap_or_else(|| panic!("`{label}` function artifact exists"))
+            .clone()
+    };
+
+    let handler = function("crate::handler");
+    assert_eq!(
+        handler.attributes.get("async"),
+        Some(&serde_json::json!(true)),
+        "`async fn` is a declaration-site syntactic fact"
+    );
+    assert_eq!(
+        handler.attributes.get("awaits"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        handler.attributes.get("spawns"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        handler.attributes.get("concurrency_primitives"),
+        Some(&serde_json::json!(["Arc", "Mutex"])),
+        "the shared-state type names occur in the signature, not the body"
+    );
+
+    let background = function("crate::background");
+    assert_eq!(
+        background.attributes.get("async"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        background.attributes.get("awaits"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        background.attributes.get("spawns"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        background.attributes.get("concurrency_primitives"),
+        Some(&serde_json::json!([
+            "std::sync::mpsc::channel",
+            "std::thread::spawn"
+        ])),
+        "a spawn/channel marker records the full syntactic call path, never a claim \
+         about which item it resolves to"
+    );
+
+    let await_relations = result
+        .program_space
+        .relations()
+        .iter()
+        .filter(|relation| relation.kind == "awaits")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        await_relations.len(),
+        1,
+        "exactly one syntactic `.await` point exists: {await_relations:#?}"
+    );
+    assert_eq!(await_relations[0].source_id, handler.id);
+    assert_eq!(
+        await_relations[0].target_ids,
+        BTreeSet::from([handler.id.clone()]),
+        "an `await` point is recorded as a self-edge on the awaiting symbol"
+    );
+}
+
+#[test]
+fn a_changed_public_async_function_synthesizes_a_substantive_obligation() {
+    let repository = async_fixture_repository();
+    let result = ingest(&repository.request()).expect("M2 ingest succeeds");
+    let handler = result
+        .program_space
+        .artifacts()
+        .iter()
+        .find(|artifact| artifact.kind == "function" && artifact.label == "crate::handler")
+        .expect("handler function artifact exists")
+        .clone();
+    assert!(
+        result.program_space.relations().iter().any(|relation| {
+            relation.kind == "contains"
+                && relation.target_ids.contains(&handler.id)
+                && result.program_space.artifacts().iter().any(|artifact| {
+                    artifact.id == relation.source_id
+                        && artifact.attributes.get("changed") == Some(&serde_json::json!(true))
+                })
+        }),
+        "the change family must contain the changed symbol, so `changed` reaches it \
+         without ever entering its own base-relative attributes"
+    );
+
+    let bundle = MvpRulePack::synthesize(&result.program_space).expect("synthesis succeeds");
+    let substantive = bundle
+        .obligations()
+        .iter()
+        .filter(|obligation| obligation.property_id() != "reviewgraphen.capability_gap")
+        .collect::<Vec<_>>();
+    assert!(
+        !substantive.is_empty(),
+        "a changed public async function must synthesize at least one obligation that is \
+         not a capability gap: {:#?}",
+        bundle
+            .obligations()
+            .iter()
+            .map(|obligation| obligation.property_id())
+            .collect::<Vec<_>>()
+    );
+    let node_obligation = substantive
+        .iter()
+        .find(|obligation| obligation.property_id() == "async.concurrent_reentry")
+        .expect("the changed public symbol rule fires");
+    assert_eq!(
+        node_obligation.target_refs(),
+        std::slice::from_ref(&handler.id)
+    );
+    assert_eq!(
+        node_obligation.applicability_status(),
+        "applicable",
+        "`ast` and `concurrency_model` are both complete for this snapshot, so the \
+         obligation must not fall back to an `unknown` capability gap: {:?}",
+        node_obligation.applicability_reasons()
+    );
 }
 
 #[test]
