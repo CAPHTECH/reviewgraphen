@@ -59350,10 +59350,23 @@ mod tests {
         );
         let plan = v4.aggregate.review_plans().next().expect("V4 plan");
         let plan_id = plan.id().clone();
-        let (later_d2_obligation, later_context, later_sources) = plan
+        // `semantic_key` order, not plan-wave order: wave order is risk-first
+        // with a `StableId` tie-break, so positional selection here makes
+        // *which* obligation this prefix fixture appends a later D2 attempt
+        // for depend on obligation ID derivation. See
+        // `cover_external_obligation_id` for the failure mode that causes.
+        let mut later_d2_candidates = plan
             .waves()
             .iter()
             .flat_map(|wave| wave.obligation_ids())
+            .collect::<Vec<_>>();
+        later_d2_candidates.sort_by_key(|candidate| {
+            v4.aggregate
+                .obligation(candidate)
+                .map(|obligation| obligation.semantic_key().to_owned())
+        });
+        let (later_d2_obligation, later_context, later_sources) = later_d2_candidates
+            .into_iter()
             .filter(|candidate| {
                 v4.aggregate
                     .obligation(candidate)
@@ -64170,15 +64183,47 @@ mod tests {
             v3.aggregate().program().profile_key(),
             crate::DOUBLE_SUBMIT_PROFILE_ID
         );
-        let (cover_external_obligation_id, cover_external_context) = plan
+        // This fixture's witness that the M5 double-submit cover excludes
+        // obligations outside its property (see the
+        // `!selected.contains(&cover_external_obligation_id)` assertion in
+        // `complete_m5_v4_fixture_covers_and_excludes_external_obligations`).
+        // The witness must therefore be a *real* review obligation on another
+        // property -- a `reviewgraphen.capability_gap` obligation is a
+        // coverage-gap marker, not a review target, so excluding it is
+        // vacuous and proves nothing.
+        //
+        // Scanned in `semantic_key` order rather than plan-wave order for the
+        // same reason as the M4 subject above: wave order is risk-first with a
+        // `StableId` tie-break (`planning.rs`'s `priority_cmp`), so any change
+        // that re-derives obligation IDs -- a rule version, a profile, a
+        // property rename, a different context set or target ref -- silently
+        // re-points this witness. When it does, S0 and S1 of an M6 fixture pick
+        // *different* witnesses, their record bodies then differ by
+        // `lifecycle` alone, and ADR 0023 §"Reduction" item 4 correctly reports
+        // the S0 record as `stale`/`target_changed` for want of an exact
+        // successor. That surfaces as a bogus M6 preservation regression far
+        // from here. Do not revert this to positional selection.
+        let mut cover_external_candidates = plan
             .waves()
             .iter()
             .flat_map(|wave| wave.obligation_ids())
             .filter(|candidate| {
                 v3.aggregate()
                     .obligation(candidate)
-                    .is_some_and(|obligation| obligation.property_id() != M4_PROPERTY_ID)
+                    .is_some_and(|obligation| {
+                        obligation.property_id() != M4_PROPERTY_ID
+                            && obligation.property_id()
+                                != crate::synthesize::CAPABILITY_GAP_PROPERTY
+                    })
             })
+            .collect::<Vec<_>>();
+        cover_external_candidates.sort_by_key(|candidate| {
+            v3.aggregate()
+                .obligation(candidate)
+                .map(|obligation| obligation.semantic_key().to_owned())
+        });
+        let (cover_external_obligation_id, cover_external_context) = cover_external_candidates
+            .into_iter()
             .find_map(|candidate| {
                 let mut session = crate::prepare_context(v3.aggregate(), candidate.clone()).ok()?;
                 loop {
@@ -68124,10 +68169,29 @@ mod tests {
         let review_plan = plan(log.aggregate(), PlanBudget::new(16, 16).unwrap()).unwrap();
         log.append(EventCommand::review_plan_recorded(review_plan.clone()))
             .unwrap();
-        let (obligation_id, built) = review_plan
+        // Same pin as `d2_v3_m4_m5_log_from_program`, for the same reason:
+        // `required_property` is usually `M4_PROPERTY_ID`, which the
+        // double-submit program satisfies *twice*
+        // (`path.external_side_effect@1`'s and
+        // `invariant.payment_at_most_once@1`'s), so plan-wave order --
+        // risk-first with a `StableId` tie-break -- decides which one and
+        // moves whenever obligation IDs are re-derived. Path-targeted first,
+        // then `semantic_key`.
+        let mut candidates = review_plan
             .waves()
             .iter()
             .flat_map(|wave| wave.obligation_ids())
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|candidate| {
+            log.aggregate().obligation(candidate).map(|obligation| {
+                (
+                    obligation.target_kind() != "path",
+                    obligation.semantic_key().to_owned(),
+                )
+            })
+        });
+        let (obligation_id, built) = candidates
+            .into_iter()
             .find_map(|candidate| {
                 if required_property.is_some_and(|property| {
                     log.aggregate()

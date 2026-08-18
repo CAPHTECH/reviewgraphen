@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 const CAPABILITY_GAP_RULE: &str = "capability_gap.origin_rule@1";
-const CAPABILITY_GAP_PROPERTY: &str = "reviewgraphen.capability_gap";
+pub(crate) const CAPABILITY_GAP_PROPERTY: &str = "reviewgraphen.capability_gap";
 
 /// Fixed descriptor for one M1 deterministic rule.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
