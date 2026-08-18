@@ -948,7 +948,7 @@ fn reference_obligation_semantics_are_a_nine_item_oracle_of_five_concrete_and_fo
     assert_eq!(
         origin_rules,
         BTreeSet::from([
-            "node.changed_public_symbol@1",
+            "node.changed_public_symbol@2",
             "relation.concurrent_reentry@1",
             "path.external_side_effect@1",
             "invariant.payment_at_most_once@1",
@@ -1261,7 +1261,7 @@ fn deterministic_reorder_and_fixed_fixture_bytes_are_stable() {
     assert_eq!(original.universe().id(), reordered.universe().id());
     assert_eq!(
         original.contract().canonical().hash().to_string(),
-        "sha256:84c8a874511624775d140baed272b651599e92cb44db1cb512f8f17bdb3a4de8"
+        "sha256:9b42d50274db50c8ccf9a2c93c3f412beec4449f73ab59b18b8ce5a149f22282"
     );
     assert_eq!(original.contract().canonical().bytes().len(), 17352);
 }
@@ -2110,6 +2110,9 @@ fn deterministic_id_registry_rejects_same_id_for_different_canonical_content() {
 
 #[test]
 fn version_tuple_deserialization_revalidates_its_snapshot_namespace() {
+    // Deliberately still `@1`: this asserts the snapshot-namespace check, and a
+    // superseded rule version must keep deserializing so stored history stays
+    // readable after a rule is revised.
     let invalid = json!({
         "profile": "code-review@1",
         "rule": "node.changed_public_symbol@1",
@@ -4898,7 +4901,7 @@ fn migration_record_matches_the_checked_in_canonical_fixture_byte_for_byte() {
     );
 }
 
-/// `node.changed_public_symbol@1` asserts `async.concurrent_reentry`, so it
+/// `node.changed_public_symbol@2` asserts `async.concurrent_reentry`, so it
 /// must fire only where an extractor actually established concurrency. The
 /// reference fixture's `function:checkout-submit` is `async: true`, which is
 /// the positive control; stripping every concurrency attribute from that one
@@ -4912,7 +4915,7 @@ fn changed_public_symbol_rule_requires_extractor_established_concurrency() {
             .expect("bundle")
             .obligations()
             .iter()
-            .filter(|obligation| obligation.version().rule() == "node.changed_public_symbol@1")
+            .filter(|obligation| obligation.version().rule() == "node.changed_public_symbol@2")
             .flat_map(|obligation| obligation.target_refs().to_vec())
             .collect::<BTreeSet<_>>()
     };

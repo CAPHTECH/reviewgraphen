@@ -139,13 +139,13 @@
         "weighted": -0.0
       }
     },
-    "universe_id": "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+    "universe_id": "universe:sha256:6b1af2ddfc587315d65d2dd0be3aa6831b68e17c7837aba859bbe78d551331f0"
   },
   "metadata": {
     "generated_at": "1970-01-01T00:00:00Z",
     "policy_version": "default@1",
     "profile_id": "code-review@1",
-    "report_id": "report:sha256:ef5d78b00b35488dc96ace4817a1b4d2c43f2885c135f7d36649814e2fade36a",
+    "report_id": "report:sha256:d59bf1f4e20012103a857d6fba57990aaaf8c82b79a9c6ebd8349ff3c4f4c249",
     "rule_set_hash": "sha256:3333333333333333",
     "run_id": "run:populated-report",
     "tool_versions": {
@@ -168,11 +168,11 @@
         ],
         "obligation_ids": [
           "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+          "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5",
           "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
           "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
           "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427",
-          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
-          "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+          "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3",
           "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
           "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184",
           "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
@@ -198,11 +198,11 @@
         "limitation:bounded-concurrency",
         "limitation:interprocedural-data-flow",
         "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+        "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5",
         "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
         "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
         "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427",
-        "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
-        "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+        "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3",
         "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
         "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184",
         "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564",
@@ -220,7 +220,7 @@
         "snapshot:double-submit-v1",
         "state:checkout-loading",
         "test:double-submit",
-        "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4",
+        "universe:sha256:6b1af2ddfc587315d65d2dd0be3aa6831b68e17c7837aba859bbe78d551331f0",
         "verification:populated-report"
       ]
     },
@@ -238,7 +238,7 @@
       ],
       "payload": {
         "snapshot_id": "snapshot:double-submit-v1",
-        "universe_id": "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4",
+        "universe_id": "universe:sha256:6b1af2ddfc587315d65d2dd0be3aa6831b68e17c7837aba859bbe78d551331f0",
         "verification_ids": [
           "verification:populated-report"
         ]
@@ -263,11 +263,11 @@
         "limitation:bounded-concurrency",
         "limitation:interprocedural-data-flow",
         "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+        "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5",
         "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
         "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
         "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427",
-        "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
-        "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+        "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3",
         "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
         "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184",
         "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564",
@@ -285,7 +285,7 @@
         "snapshot:double-submit-v1",
         "state:checkout-loading",
         "test:double-submit",
-        "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4",
+        "universe:sha256:6b1af2ddfc587315d65d2dd0be3aa6831b68e17c7837aba859bbe78d551331f0",
         "verification:populated-report"
       ]
     },
@@ -296,7 +296,7 @@
           "reason": "M1 does not perform cross-context gluing; CI status remains partial.",
           "recoverable": false,
           "source_ids": [
-            "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+            "universe:sha256:6b1af2ddfc587315d65d2dd0be3aa6831b68e17c7837aba859bbe78d551331f0"
           ]
         }
       ],
@@ -304,7 +304,7 @@
         "status": "partial"
       },
       "source_ids": [
-        "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+        "universe:sha256:6b1af2ddfc587315d65d2dd0be3aa6831b68e17c7837aba859bbe78d551331f0"
       ]
     },
     "human_review": {
@@ -320,11 +320,11 @@
       "payload": {
         "claim_count": 1,
         "obligation_count": 9,
-        "universe_id": "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+        "universe_id": "universe:sha256:6b1af2ddfc587315d65d2dd0be3aa6831b68e17c7837aba859bbe78d551331f0"
       },
       "source_ids": [
         "claim:populated-report",
-        "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+        "universe:sha256:6b1af2ddfc587315d65d2dd0be3aa6831b68e17c7837aba859bbe78d551331f0"
       ]
     }
   },
@@ -341,7 +341,7 @@
           "execution_metadata_unavailable"
         ],
         "obligation_ids": [
-          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
+          "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3"
         ],
         "polarity": "issue_present",
         "review_status": "accepted",
@@ -386,7 +386,7 @@
         "context_envelope_id": "context:unresolved",
         "id": "execution:fixture",
         "obligation_ids": [
-          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
+          "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3"
         ],
         "reviewer": {
           "identity": "unresolved",
@@ -417,11 +417,11 @@
     "gluing_results": [],
     "obligation_ids": [
       "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+      "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5",
       "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
       "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
       "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427",
-      "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
-      "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+      "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3",
       "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
       "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184",
       "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
@@ -431,10 +431,10 @@
         "blocks": [
           "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
         ],
-        "id": "obstruction:sha256:1408cf6caa31ac30503124cdfc6b9e9bd17b37b30572bd503c84e71341785908",
-        "kind": "capability_undeclared",
+        "id": "obstruction:sha256:0e520888986ef5049fa432b2c04350105f727dd3adeead802ab70d0c4889c59f",
+        "kind": "capability_partial",
         "required_resolution": [
-          "capability_undeclared:test_mapping"
+          "capability_partial:concurrency_model"
         ],
         "review_status": "unreviewed",
         "severity": "medium",
@@ -445,13 +445,51 @@
           "invariant:payment-at-most-once",
           "requirement:payment-at-most-once"
         ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427"
+        ],
+        "id": "obstruction:sha256:10c519d3a4a72d476b3aa219bcf57d7d2cb4d088861537d2248ff5c203f9f0b0",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0"
+        ],
+        "id": "obstruction:sha256:13d6b699067b12ad4cdcc8e8256bd32f586dcd85a03a243dba9815f90b16ada1",
+        "kind": "capability_undeclared",
+        "required_resolution": [
+          "capability_undeclared:test_mapping"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:payment",
+          "context:test",
+          "context:ui-event",
+          "relation:payment-calls-stripe",
+          "relation:submit-calls-payment",
+          "relation:tap-handled-by-submit"
+        ],
         "title": "Required extraction capability was never declared"
       },
       {
         "blocks": [
-          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
+          "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3"
         ],
-        "id": "obstruction:sha256:1a85ebc1bf9092a1ee3faee84b797e2d6a5bb6a4d1a69558c816821264580801",
+        "id": "obstruction:sha256:1ef2cb41e8b52b1c4ab9813182d47cb8008da2858dab9a9501923e1eac3112d8",
         "kind": "capability_partial",
         "required_resolution": [
           "capability_partial:concurrency_model"
@@ -466,9 +504,26 @@
       },
       {
         "blocks": [
+          "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184"
+        ],
+        "id": "obstruction:sha256:24dd087ada92eb9284d8a0379d81a3ddc35fb76afd7155a9e173d651a81fe8b9",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
           "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427"
         ],
-        "id": "obstruction:sha256:3970987ebd15abbd05a0355c1f7671b37b0721b51a2a795ae3f5bbbee19effc7",
+        "id": "obstruction:sha256:26100b399dc24c7638eb572b90418ca7d4ac3442c0bc5133bee53b91fc6d409d",
         "kind": "capability_undeclared",
         "required_resolution": [
           "capability_undeclared:test_mapping"
@@ -484,9 +539,9 @@
       {
         "blocks": [
           "claim:populated-report",
-          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
+          "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3"
         ],
-        "id": "obstruction:sha256:42b02c040316eeb51b9d5aba25f06d2db4fcf30ab06776e14f702d7112f58e17",
+        "id": "obstruction:sha256:56ba87d84579acaf5a901a05721d5907a3ebc4f4a79ac61b26ff5037e51b3854",
         "kind": "execution_metadata_unavailable",
         "required_resolution": [
           "Record reviewer and context-envelope metadata in an execution-capable milestone."
@@ -500,12 +555,67 @@
       },
       {
         "blocks": [
-          "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
+          "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0"
         ],
-        "id": "obstruction:sha256:59d25c23125e17ba7ec47919d6ba911828e9086fd39ddd5f08578250ac5f27a9",
+        "id": "obstruction:sha256:67e66c843414840f4746d8a665f9bb9d9d91843b27d703873aac47d7e20e2a6e",
         "kind": "capability_partial",
         "required_resolution": [
           "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:payment",
+          "context:test",
+          "context:ui-event",
+          "relation:payment-calls-stripe",
+          "relation:submit-calls-payment",
+          "relation:tap-handled-by-submit"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184"
+        ],
+        "id": "obstruction:sha256:7ffb1d75dff583ff9b3f1f5c4996315d71b3c67959c3d930aa20bd7b377aa485",
+        "kind": "capability_undeclared",
+        "required_resolution": [
+          "capability_undeclared:test_mapping"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability was never declared"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976"
+        ],
+        "id": "obstruction:sha256:8dbf67a6cd32fae3c44ed24c9cfbd994e93c97001755970143a6ddc2d6f66fb7",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:ui-event",
+          "relation:tap-handled-by-submit"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
+        ],
+        "id": "obstruction:sha256:cfda84154f4e0fea49ce0c0338b87dc26c673ac70c3cf23dc11ab83353a244bb",
+        "kind": "capability_undeclared",
+        "required_resolution": [
+          "capability_undeclared:test_mapping"
         ],
         "review_status": "unreviewed",
         "severity": "medium",
@@ -516,16 +626,16 @@
           "invariant:payment-at-most-once",
           "requirement:payment-at-most-once"
         ],
-        "title": "Required extraction capability is only partially available"
+        "title": "Required extraction capability was never declared"
       },
       {
         "blocks": [
-          "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184"
+          "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5"
         ],
-        "id": "obstruction:sha256:888c09a993280863e053f2959f04278adc138f53e5d8c439821a49348bdd20d3",
-        "kind": "capability_undeclared",
+        "id": "obstruction:sha256:ea59c53aeae02f87fffa7373f0f5b42f26459e9dd50a7878f4e8e9fe79a8d00f",
+        "kind": "capability_partial",
         "required_resolution": [
-          "capability_undeclared:test_mapping"
+          "capability_partial:concurrency_model"
         ],
         "review_status": "unreviewed",
         "severity": "medium",
@@ -533,123 +643,13 @@
           "repository:double-submit-payment",
           "snapshot:double-submit-v1"
         ],
-        "title": "Required extraction capability was never declared"
+        "title": "Required extraction capability is only partially available"
       },
       {
         "blocks": [
           "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89"
         ],
-        "id": "obstruction:sha256:ab070b18a4d6e0ed6519f9c774628b457b24a4f7358a0701fea1b6e1256c5843",
-        "kind": "capability_partial",
-        "required_resolution": [
-          "capability_partial:concurrency_model"
-        ],
-        "review_status": "unreviewed",
-        "severity": "medium",
-        "source_ids": [
-          "repository:double-submit-payment",
-          "snapshot:double-submit-v1"
-        ],
-        "title": "Required extraction capability is only partially available"
-      },
-      {
-        "blocks": [
-          "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0"
-        ],
-        "id": "obstruction:sha256:bc4f201d56b6a76b0b84bed57dc2423217a19582012efd5c137746de25eae504",
-        "kind": "capability_partial",
-        "required_resolution": [
-          "capability_partial:concurrency_model"
-        ],
-        "review_status": "unreviewed",
-        "severity": "medium",
-        "source_ids": [
-          "context:payment",
-          "context:test",
-          "context:ui-event",
-          "relation:payment-calls-stripe",
-          "relation:submit-calls-payment",
-          "relation:tap-handled-by-submit"
-        ],
-        "title": "Required extraction capability is only partially available"
-      },
-      {
-        "blocks": [
-          "obligation:sha256:3b788b6c81ddf242c62124b788a8abddb3ccfbc9ce7a0294e7e0fb718f6d7427"
-        ],
-        "id": "obstruction:sha256:ccf0e7ffc4b84a97b9bd475847cc6d6e44c2e9b84874942315ae3fe866bc8ea7",
-        "kind": "capability_partial",
-        "required_resolution": [
-          "capability_partial:concurrency_model"
-        ],
-        "review_status": "unreviewed",
-        "severity": "medium",
-        "source_ids": [
-          "repository:double-submit-payment",
-          "snapshot:double-submit-v1"
-        ],
-        "title": "Required extraction capability is only partially available"
-      },
-      {
-        "blocks": [
-          "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0"
-        ],
-        "id": "obstruction:sha256:dfbcd45697c488771f5fd2f2190bfeec76a9afb61464eccd0aaa48345e99d531",
-        "kind": "capability_undeclared",
-        "required_resolution": [
-          "capability_undeclared:test_mapping"
-        ],
-        "review_status": "unreviewed",
-        "severity": "medium",
-        "source_ids": [
-          "context:payment",
-          "context:test",
-          "context:ui-event",
-          "relation:payment-calls-stripe",
-          "relation:submit-calls-payment",
-          "relation:tap-handled-by-submit"
-        ],
-        "title": "Required extraction capability was never declared"
-      },
-      {
-        "blocks": [
-          "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088"
-        ],
-        "id": "obstruction:sha256:f4d1f8ead6d2d9d1333b124664e331835c034b35bca80b8971dd4efd7046f695",
-        "kind": "capability_partial",
-        "required_resolution": [
-          "capability_partial:concurrency_model"
-        ],
-        "review_status": "unreviewed",
-        "severity": "medium",
-        "source_ids": [
-          "repository:double-submit-payment",
-          "snapshot:double-submit-v1"
-        ],
-        "title": "Required extraction capability is only partially available"
-      },
-      {
-        "blocks": [
-          "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976"
-        ],
-        "id": "obstruction:sha256:fa08f310b0a0ee8d21810d28a1251f217c9a3289c478cbedfe59d2399f1d951f",
-        "kind": "capability_partial",
-        "required_resolution": [
-          "capability_partial:concurrency_model"
-        ],
-        "review_status": "unreviewed",
-        "severity": "medium",
-        "source_ids": [
-          "context:ui-event",
-          "relation:tap-handled-by-submit"
-        ],
-        "title": "Required extraction capability is only partially available"
-      },
-      {
-        "blocks": [
-          "obligation:sha256:8ec8ecefe55901840b3c53a42d8731deb50dd805b252b7a42988d7337dbb9184"
-        ],
-        "id": "obstruction:sha256:fed43db2a6ebe29f7d6ed6a05093aa7ebd43094a4b79eb47c5a35ea911c5cc92",
+        "id": "obstruction:sha256:ee5cc56d04d92794707f1ebf195c3e0ed8151b28e56076079223b695075b3e17",
         "kind": "capability_partial",
         "required_resolution": [
           "capability_partial:concurrency_model"
@@ -688,10 +688,10 @@
     ],
     "program_space_ref": "program-space:snapshot:double-submit-v1",
     "repository_id": "repository:double-submit-payment",
-    "review_space_ref": "review-space:universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4",
+    "review_space_ref": "review-space:universe:sha256:6b1af2ddfc587315d65d2dd0be3aa6831b68e17c7837aba859bbe78d551331f0",
     "snapshot_id": "snapshot:double-submit-v1",
     "target_revision": "fixture-buggy-head",
-    "universe_id": "universe:sha256:1e50060ddf7cdc3f1442038a8ad90d1def1a24fe1568988d2b86d5173328e1b4"
+    "universe_id": "universe:sha256:6b1af2ddfc587315d65d2dd0be3aa6831b68e17c7837aba859bbe78d551331f0"
   },
   "schema": "reviewgraphen.review.report.v1"
 }

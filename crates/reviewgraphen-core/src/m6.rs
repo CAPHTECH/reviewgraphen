@@ -10924,7 +10924,14 @@ fn impact_edges_v5(rule: &str, property: &str) -> Option<&'static [ImpactEdgeV5]
     ];
     const NONE: &[ImpactEdgeV5] = &[];
     match (rule, property) {
+        // `@1` is retained alongside `@2`, not replaced: this lookup is applied
+        // to stored historical obligations as well as freshly synthesized ones,
+        // and an obligation recorded under `@1` must keep resolving to the same
+        // impact cone forever. `@2` narrows `@1`'s trigger (see
+        // `has_local_concurrency_evidence`) without changing the target kind or
+        // the structure the cone walks, so both map to `NODE`.
         ("node.changed_public_symbol@1", "async.concurrent_reentry") => Some(NODE),
+        ("node.changed_public_symbol@2", "async.concurrent_reentry") => Some(NODE),
         ("relation.concurrent_reentry@1", "async.concurrent_reentry") => Some(RELATION_REENTRY),
         ("relation.changed_call_contract@1", "payment.idempotency_contract") => Some(CALL),
         ("path.external_side_effect@1", "payment.at_most_once") => Some(PATH),

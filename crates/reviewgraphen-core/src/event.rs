@@ -74058,7 +74058,7 @@ mod tests {
         assert_eq!(envelope.schema, EventContractVersion::V1.schema());
         assert_eq!(
             envelope.event_hash.to_string(),
-            "sha256:888755be60f6cbf89c4f9d34884aee7ed2daeacc265fc05ebc4f461098d43372"
+            "sha256:07fcb07118b80f5a3929500d558b1ecdcf08c7ed067add97dd606ab7600ece33"
         );
     }
 
@@ -74069,7 +74069,7 @@ mod tests {
         assert_eq!(envelope.schema, EventContractVersion::V2.schema());
         assert_eq!(
             envelope.event_hash.to_string(),
-            "sha256:9d0f98cffe34cb23ba0ad804aecd11d0e953850cb623824e0e0e2d92dc6c7526"
+            "sha256:0703099c3a61f1014fba71832b4d3a5ea11f9563df770c53b2a8dc6c59669ee9"
         );
         assert_eq!(log.tail_hash(), envelope.event_hash());
         assert_eq!(log.event_contract_version(), EventContractVersion::V2);

@@ -525,7 +525,7 @@ impl MvpRulePack {
     pub const fn rules() -> &'static [RuleDescriptor] {
         &[
             RuleDescriptor {
-                id: "node.changed_public_symbol@1",
+                id: "node.changed_public_symbol@2",
                 target_kind: "node",
                 property_id: "async.concurrent_reentry",
             },
@@ -583,7 +583,7 @@ impl MvpRulePack {
             if let Some(reason) = attribute_string(&artifact.attributes, "reviewgraphen_excluded") {
                 exclusions.push(exclusion(
                     program,
-                    "node.changed_public_symbol@1",
+                    "node.changed_public_symbol@2",
                     artifact.id.clone(),
                     reason,
                     3.0,
@@ -594,7 +594,7 @@ impl MvpRulePack {
             let node_obligation = materialize(
                 program,
                 ObligationSpec {
-                    rule: "node.changed_public_symbol@1",
+                    rule: "node.changed_public_symbol@2",
                     origin_rule: None,
                     target_kind: "node",
                     target_refs: target_refs.clone(),
@@ -918,7 +918,7 @@ impl MvpRulePack {
 
 fn fallback_weight(rule: &str) -> Result<f64> {
     match rule {
-        "node.changed_public_symbol@1" => Ok(3.0),
+        "node.changed_public_symbol@2" => Ok(3.0),
         "relation.concurrent_reentry@1" => Ok(3.5),
         "relation.changed_call_contract@1" => Ok(5.0),
         "path.external_side_effect@1" => Ok(6.0),
@@ -1428,7 +1428,7 @@ struct RuleContract {
 
 fn rule_contract(rule: &str) -> Result<RuleContract> {
     let contract = match rule {
-        "node.changed_public_symbol@1" => RuleContract {
+        "node.changed_public_symbol@2" => RuleContract {
             required_capabilities: &["ast", "concurrency_model"],
             include_relation_kinds: &["awaits", "writes", "handled_by"],
             max_relation_depth: 2,
@@ -1571,7 +1571,7 @@ fn extend_unique(target: &mut Vec<StableId>, candidates: Vec<StableId>) {
 }
 
 /// Whether an extractor established at least one concurrency fact about this
-/// symbol -- `node.changed_public_symbol@1`'s narrowing trigger condition.
+/// symbol -- `node.changed_public_symbol@2`'s narrowing trigger condition.
 ///
 /// Before this, the rule asserted `async.concurrent_reentry` over *every*
 /// changed public function, so a proc-macro entry point or a plain
@@ -1597,37 +1597,30 @@ fn extend_unique(target: &mut Vec<StableId>, candidates: Vec<StableId>) {
 /// `relation.concurrent_reentry@1`, which has its own trigger and its own
 /// required capabilities.
 ///
-/// # Why this narrowed `@1` in place instead of minting `@2`
+/// # Why this is `@2` and not an in-place narrowing of `@1`
 ///
-/// `docs/07`'s obligation schema versions a rule in-band (`rule_id:
-/// payment.idempotency@2`), the rule string is bound into every obligation's
-/// `StableId` and its [`VersionTuple`], and `docs/12` §11 keeps `semantic_key`
-/// stable across a rule revision so old and new obligations can be
-/// corresponded by an explicit morphism. `m6.rs` implements the consuming half
-/// (`StaleReasonV5::RuleChanged` fires exactly when `version.rule` differs
-/// between two snapshots). By that contract a changed trigger is normally a
-/// new rule version, and `@2` was implemented and measured first.
+/// `docs/07` versions a rule in-band (`rule_id: payment.idempotency@2`), the
+/// rule string is bound into every obligation's `StableId` and into its
+/// [`VersionTuple`], and `docs/12` section 11 keeps `semantic_key` stable
+/// across a revision so old and new obligations still correspond by an
+/// explicit morphism. `m6.rs` implements the consuming half:
+/// `StaleReasonV5::RuleChanged` fires exactly when `version.rule` differs
+/// between two snapshots. Changed trigger semantics under an unchanged version
+/// would defeat all of it -- a stored obligation would carry no signal that the
+/// predicate which produced it has since changed.
 ///
-/// It was reverted because the protection that contract buys is empty here
-/// while its cost is not. The mechanism exists so a *stored* obligation from
-/// the old trigger cannot be mistaken for one from the new trigger. No such
-/// record exists: this rule could never fire on a real repository until the
-/// `changed`-wiring landed alongside this commit, so every `@1` node
-/// obligation in this repository comes from the hand-authored double-submit
-/// fixture -- whose `function:checkout-submit` is `async: true` and still
-/// qualifies, byte-identically, under the narrowed trigger. Renaming to `@2`
-/// changed no obligation *set* anywhere; it only re-derived IDs, which then
-/// required rewriting sixteen pinned goldens across `event.rs`,
-/// `m6_test_support.rs`, and `m1.rs` (two of them named "historical golden" /
-/// "frozen") plus six checked-in JSON fixtures, and perturbed obligation sort
-/// order enough to break M5/M6 preservation fixtures that select their subject
-/// obligation positionally. Buying nothing at that price is the worse trade.
+/// Narrowing `@1` in place was measured first and rejected. It is momentarily
+/// harmless: nothing has persisted an obligation from this rule, because it
+/// could not fire on real input until the `changed`-wiring landed. But that
+/// exemption is temporal, not structural -- it expires the moment anything
+/// does, which is now possible for the first time.
 ///
-/// Mint `@2` when the first consumer actually persists obligations from this
-/// rule, or when a future revision changes the obligation *set* for an input
-/// that already has stored history. Either way the M5/M6 fixtures should be
-/// made to select their subject by semantic key first, so a rule-version bump
-/// stops being coupled to obligation sort order.
+/// The bump was blocked for a while by something unrelated to versioning: a
+/// stored genesis could not be *loaded* once the running pack stopped
+/// reproducing it, so a `@1` record became unreadable under `@2`. That was a
+/// durability defect in its own right, fixed separately;
+/// see `docs/durability-finding-run-genesis-resynthesis-couples-stored-history-to-current-rule-pack.md`.
+///
 fn has_local_concurrency_evidence(attributes: &BTreeMap<String, Value>) -> bool {
     attribute_bool(attributes, "async")
         || attribute_bool(attributes, "awaits")

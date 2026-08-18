@@ -38,7 +38,7 @@
         "policy": "default-evidence@1",
         "required": true
       },
-      "id": "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
+      "id": "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3",
       "lifecycle": "generated",
       "property": {
         "id": "async.concurrent_reentry",
@@ -46,7 +46,7 @@
       },
       "provenance": {
         "confidence": 1.0,
-        "extraction_method": "node.changed_public_symbol@1",
+        "extraction_method": "node.changed_public_symbol@2",
         "generator_ids": [
           "function:checkout-submit"
         ],
@@ -81,7 +81,7 @@
       "version": {
         "extractor_set": "sha256:7777777777777777",
         "profile": "code-review@1",
-        "rule": "node.changed_public_symbol@1",
+        "rule": "node.changed_public_symbol@2",
         "snapshot": "snapshot:double-submit-v1"
       }
     },
@@ -113,7 +113,7 @@
         ]
       },
       "depends_on_obligation_ids": [
-        "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
+        "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3"
       ],
       "evidence_requirement": {
         "accepted_modes": [
@@ -452,6 +452,83 @@
         ],
         "reasons": [
           "capability_partial:concurrency_model",
+          "origin_rule:node.changed_public_symbol@2"
+        ],
+        "status": "unknown"
+      },
+      "context_requirement": {
+        "context_ids": [],
+        "include_existing_evidence": true,
+        "include_relation_kinds": [],
+        "include_tests": true,
+        "max_relation_depth": 0,
+        "required_capabilities": [
+          "concurrency_model"
+        ]
+      },
+      "depends_on_obligation_ids": [],
+      "evidence_requirement": {
+        "accepted_modes": [],
+        "minimum_count": 1,
+        "policy": "capability-gap-obstruction@1",
+        "required": true
+      },
+      "id": "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5",
+      "lifecycle": "generated",
+      "property": {
+        "id": "reviewgraphen.capability_gap",
+        "version": "1"
+      },
+      "provenance": {
+        "confidence": 1.0,
+        "extraction_method": "capability_gap.origin_rule@1",
+        "generator_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "origin_rule": "node.changed_public_symbol@2",
+        "review_status": "accepted",
+        "source": {
+          "content_hash": "sha256:8888888888888888",
+          "kind": "tool",
+          "locator": "reviewgraphen obligation synthesizer",
+          "revision": "0.1.0-draft"
+        },
+        "tool_version": "0.1.0-draft"
+      },
+      "risk": {
+        "exposure": 0.0,
+        "impact": "unknown",
+        "rationale": "The origin rule cannot be fully assessed because a required extraction capability is unavailable.",
+        "structural_reach": 0.0,
+        "uncertainty": 1.0,
+        "weight": 3.0
+      },
+      "source_ids": [
+        "repository:double-submit-payment",
+        "snapshot:double-submit-v1"
+      ],
+      "target": {
+        "kind": "subgraph",
+        "refs": [
+          "snapshot:double-submit-v1"
+        ],
+        "semantic_key": "reviewgraphen.capability_gap|snapshot:double-submit-v1|origin_rule:node.changed_public_symbol@2"
+      },
+      "version": {
+        "extractor_set": "sha256:7777777777777777",
+        "profile": "code-review@1",
+        "rule": "capability_gap.origin_rule@1",
+        "snapshot": "snapshot:double-submit-v1"
+      }
+    },
+    {
+      "applicability": {
+        "qualification_ids": [
+          "limitation:bounded-concurrency"
+        ],
+        "reasons": [
+          "capability_partial:concurrency_model",
           "origin_rule:relation.concurrent_reentry@1"
         ],
         "status": "unknown"
@@ -606,83 +683,6 @@
         ],
         "reasons": [
           "capability_partial:concurrency_model",
-          "origin_rule:node.changed_public_symbol@1"
-        ],
-        "status": "unknown"
-      },
-      "context_requirement": {
-        "context_ids": [],
-        "include_existing_evidence": true,
-        "include_relation_kinds": [],
-        "include_tests": true,
-        "max_relation_depth": 0,
-        "required_capabilities": [
-          "concurrency_model"
-        ]
-      },
-      "depends_on_obligation_ids": [],
-      "evidence_requirement": {
-        "accepted_modes": [],
-        "minimum_count": 1,
-        "policy": "capability-gap-obstruction@1",
-        "required": true
-      },
-      "id": "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
-      "lifecycle": "generated",
-      "property": {
-        "id": "reviewgraphen.capability_gap",
-        "version": "1"
-      },
-      "provenance": {
-        "confidence": 1.0,
-        "extraction_method": "capability_gap.origin_rule@1",
-        "generator_ids": [
-          "repository:double-submit-payment",
-          "snapshot:double-submit-v1"
-        ],
-        "origin_rule": "node.changed_public_symbol@1",
-        "review_status": "accepted",
-        "source": {
-          "content_hash": "sha256:8888888888888888",
-          "kind": "tool",
-          "locator": "reviewgraphen obligation synthesizer",
-          "revision": "0.1.0-draft"
-        },
-        "tool_version": "0.1.0-draft"
-      },
-      "risk": {
-        "exposure": 0.0,
-        "impact": "unknown",
-        "rationale": "The origin rule cannot be fully assessed because a required extraction capability is unavailable.",
-        "structural_reach": 0.0,
-        "uncertainty": 1.0,
-        "weight": 3.0
-      },
-      "source_ids": [
-        "repository:double-submit-payment",
-        "snapshot:double-submit-v1"
-      ],
-      "target": {
-        "kind": "subgraph",
-        "refs": [
-          "snapshot:double-submit-v1"
-        ],
-        "semantic_key": "reviewgraphen.capability_gap|snapshot:double-submit-v1|origin_rule:node.changed_public_symbol@1"
-      },
-      "version": {
-        "extractor_set": "sha256:7777777777777777",
-        "profile": "code-review@1",
-        "rule": "capability_gap.origin_rule@1",
-        "snapshot": "snapshot:double-submit-v1"
-      }
-    },
-    {
-      "applicability": {
-        "qualification_ids": [
-          "limitation:bounded-concurrency"
-        ],
-        "reasons": [
-          "capability_partial:concurrency_model",
           "origin_rule:invariant.payment_at_most_once@1"
         ],
         "status": "unknown"
@@ -764,20 +764,20 @@
   "universe": {
     "exclusions": [],
     "extractor_set_hash": "sha256:7777777777777777",
-    "id": "universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048",
+    "id": "universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042",
     "limitation_ids": [
       "limitation:bounded-concurrency",
       "limitation:interprocedural-data-flow"
     ],
     "obligation_ids": [
-      "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
+      "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3",
       "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
       "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
       "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
       "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564",
+      "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5",
       "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
       "obligation:sha256:352de2c0c1672709aee677b3f1eafcbefe78f8bbf7352fa16039b2dab29dbe95",
-      "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
       "obligation:sha256:c5410fd7d6d24c891ae1b309b6e1d4eb559a248386d585b7895c237857860a71"
     ],
     "policy_version": "default@1",

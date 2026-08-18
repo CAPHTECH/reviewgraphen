@@ -3525,11 +3525,16 @@ pub(crate) mod tests {
             JournalIdentity::new_for_read(run(), JournalGenesis::V5(genesis.to_vec())).unwrap();
         let verdict = verdict.expect("a V5 genesis carries an authorship verdict");
         assert!(
-            verdict.is_reproduced(),
-            "the running rule pack reproduces this fixture today, so both \
-             constructors must agree"
+            !verdict.is_reproduced(),
+            "this corpus was written by an earlier rule pack, which is exactly \
+             the case the read constructor exists for"
         );
-        assert!(JournalIdentity::new(run(), JournalGenesis::V5(genesis.to_vec())).is_ok());
+
+        // The same bytes through the strict constructor. Every path that
+        // extends a run takes this one, so a version-crossed record cannot
+        // reach any of them without a caller having explicitly asked for the
+        // read-only form.
+        assert!(JournalIdentity::new(run(), JournalGenesis::V5(genesis.to_vec())).is_err());
     }
 
     #[test]
@@ -3562,13 +3567,24 @@ pub(crate) mod tests {
                 Cursor::new(genesis),
             )
             .unwrap();
+        // Asserted on the reason, not merely on failure. Once the genesis is
+        // loadable again (it is version-crossed, so `new_for_read` above
+        // accepts it and reports `NotReproducible`), a bare `is_err()` would
+        // pass just as happily if publication had refused for some unrelated
+        // reason -- including the verdict itself. The whole point of this
+        // fixture is the marker's non-contract `body_hash`, so that is what
+        // the assertion names.
+        let Err(error) = EventJournal::publish_fixture_v5(
+            &root,
+            identity,
+            include_bytes!("../tests/fixtures/terminal-v5-gluing.jsonl"),
+        ) else {
+            panic!("the legacy marker must be refused");
+        };
         assert!(
-            EventJournal::publish_fixture_v5(
-                &root,
-                identity,
-                include_bytes!("../tests/fixtures/terminal-v5-gluing.jsonl"),
-            )
-            .is_err()
+            format!("{error:?}").contains("unknown field `body_hash`"),
+            "publication must reject the non-contract body_hash, not something \
+             incidental: {error:?}"
         );
     }
 }

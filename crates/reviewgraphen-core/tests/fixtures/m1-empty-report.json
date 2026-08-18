@@ -137,13 +137,13 @@
         "weighted": -0.0
       }
     },
-    "universe_id": "universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048"
+    "universe_id": "universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042"
   },
   "metadata": {
     "generated_at": "1970-01-01T00:00:00Z",
     "policy_version": "default@1",
     "profile_id": "code-review@1",
-    "report_id": "report:sha256:84efe81fa213665ab07bc0d60d7da7e9ab5c6ea456f0f291b9e8311266eb3fb4",
+    "report_id": "report:sha256:40d701ebf8d419ec66a907addc4cba43ad1b1c23e843b0cf5fb436b8f04fc03c",
     "rule_set_hash": "sha256:3333333333333333",
     "run_id": "run:report",
     "tool_versions": {
@@ -164,11 +164,11 @@
         "claim_ids": [],
         "obligation_ids": [
           "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+          "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5",
           "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
           "obligation:sha256:352de2c0c1672709aee677b3f1eafcbefe78f8bbf7352fa16039b2dab29dbe95",
           "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
-          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
-          "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+          "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3",
           "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
           "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564",
           "obligation:sha256:c5410fd7d6d24c891ae1b309b6e1d4eb559a248386d585b7895c237857860a71"
@@ -189,11 +189,11 @@
         "limitation:bounded-concurrency",
         "limitation:interprocedural-data-flow",
         "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+        "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5",
         "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
         "obligation:sha256:352de2c0c1672709aee677b3f1eafcbefe78f8bbf7352fa16039b2dab29dbe95",
         "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
-        "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
-        "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+        "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3",
         "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
         "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564",
         "obligation:sha256:c5410fd7d6d24c891ae1b309b6e1d4eb559a248386d585b7895c237857860a71",
@@ -211,7 +211,7 @@
         "snapshot:double-submit-v1",
         "state:checkout-loading",
         "test:double-submit",
-        "universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048"
+        "universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042"
       ]
     },
     "audit_trace": {
@@ -228,7 +228,7 @@
       ],
       "payload": {
         "snapshot_id": "snapshot:double-submit-v1",
-        "universe_id": "universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048",
+        "universe_id": "universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042",
         "verification_ids": []
       },
       "source_ids": [
@@ -246,11 +246,11 @@
         "limitation:bounded-concurrency",
         "limitation:interprocedural-data-flow",
         "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+        "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5",
         "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
         "obligation:sha256:352de2c0c1672709aee677b3f1eafcbefe78f8bbf7352fa16039b2dab29dbe95",
         "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
-        "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
-        "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+        "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3",
         "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
         "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564",
         "obligation:sha256:c5410fd7d6d24c891ae1b309b6e1d4eb559a248386d585b7895c237857860a71",
@@ -268,7 +268,7 @@
         "snapshot:double-submit-v1",
         "state:checkout-loading",
         "test:double-submit",
-        "universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048"
+        "universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042"
       ]
     },
     "ci_gate": {
@@ -278,7 +278,7 @@
           "reason": "M1 does not perform cross-context gluing; CI status remains partial.",
           "recoverable": false,
           "source_ids": [
-            "universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048"
+            "universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042"
           ]
         }
       ],
@@ -286,7 +286,7 @@
         "status": "partial"
       },
       "source_ids": [
-        "universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048"
+        "universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042"
       ]
     },
     "human_review": {
@@ -302,10 +302,10 @@
       "payload": {
         "claim_count": 0,
         "obligation_count": 9,
-        "universe_id": "universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048"
+        "universe_id": "universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042"
       },
       "source_ids": [
-        "universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048"
+        "universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042"
       ]
     }
   },
@@ -321,11 +321,11 @@
     "gluing_results": [],
     "obligation_ids": [
       "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0",
+      "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5",
       "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89",
       "obligation:sha256:352de2c0c1672709aee677b3f1eafcbefe78f8bbf7352fa16039b2dab29dbe95",
       "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976",
-      "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3",
-      "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088",
+      "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3",
       "obligation:sha256:6f26e77829a47ebf4ffdbcb4934d9830ae9ef52bc7c4948da05a3ca8d543145e",
       "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564",
       "obligation:sha256:c5410fd7d6d24c891ae1b309b6e1d4eb559a248386d585b7895c237857860a71"
@@ -333,9 +333,9 @@
     "obstructions": [
       {
         "blocks": [
-          "obligation:sha256:45743fe03ee6e28cbf3d42d390f140593b1e26ca450956a766bcf240cabd31a3"
+          "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
         ],
-        "id": "obstruction:sha256:072fd8d4a0d580b1e5f4652afde48c783d0ac31514981b136c5f955139ec83a8",
+        "id": "obstruction:sha256:05301d895e38ac0ee23b091ce9930733bcc09a4cb3ed9b7c38a45068501c23eb",
         "kind": "capability_partial",
         "required_resolution": [
           "capability_partial:concurrency_model"
@@ -343,67 +343,19 @@
         "review_status": "unreviewed",
         "severity": "medium",
         "source_ids": [
+          "context:payment",
+          "context:test",
           "context:ui-event",
-          "function:checkout-submit"
+          "invariant:payment-at-most-once",
+          "requirement:payment-at-most-once"
         ],
         "title": "Required extraction capability is only partially available"
       },
       {
         "blocks": [
-          "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976"
+          "obligation:sha256:1a3fc47dc3269508fd451d629028e7a73b2038f37e6f0fab2889523157ec50e5"
         ],
-        "id": "obstruction:sha256:3dcea64cfebfa7ffac89cb0710eaa2dd2a48baf1b0f1214eddf6377e7e14e565",
-        "kind": "capability_partial",
-        "required_resolution": [
-          "capability_partial:concurrency_model"
-        ],
-        "review_status": "unreviewed",
-        "severity": "medium",
-        "source_ids": [
-          "context:ui-event",
-          "relation:tap-handled-by-submit"
-        ],
-        "title": "Required extraction capability is only partially available"
-      },
-      {
-        "blocks": [
-          "obligation:sha256:c5410fd7d6d24c891ae1b309b6e1d4eb559a248386d585b7895c237857860a71"
-        ],
-        "id": "obstruction:sha256:5d500636e309046ea4ac3dd6957275a54936cea32fa5247a5cd369aba4f0a8ee",
-        "kind": "capability_partial",
-        "required_resolution": [
-          "capability_partial:concurrency_model"
-        ],
-        "review_status": "unreviewed",
-        "severity": "medium",
-        "source_ids": [
-          "repository:double-submit-payment",
-          "snapshot:double-submit-v1"
-        ],
-        "title": "Required extraction capability is only partially available"
-      },
-      {
-        "blocks": [
-          "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89"
-        ],
-        "id": "obstruction:sha256:660f0b714d47d27b78d61346a43025f90933bb751476a5a27a0a277ce810f417",
-        "kind": "capability_partial",
-        "required_resolution": [
-          "capability_partial:concurrency_model"
-        ],
-        "review_status": "unreviewed",
-        "severity": "medium",
-        "source_ids": [
-          "repository:double-submit-payment",
-          "snapshot:double-submit-v1"
-        ],
-        "title": "Required extraction capability is only partially available"
-      },
-      {
-        "blocks": [
-          "obligation:sha256:63d206fb8a646362359f6bf3d30bc9d394608c962cf3d2fccb2077c2de399088"
-        ],
-        "id": "obstruction:sha256:97eda24ef4cd6a5ff8ffaaa55b3aa289f7b4696d57e53d2f19056080412c9632",
+        "id": "obstruction:sha256:2fc46d638d455dea53d192868240e91ea1c154894f324eae15353e80eb51182b",
         "kind": "capability_partial",
         "required_resolution": [
           "capability_partial:concurrency_model"
@@ -420,7 +372,7 @@
         "blocks": [
           "obligation:sha256:352de2c0c1672709aee677b3f1eafcbefe78f8bbf7352fa16039b2dab29dbe95"
         ],
-        "id": "obstruction:sha256:a23132d26682cf4c7af723c5fc6d748640acf3e0cd9b7905d69cfd8a748ea8f2",
+        "id": "obstruction:sha256:36cfadbcf839389eb803dcb00e3addef6558ba23234641f37432d665516ead0b",
         "kind": "capability_partial",
         "required_resolution": [
           "capability_partial:concurrency_model"
@@ -435,9 +387,77 @@
       },
       {
         "blocks": [
+          "obligation:sha256:313263d5bdfe3c087bafb9fadf0373362ea04f00fd5222a8c5408f5f8a1d6b89"
+        ],
+        "id": "obstruction:sha256:764096b78d38440a9ecfbf5fa270e8bab2cee7cf72ce23f649c4b8f615c079ac",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:c5410fd7d6d24c891ae1b309b6e1d4eb559a248386d585b7895c237857860a71"
+        ],
+        "id": "obstruction:sha256:81359960282e2565e108b96569a9a0bd5e3fab9892b8d209fe037a5a50b6766c",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "repository:double-submit-payment",
+          "snapshot:double-submit-v1"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:5ae9c506b2fde3931f6a03a7f83a1f8ad7b79394af754da658b795d21581b0f3"
+        ],
+        "id": "obstruction:sha256:96d25c2dad6decb48f4fc40ac706a309b33ddd268eb7aaad63500d70a6099d77",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:ui-event",
+          "function:checkout-submit"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
+          "obligation:sha256:36c0e2939b064024b1f4b0d88837f52c1437246cd9e8361706748d809e10b976"
+        ],
+        "id": "obstruction:sha256:9dc811028314c7b76b8215ccf174e167917b8b777287d999abf981dfefbf9e00",
+        "kind": "capability_partial",
+        "required_resolution": [
+          "capability_partial:concurrency_model"
+        ],
+        "review_status": "unreviewed",
+        "severity": "medium",
+        "source_ids": [
+          "context:ui-event",
+          "relation:tap-handled-by-submit"
+        ],
+        "title": "Required extraction capability is only partially available"
+      },
+      {
+        "blocks": [
           "obligation:sha256:1859bd4ea17b22d0c686ac750b39a5a6730bd11a7a32cbbc69a1e24842cc74f0"
         ],
-        "id": "obstruction:sha256:c46464a153da99da93c431c6ae5b0af5b701eea757a9303e6ef1cc4ce3123f64",
+        "id": "obstruction:sha256:d6ebea4647241adfa216a8375ff7442123567cf2c8b591a8d5d7d26568cd95eb",
         "kind": "capability_partial",
         "required_resolution": [
           "capability_partial:concurrency_model"
@@ -451,26 +471,6 @@
           "relation:payment-calls-stripe",
           "relation:submit-calls-payment",
           "relation:tap-handled-by-submit"
-        ],
-        "title": "Required extraction capability is only partially available"
-      },
-      {
-        "blocks": [
-          "obligation:sha256:c4d0df24eff3488ca84e63077e6dab4765c8ebb7366b166caba2dd8d74c9f564"
-        ],
-        "id": "obstruction:sha256:fc011c54b369147a7e71772672a1a4782819272c95b813ec5c0bb3e7b48a833f",
-        "kind": "capability_partial",
-        "required_resolution": [
-          "capability_partial:concurrency_model"
-        ],
-        "review_status": "unreviewed",
-        "severity": "medium",
-        "source_ids": [
-          "context:payment",
-          "context:test",
-          "context:ui-event",
-          "invariant:payment-at-most-once",
-          "requirement:payment-at-most-once"
         ],
         "title": "Required extraction capability is only partially available"
       }
@@ -488,10 +488,10 @@
     ],
     "program_space_ref": "program-space:snapshot:double-submit-v1",
     "repository_id": "repository:double-submit-payment",
-    "review_space_ref": "review-space:universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048",
+    "review_space_ref": "review-space:universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042",
     "snapshot_id": "snapshot:double-submit-v1",
     "target_revision": "fixture-buggy-head",
-    "universe_id": "universe:sha256:6b554b4af50554989170d18e89e8c0349de99a6c00567933b0b4750f19cac048"
+    "universe_id": "universe:sha256:e7a9c6ca0d97de078253f57eb60fb90e23a24fc04c1f218ebf6fe342732f2042"
   },
   "schema": "reviewgraphen.review.report.v1"
 }
