@@ -9,12 +9,15 @@ root=/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02
 dest="$root/benchmarks/m8-impl-local-v1/runs"
 mkdir -p "$dest"
 
-for run in methodology baseline task2-methodology; do
+for run in methodology baseline task2-methodology \
+           task1-rerun-baseline task1-rerun-methodology \
+           task2-rerun-methodology task2-rerun-baseline; do
   src=/tmp/m8-impl-local-v1-runs/$run
   [[ -d "$src" ]] || continue
   mkdir -p "$dest/$run"
   for file in generation-metrics.json request-body.json final-content.txt \
-              candidate.json verification.json applied.diff; do
+              candidate.json verification.json applied.diff \
+              advertised-models.json patched-lib.rs patched-rust.rs; do
     [[ -f "$src/$file" ]] && cp "$src/$file" "$dest/$run/$file"
   done
   if [[ -f "$src/provider-response.sse" ]]; then
