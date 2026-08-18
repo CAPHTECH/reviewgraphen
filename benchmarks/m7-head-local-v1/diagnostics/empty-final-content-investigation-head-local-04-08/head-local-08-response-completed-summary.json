@@ -1,0 +1,22 @@
+{
+  "id": "resp_a03e03b454d58b5eb93fccd32b646bf06fcccff79a0f7397",
+  "status": "completed",
+  "incomplete_details": null,
+  "usage": {
+    "input_tokens": 39793,
+    "output_tokens": 27305,
+    "total_tokens": 67098,
+    "input_tokens_details": {
+      "cached_tokens": 10240
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 27305
+    }
+  },
+  "max_output_tokens": 131072,
+  "error": null,
+  "truncation": "auto",
+  "output_types": [
+    "reasoning"
+  ]
+}
