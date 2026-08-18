@@ -549,6 +549,7 @@ impl MvpRulePack {
             if artifact.kind != "function"
                 || !is_changed_public_symbol(program, &artifact.id)
                 || !attribute_bool(&artifact.attributes, "public")
+                || !has_local_concurrency_evidence(&artifact.attributes)
             {
                 continue;
             }
@@ -1540,6 +1541,74 @@ fn extend_unique(target: &mut Vec<StableId>, candidates: Vec<StableId>) {
             target.push(candidate);
         }
     }
+}
+
+/// Whether an extractor established at least one concurrency fact about this
+/// symbol -- `node.changed_public_symbol@1`'s narrowing trigger condition.
+///
+/// Before this, the rule asserted `async.concurrent_reentry` over *every*
+/// changed public function, so a proc-macro entry point or a plain
+/// synchronous constructor received a concurrent-reentry obligation on the
+/// strength of having been edited. That is not a review target a reviewer can
+/// act on, and it inflates the coverage denominator with obligations whose
+/// property cannot apply to their target. The condition was invisible while
+/// the ingest side could not mark anything `changed` (see
+/// `docs/measurement-validity-obligation-synthesis-capability-gap.md`): the
+/// rule had never fired on a real repository, so nothing exposed it.
+///
+/// The facts read here are exactly the ones an adapter declares under the
+/// `concurrency_model` capability this rule already requires -- it demanded
+/// that capability be `complete` while ignoring everything it produced. Only
+/// positive, extractor-declared evidence qualifies: a symbol declared
+/// `async`, one whose body `await`s, one that spawns concurrent work, or one
+/// naming at least one concurrency primitive. An absent attribute is not
+/// evidence of absence, but it is not evidence either, and a rule asserting a
+/// concurrency property must not fire without any.
+///
+/// Deliberately reads only the target symbol's own attributes: concurrency
+/// reaching a symbol through its callers is the subject of
+/// `relation.concurrent_reentry@1`, which has its own trigger and its own
+/// required capabilities.
+///
+/// # Why this narrowed `@1` in place instead of minting `@2`
+///
+/// `docs/07`'s obligation schema versions a rule in-band (`rule_id:
+/// payment.idempotency@2`), the rule string is bound into every obligation's
+/// `StableId` and its [`VersionTuple`], and `docs/12` §11 keeps `semantic_key`
+/// stable across a rule revision so old and new obligations can be
+/// corresponded by an explicit morphism. `m6.rs` implements the consuming half
+/// (`StaleReasonV5::RuleChanged` fires exactly when `version.rule` differs
+/// between two snapshots). By that contract a changed trigger is normally a
+/// new rule version, and `@2` was implemented and measured first.
+///
+/// It was reverted because the protection that contract buys is empty here
+/// while its cost is not. The mechanism exists so a *stored* obligation from
+/// the old trigger cannot be mistaken for one from the new trigger. No such
+/// record exists: this rule could never fire on a real repository until the
+/// `changed`-wiring landed alongside this commit, so every `@1` node
+/// obligation in this repository comes from the hand-authored double-submit
+/// fixture -- whose `function:checkout-submit` is `async: true` and still
+/// qualifies, byte-identically, under the narrowed trigger. Renaming to `@2`
+/// changed no obligation *set* anywhere; it only re-derived IDs, which then
+/// required rewriting sixteen pinned goldens across `event.rs`,
+/// `m6_test_support.rs`, and `m1.rs` (two of them named "historical golden" /
+/// "frozen") plus six checked-in JSON fixtures, and perturbed obligation sort
+/// order enough to break M5/M6 preservation fixtures that select their subject
+/// obligation positionally. Buying nothing at that price is the worse trade.
+///
+/// Mint `@2` when the first consumer actually persists obligations from this
+/// rule, or when a future revision changes the obligation *set* for an input
+/// that already has stored history. Either way the M5/M6 fixtures should be
+/// made to select their subject by semantic key first, so a rule-version bump
+/// stops being coupled to obligation sort order.
+fn has_local_concurrency_evidence(attributes: &BTreeMap<String, Value>) -> bool {
+    attribute_bool(attributes, "async")
+        || attribute_bool(attributes, "awaits")
+        || attribute_bool(attributes, "spawns")
+        || attributes
+            .get("concurrency_primitives")
+            .and_then(Value::as_array)
+            .is_some_and(|primitives| !primitives.is_empty())
 }
 
 fn is_changed_public_symbol(program: &ProgramSpace, artifact_id: &StableId) -> bool {

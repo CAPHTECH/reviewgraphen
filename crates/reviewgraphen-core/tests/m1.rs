@@ -4897,3 +4897,55 @@ fn migration_record_matches_the_checked_in_canonical_fixture_byte_for_byte() {
         MIGRATION_RECORD_HASH.trim()
     );
 }
+
+/// `node.changed_public_symbol@1` asserts `async.concurrent_reentry`, so it
+/// must fire only where an extractor actually established concurrency. The
+/// reference fixture's `function:checkout-submit` is `async: true`, which is
+/// the positive control; stripping every concurrency attribute from that one
+/// artifact -- and changing nothing else, so it stays a changed public
+/// function -- must remove its node obligation entirely rather than assert a
+/// concurrency property over a symbol nothing says is concurrent.
+#[test]
+fn changed_public_symbol_rule_requires_extractor_established_concurrency() {
+    let node_rule_targets = |program: &ProgramSpace| {
+        MvpRulePack::synthesize(program)
+            .expect("bundle")
+            .obligations()
+            .iter()
+            .filter(|obligation| obligation.version().rule() == "node.changed_public_symbol@1")
+            .flat_map(|obligation| obligation.target_refs().to_vec())
+            .collect::<BTreeSet<_>>()
+    };
+
+    let submit = StableId::parse("function:checkout-submit").expect("id");
+    assert_eq!(
+        node_rule_targets(&program()),
+        BTreeSet::from([submit]),
+        "control: the reference fixture's async, changed, public function must qualify"
+    );
+
+    let mut input: Value = serde_json::from_slice(FIXTURE).expect("fixture JSON");
+    for artifact in input["artifacts"].as_array_mut().expect("artifacts") {
+        if artifact["id"] != "function:checkout-submit" {
+            continue;
+        }
+        let attributes = artifact["attributes"].as_object_mut().expect("attributes");
+        for key in ["async", "awaits", "spawns", "concurrency_primitives"] {
+            attributes.remove(key);
+        }
+        assert_eq!(
+            attributes.get("public"),
+            Some(&Value::Bool(true)),
+            "the symbol must stay public, so only the concurrency evidence differs"
+        );
+    }
+    let without_concurrency =
+        ProgramSpace::from_json_slice(&serde_json::to_vec(&input).expect("mutated fixture"))
+            .expect("mutated fixture parses");
+
+    assert!(
+        node_rule_targets(&without_concurrency).is_empty(),
+        "a changed public function with no extractor-established concurrency must not \
+         receive an `async.concurrent_reentry` obligation"
+    );
+}
