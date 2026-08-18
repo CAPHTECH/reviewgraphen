@@ -5076,3 +5076,48 @@ fn universe_identity_check_admits_a_foreign_rule_pack_and_leaves_authorship_to_r
          holds regardless of which pack wrote the record"
     );
 }
+
+/// A run recorded under a profile this binary's rule pack does not handle is
+/// readable, and says why. The pack keeps declining the profile -- that scope
+/// statement is the honest one, since four of its five rules key on the
+/// double-submit scenario -- but declining is reported as a verdict instead of
+/// making the record permanently unloadable.
+#[test]
+fn genesis_under_an_unhandled_profile_is_readable_and_reports_that_it_cannot_be_synthesized() {
+    let log = EventLog::new_v3(id("run:foreign-profile"), aggregate()).unwrap();
+    let bytes = log
+        .run_genesis_snapshot()
+        .unwrap()
+        .canonical_bytes()
+        .unwrap();
+    let mut value: Value = serde_json::from_slice(&bytes).unwrap();
+    value["program_space"]["profile"]["id"] = json!("some-other-profile");
+    let foreign = canonical_json(&value).unwrap();
+
+    let (snapshot, verdict) =
+        reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes_with_reproduction(&foreign)
+            .expect("an unhandled profile is a readable record, not a decode failure");
+    assert_eq!(
+        snapshot.program_space().profile_key(),
+        "some-other-profile@1"
+    );
+    match &verdict {
+        reviewgraphen_core::GenesisReproduction::NotSynthesizable { profile, reason } => {
+            assert_eq!(profile, "some-other-profile@1");
+            assert!(
+                reason.contains("supports only"),
+                "the pack's own reason is carried, not invented: {reason}"
+            );
+        }
+        other => panic!("expected NotSynthesizable, got {other:?}"),
+    }
+    assert!(!verdict.is_reproduced());
+    assert!(
+        verdict.mismatch().is_none(),
+        "there is no fresh synthesis to compare against, so no mismatch can be described"
+    );
+    assert!(
+        reviewgraphen_core::RunGenesisSnapshot::from_canonical_bytes(&foreign).is_err(),
+        "the strict decode every extension path uses must still refuse it"
+    );
+}

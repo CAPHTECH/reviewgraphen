@@ -150,6 +150,17 @@ pub enum GenesisReproduction {
     Reproduced,
     /// Fresh synthesis differs; the mismatch describes how.
     NotReproducible(GenesisReproductionMismatch),
+    /// The running rule pack declines to synthesize for this program at all --
+    /// typically because its rules are scoped to profiles this record does not
+    /// use. Distinct from `NotReproducible`: there is nothing to compare
+    /// against, so no mismatch can be described, and no amount of inspection
+    /// here can say whether the record is faithful to whatever pack wrote it.
+    NotSynthesizable {
+        /// The program's profile key, as recorded.
+        profile: String,
+        /// The rule pack's own reason for declining.
+        reason: String,
+    },
 }
 
 impl GenesisReproduction {
@@ -159,11 +170,17 @@ impl GenesisReproduction {
         matches!(self, Self::Reproduced)
     }
 
-    /// The mismatch detail, when the record did not reproduce.
+    /// The mismatch detail, when fresh synthesis ran and differed.
+    ///
+    /// `None` for [`Self::NotSynthesizable`] as well as for
+    /// [`Self::Reproduced`]: when the pack declines the profile there is no
+    /// fresh synthesis to compare against, so there is no mismatch to
+    /// describe. A caller that treats `mismatch().is_none()` as "all is well"
+    /// is wrong for that case -- use [`Self::is_reproduced`].
     #[must_use]
     pub const fn mismatch(&self) -> Option<&GenesisReproductionMismatch> {
         match self {
-            Self::Reproduced => None,
+            Self::Reproduced | Self::NotSynthesizable { .. } => None,
             Self::NotReproducible(mismatch) => Some(mismatch),
         }
     }
@@ -655,7 +672,29 @@ impl RunGenesisSnapshot {
                 "run genesis snapshot must use the supported canonical schema".to_owned(),
             ));
         }
-        let (aggregate, reproduction) = snapshot.rebuild_aggregate_with_reproduction()?;
+        let reproduction = snapshot.reproduction()?;
+        if matches!(reproduction, GenesisReproduction::NotSynthesizable { .. }) {
+            // No aggregate is built, and none can be: `ReviewAggregate::new`
+            // recomputes the universe `StableId` through this pack's own
+            // derivation (`universe_id` in `synthesize.rs`, which binds the
+            // running pack's literal), so a universe minted by a different
+            // pack can never satisfy it. Building it anyway would turn the
+            // verdict into the hard error the verdict exists to replace.
+            //
+            // The snapshot returned here therefore carries the structural
+            // guarantees only -- canonical encoding, denied unknown fields,
+            // per-record validity, strict obligation ordering -- and NOT the
+            // pristine-aggregate guarantee. That is what the verdict is
+            // telling the caller: this binary cannot interpret the record, so
+            // it does not pretend to have validated it. Every path that
+            // extends a run uses the strict decode and refuses this outright.
+            return Ok((snapshot, reproduction));
+        }
+        let aggregate = ReviewAggregate::new(
+            snapshot.program_space.clone(),
+            snapshot.universe.clone(),
+            snapshot.obligations.clone(),
+        )?;
         aggregate.validate_pristine_for_event_log()?;
         Ok((snapshot, reproduction))
     }
@@ -740,8 +779,27 @@ impl RunGenesisSnapshot {
     /// caller decision, which is why this reports rather than refuses.
     pub fn reproduction(&self) -> Result<GenesisReproduction> {
         self.validate_structure()?;
-        let (expected_universe, mut expected_obligations) =
-            MvpRulePack::synthesize(&self.program_space)?.into_parts();
+        // A rule pack that declines the program's profile outright is not a
+        // malformed record; it is this binary saying the record is outside
+        // what it can speak to. `MvpRulePack` is deliberately scoped to the
+        // profiles its rules were written for (see `MvpRulePack::synthesize`),
+        // and that scope statement is worth keeping honest -- widening it so
+        // decode succeeds would make the pack claim profiles it was never
+        // designed for. Propagating the refusal as a decode error instead
+        // would make every run recorded under a third profile permanently
+        // unreadable, which is the same durability defect this verdict exists
+        // to remove. So it becomes a verdict.
+        let synthesized = match MvpRulePack::synthesize(&self.program_space) {
+            Ok(bundle) => bundle,
+            Err(DomainError::Validation(reason)) => {
+                return Ok(GenesisReproduction::NotSynthesizable {
+                    profile: self.program_space.profile_key(),
+                    reason,
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        let (expected_universe, mut expected_obligations) = synthesized.into_parts();
         expected_obligations.sort_by(|left, right| left.id().cmp(right.id()));
         if expected_universe == self.universe && expected_obligations == self.obligations {
             return Ok(GenesisReproduction::Reproduced);
