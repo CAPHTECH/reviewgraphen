@@ -1,0 +1,178 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_impl_local_v1_preregistration.v1",
+  "experiment": "m8-impl-local-v1",
+  "status": "frozen_before_first_generation_request",
+  "supersedes_nothing": true,
+  "question": "Can qwen3.8:27b-mlx do IMPLEMENTATION work when given a ReviewGraphen-style methodology, the way m7-head-local-v1 showed it could do review work? Three sub-questions only: (1) does the generation terminate, (2) does the resulting code compile, (3) do the tests pass.",
+  "follows_from": {
+    "experiment": "m7-head-local-v1",
+    "what_that_measured": "With the frozen review methodology skill, qwen terminated in 50-80 min with structured, well-located output (11/15 raw findings judged issue_should_be_created, 0/15 unresolvable_location). Bare qwen (qwen_b1) failed 1/1 by spending its entire output budget on reasoning and emitting nothing. The mechanism credited there is bounding the search so it terminated -- NOT that the methodology made the model more capable.",
+    "what_that_did_not_measure": "Anything about implementation. In review the model had no compiler and no test runner, so every conclusion stayed a Claim by construction. This experiment is the first time a claim can actually reach Verification."
+  },
+  "hypotheses_being_discriminated": {
+    "transfer": "The same bounding effect works for implementation, and evidence is now cheap and real (it compiles / the test fails / the failing test passes), so Claim-Evidence-Verification can actually close.",
+    "economics": "Measured cost is hostile: ~75k output tokens per turn of which 97-99% is reasoning, 50-80 min per generation, prefix caching dies whenever the context changes, and 2 of 9 m7 review units ended in silent truncation with zero output. For review a truncation loses an observation; for implementation it can leave a half-edited tree.",
+    "third_possibility_explicitly_admitted": "n=1 per arm cannot distinguish these. 'Cannot tell from n=1' is a preregistered acceptable answer and must be reported as such rather than over-read."
+  },
+  "task": {
+    "id": "review-flag-order",
+    "repository": "this repository (ReviewGraphen)",
+    "pinned_revision": "05573bb6b3491b6849512e75e055d4cf6279b606",
+    "changeable_file": "crates/reviewgraphen-cli/src/lib.rs",
+    "changeable_file_sha256": "0306984af8cc058bafa883560119bfa47a5ff82a3daca7c5b7cbcc1e63016d02",
+    "changeable_file_bytes": 13035,
+    "specification": "benchmarks/m8-impl-local-v1/task/TASK.md",
+    "specification_sha256": "40de684e87587554eac820b44caa1dec82c558e44c61ca8b2eae0cacea5e92d1",
+    "acceptance_test": "benchmarks/m8-impl-local-v1/task/review_flag_order.rs",
+    "acceptance_test_sha256": "47fd74b43cfc1090fd6d662a8b0835709563f378728b598012fa772151fded92",
+    "summary": "reviewgraphen_cli::run accepts the generic review command only as `review --request R --artifacts A`. Make it also accept `review --artifacts A --request R`, preserving every existing rejection (exit 2 + unchanged usage text) for incomplete forms, duplicate flags, unknown flags, and extra arguments, and preserving positional consumption of flag values.",
+    "why_this_task": [
+      "Small and bounded: one function in one 13,035-byte file; the whole file fits in the packet, so the model is never asked to edit code it cannot see.",
+      "Precisely specified: the acceptance test is handed to the model verbatim, so specification ambiguity is removed as a confound. A failure is attributable to the model, not to an under-specified ticket.",
+      "Genuinely red before the change and green after: on the pinned revision the test file compiles and exactly one of its six tests fails (artifacts_before_request_is_accepted); the other five pass, and the three pre-existing in-file unit tests pass. Verified before freezing (see reference_solution_selftest).",
+      "Real branching logic, not a text substitution: the correct change rewrites a slice pattern and its guard, so 'does it compile' is a real question in Rust rather than a formality. This is why the license-string inconsistency (MIT OR Apache-2.0 vs Apache-2.0 across store/report/cli) was rejected as too trivial: any output at all would compile and no test would move.",
+      "Cheap to check: cargo build + cargo test for this crate complete in seconds, so verification adds no meaningful cost next to generation.",
+      "Inside the permitted area: not benchmarks/ (frozen records), not event.rs or journal.rs (genesis/durability, subtle and mid-arc)."
+    ],
+    "reference_solution_selftest": {
+      "purpose": "Proves the task is solvable under the stated constraints and that the harness measures what it claims. NOT an arm and NOT a comparator.",
+      "script": "benchmarks/m8-impl-local-v1/scripts/make_reference_candidate.py",
+      "result": "verdict=verified; compiles=true; build warnings 0; clippy warnings 0; cargo test: 3 unit passed / 6 acceptance passed / 0 failed; applied diff 28 lines.",
+      "run_before_freeze": true
+    }
+  },
+  "isolation": {
+    "mandatory": true,
+    "mechanism": "The model is never given a shell, a filesystem, or an agent loop. It emits one JSON object describing an edit. benchmarks/m8-impl-local-v1/scripts/make_scratch.sh materializes a fresh tracked-files-only copy of the pinned revision under /tmp via `git archive`, the harness applies the edit there by exact unique literal substitution, and builds and tests there.",
+    "consequence": "A silent truncation, a malformed candidate, or a non-matching anchor cannot leave anything half-edited, because the only tree ever written is created fresh per verification and the real worktree is never a target.",
+    "scratch_root_constraint": "/tmp only; make_scratch.sh refuses any other path and refuses a directory that already exists."
+  },
+  "skill_freeze": {
+    "path": "benchmarks/m8-impl-local-v1/skill/IMPLEMENTATION_SKILL.md",
+    "sha256": "9d888647caf1452c72ee5ee084c2d18f0f21f062b75c8daa432cb97c0179c0f6",
+    "derived_from": [
+      "docs/03_conceptual_model.md (SS5 obligation fields, SS5.1 target kinds incl. Morphism, SS8 claim polarity, SS11 coverage, SS13 change morphism and staleness, SS15.1 separate IDs, SS16 pipeline)",
+      "docs/06_program_space_ingestion.md (SS1-3 accepted facts vs explicit unknowns, tiering)",
+      "docs/07_review_obligation_model.md (SS3 target kinds, SS3.6 Morphism obligation: interface preservation / invariant preservation / lost test relation / new direct dependency / increased projection loss; SS4 change rule; SS12 property vocabulary; SS13 obligation explosion and budget-aware deferral)",
+      "docs/08_context_cover_gluing.md (bounded per-obligation context; local does not become global)",
+      "docs/09_review_execution_and_agent_protocol.md (SS2 ReviewPlan budget field, SS3-4 execution, SS5-6 persona-switching is not coverage, SS8 source citation, SS9 abstention incl. budget_exhausted, SS16 coverage honesty)",
+      "docs/10_evidence_and_verification.md (SS1 Claim/Evidence/Verification/Decision separation, SS2.2 executable evidence = test result / compiler diagnostic / reproduction script result, SS3 evidence record, SS4 binding relations, SS5 'passed' means the procedure produced a supporting result, SS6 verification facets, SS7 negative claims, SS10 LLM verification is not machine_checked, SS12 contradictory evidence, SS15-16 quality policy and invariants)",
+      "docs/adr/0011-program-space-v2-capability-trace.md"
+    ],
+    "not_derived_from_operator_prose": true,
+    "experiment_side_constraints_disclosed_inside_the_skill": [
+      "Hard cap of 6 self-enumerated obligations. Not from the design documents; set from the m7 measurement that unstructured generation exhausted 65,535 of 65,536 output tokens with zero final content, and set lower than m7's cap of 8 because this task additionally requires emitting a working edit."
+    ]
+  },
+  "arms": {
+    "order_of_execution": [
+      "methodology",
+      "baseline"
+    ],
+    "order_rationale": "The methodology arm is the primary arm of interest and runs first, so that a server-side death costs the control rather than the treatment. The two packets share no leading prefix, so ordering has no prefix-cache consequence either way.",
+    "manipulated_variable": "Presence of the frozen implementation methodology skill body, plus one sentence instructing the model to follow it. Task text, source, acceptance test, output contract, schema, model, endpoint, and sampling are byte-identical across arms.",
+    "methodology": {
+      "packet": "/tmp/m8-impl-local-v1-packets/packet-methodology.txt",
+      "packet_sha256": "b1f9d5f412ff35609eb7103e9217cb98e47d98bada1364aa5f837f302800ea06",
+      "packet_bytes": 37234,
+      "n": 1
+    },
+    "baseline": {
+      "packet": "/tmp/m8-impl-local-v1-packets/packet-baseline.txt",
+      "packet_sha256": "a329fd112963fd888648f9201c9f94424d541b1dc7317e34b283f31b37be6008",
+      "packet_bytes": 23119,
+      "n": 1,
+      "role": "Required so that any methodology result is attributable. m7's bare-qwen arm failed 1/1, so this arm is expected to be cheap and is expected to fail; that expectation is recorded here in advance and does not license reinterpreting a surprise."
+    },
+    "repair": {
+      "conditional": true,
+      "n_max": 1,
+      "trigger": "Run at most one repair request, and only if ALL of: (a) the methodology arm produced a final message item with non-empty content, and (b) its verification verdict is one of edit_anchor_did_not_match, does_not_compile, tests_failed.",
+      "content": "The methodology packet, unchanged, followed by the model's own emitted candidate JSON verbatim and the exact stdout/stderr of the failing cargo command. Nothing else is added and no criterion is relaxed.",
+      "role": "Secondary and exploratory. It is the only part of this design that probes whether real executable Evidence can be consumed, and one turn is not an edit-compile-fix loop. It is not part of questions 1-3 and its result is reported separately.",
+      "not_run_if": "The methodology arm failed with any upstream_* class, or the campaign was stopped by a stopping rule."
+    },
+    "arms_deliberately_not_run": {
+      "agentic_loop": "No arm gives the model a shell, a compiler, or an iteration loop. Rationale recorded in advance: at ~50-80 min and ~75k output tokens per turn with prefix caching dead on every context change, a 3-turn loop is 2.5-4 h of a single-capacity server the operator owns, against a question that a single shot already answers negatively if it answers negatively at all. This is a deliberate scope limit, and it means THIS EXPERIMENT CANNOT MEASURE ITERATION ECONOMICS. That limitation is preregistered, not discovered afterwards."
+    }
+  },
+  "execution_conditions": {
+    "frozen_from": ".claude/skills/local-qwen/SKILL.md",
+    "endpoint": "http://192.168.68.71:11999/v1/responses",
+    "endpoint_note": "Port 11999 is the cch-normalizing proxy, never 11434 and never LM Studio's own port. These requests carry no cch= marker, so the proxy is a pass-through for them.",
+    "model": "qwen3.8:27b-mlx",
+    "max_output_tokens": 131072,
+    "max_output_tokens_note": "Never lowered. m7 proved 65,536 was causally an active constraint: the same unit completed at 64,421 tokens under the old cap and at 72,863 under the new one.",
+    "model_context_window": 262144,
+    "reasoning_effort_sent": "high",
+    "reasoning_effort_note": "Sent to match the frozen m7 condition. Measured as a no-op on the LM Studio backend (reasoning_effort none and low produced byte-identical SHA-256 output). No attempt is made to suppress reasoning.",
+    "sampling": "temperature / top_p / top_k / penalties are never sent; the server's own configuration is used unmodified. Whatever the server reports back in response.completed is recorded verbatim as an observation.",
+    "concurrency": "Exactly one request in flight at any time, across the whole experiment. Never parallel: m7 measured two concurrent trials producing zero completions in 57.5 minutes, one of them streaming zero events of any kind.",
+    "client": "python3 urllib against /v1/responses with stream=true. Not Codex CLI and not Claude Code: this experiment needs one non-agentic request, and the raw SSE stream is captured and hashed directly.",
+    "client_read_timeout_seconds": 14400,
+    "client_read_timeout_note": "A client-side backstop only. It is not a retry budget; a timeout is recorded and reported, never retried."
+  },
+  "measurement": {
+    "question_1_does_it_terminate": {
+      "primary": "message_item_created == true AND final_content_bytes > 0 AND response.status == 'completed'",
+      "also_recorded": [
+        "elapsed_seconds",
+        "provider_input_tokens",
+        "cached_input_tokens",
+        "provider_output_tokens",
+        "provider_reported_reasoning_tokens",
+        "reasoning_share_of_output",
+        "sse_event_counts",
+        "output_item_types",
+        "response_incomplete_details"
+      ],
+      "failure_classes": {
+        "upstream_server_failure": "HTTP >= 500",
+        "upstream_stream_closed_before_completion": "transport error / stream died",
+        "upstream_server_stream_incomplete": "no response.completed, or status != completed",
+        "upstream_silent_truncation": "status=completed, error null, incomplete_details null, no message-type output item, and output_tokens < 0.95 * max_output_tokens. Definition reused unchanged from m7-head-local-v1 scripts/detect_silent_truncation.py.",
+        "empty_final_after_process_completion": "no message item at or above 0.95 * cap, or an empty final -- the model's own reasoning-budget failure",
+        "generation_ok": "a non-empty final message item exists"
+      },
+      "denominator_rule": "upstream_* classes are server-side and are excluded from any semantic denominator, exactly as in m7-head-local-v1. They are reported, never silently dropped."
+    },
+    "question_2_does_it_compile": {
+      "procedure": "cargo build -p reviewgraphen-cli, run in the isolated scratch copy after the candidate's edits are applied",
+      "pass": "exit code 0",
+      "also_recorded": ["build_warning_count", "clippy warning count (recorded, NOT a gate)"]
+    },
+    "question_3_do_the_tests_pass": {
+      "procedure": "cargo test -p reviewgraphen-cli, run in the same scratch copy",
+      "pass": "exit code 0, which requires all 3 pre-existing in-file unit tests and all 6 acceptance tests to pass",
+      "also_recorded": ["per-binary test result lines", "whether artifacts_before_request_is_accepted specifically is still failing"]
+    },
+    "secondary_evidence_discipline_measure": {
+      "why": "The single most transferable thing in the review skill was the Claim-is-not-Evidence discipline. This arm's model has no compiler and no test runner, and the skill states that 'verified' is therefore unavailable to it for every obligation without exception.",
+      "measure": "candidate_declares_verified: does any emitted obligation carry evidence_status == 'verified'? Any true here is an evidence-discipline violation, and is reported whether or not the code compiles.",
+      "note": "Only meaningful for the methodology arm, which is the only arm told about evidence statuses at all. The baseline arm's obligations field is optional and its absence is not a finding."
+    },
+    "not_measured": [
+      "Whether the model can iterate against a compiler (no agentic arm; see arms_deliberately_not_run).",
+      "Whether the methodology helps on tasks larger than one function in one file.",
+      "Anything about ReviewGraphen the implementation. This measures the methodology only, exactly as m7's qwen_skill arm did."
+    ]
+  },
+  "stopping_rules": {
+    "standing_order_source": ".claude/skills/local-qwen/SKILL.md 'The no-retry rule (operator standing order)' and 'Parallelism: don't'",
+    "rules": [
+      "Never more than one generation request in flight.",
+      "Never retry a failed request, in any arm, for any reason.",
+      "If any arm fails with an upstream_* class, stop the entire campaign immediately. Do not start the next arm. Record the time the symptom was noticed, the approximate token count of the request, and which client was used, and report that.",
+      "Maximum 3 generation requests for the whole experiment: methodology, baseline, and at most one conditional repair.",
+      "Do not lower max_output_tokens, do not set temperature or top_p, do not attempt to suppress reasoning, and do not switch endpoints, under any circumstance including an apparent failure.",
+      "A smoke probe against /v1/models (a control endpoint) is not a generation request and does not count against the budget. A responsive control endpoint is explicitly NOT evidence that generation is healthy."
+    ],
+    "criteria_freeze": "Success criteria and failure classes above are frozen at this commit and are not adjusted after seeing any result. Any deviation forced by circumstance is recorded as a dated amendment file next to this one, never as an edit to this file."
+  },
+  "reporting_commitments": [
+    "Report the three answers with measured numbers, including elapsed time, output tokens, reasoning share, and whether a message item was ever created.",
+    "Report the baseline arm's result even though it is expected to fail.",
+    "State honestly whether the methodology transfers, fails on economics, or cannot be told apart at n=1, and prefer the last of these when the data does not separate the first two.",
+    "Nothing is pushed. Commits stay in this worktree."
+  ]
+}

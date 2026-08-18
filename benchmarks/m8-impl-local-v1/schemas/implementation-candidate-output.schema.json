@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capht.tech/schemas/reviewgraphen/benchmark/implementation-candidate-output.v1.schema.json",
+  "title": "reviewgraphen.benchmark.implementation_candidate_output.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "outcome", "edits"],
+  "properties": {
+    "schema": {
+      "const": "reviewgraphen.benchmark.implementation_candidate_output.v1"
+    },
+    "outcome": {
+      "enum": ["completed", "abstained"]
+    },
+    "abstention_reason": {
+      "type": "string"
+    },
+    "edits": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file"],
+        "properties": {
+          "file": { "type": "string" },
+          "old": { "type": "string" },
+          "new": { "type": "string" },
+          "full_content": { "type": "string" }
+        }
+      }
+    },
+    "obligations": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "property", "claim", "evidence_status"],
+        "properties": {
+          "id": { "type": "string" },
+          "target_kind": { "type": "string" },
+          "target": { "type": "string" },
+          "property": { "type": "string" },
+          "context_requirement": { "type": "string" },
+          "evidence_requirement": { "type": "string" },
+          "risk": { "type": "string" },
+          "provenance": { "type": "string" },
+          "claim": {
+            "enum": [
+              "satisfied",
+              "not_satisfied",
+              "inconclusive",
+              "not_applicable",
+              "conflict"
+            ]
+          },
+          "evidence_status": {
+            "enum": ["verified", "claimed", "requested"]
+          },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
