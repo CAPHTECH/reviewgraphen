@@ -1,17 +1,97 @@
 {
   "api_calls": 15,
+  "calls_beating_their_own_full_recompute": 11,
+  "calls_total": 15,
   "elapsed_seconds": 5400,
   "full_recompute_projection_seconds": 4081.0,
   "identity_holds": true,
   "identity_note": "holds in BOTH cache states -- a reporting artifact, not a cache signal",
+  "per_call": [
+    {
+      "context_tokens": 27880,
+      "elapsed_s": 0.0,
+      "full_recompute_s": 89.6
+    },
+    {
+      "context_tokens": 31322,
+      "elapsed_s": 41.7,
+      "full_recompute_s": 100.7
+    },
+    {
+      "context_tokens": 58506,
+      "elapsed_s": 911.9,
+      "full_recompute_s": 188.1
+    },
+    {
+      "context_tokens": 92227,
+      "elapsed_s": 1239.9,
+      "full_recompute_s": 296.5
+    },
+    {
+      "context_tokens": 92725,
+      "elapsed_s": 57.6,
+      "full_recompute_s": 298.2
+    },
+    {
+      "context_tokens": 93164,
+      "elapsed_s": 103.6,
+      "full_recompute_s": 299.6
+    },
+    {
+      "context_tokens": 93736,
+      "elapsed_s": 125.8,
+      "full_recompute_s": 301.4
+    },
+    {
+      "context_tokens": 94108,
+      "elapsed_s": 64.9,
+      "full_recompute_s": 302.6
+    },
+    {
+      "context_tokens": 94698,
+      "elapsed_s": 85.3,
+      "full_recompute_s": 304.5
+    },
+    {
+      "context_tokens": 95211,
+      "elapsed_s": 70.5,
+      "full_recompute_s": 306.1
+    },
+    {
+      "context_tokens": 96558,
+      "elapsed_s": 88.6,
+      "full_recompute_s": 310.5
+    },
+    {
+      "context_tokens": 97436,
+      "elapsed_s": 165.7,
+      "full_recompute_s": 313.3
+    },
+    {
+      "context_tokens": 98918,
+      "elapsed_s": 259.6,
+      "full_recompute_s": 318.1
+    },
+    {
+      "context_tokens": 100305,
+      "elapsed_s": 103.5,
+      "full_recompute_s": 322.5
+    },
+    {
+      "context_tokens": 102411,
+      "elapsed_s": 1061.6,
+      "full_recompute_s": 329.3
+    }
+  ],
   "prefill_tok_per_s_assumed": 311.0,
   "ratio_elapsed_over_projection": 1.323,
   "ratio_threshold": 0.6,
-  "reference_skill_1_broken_cache_ratio": 1.29,
+  "reference_skill_1_ratio": 1.323,
   "reported_total_input_tokens": 1269205,
   "reported_total_output_tokens": 20264,
   "schema": "reviewgraphen.benchmark.m9_cache_credit.v1",
   "summed_context_tokens": 1269205,
   "trial": "skill-1",
-  "verdict": "cache_NOT_credited"
+  "verdict": "cache_credited",
+  "verdict_rule": "any call beating its own full-recompute time is direct evidence of crediting and outranks the aggregate ratio"
 }

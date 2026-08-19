@@ -1,0 +1,98 @@
+{
+  "schema": "reviewgraphen.benchmark.m9_agentic_local_v4_preregistration.v1",
+  "experiment": "m9-agentic-local-v4",
+  "status": "frozen_before_first_generation_request_under_mode_baseline",
+  "relationship_to_v3": "FRESH preregistration, not an amendment. v3 was pinned to mode: dspark and never issued a generation request -- its identity gate refused at the door when the operator intentionally switched to baseline. v3 is retained unedited. Its ~1,468 s counterfactual is void: it assumed dspark AND a full-recompute prefill that RECONCILIATION.md shows did not happen.",
+
+  "the_condition": {
+    "endpoint": "http://192.168.68.71:11999 only",
+    "advertised_model": "Qwen3.8-27B-MLX-4bit",
+    "owned_by": "mlx-dspark",
+    "mode": "baseline",
+    "drafter": null,
+    "speculative_decoding": "OFF, deliberately, on the operator's recommendation for this workload",
+    "target_weights": "/Users/rizumita/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit",
+    "reasoning_effort": "low (server-set); not specifiable from this client",
+    "context_window": 262144,
+    "server_max_output_tokens": 32768,
+    "client_max_output_tokens": 32000,
+    "why_baseline": "This load is deep post-tool-result reasoning, where the operator measures dspark at 0.58x baseline (9.5 vs 16.5 tok/s). Speculative decoding wins only on low-entropy code, where it is 36.4 vs 28.7 the other way."
+  },
+
+  "do_not_re_measure_baseline_vs_dspark": {
+    "instruction": "This experiment does NOT compare baseline against dspark, and must not be read as doing so.",
+    "reason": "The operator has decided it and owns the decision. Re-deriving it would spend their server time on a settled question, and a shallow prompt gives the opposite answer -- a trap they hit once themselves."
+  },
+
+  "backend_identity_gate": {
+    "now_two_checks": "the /v1/models listing hash AND the /health hash. Both must pass; either failure refuses the trial before any request.",
+    "why_both": "The listing caught the 2026-08-19 weights change. /health is what reports the decode path -- mode, drafter, max_draft, reasoning_effort, context_window, max_output_tokens -- none of which appears in the echoed response.model field that the original pin asserted on.",
+    "pinned_listing_sha256": "afc7adb7cb672ad830ffbb0eacf263356b89da15188dc05795725ed166cd8df3",
+    "pinned_health_sha256": "6cdd746cdc72635b96ad28e97233deeefb917bc35a1b04499f96d632f4873149",
+    "excluded_volatile_fields": "listing `created` (timestamp) and health `status` (liveness, not configuration)",
+    "verified_before_freezing": "both hashes computed from the live endpoints and the gate re-run to a pass"
+  },
+
+  "counterfactual_on_record_before_the_trials": {
+    "projection": "~3,017 s, 56% of the 5,400 s cap",
+    "derivation": "From skill-1's own measured decomposition: deep calls 14,435 output tokens at 4.5 tok/s under dspark, scaled by the operator's 1.74x baseline advantage to 7.8 tok/s = 1,847 s; shallow calls unchanged at 1,170 s.",
+    "supersedes": "the v3 figure of ~1,468 s, which assumed dspark and a full-recompute prefill that did not happen",
+    "bounds": "Upper bound in one respect: if the operator's cache fix credits more than skill-1 already got, the shallow term shrinks. Unbounded in another: if a trial reasons more than skill-1 did, the deep term grows without limit -- that is the term that hit the cap.",
+    "how_it_will_be_judged": "Reported against each completed trial's elapsed time, without adjustment."
+  },
+
+  "what_is_unchanged_and_hash_pinned": {
+    "task": "m8-impl-local-v1 task 2, pinned revision 05573bb6b3491b6849512e75e055d4cf6279b606",
+    "acceptance_test_sha256": "47fd74b43cfc1090fd6d662a8b0835709563f378728b598012fa772151fded92",
+    "prompt_skill_sha256": "ad2864e90d2ece77942bad92780b8d6139f2b9f7af149f33df09d47a6be85a3e",
+    "prompt_noskill_sha256": "8e25d717bb1ff287a55ae6e7abbe277b72d759b82465b05c2aea676534cad36f",
+    "skill_body_sha256": "9d888647caf1452c72ee5ee084c2d18f0f21f062b75c8daa432cb97c0179c0f6",
+    "also_unchanged": ["sandbox recipe", "verifier", "loop analyser", "5,400 s cap", "3 trials per arm", "alternating arm order", "per-trial scratch", "per-trial CARGO_TARGET_DIR"],
+    "deliberately_NOT_changed": {
+      "syn_api_surface": "not given to either arm; noskill-1 reached 120/120 without it",
+      "forced_transition": "not added; noskill-1 made the transition unaided"
+    }
+  },
+
+  "not_poolable": "Not with m7, not with m8, not with v2's two trials (broken cache, dspark). Nor the reverse. Different serving implementation, quantization, decode path and cache behaviour.",
+
+  "in_flight_cache_check": {
+    "method": "ratio = elapsed / (summed distinct per-turn input_tokens / 311 tok/s); cache_credited below 0.6",
+    "important_qualification_added_after_v3": "RECONCILIATION.md shows this ratio was NOT a clean cache detector for skill-1: 12 of its 15 calls completed faster than a full recompute, so the cache was crediting even though skill-1 scored 1.323 on this ratio. The ratio is therefore recorded as a DIAGNOSTIC, and a high value triggers a per-call check of whether any call beat its own full-recompute time before the series is stopped.",
+    "enforcement": "A cache_NOT_credited verdict stops the series only after the per-call check confirms no call beat its full-recompute time. Otherwise it is recorded and the series continues."
+  },
+
+  "truncated_tail_watch": {
+    "symptom": "tails cut mid-sentence or with an unclosed code block; the operator's local patch can be lost SILENTLY on a package update",
+    "detector": "scripts/detect_truncated_tail.py, run on every trial",
+    "handling": "a hit STOPS the series; no retry; record time, approximate token count, client"
+  },
+
+  "operating_agreement": {
+    "experiment_window": "The operator has been given a 3-4 hour window for this run and will freeze configuration during it. Announced windows are now the norm; the two mid-experiment backend changes are why."
+  },
+
+  "primary_output_is_descriptive": {
+    "statement": "Per-trial records: the three verdicts, what the loop did, elapsed against the counterfactual. NOT an arm comparison.",
+    "comparative_claims": "Nothing is ever ACCEPTED. Complete separation (3/3 vs 0/3) is SUGGESTIVE only; anything less is noise, stated in advance."
+  },
+
+  "verdicts": ["verified", "tests_failed", "does_not_compile", "no_change_made", "loop_incomplete_timeout", "loop_incomplete_error", "target_file_missing"],
+
+  "half_edited_tree_rule": "How the loop ended is classified BEFORE its code is looked at, and wins. exit 124 -> loop_incomplete_timeout; other non-zero -> loop_incomplete_error. Excluded from compiles/tests_pass tallies with the exclusion reported. v2's noskill-1 was loop_incomplete_timeout yet compiled and passed 120/120; the code state is reported alongside, never hidden by, the verdict.",
+
+  "stopping_rules": [
+    "One request in flight at any time.",
+    "No retry of any trial, for any reason.",
+    "Any upstream failure stops the series; record time, approximate token count, client, and completed trials per arm.",
+    "Either identity gate failure refuses the trial and stops the series (exit 66), before any request.",
+    "A truncated-tail signature stops the series (exit 68).",
+    "Per-trial wall-clock cap 5,400 s; hitting it is loop_incomplete_timeout and does not by itself stop the series.",
+    "Maximum 6 trials. A trial lost upstream is excluded and NOT replaced.",
+    "Every halt uses scripts/halt.sh, verified by an untruncated count."
+  ],
+
+  "preservation": "Each trial copied into the repository as it completes, never batched.",
+
+  "not_started": ["the emit-only-the-edit arm", "the syn-surface variant", "a second judge family", "any enable_thinking condition", "any baseline-vs-dspark comparison"]
+}

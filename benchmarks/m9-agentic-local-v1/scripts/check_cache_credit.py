@@ -41,6 +41,7 @@ from __future__ import annotations
 import gzip
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 PREFILL_TOK_PER_S = 311.0
@@ -63,6 +64,7 @@ def main() -> None:
     result = Path(sys.argv[1])
 
     inputs = []
+    stamped = []
     total_input = None
     total_output = None
     for line in load(result).splitlines():
@@ -77,6 +79,13 @@ def main() -> None:
             u = (e.get("message") or {}).get("usage") or {}
             if u.get("input_tokens") is not None:
                 inputs.append(u["input_tokens"])
+                if e.get("timestamp"):
+                    stamped.append(
+                        (
+                            datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")),
+                            u["input_tokens"],
+                        )
+                    )
         elif e.get("type") == "result":
             u = e.get("usage") or {}
             total_input = u.get("input_tokens")
@@ -87,6 +96,30 @@ def main() -> None:
         if not calls or calls[-1] != v:
             calls.append(v)
 
+    # Per-call physical test, added after RECONCILIATION.md. A call that
+    # completed in LESS time than a full recompute of its own context would
+    # take cannot have paid that recompute -- so the cache credited for it.
+    # This is direct physical evidence and outranks the aggregate ratio,
+    # which scored skill-1 at 1.323 while 12 of its 15 calls had in fact
+    # been credited.
+    stamped.sort(key=lambda x: x[0])
+    grouped = []
+    for t, ctx in stamped:
+        if grouped and grouped[-1][1] == ctx:
+            grouped[-1][0] = t
+        else:
+            grouped.append([t, ctx])
+    beating = 0
+    per_call = []
+    prev_end = grouped[0][0] if grouped else None
+    for i, (end, ctx) in enumerate(grouped):
+        el = (end - (prev_end if i else grouped[0][0])).total_seconds() if i else 0.0
+        prev_end = end
+        need = ctx / PREFILL_TOK_PER_S
+        if i and el < need:
+            beating += 1
+        per_call.append({"context_tokens": ctx, "elapsed_s": round(el, 1), "full_recompute_s": round(need, 1)})
+
     elapsed_path = result / "elapsed-seconds"
     elapsed = int(elapsed_path.read_text().strip()) if elapsed_path.exists() else None
 
@@ -95,7 +128,9 @@ def main() -> None:
     ratio = (elapsed / projection) if (elapsed and projection) else None
 
     verdict = "unknown"
-    if ratio is not None:
+    if beating > 0:
+        verdict = "cache_credited"
+    elif ratio is not None:
         verdict = "cache_credited" if ratio < RATIO_THRESHOLD else "cache_NOT_credited"
 
     record = {
@@ -113,7 +148,11 @@ def main() -> None:
         "ratio_elapsed_over_projection": round(ratio, 3) if ratio else None,
         "ratio_threshold": RATIO_THRESHOLD,
         "verdict": verdict,
-        "reference_skill_1_broken_cache_ratio": 1.29,
+        "reference_skill_1_ratio": 1.323,
+        "calls_beating_their_own_full_recompute": beating,
+        "calls_total": len(grouped),
+        "per_call": per_call,
+        "verdict_rule": "any call beating its own full-recompute time is direct evidence of crediting and outranks the aggregate ratio",
     }
     (result / "cache-credit.json").write_text(
         json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
