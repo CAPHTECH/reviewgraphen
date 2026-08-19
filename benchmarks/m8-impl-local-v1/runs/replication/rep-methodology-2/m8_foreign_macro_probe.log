@@ -1,0 +1,14 @@
+   Compiling reviewgraphen-ingest v0.1.0 (/tmp/m8-rep-scratch-rep-methodology-2/crates/reviewgraphen-ingest)
+error[E0609]: no field `ident` on type `&ForeignItemFn`
+    --> crates/reviewgraphen-ingest/src/rust.rs:1868:57
+     |
+1868 | ...                   hoisted.push(foreign_fn.ident.to_string());
+     |                                               ^^^^^ unknown field
+     |
+help: one of the expressions' fields has a field of the same name
+     |
+1868 |                                 hoisted.push(foreign_fn.sig.ident.to_string());
+     |                                                         ++++
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `reviewgraphen-ingest` (lib) due to 1 previous error

@@ -1,0 +1,9 @@
+   Compiling reviewgraphen-ingest v0.1.0 (/tmp/m8-rep-scratch-rep-methodology-3/crates/reviewgraphen-ingest)
+error[E0599]: no variant or associated item named `Const` found for enum `ForeignItem` in the current scope
+    --> crates/reviewgraphen-ingest/src/rust.rs:1865:42
+     |
+1865 | ...                   ForeignItem::Const(nested) => {
+     |                                    ^^^^^ variant or associated item not found in `ForeignItem`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `reviewgraphen-ingest` (lib) due to 1 previous error

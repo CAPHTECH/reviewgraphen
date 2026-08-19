@@ -1,0 +1,31 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m8-rep-scratch-rep-methodology-2/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 09:15:18.439769923 +0900
+@@ -1852,6 +1852,28 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                // A block-local foreign module (`extern "C" { .. }`) is hoisted for
++                // the whole block like any other item: its `fn` and `static`
++                // declarations put their names in the block's *value* namespace, so
++                // they shadow a same-named module-level item for an unqualified call
++                // in this block -- real Rust would reject the call rather than let it
++                // fall through to the module item. Only those exact names are hoisted,
++                // never a blanket conservative mark on the block: an extern block that
++                // declares other names blocks nothing, and a foreign `type` (type
++                // namespace only, like a named-field struct) never shadows.
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    for foreign_item in &nested.items {
++                        match foreign_item {
++                            syn::ForeignItem::Fn(foreign_fn) => {
++                                hoisted.push(foreign_fn.ident.to_string());
++                            }
++                            syn::ForeignItem::Static(foreign_static) => {
++                                hoisted.push(foreign_static.ident.to_string());
++                            }
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }

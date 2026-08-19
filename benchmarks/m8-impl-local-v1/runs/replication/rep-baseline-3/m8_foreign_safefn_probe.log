@@ -1,0 +1,22 @@
+   Compiling reviewgraphen-ingest v0.1.0 (/tmp/m8-rep-scratch-rep-baseline-3/crates/reviewgraphen-ingest)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/m8_foreign_safefn_probe.rs (/tmp/claude-1000/-home-rizumita-workspace-reviewgraphen/0d42d984-55de-424b-ad9a-e8b8f298b722/scratchpad/cargo-target/debug/deps/m8_foreign_safefn_probe-9a8a97e924d6b43b)
+
+running 1 test
+test unenumerable_foreign_item_conservatively_blocks_naked_call_resolution ... FAILED
+
+failures:
+
+---- unenumerable_foreign_item_conservatively_blocks_naked_call_resolution stdout ----
+
+thread 'unenumerable_foreign_item_conservatively_blocks_naked_call_resolution' (771804) panicked at crates/reviewgraphen-ingest/tests/m8_foreign_safefn_probe.rs:174:5:
+a foreign module containing an unenumerable macro item must conservatively block naked-call resolution in that block, exactly as a glob `use` and an opaque pattern already do
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    unenumerable_foreign_item_conservatively_blocks_naked_call_resolution
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+error: test failed, to rerun pass `-p reviewgraphen-ingest --test m8_foreign_safefn_probe`
