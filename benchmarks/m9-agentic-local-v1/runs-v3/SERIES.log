@@ -1,0 +1,11 @@
+2026-08-20T07:18:36+09:00 SERIES START
+2026-08-20T07:18:36+09:00 START skill-1
+BACKEND IDENTITY GATE FAILED
+  expected b0efdd40ac172d0905dcadb3b224d10c6794b335a2070f431c29ad68203af6cf
+  observed afc7adb7cb672ad830ffbb0eacf263356b89da15188dc05795725ed166cd8df3
+  canonical [{"drafter":null,"id":"Qwen3.8-27B-MLX-4bit","mode":"baseline","owned_by":"mlx-dspark","target":"/Users/rizumita/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit"}]
+backend identity gate failed; refusing to start skill-1
+2026-08-20T07:18:36+09:00 LOOP skill-1 outcome=unknown elapsed=s
+2026-08-20T07:18:36+09:00 VERIFY skill-1 verdict=target_file_missing
+2026-08-20T07:18:36+09:00 ECHOED-MODEL skill-1  (recorded, not a gate)
+2026-08-20T07:18:36+09:00 STOP skill-1 backend identity gate=failed

@@ -9,10 +9,10 @@
 set -uo pipefail
 
 root=/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726
-dest="$root/benchmarks/m9-agentic-local-v1/runs-v2"
+dest="$root/benchmarks/m9-agentic-local-v1/runs-v3"
 mkdir -p "$dest"
 
-for src in /tmp/m9v2-runs/*; do
+for src in /tmp/m9v3-runs/*; do
   [[ -d "$src" ]] || continue
   trial=$(basename "$src")
   out="$dest/$trial"
@@ -21,7 +21,8 @@ for src in /tmp/m9v2-runs/*; do
               pre-loop-manifest.txt post-loop-manifest.txt \
               verification.json loop-behaviour.json loop-summary.txt \
               applied.diff patched-rust.rs claude.stderr verify.log \
-              backend-identity.json trial.pgid; do
+              backend-identity.json trial.pgid \
+              cache-credit.json truncated-tail.json; do
     [[ -f "$src/$file" ]] && cp -u "$src/$file" "$out/$file"
   done
   # The transcript is the irreplaceable artifact and is large; store it gzipped.

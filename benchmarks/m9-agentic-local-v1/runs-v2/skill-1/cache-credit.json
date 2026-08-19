@@ -1,0 +1,17 @@
+{
+  "api_calls": 15,
+  "elapsed_seconds": 5400,
+  "full_recompute_projection_seconds": 4081.0,
+  "identity_holds": true,
+  "identity_note": "holds in BOTH cache states -- a reporting artifact, not a cache signal",
+  "prefill_tok_per_s_assumed": 311.0,
+  "ratio_elapsed_over_projection": 1.323,
+  "ratio_threshold": 0.6,
+  "reference_skill_1_broken_cache_ratio": 1.29,
+  "reported_total_input_tokens": 1269205,
+  "reported_total_output_tokens": 20264,
+  "schema": "reviewgraphen.benchmark.m9_cache_credit.v1",
+  "summed_context_tokens": 1269205,
+  "trial": "skill-1",
+  "verdict": "cache_NOT_credited"
+}

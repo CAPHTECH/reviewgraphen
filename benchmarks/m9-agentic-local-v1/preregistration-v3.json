@@ -1,0 +1,106 @@
+{
+  "schema": "reviewgraphen.benchmark.m9_agentic_local_v3_preregistration.v1",
+  "experiment": "m9-agentic-local-v3",
+  "status": "frozen_before_first_generation_request_under_the_fixed_cache",
+  "relationship_to_v2": "FRESH preregistration, not an amendment. v2's execution conditions are false: the server's prefix cache was not crediting when its trials ran, and has since been fixed. v2 is retained unedited as the record of what ran under the broken cache.",
+
+  "what_changed": {
+    "only_difference_from_v2": "the server. The task, prompts, skill body, sandbox recipe, verifier, loop analyser, 5,400 s cap, arm order and 3-trials-per-arm are all unchanged and hash-pinned.",
+    "the_fix": "The operator found and fixed a cache-killing bug: a Claude Code marker whose value changes every turn sat inside the cached prefix, so the prefix differed each turn and the cache missed entirely. Their measurement on a 4,000-token prefix: 16.4/16.4/16.2 s before, 16.4/0.11/0.11 s after -- 149x.",
+    "mechanism_for_this_harness_not_established": "Zero occurrences of `total_tokens` or `tokens left` were found in any deep request captured from `claude --print` across two logging-proxy sessions. So that specific marker does not appear in this harness's request shape. The EFFECT is established for v2's trials by arithmetic (see prediction below); the mechanism for this shape is not, and neither the marker nor an alternative is asserted."
+  },
+
+  "not_poolable": {
+    "with_v2_trials": "The two completed v2 trials (skill-1, noskill-1) ran under the broken cache and MUST NOT be pooled with anything run here, compared as if the condition were constant, or used to revise these results. Nor the reverse.",
+    "with_m7_or_m8": "Unchanged from v2: different serving implementation, different advertised model, explicitly 4-bit quantization, speculative decoding, and Codex cannot reach this backend at all so those harnesses are unrunnable as written."
+  },
+
+  "prediction_on_record_before_the_trials": {
+    "statement": "If the cache holds, the same task projects to ~1,468 s -- 28% of the 5,400 s cap.",
+    "derivation": "delta-only prefill of skill-1's 74,531 tokens of context growth at 311 tok/s = 240 s, plus decode of 20,264 output tokens at the operator's deep-reasoning rate of 16.5 tok/s = 1,228 s.",
+    "what_it_is_and_is_not": "A projection from ONE broken-cache trial's own token record, not a forecast of what any new trial will do. Turn count, tool use and reasoning volume all vary freely. It is recorded so it can be wrong in public.",
+    "how_it_will_be_judged": "Reported against each completed trial's elapsed time, without adjustment. A trial that terminates cleanly well inside the cap corroborates it; trials that again hit 5,400 s falsify it and mean the cache was not the dominant cost after all."
+  },
+
+  "in_flight_cache_verification": {
+    "why_the_proposed_identity_check_was_replaced": "The coordinator proposed using `sum(per-turn contexts) == input_tokens total` as the in-flight signal. Measured against both cache states, it does not discriminate: broken-cache trial and working-cache bench both report usage keys ['input_tokens','output_tokens'], both report input_tokens as the FULL context, and both omit cache_read_input_tokens entirely. The identity is a reporting artifact that holds either way. It was decisive for skill-1 only in combination with the wall clock.",
+    "what_is_used_instead": "wall clock against the full-recompute projection",
+    "formula": "ratio = elapsed_seconds / (sum(distinct per-turn input_tokens) / 311)",
+    "prefill_rate_justification": "311 tok/s is the operator's spec (32k in 102.9 s); this harness's own novel-prefix measurement gave 267 tok/s, so the two agree to within their spread.",
+    "threshold": "ratio < 0.6 => cache_credited. ratio >= 0.6 => cache_NOT_credited.",
+    "calibration": "skill-1 under the broken cache scores 1.323. Validated before freezing: the check flags it correctly, and the truncated-tail detector produces no false positive on either completed v2 trial.",
+    "enforcement": "Run after every trial. The FIRST cache_NOT_credited stops the series (exit 67), because every subsequent trial would measure the old condition and cost 90 minutes to do it."
+  },
+
+  "truncated_tail_watch": {
+    "symptom": "response tails cut unnaturally -- a sentence ending mid-way, a code block left unclosed. Backend-specific, patched locally, and the patch can be lost SILENTLY on a package update.",
+    "detector": "scripts/detect_truncated_tail.py, run on every trial: odd ``` fence count, or a non-empty tail ending without terminal punctuation, checked on the final result text, the last assistant text block and the last thinking block. Conservative -- a turn ending in a tool call has no text and is not flagged.",
+    "handling": "A hit STOPS the series (exit 68). No retry. Record the time the symptom was noticed, the approximate token count of the request, and the client.",
+    "correspondence_recorded_not_asserted": "Symptomatically matches the upstream_silent_truncation class defined on LM Studio, and Ollama's own variant. Three serving implementations, same weights family. No common cause asserted."
+  },
+
+  "arms": {
+    "order_of_execution": ["skill", "noskill", "skill", "noskill", "skill", "noskill"],
+    "n_per_arm": 3,
+    "manipulated_variable": "one paragraph naming the skill, plus the skill file present in the checkout; mechanically verified as the only prompt delta",
+    "prompt_skill_sha256": "ad2864e90d2ece77942bad92780b8d6139f2b9f7af149f33df09d47a6be85a3e",
+    "prompt_noskill_sha256": "8e25d717bb1ff287a55ae6e7abbe277b72d759b82465b05c2aea676534cad36f",
+    "skill_body_sha256": "9d888647caf1452c72ee5ee084c2d18f0f21f062b75c8daa432cb97c0179c0f6"
+  },
+
+  "task": {
+    "identical_to": "m8-impl-local-v1 task 2, unchanged",
+    "pinned_revision": "05573bb6b3491b6849512e75e055d4cf6279b606",
+    "changeable_file": "crates/reviewgraphen-ingest/src/rust.rs",
+    "acceptance_test_sha256": "47fd74b43cfc1090fd6d662a8b0835709563f378728b598012fa772151fded92",
+    "acceptance_test_never_in_the_agent_tree": "installed only by the verifier, into a fresh tree built from the pinned revision into which only rust.rs is copied",
+    "deliberately_NOT_changed": {
+      "syn_api_surface": "NOT given to either arm. Weakened as a hypothesis: noskill-1 reached a change that compiles and passes 120/120 without it.",
+      "forced_exploration_to_implementation_transition": "NOT added. noskill-1 made the transition unaided; the clock stopped it, not indecision.",
+      "why_both_are_held": "Changing the task and the condition at once would leave any difference unattributable. This run isolates the condition."
+    }
+  },
+
+  "backend_identity_gate": {
+    "unchanged_from_v2": true,
+    "pinned_identity_sha256": "b0efdd40ac172d0905dcadb3b224d10c6794b335a2070f431c29ad68203af6cf",
+    "note": "gates on the /v1/models listing hash, never on the echoed response.model, which passed through an entire backend swap"
+  },
+
+  "primary_output_is_descriptive": {
+    "statement": "Per-trial records: the three verdicts, what the loop actually did, and the cache-credit ratio. NOT an arm comparison.",
+    "comparative_claims": "Nothing is ever ACCEPTED. Complete separation (3/3 versus 0/3) on a verdict axis is reported as SUGGESTIVE only; anything less is noise, stated in advance."
+  },
+
+  "verdicts": ["verified", "tests_failed", "does_not_compile", "no_change_made", "loop_incomplete_timeout", "loop_incomplete_error", "target_file_missing"],
+
+  "half_edited_tree_rule": {
+    "unchanged": true,
+    "rule": "How the loop ended is classified BEFORE its code is looked at, and that classification wins. exit 124 -> loop_incomplete_timeout; other non-zero -> loop_incomplete_error. A half-edited tree that does not compile is reported as loop_incomplete_*, never as does_not_compile. Excluded from compiles/tests_pass tallies, with the exclusion and its count reported.",
+    "note_from_v2": "noskill-1 was loop_incomplete_timeout yet its code compiled and passed 120/120. The rule stands, and the code state is reported alongside it rather than hidden by it."
+  },
+
+  "isolation": {
+    "per_trial_scratch": "mandatory, fresh, /tmp only",
+    "per_trial_cargo_target_dir": "mandatory",
+    "real_repository_invisible": "--tmpfs over /home/rizumita/workspace inside the sandbox",
+    "benchmarks_removed": "the pinned archive carries benchmarks/m7-head-local-v1; deleted from every working copy",
+    "credentials": "fresh mode-700 CLAUDE_CONFIG_DIR per trial, no credentials inside, dummy API key"
+  },
+
+  "stopping_rules": [
+    "One request in flight at any time.",
+    "No retry of any trial, for any reason.",
+    "Any upstream failure stops the series immediately. Record time, approximate token count, client, and how many trials of each arm completed.",
+    "A backend identity gate failure stops the series (exit 66).",
+    "The first cache_NOT_credited stops the series (exit 67).",
+    "A truncated-tail signature stops the series (exit 68).",
+    "Per-trial wall-clock cap 5,400 s; hitting it is loop_incomplete_timeout and does not by itself stop the series.",
+    "Maximum 6 trials. A trial lost upstream is excluded and NOT replaced.",
+    "Every halt uses scripts/halt.sh, whose verification is an untruncated count and which exits non-zero if anything survives."
+  ],
+
+  "preservation": "Each trial is copied into the repository as it completes, never batched. That rule has already prevented one loss in this program.",
+
+  "not_started": ["the emit-only-the-edit arm", "the syn-surface variant", "a second judge family", "any enable_thinking condition"]
+}
