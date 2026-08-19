@@ -71,6 +71,7 @@ set +e
   --dev-bind /dev /dev \
   --proc /proc \
   --tmpfs /home/rizumita/workspace \
+  --tmpfs /tmp/claude-1000 \
   --bind "$scratch" "$scratch" \
   --bind "$target" "$target" \
   --bind "$config" "$config" \
@@ -81,7 +82,7 @@ set +e
   --setenv ANTHROPIC_BASE_URL http://192.168.68.71:11999 \
   --setenv ANTHROPIC_API_KEY ollama \
   --setenv CLAUDE_CODE_MAX_OUTPUT_TOKENS 32000 \
-  --setenv PATH /home/rizumita/.cargo/bin:/usr/local/bin:/usr/bin:/bin \
+  --setenv PATH /home/rizumita/.local/share/mise/installs/claude/latest:/home/rizumita/.cargo/bin:/usr/local/bin:/usr/bin:/bin \
   --setenv HOME /home/rizumita \
   --chdir "$scratch" \
   timeout "$timeout_seconds" claude \

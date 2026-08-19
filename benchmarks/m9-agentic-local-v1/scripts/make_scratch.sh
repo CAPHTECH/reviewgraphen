@@ -38,9 +38,15 @@ revision=$(cat "$m8/task/PINNED_REVISION")
 mkdir -p "$scratch"
 git -C "$root" archive "$revision" | tar -x -C "$scratch"
 
-# The acceptance test and every prior m8 artifact must be absent.
+# The pinned revision predates m8 but NOT m7: its archive carries
+# `benchmarks/m7-head-local-v1`, the whole prior campaign. That is not the
+# acceptance test, but it is the experimental setup, and an agent that reads
+# it learns it is being measured. It is removed rather than tolerated.
+# `benchmarks/` is not a cargo workspace member, so removing it cannot affect
+# the build.
+rm -rf "$scratch/benchmarks"
 if [[ -e "$scratch/benchmarks" ]]; then
-  echo "pinned archive unexpectedly contains benchmarks/; refusing" >&2
+  echo "failed to remove benchmarks/ from the working copy; refusing" >&2
   exit 65
 fi
 if grep -rl "m8_extern_block_shadow" "$scratch" >/dev/null 2>&1; then
