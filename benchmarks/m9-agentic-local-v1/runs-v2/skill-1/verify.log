@@ -1,0 +1,43 @@
+{
+  "build_errors": [],
+  "changed_files": [],
+  "clippy_exit": 0,
+  "clippy_warnings": 0,
+  "compiles": true,
+  "diff_line_count": 0,
+  "elapsed_seconds": 5400,
+  "loop_outcome": "loop_incomplete_timeout",
+  "out_of_scope_change_count": 0,
+  "out_of_scope_changed_files": [],
+  "result_unchanged_from_pinned": true,
+  "schema": "reviewgraphen.benchmark.m9_trial_verification.v1",
+  "target_file_changed": false,
+  "test_result_lines": [
+    [
+      "ok",
+      "67",
+      "0"
+    ],
+    [
+      "ok",
+      "8",
+      "0"
+    ],
+    [
+      "ok",
+      "40",
+      "0"
+    ],
+    [
+      "FAILED",
+      "2",
+      "3"
+    ]
+  ],
+  "tests_pass": false,
+  "touched_a_test_file": false,
+  "trial": "skill-1",
+  "verdict": "loop_incomplete_timeout",
+  "verify_tree_created": true
+}
+VERDICT: loop_incomplete_timeout

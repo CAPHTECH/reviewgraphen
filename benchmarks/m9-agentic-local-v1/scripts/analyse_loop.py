@@ -1,17 +1,36 @@
 #!/usr/bin/env python3
 """Reconstructs what the agentic loop actually did, from the stream-json log.
 
-This is the practical-utility evidence the single-shot harness could not
-produce: how many turns, how many tool calls, how often it invoked cargo,
-and -- the question that motivated this experiment -- **whether it read a
-compiler error and then edited in response to it.**
+Every field carries a `provenance` entry saying whether it is counted from
+actual stream EVENTS (trustworthy) or from backend-reported USAGE metadata
+(suspect on this backend). That distinction was added after two measurement
+faults were found in the first version's output, both established from the
+retained stream rather than by reasoning:
 
-`saw_error_then_edited` is counted as: a Bash result containing a rustc
-diagnostic (`error[E….]` or `error:` from cargo), followed later in the
-stream by an Edit/Write to the target file. That is an ordering fact from
-the transcript, not an inference about intent, and it is reported as such.
+FAULT A -- `cargo_invocations` counted the SUBSTRING "cargo".
+    The agent's commands referenced `~/.cargo/registry/src/.../syn-2.0.119`
+    while reading syn's source. All 8 counted "cargo invocations" in
+    skill-1 were that path. The real count was ZERO: it never compiled.
+    Fix: match `cargo` as a command word after stripping path-like
+    `.cargo` occurrences.
 
-usage: analyse_loop.py <result-dir>
+FAULT B -- token totals were summed from per-turn `usage`.
+    This backend sends exactly `{"input_tokens": N, "output_tokens": 0}`
+    per turn. `output_tokens` is PRESENT AND ZERO -- not absent, not lost
+    in aggregation -- and there is no separate reasoning key. Summing it
+    gave 0 while 45 assistant events and 13 tool calls plainly required
+    output. Worse, `input_tokens` is cumulative context re-reported every
+    turn, and several stream events share one API call's usage, so summing
+    it triple-counted: 3,818,353 against the result event's authoritative
+    1,269,205.
+    Fix: token totals come from the terminal `result` event, which Claude
+    Code computes itself (`output_tokens` 20,264 for skill-1). Per-turn
+    stream usage is retained separately, clearly labelled, as evidence of
+    what the backend does and does not report.
+
+Also recorded distinctly: `assistant_stream_events` (raw event count) and
+`logical_turns` (the client's own `num_turns`). One logical turn can emit
+several assistant events, so the two differ -- 45 against 23 in skill-1.
 """
 
 from __future__ import annotations
@@ -23,6 +42,13 @@ from pathlib import Path
 
 TARGET_FILE = "crates/reviewgraphen-ingest/src/rust.rs"
 ERROR_PATTERN = re.compile(r"error\[E\d{4}\]|^error(:|\[)", re.M)
+# `cargo` as a command word, not as part of a path such as ~/.cargo/registry.
+CARGO_COMMAND = re.compile(r"(?:^|[;&|(]|\s)cargo\s", re.M)
+CARGO_PATH = re.compile(r"[\w./~-]*\.cargo[\w./-]*")
+
+
+def invokes_cargo(command: str) -> bool:
+    return bool(CARGO_COMMAND.search(CARGO_PATH.sub(" ", command)))
 
 
 def main() -> None:
@@ -30,9 +56,19 @@ def main() -> None:
         raise SystemExit("usage: analyse_loop.py <result-dir>")
     result = Path(sys.argv[1])
     stream = result / "stream.jsonl"
+    if not stream.exists():
+        gz = result / "stream.jsonl.gz"
+        if gz.exists():
+            import gzip
+
+            text = gzip.open(gz, "rt", encoding="utf-8", errors="replace").read()
+        else:
+            raise SystemExit(f"no stream in {result}")
+    else:
+        text = stream.read_text(encoding="utf-8", errors="replace")
 
     events = []
-    for line in stream.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -42,30 +78,30 @@ def main() -> None:
             continue
 
     report: dict = {
-        "schema": "reviewgraphen.benchmark.m9_loop_behaviour.v1",
+        "schema": "reviewgraphen.benchmark.m9_loop_behaviour.v2",
         "trial": result.name,
         "stream_events": len(events),
     }
 
-    assistant_turns = 0
+    assistant_events = 0
     tool_calls: dict[str, int] = {}
     bash_commands: list[str] = []
     edits_to_target = 0
     timeline: list[str] = []
-    usage_total = {"input_tokens": 0, "output_tokens": 0}
-    api_errors: list[str] = []
+    per_turn_usage: list[dict] = []
     model_ids: set[str] = set()
+    result_event: dict | None = None
 
     for event in events:
         kind = event.get("type")
         if kind == "assistant":
             message = event.get("message") or {}
-            assistant_turns += 1
+            assistant_events += 1
             if message.get("model"):
                 model_ids.add(message["model"])
-            usage = message.get("usage") or {}
-            usage_total["input_tokens"] += usage.get("input_tokens") or 0
-            usage_total["output_tokens"] += usage.get("output_tokens") or 0
+            usage = message.get("usage")
+            if usage is not None:
+                per_turn_usage.append(usage)
             for block in message.get("content") or []:
                 if block.get("type") != "tool_use":
                     continue
@@ -75,7 +111,7 @@ def main() -> None:
                 if name == "Bash":
                     command = str(payload.get("command", ""))
                     bash_commands.append(command)
-                    if "cargo" in command:
+                    if invokes_cargo(command):
                         timeline.append("cargo")
                 if name in {"Edit", "Write", "NotebookEdit"}:
                     if TARGET_FILE in str(payload.get("file_path", "")):
@@ -86,63 +122,97 @@ def main() -> None:
             for block in message.get("content") or []:
                 if block.get("type") != "tool_result":
                     continue
-                text = json.dumps(block.get("content"))
-                if ERROR_PATTERN.search(text):
+                if ERROR_PATTERN.search(json.dumps(block.get("content"))):
                     timeline.append("compiler_error_seen")
         elif kind == "result":
-            report["result_subtype"] = event.get("subtype")
-            report["result_is_error"] = event.get("is_error")
-            report["num_turns_reported"] = event.get("num_turns")
-            report["duration_ms"] = event.get("duration_ms")
-            report["stop_reason"] = event.get("stop_reason")
-            report["api_error_status"] = event.get("api_error_status")
-            report["final_text"] = (event.get("result") or "")[:2000]
-        if event.get("is_error") and kind not in {"result"}:
-            api_errors.append(str(event.get("subtype") or kind))
+            result_event = event
 
-    cargo_calls = sum(1 for command in bash_commands if "cargo" in command)
-    report.update(
-        {
-            "assistant_turns": assistant_turns,
-            "tool_calls": dict(sorted(tool_calls.items())),
-            "tool_calls_total": sum(tool_calls.values()),
-            "bash_calls": len(bash_commands),
-            "cargo_invocations": cargo_calls,
-            "cargo_build_invocations": sum(
-                1 for c in bash_commands if "cargo" in c and "build" in c
-            ),
-            "cargo_test_invocations": sum(
-                1 for c in bash_commands if "cargo" in c and "test" in c
-            ),
-            "edits_to_target_file": edits_to_target,
-            "model_ids_seen": sorted(model_ids),
-            "reported_usage_totals": usage_total,
-            "api_errors": api_errors,
-        }
-    )
+    cargo_calls = [c for c in bash_commands if invokes_cargo(c)]
+    report["from_stream_events"] = {
+        "provenance": "counted from tool_use / tool_result blocks in the transcript -- trustworthy",
+        "assistant_stream_events": assistant_events,
+        "tool_calls": dict(sorted(tool_calls.items())),
+        "tool_calls_total": sum(tool_calls.values()),
+        "bash_calls": len(bash_commands),
+        "cargo_invocations": len(cargo_calls),
+        "cargo_build_invocations": sum(1 for c in cargo_calls if " build" in c),
+        "cargo_test_invocations": sum(1 for c in cargo_calls if " test" in c),
+        "cargo_check_invocations": sum(1 for c in cargo_calls if " check" in c),
+        "bash_commands_mentioning_cargo_path_only": sum(
+            1 for c in bash_commands if "cargo" in c and not invokes_cargo(c)
+        ),
+        "edits_to_target_file": edits_to_target,
+        "compiler_errors_observed": timeline.count("compiler_error_seen"),
+        "model_ids_seen": sorted(model_ids),
+    }
 
-    # Ordering fact: was a compiler error observed before a later edit?
+    # Ordering fact, from events.
     saw_error_then_edited = False
     seen_error = False
-    error_then_edit_pairs = 0
+    pairs = 0
     for step in timeline:
         if step == "compiler_error_seen":
             seen_error = True
         elif step == "edit_target" and seen_error:
             saw_error_then_edited = True
-            error_then_edit_pairs += 1
+            pairs += 1
             seen_error = False
-    report["compiler_errors_observed"] = timeline.count("compiler_error_seen")
-    report["saw_error_then_edited"] = saw_error_then_edited
-    report["error_then_edit_pairs"] = error_then_edit_pairs
-    report["timeline"] = timeline
+    report["from_stream_events"]["saw_error_then_edited"] = saw_error_then_edited
+    report["from_stream_events"]["error_then_edit_pairs"] = pairs
 
+    authoritative = (result_event or {}).get("usage") or {}
+    model_usage = (result_event or {}).get("modelUsage") or {}
+    report["tokens_authoritative"] = {
+        "provenance": "the client's terminal `result` event, which Claude Code computes itself -- the only trustworthy token source on this backend",
+        "input_tokens": authoritative.get("input_tokens"),
+        "output_tokens": authoritative.get("output_tokens"),
+        "cache_read_input_tokens": authoritative.get("cache_read_input_tokens"),
+        "cache_creation_input_tokens": authoritative.get("cache_creation_input_tokens"),
+        "thinking_tokens": (authoritative.get("output_tokens_details") or {}).get(
+            "thinking_tokens"
+        ),
+        "model_usage": model_usage,
+    }
+
+    inputs = [u.get("input_tokens") for u in per_turn_usage if u.get("input_tokens") is not None]
+    outputs = [u.get("output_tokens") for u in per_turn_usage if "output_tokens" in u]
+    report["tokens_backend_per_turn"] = {
+        "provenance": "raw per-turn `usage` from the backend -- SUSPECT, retained as evidence of what it reports",
+        "keys_ever_seen": sorted({k for u in per_turn_usage for k in u}),
+        "turns_with_usage": len(per_turn_usage),
+        "output_tokens_all_zero": bool(outputs) and all(o == 0 for o in outputs),
+        "input_tokens_min": min(inputs) if inputs else None,
+        "input_tokens_max": max(inputs) if inputs else None,
+        "input_tokens_last": inputs[-1] if inputs else None,
+        "input_tokens_monotonic_non_decreasing": all(
+            inputs[i] <= inputs[i + 1] for i in range(len(inputs) - 1)
+        )
+        if inputs
+        else None,
+        "input_tokens_naive_sum_DO_NOT_USE": sum(inputs) if inputs else None,
+        "why_the_naive_sum_is_wrong": "each turn's input_tokens re-reports the whole accumulated context, and several stream events share one API call's usage, so summing multiply-counts the same prefix",
+    }
+
+    if result_event is not None:
+        report["result_event"] = {
+            "subtype": result_event.get("subtype"),
+            "is_error": result_event.get("is_error"),
+            "logical_turns": result_event.get("num_turns"),
+            "duration_ms": result_event.get("duration_ms"),
+            "stop_reason": result_event.get("stop_reason"),
+            "api_error_status": result_event.get("api_error_status"),
+            "final_text": (result_event.get("result") or "")[:2000],
+        }
+
+    report["timeline"] = timeline
     (result / "loop-behaviour.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    compact = {
-        key: value for key, value in report.items() if key not in {"timeline", "final_text"}
-    }
+    compact = {k: v for k, v in report.items() if k not in {"timeline"}}
+    if "result_event" in compact:
+        compact["result_event"] = {
+            k: v for k, v in compact["result_event"].items() if k != "final_text"
+        }
     print(json.dumps(compact, indent=2, sort_keys=True))
 
 

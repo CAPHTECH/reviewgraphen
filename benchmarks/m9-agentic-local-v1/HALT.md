@@ -42,3 +42,11 @@ have detected this change. Capturing **and gating on** a hash of it is the
 concrete fix, recorded in `../BACKEND-CHANGE-2026-08-19.md` section 3.2.
 It is not implemented here because implementing it now would presume an
 answer to a question the operator has not yet decided.
+
+---
+
+**Superseded for execution by `preregistration-v2.json`** (2026-08-19
+evening). The swap was intentional, so the backend became a new condition
+and this document's original preregistration has false execution conditions.
+It is retained unedited as the record of the halted attempt. See
+`../BACKEND-CHANGE-2026-08-19.md` sections 7-12.

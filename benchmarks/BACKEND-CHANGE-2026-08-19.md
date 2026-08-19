@@ -173,3 +173,171 @@ unqualified id resolved to.
 
 Neither is worked around from here. No provider request will be issued until
 that decision is made.
+
+---
+
+# Addendum, 2026-08-19 evening
+
+## 7. Correction: my halt report was wrong
+
+Section 4 of this document said all m9 processes were stopped. **That was
+false.** One `claude --print` under bwrap was still running when the
+coordinator checked — 12 m 25 s elapsed, still holding a connection to the
+swapped backend. They terminated it. A halt that reports success while a
+trial keeps generating is worse than the swap it was responding to, and the
+report of success was mine.
+
+### 7.1 Why the kill missed, established rather than guessed
+
+Three faults, compounding.
+
+**1. The killing shell killed itself.** The halt ran
+`pkill -f run_series.sh; pkill -f run_trial.sh; pkill -f "claude --print"; pkill -f bwrap; …`.
+`pkill -f` matches against full command lines, and the shell executing that
+sequence has `claude --print` inside *its own* argv. So the third `pkill`
+SIGTERM'd its own wrapper shell, and `pkill -f bwrap` never ran. The
+evidence at the time was that the command produced **no output at all** —
+not the `ps` listing, not the trailing `echo`, not the `date` — and exited
+on a signal.
+
+Confirmed empirically afterwards rather than assumed:
+
+```
+$ bash -c 'pgrep -af HALTPROBE_TOKEN_9931'
+MATCHED: 1124205 /usr/bin/zsh -c … eval 'bash -c '…HALTPROBE_TOKEN_9931…'
+MATCHED: 1124208 bash -c pgrep -af HALTPROBE_TOKEN_9931 …
+```
+
+Both the outer wrapper and the inner shell match a token that exists only
+inside the command itself.
+
+**2. Killing the wrapper script did not kill the trial.** `run_trial.sh`
+launched `timeout` → `bwrap` → `claude` as ordinary descendants in the
+caller's process group. `pkill -f run_trial.sh` removed the script and
+orphaned the client, which kept generating.
+
+**3. The verification was truncated, and I read a negative from it.** The
+follow-up check was `ps -ef | grep -E … | head -10`. Ten lines came back,
+all unrelated `claude --resume` sessions, and I concluded "none above means
+stopped". The trial process was further down a list that `head -10` had
+already cut off.
+
+Fault 3 is the one that turned a failed halt into a success report. Faults 1
+and 2 caused the survival; fault 3 caused the false claim about it.
+
+### 7.2 What replaces it
+
+`m9-agentic-local-v1/scripts/halt.sh`, and two changes to how trials launch:
+
+- Trials run under `setsid` via `pgid_exec.sh`, which records its own `$$`
+  as the process-group id and then `exec`s the sandbox, so one
+  `kill -- -PGID` covers `timeout`, `bwrap`, `claude` and every descendant.
+- `halt.sh` never pattern-matches inline argv text. It kills recorded
+  process groups by id and sweeps for survivors by **binary path**
+  (`codex-resources/bwrap`, `installs/claude/latest/claude --print`),
+  excluding its own process group from every sweep.
+- Verification is a **count**, printed with the complete untruncated
+  survivor list, and a non-zero count makes `halt.sh` exit non-zero. No
+  halt can report success from a list that was cut short again.
+
+Self-tested: prints the full list, `survivor_count=0`, `HALT VERIFIED`.
+
+### 7.3 The surviving trial is void
+
+It was `skill-1`, already marked `VOID` for a different reason. It is now
+void for a second, independent one: it ran partly or wholly against the new
+backend. Which portion is not determinable and is not being determined. It
+remains outside the trial count.
+
+## 8. Codex can no longer reach this backend at all
+
+`/v1/responses` returns **404**, and Codex 0.147 dropped `wire_api = "chat"`,
+so there is no supported path from `codex-exec` to this server.
+
+Consequence, independent of the weights question: **every m7- and m8-style
+harness that drove the local model through Codex is unrunnable against the
+current backend.** `m7-head-local-v1` used
+`run-process-reviewer-codex-profile` for all of its local generation, and
+`m8-impl-local-v1` used a direct `/v1/responses` client. Neither can be
+re-executed as written.
+
+Those frozen results are therefore **not reproducible against the current
+backend for a transport reason alone**, before anything is said about
+quantization or weights. m9 is unaffected: it drives `claude --print`
+against `/v1/messages`.
+
+## 9. Reasoning now terminates — and this is a confound, not a win
+
+Operator measurement: the server sets reasoning effort low, producing 2,942
+characters of thinking plus 6,554 of body, against roughly 10,000 / 0
+before. `chat_template_kwargs: {"enable_thinking": true}` overrides it per
+request; that is **not** used here, and using it would be a separate
+preregistered condition.
+
+The dominant failure mode of this entire program was reasoning that never
+terminated: `m7`'s bare arm spent 65,535 of 65,536 output tokens on thinking
+and emitted nothing, and two of nine review units ended in silent
+truncation. **The new backend removes that failure mode at the server.**
+
+So a better m9 result under this condition is not evidence that the
+methodology transfers. The confound is baked into the condition and is named
+up front in the new preregistration.
+
+Also measured: code decode 28.7 → 36.4 tok/s with speculative decoding and
+unaffected output content; 32k prefill 102.9 s cold, 0.147 s on a cache hit.
+
+## 10. The listing volunteers more identity than the old one did
+
+The pinned listing is:
+
+```json
+[{"drafter":"/Users/rizumita/dspark-models/Qwen3.8-27B-Dspark-v1",
+  "id":"Qwen3.8-27B-MLX-4bit","mode":"dspark","owned_by":"mlx-dspark",
+  "target":"/Users/rizumita/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit"}]
+```
+
+identity sha256 `b0efdd40ac172d0905dcadb3b224d10c6794b335a2070f431c29ad68203af6cf`
+(`created` excluded as a volatile timestamp).
+
+It names both the loaded weights and the speculative-decoding drafter. That
+is strictly more than the previous backend gave, and it is what makes the
+gate in `scripts/check_backend_identity.py` meaningful. It does **not**
+retroactively answer section 5: the old default id still never stated which
+weights it resolved to.
+
+## 11. Truncated response tails — a correspondence, not a common cause
+
+The operator reports a backend-specific bug: **response tails cut
+unnaturally — a sentence ending mid-way, a code block left unclosed.**
+Upstream unfixed, locally patched, and the patch can be lost on a package
+update.
+
+This matches, symptomatically, the `upstream_silent_truncation` class this
+program defined on LM Studio: `status: "completed"`, `error: null`,
+`incomplete_details: null`, reasoning cut mid-sentence, and **no message
+item at all**, well short of `max_output_tokens`
+(`m7-head-local-v1/scripts/detect_silent_truncation.py`, established from
+`head-local-04` and `head-local-08`). Ollama produced its own variant: an
+8-hour hang with no response header, then HTTP 502.
+
+Three serving implementations — Ollama, LM Studio, and now mlx-dspark — have
+each produced a truncated or absent tail on the same weights family.
+
+**No common cause is asserted.** These are three symptom reports, and the
+symptom is generic enough that independent causes are entirely plausible.
+What is recorded is the correspondence, so that if one is ever root-caused
+the others are already on file as candidates to re-check.
+
+Operational consequence: unchanged. If it recurs — no retry, record the time
+the symptom was noticed, the approximate token count, and the client, then
+stop and report.
+
+## 12. Concurrency guidance has changed; the choice has not
+
+The server now batches up to 2 requests, queues 3 and beyond, and the
+operator measured **under 3% difference at 3 concurrent**. Sequential is no
+longer required.
+
+m9 stays sequential anyway. The measured gain is nil and single-flight
+attribution is cleaner — a queued or batched trial shares contention with
+its neighbour, and wall-clock is one of the things this experiment records.

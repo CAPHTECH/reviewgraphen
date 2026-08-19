@@ -1,0 +1,25 @@
+{
+  "canonical_identity": "[{\"drafter\":\"/Users/rizumita/dspark-models/Qwen3.8-27B-Dspark-v1\",\"id\":\"Qwen3.8-27B-MLX-4bit\",\"mode\":\"dspark\",\"owned_by\":\"mlx-dspark\",\"target\":\"/Users/rizumita/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit\"}]",
+  "expected_sha256": "b0efdd40ac172d0905dcadb3b224d10c6794b335a2070f431c29ad68203af6cf",
+  "gate": "passed",
+  "identity_sha256": "b0efdd40ac172d0905dcadb3b224d10c6794b335a2070f431c29ad68203af6cf",
+  "listing": {
+    "data": [
+      {
+        "created": 1787130847,
+        "display_name": "Qwen3.8-27B-MLX-4bit (mlx-dspark dspark)",
+        "id": "Qwen3.8-27B-MLX-4bit",
+        "object": "model",
+        "owned_by": "mlx-dspark",
+        "x_mlx_dspark": {
+          "drafter": "/Users/rizumita/dspark-models/Qwen3.8-27B-Dspark-v1",
+          "mode": "dspark",
+          "target": "/Users/rizumita/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit"
+        }
+      }
+    ],
+    "object": "list"
+  },
+  "schema": "reviewgraphen.benchmark.backend_identity.v1",
+  "url": "http://192.168.68.71:11999/v1/models"
+}
