@@ -1,0 +1,36 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "071120d6fb6bbd58",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The arm implements the general rule rather than the tested examples. It iterates every item of the foreign module -- `for item in &foreign.items` -- and hoists by kind, `syn::ForeignItem::Fn(decl) => { hoisted.push(decl.sig.ident.to_string()); }` and `syn::ForeignItem::Static(decl) => { hoisted.push(decl.ident.to_string()); }`, so any name in any block-local `extern` block shadows, not just a name spelled `target`. There is no string comparison, no arity or ABI check, and no gating on the enclosing function. Spec point 4 (`extern \"C\" { fn unrelated(); }` must not block) is satisfied structurally rather than by a carve-out: `conservative_unresolved` is deliberately not touched in this arm, unlike the glob-`use` arm's `conservative_unresolved |= has_glob;`, so only the declared names are pushed and a naked `target()` in that block still resolves."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "The diff adds exactly one match arm, `syn::Stmt::Item(syn::Item::ForeignMod(foreign)) => { .. }`, inserted before the existing `_ => {}` catch-all in `visit_block`. Every other line in the hunk -- the `Item::Fn`/`Item::Const`/`Item::Static`/`Item::Struct`/`Item::Use` arms, `self.push_scope(hoisted, conservative_unresolved);`, `visit::visit_block(self, block);`, `self.pop_scope();`, and the whole `visit_local` body shown as trailing context -- is unmodified. No reformatting, no renaming, no signature changes, no doc-comment churn."
+      },
+      "convention_fit": {
+        "verdict": "mixed",
+        "justification": "Structure and comment voice fit well: the arm sits in the same `syn::Stmt::Item(..)` shape as its siblings, ends with an inner `_ => {}` mirroring the outer catch-all, and the comment's reasoning register matches the surrounding doc comment (`A foreign \\`type\\` alias is type-namespace only (like a named-field struct) and never shadows.` echoes the existing `real Rust puts a named-field struct's name only in the *type* namespace`). Two small slips: the sibling arms write the item variant unqualified -- `syn::Stmt::Item(Item::Fn(nested))`, `Item::Use(nested)` -- because `Item` is imported, but this arm writes `syn::Item::ForeignMod(foreign)`; and the binding is named `foreign`/`decl` where every neighbouring arm binds `nested`."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "none",
+        "justification": "All six required behaviours are reachable from the code shown. Points 1 and 2 are the two explicit arms; point 3 falls out of the unchanged `self.push_scope(hoisted, conservative_unresolved); visit::visit_block(self, block); self.pop_scope();`, which scopes the hoist to this block only; point 4 from not setting `conservative_unresolved`; point 5 because a block with no `Item::ForeignMod` never enters the new arm. The remaining `syn::ForeignItem` variants -- `Type`, `Macro`, `Verbatim` -- fall to the inner `_ => {}`: `Type` is correctly excluded per the arm's own comment, and ignoring a macro matches how the outer match already ignores `Item::Macro` via its `_ => {}`, so this is preserved existing behaviour (point 6) rather than a new gap."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "none",
+        "justification": "The arm reads only `foreign.items` and the idents within it; it introduces no reference to state outside `visit_block` and no ordering assumption -- `hoisted` is a block-wide pre-pass consumed once by `push_scope(hoisted, conservative_unresolved)` after the loop, so the position of the `extern` block among `block.stmts` is irrelevant, which is what hoisting requires. It duplicates no invariant: the value-vs-type namespace rule already stated in the doc comment is applied, not re-encoded elsewhere. The change contains no `unsafe` keyword; `unsafe extern \"C\" { .. }` in the ingested fixture still parses to `Item::ForeignMod` and matches this arm unchanged."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "The in-arm comment states both the rule and its ground: `put their names in the enclosing block's value namespace, exactly as a block-local \\`fn\\`/\\`static\\` does, so they shadow a same-named module-level function for a naked call in this block`, and then justifies the omission a reader would otherwise question -- why `ForeignItem::Type` is skipped. A maintainer can check correctness against the surrounding doc comment without external context."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "The single added arm implements the specified rule generally, satisfies points 1-5 and leaves point 6's machinery (`push_scope`/`pop_scope`, `conservative_unresolved`, the other item arms) untouched, and is as small as the fix can be. The only faults are cosmetic -- `syn::Item::ForeignMod` where siblings use the imported `Item::Fn`, and `foreign`/`decl` where siblings use `nested` -- which do not warrant blocking."
+      }
+    }
+  ]
+}

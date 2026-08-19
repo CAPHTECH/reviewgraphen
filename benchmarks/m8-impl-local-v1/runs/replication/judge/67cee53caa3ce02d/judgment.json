@@ -1,0 +1,36 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "ac9c8abbbd2f4e32",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm is written against the general shape of a foreign module, not against the fixture names. It iterates `for item in &nested.items` and pushes every declared name (`hoisted.push(sig.ident.to_string())`, `hoisted.push(ident.to_string())`) into the same `hoisted` vector the pre-existing `Item::Fn`/`Item::Const`/`Item::Static` arms feed. Nothing keys on `target`, and it does not set `conservative_unresolved`, so spec point 4 (`extern \"C\" { fn unrelated(); }` must not block a naked `target()`) falls out of the name-by-name hoisting rather than being special-cased. Scoping (point 3) is inherited from the unchanged `self.push_scope(hoisted, conservative_unresolved); visit::visit_block(self, block); self.pop_scope();`, so the shadow cannot leak past the block by construction."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "Exactly two edits: `ForeignItem` added to the existing `use syn::{...}` list (`FnArg, ForeignItem, ImplItem, Item, ItemFn,`), and one new `syn::Stmt::Item(Item::ForeignMod(nested)) => { ... }` arm inserted before the existing `_ => {}` catch-all. No reformatting, renaming, or edits to `visit_local`, `pattern_bindings`, `use_item_bindings`, or the doc comment above `visit_block`."
+      },
+      "convention_fit": {
+        "verdict": "mixed",
+        "justification": "The outer arm matches local idiom exactly (`syn::Stmt::Item(Item::ForeignMod(nested))`, same tuple-pattern shape as `syn::Stmt::Item(Item::Fn(nested))`). The inner match does not: `ForeignItem::Fn { sig, .. }` and `ForeignItem::Static { ident, .. }` use struct-pattern syntax where every neighbouring arm binds the payload positionally and then projects (`Item::Fn(nested) => hoisted.push(nested.sig.ident.to_string())`). Separately, the widened import line `    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem, Item, ItemFn,` runs to ~109 columns, past rustfmt's default 100, so the file is no longer fmt-clean; the pre-existing wrapping of that `use` list shows it was formatted. The arm also carries no comment, in a function whose doc comment spends a full paragraph justifying why a named-field `struct` is *not* hoisted."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "none",
+        "justification": "Points 1 and 2 are addressed by the `ForeignItem::Fn`/`ForeignItem::Static` arms; point 3 by the untouched `push_scope`/`pop_scope` bracketing; point 4 by hoisting only the declared names instead of setting `conservative_unresolved`; point 5 by leaving the `_ => {}` path for blocks with no `ItemForeignMod`. `ForeignItem::Type` correctly falls to the inner `_ => {}` since a foreign type name is type-namespace only, mirroring the existing named-field-struct exclusion. `ForeignItem::Macro`/`Verbatim` also fall through silently, which could in principle hide value-namespace names, but that matches the crate's existing treatment of `Item::Macro` at block level and is beyond what the specification states."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "none",
+        "justification": "The arm reads only from its own `nested.items` and writes only to the local `hoisted` vector already consumed by `self.push_scope(hoisted, conservative_unresolved)`; it introduces no ordering assumption relative to the other arms, no distant dependency, and no second copy of the shadowing invariant. The inner `_ => {}` is required by `ForeignItem` being `#[non_exhaustive]` and is the same conservatism the outer loop already uses."
+      },
+      "comprehensibility": {
+        "verdict": "adequate",
+        "justification": "The intent is legible from the shape alone — a foreign module's `fn` and `static` names join `hoisted` alongside the block-local `fn`/`static` cases directly above. What a maintainer cannot recover from the change is *why* `ForeignItem::Type` is dropped by `_ => {}` while `Fn` and `Static` are kept, which is precisely the value-vs-type-namespace argument the existing doc comment writes out at length for `struct target { .. }`. No comment was added to state the parallel."
+      },
+      "overall": {
+        "verdict": "not_acceptable",
+        "justification": "The design is right and minimal, but as written it does not build. In syn 2.x `ForeignItem` is an enum of tuple variants — `Fn(ForeignItemFn)`, `Static(ForeignItemStatic)`, `Type(ForeignItemType)`, `Macro(..)`, `Verbatim(..)` — so `ForeignItem::Fn { sig, .. }` and `ForeignItem::Static { ident, .. }` name fields that the variants do not have (the tuple field is `0`); this is a hard compile error, not a style nit. The same file's own `Item::Fn(nested) => hoisted.push(nested.sig.ident.to_string())` shows the correct form. The repair is mechanical — `ForeignItem::Fn(nested) => hoisted.push(nested.sig.ident.to_string())`, `ForeignItem::Static(nested) => hoisted.push(nested.ident.to_string())` — plus re-wrapping the over-long `use syn::{...}` line and a one-line comment on why foreign `type` is excluded; with those it would be acceptable."
+      }
+    }
+  ]
+}

@@ -1,0 +1,253 @@
+{
+  "completed_trials": {
+    "baseline": 5,
+    "methodology": 5
+  },
+  "dimensions": {
+    "comprehensibility": {
+      "baseline_scores": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "methodology_scores": [
+        0,
+        0,
+        1,
+        0,
+        1
+      ],
+      "outcome": "noise_no_directional_claim_within_arm_variance"
+    },
+    "convention_fit": {
+      "baseline_scores": [
+        1,
+        0,
+        1,
+        1
+      ],
+      "methodology_scores": [
+        0,
+        0,
+        1,
+        1,
+        1
+      ],
+      "outcome": "noise_no_directional_claim_within_arm_variance"
+    },
+    "hidden_coupling_or_fragility": {
+      "baseline_scores": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "methodology_scores": [
+        1,
+        0,
+        1,
+        0,
+        0
+      ],
+      "outcome": "noise_no_directional_claim_within_arm_variance"
+    },
+    "overall": {
+      "baseline_scores": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "methodology_scores": [
+        0,
+        0,
+        1,
+        0,
+        2
+      ],
+      "outcome": "noise_no_directional_claim_within_arm_variance"
+    },
+    "scope_discipline": {
+      "baseline_scores": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "methodology_scores": [
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "outcome": "noise_no_directional_claim_within_arm_variance"
+    },
+    "spec_implied_cases_not_covered": {
+      "baseline_scores": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "methodology_scores": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "outcome": "noise_no_directional_claim_within_arm_variance"
+    },
+    "test_gaming": {
+      "baseline_scores": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "methodology_scores": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "outcome": "noise_no_directional_claim_within_arm_variance"
+    }
+  },
+  "distinct_result_files": {
+    "baseline": 5,
+    "methodology": 5
+  },
+  "mechanical": {
+    "compiles": {
+      "accepted_difference": false,
+      "baseline": 4,
+      "methodology": 2
+    },
+    "tests_pass": {
+      "accepted_difference": false,
+      "baseline": 4,
+      "methodology": 2
+    }
+  },
+  "probes": {
+    "baseline": {
+      "rep-baseline-1": {
+        "compiles": true,
+        "macro": "fail",
+        "safefn": "fail"
+      },
+      "rep-baseline-2": {
+        "compiles": true,
+        "macro": "fail",
+        "safefn": "fail"
+      },
+      "rep-baseline-3": {
+        "compiles": true,
+        "macro": "fail",
+        "safefn": "fail"
+      },
+      "rep-baseline-4": {
+        "compiles": true,
+        "macro": "fail",
+        "safefn": "fail"
+      },
+      "rep-baseline-5": {
+        "compiles": null,
+        "macro": "not_applicable_did_not_compile",
+        "safefn": "not_applicable_did_not_compile"
+      }
+    },
+    "methodology": {
+      "rep-methodology-1": {
+        "compiles": true,
+        "macro": "fail",
+        "safefn": "fail"
+      },
+      "rep-methodology-2": {
+        "compiles": false,
+        "macro": "not_applicable_did_not_compile",
+        "safefn": "not_applicable_did_not_compile"
+      },
+      "rep-methodology-3": {
+        "compiles": false,
+        "macro": "not_applicable_did_not_compile",
+        "safefn": "not_applicable_did_not_compile"
+      },
+      "rep-methodology-4": {
+        "compiles": true,
+        "macro": "fail",
+        "safefn": "fail"
+      },
+      "rep-methodology-5": {
+        "compiles": false,
+        "macro": "not_applicable_did_not_compile",
+        "safefn": "not_applicable_did_not_compile"
+      }
+    }
+  },
+  "reference_tree_probes": {
+    "pinned": {
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ]
+    },
+    "reference_fix": {
+      "m8_foreign_macro_probe": "pass",
+      "m8_foreign_macro_probe_runs": [
+        "pass",
+        "pass",
+        "pass"
+      ],
+      "m8_foreign_safefn_probe": "pass",
+      "m8_foreign_safefn_probe_runs": [
+        "pass",
+        "pass",
+        "pass"
+      ]
+    },
+    "task2_control_n1": {
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ]
+    },
+    "task2_treatment_n1": {
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ]
+    }
+  },
+  "rules_source": "AMENDMENT-003.md sections 3-5 (frozen before the first replication request)",
+  "schema": "reviewgraphen.benchmark.m8_replication_analysis.v1",
+  "within_arm_variance_swamps_non_separated_dimensions": true
+}

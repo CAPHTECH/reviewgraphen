@@ -1,0 +1,470 @@
+{
+  "private_cargo_target_dir_per_tree": true,
+  "reference_trees": {
+    "pinned": {
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ]
+    },
+    "reference_fix": {
+      "m8_foreign_macro_probe": "pass",
+      "m8_foreign_macro_probe_runs": [
+        "pass",
+        "pass",
+        "pass"
+      ],
+      "m8_foreign_safefn_probe": "pass",
+      "m8_foreign_safefn_probe_runs": [
+        "pass",
+        "pass",
+        "pass"
+      ]
+    },
+    "task2_control_n1": {
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ]
+    },
+    "task2_treatment_n1": {
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ]
+    }
+  },
+  "schema": "reviewgraphen.benchmark.m8_post_series.v1",
+  "trials": {
+    "rep-baseline-1": {
+      "compiles": true,
+      "declares_verified": false,
+      "flaky_verification": false,
+      "foreign_item_catchall": "fail_open",
+      "in_series_verdict": "verified",
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "obligation_count": 0,
+      "post_series_verdict": "verified",
+      "result_sha256": "675745989b9d907720b24ef9a44b01868174a48e560551173c7fea82e4440daf",
+      "schema_validated_against": "schemas/implementation-candidate-edit.schema.json",
+      "test_result_lines": [
+        [
+          "ok",
+          "67",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0"
+        ],
+        [
+          "ok",
+          "40",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0"
+        ]
+      ],
+      "tests_pass": true
+    },
+    "rep-baseline-2": {
+      "compiles": true,
+      "declares_verified": false,
+      "flaky_verification": false,
+      "foreign_item_catchall": "fail_open",
+      "in_series_verdict": "verified",
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "obligation_count": 0,
+      "post_series_verdict": "verified",
+      "result_sha256": "7376e1ca12d5becca56b6a84f074e4d9af0185d274bdb9146bc65176aafc1958",
+      "schema_validated_against": "schemas/implementation-candidate-edit.schema.json",
+      "test_result_lines": [
+        [
+          "ok",
+          "67",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0"
+        ],
+        [
+          "ok",
+          "40",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0"
+        ]
+      ],
+      "tests_pass": true
+    },
+    "rep-baseline-3": {
+      "compiles": true,
+      "declares_verified": false,
+      "flaky_verification": false,
+      "foreign_item_catchall": "fail_open",
+      "in_series_verdict": "verified",
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "obligation_count": 0,
+      "post_series_verdict": "verified",
+      "result_sha256": "f4a2f7689752cad7b9df08b255ada318244e50aeb15dc89f36b4773c6ae629ab",
+      "schema_validated_against": "schemas/implementation-candidate-edit.schema.json",
+      "test_result_lines": [
+        [
+          "ok",
+          "67",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0"
+        ],
+        [
+          "ok",
+          "40",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0"
+        ]
+      ],
+      "tests_pass": true
+    },
+    "rep-baseline-4": {
+      "compiles": true,
+      "declares_verified": false,
+      "flaky_verification": false,
+      "foreign_item_catchall": "fail_open",
+      "in_series_verdict": "verified",
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "obligation_count": 0,
+      "post_series_verdict": "verified",
+      "result_sha256": "b96d044e59e65707f247a18cccbb1d40bf3e6545275fa0bd1e1aa94896c5c4ae",
+      "schema_validated_against": "schemas/implementation-candidate-edit.schema.json",
+      "test_result_lines": [
+        [
+          "ok",
+          "67",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0"
+        ],
+        [
+          "ok",
+          "40",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0"
+        ]
+      ],
+      "tests_pass": true
+    },
+    "rep-baseline-5": {
+      "compiles": null,
+      "declares_verified": false,
+      "flaky_verification": false,
+      "foreign_item_catchall": "no_diff",
+      "in_series_verdict": "edit_anchor_did_not_match",
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "obligation_count": 0,
+      "post_series_verdict": "edit_anchor_did_not_match",
+      "result_sha256": "104c76d15a4161ec32bc1a5f2b9e9110cba4f0d6d222d703babbaff7c293030b",
+      "schema_validated_against": "schemas/implementation-candidate-edit.schema.json",
+      "test_result_lines": null,
+      "tests_pass": null
+    },
+    "rep-methodology-1": {
+      "compiles": true,
+      "declares_verified": false,
+      "flaky_verification": true,
+      "foreign_item_catchall": "fail_open",
+      "in_series_verdict": "tests_failed",
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "obligation_count": 6,
+      "post_series_verdict": "verified",
+      "result_sha256": "935550142ed27b42d2d0e0ce97b58ae0872e81b32a8f6b8c53d99911e454bbad",
+      "schema_validated_against": "schemas/implementation-candidate-output.schema.json",
+      "test_result_lines": [
+        [
+          "ok",
+          "67",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0"
+        ],
+        [
+          "ok",
+          "40",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0"
+        ]
+      ],
+      "tests_pass": true
+    },
+    "rep-methodology-2": {
+      "compiles": false,
+      "declares_verified": false,
+      "flaky_verification": false,
+      "foreign_item_catchall": "fail_open",
+      "in_series_verdict": "does_not_compile",
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "obligation_count": 6,
+      "post_series_verdict": "does_not_compile",
+      "result_sha256": "45d92852745f238874884a9f5c7b5964a7d8078c9c552d05b190abc9d623ce98",
+      "schema_validated_against": "schemas/implementation-candidate-output.schema.json",
+      "test_result_lines": null,
+      "tests_pass": null
+    },
+    "rep-methodology-3": {
+      "compiles": false,
+      "declares_verified": false,
+      "flaky_verification": false,
+      "foreign_item_catchall": "fail_open",
+      "in_series_verdict": "does_not_compile",
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "obligation_count": 6,
+      "post_series_verdict": "does_not_compile",
+      "result_sha256": "4fdbfa06d68b74cf21c3cd15fdd956bb1eea874da0309bcb15d024fc6b866511",
+      "schema_validated_against": "schemas/implementation-candidate-output.schema.json",
+      "test_result_lines": null,
+      "tests_pass": null
+    },
+    "rep-methodology-4": {
+      "compiles": true,
+      "declares_verified": false,
+      "flaky_verification": false,
+      "foreign_item_catchall": "fail_open",
+      "in_series_verdict": "verified",
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "obligation_count": 6,
+      "post_series_verdict": "verified",
+      "result_sha256": "9d55a6b0b15714db202c83c4536d3e3ff6890bbcea53b0307f11dc1b586f475d",
+      "schema_validated_against": "schemas/implementation-candidate-output.schema.json",
+      "test_result_lines": [
+        [
+          "ok",
+          "67",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0"
+        ],
+        [
+          "ok",
+          "40",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0"
+        ]
+      ],
+      "tests_pass": true
+    },
+    "rep-methodology-5": {
+      "compiles": false,
+      "declares_verified": false,
+      "flaky_verification": false,
+      "foreign_item_catchall": "fail_open",
+      "in_series_verdict": "does_not_compile",
+      "m8_foreign_macro_probe": "fail",
+      "m8_foreign_macro_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "m8_foreign_safefn_probe": "fail",
+      "m8_foreign_safefn_probe_runs": [
+        "fail",
+        "fail",
+        "fail"
+      ],
+      "obligation_count": 6,
+      "post_series_verdict": "does_not_compile",
+      "result_sha256": "67cee53caa3ce02db5463a13c7ee724d6b5a2fed0d5b0b2b2da93b9cc8eb404f",
+      "schema_validated_against": "schemas/implementation-candidate-output.schema.json",
+      "test_result_lines": null,
+      "tests_pass": null
+    }
+  }
+}

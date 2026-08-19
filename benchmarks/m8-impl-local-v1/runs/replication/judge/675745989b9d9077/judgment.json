@@ -1,0 +1,36 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "355dd8e5294e24c8",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm keys on the *item kind*, not on any name or shape an acceptance test would use: `syn::Stmt::Item(Item::ForeignMod(nested)) => { for item in &nested.items { match item { ForeignItem::Fn(foreign_fn) => hoisted.push(foreign_fn.sig.ident.to_string()), ForeignItem::Static(foreign_static) => hoisted.push(foreign_static.ident.to_string()), _ => {} } } }`. Every declared foreign `fn`/`static` name is hoisted, so a foreign `fn whatever();` shadows `whatever()` just as `fn target();` shadows `target()` — nothing is narrowed to the spec's example name. Spec point 4 (`extern \"C\" { fn unrelated(); }` must not block a naked `target()`) is satisfied structurally rather than by special-casing: only the actual declared idents reach `hoisted`, and `conservative_unresolved` is untouched by this arm. Spec point 3 (no leak past the block) falls out of the pre-existing `self.push_scope(hoisted, conservative_unresolved); visit::visit_block(self, block); self.pop_scope();` bracket the arm feeds into, not from any added bookkeeping."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "Exactly two edits: `ForeignItem` added to the existing `use syn::{...}` list, and one new match arm in `visit_block`. Neighbouring arms (`Item::Fn`, `Item::Const`, `Item::Static`, `Item::Struct` with the `if !matches!(nested.fields, Fields::Named(_))` guard, `Item::Use`) are byte-identical, `visit_local` below is untouched, and no `unsafe`, no dependency, no other file. The one blemish is a formatting side-effect rather than a semantic one — see convention_fit."
+      },
+      "convention_fit": {
+        "verdict": "mixed",
+        "justification": "Two mismatches. (a) The import line as written is `    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem, Item, ItemFn,` — 109 columns, past rustfmt's 100-char default that every other line in this file respects; rustfmt would rewrap the list, so `cargo fmt --check` would flag this hunk. (b) The file's idiom is to explain namespace reasoning in prose: the doc comment right above `visit_block` spends six lines on why a named-field struct is *not* hoisted (\"real Rust puts a named-field struct's name only in the *type* namespace, never the value namespace\"). The new arm adds the mirror-image fact — foreign `fn`/`static` *are* in the value namespace, foreign `type` is not — and says nothing, leaving the inner `_ => {}` unexplained. Mechanically the arm does fit: it reuses `hoisted.push(...to_string())` and the `syn::Stmt::Item(Item::X(nested))` shape; only the binder names (`foreign_fn`, `foreign_static` vs. the local `nested`) drift, which is defensible since `nested` is already taken by the outer pattern."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "none",
+        "justification": "Points 1 and 2 are both covered by the two inner arms (`ForeignItem::Fn` and `ForeignItem::Static`), point 3 by the untouched `push_scope`/`pop_scope` bracket, point 4 by hoisting only the declared idents, point 5 by leaving the outer `_ => {}` catch-all in place for blocks with no foreign module. `ForeignItem::Type` falling into `_ => {}` is right, not an omission — a foreign type alias is type-namespace only, the same reasoning the existing doc comment gives for named-field structs. The one genuinely open edge is `ForeignItem::Macro` (and `Verbatim`), which can expand to value-namespace names and is dropped silently; but the outer match already drops block-level `Item::Macro` through its own `_ => {}`, so this change does not introduce an inconsistency, and the spec's words do not reach it."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "none",
+        "justification": "The arm reads only `nested.items` and pushes into the same local `hoisted` vector the other arms use; it takes no dependency on anything outside `visit_block`, adds no ordering assumption (it runs in the same statement scan, before the single `self.push_scope(hoisted, conservative_unresolved)`), and does not set `conservative_unresolved`, so glob-`use` conservatism is untouched. It duplicates no invariant that lives elsewhere. The inner `_ => {}` will silently ignore any foreign-item variant syn adds later, but that is the identical exposure the surrounding outer `_ => {}` already carries, not a new fragility."
+      },
+      "comprehensibility": {
+        "verdict": "adequate",
+        "justification": "The structure is self-evident — a maintainer reading `ForeignItem::Fn(foreign_fn) => hoisted.push(foreign_fn.sig.ident.to_string())` next to `Item::Fn(nested) => hoisted.push(nested.sig.ident.to_string())` sees immediately that foreign fns are being treated as block-hoisted binders. What is *not* recoverable from the change alone is why `ForeignItem::Type` is dropped by `_ => {}` while the other two are kept; the reader has to reconstruct the value-vs-type namespace argument themselves, even though the doc comment directly above spells out that exact argument for `Fields::Named(_)`. One sentence appended to that comment would have made it clear."
+      },
+      "overall": {
+        "verdict": "acceptable_with_changes",
+        "justification": "Behaviourally this is the right fix and the minimal one: one match arm covering `ForeignItem::Fn` and `ForeignItem::Static` satisfies spec points 1-5 without touching `conservative_unresolved` (which would have violated point 4) and without disturbing any existing arm. Two things should be fixed before merge: rewrap the 109-column `use syn::{... ForeignItem, ImplItem, Item, ItemFn,` line to rustfmt's width, and extend the `visit_block` doc comment with the namespace rationale that justifies the inner `_ => {}` skipping `ForeignItem::Type`, matching the voice it already uses for named-field structs."
+      }
+    }
+  ]
+}

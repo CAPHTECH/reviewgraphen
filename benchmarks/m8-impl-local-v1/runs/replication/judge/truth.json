@@ -1,0 +1,47 @@
+{
+  "change_to_trials": {
+    "071120d6fb6bbd58": [
+      "rep-methodology-4"
+    ],
+    "1f8b44a9e51e6bfa": [
+      "rep-methodology-3"
+    ],
+    "355dd8e5294e24c8": [
+      "rep-baseline-1"
+    ],
+    "3b7a0497d867d5ef": [
+      "rep-methodology-2"
+    ],
+    "60a5097810bf9835": [
+      "rep-baseline-2"
+    ],
+    "67208cc24e8a21c2": [
+      "rep-baseline-4"
+    ],
+    "7feea8f23036030e": [
+      "rep-methodology-1"
+    ],
+    "ac9c8abbbd2f4e32": [
+      "rep-methodology-5"
+    ],
+    "ce4c20a19dea8591": [
+      "rep-baseline-3"
+    ]
+  },
+  "note": "Never admitted to any judge call.",
+  "schema": "reviewgraphen.benchmark.m8_replication_truth.v1",
+  "trial_to_change": {
+    "rep-baseline-1": "355dd8e5294e24c8",
+    "rep-baseline-2": "60a5097810bf9835",
+    "rep-baseline-3": "ce4c20a19dea8591",
+    "rep-baseline-4": "67208cc24e8a21c2",
+    "rep-methodology-1": "7feea8f23036030e",
+    "rep-methodology-2": "3b7a0497d867d5ef",
+    "rep-methodology-3": "1f8b44a9e51e6bfa",
+    "rep-methodology-4": "071120d6fb6bbd58",
+    "rep-methodology-5": "ac9c8abbbd2f4e32"
+  },
+  "trials_without_a_judged_change": [
+    "rep-baseline-5"
+  ]
+}
