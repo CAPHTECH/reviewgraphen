@@ -7,8 +7,8 @@ set -uo pipefail
 
 root=/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726
 exp="$root/benchmarks/m9-agentic-local-v1"
-runs=/tmp/m9v3-runs
-log=/tmp/m9v3-series.log
+runs=/tmp/m9v4-runs
+log=/tmp/m9v4-series.log
 mkdir -p "$runs"
 
 note() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$log"; }
