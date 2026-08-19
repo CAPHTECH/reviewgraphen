@@ -170,3 +170,12 @@ units, which are themselves a biased subsample of the original 8 (see
 `ARTIFACT_LOSS_AMENDMENT.md`). No resolution of the `claude_skill`
 same-family judge-bias question (planned, not-yet-executed: a
 post-2026-08-20 GPT-family cross-validation pass).
+
+**Addendum, 2026-08-19:** the operator decided not to run the planned
+cross-validation pass named above — see
+`../../CODEX_CROSS_VALIDATION_AMENDMENT.md` §8 for the decision, its
+reasoning, and what remains unresolved as a result. In short: the
+primary arm (`qwen_skill`) is already cross-family judged, so the pass
+would not have tested anything about this report's primary result;
+`claude_skill`'s same-family judge-bias direction and magnitude remain
+unmeasured, unchanged from what this report already states above.
