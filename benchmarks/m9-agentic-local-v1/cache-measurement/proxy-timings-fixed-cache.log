@@ -1,0 +1,5 @@
+001 GET /v1/models bytes_in=0 status=200 elapsed=0.01s
+002 POST /v1/messages?beta=true bytes_in=8022 status=200 elapsed=11.37s
+003 POST /v1/messages?beta=true bytes_in=111303 status=200 elapsed=123.82s
+004 POST /v1/messages?beta=true bytes_in=125694 status=200 elapsed=19.89s
+005 POST /v1/messages/count_tokens?beta=true bytes_in=83457 status=200 elapsed=0.02s
