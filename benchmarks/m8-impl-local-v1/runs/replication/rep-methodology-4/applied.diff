@@ -1,0 +1,27 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m8-rep-scratch-rep-methodology-4/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 10:09:18.274102855 +0900
+@@ -1852,6 +1852,24 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                syn::Stmt::Item(syn::Item::ForeignMod(foreign)) => {
++                    // A block-local foreign module's `fn`/`static` items put their names in
++                    // the enclosing block's value namespace, exactly as a block-local
++                    // `fn`/`static` does, so they shadow a same-named module-level function
++                    // for a naked call in this block. A foreign `type` alias is
++                    // type-namespace only (like a named-field struct) and never shadows.
++                    for item in &foreign.items {
++                        match item {
++                            syn::ForeignItem::Fn(decl) => {
++                                hoisted.push(decl.sig.ident.to_string());
++                            }
++                            syn::ForeignItem::Static(decl) => {
++                                hoisted.push(decl.ident.to_string());
++                            }
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }

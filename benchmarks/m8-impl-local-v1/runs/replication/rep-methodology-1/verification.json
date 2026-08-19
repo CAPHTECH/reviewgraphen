@@ -1,0 +1,91 @@
+{
+  "acceptance_test_still_failing": false,
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "reviewgraphen-ingest"
+    ],
+    "exit_code": 0,
+    "stderr": "   Compiling reviewgraphen-ingest v0.1.0 (/tmp/m8-rep-scratch-rep-methodology-1/crates/reviewgraphen-ingest)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.15s\n",
+    "stdout": ""
+  },
+  "build_warning_count": 0,
+  "candidate_declares_verified": false,
+  "candidate_evidence_statuses": [
+    "requested"
+  ],
+  "candidate_obligation_count": 6,
+  "candidate_outcome": "completed",
+  "clippy": {
+    "exit_code": 0,
+    "warning_count": 0
+  },
+  "compiles": true,
+  "diff_line_count": 39,
+  "edit_application": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "index": 0,
+      "new_bytes": 1261,
+      "old_bytes": 96,
+      "old_occurrences": 1,
+      "status": "applied"
+    },
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "index": 1,
+      "new_bytes": 295,
+      "old_bytes": 223,
+      "old_occurrences": 1,
+      "status": "applied"
+    }
+  ],
+  "result_dir": "/tmp/m8-impl-local-v1-runs/rep-methodology-1",
+  "schema": "reviewgraphen.benchmark.m8_impl_local_verification.v1",
+  "schema_validated_against": "schemas/implementation-candidate-output.schema.json",
+  "schema_validation": {
+    "command": [
+      "python3",
+      "-c",
+      "import json,sys,jsonschema;schema=json.load(open(sys.argv[1]));instance=json.load(open(sys.argv[2]));jsonschema.validate(instance,schema);print('valid')",
+      "/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/benchmarks/m8-impl-local-v1/schemas/implementation-candidate-output.schema.json",
+      "/tmp/m8-impl-local-v1-runs/rep-methodology-1/candidate.json"
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "valid\n"
+  },
+  "scratch_creation": {
+    "command": [
+      "bash",
+      "/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/benchmarks/m8-impl-local-v1/scripts/make_scratch.sh",
+      "/tmp/m8-rep-scratch-rep-methodology-1"
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "/tmp/m8-rep-scratch-rep-methodology-1\n"
+  },
+  "scratch_dir": "/tmp/m8-rep-scratch-rep-methodology-1",
+  "test": {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "reviewgraphen-ingest"
+    ],
+    "exit_code": 101,
+    "stderr": "   Compiling reviewgraphen-ingest v0.1.0 (/tmp/m8-rep-scratch-rep-methodology-1/crates/reviewgraphen-ingest)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.27s\n     Running unittests src/lib.rs (/tmp/claude-1000/-home-rizumita-workspace-reviewgraphen/0d42d984-55de-424b-ad9a-e8b8f298b722/scratchpad/cargo-target/debug/deps/reviewgraphen_ingest-1dc09aceaad12694)\nerror: test failed, to rerun pass `-p reviewgraphen-ingest --lib`\n",
+    "stdout": "\nrunning 67 tests\ntest adapter_set_hash_tests::a_different_cargo_version_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_git_version_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_cargo_resolver_policy_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_max_files_limit_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_max_file_bytes_limit_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_git_command_policy_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_proc_macro2_version_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_quote_version_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::the_proc_macro2_version_constant_is_the_real_workspace_pin_not_a_placeholder ... ok\ntest adapter_set_hash_tests::identical_inputs_produce_an_identical_adapter_set_hash ... ok\ntest adapter_set_hash_tests::a_different_syn_version_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::the_quote_version_constant_is_the_real_workspace_pin_not_a_placeholder ... ok\ntest adapter_set_hash_tests::the_syn_version_constant_is_the_real_workspace_pin_not_a_placeholder ... ok\ntest adapter_set_hash_tests::profile_and_policy_identity_do_not_affect_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::an_unavailable_cargo_version_changes_the_adapter_set_hash_and_never_panics ... ok\ntest adapter_set_hash_tests::a_different_unavailable_cargo_failure_kind_changes_the_adapter_set_hash ... ok\ntest adapter_set_hash_tests::the_same_cargo_failure_kind_hashes_identically_even_with_a_different_diagnostic ... ok\ntest git::cargo_admission_tests::a_relative_admitted_path_fails_closed ... ok\ntest git::cargo_admission_tests::cargo_command_declares_only_the_fixed_env_allowlist ... ok\ntest git::cargo_admission_tests::a_directory_admitted_path_fails_closed ... ok\ntest git::bounded_exec_tests::a_reader_thread_panic_becomes_a_typed_error_not_an_empty_result ... ok\ntest git::bounded_exec_tests::output_exactly_at_the_cap_boundary_is_accepted ... ok\ntest cargo_failure_identity_tests::a_different_cargo_version_failure_kind_changes_the_hash_and_limitation_id ... ok\ntest cargo_failure_identity_tests::the_same_cargo_version_failure_from_two_different_staged_tempdirs_hashes_and_identifies_identically ... ok\ntest git::cargo_admission_tests::a_nonexistent_admitted_path_fails_closed ... ok\ntest git::bounded_exec_tests::stderr_exceeding_the_cap_is_also_a_typed_error ... ok\ntest git::cargo_admission_tests::disabled_admission_never_attempts_cargo_version ... ok\ntest cargo_failure_identity_tests::the_same_cargo_failure_kind_with_deliberately_different_diagnostics_matches_completely ... ok\ntest git::bounded_exec_tests::output_exceeding_the_cap_is_a_typed_error_even_when_the_child_exits_successfully ... ok\ntest git::cargo_dependency_resolution_tests::same_named_local_packages_are_not_mis_bound_without_a_disambiguating_path ... ok\ntest git::cargo_admission_tests::a_non_executable_admitted_file_fails_closed ... ok\ntest git::cargo_dependency_resolution_tests::unambiguous_local_dependency_resolves_to_its_accepted_package ... ok\ntest git::cargo_dependency_resolution_tests::registry_dependency_is_always_external_even_if_a_same_named_local_package_exists ... ok\ntest git::cargo_dependency_resolution_tests::unmatched_local_dependency_is_unresolved_not_guessed ... ok\ntest git::cargo_version_precondition_tests::an_unavailable_cargo_version_blocks_cargo_metadata_even_though_the_manifest_would_otherwise_succeed ... ok\ntest git::cargo_admission_tests::a_valid_trusted_executable_is_admitted_and_its_real_version_is_reported ... FAILED\ntest git::cargo_dependency_resolution_tests::same_named_local_packages_are_disambiguated_by_an_exact_path_match ... ok\ntest git::git_command_policy_tests::the_built_command_disables_pager_optional_locks_and_the_default_attributes_file ... ok\ntest git::git_command_policy_tests::the_built_command_strips_ambient_environment_to_the_allowlist_and_disables_config ... ok\ntest git::git_command_policy_tests::the_show_file_command_disables_ext_diff_and_textconv ... ok\ntest git::git_command_policy_tests::the_changed_lines_command_disables_ext_diff_and_textconv_and_fixes_the_diff_algorithm ... ok\ntest git::cargo_version_precondition_tests::cargo_metadata_extraction_refuses_to_proceed_if_cargo_version_is_ok_without_a_staged_snapshot - should panic ... ok\ntest git::git_command_policy_tests::the_changes_command_disables_ext_diff_and_textconv_and_fixes_rename_detection ... ok\ntest git::tool_version_tests::a_missing_binary_is_a_typed_command_io_error ... ok\ntest rust::anchor_tests::rust_anchor_v1_ignores_only_comments_formatting_and_spans ... ok\ntest source_key_resolution_tests::capability_with_no_declared_source_keys_falls_back_to_the_snapshot ... ok\ntest git::tool_version_tests::a_nonzero_exit_is_a_typed_command_failed_error ... ok\ntest rust::anchor_tests::rust_anchor_v1_changes_for_identifier_signature_or_body_mutation ... ok\ntest source_key_resolution_tests::capability_with_only_unknown_source_keys_fails_closed ... ok\ntest source_key_resolution_tests::capability_with_one_unknown_key_among_multiple_fails_closed ... ok\ntest source_key_resolution_tests::capability_with_all_known_source_keys_resolves_normally ... ok\ntest source_key_resolution_tests::issue_with_all_known_source_keys_resolves_normally ... ok\ntest source_key_resolution_tests::issue_with_empty_source_keys_still_falls_back_to_the_snapshot ... ok\ntest source_key_resolution_tests::issue_with_one_unknown_key_among_multiple_fails_closed ... ok\ntest source_key_resolution_tests::issue_with_only_unknown_source_keys_fails_closed ... ok\ntest source_key_resolution_tests::relation_endpoint_order_changes_accepted_identity_and_body ... ok\ntest git::bounded_exec_tests::a_well_behaved_process_completes_normally_through_the_bounded_wrapper ... ok\ntest git::bounded_exec_tests::unbounded_output_does_not_leave_the_process_running_and_never_returns_a_truncated_ok ... ok\ntest git::cargo_version_precondition_tests::cargo_metadata_reads_the_exact_staged_directory_cargo_version_was_determined_from ... ok\ntest git::tool_version_tests::empty_stdout_on_success_is_a_typed_adapter_output_error ... ok\ntest git::cargo_version_precondition_tests::a_verified_cargo_version_lets_the_same_manifest_produce_accepted_package_facts ... ok\ntest git::tool_version_tests::a_successful_command_returns_its_trimmed_stdout ... ok\ntest git::cargo_admission_tests::cargo_version_and_cargo_metadata_run_the_same_admitted_executable_from_the_same_cwd ... ok\ntest git::cargo_admission_tests::cargo_subprocesses_never_inherit_the_real_ambient_path ... ok\ntest cargo_executable_path_independence_tests::different_admitted_cargo_paths_with_identical_output_hash_and_canonicalize_identically ... ok\ntest git::source_bundle_limit_tests::aggregate_source_limit_stops_before_the_next_git_show ... ok\ntest git::bounded_exec_tests::a_slow_process_is_killed_at_the_timeout_bound_instead_of_awaited_to_completion ... ok\n\nfailures:\n\n---- git::cargo_admission_tests::a_valid_trusted_executable_is_admitted_and_its_real_version_is_reported stdout ----\n\nthread 'git::cargo_admission_tests::a_valid_trusted_executable_is_admitted_and_its_real_version_is_reported' (736828) panicked at crates/reviewgraphen-ingest/src/git.rs:3130:14:\na valid absolute, executable, regular-file path must be admitted: CargoToolFailure { kind: Unavailable, diagnostic: \"failed to run allow-listed cargo --version: Text file busy (os error 26)\" }\n\n\nfailures:\n    git::cargo_admission_tests::a_valid_trusted_executable_is_admitted_and_its_real_version_is_reported\n\ntest result: FAILED. 66 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n"
+  },
+  "test_result_lines": [
+    [
+      "FAILED",
+      "66",
+      "1"
+    ]
+  ],
+  "tests_pass": false,
+  "verdict": "tests_failed"
+}

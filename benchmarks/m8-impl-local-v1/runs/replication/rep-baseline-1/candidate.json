@@ -1,0 +1,16 @@
+{
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "Fields, File, FnArg, ForeignItem, ImplItem, Item, ItemFn,",
+      "old": "Fields, File, FnArg, ImplItem, Item, ItemFn,"
+    },
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                syn::Stmt::Item(Item::ForeignMod(nested)) => {\n                    for item in &nested.items {\n                        match item {\n                            ForeignItem::Fn(foreign_fn) => {\n                                hoisted.push(foreign_fn.sig.ident.to_string())\n                            }\n                            ForeignItem::Static(foreign_static) => {\n                                hoisted.push(foreign_static.ident.to_string())\n                            }\n                            _ => {}\n                        }\n                    }\n                }\n                _ => {}",
+      "old": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                _ => {}"
+    }
+  ],
+  "outcome": "completed",
+  "schema": "reviewgraphen.benchmark.implementation_candidate_edit.v1"
+}

@@ -1,0 +1,62 @@
+{
+  "advertised_model_ids": [
+    "qwen3.8-27b-mlx",
+    "qwen3.8-27b-mlx@4bit",
+    "qwen3.8-27b-mlx@8bit",
+    "qwen3.8-27b-mtp",
+    "text-embedding-nomic-embed-text-v1.5"
+  ],
+  "cached_input_tokens": 24576,
+  "effective_sampling_reported_by_server": {
+    "frequency_penalty": 1.1,
+    "presence_penalty": 0,
+    "temperature": 0.1,
+    "top_p": false
+  },
+  "elapsed_minutes": 14.54,
+  "elapsed_seconds": 872.336,
+  "empty_final": false,
+  "endpoint": "http://192.168.68.71:11999/v1/responses",
+  "expected_resolved_model": "qwen3.8-27b-mlx",
+  "failure_class": "generation_ok",
+  "final_content_bytes": 13027,
+  "max_output_tokens": 131072,
+  "message_item_created": true,
+  "model": "qwen3.8:27b-mlx",
+  "model_context_window": 262144,
+  "model_identity_verified": true,
+  "model_sent": "qwen3.8:27b-mlx",
+  "output_item_types": [
+    "reasoning",
+    "message"
+  ],
+  "output_text_delta_utf8_bytes": 13027,
+  "packet": "/tmp/m8-t2-packets-v2/packet-methodology.txt",
+  "packet_bytes": 102298,
+  "provider_input_tokens": 24782,
+  "provider_output_tokens": 21512,
+  "provider_reported_reasoning_tokens": 18384,
+  "reasoning_delta_utf8_bytes": 75841,
+  "reasoning_effort_requested": "high",
+  "reasoning_share_of_output": 0.85459,
+  "resolved_model_reported_by_server": "qwen3.8-27b-mlx",
+  "response_error": null,
+  "response_incomplete_details": null,
+  "response_status": "completed",
+  "schema": "reviewgraphen.benchmark.m8_impl_local_generation_metrics.v1",
+  "sse_event_counts": {
+    "response.completed": 1,
+    "response.content_part.added": 2,
+    "response.content_part.done": 2,
+    "response.created": 1,
+    "response.in_progress": 1,
+    "response.output_item.added": 2,
+    "response.output_item.done": 2,
+    "response.output_text.delta": 3098,
+    "response.output_text.done": 1,
+    "response.reasoning_text.delta": 18219,
+    "response.reasoning_text.done": 1
+  },
+  "transport_error": null,
+  "upstream_status": 200
+}

@@ -1,0 +1,36 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "1f8b44a9e51e6bfa",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm implements the general rule rather than the tested examples. It matches any `syn::Stmt::Item(Item::ForeignMod(foreign))` and iterates `for item in &foreign.items`, hoisting `ForeignItem::Fn(nested) => hoisted.push(nested.sig.ident.to_string())` and `ForeignItem::Static(nested) => hoisted.push(nested.ident.to_string())` -- i.e. the actual declared identifiers, not a hardcoded name. Spec point 4 (`extern \"C\" { fn unrelated(); }` must not block a naked `target()`) falls out naturally because only the declared idents are pushed; there is no `conservative_unresolved |= ...` on this path, so the whole-block blunt hammer the spec warns about is absent. Spec point 3 (no leaking) is handled by reusing the existing `self.push_scope(hoisted, conservative_unresolved); visit::visit_block(self, block); self.pop_scope();` sequence, unchanged. No ABI string, arity, or identifier is special-cased: `Item::ForeignMod` matches `extern \"C\"`, `extern \"system\"`, and bare `extern` alike."
+      },
+      "scope_discipline": {
+        "verdict": "minor_excess",
+        "justification": "The diff touches only `visit_block` plus the import list, and the import reflow (`ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,` / `Item, ItemFn, ...` / `Visibility,`) is the mechanical consequence of adding one name to an alphabetised, rustfmt-wrapped `use` -- not a drive-by. The excess is the third inner arm, `ForeignItem::Const(nested) => { hoisted.push(nested.ident.to_string()) }`. The spec asks for exactly two cases (\"Its `fn` and `static` declarations\", points 1 and 2); Rust does not permit `const` items inside an `extern` block at all, so this arm covers a construct that cannot occur in valid parsed input. It is speculative coverage the task never mentioned, and the instruction was \"Keep the change as small as it can be.\""
+      },
+      "convention_fit": {
+        "verdict": "mixed",
+        "justification": "The arm placement is right -- inserted after the `Item::Use` arm and before `_ => {}`, in the same `match stmt` -- and the ident extraction mirrors the neighbours exactly (`nested.sig.ident.to_string()` for fns, `nested.ident.to_string()` for statics, matching `Item::Fn`/`Item::Static` above). Two things read foreign. First, the inner arms are braced expression bodies with no trailing semicolon: `ForeignItem::Fn(nested) => {\\n    hoisted.push(nested.sig.ident.to_string())\\n}`. Every neighbouring one-call arm is either a bare expression (`syn::Stmt::Item(Item::Fn(nested)) => hoisted.push(nested.sig.ident.to_string()),`) or, where a block is genuinely needed, a *statement* with a semicolon (`{ hoisted.push(nested.ident.to_string()); }` in the `Item::Struct` arm). These bodies fit on one line and rustfmt would collapse them, so the diff as written is not fmt-clean. Second, the surrounding code is dense with justifying prose -- the `visit_block` doc comment spends six lines explaining why a named-field struct is *not* hoisted (\"real Rust puts a named-field struct's name only in the *type* namespace, never the value namespace\") -- yet the new arm, which turns on precisely that same namespace argument for foreign items, carries no comment at all and the doc comment above is left untouched."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "none",
+        "justification": "Both named cases are handled: `ForeignItem::Fn` covers point 1 and `ForeignItem::Static` covers point 2. `ForeignItem::Type` is correctly left to `_ => {}`, consistent with the doc comment's namespace reasoning (a foreign type name is in the type namespace and cannot shadow a call target). Points 3, 5 and 6 are satisfied by the change being purely additive: the `Item::Fn`/`Const`/`Static`/`Struct`/`Use` arms, the `conservative_unresolved |= has_glob` glob handling, and the `push_scope`/`pop_scope` bracketing are all byte-identical. The residual gap -- a `ForeignItem::Macro` that expands to declare `target` falls into `_ => {}` and contributes no shadow -- is real but is the identical posture the existing code already takes toward item macros at block level, so it is not a case this change newly leaves open."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "some",
+        "justification": "The `ForeignItem::Const(nested) => { hoisted.push(nested.ident.to_string()) }` arm is the concern. syn 2.0's `ForeignItem` enum is `Fn | Static | Type | Macro | Verbatim` -- there is no `Const` variant, because Rust extern blocks accept only `fn`, `static` and `type`. On that reading the arm is not merely dead, it fails to compile (`no variant named `Const` found for enum `ForeignItem``), which would sink the whole change; at absolute best it is an arm that can never be reached. Either way it is the one line I would require changed, and it should simply be deleted. Secondary: `_ => {}` inside the foreign-item match silently drops `ForeignItem::Macro` and `ForeignItem::Verbatim`, so a foreign module whose contents this crate cannot see contributes no shadow and no conservatism -- a quiet false-match risk in a crate whose stated contract is \"record the unknown rather than guess\", and one that will widen if syn grows variants. Nothing else is coupled: no ordering assumption is introduced, and the invariant lives in the same `hoisted` vector the other arms feed."
+      },
+      "comprehensibility": {
+        "verdict": "adequate",
+        "justification": "The mechanism is self-evident from the code -- `for item in &foreign.items` feeding the same `hoisted` vector the sibling arms feed makes it obvious *what* happens. What a maintainer cannot get from the change and its surroundings is *why* foreign `fn` and `static` shadow while `ForeignItem::Type` does not; that argument is exactly the one the `visit_block` doc comment makes at length for named-field structs, and the diff neither extends that comment nor adds its own. A reader also has no hint why `ForeignItem::Const` is listed, since no valid Rust input can produce it -- it invites the wrong inference that extern blocks may contain consts."
+      },
+      "overall": {
+        "verdict": "acceptable_with_changes",
+        "justification": "The substance is right and minimal: `Item::ForeignMod` hoisting the declared `ForeignItem::Fn`/`ForeignItem::Static` idents into the existing per-block `hoisted` vector satisfies points 1-5 without whole-block conservatism, and the untouched `push_scope`/`visit_block`/`pop_scope` bracketing preserves point 6. Two things must change before I would merge: delete `ForeignItem::Const(nested) => { hoisted.push(nested.ident.to_string()) }`, which references a variant syn's `ForeignItem` does not have and would likely break the build outright, and collapse the braced arm bodies to the one-line form the neighbouring arms use so the file is rustfmt-clean. A one-line comment tying the new arm to the value-namespace argument already spelled out in the `visit_block` doc comment would bring it up to local standard."
+      }
+    }
+  ]
+}

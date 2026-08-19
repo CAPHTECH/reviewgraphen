@@ -1,0 +1,25 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m8-rep-scratch-rep-baseline-4/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 10:24:03.249017394 +0900
+@@ -1852,6 +1852,22 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                // A block-local foreign module (`extern "..." { ... }`) is hoisted for the
++                // whole block exactly like a local `fn`/`static`: its `fn` and `static`
++                // declarations put their names in the block's *value* namespace, so each one
++                // shadows a same-named module-level function for any naked call in this block
++                // and must never let such a call fall through to the module item. Only `fn`
++                // and `static` are value-namespace names (a foreign `type` alias is type-only),
++                // so an extern block declaring only other names shadows nothing and blocks no call.
++                syn::Stmt::Item(Item::ForeignMod(foreign)) => {
++                    for item in &foreign.items {
++                        match item {
++                            syn::ForeignItem::Fn(decl) => hoisted.push(decl.sig.ident.to_string()),
++                            syn::ForeignItem::Static(decl) => hoisted.push(decl.ident.to_string()),
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }

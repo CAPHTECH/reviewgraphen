@@ -1,0 +1,37 @@
+
+
+Looking at this task, I need to make block-local `extern "C" { ... }` modules contribute their `fn` and `static` names as shadows in the enclosing block's lexical scope.
+
+**Analysis of where to make the change:**
+
+The single right place is `visit_block`, which already scans a block's statements for hoisted items (`fn`/`const`/`static`/tuple-unit `struct`/`use`) and pushes them into a per-block `LexicalScope`. A block-local foreign module appears as `syn::Stmt::Item(Item::ForeignMod(_))`, which currently falls into the `_ => {}` catch-all and contributes no shadow.
+
+**Key design decisions:**
+
+1. **Hoist only `ForeignItem::Fn` and `ForeignItem::Static` names** into the existing `hoisted` vector — exactly mirroring how block-local `fn`/`static` items are handled. This satisfies requirements 1 and 2, because `record_call`'s existing shadow check (`is_locally_bound`) then emits the `RelationUnresolved` obstruction and skips the match.
+2. **Do NOT set `conservative_unresolved`** for a foreign module — requirement 4 demands that an extern declaring only other names blocks nothing.
+3. **Scoping (requirement 3) is automatic**: `visit_block` pushes the scope before visiting and pops it after, so a shadow in an inner block never leaks to the outer one.
+4. **Wildcard for other `ForeignItem` variants** (`Type`, `Verbatim`, and any others): a foreign `type` alias lives only in the type namespace (same reasoning as named-field structs — never hoisted), and a wildcard arm compiles safely regardless of which variants exist in syn 2.0.
+5. **Traversal is unchanged**: the `ForeignMod` was already visited by `visit::visit_block`; foreign fn declarations have no bodies, so no new call/issue recording paths are triggered. The only behavioral delta is `is_locally_bound` returning true for those names within that block — which has exactly one call site, in `record_call`.
+6. I add `ForeignItem` to the existing `syn` import list (keeping it rustfmt-sorted: after `FnArg`, since 'n' < 'o').
+
+The change contains no `unsafe` keyword, adds no dependencies, touches only the one permitted file, and preserves every existing arm.
+
+```json
+{
+  "schema": "reviewgraphen.benchmark.implementation_candidate_edit.v1",
+  "outcome": "completed",
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "old": "use syn::{\n    Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,\n    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, ItemFn,\n    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,\n};",
+      "new": "use syn::{\n    Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,\n    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem,\n    ImplItem, ItemFn, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type,\n    UseTree, Visibility,\n};"
+    },
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "old": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                _ => {}",
+      "new": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                syn::Stmt::Item(Item::ForeignMod(nested)) => {\n                    for item in &nested.items {\n                        match item {\n                            ForeignItem::Fn(decl) => hoisted.push(decl.sig.ident.to_string()),\n                            ForeignItem::Static(decl) => hoisted.push(decl.ident.to_string()),\n                            _ => {}\n                        }\n                    }\n                }\n                _ => {}"
+    }
+  ]
+}
+```

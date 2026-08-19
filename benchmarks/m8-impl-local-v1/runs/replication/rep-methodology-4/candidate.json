@@ -1,0 +1,98 @@
+{
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                syn::Stmt::Item(syn::Item::ForeignMod(foreign)) => {\n                    // A block-local foreign module's `fn`/`static` items put their names in\n                    // the enclosing block's value namespace, exactly as a block-local\n                    // `fn`/`static` does, so they shadow a same-named module-level function\n                    // for a naked call in this block. A foreign `type` alias is\n                    // type-namespace only (like a named-field struct) and never shadows.\n                    for item in &foreign.items {\n                        match item {\n                            syn::ForeignItem::Fn(decl) => {\n                                hoisted.push(decl.sig.ident.to_string());\n                            }\n                            syn::ForeignItem::Static(decl) => {\n                                hoisted.push(decl.ident.to_string());\n                            }\n                            _ => {}\n                        }\n                    }\n                }\n                _ => {}",
+      "old": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                _ => {}"
+    }
+  ],
+  "limitations": [
+    "No compiler, test runner, or shell was available in this session; every obligation is `requested`, none is `verified`. Writing the edit and re-reading it is not compilation.",
+    "I was not shown the 115 existing tests, `tests/m2.rs`, `tests/extraction_report_schema.rs`, the harness acceptance test, or any other file in the crate; preservation claims (obligation-5) rest on a structural argument about the diff's surface, not on observed test outcomes.",
+    "My syn 2.0.x API knowledge (`ForeignItem::Fn/Static`, `ForeignFn.sig`, `ForeignStatic.ident`) comes from training, not from the given source; a mismatch would surface only as a harness build failure (obligation-6).",
+    "I did not check any consumer of `reviewgraphen-ingest` outside this file; no public signature changed (`visit_block` and `FunctionBodyVisitor` are private), so the only observable delta is in emitted relations/obstructions for inputs containing block-local extern fn/static items \u2014 the intended fix.",
+    "The `visit_block` doc comment was deliberately left unmodified (it now omits the extern case); updating it would expand the morphism beyond the enumerated obligations."
+  ],
+  "obligations": [
+    {
+      "claim": "satisfied",
+      "context_requirement": "`visit_block`'s hoisting pre-scan and `record_call`'s existing `is_locally_bound` shadow check, both in the given file; the harness acceptance test's fixture (not shown to me)",
+      "evidence_requirement": "`cargo test -p reviewgraphen-ingest` in the harness \u2014 specifically its acceptance test of behaviour 1; no test runner is available in this session",
+      "evidence_status": "requested",
+      "id": "obligation-1",
+      "note": "By construction: the new arm pushes the extern fn's name into the block's `LexicalScope.bindings` during `visit_block`'s pre-scan, and the pre-existing (unchanged) shadow check in `record_call` then emits the obstruction and skips resolution. Reasoned against the given source only; nothing was run in this session, so no verification exists here.",
+      "property": "value-namespace-shadowing (domain.specific_property): a block-local extern `fn` named `target` makes a naked `target()` in that block shadowed \u2014 no `calls` edge to the module-level `target`, and a `RelationUnresolved` obstruction naming the enclosing function is retained",
+      "provenance": "task specification point 1; crate contract that a shadowed call must be retained as an explicit obstruction rather than matched",
+      "risk": "high impact (an unsound match is a false fact, violating the crate's record-the-unknown contract); exposure: any function body containing an extern block with a same-named fn; likelihood: exercised directly by the acceptance test",
+      "target": "the `calls` relation (and its absence) for a naked call in a block containing `extern \"C\" { fn target(); }`",
+      "target_kind": "Relation"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "`visit_block`'s hoisting pre-scan and `record_call`'s shadow check (given file); the acceptance test's behaviour-2 fixture",
+      "evidence_requirement": "`cargo test -p reviewgraphen-ingest` in the harness (behaviour 2); not run in this session",
+      "evidence_status": "requested",
+      "id": "obligation-2",
+      "note": "The arm pushes `decl.ident` for every `ForeignItem::Static`; the unchanged shadow check in `record_call` does the rest. Reasoning only; unverified in this session.",
+      "property": "value-namespace-shadowing (domain.specific_property): a block-local extern `static` named `target` shadows a same-named module-level function for a naked call in that block, exactly as the extern `fn` case \u2014 a foreign static is in the value namespace",
+      "provenance": "task specification point 2; consistent with the crate's existing namespace-based shadowing posture (a locally bound name shadows regardless of whether it is itself callable)",
+      "risk": "high impact (same false-fact class as obligation-1); exposure: any block with an extern static sharing a module fn's name; likelihood: exercised by the acceptance test",
+      "target": "the `calls` relation (and its absence) for a naked call in a block containing `extern \"C\" { static target: u8; }`",
+      "target_kind": "Relation"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the existing `push_scope`/`pop_scope` bracketing in `visit_block` (given file); the acceptance test's nested-block fixture",
+      "evidence_requirement": "`cargo test -p reviewgraphen-ingest` in the harness (behaviour 3); not run in this session",
+      "evidence_status": "requested",
+      "id": "obligation-3",
+      "note": "The names I add enter the same per-block scope that `visit_block` already pushes before and pops after `visit::visit_block`; no push/pop logic was changed, so non-leak is inherited from the existing mechanism (which already brackets local fn/const/static/use). Reasoning only; unverified in this session.",
+      "property": "invariant-preservation (docs/07 \u00a73.6): the shadow is scoped to its own block and does not leak past it \u2014 in a body of `{ extern \"C\" { fn target(); } target(); }` followed by an outer `target()`, exactly one resolved `calls` edge (the outer call)",
+      "provenance": "task specification point 3; Rust's own block-scoping rule for items",
+      "risk": "medium impact (a leaking shadow would wrongly block a valid outer resolution); exposure: any function with an inner block containing an extern item; likelihood: exercised by the acceptance test",
+      "target": "the lexical-scope stack in `FunctionBodyVisitor` across the change",
+      "target_kind": "Invariant"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "`visit_block`'s pre-scan (given file) \u2014 specifically that the new arm extends `hoisted` with only the declared fn/static names and never sets `conservative_unresolved`; the acceptance test's behaviour-4 fixture",
+      "evidence_requirement": "`cargo test -p reviewgraphen-ingest` in the harness (behaviour 4); not run in this session",
+      "evidence_status": "requested",
+      "id": "obligation-4",
+      "note": "The arm pushes only the exact declared names and leaves `conservative_unresolved` untouched (that flag is set only by glob/unenumerable `use`, as before); a type-only extern block pushes nothing, identical to the old catch-all. Reasoning against the given source; unverified in this session.",
+      "property": "increased-projection-loss (docs/07 \u00a73.6): the change must not mark a block conservatively unresolved merely because any foreign module is present \u2014 `extern \"C\" { fn unrelated(); }` must not block a naked `target()` that still resolves to the module-level `target`",
+      "provenance": "task specification point 4, which explicitly rejects the whole-block-conservative alternative",
+      "risk": "medium impact (over-blocking converts valid resolutions into obstructions \u2014 the lost-unknown half of the crate's contract); exposure: any block with an extern module whose names do not collide; likelihood: exercised by the acceptance test",
+      "target": "the resolved-vs-unresolved status of naked calls in blocks containing a foreign module that declares only other names",
+      "target_kind": "Morphism"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the full given file (to bound the diff's surface); the 115 existing tests and both integration suites, which I was NOT shown",
+      "evidence_requirement": "`cargo test -p reviewgraphen-ingest` in the harness (whole suite); not run in this session",
+      "evidence_status": "requested",
+      "id": "obligation-5",
+      "note": "Structural argument only: the edit adds exactly one match arm to `visit_block`'s pre-scan that previously fell into the `_ => {}` catch-all, and changes no other line; for inputs without a block-local extern fn/static the emitted facts are unchanged by construction (hoisted names emit no artifacts of their own and only affect `record_call` for same-named calls). I have not seen or run any of the 115 tests, so this is a bounded claim: it covers the diff's surface, not observed test outcomes.",
+      "property": "invariant-preservation + test-relation (docs/07 \u00a73.6, docs/07 \u00a712): all 115 existing tests (unit + `tests/m2.rs` + `tests/extraction_report_schema.rs`) still pass after the change",
+      "provenance": "task specification point 6; docs/07 \u00a74 change rule firing on lost or distorted structure in the morphism",
+      "risk": "high impact if violated (regressing the existing suite); exposure: any fixture whose block contains a foreign module with fn/static items AND a same-named naked call expecting the old (unsound) resolution; likelihood: low \u2014 the task states all 115 pass pre-change and only the acceptance test fails, so no existing test can assert the old behaviour for this construct",
+      "target": "the crate's pre-existing behaviours: fn/const/static/tuple-unit-struct/use hoisting, glob-use conservatism, pattern-position shadowing, the obstruction ledger, and snapshot/fact ID base-invariance",
+      "target_kind": "Morphism"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the given file (for style and imports) plus my knowledge of the syn 2.0.x API shapes used: `Item::ForeignMod(ForeignMod { items })`, `ForeignItem::Fn(ForeignFn { sig })`, `ForeignItem::Static(ForeignStatic { ident })`",
+      "evidence_requirement": "`cargo build -p reviewgraphen-ingest` and `cargo clippy -p reviewgraphen-ingest --all-targets` in the harness; neither was run in this session (no compiler available)",
+      "evidence_status": "requested",
+      "id": "obligation-6",
+      "note": "I did not compile. Confidence rests on: (1) `syn::Item::ForeignMod` and the `Fn`/`Static` variants of `syn::ForeignItem`, with `.sig.ident` / `.ident`, are standard stable syn 2.x shapes; (2) fully-qualified paths mean the untouched import list cannot break; (3) match ergonomics mirror the existing arms exactly, and a wildcard arm covers any non-exhaustive variant. Residual risk: a syn 2.0.119 detail differing from my knowledge; the harness build is the actual check.",
+      "property": "domain.specific_property: lint-clean-compilation \u2014 `cargo build -p reviewgraphen-ingest` exits 0 and `cargo clippy -p reviewgraphen-ingest --all-targets` reports no new diagnostics; the edit contains no `unsafe` keyword (workspace `forbid(unsafe_code)`) and adds no dependencies or import-list changes",
+      "provenance": "the task's 'How the change is checked' section names these two commands as checks that count; workspace lint constraints (edition 2024, toolchain 1.95.0)",
+      "risk": "high impact if violated (a build failure voids the entire run); exposure: any syn API-shape mismatch in the two field accesses; likelihood: low \u2014 both are long-stable syn 2.x shapes, and fully-qualified paths avoid any dependency on the untouched import list",
+      "target": "the post-change `crates/reviewgraphen-ingest/src/rust.rs` under the workspace's lint configuration",
+      "target_kind": "Invariant"
+    }
+  ],
+  "outcome": "completed",
+  "schema": "reviewgraphen.benchmark.implementation_candidate_output.v1"
+}

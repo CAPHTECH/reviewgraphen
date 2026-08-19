@@ -1,0 +1,28 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m8-rep-scratch-rep-baseline-3/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 09:54:22.843368902 +0900
+@@ -12,7 +12,8 @@
+ use syn::visit::{self, Visit};
+ use syn::{
+     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
++    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, ForeignItem, FnArg,
++    ImplItem, Item, ItemFn,
+     ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
+ };
+ 
+@@ -1842,6 +1843,15 @@
+                 syn::Stmt::Item(Item::Fn(nested)) => hoisted.push(nested.sig.ident.to_string()),
+                 syn::Stmt::Item(Item::Const(nested)) => hoisted.push(nested.ident.to_string()),
+                 syn::Stmt::Item(Item::Static(nested)) => hoisted.push(nested.ident.to_string()),
++                syn::Stmt::Item(Item::ForeignMod(foreign)) => {
++                    for item in &foreign.items {
++                        match item {
++                            ForeignItem::Fn(decl) => hoisted.push(decl.sig.ident.to_string()),
++                            ForeignItem::Static(decl) => hoisted.push(decl.ident.to_string()),
++                            _ => {}
++                        }
++                    }
++                }
+                 syn::Stmt::Item(Item::Struct(nested))
+                     if !matches!(nested.fields, Fields::Named(_)) =>
+                 {

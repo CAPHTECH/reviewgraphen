@@ -1,0 +1,11 @@
+{
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                // A block-local foreign module (`extern \"...\" { ... }`) is hoisted for the\n                // whole block exactly like a local `fn`/`static`: its `fn` and `static`\n                // declarations put their names in the block's *value* namespace, so each one\n                // shadows a same-named module-level function for any naked call in this block\n                // and must never let such a call fall through to the module item. Only `fn`\n                // and `static` are value-namespace names (a foreign `type` alias is type-only),\n                // so an extern block declaring only other names shadows nothing and blocks no call.\n                syn::Stmt::Item(Item::ForeignMod(foreign)) => {\n                    for item in &foreign.items {\n                        match item {\n                            syn::ForeignItem::Fn(decl) => hoisted.push(decl.sig.ident.to_string()),\n                            syn::ForeignItem::Static(decl) => hoisted.push(decl.ident.to_string()),\n                            _ => {}\n                        }\n                    }\n                }\n                _ => {}",
+      "old": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                _ => {}"
+    }
+  ],
+  "outcome": "completed",
+  "schema": "reviewgraphen.benchmark.implementation_candidate_edit.v1"
+}

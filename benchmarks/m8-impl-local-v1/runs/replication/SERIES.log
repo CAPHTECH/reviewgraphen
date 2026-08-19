@@ -1,0 +1,52 @@
+2026-08-19T08:30:24+09:00 SERIES START
+2026-08-19T08:30:24+09:00 START rep-methodology-1 (packet sha256 verified)
+2026-08-19T08:48:46+09:00 OK rep-methodology-1 generated
+2026-08-19T08:48:51+09:00 VERIFY rep-methodology-1 verdict=tests_failed
+2026-08-19T08:48:52+09:00 PROBE rep-methodology-1 m8_foreign_macro_probe=fail
+2026-08-19T08:48:52+09:00 PROBE rep-methodology-1 m8_foreign_safefn_probe=fail
+2026-08-19T08:48:52+09:00 START rep-baseline-1 (packet sha256 verified)
+2026-08-19T09:02:39+09:00 OK rep-baseline-1 generated
+2026-08-19T09:03:01+09:00 VERIFY rep-baseline-1 verdict=verified
+2026-08-19T09:03:01+09:00 PROBE rep-baseline-1 m8_foreign_macro_probe=fail
+2026-08-19T09:03:02+09:00 PROBE rep-baseline-1 m8_foreign_safefn_probe=fail
+2026-08-19T09:03:02+09:00 START rep-methodology-2 (packet sha256 verified)
+2026-08-19T09:15:18+09:00 OK rep-methodology-2 generated
+2026-08-19T09:15:18+09:00 VERIFY rep-methodology-2 verdict=does_not_compile
+2026-08-19T09:15:19+09:00 PROBE rep-methodology-2 m8_foreign_macro_probe=fail
+2026-08-19T09:15:19+09:00 PROBE rep-methodology-2 m8_foreign_safefn_probe=fail
+2026-08-19T09:15:19+09:00 START rep-baseline-2 (packet sha256 verified)
+2026-08-19T09:24:53+09:00 OK rep-baseline-2 generated
+2026-08-19T09:25:15+09:00 VERIFY rep-baseline-2 verdict=verified
+2026-08-19T09:25:16+09:00 PROBE rep-baseline-2 m8_foreign_macro_probe=fail
+2026-08-19T09:25:17+09:00 PROBE rep-baseline-2 m8_foreign_safefn_probe=fail
+2026-08-19T09:25:17+09:00 START rep-methodology-3 (packet sha256 verified)
+2026-08-19T09:34:33+09:00 OK rep-methodology-3 generated
+2026-08-19T09:34:33+09:00 VERIFY rep-methodology-3 verdict=does_not_compile
+2026-08-19T09:34:34+09:00 PROBE rep-methodology-3 m8_foreign_macro_probe=fail
+2026-08-19T09:34:34+09:00 PROBE rep-methodology-3 m8_foreign_safefn_probe=fail
+2026-08-19T09:34:34+09:00 START rep-baseline-3 (packet sha256 verified)
+2026-08-19T09:54:22+09:00 OK rep-baseline-3 generated
+2026-08-19T09:54:44+09:00 VERIFY rep-baseline-3 verdict=verified
+2026-08-19T09:54:44+09:00 PROBE rep-baseline-3 m8_foreign_macro_probe=fail
+2026-08-19T09:54:45+09:00 PROBE rep-baseline-3 m8_foreign_safefn_probe=fail
+2026-08-19T09:54:45+09:00 START rep-methodology-4 (packet sha256 verified)
+2026-08-19T10:09:18+09:00 OK rep-methodology-4 generated
+2026-08-19T10:09:40+09:00 VERIFY rep-methodology-4 verdict=verified
+2026-08-19T10:09:41+09:00 PROBE rep-methodology-4 m8_foreign_macro_probe=fail
+2026-08-19T10:09:41+09:00 PROBE rep-methodology-4 m8_foreign_safefn_probe=fail
+2026-08-19T10:09:41+09:00 START rep-baseline-4 (packet sha256 verified)
+2026-08-19T10:24:03+09:00 OK rep-baseline-4 generated
+2026-08-19T10:24:24+09:00 VERIFY rep-baseline-4 verdict=verified
+2026-08-19T10:24:25+09:00 PROBE rep-baseline-4 m8_foreign_macro_probe=fail
+2026-08-19T10:24:26+09:00 PROBE rep-baseline-4 m8_foreign_safefn_probe=fail
+2026-08-19T10:24:26+09:00 START rep-methodology-5 (packet sha256 verified)
+2026-08-19T10:32:37+09:00 OK rep-methodology-5 generated
+2026-08-19T10:32:37+09:00 VERIFY rep-methodology-5 verdict=does_not_compile
+2026-08-19T10:32:38+09:00 PROBE rep-methodology-5 m8_foreign_macro_probe=fail
+2026-08-19T10:32:38+09:00 PROBE rep-methodology-5 m8_foreign_safefn_probe=fail
+2026-08-19T10:32:38+09:00 START rep-baseline-5 (packet sha256 verified)
+2026-08-19T10:44:55+09:00 OK rep-baseline-5 generated
+2026-08-19T10:44:55+09:00 VERIFY rep-baseline-5 verdict=edit_anchor_did_not_match
+2026-08-19T10:44:57+09:00 PROBE rep-baseline-5 m8_foreign_macro_probe=fail
+2026-08-19T10:44:57+09:00 PROBE rep-baseline-5 m8_foreign_safefn_probe=fail
+2026-08-19T10:44:57+09:00 SERIES COMPLETE: 10 trials

@@ -1,0 +1,104 @@
+{
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "use syn::{\n    Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,\n    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,\n    Item, ItemFn, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree,\n    Visibility,\n};",
+      "old": "use syn::{\n    Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,\n    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,\n    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,\n};"
+    },
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                syn::Stmt::Item(Item::ForeignMod(foreign)) => {\n                    for item in &foreign.items {\n                        match item {\n                            ForeignItem::Fn(nested) => {\n                                hoisted.push(nested.sig.ident.to_string())\n                            }\n                            ForeignItem::Static(nested) => {\n                                hoisted.push(nested.ident.to_string())\n                            }\n                            ForeignItem::Const(nested) => {\n                                hoisted.push(nested.ident.to_string())\n                            }\n                            _ => {}\n                        }\n                    }\n                }\n                _ => {}",
+      "old": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                _ => {}"
+    }
+  ],
+  "limitations": [
+    "No compiler or test runner was available in this session; every evidence status is `requested`, not `verified`. No claim here is a verification result.",
+    "The 115 existing tests (tests/m2.rs, tests/extraction_report_schema.rs, and in-file unit tests beyond anchor_tests) were not shown; the preservation claim (obligation-5) is bounded to structural inspection of the edit surface, not to observed test outcomes.",
+    "The harness-owned acceptance test was not shown; obligations 1-4 are claimed satisfied by reasoning about the visible source, not by observing a test pass.",
+    "syn 2.0.119's ForeignItem::Const variant is assumed to exist based on knowledge of the syn 2.x API; it was not verified against the actual dependency source. If it does not exist in this exact patch version, the code will fail to compile.",
+    "No other file in the crate was inspected; any interaction between this change and code in other modules of reviewgraphen-ingest (e.g., a separate visitor or test helper that pattern-matches on Item::ForeignMod) is unchecked.",
+    "The `environment valid` facet (docs/10 \u00a76) is not satisfied: no build was performed in the target toolchain (Rust 1.95.0, edition 2024). The `independent` facet is not satisfied: all reasoning was performed by the same model that produced the edit."
+  ],
+  "obligations": [
+    {
+      "claim": "satisfied",
+      "context_requirement": "visit_block statement scan, record_call's is_locally_bound check, and the resolver registration in collect_function \u2014 all present in the given file",
+      "evidence_requirement": "cargo test -p reviewgraphen-ingest (harness-owned acceptance test, point 1)",
+      "evidence_status": "requested",
+      "id": "obligation-1",
+      "note": "The new ForeignMod arm pushes the fn's ident into `hoisted`, which becomes a LexicalScope binding via push_scope; record_call's existing is_locally_bound check then routes the call to the shadowed-unresolved path. I reasoned this through from the visible source; I did not run any test.",
+      "property": "baseline: changed-symbol \u2014 a naked call to `target` in a block containing `extern \"C\" { fn target(); }` is shadowed: no `calls` relation to the module-level `target`, and a `RelationUnresolved` obstruction naming the enclosing function is emitted",
+      "provenance": "Task specification point 1; the crate's stated contract that a wrong match is a false fact",
+      "risk": "High impact: a false `calls` fact is emitted into the ProgramSpace. High exposure: any function body containing a block-local extern fn with a same-named module function. Medium likelihood in real code.",
+      "target": "visit_block hoisting of block-local extern fn declarations",
+      "target_kind": "Morphism"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "Same as obligation-1; additionally requires that ForeignItem::Static's .ident is the value-namespace name (it is, per syn 2.x API)",
+      "evidence_requirement": "cargo test -p reviewgraphen-ingest (harness-owned acceptance test, point 2)",
+      "evidence_status": "requested",
+      "id": "obligation-2",
+      "note": "ForeignItem::Static is matched and its .ident hoisted. I did not run any test.",
+      "property": "baseline: changed-symbol \u2014 a naked call to `target` in a block containing `extern \"C\" { static target: u8; }` is shadowed identically to the fn case",
+      "provenance": "Task specification point 2: 'A foreign static is in the value namespace just as a foreign fn is.'",
+      "risk": "Same as obligation-1.",
+      "target": "visit_block hoisting of block-local extern static declarations",
+      "target_kind": "Morphism"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "visit_block's push_scope/pop_scope discipline (visible in file) and syn::visit::Visit's default block traversal which re-enters visit_block for nested blocks",
+      "evidence_requirement": "cargo test -p reviewgraphen-ingest (harness-owned acceptance test, point 3) plus the existing suite",
+      "evidence_status": "requested",
+      "id": "obligation-3",
+      "note": "The hoisted names are pushed into a scope that is popped at the end of visit_block, identical to how fn/const/static/use items are already scoped. I did not run any test; I verified the push/pop structure by reading the visible source.",
+      "property": "baseline: test-relation \u2014 in `{ extern \"C\" { fn target(); } target(); } target();` the inner call is unresolved and the outer call resolves; exactly one resolved edge for that caller",
+      "provenance": "Task specification point 3; docs/07 \u00a73.6 invariant preservation (the existing push/pop scoping is an invariant the morphism must not distort)",
+      "risk": "High impact if violated: a shadow leaking would suppress a legitimate resolution in sibling/enclosing code, producing a lost `calls` fact.",
+      "target": "Shadow scoping: the extern-block shadow must not leak past its enclosing block",
+      "target_kind": "Morphism"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "visit_block's per-name hoisting (not a whole-block flag) and record_call's two independent shadow checks (is_locally_bound for exact names, in_conservative_unresolved_scope for glob use)",
+      "evidence_requirement": "cargo test -p reviewgraphen-ingest (harness-owned acceptance test, point 4) plus the existing suite",
+      "evidence_status": "requested",
+      "id": "obligation-4",
+      "note": "The new arm only pushes specific identifiers it can name; it never sets conservative_unresolved. I did not run any test.",
+      "property": "baseline: test-relation \u2014 `extern \"C\" { fn unrelated(); }` in a block contributes only the name `unrelated` to hoisted bindings; a naked `target()` call still resolves to the module-level `target`; conservative_unresolved is not set",
+      "provenance": "Task specification point 4; docs/07 \u00a73.6 'increased projection loss' as a morphism defect",
+      "risk": "High impact if violated: marking the whole block conservative whenever any extern is present would suppress all unqualified resolutions in that block, a large projection loss.",
+      "target": "No over-conservatism: an extern block declaring only unrelated names must not block resolution",
+      "target_kind": "Morphism"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "The entire given file (all arms of visit_block, record_call, pattern_bindings, use_item_bindings, the LexicalScope struct, and the anchor_tests module). I do NOT have: tests/m2.rs, tests/extraction_report_schema.rs, or any other file in the crate.",
+      "evidence_requirement": "cargo test -p reviewgraphen-ingest (all 115 existing tests) and cargo build -p reviewgraphen-ingest",
+      "evidence_status": "requested",
+      "id": "obligation-5",
+      "note": "The edit adds a new match arm and one import; it does not alter any existing arm, binding, or control-flow path. The only behavioural change is for stmts that are Item::ForeignMod, which previously fell into the catch-all `_ => {}` and contributed nothing. I cannot see the 115 tests, so my preservation claim is bounded to: 'no existing code path is modified; the new arm only fires on a construct that previously contributed no shadow.' I did not run any test.",
+      "property": "baseline: test-relation \u2014 all 115 existing tests in the crate (unit + tests/m2.rs + tests/extraction_report_schema.rs) still pass; no existing match arm, data structure, or function signature is modified",
+      "provenance": "Task specification point 6; docs/07 \u00a73.6 'lost test relation' and 'invariant preservation'",
+      "risk": "High impact: any regression breaks the crate's existing contract. Exposure is bounded by the edit surface: two additions (one import, one match arm), zero modifications to existing code paths.",
+      "target": "Preservation of all existing shadow-handling behaviour (fn/const/static/tuple-struct/use/glob-use/pattern) and the full existing test suite",
+      "target_kind": "Morphism"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "The import list (visible), the new match arm (written by me), and the workspace lint constraints as stated in the task. I do NOT have: the workspace Cargo.toml or syn's source to verify ForeignItem::Const exists in 2.0.119.",
+      "evidence_requirement": "cargo build -p reviewgraphen-ingest (must exit 0, no errors) and cargo clippy -p reviewgraphen-ingest --all-targets (must exit 0, no warnings)",
+      "evidence_status": "requested",
+      "id": "obligation-6",
+      "note": "I verified by inspection: no `unsafe` keyword in the added code, no new dependency, no dbg/todo/unimplemented macros, ForeignItem is imported and used. I am relying on my knowledge that syn 2.x exports ForeignItem with Fn/Static/Const variants; I cannot verify against the actual crate source without a compiler. I did not run cargo build or clippy.",
+      "property": "architecture: context-boundary \u2014 no `unsafe` keyword, no new dependencies, no denied lints (unused_must_use, clippy::dbg_macro, clippy::todo, clippy::unimplemented) triggered; syn 2.0.119 ForeignItem API used correctly",
+      "provenance": "Task constraints section (edition 2024, toolchain 1.95.0, forbid unsafe, deny lints); docs/10 \u00a72.2 (compiler diagnostic as executable evidence)",
+      "risk": "High impact if the code does not compile: the entire change is discarded. Low likelihood: ForeignItem::Fn/Static/Const are stable syn 2.x variants; the match is exhaustive via `_ => {}`; no unsafe or denied-lint constructs are introduced.",
+      "target": "Compilation and lint cleanliness of the change under workspace configuration",
+      "target_kind": "Morphism"
+    }
+  ],
+  "outcome": "completed",
+  "schema": "reviewgraphen.benchmark.implementation_candidate_output.v1"
+}

@@ -1,0 +1,38 @@
+```json
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "67208cc24e8a21c2",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The arm implements the general rule, not the tested example. It iterates every declaration in the foreign module and hoists by kind -- `for item in &foreign.items { match item { syn::ForeignItem::Fn(decl) => hoisted.push(decl.sig.ident.to_string()), syn::ForeignItem::Static(decl) => hoisted.push(decl.ident.to_string()), _ => {} } }`. Nothing keys on the name `target`, on the ABI string (`Item::ForeignMod(foreign)` is matched irrespective of `foreign.abi`), on the number of items, or on the block's position. Spec point 4 (the trap arm: `extern \"C\" { fn unrelated(); }` must not block a naked `target()`) is satisfied structurally rather than by special-casing, because only the declared idents enter `hoisted` and `conservative_unresolved` is left untouched by this arm. Spec point 3 (no leak past the block) falls out of reusing the existing `self.push_scope(hoisted, conservative_unresolved); ... self.pop_scope();` pair rather than any new bookkeeping."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "The diff adds exactly one match arm plus its comment to `visit_block`. Every pre-existing arm is byte-identical in the diff context -- `syn::Stmt::Item(Item::Fn(nested)) => hoisted.push(nested.sig.ident.to_string())`, the `Item::Struct(nested) if !matches!(nested.fields, Fields::Named(_))` guard, the `use_item_bindings` arm with `conservative_unresolved |= has_glob`, and the trailing `_ => {}` are all untouched. `visit_local` appears in the context window only as unchanged context. No renames, no reformatting, no new helper function, no edits outside `rust.rs`."
+      },
+      "convention_fit": {
+        "verdict": "mixed",
+        "justification": "The arm shape and qualification style match the neighbours: `syn::Stmt::Item(Item::ForeignMod(foreign))` mirrors `syn::Stmt::Item(Item::Static(nested))`, and the inner `_ => {}` mirrors the outer catch-all. Two things read foreign, though. First, binding names: every sibling arm binds the item as `nested` (`Item::Fn(nested)`, `Item::Const(nested)`, `Item::Use(nested)`), while this one introduces `foreign` and then `decl` for the inner items. Second, comment placement: the visible local idiom puts rationale in the function's doc comment -- the existing `/// A block-local *named-field* struct (`struct target { .. }`) is deliberately never hoisted here: ... hoisting it anyway would wrongly block an otherwise-valid resolution to the outer `fn target`.` explains precisely the analogous namespace judgement -- and the match arms themselves carry no inline commentary at all. This change instead attaches a seven-line inline block (`// A block-local foreign module (`extern \"...\" { ... }`) is hoisted for the whole block exactly like a local `fn`/`static`: ...`) directly above the arm. The voice is right; the location and the density relative to a five-line arm are not."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "some",
+        "justification": "The specified cases are all covered: `ForeignItem::Fn` (point 1), `ForeignItem::Static` (point 2), block scoping via the existing push/pop (point 3), name-selective shadowing (point 4), and no effect when no `ForeignMod` is present (point 5). The gap is the inner `_ => {}`, which silently discards `syn::ForeignItem::Macro` and `syn::ForeignItem::Verbatim`. An `extern \"C\" { make_bindings!(); }` in a block can bind value-namespace names the visitor cannot see, and the crate's stated posture -- \"record the unknown rather than guess ... a wrong match is a false fact\" -- is the same reasoning that makes the sibling arm set `conservative_unresolved |= has_glob` for a glob `use`. An unknown-name foreign item is the glob-`use` situation in a different syntactic dress, and here it produces a silent resolution rather than a retained obstruction. Correctly excluded, by contrast, is `ForeignItem::Type`, and the comment says why: `// Only `fn` and `static` are value-namespace names (a foreign `type` alias is type-only)`."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "some",
+        "justification": "No distant dependency and no ordering assumption: the arm only appends to the same `hoisted` vector the other arms feed, before the single `self.push_scope(hoisted, conservative_unresolved)`, so hoisting is order-independent as the surrounding code already assumes. It duplicates no invariant -- the value/type namespace rule it encodes is stated once, in the same place as the named-field-struct rule. The fragility is the inner `_ => {}`: it is a construct that will silently do the wrong thing as `syn`'s `ForeignItem` enum grows or as the fixtures start using macros inside `extern` blocks, and it fails in the unsound direction (a false `calls` fact) rather than toward a retained unknown. The same criticism applies to the pre-existing outer `_ => {}`, so this is the local status quo rather than a new class of hazard."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "A maintainer can see why it is correct without external context. The comment states the licensing rule -- `its `fn` and `static` declarations put their names in the block's *value* namespace, so each one shadows a same-named module-level function for any naked call in this block` -- and the exclusion rule -- `an extern block declaring only other names shadows nothing and blocks no call` -- which is exactly the non-obvious spec point 4. It parallels the existing doc-comment reasoning about the named-field struct, so the namespace argument the file already relies on is visibly the same argument here."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "It does the specified job with one arm and no collateral damage: `Item::ForeignMod` is matched unconditionally, `ForeignItem::Fn`/`ForeignItem::Static` idents are hoisted into the existing scope machinery, and nothing else in `visit_block` moves. All six required behaviours hold, including the anti-over-conservatism one that a lazier fix would have failed. Two things I would raise in review but would not block on: rename `foreign`/`decl` to `nested` for consistency with the sibling arms and move the rationale into the function doc comment where the analogous named-field-struct reasoning already lives; and consider whether `syn::ForeignItem::Macro` should set `conservative_unresolved` the way `has_glob` does, since today it drops an unknown instead of recording one."
+      }
+    }
+  ]
+}
+```

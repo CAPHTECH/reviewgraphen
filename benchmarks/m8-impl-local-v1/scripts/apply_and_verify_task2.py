@@ -22,6 +22,7 @@ usage: apply_and_verify_task2.py <result-dir> <fresh-scratch-dir>
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -48,7 +49,11 @@ def run(command: list[str], cwd: Path | None = None) -> dict:
         env={
             "PATH": "/home/rizumita/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
             "HOME": "/home/rizumita",
-            "CARGO_TARGET_DIR": CARGO_TARGET_DIR,
+            # AMENDMENT-005 section 3.2: a caller may hand this process a
+            # private per-tree target dir. One shared target dir served one
+            # scratch tree's compiled `reviewgraphen-ingest` 0.1.0 library to
+            # another, producing measurements that were simply wrong.
+            "CARGO_TARGET_DIR": os.environ.get("CARGO_TARGET_DIR", CARGO_TARGET_DIR),
             # Ten of tests/m2.rs's forty tests require an externally admitted
             # cargo (docs/adr/0012); without it they fail on the pinned
             # revision too, which would make the Q3 gate meaningless. The

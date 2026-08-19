@@ -1,0 +1,16 @@
+{
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, ForeignItem, FnArg,\n    ImplItem, Item, ItemFn,",
+      "old": "    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,"
+    },
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "                syn::Stmt::Item(Item::Static(nested)) => hoisted.push(nested.ident.to_string()),\n                syn::Stmt::Item(Item::ForeignMod(foreign)) => {\n                    for item in &foreign.items {\n                        match item {\n                            ForeignItem::Fn(decl) => hoisted.push(decl.sig.ident.to_string()),\n                            ForeignItem::Static(decl) => hoisted.push(decl.ident.to_string()),\n                            _ => {}\n                        }\n                    }\n                }",
+      "old": "                syn::Stmt::Item(Item::Static(nested)) => hoisted.push(nested.ident.to_string()),"
+    }
+  ],
+  "outcome": "completed",
+  "schema": "reviewgraphen.benchmark.implementation_candidate_edit.v1"
+}

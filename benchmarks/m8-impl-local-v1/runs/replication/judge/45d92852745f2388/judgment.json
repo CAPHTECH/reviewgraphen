@@ -1,0 +1,36 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "3b7a0497d867d5ef",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm implements the general rule rather than the tested example. It iterates every item of the foreign module -- `for foreign_item in &nested.items` -- and hoists by kind, not by name: `syn::ForeignItem::Fn(foreign_fn) => { hoisted.push(foreign_fn.ident.to_string()); }` and `syn::ForeignItem::Static(foreign_static) => { hoisted.push(foreign_static.ident.to_string()); }`. There is no comparison against `\"target\"`, no restriction to `extern \"C\"` specifically (`Item::ForeignMod(nested)` matches any ABI), and no restriction to single-item extern blocks. The hoisted names flow into the same `self.push_scope(hoisted, conservative_unresolved)` call the pre-existing `fn`/`const`/`static`/`use` arms use, so the shadowing mechanism is the general one, not a bypass. The change also deliberately declines the shortcut the spec warns about: it never sets `conservative_unresolved` for a foreign module, which is what point 4 requires."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "The diff adds exactly one match arm plus its comment inside `visit_block`'s statement loop, between the `syn::Stmt::Item(Item::Use(nested))` arm and the trailing `_ => {}`. Every other line in the 25-line context on both sides -- the doc comment about named-field structs, the `Item::Fn`/`Item::Const`/`Item::Static`/`Item::Struct`/`Item::Use` arms, `self.push_scope(...)`/`visit::visit_block(self, block)`/`self.pop_scope()`, and the whole `visit_local` body -- is unmodified. No renaming, no reformatting, no signature changes, no new imports."
+      },
+      "convention_fit": {
+        "verdict": "fits",
+        "justification": "Match-arm shape mirrors the neighbours: the binding is named `nested` exactly as in `syn::Stmt::Item(Item::Fn(nested))` and `syn::Stmt::Item(Item::Use(nested))`, and the path qualification style (`syn::Stmt::Item(...)`, `syn::ForeignItem::Fn(...)` with the imported `Item`/`Fields` unqualified) matches the mixed qualification already present. The inner `_ => {}` catch-all matches the outer loop's own `_ => {}`. Comment voice matches the surrounding doc comment closely -- the existing text says \"real Rust puts a named-field struct's name only in the *type* namespace, never the value namespace\", and the new comment says \"a foreign `type` (type namespace only, like a named-field struct) never shadows\" and \"real Rust would reject the call rather than let it fall through to the module item\". Ten lines of comment for twelve lines of code is on the verbose side, but this file's existing comment density (the multi-paragraph doc comment above `visit_block`) justifies it."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "none",
+        "justification": "All six required behaviours are reachable from the code. (1)/(2): `ForeignItem::Fn` and `ForeignItem::Static` both push into `hoisted`. (3): the shadow lives only in the scope created by this block's `self.push_scope(hoisted, conservative_unresolved)` and torn down by the existing `self.pop_scope()` after `visit::visit_block(self, block)`, so it cannot leak to a call outside the block. (4): the arm never touches `conservative_unresolved`, so `extern \"C\" { fn unrelated(); }` hoists only `\"unrelated\"` and a naked `target()` still resolves. (5): a block with no `Item::ForeignMod` never enters the new arm. (6): no existing arm is altered. The `_ => {}` inside the foreign-item loop drops `ForeignItem::Type` -- correct, since a foreign type is type-namespace-only -- and `ForeignItem::Macro`, which could in principle expand to value-namespace declarations; but the enclosing loop's own `_ => {}` already drops `Item::Macro` at block level identically, so this is pre-existing crate behaviour rather than a gap this change introduces, and the spec's words do not reach it."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "none",
+        "justification": "The arm reads only its own AST node (`nested.items`, `foreign_fn.ident`, `foreign_static.ident`) and feeds the one existing sink, `self.push_scope(hoisted, conservative_unresolved)`. No ordering assumption is added -- hoisting happens in the same pre-pass over `&block.stmts` that already runs before `visit::visit_block`, which is the correct semantics for hoisted items regardless of statement order. No invariant is duplicated: the value-namespace rule is expressed once, by which `ForeignItem` variants get pushed. `syn::ForeignItem` is `#[non_exhaustive]`, so the inner `_ => {}` is required rather than a silent-drift hazard, and its behaviour on a future variant (contribute no shadow) matches the outer loop's existing default."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "The comment states the rule, the reason, and the two explicit non-behaviours a maintainer would otherwise wonder about: \"its `fn` and `static` declarations put their names in the block's *value* namespace, so they shadow a same-named module-level item\", then \"Only those exact names are hoisted, never a blanket conservative mark on the block: an extern block that declares other names blocks nothing, and a foreign `type` (type namespace only, like a named-field struct) never shadows.\" That last clause explains the inner `_ => {}` -- the one line whose correctness is not self-evident -- and ties it to the named-field-struct precedent already documented above `visit_block`."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "Minimal, correct, and general: one arm hoisting `foreign_fn.ident`/`foreign_static.ident` into the existing `hoisted` vector, with no touch to `conservative_unresolved` (satisfying point 4) and reuse of the existing `push_scope`/`pop_scope` lifetime (satisfying point 3). No `unsafe` keyword, no new dependency, no other file touched. The only nit is comment verbosity relative to the twelve lines it documents, which does not warrant a change request in a file with this comment density."
+      }
+    }
+  ]
+}

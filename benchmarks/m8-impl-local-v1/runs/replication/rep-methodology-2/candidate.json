@@ -1,0 +1,99 @@
+{
+  "edits": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "new": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                // A block-local foreign module (`extern \"C\" { .. }`) is hoisted for\n                // the whole block like any other item: its `fn` and `static`\n                // declarations put their names in the block's *value* namespace, so\n                // they shadow a same-named module-level item for an unqualified call\n                // in this block -- real Rust would reject the call rather than let it\n                // fall through to the module item. Only those exact names are hoisted,\n                // never a blanket conservative mark on the block: an extern block that\n                // declares other names blocks nothing, and a foreign `type` (type\n                // namespace only, like a named-field struct) never shadows.\n                syn::Stmt::Item(Item::ForeignMod(nested)) => {\n                    for foreign_item in &nested.items {\n                        match foreign_item {\n                            syn::ForeignItem::Fn(foreign_fn) => {\n                                hoisted.push(foreign_fn.ident.to_string());\n                            }\n                            syn::ForeignItem::Static(foreign_static) => {\n                                hoisted.push(foreign_static.ident.to_string());\n                            }\n                            _ => {}\n                        }\n                    }\n                }\n                _ => {}",
+      "old": "                syn::Stmt::Item(Item::Use(nested)) => {\n                    let (names, has_glob) = use_item_bindings(&nested.tree);\n                    hoisted.extend(names);\n                    conservative_unresolved |= has_glob;\n                }\n                _ => {}"
+    }
+  ],
+  "limitations": [
+    "No execution environment in this session: `cargo build`, `cargo clippy`, and the full test suite (115 existing + the acceptance test) were not run; every `evidence_status` is `claimed`, and the harness's three cargo commands are what will actually verify.",
+    "syn 2.0.119's source was not provided; the edit relies on knowledge of its public `ForeignMod`/`ForeignItem` API, not on a file in this session.",
+    "The 115 existing tests were not shown; preservation (obligation-5) is bounded to inspection of the unchanged match arms, not confirmed against the suite.",
+    "Foreign `const`/`type`/`verbatim` items inside a block-local extern are deliberately not hoisted (out of the specified scope): a foreign `const` is in the value namespace and would, in principle, also shadow \u2014 a known residual gap beyond required behaviours 1-2.",
+    "Module-level `extern` blocks remain unhandled by `collect_items` (pre-existing, unchanged); only block-local externs inside function bodies are addressed.",
+    "Macro-expanded and cross-crate contents of extern blocks remain outside this adapter's bounded resolution (unchanged posture)."
+  ],
+  "obligations": [
+    {
+      "claim": "satisfied",
+      "context_requirement": "`visit_block`'s statement match, `record_call`'s existing shadow branch (`is_locally_bound`), and the obstruction path in `rust.rs`; syn 2.0.119 `ForeignItem::Fn` shape",
+      "evidence_requirement": "`cargo test -p reviewgraphen-ingest` exits 0, including the harness acceptance test for required behaviour 1",
+      "evidence_status": "claimed",
+      "id": "obligation-1",
+      "note": "Traced the code path only; nothing was executed in this session. The new arm pushes the foreign `fn`'s ident into `hoisted`, so `record_call` takes its existing shadow branch: no `calls` edge is emitted and the existing `RelationUnresolved` obstruction (naming the enclosing function via `current_source`) is retained. Not run; the harness's `cargo test` will settle it.",
+      "property": "domain.specific_property: value-namespace-shadowing (a foreign `fn` name in the block's value namespace must shadow a same-named module-level function for an unqualified call)",
+      "provenance": "task specification, required behaviour 1; the crate's 'record the unknown rather than guess' contract",
+      "risk": "impact: high (a wrong match is a false fact in the ProgramSpace); exposure: every block-local extern `fn`; likelihood: high pre-fix (the catch-all arm guaranteed the unsound match)",
+      "target": "`calls` relation and `RelationUnresolved` obstruction for a naked call in a block containing a block-local `extern \"C\" { fn target(); }`",
+      "target_kind": "Relation"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "`visit_block`'s statement match and `record_call`'s shadow branch in `rust.rs`; syn 2.0.119 `ForeignItem::Static` shape",
+      "evidence_requirement": "`cargo test -p reviewgraphen-ingest` exits 0, including the harness acceptance test for required behaviour 2",
+      "evidence_status": "claimed",
+      "id": "obligation-2",
+      "note": "Same mechanism as obligation-1 via the `ForeignItem::Static` arm; traced only, not executed. The harness's `cargo test` will settle it.",
+      "property": "domain.specific_property: value-namespace-shadowing (a foreign `static` name is in the block's value namespace and must shadow a same-named module-level function)",
+      "provenance": "task specification, required behaviour 2 (a foreign `static` is in the value namespace just as a foreign `fn` is)",
+      "risk": "impact: high (false fact); exposure: every block-local extern `static`; likelihood: high pre-fix",
+      "target": "`calls` relation and `RelationUnresolved` obstruction for a naked call in a block containing a block-local `extern \"C\" { static target: u8; }`",
+      "target_kind": "Relation"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "`visit_block`'s existing `push_scope(hoisted, ..)` / `pop_scope()` around `visit::visit_block`, and `with_source`'s top-level scope in `rust.rs`",
+      "evidence_requirement": "`cargo test -p reviewgraphen-ingest` exits 0, including the harness acceptance test for required behaviour 3",
+      "evidence_status": "claimed",
+      "id": "obligation-3",
+      "note": "The foreign idents enter the same `hoisted` vec the pre-existing arms feed, so they are bound and released by the unchanged push/pop; for `{ { extern .. target(); } target(); }` the inner call is shadowed and the outer resolves, giving exactly one edge. Traced only; not executed.",
+      "property": "domain.specific_property: scope-non-leakage (the shadow is active only inside the block that declares the extern, and is popped before enclosing code is visited)",
+      "provenance": "required behaviour 3; docs/07 \u00a73.6 invariant preservation",
+      "risk": "impact: high (a leaked shadow would silently drop a legitimate outer resolution); exposure: nested blocks; likelihood: low post-fix because the unchanged push/pop mechanism is reused",
+      "target": "lexical scope of the foreign-module shadow across nested blocks (no leak past its own block; exactly one resolved edge for the nested-block case)",
+      "target_kind": "Invariant"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "`visit_block`'s match, `in_conservative_unresolved_scope`, and the resolver lookup in `record_call` in `rust.rs`",
+      "evidence_requirement": "`cargo test -p reviewgraphen-ingest` exits 0, including the harness acceptance test for required behaviour 4",
+      "evidence_status": "claimed",
+      "id": "obligation-4",
+      "note": "The new arm leaves `conservative_unresolved` untouched and pushes only the declared foreign names, so `unrelated` cannot shadow `target`; traced only, not executed.",
+      "property": "domain.specific_property: no-blanket-conservatism (the arm never sets `conservative_unresolved` and only pushes the foreign items' own idents, so a non-colliding name cannot affect another call)",
+      "provenance": "required behaviour 4 (explicitly warns that blanket conservatism per foreign-module presence would violate it)",
+      "risk": "impact: medium (over-blocking drops valid resolutions); exposure: any extern block with non-colliding names; likelihood: would have been high had the whole block been marked conservative",
+      "target": "a block-local `extern \"C\"` declaring only other names (e.g. `fn unrelated()`) must not block resolution of a same-block naked call to a module-level function",
+      "target_kind": "Invariant"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the five pre-existing arms of `visit_block`'s match (byte-identical in the edit), the catch-all arm, and the unchanged `record_call`/resolver logic",
+      "evidence_requirement": "`cargo test -p reviewgraphen-ingest` exits 0 across the whole existing suite (unit tests + `tests/m2.rs` + `tests/extraction_report_schema.rs`)",
+      "evidence_status": "claimed",
+      "id": "obligation-5",
+      "note": "Bounded to code inspection: I was not shown the 115 tests, so this is a claim that the only behavioural delta is for blocks containing a block-local extern with `fn`/`static` foreign items. Not confirmed against the suite; the harness's full `cargo test` run will settle it.",
+      "property": "baseline: test-relation (the 115 existing tests' asserted relations and obstructions are unchanged; no-extern blocks resolve exactly as before)",
+      "provenance": "required behaviours 5 and 6; docs/07 \u00a73.6 change rule (lost or distorted structure in the morphism)",
+      "risk": "impact: high (regressing the existing suite); exposure: all fixtures; likelihood: low \u2014 the new arm fires only on `Item::ForeignMod`, which previously hit `_ => {}` and contributed nothing, so non-extern inputs are byte-identical",
+      "target": "all inputs not containing a block-local extern with `fn`/`static` foreign items (in particular blocks with no foreign module at all, and the existing `fn`/`const`/`static`/tuple-struct/`use`/glob shadow handling, obstruction ledger, and ID base-invariance)",
+      "target_kind": "Morphism"
+    },
+    {
+      "claim": "satisfied",
+      "context_requirement": "the edit text itself and the workspace lint constraints as stated in the task",
+      "evidence_requirement": "`cargo build -p reviewgraphen-ingest` exits 0 and `cargo clippy -p reviewgraphen-ingest --all-targets` exits 0 with no new diagnostics",
+      "evidence_status": "claimed",
+      "id": "obligation-6",
+      "note": "syn 2.0.119's source was not provided in this session; `ForeignItem::Fn`/`Static` and their `.ident` fields are stable syn 2.x API I am relying on from knowledge, not a file given here. If that knowledge is wrong, `cargo build` fails with a clear diagnostic rather than drifting silently; I did not run it.",
+      "property": "architecture: forbidden-dependency (no new dependency and no `unsafe` keyword introduced; no denied lint triggered)",
+      "provenance": "task constraints (no `unsafe`, no new deps, deny lints) and Stage 4's preference for a loud compiler failure over silent drift",
+      "risk": "impact: high (a build or lint failure discards the whole change); exposure: entire crate; likelihood: low \u2014 uses only stable syn 2.x public API already a dependency, fully-qualified so no import-list change is needed",
+      "target": "the edit itself as a buildable, lint-clean morphism under the workspace constraints (edition 2024, toolchain 1.95.0, `unsafe_code` forbid, denied lints, no new dependencies)",
+      "target_kind": "Morphism"
+    }
+  ],
+  "outcome": "completed",
+  "schema": "reviewgraphen.benchmark.implementation_candidate_output.v1"
+}

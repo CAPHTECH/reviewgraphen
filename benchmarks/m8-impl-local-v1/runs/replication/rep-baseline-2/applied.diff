@@ -1,0 +1,28 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m8-rep-scratch-rep-baseline-2/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 09:24:53.893708941 +0900
+@@ -1852,6 +1852,25 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                // A block-local `extern` block's `fn`/`static` declarations
++                // enter this block's value namespace exactly like a local
++                // `fn`/`static`, so they shadow a same-named module function
++                // for a naked call here. Hoist only the names it declares --
++                // never conservatively, unlike a glob `use` -- so an
++                // unrelated foreign declaration blocks nothing.
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    for item in &nested.items {
++                        match item {
++                            syn::ForeignItem::Fn(item_fn) => {
++                                hoisted.push(item_fn.sig.ident.to_string());
++                            }
++                            syn::ForeignItem::Static(item_static) => {
++                                hoisted.push(item_static.ident.to_string());
++                            }
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }

@@ -1,0 +1,36 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "60a5097810bf9835",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm implements the general rule, not the tested example. It iterates every item of the foreign module and hoists whatever names it finds -- `for item in &nested.items { match item { syn::ForeignItem::Fn(item_fn) => { hoisted.push(item_fn.sig.ident.to_string()); } syn::ForeignItem::Static(item_static) => { hoisted.push(item_static.ident.to_string()); } _ => {} } }` -- with no reference to any particular identifier, no `== \"target\"` check, and no narrowing to a specific ABI string (`nested.abi` is never inspected, so `extern \"C\"`, `extern \"system\"` and a bare `extern` all behave alike). Spec point 4, the anti-gaming trap, is satisfied structurally rather than by special case: `conservative_unresolved` is deliberately left untouched by this arm, so `extern \"C\" { fn unrelated(); }` pushes only the shadow `\"unrelated\"` and a naked `target()` in that block still resolves. Spec point 3 falls out of reusing the existing `self.push_scope(hoisted, conservative_unresolved); visit::visit_block(self, block); self.pop_scope();` sequence unchanged, so the shadow cannot leak past the block."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "The diff adds exactly one match arm plus its comment and nothing else. Every other line in the hunk is unchanged context: the `Item::Fn`/`Item::Const`/`Item::Static`/`Item::Struct`/`Item::Use` arms, the trailing `_ => {}`, the `push_scope`/`visit_block`/`pop_scope` trio, and the whole `visit_local` body below are untouched. The doc comment above `visit_block` about named-field structs is not reworded, and no nearby code is renamed or reformatted."
+      },
+      "convention_fit": {
+        "verdict": "fits",
+        "justification": "The arm binds `nested` for the item, matching every sibling arm (`syn::Stmt::Item(Item::Fn(nested))`, `...Item::Use(nested)`), and pushes `.to_string()` of the ident into `hoisted` in the same shape as `hoisted.push(nested.sig.ident.to_string())`. Paths are written `syn::ForeignItem::Fn` in the same qualified style the file already uses for `syn::Stmt::Item`. The comment voice matches the surrounding prose, which argues from real Rust's namespaces -- compare the existing `real Rust puts a named-field struct's name only in the *type* namespace, never the value namespace` with the new `enter this block's value namespace exactly like a local `fn`/`static``. The one small divergence is placement: the existing rationale for the struct and glob-`use` rules lives in the doc comment above `visit_block`, whereas this rationale sits inline above the arm; the inner binding names `item_fn`/`item_static` also depart from the `nested` habit. Neither reads foreign."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "none",
+        "justification": "Spec point 1 is covered by the `ForeignItem::Fn` branch, point 2 by `ForeignItem::Static`, point 3 by the untouched `push_scope`/`pop_scope` pair, point 4 by not setting `conservative_unresolved`, point 5 by the fact that a block with no `Item::ForeignMod` statement still falls through to `_ => {}` exactly as before. The inner `_ => {}` drops `ForeignItem::Type`, which is correct -- a foreign type is in the type namespace only and can never be a naked call target, the same reasoning the existing doc comment gives for named-field structs. `ForeignItem::Macro` and `ForeignItem::Verbatim` are also dropped and could in principle expand to a value-namespace name, but the outer `_ => {}` already treats a block-level `Item::Macro` the same way, so this is the crate's existing posture rather than a gap this change opens. Edition 2024's `unsafe extern \"C\" { .. }` still parses to `Item::ForeignMod` and so is matched."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "none",
+        "justification": "No new state is introduced and no invariant is duplicated: the arm feeds the same `hoisted` vector the other arms feed, and the scope lifetime is entirely governed by the pre-existing `self.push_scope(hoisted, conservative_unresolved)` / `self.pop_scope()` pair, so there is no ordering assumption to violate. `conservative_unresolved` is left alone, so this arm cannot interact with the glob-`use` conservatism. Nested foreign modules in nested blocks are handled by the existing `visit::visit_block(self, block)` recursion rather than by anything bespoke. The inner `_ => {}` is unavoidable -- `syn::ForeignItem` is non-exhaustive -- and biases toward the pre-change behaviour for any future variant rather than toward a wrong match on the variants that matter."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "The comment states both the rule and the reason it stops where it does: `Hoist only the names it declares -- never conservatively, unlike a glob `use` -- so an unrelated foreign declaration blocks nothing.` That is precisely the non-obvious design point (why this is not treated like `has_glob`), and it lets a maintainer see why `conservative_unresolved` is absent from the arm rather than wondering if it was forgotten. The namespace argument in the first sentence connects the arm to the doc comment's existing type-versus-value-namespace reasoning."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "One additive match arm that implements the specified rule generally: `syn::ForeignItem::Fn(item_fn) => { hoisted.push(item_fn.sig.ident.to_string()); }` and the `Static` counterpart give spec points 1 and 2, the untouched `push_scope`/`pop_scope` gives point 3, leaving `conservative_unresolved` alone gives point 4, and no other line changes so points 5 and 6 hold. No `unsafe` keyword, no new dependency, no other file touched. The only nits are cosmetic -- rationale placed inline rather than in the `visit_block` doc comment where the sibling rules are explained, and `item_fn`/`item_static` instead of the file's `nested` habit -- neither worth blocking on."
+      }
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+ok: no forbidden marker found under /tmp/m8-rep-judge/675745989b9d9077
+judge status=0 elapsed=62s
+JUDGED rep-baseline-1 (675745989b9d9077)
+ok: no forbidden marker found under /tmp/m8-rep-judge/7376e1ca12d5becc
+judge status=0 elapsed=58s
+JUDGED rep-baseline-2 (7376e1ca12d5becc)
+ok: no forbidden marker found under /tmp/m8-rep-judge/f4a2f7689752cad7
+judge status=0 elapsed=63s
+JUDGED rep-baseline-3 (f4a2f7689752cad7)
+ok: no forbidden marker found under /tmp/m8-rep-judge/b96d044e59e65707
+judge status=0 elapsed=57s
+JUDGED rep-baseline-4 (b96d044e59e65707)
+SKIP rep-baseline-5 (no applicable edit)
+ok: no forbidden marker found under /tmp/m8-rep-judge/935550142ed27b42
+judge status=0 elapsed=66s
+JUDGED rep-methodology-1 (935550142ed27b42)
+ok: no forbidden marker found under /tmp/m8-rep-judge/45d92852745f2388
+judge status=0 elapsed=47s
+JUDGED rep-methodology-2 (45d92852745f2388)
+ok: no forbidden marker found under /tmp/m8-rep-judge/4fdbfa06d68b74cf
+judge status=0 elapsed=71s
+JUDGED rep-methodology-3 (4fdbfa06d68b74cf)
+ok: no forbidden marker found under /tmp/m8-rep-judge/9d55a6b0b15714db
+judge status=0 elapsed=42s
+JUDGED rep-methodology-4 (9d55a6b0b15714db)
+ok: no forbidden marker found under /tmp/m8-rep-judge/67cee53caa3ce02d
+judge status=0 elapsed=68s
+JUDGED rep-methodology-5 (67cee53caa3ce02d)
+{
+  "45d92852745f2388": [
+    "rep-methodology-2"
+  ],
+  "4fdbfa06d68b74cf": [
+    "rep-methodology-3"
+  ],
+  "675745989b9d9077": [
+    "rep-baseline-1"
+  ],
+  "67cee53caa3ce02d": [
+    "rep-methodology-5"
+  ],
+  "7376e1ca12d5becc": [
+    "rep-baseline-2"
+  ],
+  "935550142ed27b42": [
+    "rep-methodology-1"
+  ],
+  "9d55a6b0b15714db": [
+    "rep-methodology-4"
+  ],
+  "b96d044e59e65707": [
+    "rep-baseline-4"
+  ],
+  "f4a2f7689752cad7": [
+    "rep-baseline-3"
+  ]
+}
