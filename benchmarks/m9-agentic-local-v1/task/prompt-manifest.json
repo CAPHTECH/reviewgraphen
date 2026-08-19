@@ -1,0 +1,19 @@
+{
+  "prompt_delta_is_only_the_skill_paragraph": true,
+  "prompts": {
+    "noskill": {
+      "bytes": 5521,
+      "path": "benchmarks/m9-agentic-local-v1/task/PROMPT-noskill.md",
+      "sha256": "8e25d717bb1ff287a55ae6e7abbe277b72d759b82465b05c2aea676534cad36f"
+    },
+    "skill": {
+      "bytes": 5687,
+      "path": "benchmarks/m9-agentic-local-v1/task/PROMPT-skill.md",
+      "sha256": "ad2864e90d2ece77942bad92780b8d6139f2b9f7af149f33df09d47a6be85a3e"
+    }
+  },
+  "schema": "reviewgraphen.benchmark.m9_prompt_manifest.v1",
+  "skill_body_sha256": "9d888647caf1452c72ee5ee084c2d18f0f21f062b75c8daa432cb97c0179c0f6",
+  "source_task": "benchmarks/m8-impl-local-v1/task2/TASK2.md",
+  "source_task_sha256": "b35796b03c8d8341d9ef2d76260ddb4e58a82d89dd4ec3b4efba0c2925b02cae"
+}
