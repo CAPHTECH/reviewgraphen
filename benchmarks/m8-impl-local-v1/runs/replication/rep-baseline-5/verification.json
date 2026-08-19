@@ -1,0 +1,43 @@
+{
+  "candidate_declares_verified": false,
+  "candidate_evidence_statuses": [],
+  "candidate_obligation_count": 0,
+  "candidate_outcome": "completed",
+  "edit_application": [
+    {
+      "file": "crates/reviewgraphen-ingest/src/rust.rs",
+      "index": 0,
+      "new_bytes": 303,
+      "old_bytes": 286,
+      "old_occurrences": 0,
+      "status": "rejected_anchor_not_unique"
+    }
+  ],
+  "result_dir": "/tmp/m8-impl-local-v1-runs/rep-baseline-5",
+  "schema": "reviewgraphen.benchmark.m8_impl_local_verification.v1",
+  "schema_validated_against": "schemas/implementation-candidate-edit.schema.json",
+  "schema_validation": {
+    "command": [
+      "python3",
+      "-c",
+      "import json,sys,jsonschema;schema=json.load(open(sys.argv[1]));instance=json.load(open(sys.argv[2]));jsonschema.validate(instance,schema);print('valid')",
+      "/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/benchmarks/m8-impl-local-v1/schemas/implementation-candidate-edit.schema.json",
+      "/tmp/m8-impl-local-v1-runs/rep-baseline-5/candidate.json"
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "valid\n"
+  },
+  "scratch_creation": {
+    "command": [
+      "bash",
+      "/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/benchmarks/m8-impl-local-v1/scripts/make_scratch.sh",
+      "/tmp/m8-rep-scratch-rep-baseline-5"
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "/tmp/m8-rep-scratch-rep-baseline-5\n"
+  },
+  "scratch_dir": "/tmp/m8-rep-scratch-rep-baseline-5",
+  "verdict": "edit_anchor_did_not_match"
+}
