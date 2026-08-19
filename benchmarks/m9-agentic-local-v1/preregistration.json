@@ -1,0 +1,162 @@
+{
+  "schema": "reviewgraphen.benchmark.m9_agentic_local_v1_preregistration.v1",
+  "experiment": "m9-agentic-local-v1",
+  "status": "frozen_before_first_generation_request",
+  "supersedes_nothing": true,
+
+  "question_change_declared_up_front": {
+    "what_m8_asked": "Does the methodology have an effect on implementation quality? Controlled: one request, one fixed packet, one JSON edit, no tools, everything except the skill body held byte-identical.",
+    "what_this_asks": "Is qwen usable for implementation work in a realistic setting? The model gets a shell, a compiler, a test suite, and as many turns as it takes.",
+    "why_it_changed": "m8's own finding forced it. All three m8 treatment failures were `syn` API-shape errors (E0609 no field `ident` on `&ForeignItemFn`; E0599 invented `ForeignItem::Const`; E0026 struct-variant patterns for tuple variants). Every one is removed by a single compile-and-read-the-error cycle. The single-shot harness was therefore measuring whether the model has syn's type surface memorised, which is not what implementation work is.",
+    "what_is_given_up": "Control. Turn count, what the agent reads, what it runs, how many times it compiles, and how long it takes all vary freely between trials and between arms. Attribution is correspondingly weaker than m8's and MUST NOT be reported as if it were m8's.",
+    "naming_warning": "The arms are called `skill` and `noskill`. That naming must not be allowed to imply the m8 question is still being answered. Any report from this experiment states the question above before any arm comparison."
+  },
+
+  "primary_output_is_descriptive": {
+    "statement": "The primary result is a per-trial record: the three verdicts, plus what the loop actually did. It is NOT an arm comparison.",
+    "why": "n=3 per arm with uncontrolled turn counts cannot support a comparative claim. m8 at n=5 per arm, with far tighter control, produced 9 distinct changes from 10 trials and its frozen rules accepted nothing in either direction. This design has strictly less power and strictly more variance.",
+    "comparative_claims": "A verdict-axis difference is reported as SUGGESTIVE only if it is complete separation (3/3 versus 0/3). Nothing in this experiment is ever recorded as ACCEPTED. Anything short of complete separation is reported as noise, in advance, exactly as in m8."
+  },
+
+  "arms": {
+    "order_of_execution": ["skill", "noskill", "skill", "noskill", "skill", "noskill"],
+    "order_rationale": "Strictly alternating, so a stop at any point leaves the arms balanced, and so drift over the multi-hour window hits both alike.",
+    "n_per_arm": 3,
+    "manipulated_variable": "One paragraph in the prompt naming the skill, plus the skill file being present in the checkout. Verified mechanically: `prompt_delta_is_only_the_skill_paragraph` is true in task/prompt-manifest.json.",
+    "skill": {
+      "prompt": "task/PROMPT-skill.md",
+      "prompt_sha256": "ad2864e90d2ece77942bad92780b8d6139f2b9f7af149f33df09d47a6be85a3e",
+      "skill_installed_at": ".claude/skills/reviewgraphen-implementation-methodology/SKILL.md",
+      "skill_body_sha256": "9d888647caf1452c72ee5ee084c2d18f0f21f062b75c8daa432cb97c0179c0f6",
+      "skill_body_provenance": "Byte-identical to m8's frozen treatment skill. The coordinator referred to `reviewgraphen-methodology`, which is the REVIEW skill; the implementation-shaped analogue frozen for m8 is used instead, so this arm's treatment content is the same thing m8 measured and the two sit alongside each other."
+    },
+    "noskill": {
+      "prompt": "task/PROMPT-noskill.md",
+      "prompt_sha256": "8e25d717bb1ff287a55ae6e7abbe277b72d759b82465b05c2aea676534cad36f",
+      "skill_installed": false
+    }
+  },
+
+  "task": {
+    "identical_to": "m8-impl-local-v1 task 2",
+    "pinned_revision": "05573bb6b3491b6849512e75e055d4cf6279b606",
+    "changeable_file": "crates/reviewgraphen-ingest/src/rust.rs",
+    "specification_source": "benchmarks/m8-impl-local-v1/task2/TASK2.md",
+    "specification_sha256": "b35796b03c8d8341d9ef2d76260ddb4e58a82d89dd4ec3b4efba0c2925b02cae",
+    "specification_edit": "Two sentences describing the single-shot harness were replaced because they are false here: the agent CAN see the existing suite. Replaced rather than deleted so the difference is visible in the record.",
+    "acceptance_test": "benchmarks/m8-impl-local-v1/task2/m8_extern_block_shadow.rs",
+    "acceptance_test_sha256": "47fd74b43cfc1090fd6d662a8b0835709563f378728b598012fa772151fded92",
+    "acceptance_test_never_editable": "It is NOT placed in the agent's checkout at all. m8 could leave it in the tree safely because the model had no filesystem; this agent does. It is installed only by the verifier, into a tree the agent can no longer reach."
+  },
+
+  "isolation": {
+    "mandatory": true,
+    "sandbox": "bubblewrap",
+    "recipe": [
+      "--ro-bind / /                    the entire host filesystem is read-only",
+      "--tmpfs /home/rizumita/workspace the real repository is INVISIBLE, not merely unwritable",
+      "--bind <scratch>                 the only writable project tree, fresh per trial",
+      "--bind <private target dir>      per-trial CARGO_TARGET_DIR",
+      "--bind ~/.cargo                  registry cache",
+      "fresh CLAUDE_CONFIG_DIR          mode 700, no credentials inside"
+    ],
+    "why_invisible_not_readonly": "A read-only real repository would still let the agent read the acceptance test, every m8 result, and every earlier candidate from the checkout next door, which would void the blind judgement. Verified in make_scratch.sh: the pinned archive contains no `benchmarks/` and no reference to the acceptance test, and the script refuses if either appears.",
+    "private_cargo_target_dir": "Mandatory, per m8 AMENDMENT-005, which demonstrated a shared target dir serving one tree's compiled library to another and producing measurements that were simply wrong. An agentic loop runs cargo far more often than m8 did, so the hazard is larger here.",
+    "verification_runs_outside_the_agent_tree": "A fresh tree is built from the pinned revision and ONLY crates/reviewgraphen-ingest/src/rust.rs is copied in from the agent's checkout. Every other edit the agent made is discarded, and separately recorded as out_of_scope_changed_files. Test-gaming is therefore mechanically impossible rather than merely forbidden."
+  },
+
+  "cost_guard": {
+    "risk": "The local-qwen skill warns that a client silently falling back to api.anthropic.com bills real money.",
+    "mitigations": [
+      "CLAUDE_CONFIG_DIR is a fresh mode-700 directory per trial containing no credentials, so no session exists that could be used against a billed endpoint.",
+      "ANTHROPIC_API_KEY is the dummy string `ollama`, which a real endpoint would reject rather than bill.",
+      "ANTHROPIC_BASE_URL is the LAN proxy on 11999.",
+      "Every trial records the model ids observed in its own transcript; a trial whose transcript shows any model other than qwen3.8:27b-mlx is a hard stop."
+    ]
+  },
+
+  "execution_conditions": {
+    "frozen_from": ".claude/skills/local-qwen/SKILL.md, with the deviations below declared rather than discovered",
+    "endpoint": "http://192.168.68.71:11999",
+    "model_sent": "qwen3.8:27b-mlx",
+    "client": "Claude Code CLI 2.1.233, --print --output-format stream-json --verbose",
+    "permission_mode": "bypassPermissions",
+    "allowed_tools": "Read, Edit, Write, Bash, Grep, Glob, Skill",
+    "concurrency": "Exactly one request in flight across the whole experiment. Never parallel.",
+    "declared_deviations_from_the_m8_condition": [
+      "max_output_tokens is 32,000, not 131,072. Claude Code reports maxOutputTokens 32000 for this model and CLAUDE_CODE_MAX_OUTPUT_TOKENS is set to 32000 to match what the client will actually do. m8's peak single-turn output was 24,396, so 32,000 is above every observed single-turn need, but this IS a lowered cap relative to the frozen condition and is recorded as such.",
+      "The client reports a 200,000-token context window rather than the server's 262,144.",
+      "Claude Code prepends a large system prompt and tool schema: a trivial two-turn probe billed 50,533 input tokens. Every turn re-sends it. The cch-normalizing proxy on 11999 exists precisely to keep that prefix cacheable.",
+      "Multi-turn by construction, where every m8 arm was single-turn. This is the point of the experiment, not an accident."
+    ]
+  },
+
+  "loop_record": {
+    "why": "This is the practical-utility evidence the single-shot harness could not produce, and the reason the experiment exists.",
+    "fields": [
+      "assistant_turns and the client's own num_turns",
+      "wall clock elapsed_seconds",
+      "tool_calls by tool name, and the total",
+      "bash_calls, cargo_invocations, cargo_build_invocations, cargo_test_invocations",
+      "edits_to_target_file",
+      "compiler_errors_observed",
+      "saw_error_then_edited and error_then_edit_pairs",
+      "reported input/output token totals",
+      "model_ids_seen",
+      "the ordered timeline of cargo / compiler_error_seen / edit_target events"
+    ],
+    "saw_error_then_edited_definition": "A tool result containing a rustc diagnostic, followed later in the same transcript by an Edit or Write to the target file. This is an ORDERING FACT read off the transcript, not an inference about intent, and is reported as such."
+  },
+
+  "verdicts": {
+    "same_three_as_the_existing_series": ["terminates", "compiles", "tests pass"],
+    "compiles": "cargo build -p reviewgraphen-ingest, in the verification tree, private target dir",
+    "tests_pass": "cargo test -p reviewgraphen-ingest: 67 unit + 8 extraction_report_schema + 40 m2 + 5 harness-owned acceptance = 120 tests",
+    "clippy": "recorded, not a gate",
+    "verdict_values": [
+      "verified",
+      "tests_failed",
+      "does_not_compile",
+      "no_change_made",
+      "loop_incomplete_timeout",
+      "loop_incomplete_error",
+      "target_file_missing"
+    ]
+  },
+
+  "half_edited_tree_rule": {
+    "decided_in_advance": true,
+    "problem": "A truncation, stream death, or timeout mid-loop can leave the tree half-edited. The m8 single-shot design could not do this: an edit either applied atomically or was rejected.",
+    "rule": [
+      "A trial whose `claude` process exits non-zero is classified by HOW it ended, before its code is looked at: exit 124 -> `loop_incomplete_timeout`; any other non-zero exit -> `loop_incomplete_error`.",
+      "That classification WINS over any code-level outcome. A half-edited tree that happens not to compile is reported as `loop_incomplete_*`, never as `does_not_compile`.",
+      "The tree is still built and tested, and the compile/test result is still recorded, because 'what state did it leave the tree in' is exactly the question this experiment adds. It is recorded as a property of the incomplete loop, not as a verdict.",
+      "`loop_incomplete_*` trials are excluded from any compiles/tests_pass tally and the exclusion is reported with the count, never silently."
+    ],
+    "distinct_from": "`no_change_made`, which is a CLEANLY terminated loop that left the target file byte-identical to the pinned revision. That is a real outcome and counts."
+  },
+
+  "stopping_rules": {
+    "standing_order_source": ".claude/skills/local-qwen/SKILL.md no-retry rule",
+    "rules": [
+      "One request in flight at any time.",
+      "No retry of any trial, for any reason.",
+      "Any upstream failure stops the entire series immediately: the next trial is not started. Record the time the symptom was noticed, the approximate token count, the client, and how many trials of each arm completed.",
+      "A transcript showing any model other than qwen3.8:27b-mlx is a hard stop.",
+      "Per-trial wall-clock cap of 5,400 seconds (90 minutes), enforced by `timeout`. Hitting it is `loop_incomplete_timeout`, not a failure of the code, and it does not by itself stop the series.",
+      "Maximum 6 generation trials for the whole experiment. No repair turns, no replacements: a trial lost to upstream failure is excluded and NOT replaced, because a replacement chosen after seeing which trials survived is selection."
+    ]
+  },
+
+  "judging": {
+    "protocol": "Identical to m8: content-addressed change ids, hash-ordered, byte-identical changes collapse, abort-not-redact marker scan, --no-session-persistence --tools \"\", cross-family, reference solution never shown.",
+    "granularity": "One judge call per distinct change, independent, as in m8's replication.",
+    "marker_list_addition": "The m8 marker list already aborts on `skill`, `baseline`, `methodology`, `qwen`, `claude`. It is reused unchanged and covers this experiment's arm names."
+  },
+
+  "not_started": [
+    "the emit-only-the-edit arm",
+    "the syn-surface variant",
+    "a second judge family"
+  ]
+}
