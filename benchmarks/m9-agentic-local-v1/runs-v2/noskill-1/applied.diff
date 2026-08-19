@@ -1,0 +1,108 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m9-verify-noskill-1/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 21:32:16.328180512 +0900
+@@ -12,8 +12,9 @@
+ use syn::visit::{self, Visit};
+ use syn::{
+     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
+-    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
++    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem,
++    ImplItem, Item, ItemFn, ItemForeignMod, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat,
++    Signature, Type, UseTree, Visibility,
+ };
+ 
+ /// Extracts only the M2 Rust AST subset from immutable Git file bytes.
+@@ -1375,6 +1376,40 @@
+     }
+ }
+ 
++/// The names a block-local `extern` block's declarations put in the enclosing
++/// block's *value* namespace, and whether the block also contains a foreign
++/// declaration shape it cannot reduce to an exact bound name. A foreign `fn`
++/// and a foreign `static` are exactly enumerable and in the value namespace
++/// precisely as a block-local `fn`/`static` item is, so they shadow a
++/// same-named module-level function for a naked call in this block -- scoped
++/// to their own block, never marked conservative on their own. A foreign
++/// `type` declaration is in the *type* namespace only and contributes neither;
++/// any other foreign shape forces the conservative flag (see the match arms).
++/// (A foreign `const` does not exist in Rust -- a `const` in a block is a
++/// block *item*, never a foreign item -- so `fn` and `static` are the only
++/// value-namespace shadows a foreign module can introduce.)
++fn foreign_mod_bindings(module: &ItemForeignMod) -> (Vec<String>, bool) {
++    let mut names = Vec::new();
++    let mut conservative = false;
++    for item in &module.items {
++        match item {
++            ForeignItem::Fn(function) => names.push(function.sig.ident.to_string()),
++            ForeignItem::Static(static_) => names.push(static_.ident.to_string()),
++            // Type-namespace only (never a call target), like a named-field
++            // struct: no shadow, no conservative flag.
++            ForeignItem::Type(_) => {}
++            // `ForeignItem` is `#[non_exhaustive]`, so the wildcard arm is
++            // required and doubles as the fail-closed case: an opaque
++            // `ForeignItem::Macro`/`ForeignItem::Verbatim`, or any variant a
++            // future `syn` release may add, may bind *any* name, so the whole
++            // block becomes conservatively unresolved rather than being
++            // guessed at.
++            _ => conservative = true,
++        }
++    }
++    (names, conservative)
++}
++
+ /// Normalizes a `>= 2`-segment call path against the calling module's
+ /// logical label, using only the syntactic `crate`/`self`/`super` module
+ /// path grammar -- never `use`-alias or type resolution. Returns `None` when
+@@ -1806,12 +1841,13 @@
+ 
+     /// Every nested block introduces its own lexical scope, so a shadow
+     /// introduced inside it never leaks to sibling or enclosing code once
+-    /// the block ends. A nested `fn`/`const`/`static` item, and every name
+-    /// a block-local `use` item introduces, is hoisted -- bound for the
+-    /// *whole* block, not just after its textual position -- matching
+-    /// Rust's own item-scoping rule and preventing a call positioned
+-    /// before such a local item from wrongly falling through to a
+-    /// same-named module-level function. A block-local `use` naming a
++    /// the block ends. A nested `fn`/`const`/`static` item, every name a
++    /// block-local `use` item introduces, and every value-namespace name a
++    /// block-local `extern` block's `fn`/`static` declaration introduces, is
++    /// hoisted -- bound for the *whole* block, not just after its textual
++    /// position -- matching Rust's own item-scoping rule and preventing a
++    /// call positioned before such a local item from wrongly falling through
++    /// to a same-named module-level function. A block-local `use` naming a
+     /// module-level function (for example `use ext::target;` shadowing an
+     /// unrelated same-module `fn target`) is exactly as much a shadow as a
+     /// local `fn`/`let` -- and is never itself resolved further (proving
+@@ -1833,7 +1869,19 @@
+     /// namespace, never the value namespace, so it can never itself be a
+     /// call target and does not shadow a same-named callable at all --
+     /// hoisting it anyway would wrongly block an otherwise-valid resolution
+-    /// to the outer `fn target`.
++    /// to the outer `fn target`. A block-local *foreign module* (`extern
++    /// "C" { .. }`) is handled the same item-scoping way its block-level
++    /// `fn`/`static` are: each of its `fn`/`static` declarations puts its
++    /// name in the *value* namespace exactly as a block-local `fn`/`static`
++    /// item does, so each is hoisted and shadows a same-named module-level
++    /// function for a naked call in this block (a foreign `fn` is a value
++    /// exactly like a local `fn`; a foreign `static` likewise). A foreign
++    /// `type` declaration is type-namespace only and is never hoisted (see
++    /// `foreign_mod_bindings`), and a foreign-module name that is not a
++    /// same-named module function does not block anything. The shadow is
++    /// scoped to its own block and never leaks past it; the whole block is
++    /// marked conservative only when the foreign module contains a
++    /// declaration shape that cannot be reduced to an exact bound name.
+     fn visit_block(&mut self, block: &Block) {
+         let mut hoisted = Vec::new();
+         let mut conservative_unresolved = false;
+@@ -1852,6 +1900,11 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    let (names, conservative) = foreign_mod_bindings(nested);
++                    hoisted.extend(names);
++                    conservative_unresolved |= conservative;
++                }
+                 _ => {}
+             }
+         }

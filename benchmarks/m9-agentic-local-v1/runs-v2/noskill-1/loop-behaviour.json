@@ -1,0 +1,90 @@
+{
+  "from_stream_events": {
+    "assistant_stream_events": 85,
+    "bash_calls": 17,
+    "bash_commands_mentioning_cargo_path_only": 4,
+    "cargo_build_invocations": 3,
+    "cargo_check_invocations": 0,
+    "cargo_invocations": 6,
+    "cargo_test_invocations": 1,
+    "compiler_errors_observed": 0,
+    "edits_to_target_file": 6,
+    "error_then_edit_pairs": 0,
+    "model_ids_seen": [
+      "qwen3.8:27b-mlx"
+    ],
+    "provenance": "counted from tool_use / tool_result blocks in the transcript -- trustworthy",
+    "saw_error_then_edited": false,
+    "tool_calls": {
+      "Bash": 17,
+      "Edit": 6,
+      "Read": 9,
+      "TaskCreate": 1,
+      "TaskUpdate": 1
+    },
+    "tool_calls_total": 34
+  },
+  "result_event": {
+    "api_error_status": null,
+    "duration_ms": 5399363,
+    "final_text": "",
+    "is_error": true,
+    "logical_turns": 36,
+    "stop_reason": "tool_use",
+    "subtype": "error_during_execution"
+  },
+  "schema": "reviewgraphen.benchmark.m9_loop_behaviour.v2",
+  "stream_events": 11393,
+  "timeline": [
+    "cargo",
+    "cargo",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo"
+  ],
+  "tokens_authoritative": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 2221292,
+    "model_usage": {
+      "qwen3.8:27b-mlx": {
+        "cacheCreationInputTokens": 0,
+        "cacheReadInputTokens": 0,
+        "canonicalModel": "qwen3.8:27b-mlx",
+        "contextWindow": 200000,
+        "costUSD": 11.84225,
+        "inputTokens": 2223130,
+        "maxOutputTokens": 32000,
+        "outputTokens": 29064,
+        "provider": "firstParty",
+        "webSearchRequests": 0
+      }
+    },
+    "output_tokens": 28961,
+    "provenance": "the client's terminal `result` event, which Claude Code computes itself -- the only trustworthy token source on this backend",
+    "thinking_tokens": 0
+  },
+  "tokens_backend_per_turn": {
+    "input_tokens_last": 81574,
+    "input_tokens_max": 81574,
+    "input_tokens_min": 27766,
+    "input_tokens_monotonic_non_decreasing": true,
+    "input_tokens_naive_sum_DO_NOT_USE": 5800006,
+    "keys_ever_seen": [
+      "input_tokens",
+      "output_tokens"
+    ],
+    "output_tokens_all_zero": true,
+    "provenance": "raw per-turn `usage` from the backend -- SUSPECT, retained as evidence of what it reports",
+    "turns_with_usage": 85,
+    "why_the_naive_sum_is_wrong": "each turn's input_tokens re-reports the whole accumulated context, and several stream events share one API call's usage, so summing multiply-counts the same prefix"
+  },
+  "trial": "noskill-1"
+}
