@@ -1,0 +1,127 @@
+{
+  "schema": "reviewgraphen.benchmark.m9_agentic_local_v2_preregistration.v1",
+  "experiment": "m9-agentic-local-v2",
+  "status": "frozen_before_first_generation_request_under_the_new_condition",
+  "relationship_to_v1": "FRESH preregistration, not an amendment. `preregistration.json` in this directory described the previous backend; its execution conditions are now false. It is retained unedited as the record of the halted attempt. v2 supersedes it for execution and inherits nothing implicitly.",
+
+  "trials_completed_under_v1": {
+    "count": 0,
+    "skill-1": "VOID twice over: killed mid-loop by the halt (not by the model, the server, or its own timeout), and subsequently established to have kept running against the swapped backend for ~12 minutes after I wrongly reported it stopped. Not a trial outcome, not analysed, outside every count.",
+    "bring_up_probes": "3, harness checks only, never trials. See BRINGUP.md."
+  },
+
+  "the_condition": {
+    "endpoint": "http://192.168.68.71:11999 only. Never 1234, never 8080, never 11434.",
+    "auth": "any string; `ollama` is sent",
+    "advertised_model": "Qwen3.8-27B-MLX-4bit",
+    "owned_by": "mlx-dspark",
+    "serving_implementation": "mlx-dspark (was LM Studio)",
+    "quantization": "explicitly 4-bit. The previous default id `qwen3.8-27b-mlx` stated no quantization, so whether these are the same weights is unanswerable and is not assumed either way.",
+    "target_weights": "/Users/rizumita/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit",
+    "speculative_decoding_drafter": "/Users/rizumita/dspark-models/Qwen3.8-27B-Dspark-v1",
+    "model_name_sent": "qwen3.8:27b-mlx (still accepted)",
+    "reasoning": "server-set low. Operator measurement: 2,942 characters of thinking plus 6,554 of body, against roughly 10,000 / 0 before.",
+    "enable_thinking_override": "chat_template_kwargs {\"enable_thinking\": true} exists and is NOT used. Using it would be a separate preregistered condition.",
+    "throughput": "code decode 28.7 -> 36.4 tok/s; output content reported unaffected; 32k prefill 102.9 s cold, 0.147 s on a cache hit",
+    "concurrency_guidance": "The server now batches up to 2 and queues 3+, with under 3% measured difference at 3 concurrent, so sequential is no longer required. This experiment runs sequentially anyway: the measured gain is nil, and single-flight keeps wall-clock -- which is a recorded outcome here -- free of contention from a neighbouring trial."
+  },
+
+  "not_poolable": {
+    "statement": "Results from this experiment MUST NOT be pooled with, compared as if the condition were constant against, or used to revise: m7-head-local-v1 in its entirety, m8-impl-local-v1 task 1 (all four cells), m8-impl-local-v1 task 2 (n=1 per arm), or the m8 task-2 replication (10 trials). Nor the reverse.",
+    "reasons": [
+      "Different serving implementation, and a different advertised model with explicitly 4-bit quantization where the previous default stated none.",
+      "Reasoning behaviour changed at the server.",
+      "Speculative decoding is now in the path.",
+      "Transport: those experiments cannot even be re-executed. /v1/responses returns 404 on this backend and Codex 0.147 dropped wire_api = \"chat\", so every m7- and m8-style local harness is unrunnable as written, independent of the weights question."
+    ]
+  },
+
+  "confound_named_up_front": {
+    "statement": "A better result here is NOT evidence that the methodology transfers.",
+    "why": "The dominant failure mode of every prior series in this program was reasoning that never terminated -- m7's bare arm burned 65,535 of 65,536 output tokens on thinking and emitted nothing, and 2 of 9 review units ended in silent truncation. This backend sets reasoning effort low, which removes that failure mode AT THE SERVER, for both arms, before the methodology does anything.",
+    "consequence": "Any improvement over m8 is attributable to the condition at least as readily as to the method, and this design cannot separate them. It is not a comparison against m8 and will not be reported as one.",
+    "what_can_still_be_learned": "Whether qwen is usable for implementation work in a realistic agentic setting under the CURRENT condition, and what the loop actually does. That is a within-condition question and is unaffected."
+  },
+
+  "question": "Unchanged from v1: is qwen usable for implementation work when given a shell, a compiler, a test suite, and as many turns as it takes? This is a practical-usability question with correspondingly weak attribution, NOT m8's controlled question about whether the methodology has an effect. The arm names `skill` and `noskill` must not be read as reviving the old question.",
+
+  "design_reused_unchanged": {
+    "rationale": "The coordinator's instruction: reuse the completed, hash-pinned design so the only difference from the halted attempt is the condition.",
+    "byte_identical_to_v1": [
+      "task/PROMPT-skill.md sha256 ad2864e90d2ece77942bad92780b8d6139f2b9f7af149f33df09d47a6be85a3e",
+      "task/PROMPT-noskill.md sha256 8e25d717bb1ff287a55ae6e7abbe277b72d759b82465b05c2aea676534cad36f",
+      "skill body sha256 9d888647caf1452c72ee5ee084c2d18f0f21f062b75c8daa432cb97c0179c0f6",
+      "scripts/make_scratch.sh, scripts/verify_trial.py, scripts/analyse_loop.py, scripts/archive_trials.sh",
+      "the bwrap sandbox recipe inside run_trial.sh",
+      "the task, pinned revision 05573bb, and the harness-owned acceptance test sha256 47fd74b43cfc1090fd6d662a8b0835709563f378728b598012fa772151fded92"
+    ],
+    "harness_changes_and_why_each_is_not_a_condition_change": [
+      "run_trial.sh launches the sandbox under `setsid` via scripts/pgid_exec.sh, which records its own $$ as the process-group id then execs. This exists because the previous halt killed only the wrapper script and orphaned the client; it changes nothing the model sees.",
+      "scripts/halt.sh added: kills recorded process groups by id, sweeps survivors by binary path, never pattern-matches inline argv, and verifies by an untruncated COUNT that makes it exit non-zero if anything survives.",
+      "scripts/check_backend_identity.py added and run before every trial: gates on the /v1/models identity hash.",
+      "run_series.sh now RECORDS the echoed model id instead of gating on it."
+    ]
+  },
+
+  "backend_identity_gate": {
+    "replaces": "asserting on response.model, which passed through an entire backend swap because this server echoes whatever id the request sent",
+    "principle": "The echoed field is the server's Claim about itself. The listing is an observation that has already, once, detected a real change.",
+    "hashed_fields": ["id", "owned_by", "x_mlx_dspark.mode", "x_mlx_dspark.target", "x_mlx_dspark.drafter"],
+    "excluded_field": "created -- a volatile timestamp",
+    "pinned_identity_sha256": "b0efdd40ac172d0905dcadb3b224d10c6794b335a2070f431c29ad68203af6cf",
+    "pin_file": "PINNED_BACKEND_IDENTITY",
+    "enforcement": "run_trial.sh refuses to start a trial if the gate fails (exit 66); run_series.sh stops the series. Tested positive and negative before freezing.",
+    "honest_ceiling": "This proves the advertised listing is unchanged. No endpoint here attests loaded weights, so it is a falsifiable check, not proof of model identity."
+  },
+
+  "arms": {
+    "order_of_execution": ["skill", "noskill", "skill", "noskill", "skill", "noskill"],
+    "n_per_arm": 3,
+    "manipulated_variable": "one paragraph naming the skill, plus the skill file present in the checkout; mechanically verified as the only prompt delta"
+  },
+
+  "primary_output_is_descriptive": {
+    "statement": "Per-trial records: the three verdicts plus what the loop actually did. NOT an arm comparison.",
+    "comparative_claims": "Nothing is ever ACCEPTED. Complete separation (3/3 versus 0/3) on a verdict axis is reported as SUGGESTIVE only. Anything less is noise, stated in advance. m8 at n=5 with far tighter control accepted nothing in either direction; this has less power, more variance, and a named confound."
+  },
+
+  "verdicts": ["verified", "tests_failed", "does_not_compile", "no_change_made", "loop_incomplete_timeout", "loop_incomplete_error", "target_file_missing"],
+
+  "half_edited_tree_rule": {
+    "unchanged_from_v1": true,
+    "rule": "How the loop ended is classified BEFORE its code is looked at, and that classification wins. exit 124 -> loop_incomplete_timeout; other non-zero -> loop_incomplete_error. A half-edited tree that does not compile is reported as loop_incomplete_*, never as does_not_compile. Such trials are excluded from compiles/tests_pass tallies and the exclusion is reported with its count.",
+    "distinct_from": "no_change_made, which is a cleanly terminated loop that left the target file byte-identical to the pinned revision"
+  },
+
+  "isolation": {
+    "per_trial_scratch": "mandatory, fresh, /tmp only",
+    "per_trial_cargo_target_dir": "mandatory -- m8 AMENDMENT-005 demonstrated a shared one serving another tree's library and producing wrong measurements, and an agentic loop runs cargo far more often",
+    "real_repository_invisible": "--tmpfs over /home/rizumita/workspace inside the sandbox, so the acceptance test and every prior result are unreachable",
+    "benchmarks_removed": "the pinned archive carries benchmarks/m7-head-local-v1; it is deleted from every working copy",
+    "acceptance_test_never_in_the_agent_tree": "installed only by the verifier, into a fresh tree built from the pinned revision into which only rust.rs is copied, so test-gaming is mechanically impossible and every discarded out-of-scope edit is still recorded",
+    "credentials": "fresh mode-700 CLAUDE_CONFIG_DIR per trial, no credentials inside, dummy API key"
+  },
+
+  "known_bug_watch": {
+    "symptom": "response tails cut unnaturally -- a sentence ending mid-way, a code block left unclosed. Backend-specific, upstream unfixed, locally patched, and the patch can be lost on a package update.",
+    "correspondence_recorded_not_asserted": "Symptomatically matches the upstream_silent_truncation class this program defined on LM Studio, and Ollama produced its own variant. Three serving implementations, same weights family, truncated-or-absent tails. No common cause is asserted; the correspondence is on file so that root-causing one puts the others up for re-check.",
+    "handling": "If a trial's output ends mid-sentence or with an unclosed block, that is recorded on the trial and the series STOPS. No retry. Record the time noticed, the approximate token count, and the client."
+  },
+
+  "stopping_rules": [
+    "One request in flight at any time.",
+    "No retry of any trial, for any reason.",
+    "Any upstream failure stops the series immediately; the next trial is not started. Record time, approximate token count, client, and how many trials of each arm completed.",
+    "A backend identity gate failure stops the series.",
+    "A truncated-tail symptom stops the series.",
+    "Per-trial wall-clock cap 5,400 s, enforced by `timeout`; hitting it is loop_incomplete_timeout and does not by itself stop the series.",
+    "Maximum 6 trials. A trial lost upstream is excluded and NOT replaced -- a replacement chosen after seeing which trials survived is selection.",
+    "Every halt uses scripts/halt.sh, whose verification is an untruncated count and which exits non-zero if anything survives. No halt is reported as successful on any other basis."
+  ],
+
+  "judging": "Same protocol as m8: content-addressed change ids, hash-ordered, identical changes collapse, abort-not-redact marker scan, --no-session-persistence --tools \"\", cross-family, reference solution never shown, one call per distinct change.",
+
+  "preservation": "Each trial is copied into the repository as it completes, never batched.",
+
+  "not_started": ["the emit-only-the-edit arm", "the syn-surface variant", "a second judge family", "any enable_thinking condition"]
+}

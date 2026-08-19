@@ -7,8 +7,8 @@ set -uo pipefail
 
 root=/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726
 exp="$root/benchmarks/m9-agentic-local-v1"
-runs=/tmp/m9-runs
-log=/tmp/m9-series.log
+runs=/tmp/m9v2-runs
+log=/tmp/m9v2-series.log
 mkdir -p "$runs"
 
 note() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$log"; }
@@ -28,10 +28,15 @@ for index in 1 2 3; do
     verdict=$(python3 -c "import json;print(json.load(open('$runs/$trial/verification.json'))['verdict'])" 2>/dev/null || echo unknown)
     note "VERIFY $trial verdict=$verdict"
 
-    # Any model other than the frozen one is a hard stop.
+    # The echoed model id is RECORDED, never gated on: this backend reflects
+    # whatever id the request sent, so that field passed through an entire
+    # backend swap. The gate is the /v1/models identity hash, checked by
+    # run_trial.sh before every trial.
     models=$(python3 -c "import json;print(','.join(json.load(open('$runs/$trial/loop-behaviour.json'))['model_ids_seen']))" 2>/dev/null || echo "")
-    if [[ -n "$models" && "$models" != "qwen3.8:27b-mlx" ]]; then
-      note "STOP $trial unexpected model ids: $models"
+    note "ECHOED-MODEL $trial $models (recorded, not a gate)"
+    gate=$(python3 -c "import json;print(json.load(open('$runs/$trial/backend-identity.json'))['gate'])" 2>/dev/null || echo missing)
+    if [[ "$gate" != "passed" ]]; then
+      note "STOP $trial backend identity gate=$gate"
       exit 66
     fi
     bash "$exp/scripts/archive_trials.sh" >/dev/null 2>&1 || true

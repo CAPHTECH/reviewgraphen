@@ -51,6 +51,17 @@ config=/tmp/m9-config-$trial
 timeout_seconds=5400
 
 mkdir -p "$result"
+
+# Backend identity gate. Replaces asserting on the echoed response.model
+# field, which passed through an entire backend swap because this server
+# reflects whatever id the request sent. A control-endpoint read, not a
+# generation request.
+if ! python3 "$exp/scripts/check_backend_identity.py" \
+     "$(cat "$exp/PINNED_BACKEND_IDENTITY")" "$result/backend-identity.json"; then
+  echo "backend identity gate failed; refusing to start $trial" >&2
+  exit 66
+fi
+
 rm -rf "$scratch" "$target" "$config"
 mkdir -p "$target" "$config"
 chmod 700 "$config"
@@ -66,7 +77,11 @@ fi
 
 started=$(date +%s)
 set +e
-"$bwrap" \
+# `setsid` puts the whole trial -- timeout, bwrap, claude and every
+# descendant -- into its own process group, so a halt can terminate all of
+# it with one `kill -- -PGID`. The previous attempt killed only the wrapper
+# script and left the client generating for another twelve minutes.
+setsid --wait bash "$exp/scripts/pgid_exec.sh" "$result/trial.pgid" "$bwrap" \
   --ro-bind / / \
   --dev-bind /dev /dev \
   --proc /proc \
