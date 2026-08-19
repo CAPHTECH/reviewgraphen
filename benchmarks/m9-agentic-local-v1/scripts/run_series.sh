@@ -7,8 +7,8 @@ set -uo pipefail
 
 root=/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726
 exp="$root/benchmarks/m9-agentic-local-v1"
-runs=/tmp/m9v2-runs
-log=/tmp/m9v2-series.log
+runs=/tmp/m9v3-runs
+log=/tmp/m9v3-series.log
 mkdir -p "$runs"
 
 note() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$log"; }
@@ -38,6 +38,31 @@ for index in 1 2 3; do
     if [[ "$gate" != "passed" ]]; then
       note "STOP $trial backend identity gate=$gate"
       exit 66
+    fi
+
+    # In-flight cache-credit check. The identity
+    # sum(per-turn contexts) == input_tokens total does NOT discriminate --
+    # measured identical in both cache states -- so the discriminator is
+    # wall clock against the full-recompute projection.
+    python3 "$exp/scripts/check_cache_credit.py" "$runs/$trial" \
+      > "$runs/$trial/cache-credit.log" 2>&1
+    cache_verdict=$(python3 -c "import json;print(json.load(open('$runs/$trial/cache-credit.json'))['verdict'])" 2>/dev/null || echo unknown)
+    cache_ratio=$(python3 -c "import json;print(json.load(open('$runs/$trial/cache-credit.json'))['ratio_elapsed_over_projection'])" 2>/dev/null || echo '?')
+    note "CACHE $trial verdict=$cache_verdict ratio=$cache_ratio (threshold 0.6)"
+    if [[ "$cache_verdict" != "cache_credited" ]]; then
+      note "STOP $trial cache not credited -- this trial measures the OLD condition"
+      exit 67
+    fi
+
+    # Backend truncated-tail bug: the local patch can be lost silently on a
+    # package update, so this runs on every trial.
+    python3 "$exp/scripts/detect_truncated_tail.py" "$runs/$trial" \
+      > "$runs/$trial/truncated-tail.log" 2>&1
+    tail_suspect=$(python3 -c "import json;print(json.load(open('$runs/$trial/truncated-tail.json'))['suspected'])" 2>/dev/null || echo unknown)
+    note "TAIL $trial suspected=$tail_suspect"
+    if [[ "$tail_suspect" == "True" ]]; then
+      note "STOP $trial truncated-tail signature detected"
+      exit 68
     fi
     bash "$exp/scripts/archive_trials.sh" >/dev/null 2>&1 || true
   done
