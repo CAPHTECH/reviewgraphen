@@ -1,0 +1,31 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m8-rep-scratch-rep-methodology-5/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 10:32:37.382797435 +0900
+@@ -12,7 +12,7 @@
+ use syn::visit::{self, Visit};
+ use syn::{
+     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
++    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem, Item, ItemFn,
+     ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
+ };
+ 
+@@ -1852,6 +1852,19 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    for item in &nested.items {
++                        match item {
++                            ForeignItem::Fn { sig, .. } => {
++                                hoisted.push(sig.ident.to_string());
++                            }
++                            ForeignItem::Static { ident, .. } => {
++                                hoisted.push(ident.to_string());
++                            }
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }

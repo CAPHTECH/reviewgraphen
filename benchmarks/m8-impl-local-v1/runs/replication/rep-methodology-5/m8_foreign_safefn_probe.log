@@ -1,0 +1,21 @@
+   Compiling reviewgraphen-ingest v0.1.0 (/tmp/m8-rep-scratch-rep-methodology-5/crates/reviewgraphen-ingest)
+error[E0026]: variant `syn::ForeignItem::Fn` does not have a field named `sig`
+    --> crates/reviewgraphen-ingest/src/rust.rs:1858:47
+     |
+1858 | ...                   ForeignItem::Fn { sig, .. } => {
+     |                                         ^^^
+     |                                         |
+     |                                         variant `syn::ForeignItem::Fn` does not have this field
+     |                                         help: `syn::ForeignItem::Fn` has a field named `0`
+
+error[E0026]: variant `syn::ForeignItem::Static` does not have a field named `ident`
+    --> crates/reviewgraphen-ingest/src/rust.rs:1861:51
+     |
+1861 | ...                   ForeignItem::Static { ident, .. } => {
+     |                                             ^^^^^
+     |                                             |
+     |                                             variant `syn::ForeignItem::Static` does not have this field
+     |                                             help: `syn::ForeignItem::Static` has a field named `0`
+
+For more information about this error, try `rustc --explain E0026`.
+error: could not compile `reviewgraphen-ingest` (lib) due to 2 previous errors
