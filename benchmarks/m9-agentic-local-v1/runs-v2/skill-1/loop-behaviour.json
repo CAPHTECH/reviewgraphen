@@ -1,0 +1,45 @@
+{
+  "api_error_status": null,
+  "api_errors": [],
+  "assistant_turns": 45,
+  "bash_calls": 13,
+  "cargo_build_invocations": 0,
+  "cargo_invocations": 8,
+  "cargo_test_invocations": 0,
+  "compiler_errors_observed": 0,
+  "duration_ms": 5399376,
+  "edits_to_target_file": 0,
+  "error_then_edit_pairs": 0,
+  "final_text": "",
+  "model_ids_seen": [
+    "qwen3.8:27b-mlx"
+  ],
+  "num_turns_reported": 23,
+  "reported_usage_totals": {
+    "input_tokens": 3818353,
+    "output_tokens": 0
+  },
+  "result_is_error": true,
+  "result_subtype": "error_during_execution",
+  "saw_error_then_edited": false,
+  "schema": "reviewgraphen.benchmark.m9_loop_behaviour.v1",
+  "stop_reason": "tool_use",
+  "stream_events": 12310,
+  "timeline": [
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo"
+  ],
+  "tool_calls": {
+    "Bash": 13,
+    "Read": 6,
+    "Skill": 1
+  },
+  "tool_calls_total": 20,
+  "trial": "skill-1"
+}
