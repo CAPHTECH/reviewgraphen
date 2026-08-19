@@ -20,6 +20,17 @@ for index in 1 2 3; do
     rm -rf "${runs:?}/$trial"
     note "START $trial"
     bash "$exp/scripts/run_trial.sh" "$arm" "$trial" "$runs/$trial" >> "$log" 2>&1
+    trial_status=$?
+    # run_trial.sh refuses before issuing any request when a pre-flight gate
+    # fails (exit 66). Verifying a trial that never ran produced a misleading
+    # `verdict=target_file_missing` once; skip straight to the stop instead.
+    if (( trial_status == 66 )); then
+      note "STOP $trial refused by a pre-flight gate -- no generation request was issued"
+      printf 'NOT A TRIAL. run_trial.sh refused before issuing any generation\nrequest, because a pre-flight gate failed. No stream exists. Excluded\nfrom every count.\n' \
+        > "$runs/$trial/NOT-A-TRIAL.md"
+      rm -f "$runs/$trial/verification.json" "$runs/$trial/loop-summary.txt" "$runs/$trial/verify.log"
+      exit 66
+    fi
     outcome=$(cat "$runs/$trial/loop-outcome" 2>/dev/null || echo unknown)
     note "LOOP $trial outcome=$outcome elapsed=$(cat "$runs/$trial/elapsed-seconds" 2>/dev/null)s"
 
