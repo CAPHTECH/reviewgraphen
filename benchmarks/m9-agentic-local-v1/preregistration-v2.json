@@ -3,13 +3,11 @@
   "experiment": "m9-agentic-local-v2",
   "status": "frozen_before_first_generation_request_under_the_new_condition",
   "relationship_to_v1": "FRESH preregistration, not an amendment. `preregistration.json` in this directory described the previous backend; its execution conditions are now false. It is retained unedited as the record of the halted attempt. v2 supersedes it for execution and inherits nothing implicitly.",
-
   "trials_completed_under_v1": {
     "count": 0,
     "skill-1": "VOID twice over: killed mid-loop by the halt (not by the model, the server, or its own timeout), and subsequently established to have kept running against the swapped backend for ~12 minutes after I wrongly reported it stopped. Not a trial outcome, not analysed, outside every count.",
     "bring_up_probes": "3, harness checks only, never trials. See BRINGUP.md."
   },
-
   "the_condition": {
     "endpoint": "http://192.168.68.71:11999 only. Never 1234, never 8080, never 11434.",
     "auth": "any string; `ollama` is sent",
@@ -25,7 +23,6 @@
     "throughput": "code decode 28.7 -> 36.4 tok/s; output content reported unaffected; 32k prefill 102.9 s cold, 0.147 s on a cache hit",
     "concurrency_guidance": "The server now batches up to 2 and queues 3+, with under 3% measured difference at 3 concurrent, so sequential is no longer required. This experiment runs sequentially anyway: the measured gain is nil, and single-flight keeps wall-clock -- which is a recorded outcome here -- free of contention from a neighbouring trial."
   },
-
   "not_poolable": {
     "statement": "Results from this experiment MUST NOT be pooled with, compared as if the condition were constant against, or used to revise: m7-head-local-v1 in its entirety, m8-impl-local-v1 task 1 (all four cells), m8-impl-local-v1 task 2 (n=1 per arm), or the m8 task-2 replication (10 trials). Nor the reverse.",
     "reasons": [
@@ -35,16 +32,13 @@
       "Transport: those experiments cannot even be re-executed. /v1/responses returns 404 on this backend and Codex 0.147 dropped wire_api = \"chat\", so every m7- and m8-style local harness is unrunnable as written, independent of the weights question."
     ]
   },
-
   "confound_named_up_front": {
     "statement": "A better result here is NOT evidence that the methodology transfers.",
     "why": "The dominant failure mode of every prior series in this program was reasoning that never terminated -- m7's bare arm burned 65,535 of 65,536 output tokens on thinking and emitted nothing, and 2 of 9 review units ended in silent truncation. This backend sets reasoning effort low, which removes that failure mode AT THE SERVER, for both arms, before the methodology does anything.",
     "consequence": "Any improvement over m8 is attributable to the condition at least as readily as to the method, and this design cannot separate them. It is not a comparison against m8 and will not be reported as one.",
     "what_can_still_be_learned": "Whether qwen is usable for implementation work in a realistic agentic setting under the CURRENT condition, and what the loop actually does. That is a within-condition question and is unaffected."
   },
-
   "question": "Unchanged from v1: is qwen usable for implementation work when given a shell, a compiler, a test suite, and as many turns as it takes? This is a practical-usability question with correspondingly weak attribution, NOT m8's controlled question about whether the methodology has an effect. The arm names `skill` and `noskill` must not be read as reviving the old question.",
-
   "design_reused_unchanged": {
     "rationale": "The coordinator's instruction: reuse the completed, hash-pinned design so the only difference from the halted attempt is the condition.",
     "byte_identical_to_v1": [
@@ -62,37 +56,52 @@
       "run_series.sh now RECORDS the echoed model id instead of gating on it."
     ]
   },
-
   "backend_identity_gate": {
     "replaces": "asserting on response.model, which passed through an entire backend swap because this server echoes whatever id the request sent",
     "principle": "The echoed field is the server's Claim about itself. The listing is an observation that has already, once, detected a real change.",
-    "hashed_fields": ["id", "owned_by", "x_mlx_dspark.mode", "x_mlx_dspark.target", "x_mlx_dspark.drafter"],
+    "hashed_fields": [
+      "id",
+      "owned_by",
+      "x_mlx_dspark.mode",
+      "x_mlx_dspark.target",
+      "x_mlx_dspark.drafter"
+    ],
     "excluded_field": "created -- a volatile timestamp",
     "pinned_identity_sha256": "b0efdd40ac172d0905dcadb3b224d10c6794b335a2070f431c29ad68203af6cf",
     "pin_file": "PINNED_BACKEND_IDENTITY",
     "enforcement": "run_trial.sh refuses to start a trial if the gate fails (exit 66); run_series.sh stops the series. Tested positive and negative before freezing.",
     "honest_ceiling": "This proves the advertised listing is unchanged. No endpoint here attests loaded weights, so it is a falsifiable check, not proof of model identity."
   },
-
   "arms": {
-    "order_of_execution": ["skill", "noskill", "skill", "noskill", "skill", "noskill"],
+    "order_of_execution": [
+      "skill",
+      "noskill",
+      "skill",
+      "noskill",
+      "skill",
+      "noskill"
+    ],
     "n_per_arm": 3,
     "manipulated_variable": "one paragraph naming the skill, plus the skill file present in the checkout; mechanically verified as the only prompt delta"
   },
-
   "primary_output_is_descriptive": {
     "statement": "Per-trial records: the three verdicts plus what the loop actually did. NOT an arm comparison.",
     "comparative_claims": "Nothing is ever ACCEPTED. Complete separation (3/3 versus 0/3) on a verdict axis is reported as SUGGESTIVE only. Anything less is noise, stated in advance. m8 at n=5 with far tighter control accepted nothing in either direction; this has less power, more variance, and a named confound."
   },
-
-  "verdicts": ["verified", "tests_failed", "does_not_compile", "no_change_made", "loop_incomplete_timeout", "loop_incomplete_error", "target_file_missing"],
-
+  "verdicts": [
+    "verified",
+    "tests_failed",
+    "does_not_compile",
+    "no_change_made",
+    "loop_incomplete_timeout",
+    "loop_incomplete_error",
+    "target_file_missing"
+  ],
   "half_edited_tree_rule": {
     "unchanged_from_v1": true,
     "rule": "How the loop ended is classified BEFORE its code is looked at, and that classification wins. exit 124 -> loop_incomplete_timeout; other non-zero -> loop_incomplete_error. A half-edited tree that does not compile is reported as loop_incomplete_*, never as does_not_compile. Such trials are excluded from compiles/tests_pass tallies and the exclusion is reported with its count.",
     "distinct_from": "no_change_made, which is a cleanly terminated loop that left the target file byte-identical to the pinned revision"
   },
-
   "isolation": {
     "per_trial_scratch": "mandatory, fresh, /tmp only",
     "per_trial_cargo_target_dir": "mandatory -- m8 AMENDMENT-005 demonstrated a shared one serving another tree's library and producing wrong measurements, and an agentic loop runs cargo far more often",
@@ -101,13 +110,11 @@
     "acceptance_test_never_in_the_agent_tree": "installed only by the verifier, into a fresh tree built from the pinned revision into which only rust.rs is copied, so test-gaming is mechanically impossible and every discarded out-of-scope edit is still recorded",
     "credentials": "fresh mode-700 CLAUDE_CONFIG_DIR per trial, no credentials inside, dummy API key"
   },
-
   "known_bug_watch": {
     "symptom": "response tails cut unnaturally -- a sentence ending mid-way, a code block left unclosed. Backend-specific, upstream unfixed, locally patched, and the patch can be lost on a package update.",
     "correspondence_recorded_not_asserted": "Symptomatically matches the upstream_silent_truncation class this program defined on LM Studio, and Ollama produced its own variant. Three serving implementations, same weights family, truncated-or-absent tails. No common cause is asserted; the correspondence is on file so that root-causing one puts the others up for re-check.",
     "handling": "If a trial's output ends mid-sentence or with an unclosed block, that is recorded on the trial and the series STOPS. No retry. Record the time noticed, the approximate token count, and the client."
   },
-
   "stopping_rules": [
     "One request in flight at any time.",
     "No retry of any trial, for any reason.",
@@ -118,10 +125,20 @@
     "Maximum 6 trials. A trial lost upstream is excluded and NOT replaced -- a replacement chosen after seeing which trials survived is selection.",
     "Every halt uses scripts/halt.sh, whose verification is an untruncated count and which exits non-zero if anything survives. No halt is reported as successful on any other basis."
   ],
-
   "judging": "Same protocol as m8: content-addressed change ids, hash-ordered, identical changes collapse, abort-not-redact marker scan, --no-session-persistence --tools \"\", cross-family, reference solution never shown, one call per distinct change.",
-
   "preservation": "Each trial is copied into the repository as it completes, never batched.",
-
-  "not_started": ["the emit-only-the-edit arm", "the syn-surface variant", "a second judge family", "any enable_thinking condition"]
+  "not_started": [
+    "the emit-only-the-edit arm",
+    "the syn-surface variant",
+    "a second judge family",
+    "any enable_thinking condition"
+  ],
+  "condition_clarification_added_post_freeze": {
+    "added": "2026-08-19 evening, after trial 1, at the coordinator's request",
+    "why_this_is_not_a_criteria_change": "It states a fact about the condition that was already true and already implied by run_trial.sh. It changes no arm, no verdict, no threshold and no stopping rule.",
+    "reasoning_is_not_an_experimental_variable_here": "m9 does not specify reasoning AT ALL. There is no reasoning_effort and no chat_template_kwargs anywhere in run_trial.sh, and Claude Code offers no path to send either. Reasoning is fixed at the server's default `low`, identically for both arms.",
+    "consequence": "The operator's enable_thinking: true override CANNOT be tested within this design. Doing so needs a client that can set chat_template_kwargs, which this one cannot, and would be a separate preregistered condition.",
+    "relation_to_the_named_confound": "This is the mechanism behind the confound already named in `confound_named_up_front`: reasoning terminating is a property of the server, applied identically to both arms, that neither arm can influence.",
+    "corroborated_by_measurement": "skill-1's authoritative usage reports output_tokens_details.thinking_tokens = 0, and the backend's per-turn usage carries no reasoning key at all, so reasoning volume is not even observable from this client."
+  }
 }
