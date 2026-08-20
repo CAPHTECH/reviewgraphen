@@ -57,7 +57,7 @@ mkdir -p "$result"
 # reflects whatever id the request sent. A control-endpoint read, not a
 # generation request.
 if ! python3 "$exp/scripts/check_backend_identity.py" \
-     "$(cat "$exp/PINNED_BACKEND_IDENTITY")" "$result/backend-identity.json"; then
+     "$(cat "$exp/PINNED_BACKEND_IDENTITY")" "$(cat "$exp/PINNED_BACKEND_HEALTH")" "$result/backend-identity.json"; then
   echo "backend identity gate failed; refusing to start $trial" >&2
   exit 66
 fi

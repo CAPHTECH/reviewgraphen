@@ -9,10 +9,10 @@
 set -uo pipefail
 
 root=/home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726
-dest="$root/benchmarks/m9-agentic-local-v1/runs-v3"
+dest="$root/benchmarks/m9-agentic-local-v1/runs-v4"
 mkdir -p "$dest"
 
-for src in /tmp/m9v3-runs/*; do
+for src in /tmp/m9v4-runs/*; do
   [[ -d "$src" ]] || continue
   trial=$(basename "$src")
   out="$dest/$trial"
