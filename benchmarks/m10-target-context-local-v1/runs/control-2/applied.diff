@@ -1,0 +1,30 @@
+--- /tmp/m10-runs/control-2/pinned-rust.rs	2026-08-20 21:31:22.066897119 +0900
++++ /tmp/m10-verify-control-2/crates/reviewgraphen-ingest/src/rust.rs	2026-08-20 21:31:22.066897119 +0900
+@@ -1852,6 +1852,27 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                syn::Stmt::Item(Item::ForeignMod(extern_block)) => {
++                    for extern_item in &extern_block.items {
++                        match extern_item {
++                            // A foreign `fn`/`static` sits in the *value*
++                            // namespace of the enclosing block exactly as a
++                            // block-local `fn`/`static` item does, so it
++                            // shadows a same-named module-level function for
++                            // a naked call here. (A foreign `type` is in the
++                            // type namespace only and contributes nothing;
++                            // every other shape likewise never shadows a
++                            // callable, so it contributes nothing either.)
++                            syn::ForeignItem::Fn(decl) => {
++                                hoisted.push(decl.sig.ident.to_string())
++                            }
++                            syn::ForeignItem::Static(decl) => {
++                                hoisted.push(decl.ident.to_string())
++                            }
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }

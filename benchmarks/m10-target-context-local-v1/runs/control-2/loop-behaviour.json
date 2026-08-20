@@ -1,0 +1,98 @@
+{
+  "from_stream_events": {
+    "assistant_stream_events": 81,
+    "bash_calls": 21,
+    "bash_commands_mentioning_cargo_path_only": 0,
+    "cargo_build_invocations": 3,
+    "cargo_check_invocations": 0,
+    "cargo_invocations": 15,
+    "cargo_test_invocations": 14,
+    "compiler_errors_observed": 1,
+    "edits_to_target_file": 6,
+    "error_then_edit_pairs": 1,
+    "model_ids_seen": [
+      "qwen3.8:27b-mlx"
+    ],
+    "provenance": "counted from tool_use / tool_result blocks in the transcript -- trustworthy",
+    "saw_error_then_edited": true,
+    "tool_calls": {
+      "Bash": 21,
+      "Edit": 6,
+      "Read": 3
+    },
+    "tool_calls_total": 30
+  },
+  "result_event": {
+    "api_error_status": null,
+    "duration_ms": 1054891,
+    "final_text": "\n\nDone. Clippy is clean, and the only `unsafe`-matching line (380, `implementation.unsafety.to_token_stream()`) is a pre-existing syn *field* reference, not the `unsafe` keyword \u2014 my change introduces no `unsafe` token.\n\n## What I changed\n\nOne file, one addition: `crates/reviewgraphen-ingest/src/rust.rs`, in `FunctionBodyVisitor::visit_block` (rust.rs:1855-1875). I added a `syn::Stmt::Item(Item::ForeignMod(_))` arm to the hoisting scan that, for each `syn::ForeignItem`, pushes the identifier of a foreign `fn` (`decl.sig.ident`) and a foreign `static` (`decl.ident`) into the block's `hoisted` name set. All other foreign-item shapes (`type`, `type_alias`, `const`, \u2026) fall through to `_ => {}` and contribute nothing.\n\nThis makes a block-local `extern \"C\" { ... }`'s `fn`/`static` names shadow a same-named module-level function for a naked call in that block, through the existing `is_locally_bound` path \u2014 so `record_call` emits the `RelationUnresolved` shadowed obstruction instead of an unsound `calls` edge. Because it reuses `push_scope`/`pop_scope`, the shadow is scoped to its own block and cannot leak past it (requirement 3), and because only the *named* foreign `fn`/`static` are hoisted rather than marking the block conservatively, an `extern \"C\"` that declares only *other* names blocks nothing (requirement 4). Requirement 5 (no foreign module) is untouched since the new arm only fires on a present `ForeignMod`.\n\n## What I ran\n\n- `cargo build -p reviewgraphen-ingest` \u2014 passes\n- `cargo clippy -p reviewgraphen-ingest --all-targets` \u2014 passes, no warnings\n- `cargo test -p reviewgraphen-ingest` \u2014 see below\n\n**Important caveat on the test results:** this sandbox mounts `/tmp` read-only, but the test suites build temporary git workspaces via `tempfile::tempdir()` (which honors `TMPDIR`). Running with a writable `TMPDIR` (inside the checkout) I got: **lib 67/67 pass, extraction_report_schema 8/8 pass, m2 38/40**. The 2 m2 failures (`external_registry_dependency_is_still_mark",
+    "is_error": false,
+    "logical_turns": 31,
+    "stop_reason": "end_turn",
+    "subtype": "success"
+  },
+  "schema": "reviewgraphen.benchmark.m10_loop_behaviour.v1",
+  "stream_events": 6588,
+  "timeline": [
+    "edit_target",
+    "cargo",
+    "compiler_error_seen",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "edit_target",
+    "cargo",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "edit_target",
+    "cargo",
+    "edit_target",
+    "cargo",
+    "cargo"
+  ],
+  "tokens_authoritative": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 1857903,
+    "model_usage": {
+      "qwen3.8:27b-mlx": {
+        "cacheCreationInputTokens": 0,
+        "cacheReadInputTokens": 0,
+        "canonicalModel": "qwen3.8:27b-mlx",
+        "contextWindow": 200000,
+        "costUSD": 9.61828,
+        "inputTokens": 1859741,
+        "maxOutputTokens": 32000,
+        "outputTokens": 12783,
+        "provider": "firstParty",
+        "webSearchRequests": 0
+      }
+    },
+    "output_tokens": 12614,
+    "provenance": "the client's terminal `result` event, which Claude Code computes itself -- the only trustworthy token source on this backend",
+    "thinking_tokens": 0
+  },
+  "tokens_backend_per_turn": {
+    "input_tokens_last": 67474,
+    "input_tokens_max": 67474,
+    "input_tokens_min": 27828,
+    "input_tokens_monotonic_non_decreasing": true,
+    "input_tokens_naive_sum_DO_NOT_USE": 4877635,
+    "keys_ever_seen": [
+      "input_tokens",
+      "output_tokens"
+    ],
+    "output_tokens_all_zero": true,
+    "provenance": "raw per-turn `usage` from the backend -- SUSPECT, retained as evidence of what it reports",
+    "turns_with_usage": 81,
+    "why_the_naive_sum_is_wrong": "each turn's input_tokens re-reports the whole accumulated context, and several stream events share one API call's usage, so summing multiply-counts the same prefix"
+  },
+  "trial": "control-2"
+}

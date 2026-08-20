@@ -1,0 +1,177 @@
+{
+  "api_calls": 31,
+  "calls_beating_their_own_full_recompute": 29,
+  "calls_total": 31,
+  "elapsed_seconds": 1055,
+  "full_recompute_projection_seconds": 5974.0,
+  "identity_holds": true,
+  "identity_note": "holds in BOTH cache states -- a reporting artifact, not a cache signal",
+  "per_call": [
+    {
+      "context_tokens": 27828,
+      "elapsed_s": 0.0,
+      "full_recompute_s": 89.5
+    },
+    {
+      "context_tokens": 54651,
+      "elapsed_s": 240.7,
+      "full_recompute_s": 175.7
+    },
+    {
+      "context_tokens": 55113,
+      "elapsed_s": 9.0,
+      "full_recompute_s": 177.2
+    },
+    {
+      "context_tokens": 55624,
+      "elapsed_s": 63.5,
+      "full_recompute_s": 178.9
+    },
+    {
+      "context_tokens": 55845,
+      "elapsed_s": 17.4,
+      "full_recompute_s": 179.6
+    },
+    {
+      "context_tokens": 56382,
+      "elapsed_s": 20.7,
+      "full_recompute_s": 181.3
+    },
+    {
+      "context_tokens": 57226,
+      "elapsed_s": 29.6,
+      "full_recompute_s": 184.0
+    },
+    {
+      "context_tokens": 57447,
+      "elapsed_s": 7.8,
+      "full_recompute_s": 184.7
+    },
+    {
+      "context_tokens": 57884,
+      "elapsed_s": 14.5,
+      "full_recompute_s": 186.1
+    },
+    {
+      "context_tokens": 58024,
+      "elapsed_s": 19.4,
+      "full_recompute_s": 186.6
+    },
+    {
+      "context_tokens": 58258,
+      "elapsed_s": 10.4,
+      "full_recompute_s": 187.3
+    },
+    {
+      "context_tokens": 58490,
+      "elapsed_s": 24.5,
+      "full_recompute_s": 188.1
+    },
+    {
+      "context_tokens": 58968,
+      "elapsed_s": 9.3,
+      "full_recompute_s": 189.6
+    },
+    {
+      "context_tokens": 59163,
+      "elapsed_s": 26.1,
+      "full_recompute_s": 190.2
+    },
+    {
+      "context_tokens": 59672,
+      "elapsed_s": 29.5,
+      "full_recompute_s": 191.9
+    },
+    {
+      "context_tokens": 60406,
+      "elapsed_s": 16.3,
+      "full_recompute_s": 194.2
+    },
+    {
+      "context_tokens": 60828,
+      "elapsed_s": 17.2,
+      "full_recompute_s": 195.6
+    },
+    {
+      "context_tokens": 61637,
+      "elapsed_s": 37.4,
+      "full_recompute_s": 198.2
+    },
+    {
+      "context_tokens": 62570,
+      "elapsed_s": 16.0,
+      "full_recompute_s": 201.2
+    },
+    {
+      "context_tokens": 62863,
+      "elapsed_s": 30.7,
+      "full_recompute_s": 202.1
+    },
+    {
+      "context_tokens": 63542,
+      "elapsed_s": 49.0,
+      "full_recompute_s": 204.3
+    },
+    {
+      "context_tokens": 63795,
+      "elapsed_s": 13.2,
+      "full_recompute_s": 205.1
+    },
+    {
+      "context_tokens": 64102,
+      "elapsed_s": 32.9,
+      "full_recompute_s": 206.1
+    },
+    {
+      "context_tokens": 64599,
+      "elapsed_s": 15.0,
+      "full_recompute_s": 207.7
+    },
+    {
+      "context_tokens": 64831,
+      "elapsed_s": 23.4,
+      "full_recompute_s": 208.5
+    },
+    {
+      "context_tokens": 65395,
+      "elapsed_s": 22.9,
+      "full_recompute_s": 210.3
+    },
+    {
+      "context_tokens": 65852,
+      "elapsed_s": 48.3,
+      "full_recompute_s": 211.7
+    },
+    {
+      "context_tokens": 66061,
+      "elapsed_s": 9.3,
+      "full_recompute_s": 212.4
+    },
+    {
+      "context_tokens": 66283,
+      "elapsed_s": 12.0,
+      "full_recompute_s": 213.1
+    },
+    {
+      "context_tokens": 67090,
+      "elapsed_s": 14.1,
+      "full_recompute_s": 215.7
+    },
+    {
+      "context_tokens": 67474,
+      "elapsed_s": 48.8,
+      "full_recompute_s": 217.0
+    }
+  ],
+  "prefill_tok_per_s_assumed": 311.0,
+  "ratio_elapsed_over_projection": 0.177,
+  "ratio_threshold": 0.6,
+  "reference_skill_1_ratio": 1.323,
+  "reported_total_input_tokens": 1857903,
+  "reported_total_output_tokens": 12614,
+  "schema": "reviewgraphen.benchmark.m10_cache_credit.v1",
+  "summed_context_tokens": 1857903,
+  "trial": "control-2",
+  "verdict": "cache_credited",
+  "verdict_rule": "any call beating its own full-recompute time is direct evidence of crediting and outranks the aggregate ratio"
+}
