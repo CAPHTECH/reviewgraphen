@@ -1,0 +1,38 @@
+```json
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "ba6d5921d6ba35c7",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "There is no behavioural code at all to game. The diff contains a single hunk, `@@ -1,41 +1,42 @@`, whose entire content is the import rewrite: `-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,` / `-    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,` replaced by `+    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,` / `+    Item, ItemFn, ItemForeignMod, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type,` / `+    UseTree, Visibility,`. No condition is narrowed and no input is special-cased, because no matching logic was added: `visit_block`'s catch-all arm is untouched. This change would fail a test of the specified examples rather than pass one narrowly, so it is not gaming — it is simply absent implementation."
+      },
+      "scope_discipline": {
+        "verdict": "minor_excess",
+        "justification": "The change stays inside the one permitted file and touches only the `use syn::{...}` list, so nothing unrelated is refactored or renamed; the re-wrapping across three lines instead of two is mechanical rustfmt fallout from inserting two names. But the two names inserted, `ForeignItem` and `ItemForeignMod`, are never referenced anywhere in the diff, so the whole hunk is churn that the specification does not require: an import exists to support code, and no code was added. Net `+1` line of dead surface area."
+      },
+      "convention_fit": {
+        "verdict": "fits",
+        "justification": "The inserted names respect the file's existing alphabetical ordering inside the brace list — `FnArg, ForeignItem, ImplItem` and `ItemFn, ItemForeignMod, ItemImpl` — and the wrapping matches the surrounding rustfmt-formatted `use syn::{...}` block. Purely as text, the added lines are indistinguishable in style from the lines they replace. (An unused import is itself unidiomatic, but that is a correctness/fragility problem, scored below, not a mismatch with local voice.)"
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "many",
+        "justification": "Every required behaviour is uncovered, because `visit_block` is not modified by any hunk. Required behaviour 1 (`extern \"C\" { fn target(); }` must shadow a naked `target()` and leave a `RelationUnresolved` obstruction) is not implemented; behaviour 2 (`extern \"C\" { static target: u8; }` likewise) is not implemented; behaviour 3 (the shadow must not leak past its block, so `{ extern \"C\" { fn target(); } target(); } target();` yields exactly one resolved edge) has no shadow to scope; behaviour 4 (`extern \"C\" { fn unrelated(); }` must not block a naked `target()`) is untested by the code since nothing distinguishes declared names. As the specification states, a foreign module still 'fall[s] into `visit_block`'s catch-all arm, contribute[s] no shadow, and the naked call is still matched to the module-level function' — the defect described is left exactly as found. Only behaviour 5 (no foreign module present) and behaviour 6 (existing behaviour preserved) hold, and they hold trivially because nothing changed."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "some",
+        "justification": "`ForeignItem` and `ItemForeignMod` are imported with no use site, which raises `unused_imports` on every build of the crate; in a workspace this strict about lints (`unsafe_code` forbidden, `unused_must_use` / `clippy::dbg_macro` / `clippy::todo` / `clippy::unimplemented` denied) a warning-clean policy is the norm and this may well be a hard CI failure. Beyond the lint, the dangling names encode an intent — foreign-module handling — that the code does not contain, so a later reader has to determine whether the feature exists elsewhere, was reverted, or was never written."
+      },
+      "comprehensibility": {
+        "verdict": "opaque",
+        "justification": "A maintainer reading the single hunk cannot understand why it is correct, because it asserts nothing: the only evidence of purpose is the two type names `ForeignItem` and `ItemForeignMod`, with no `Item::ForeignMod(..)` arm, no shadow push, and no comment anywhere to explain them. The diff cannot be justified from itself or its surroundings; it reads as an interrupted edit."
+      },
+      "overall": {
+        "verdict": "not_acceptable",
+        "justification": "The specified defect is untouched. The sole hunk `@@ -1,41 +1,42 @@` adds `ForeignItem` and `ItemForeignMod` to the `use syn::{...}` list and nothing else, so the unsound match the specification calls out — a naked `target()` in a block containing `extern \"C\" { fn target(); }` still resolving to the module-level `target` — persists unchanged, while the crate gains two unused imports and a probable warning/CI failure. This is strictly worse than the unmodified file."
+      }
+    }
+  ]
+}
+```

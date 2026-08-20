@@ -1,0 +1,36 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "274a12fa9d3b1f4a",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm implements the general rule rather than the spec's example inputs. It iterates every declaration in the foreign module — `for foreign_item in &nested.items { match foreign_item { ForeignItem::Fn(foreign_fn) => { hoisted.push(foreign_fn.sig.ident.to_string()); } ForeignItem::Static(foreign_static) => { hoisted.push(foreign_static.ident.to_string()); } _ => {} } }` — and pushes whatever identifier each one binds. There is no comparison against a literal name such as `\"target\"`, no restriction to `extern \"C\"` specifically (the arm matches `Item::ForeignMod` regardless of ABI string), and no gating on the number of items. The distinction that makes requirement 4 pass is the same distinction that makes requirement 1 pass: names are hoisted individually, so `extern \"C\" { fn unrelated(); }` hoists `\"unrelated\"` and leaves a naked `target()` resolvable, without any special case. Likewise `conservative_unresolved` is deliberately not set, which is the honest implementation of the rule rather than the blunt shortcut the spec explicitly forbids."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "Exactly two hunks. The first adds one name to an existing import list — `ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,` — and the accompanying rewrap onto the following lines (`Item, ItemFn, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree,` / `Visibility,`) is the mechanical consequence of inserting `ForeignItem`, not discretionary reformatting. The second hunk inserts a single `syn::Stmt::Item(Item::ForeignMod(nested)) =>` arm before the existing `_ => {}`. No existing arm is touched, no identifier renamed, no nearby code refactored, and only `rust.rs` is modified as the constraint requires."
+      },
+      "convention_fit": {
+        "verdict": "fits",
+        "justification": "The arm is written in the same shape as its siblings: `syn::Stmt::Item(Item::ForeignMod(nested)) =>` uses the same fully-qualified `syn::Stmt::Item(Item::X(nested))` pattern and the same `nested` binding name as `syn::Stmt::Item(Item::Fn(nested)) => hoisted.push(nested.sig.ident.to_string())` and `Item::Static(nested)`, and it accumulates through the same `hoisted` vector rather than inventing a new mechanism. The inner `_ => {}` mirrors the outer catch-all. The explanatory comment is long, but the function it sits in already carries a comparably discursive rationale in its doc comment (\"real Rust puts a named-field struct's name only in the *type* namespace, never the value namespace ... hoisting it anyway would wrongly block an otherwise-valid resolution to the outer `fn target`\"), and the new comment adopts that same voice — namespace reasoning, `*value*` emphasis with asterisks, and an explicit statement of what would go wrong otherwise. No `unsafe` keyword appears, satisfying the `forbid(unsafe_code)` constraint."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "some",
+        "justification": "The two cases the spec names by word — foreign `fn` and foreign `static` — are both covered, and `ForeignItem::Type` is correctly left out (it is type-namespace only, as the sibling named-field-struct exclusion already establishes). What is not covered is implied by the Background's stated contract rather than by the enumerated points: 'record the unknown rather than guess ... a wrong match is a false fact.' A `ForeignItem::Macro` or `ForeignItem::Verbatim` inside the block-local extern block falls into the new inner `_ => {}` and contributes neither a shadow nor conservatism, so a foreign macro expanding to `fn target();` would still produce a resolved `calls` edge — precisely the unsound match the change exists to remove. The comment asserts the opposite as justification: 'an unexpanded macro is opaque but never a `fn`/`static` by name, so neither shadows a same-named callable.' The first clause is true, the inference is not. In mitigation this exactly matches the pre-existing treatment of a block-level `Item::Macro`, which the outer `_ => {}` has always dropped, so the gap is inherited rather than introduced, and requirement 6 ('every existing behaviour ... preserved') arguably points the same way."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "none",
+        "justification": "The arm reuses the existing scope machinery verbatim — the collected names flow into the same `self.push_scope(hoisted, conservative_unresolved);` / `visit::visit_block(self, block);` / `self.pop_scope();` sequence that already bounds `fn`/`const`/`static` shadows, so requirement 3 (no leak past the block) is satisfied structurally rather than by a new rule that could drift out of step. No invariant is duplicated: `conservative_unresolved` is left alone, so glob-`use` conservatism is untouched. There is no ordering assumption — hoisting happens in the same pre-pass over `block.stmts` as every other item kind, which is what makes it correct for a call appearing textually before the `extern` block. The one growth-sensitive spot is the inner `_ => {}`, which will silently absorb any future `ForeignItem` variant, but that is the same failure mode as the outer `_ => {}` it mirrors and does not couple to anything distant."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "The comment states the mechanism ('hoists its `fn` and `static` declarations into the enclosing block's *value* namespace, exactly like a block-local `fn`/`static` item'), the reason for each exclusion ('a foreign `type` sits in the type namespace (never a call target)'), the scoping guarantee ('pushed as a fresh `LexicalScope`, popped when the block ends'), and — most usefully for a later maintainer — why the tempting shortcut is wrong: 'never marks the whole block conservatively unresolved: a foreign module that declares *other* names only must leave a same-named `target()` resolvable to the module-level `target`.' That last sentence is exactly the constraint a future editor would otherwise violate. The only misleading line is the macro claim noted above, which reads as settled when it is not."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "It implements the specified rule generally rather than for the tested shape, touches only the import list and one new match arm, and inherits scoping correctness from `self.push_scope(hoisted, conservative_unresolved)` / `self.pop_scope()` rather than reimplementing it. Requirements 1-5 are met by construction, and nothing in the diff perturbs the glob-`use`, pattern-binding, or obstruction-ledger paths. I would merge it, and separately would either drop or soften the sentence 'an unexpanded macro is opaque but never a `fn`/`static` by name' — the code's behaviour there is defensible as consistency with the existing block-level `Item::Macro` handling, but the stated reason is not sound and will mislead whoever revisits it."
+      }
+    }
+  ]
+}

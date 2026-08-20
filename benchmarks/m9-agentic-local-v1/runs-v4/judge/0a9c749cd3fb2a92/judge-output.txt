@@ -1,0 +1,38 @@
+```json
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "6f8e987379e2133d",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm implements the general rule, not the tested examples. It iterates every declaration in the foreign module -- `for foreign_item in &nested.items` -- and hoists by kind, not by name: `ForeignItem::Fn(foreign) => { hoisted.push(foreign.sig.ident.to_string()) }` and `ForeignItem::Static(foreign) => { hoisted.push(foreign.ident.to_string()) }`. There is no literal `\"target\"`, no arity or ABI-string check (`extern \"C\"` vs `extern \"system\"` are both `Item::ForeignMod`), and no condition narrowing the effect to a single call shape. It also declines the shortcut that would pass points 1-3 while failing point 4: `conservative_unresolved` is left untouched by this arm, so a foreign module is never a whole-block block-out, only a source of specific names."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "Two hunks. The first adds exactly one identifier to an existing import -- `ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,` -- and the accompanying rewrap of `Item, ItemFn, ... UseTree,` onto the following lines is the mechanical rustfmt consequence of that insertion, not a drive-by reformat: no name is added, removed, or reordered. The second hunk adds one `syn::Stmt::Item(Item::ForeignMod(nested))` arm ahead of the existing `_ => {}`. Nothing else in `visit_block` is touched: the `Fn`/`Const`/`Static`/`Struct`/`Use` arms, `self.push_scope(hoisted, conservative_unresolved)`, and `visit_local` below are byte-identical."
+      },
+      "convention_fit": {
+        "verdict": "mixed",
+        "justification": "Arm shape and naming fit: the outer arm is `syn::Stmt::Item(Item::ForeignMod(nested))` with the same `nested` binding as `Item::Fn(nested)` / `Item::Use(nested)` above it, and the accumulation into `hoisted` matches `hoisted.push(nested.sig.ident.to_string())`. Two nits. First, comment density: all five pre-existing arms carry zero inline commentary because this file's idiom parks the namespace reasoning in the `visit_block` doc comment -- that is where the analogous named-field-struct rationale lives (\"real Rust puts a named-field struct's name only in the *type* namespace...\"). This change instead inlines fourteen lines of the same kind of reasoning into the match body. The voice is right; the placement is not the local one. Second, the braced inner arms `ForeignItem::Fn(foreign) => { hoisted.push(...) }` omit the trailing semicolon that the analogous braced arm above uses (`hoisted.push(nested.ident.to_string());` under the `Item::Struct` guard)."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "none",
+        "justification": "Each required behaviour maps onto code. (1) and (2): `ForeignItem::Fn` and `ForeignItem::Static` both push into `hoisted`, and `foreign.sig.ident` / `foreign.ident` are the correct syn 2.0 accessors for `ForeignItemFn`/`ForeignItemStatic`. (3): the names go through the unchanged `self.push_scope(hoisted, ...)` / `visit::visit_block(self, block)` / `self.pop_scope()` sequence, so the shadow dies with the block exactly as a block-local `fn` shadow does -- no separate lifetime is invented. (4): only enumerated names are pushed and `conservative_unresolved` is never set here, so `extern \"C\" { fn unrelated(); }` hoists `\"unrelated\"` and leaves a naked `target()` resolving. (5) and (6): the arm sits before `_ => {}` and matches only `Item::ForeignMod`, so every other statement kind takes the identical path it took before. `ForeignItem::Type` is correctly dropped by `_ => {}` (type namespace only, never a call target), as the comment states. `ForeignItem::Macro` also falls to `_ => {}`, but that mirrors this same match's pre-existing treatment of a block-local `Item::Macro`, so it is a standing property of the function rather than a case this change was asked to close. Note also that the arm matches `Item::ForeignMod` irrespective of `unsafety`, so the edition-2024 `unsafe extern \"C\" { .. }` fixture form is covered, and the change's own text contains no `unsafe` keyword."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "none",
+        "justification": "The arm depends on nothing distant: it writes to the same local `hoisted` vector the other arms write to and hands it to the same `push_scope(hoisted, conservative_unresolved)` call, so it inherits the existing scope discipline rather than duplicating it. No ordering assumption is added -- the pre-existing loop already collects all hoists before `visit::visit_block`, which is what makes Rust's item hoisting work, and the new arm just contributes more entries to that same pass. Duplicate names cannot misbehave: `hoisted` is already a `Vec` fed by multiple arms, so a repeated push is a pre-existing tolerated shape. `syn`'s `ForeignItem` is non-exhaustive, but the `_ => {}` there is the same shape as the `_ => {}` on the outer match, so a future variant degrades exactly as new `Item` variants already do. The comment's parenthetical invariant claim (\"Rust forbids a name appearing in two value-namespace item positions, so a name is bound at most once\") is prose only -- no code relies on it, so it cannot drift into a bug."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "The comment states the rule and, more usefully, the rejected alternative: \"Only the *specific* declared names are bound, never a whole-block conservative unresolved mark ... a foreign module declaring some *other* name, or a foreign `type` (type namespace only -- never a call target), must not block or shadow an otherwise-unshadowed call.\" That is precisely the reasoning a maintainer would otherwise have to reconstruct to know why `conservative_unresolved` is deliberately not touched here, and it explains the `_ => {}` over `ForeignItem::Type`. The one murky clause is \"`fn` and `static` names cannot collide with each other's shape here\", which does not clearly say anything; it costs nothing because the surrounding sentences carry the argument."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "Twelve lines of code that implement the actual rule -- `for foreign_item in &nested.items` with `ForeignItem::Fn`/`ForeignItem::Static` pushed into the existing `hoisted` vector -- routed through the unchanged `push_scope`/`pop_scope` pair so scoping, non-leakage, and the untouched `conservative_unresolved` flag all follow from machinery that already worked. It satisfies point 4 by construction rather than by luck, adds no dependency, no `unsafe`, and no coupling. The only thing I would raise in review is relocating the fourteen-line inline comment into the `visit_block` doc comment where this file keeps its namespace reasoning, and adding the trailing semicolons in the two braced inner arms -- neither is worth blocking a correct, minimal fix."
+      }
+    }
+  ]
+}
+```

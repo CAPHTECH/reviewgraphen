@@ -1,0 +1,126 @@
+{
+  "schema": "reviewgraphen.benchmark.m9_v4_analysis.v1",
+  "experiment": "m9-agentic-local-v4",
+  "status": "complete",
+  "basis": {
+    "preregistration": "benchmarks/m9-agentic-local-v1/preregistration-v4.json",
+    "series_log": "benchmarks/m9-agentic-local-v1/runs-v4/SERIES.log",
+    "trial_count": 6,
+    "retry_count": 0,
+    "upstream_failure_count": 0,
+    "truncated_tail_count": 0,
+    "cache_not_credited_count": 0
+  },
+  "trials": [
+    {
+      "trial": "skill-1",
+      "arm": "skill",
+      "verdict": "verified",
+      "elapsed_seconds": 4078,
+      "reported_output_tokens": 71611,
+      "thinking_share": 0.946,
+      "max_context_depth": 96457,
+      "deep_decode_tokens_per_second": 17.8,
+      "compiles": true,
+      "tests_pass": true,
+      "judge_overall": "acceptable_as_is"
+    },
+    {
+      "trial": "noskill-1",
+      "arm": "noskill",
+      "verdict": "verified",
+      "elapsed_seconds": 2178,
+      "reported_output_tokens": 33359,
+      "thinking_share": 0.912,
+      "max_context_depth": 84874,
+      "deep_decode_tokens_per_second": 16.1,
+      "compiles": true,
+      "tests_pass": true,
+      "judge_overall": "acceptable_as_is"
+    },
+    {
+      "trial": "skill-2",
+      "arm": "skill",
+      "verdict": "verified",
+      "elapsed_seconds": 5293,
+      "reported_output_tokens": 87359,
+      "thinking_share": 0.927,
+      "max_context_depth": 112526,
+      "deep_decode_tokens_per_second": 16.8,
+      "compiles": true,
+      "tests_pass": true,
+      "judge_overall": "acceptable_as_is"
+    },
+    {
+      "trial": "noskill-2",
+      "arm": "noskill",
+      "verdict": "verified",
+      "elapsed_seconds": 1598,
+      "reported_output_tokens": 22198,
+      "thinking_share": 0.869,
+      "max_context_depth": 76991,
+      "deep_decode_tokens_per_second": 12.9,
+      "compiles": true,
+      "tests_pass": true,
+      "judge_overall": "acceptable_as_is"
+    },
+    {
+      "trial": "skill-3",
+      "arm": "skill",
+      "verdict": "loop_incomplete_timeout",
+      "elapsed_seconds": 5400,
+      "reported_output_tokens": 87552,
+      "thinking_share": 0.949,
+      "max_context_depth": 113397,
+      "deep_decode_tokens_per_second": 16.9,
+      "compiles": true,
+      "tests_pass": false,
+      "judge_overall": "not_acceptable",
+      "mechanical_tally_excluded": true
+    },
+    {
+      "trial": "noskill-3",
+      "arm": "noskill",
+      "verdict": "verified",
+      "elapsed_seconds": 3483,
+      "reported_output_tokens": 53236,
+      "thinking_share": 0.917,
+      "max_context_depth": 99925,
+      "deep_decode_tokens_per_second": 17.6,
+      "compiles": true,
+      "tests_pass": true,
+      "judge_overall": "acceptable_as_is"
+    }
+  ],
+  "arm_observations": {
+    "skill": {
+      "verified": 2,
+      "trials": 3,
+      "elapsed_seconds": [4078, 5293, 5400],
+      "reported_output_tokens": [71611, 87359, 87552]
+    },
+    "noskill": {
+      "verified": 3,
+      "trials": 3,
+      "elapsed_seconds": [2178, 1598, 3483],
+      "reported_output_tokens": [33359, 22198, 53236]
+    },
+    "elapsed_complete_separation": true,
+    "output_volume_complete_separation": true,
+    "deep_decode_rate_complete_separation": false
+  },
+  "frozen_criteria": {
+    "primary_output": "per-trial descriptive records",
+    "comparative_claim_accepted": false,
+    "reason": "The preregistration accepts no comparative finding; its only named suggestive outcome threshold was complete verdict separation, which was not observed.",
+    "judge_dimension_claim_accepted": false,
+    "judge_reason": "No judged dimension completely separates the arms."
+  },
+  "interpretation": {
+    "feasibility": "The methodology arm can complete verified implementation work: 2 of 3 trials did so.",
+    "benefit": "No benefit is established. The control completed and verified 3 of 3 trials.",
+    "economics": "Observed cost is unfavorable to the methodology arm: every skill trial took longer and emitted more output than every noskill trial, while deep decode rate overlapped.",
+    "causality": "The complete time and output separation is suggestive only; n=3 per arm on one task does not establish a causal arm effect.",
+    "quality": "Five changes were judged acceptable_as_is. The timed-out skill-3 partial change alone was not_acceptable. All six were judged test_gaming:none."
+  }
+}
