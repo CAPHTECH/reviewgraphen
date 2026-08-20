@@ -306,9 +306,9 @@ fn run_process_reviewer(
         }
         let backend = match backend_kind {
             "claude" => match env::var("REVIEWGRAPHEN_CLAUDE_MAX_BUDGET_USD") {
-                Ok(budget) if !budget.is_empty() => {
-                    ProcessReviewerBackend::claude_cli_with_budget(executable, model, effort, budget)
-                }
+                Ok(budget) if !budget.is_empty() => ProcessReviewerBackend::claude_cli_with_budget(
+                    executable, model, effort, budget,
+                ),
                 _ => ProcessReviewerBackend::claude_cli(executable, model, effort),
             },
             _ => return Err("backend must be codex or claude".to_owned()),
