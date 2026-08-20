@@ -8,6 +8,7 @@ use reviewgraphen_benchmark::{
         parse_real_score, parse_real_unit, score_real, summarize_real_full_run, summarize_real_run,
     },
     score, summarize_run,
+    target_context::project_target,
 };
 use reviewgraphen_ingest::IngestRequest;
 use reviewgraphen_reviewer::process::{
@@ -141,6 +142,35 @@ fn main() -> ExitCode {
         }
         [
             command,
+            workspace_root,
+            repository_root,
+            repository_identity,
+            base_revision,
+            target_revision,
+            selector,
+        ] if command == "project-target-context" => {
+            let mut request = IngestRequest::new(
+                workspace_root,
+                repository_root,
+                repository_identity,
+                base_revision,
+                target_revision,
+            );
+            // The pinned implementation corpus contains generated event
+            // contract source above M2's conservative product default. This
+            // benchmark command declares its larger read bound explicitly;
+            // it does not alter the extractor default.
+            request.config.limits.max_file_bytes = 8 * 1024 * 1024;
+            match project_target(&request, selector) {
+                Ok(projection) => emit(&projection),
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        [
+            command,
             backend,
             input_root,
             output_schema,
@@ -245,7 +275,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: reviewgraphen-benchmark validate <execution|manifest|candidate|oracle|collection|inventory|score|real-unit|real-oracle|real-inventory|real-score> <file> | score <manifest> <candidate> <oracle> | score-real <manifest> <candidate> <real-oracle> <real-unit> | export-real-adjudication <manifest> <candidate> <real-oracle> <real-unit> <public-out> <private-out> | validate-blind-adjudication <reconciliation.json> <decision.json> | summarize-run <inventory.json> <collections.json> <scores.json> | summarize-real-run <real-inventory.json> <collections.json> <real-scores.json> | summarize-real-full-run <full-real-inventory.json> <collections.json> <real-scores.json> | prepare-pilot <absolute-public-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real-full <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | collect <manifest> <candidate.json> <out> | run-process-reviewer[-constrained] <codex|claude> <input-root> <output-schema-relative> <fresh-output-root> <record-output> <bwrap> <credential-home> <backend-executable> <model> <effort> | run-process-reviewer-codex-profile[-constrained] <profile> <environment-variable> <input-root> <output-schema-relative> <fresh-output-root> <record-output> <bwrap> <credential-home> <backend-executable> <model> <effort> | replay-process-reviewer <record.json>"
+                "usage: reviewgraphen-benchmark validate <execution|manifest|candidate|oracle|collection|inventory|score|real-unit|real-oracle|real-inventory|real-score> <file> | score <manifest> <candidate> <oracle> | score-real <manifest> <candidate> <real-oracle> <real-unit> | export-real-adjudication <manifest> <candidate> <real-oracle> <real-unit> <public-out> <private-out> | validate-blind-adjudication <reconciliation.json> <decision.json> | summarize-run <inventory.json> <collections.json> <scores.json> | summarize-real-run <real-inventory.json> <collections.json> <real-scores.json> | summarize-real-full-run <full-real-inventory.json> <collections.json> <real-scores.json> | prepare-pilot <absolute-public-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | prepare-real-full <absolute-public-dir> <absolute-private-units-dir> <absolute-output-dir> <execution-config.json> <replicates> | collect <manifest> <candidate.json> <out> | project-target-context <workspace-root> <repository-root> <repository-identity> <base-revision> <target-revision> <symbol-selector> | run-process-reviewer[-constrained] <codex|claude> <input-root> <output-schema-relative> <fresh-output-root> <record-output> <bwrap> <credential-home> <backend-executable> <model> <effort> | run-process-reviewer-codex-profile[-constrained] <profile> <environment-variable> <input-root> <output-schema-relative> <fresh-output-root> <record-output> <bwrap> <credential-home> <backend-executable> <model> <effort> | replay-process-reviewer <record.json>"
             );
             ExitCode::from(2)
         }
