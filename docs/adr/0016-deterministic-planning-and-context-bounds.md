@@ -209,10 +209,23 @@ For an included file, anchors are exactly accepted, range-bearing `Location`
 records with `owner_id` in the reached structural-ID set and `path` exactly
 equal to that containing file's path through accepted reverse-`contains`
 closure. A `Location` with no range is not an anchor; no other location is an
-anchor. Deduplicate and sort this set by `(start_line,end_line,StableId)`; more
+anchor. That definition is a filter, not a demand on ProgramSpace: a reached
+range-bearing `Location` whose owner has *no* containing file in that closure
+satisfies no file's anchor set and is therefore simply not an anchor. This is
+not a failure. `contains` is one accepted relation kind among many, and an
+artifact can be reachable without being contained -- a `state:*` syntactic
+write target, for example, is linked by `writes` and is reached only through
+the change family's own `contains` edges, never as a member of a file's or
+module's containment chain (see docs/20_m2_ingestion_contract.md, whose
+containment family is exactly file -> module and module -> declared symbol).
+Discovery already draws the same conclusion for such an owner elsewhere: it
+contributes no candidate file, no `path_cap` entry, and no `test_cap` entry.
+Deduplicate and sort the anchor set by `(start_line,end_line,StableId)`; more
 than 1,024 anchors for one file is `Incomplete`. A missing/invalid owner or
 path, an inverted range, or an anchor outside the file line range is a typed
-domain failure. Use min start to max end if it fits. Otherwise begin at the lowest start and
+domain failure -- these are malformed anchors, not absent ones: in particular
+an owner that *does* resolve to a containing file must name that file's exact
+path. Use min start to max end if it fits. Otherwise begin at the lowest start and
 take the maximum number of complete lines fitting both 400 lines and the
 excerpt byte bound. With no anchor, use whole-file `None` if it fits; otherwise
 use the analogous line-1 maximum complete-line prefix. If the first required

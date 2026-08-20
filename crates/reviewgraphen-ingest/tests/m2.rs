@@ -1,8 +1,11 @@
 use proptest::prelude::*;
-use reviewgraphen_core::MvpRulePack;
+use reviewgraphen_core::{
+    ArtifactRegistered, ArtifactSensitivity, ArtifactSource, EventCommand, EventLog, MvpRulePack,
+    ReviewAggregate, SnapshotSourceRecordEntry, SnapshotSourcesRecorded, StableId, prepare_context,
+};
 use reviewgraphen_ingest::{
     CapabilityState, CargoToolAdmission, IngestConfig, IngestError, IngestLimits, IngestRequest,
-    IngestResult, IngestionObstructionKind, ingest, ingest_with_sources,
+    IngestResult, IngestWithSourcesResult, IngestionObstructionKind, ingest, ingest_with_sources,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -2872,6 +2875,232 @@ fn a_changed_public_async_function_synthesizes_a_substantive_obligation() {
         "`ast` and `concurrency_model` are both complete for this snapshot, so the \
          obligation must not fall back to an `unknown` capability gap: {:?}",
         node_obligation.applicability_reasons()
+    );
+}
+
+/// A base/target pair whose changed line is exactly a syntactic assignment,
+/// which `FunctionBodyVisitor` reduces to a `state:*` write target. A
+/// `state:*` artifact carries a range-bearing location but is reached only
+/// through `writes` and -- since the change family gained its `contains`
+/// edges -- through `change:*`; it is never a member of a file's or module's
+/// containment chain.
+fn state_write_fixture_repository() -> TempGitRepository {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let repository = workspace.path().join("fixture");
+    fs::create_dir(&repository).expect("repository directory");
+    git(&repository, ["init", "--quiet"]);
+    git(
+        &repository,
+        ["config", "user.email", "reviewgraphen@example.test"],
+    );
+    git(&repository, ["config", "user.name", "ReviewGraphen test"]);
+    write(
+        &repository,
+        "Cargo.toml",
+        "[package]\nname = \"m2-state-write-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    );
+    write(
+        &repository,
+        "src/lib.rs",
+        "use std::sync::Arc;\nuse std::sync::Mutex;\n\n\
+         pub async fn handler(shared: Arc<Mutex<u64>>) -> u64 {\n    \
+         let mut total = load().await;\n    \
+         total = total + 1;\n    \
+         drop(shared);\n    total\n}\n\n\
+         pub async fn load() -> u64 {\n    0\n}\n",
+    );
+    git(&repository, ["add", "."]);
+    git(&repository, ["commit", "--quiet", "-m", "base"]);
+    let base = git_stdout(&repository, ["rev-parse", "HEAD"]);
+    write(
+        &repository,
+        "src/lib.rs",
+        "use std::sync::Arc;\nuse std::sync::Mutex;\n\n\
+         pub async fn handler(shared: Arc<Mutex<u64>>) -> u64 {\n    \
+         let mut total = load().await;\n    \
+         total = total + 2;\n    \
+         drop(shared);\n    total\n}\n\n\
+         pub async fn load() -> u64 {\n    0\n}\n",
+    );
+    git(&repository, ["add", "."]);
+    git(&repository, ["commit", "--quiet", "-m", "target"]);
+    let target = git_stdout(&repository, ["rev-parse", "HEAD"]);
+    TempGitRepository {
+        workspace,
+        repository,
+        identity: "reviewgraphen.test/m2-state-write-fixture".to_owned(),
+        base,
+        target,
+    }
+}
+
+/// Projects a real Core `ReviewContextEnvelope` for every synthesized
+/// obligation over an M2 ingest result, through the same `EventLog`
+/// registration path production uses (`prepare_context` reads bytes only from
+/// admitted registrations, so there is no shorter honest route). Returns each
+/// obligation's envelope ID.
+fn project_every_obligation_context(result: &IngestWithSourcesResult) -> Vec<StableId> {
+    let (universe, obligations) = MvpRulePack::synthesize(&result.program_space)
+        .expect("synthesis succeeds")
+        .into_parts();
+    let aggregate =
+        ReviewAggregate::new(result.program_space.clone(), universe, obligations.clone())
+            .expect("review aggregate");
+    let run_id = StableId::derived(
+        "run",
+        &BTreeMap::from([(
+            "snapshot_id".to_owned(),
+            serde_json::Value::String(result.program_space.snapshot_id().to_string()),
+        )]),
+    )
+    .expect("run id");
+    let mut log = EventLog::new(run_id.clone(), aggregate).expect("event log");
+    let mut entries = Vec::new();
+    for source in result.source_bundle.entries() {
+        let origin = ArtifactSource::SnapshotIngest {
+            run_id: run_id.clone(),
+            snapshot_id: result.program_space.snapshot_id().clone(),
+            adapter_id: "reviewgraphen-m2-test@1".to_owned(),
+        };
+        let registration_id = StableId::derived(
+            "registration",
+            &BTreeMap::from([
+                (
+                    "cas_hash".to_owned(),
+                    serde_json::Value::String(source.cas_hash().to_string()),
+                ),
+                (
+                    "media_type".to_owned(),
+                    serde_json::Value::String("text/plain".to_owned()),
+                ),
+                (
+                    "run_id".to_owned(),
+                    serde_json::Value::String(run_id.to_string()),
+                ),
+                (
+                    "sensitivity".to_owned(),
+                    serde_json::Value::String("workspace_source".to_owned()),
+                ),
+                (
+                    "source".to_owned(),
+                    serde_json::to_value(&origin).expect("artifact source value"),
+                ),
+            ]),
+        )
+        .expect("registration id");
+        log.append(EventCommand::artifact_registered(
+            ArtifactRegistered::new(
+                run_id.clone(),
+                registration_id.clone(),
+                source.cas_hash().clone(),
+                "text/plain",
+                u64::try_from(source.bytes().len()).expect("source size"),
+                ArtifactSensitivity::WorkspaceSource,
+                origin,
+            )
+            .expect("artifact registration"),
+        ))
+        .expect("append artifact registration");
+        entries.push(
+            SnapshotSourceRecordEntry::new(
+                source.artifact_id().clone(),
+                source.path(),
+                source.content_hash().clone(),
+                registration_id,
+                source.cas_hash().clone(),
+                u64::try_from(source.bytes().iter().filter(|byte| **byte == b'\n').count())
+                    .expect("source line count")
+                    .saturating_add(1),
+            )
+            .expect("snapshot source record entry"),
+        );
+    }
+    entries.sort_by(|left, right| left.path().cmp(right.path()));
+    log.append(EventCommand::snapshot_sources_recorded(
+        SnapshotSourcesRecorded::new(result.program_space.snapshot_id().clone(), entries)
+            .expect("snapshot sources"),
+    ))
+    .expect("append snapshot sources");
+
+    obligations
+        .iter()
+        .map(|obligation| {
+            let mut session = prepare_context(log.aggregate(), obligation.id().clone())
+                .unwrap_or_else(|error| {
+                    panic!("context projection for {}: {error}", obligation.id())
+                });
+            while let Some(request) = session
+                .next_source_request()
+                .expect("context source request")
+            {
+                let source = result
+                    .source_bundle
+                    .entries()
+                    .iter()
+                    .find(|source| source.artifact_id() == request.artifact_id())
+                    .expect("requested source is in the ingest bundle");
+                session
+                    .submit_source(&request, source.bytes())
+                    .expect("submit context source");
+            }
+            session
+                .finish()
+                .expect("context build finishes")
+                .envelope()
+                .id()
+                .clone()
+        })
+        .collect()
+}
+
+/// A `state:*` artifact is range-bearing but is not a member of any file's
+/// containment chain: the M2 contract's containment family is file -> module
+/// and module -> declared symbol, and a syntactic assignment target is
+/// neither. Since the change family gained its `contains` edges, such an
+/// artifact became *reachable* from a changed symbol, which is legitimate --
+/// so context projection must treat it as "not an anchor", not as a
+/// validation failure.
+#[test]
+fn a_changed_region_overlapping_a_state_write_still_projects_a_context() {
+    let repository = state_write_fixture_repository();
+    let result = ingest_with_sources(&repository.request(), 1 << 20).expect("M2 ingest succeeds");
+
+    let state = result
+        .program_space
+        .artifacts()
+        .iter()
+        .find(|artifact| artifact.kind == "state")
+        .expect("the changed assignment is accepted as a state-write artifact");
+    assert!(
+        state
+            .location
+            .as_ref()
+            .is_some_and(|location| location.start_line.is_some() && location.end_line.is_some()),
+        "the fixture must produce a range-bearing state artifact, or it exercises nothing"
+    );
+    let containers = result
+        .program_space
+        .relations()
+        .iter()
+        .filter(|relation| relation.kind == "contains" && relation.target_ids.contains(&state.id))
+        .map(|relation| relation.source_id.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        !containers.is_empty()
+            && containers.iter().all(|id| {
+                result
+                    .program_space
+                    .artifact(id)
+                    .is_some_and(|container| container.kind == "custom")
+            }),
+        "the fixture must place the state write inside the changed region, so the change \
+         family is its only containment parent and its file ancestry is empty: {containers:?}"
+    );
+
+    let envelopes = project_every_obligation_context(&result);
+    assert!(
+        !envelopes.is_empty(),
+        "the snapshot must synthesize at least one obligation to project"
     );
 }
 

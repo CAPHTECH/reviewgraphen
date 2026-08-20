@@ -122,6 +122,7 @@ Three separate layers, not a tuning problem:
 1. **Ingest** — `state:*` needs a `contains` edge to its file, or `change:*`
    needs a parent, or `prepare_context` must tolerate an unparented
    range-bearing artifact. Today this is a hard crash on ordinary Rust diffs.
+   **Resolved 2026-08-20 in the projection layer; see the section below.**
 2. **Excerpt policy** — one contiguous 400-line window anchored at the lowest
    reached line cannot express "these five regions scattered across a
    2,000-line file". Multi-window excerpts per file are the minimum.
@@ -131,3 +132,56 @@ Three separate layers, not a tuning problem:
 Item 3 is the one that blocks the operator's proposal directly. Even with 1 and
 2 fixed, "project the context for `FunctionBodyVisitor::visit_block`" is not
 something ReviewGraphen can be asked today.
+
+## Resolution of item 1 (2026-08-20)
+
+Fixed in the projection layer, not in ingest. `prepare_context` now treats a
+reached range-bearing artifact with an empty containing-file closure as *not an
+anchor*, instead of aborting.
+
+The choice was between changing what ProgramSpace asserts and changing what the
+projection tolerates. The two ingest-side options assert something the
+extractor does not know:
+
+- *`state:*` gains a `contains` edge to its file.* M2's containment family is
+  exactly file -> module and module -> declared symbol
+  (docs/20_m2_ingestion_contract.md). A `state:*` artifact is not a declared
+  symbol; it is a *direct path/field/index assignment target*, keyed
+  per-file only as deduplication, carrying the first write's span rather than a
+  declaration span, and explicitly unresolved -- the extractor records that the
+  token `self.total` was assigned, never what it refers to. Asserting
+  containment would promote an unresolved syntactic token to a structural
+  membership fact, and every reader of `contains` would then traverse it:
+  unbounded-depth forward/reverse discovery, anchoring (a projection window
+  anchored on an arbitrary assignment line), `is_changed_public_symbol`, and
+  the store/index containment projections.
+- *`change:*` gains a parent.* `file --contains--> change:*` would make a
+  file's containment closure base-relative and would create a second,
+  base-dependent path from a file down to its own symbols, changing discovery
+  path ranks and `path_cap` selection on every real snapshot. A change record
+  is also not a member of the file's structure; the `changed_by` edge already
+  expresses the true relationship, in the direction the contract names.
+
+The projection-layer assumption, by contrast, was never a contract. Nothing in
+ADR 0016 or docs/20 promises that every range-bearing artifact has a file
+ancestor through `contains`; ADR 0016 defines a file's anchors as exactly those
+reached locations that *do* resolve through the reverse-`contains` closure --
+a filter, not a demand. Discovery already treats an unresolved owner that way
+nine lines earlier in the same function: it contributes no candidate file, no
+`path_cap` entry, and no `test_cap` entry. The anchor loop was the single site
+that instead failed closed. Only the exact-path check is a real integrity
+claim, and it is unchanged: an artifact located in one file must never be
+contained by another.
+
+Re-validated over the same pinned axum range (`e4550d23..97def959`, throwaway
+clone, nothing retained): 1 `async.concurrent_reentry` at `applicable` under
+`node.changed_public_symbol@2` plus 4 `reviewgraphen.capability_gap`, and the
+self-diff control at 0 substantive -- unchanged from what `7b40d48`
+established, since the fix does not touch synthesis. Context projection over
+that snapshot went from 1 of 5 obligations to 5 of 5; the four that failed were
+the snapshot-seeded capability gaps, which reach the whole graph. That
+snapshot carries 570 range-bearing artifacts with no file/module containment
+parent.
+
+Items 2 (single contiguous excerpt window) and 3 (no symbol-seeded projection)
+are untouched and still stand.
