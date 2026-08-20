@@ -1,0 +1,49 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m9-verify-noskill-3/crates/reviewgraphen-ingest/src/rust.rs	2026-08-20 16:00:51.541989628 +0900
+@@ -12,8 +12,9 @@
+ use syn::visit::{self, Visit};
+ use syn::{
+     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
+-    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
++    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,
++    Item, ItemFn, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree,
++    Visibility,
+ };
+ 
+ /// Extracts only the M2 Rust AST subset from immutable Git file bytes.
+@@ -1852,6 +1853,34 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                // A block-local foreign module (`extern "C" { ... }`) hoists its
++                // `fn` and `static` declarations into the enclosing block's
++                // value namespace exactly as a block-local `fn` or `static`
++                // item does: a foreign `fn target;`/`static target: u8;`
++                // shadows a same-named module-level function for a naked call
++                // in this block, so each such name is bound for the whole
++                // block (Rust hoists items). Only the *specific* declared
++                // names are bound, never a whole-block conservative
++                // unresolved mark: a foreign `fn`/`static` is enumerable, so a
++                // foreign module declaring some *other* name, or a foreign
++                // `type` (type namespace only -- never a call target), must
++                // not block or shadow an otherwise-unshadowed call. `fn` and
++                // `static` names cannot collide with each other's shape here,
++                // and Rust forbids a name appearing in two value-namespace
++                // item positions, so a name is bound at most once.
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    for foreign_item in &nested.items {
++                        match foreign_item {
++                            ForeignItem::Fn(foreign) => {
++                                hoisted.push(foreign.sig.ident.to_string())
++                            }
++                            ForeignItem::Static(foreign) => {
++                                hoisted.push(foreign.ident.to_string())
++                            }
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }
