@@ -1,0 +1,48 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m9-verify-noskill-1/crates/reviewgraphen-ingest/src/rust.rs	2026-08-20 11:32:47.967538576 +0900
+@@ -12,8 +12,9 @@
+ use syn::visit::{self, Visit};
+ use syn::{
+     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
+-    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
++    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,
++    Item, ItemFn, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree,
++    Visibility,
+ };
+ 
+ /// Extracts only the M2 Rust AST subset from immutable Git file bytes.
+@@ -1852,6 +1853,33 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    // A block-local foreign module (`extern "C" { .. }`) hoists its
++                    // `fn` and `static` declarations into the enclosing block's
++                    // *value* namespace, exactly like a block-local `fn`/`static`
++                    // item, so each such name shadows a same-named module-level
++                    // function for a naked call in this block. Only the value
++                    // namespace matters here: a foreign `type` sits in the type
++                    // namespace (never a call target) and an unexpanded macro is
++                    // opaque but never a `fn`/`static` by name, so neither
++                    // shadows a same-named callable. The shadow is scoped to this
++                    // block alone (pushed as a fresh `LexicalScope`, popped when
++                    // the block ends) and never marks the whole block
++                    // conservatively unresolved: a foreign module that declares
++                    // *other* names only must leave a same-named `target()`
++                    // resolvable to the module-level `target`.
++                    for foreign_item in &nested.items {
++                        match foreign_item {
++                            ForeignItem::Fn(foreign_fn) => {
++                                hoisted.push(foreign_fn.sig.ident.to_string());
++                            }
++                            ForeignItem::Static(foreign_static) => {
++                                hoisted.push(foreign_static.ident.to_string());
++                            }
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }

@@ -1,0 +1,97 @@
+{
+  "from_stream_events": {
+    "assistant_stream_events": 188,
+    "bash_calls": 39,
+    "bash_commands_mentioning_cargo_path_only": 9,
+    "cargo_build_invocations": 3,
+    "cargo_check_invocations": 1,
+    "cargo_invocations": 14,
+    "cargo_test_invocations": 8,
+    "compiler_errors_observed": 0,
+    "edits_to_target_file": 3,
+    "error_then_edit_pairs": 0,
+    "model_ids_seen": [
+      "qwen3.8:27b-mlx"
+    ],
+    "provenance": "counted from tool_use / tool_result blocks in the transcript -- trustworthy",
+    "saw_error_then_edited": false,
+    "tool_calls": {
+      "Bash": 39,
+      "Edit": 3,
+      "Grep": 2,
+      "Read": 16,
+      "TaskCreate": 1,
+      "TaskUpdate": 2,
+      "Write": 3
+    },
+    "tool_calls_total": 66
+  },
+  "result_event": {
+    "api_error_status": null,
+    "duration_ms": 3481401,
+    "final_text": "\n\nThe change is complete and verified. Here's what I did.\n\n## Change (one file: `crates/reviewgraphen-ingest/src/rust.rs`)\n\nI fixed the missing handling of block-local foreign modules (`extern \"C\" { ... }`) in `FunctionBodyVisitor::visit_block`:\n\n1. **Added `ForeignItem` to the `syn` import** (line 15).\n2. **Added a `Stmt::Item(Item::ForeignMod)` arm** to the hoisting scan (rust.rs:1871) that pushes the specific `ident` of each `ForeignItem::Fn` and `ForeignItem::Static` into the block's lexical scope \u2014 the same `hoisted` set already used for `fn`/`const`/`static`/tuple-struct/`use`. A foreign `fn`/`static` is in the **value namespace**, so it shadows a same-named module-level function for a naked call in that block, exactly like a block-local `fn`/`static`.\n\nKey design choices, all driven by the required behaviours:\n- I bind only the **specific** declared names and do **not** set `conservative_unresolved` \u2014 a foreign `fn`/`static` is enumerable, so a module declaring only *other* names (or a foreign `type`, which is type-namespace-only) never blocks an unshadowed call (requirement 4). Marking the whole block conservative would have violated that.\n- The `LexicalScope` is pushed/popped around the block via the existing `visit_block` machinery, and I confirmed against syn's generated `visit` code that a nested block routes back through this `visit_block` override \u2014 so the shadow is scoped to its block and **cannot leak past it** (requirement 3).\n- `ForeignItem::Type`/`Macro`/`Verbatim` fall into the existing catch-all with no behaviour change (requirement 6). No `unsafe` keyword introduced.\n\n## What I ran\n\n- `cargo build -p reviewgraphen-ingest` \u2014 **exit 0**, clean.\n- `cargo clippy -p reviewgraphen-ingest --all-targets` \u2014 **exit 0**, zero warnings/errors.\n- `cargo test -p reviewgraphen-ingest` \u2014 lib **67/67**, schema **8/8**, m2 **38 pass / 2 fail**.\n\nThe 2 m2 failures (`external_registry_dependency_is_still_marked_external`, `ingests_a_bounded_git_snapshot_with_rust_",
+    "is_error": false,
+    "logical_turns": 67,
+    "stop_reason": "end_turn",
+    "subtype": "success"
+  },
+  "schema": "reviewgraphen.benchmark.m9_loop_behaviour.v2",
+  "stream_events": 39660,
+  "timeline": [
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo"
+  ],
+  "tokens_authoritative": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 5206137,
+    "model_usage": {
+      "qwen3.8:27b-mlx": {
+        "cacheCreationInputTokens": 0,
+        "cacheReadInputTokens": 0,
+        "canonicalModel": "qwen3.8:27b-mlx",
+        "contextWindow": 200000,
+        "costUSD": 27.374599999999997,
+        "inputTokens": 5207975,
+        "maxOutputTokens": 32000,
+        "outputTokens": 53389,
+        "provider": "firstParty",
+        "webSearchRequests": 0
+      }
+    },
+    "output_tokens": 53236,
+    "provenance": "the client's terminal `result` event, which Claude Code computes itself -- the only trustworthy token source on this backend",
+    "thinking_tokens": 0
+  },
+  "tokens_backend_per_turn": {
+    "input_tokens_last": 99925,
+    "input_tokens_max": 99925,
+    "input_tokens_min": 27766,
+    "input_tokens_monotonic_non_decreasing": true,
+    "input_tokens_naive_sum_DO_NOT_USE": 14644256,
+    "keys_ever_seen": [
+      "input_tokens",
+      "output_tokens"
+    ],
+    "output_tokens_all_zero": true,
+    "provenance": "raw per-turn `usage` from the backend -- SUSPECT, retained as evidence of what it reports",
+    "turns_with_usage": 188,
+    "why_the_naive_sum_is_wrong": "each turn's input_tokens re-reports the whole accumulated context, and several stream events share one API call's usage, so summing multiply-counts the same prefix"
+  },
+  "trial": "noskill-3"
+}

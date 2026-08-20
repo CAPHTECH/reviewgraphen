@@ -17,6 +17,15 @@ note "SERIES START"
 for index in 1 2 3; do
   for arm in skill noskill; do
     trial="${arm}-${index}"
+    # Resume support: a trial that already carries a verification.json is
+    # complete and valid, so it is skipped rather than re-run. This is what
+    # lets the series continue at noskill-1 after the pause without redoing
+    # skill-1, and it is safe because trials are independent by construction
+    # -- fresh scratch, CARGO_TARGET_DIR, credential dir and sandbox each.
+    if [[ -f "$runs/$trial/verification.json" ]]; then
+      note "SKIP $trial already complete (verification.json present)"
+      continue
+    fi
     rm -rf "${runs:?}/$trial"
     note "START $trial"
     bash "$exp/scripts/run_trial.sh" "$arm" "$trial" "$runs/$trial" >> "$log" 2>&1

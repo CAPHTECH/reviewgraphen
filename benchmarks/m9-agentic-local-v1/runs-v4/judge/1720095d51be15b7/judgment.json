@@ -1,0 +1,36 @@
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "b6adae1a98003eff",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm hoists whatever names the parsed foreign module actually declares, with no reference to the fixture identifiers the acceptance tests would use: `ForeignItem::Fn(external) => { hoisted.push(external.sig.ident.to_string()) }` and `ForeignItem::Static(external) => { hoisted.push(external.ident.to_string()) }`. Nothing keys on the name `target`, on the ABI string (`extern \"C\"` vs any other), or on the block's position. Spec point 4 (the case a naive implementation gets wrong) is satisfied structurally rather than by a special case: `conservative_unresolved` is never touched by the `Item::ForeignMod` arm, so `extern \"C\" { fn unrelated(); }` pushes only the shadow `\"unrelated\"` and leaves a bare `target()` resolvable. Spec point 3 (no leak) is likewise structural: the names go through the same `self.push_scope(hoisted, conservative_unresolved); visit::visit_block(self, block); self.pop_scope();` sequence every other hoisted item uses, so an outer call after the block sees the popped scope."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "Three edits, all load-bearing. (a) The import gains one name: `ForeignItem` inserted into the existing `syn::{...}` list, with the visible reflow of `ImplItem, Item, ItemFn, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,` being mechanical rustfmt rewrapping, not a rename or reordering. (b) One new match arm in `visit_block`. (c) An addition to the existing `visit_block` doc comment (`A block-local `extern` foreign module (`extern \"C\" { fn target(); }`) is hoisted exactly like a block-local `fn`...`) appended to the end rather than rewriting the prior text -- the paragraph on named-field structs ending `hoisting it anyway would wrongly block an otherwise-valid resolution to the outer `fn target`.` is untouched apart from the period. No reformatting, no renaming, no drive-by edits to neighbouring arms or to `visit_local` below."
+      },
+      "convention_fit": {
+        "verdict": "fits",
+        "justification": "The arm sits in the existing shape and ordering: `syn::Stmt::Item(Item::ForeignMod(nested))` reuses the binding name `nested` used by every sibling arm (`syn::Stmt::Item(Item::Fn(nested))`, `Item::Const(nested)`, `Item::Static(nested)`), and pushes into the same `hoisted` vector before the shared `push_scope`. The comment density and voice match the surrounding text closely -- the crate's habit of naming the namespace and then justifying the *non*-action is reproduced in `put their names in the *value* namespace of the enclosing block, exactly as a block-local `fn`/`static` does` and in the explicit refusal `it is never a conservative-unresolved scope: marking the whole block unresolved on the mere presence of any foreign module would wrongly block a bare call that real Rust still resolves`, which is the same rhetorical move as the existing named-field-struct paragraph. The only new coinage is the inner binding `external`, introduced to avoid shadowing `nested`; it is unremarkable."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "some",
+        "justification": "The inner `_ => {}` swallows `ForeignItem::Macro` and `ForeignItem::Verbatim`, and the comment justifying it is wrong about the first: `a foreign macro is in the *macro* namespace only: neither is a value-namespace binding`. In syn 2.0 `ForeignItem::Macro` is a macro *invocation* inside the extern block, not a macro definition; its expansion can declare foreign `fn`/`static` items and therefore can introduce exactly the value-namespace names this arm exists to catch. Under the spec's stated posture (`a wrong match is a false fact`) and by analogy with the glob-`use` handling -- `conservative_unresolved |= has_glob;` for bindings that `cannot be reduced to specific names at all` -- an unexpandable foreign macro invocation is the same kind of unenumerable binding and arguably warrants the conservative flag, not silence. `ForeignItem::Verbatim` is the same story and is not mentioned at all. Mitigating: the crate already gives block-level `Item::Macro` and `Item::Verbatim` no shadow via the outer `_ => {}`, so the behaviour is consistent with existing practice even though the stated reason is not the real one. Spec points 1-6 as literally written are all covered."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "some",
+        "justification": "The change reproduces, one level down, the exact construct that caused the defect it fixes: the bug was that `Item::ForeignMod` fell into `visit_block`'s catch-all `_ => {}` and contributed no shadow; the fix introduces a new catch-all `_ => {}` over `ForeignItem`, so any future or unhandled value-namespace-adjacent foreign item silently contributes no shadow and produces a false `calls` fact rather than an obstruction. There is no other distant dependency: the field accesses `external.sig.ident` (`ForeignItemFn`) and `external.ident` (`ForeignItemStatic`) are the correct syn 2.0 shapes, and no invariant is duplicated -- scoping is delegated wholly to the existing `push_scope`/`pop_scope` pair rather than reimplemented."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "A maintainer can reconstruct the correctness argument without outside context. The mechanism is stated (`put their names in the *value* namespace of the enclosing block, exactly as a block-local `fn`/`static` does`), the deliberate non-action is stated and motivated (`A foreign module declaring *other* names contributes no shadow at all, so it is never a conservative-unresolved scope`), and the doc comment on `visit_block` is updated so the summary of what the function hoists stays accurate: `each one shadows a same-named module-level function for a bare call in this block; a foreign module declaring only *other* names shadows nothing`. The one blemish is that the `_ => {}` rationale is misstated for macro invocations, so a maintainer trusting the comment would draw the wrong conclusion about that case."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "All six required behaviours are met by construction rather than by special-casing: the two hoists (`external.sig.ident`, `external.ident`) give points 1-2, the shared `push_scope`/`pop_scope` gives point 3, leaving `conservative_unresolved` alone gives point 4, and points 5-6 follow from the arm being purely additive -- no existing arm, including `syn::Stmt::Item(Item::Use(nested))` with its `conservative_unresolved |= has_glob;`, is modified. The diff is about as small as the fix can be and contains no `unsafe`. The residual defect is a comment clause -- calling `ForeignItem::Macro` a macro-namespace binding when it is an invocation -- which does not change behaviour and matches the crate's existing treatment of macro items; worth correcting on the way in, but not grounds to hold the change."
+      }
+    }
+  ]
+}

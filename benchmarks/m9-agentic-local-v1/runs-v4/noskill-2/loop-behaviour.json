@@ -1,0 +1,96 @@
+{
+  "from_stream_events": {
+    "assistant_stream_events": 109,
+    "bash_calls": 27,
+    "bash_commands_mentioning_cargo_path_only": 1,
+    "cargo_build_invocations": 2,
+    "cargo_check_invocations": 0,
+    "cargo_invocations": 13,
+    "cargo_test_invocations": 10,
+    "compiler_errors_observed": 0,
+    "edits_to_target_file": 6,
+    "error_then_edit_pairs": 0,
+    "model_ids_seen": [
+      "qwen3.8:27b-mlx"
+    ],
+    "provenance": "counted from tool_use / tool_result blocks in the transcript -- trustworthy",
+    "saw_error_then_edited": false,
+    "tool_calls": {
+      "Bash": 27,
+      "Edit": 6,
+      "Read": 6,
+      "Write": 1
+    },
+    "tool_calls_total": 40
+  },
+  "result_event": {
+    "api_error_status": null,
+    "duration_ms": 1597109,
+    "final_text": "\n\nDone. The single `unsafe` match is the field access `implementation.unsafety.to_token_stream()` (line 381) \u2014 the field name contains the substring but is not the `unsafe` keyword. It's pre-existing anchor code, unrelated to my change. My change introduces no `unsafe` keyword.\n\n## Summary\n\n**What I changed** \u2014 one file only: `crates/reviewgraphen-ingest/src/rust.rs`.\n\nIn `FunctionBodyVisitor::visit_block`, which scans a block's statements and hoists the names that bind for the whole block (pushed as a shadow scope), a block-local `extern` block (`Item::ForeignMod`) previously fell into the `_ => {}` catch-all and contributed no shadow \u2014 so a naked call to a same-named module function was wrongly matched. I added one arm:\n\n- `syn::Stmt::Item(Item::ForeignMod(extern_block))` iterates the foreign module's items and hoists the `ident`/`sig.ident` of each `ForeignItem::Fn` and `ForeignItem::Static`. Other foreign-item shapes (`type`, `const`, `macro`) fall to `_ => {}` and hoist nothing.\n\nThis is a *precise, per-name* hoist into the new block scope \u2014 not a conservative whole-block flag \u2014 which is what satisfies all four required behaviours:\n1. `extern \"C\" { fn target(); }` \u2192 naked `target()` in the block is shadowed (no `calls` edge; retained as a `RelationUnresolved` obstruction naming the enclosing function, via the existing `is_locally_bound` path in `record_call`).\n2. `extern \"C\" { static target: u8; }` \u2192 same, since a foreign static is in the value namespace.\n3. The scope is pushed/popped by `visit_block`, so the shadow never leaks past the block \u2014 the outer `target()` still resolves (exactly one resolved edge).\n4. A foreign module declaring only other names hoists only those names, so a `target()` call there still resolves \u2014 it does *not* trip `conservative_unresolved`.\n\nI also added `ForeignItem` to the `syn` import and updated the two doc comments that enumerate what gets hoisted (`LexicalScope` and `visit_block`).\n\n**What I ran** \u2014 the three acceptance commands",
+    "is_error": false,
+    "logical_turns": 41,
+    "stop_reason": "end_turn",
+    "subtype": "success"
+  },
+  "schema": "reviewgraphen.benchmark.m9_loop_behaviour.v2",
+  "stream_events": 13612,
+  "timeline": [
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo"
+  ],
+  "tokens_authoritative": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 2533802,
+    "model_usage": {
+      "qwen3.8:27b-mlx": {
+        "cacheCreationInputTokens": 0,
+        "cacheReadInputTokens": 0,
+        "canonicalModel": "qwen3.8:27b-mlx",
+        "contextWindow": 200000,
+        "costUSD": 13.235325000000001,
+        "inputTokens": 2535640,
+        "maxOutputTokens": 32000,
+        "outputTokens": 22285,
+        "provider": "firstParty",
+        "webSearchRequests": 0
+      }
+    },
+    "output_tokens": 22198,
+    "provenance": "the client's terminal `result` event, which Claude Code computes itself -- the only trustworthy token source on this backend",
+    "thinking_tokens": 0
+  },
+  "tokens_backend_per_turn": {
+    "input_tokens_last": 76991,
+    "input_tokens_max": 76991,
+    "input_tokens_min": 27766,
+    "input_tokens_monotonic_non_decreasing": true,
+    "input_tokens_naive_sum_DO_NOT_USE": 7112668,
+    "keys_ever_seen": [
+      "input_tokens",
+      "output_tokens"
+    ],
+    "output_tokens_all_zero": true,
+    "provenance": "raw per-turn `usage` from the backend -- SUSPECT, retained as evidence of what it reports",
+    "turns_with_usage": 109,
+    "why_the_naive_sum_is_wrong": "each turn's input_tokens re-reports the whole accumulated context, and several stream events share one API call's usage, so summing multiply-counts the same prefix"
+  },
+  "trial": "noskill-2"
+}

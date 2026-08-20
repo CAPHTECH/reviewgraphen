@@ -1,0 +1,8 @@
+{
+  "handling": "a hit is a STOP condition -- record time and approximate token count, do not retry",
+  "note": "operator-described backend bug: tails cut mid-sentence or with an unclosed code block; the local patch can be lost silently on a package update",
+  "schema": "reviewgraphen.benchmark.m9_truncated_tail.v1",
+  "suspected": false,
+  "suspects": [],
+  "trial": "noskill-1"
+}

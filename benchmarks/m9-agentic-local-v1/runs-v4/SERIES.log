@@ -9,3 +9,46 @@ trial=skill-1 arm=skill status=0 outcome=completed elapsed=4078s
 2026-08-20T09:02:20+09:00 TAIL skill-1 suspected=False
 2026-08-20T09:02:20+09:00 START noskill-1
 backend identity verified: listing afc7adb7cb672ad8… health 6cdd746cdc72635b…
+2026-08-20T10:56:29+09:00 SERIES START
+2026-08-20T10:56:29+09:00 SKIP skill-1 already complete (verification.json present)
+2026-08-20T10:56:29+09:00 START noskill-1
+backend identity verified: listing afc7adb7cb672ad8… health 6cdd746cdc72635b…
+trial=noskill-1 arm=noskill status=0 outcome=completed elapsed=2178s
+2026-08-20T11:32:47+09:00 LOOP noskill-1 outcome=completed elapsed=2178s
+2026-08-20T11:33:59+09:00 VERIFY noskill-1 verdict=verified
+2026-08-20T11:33:59+09:00 ECHOED-MODEL noskill-1  (recorded, not a gate)
+2026-08-20T11:33:59+09:00 CACHE noskill-1 verdict=cache_credited ratio=0.288 (threshold 0.6)
+2026-08-20T11:33:59+09:00 TAIL noskill-1 suspected=False
+2026-08-20T11:33:59+09:00 START skill-2
+backend identity verified: listing afc7adb7cb672ad8… health 6cdd746cdc72635b…
+trial=skill-2 arm=skill status=0 outcome=completed elapsed=5293s
+2026-08-20T13:02:12+09:00 LOOP skill-2 outcome=completed elapsed=5293s
+2026-08-20T13:03:37+09:00 VERIFY skill-2 verdict=verified
+2026-08-20T13:03:37+09:00 ECHOED-MODEL skill-2  (recorded, not a gate)
+2026-08-20T13:03:37+09:00 CACHE skill-2 verdict=cache_credited ratio=0.223 (threshold 0.6)
+2026-08-20T13:03:38+09:00 TAIL skill-2 suspected=False
+2026-08-20T13:03:38+09:00 START noskill-2
+backend identity verified: listing afc7adb7cb672ad8… health 6cdd746cdc72635b…
+trial=noskill-2 arm=noskill status=0 outcome=completed elapsed=1598s
+2026-08-20T13:30:16+09:00 LOOP noskill-2 outcome=completed elapsed=1598s
+2026-08-20T13:31:27+09:00 VERIFY noskill-2 verdict=verified
+2026-08-20T13:31:27+09:00 ECHOED-MODEL noskill-2  (recorded, not a gate)
+2026-08-20T13:31:27+09:00 CACHE noskill-2 verdict=cache_credited ratio=0.196 (threshold 0.6)
+2026-08-20T13:31:27+09:00 TAIL noskill-2 suspected=False
+2026-08-20T13:31:27+09:00 START skill-3
+backend identity verified: listing afc7adb7cb672ad8… health 6cdd746cdc72635b…
+trial=skill-3 arm=skill status=124 outcome=loop_incomplete_timeout elapsed=5400s
+2026-08-20T15:01:33+09:00 LOOP skill-3 outcome=loop_incomplete_timeout elapsed=5400s
+2026-08-20T15:02:48+09:00 VERIFY skill-3 verdict=loop_incomplete_timeout
+2026-08-20T15:02:48+09:00 ECHOED-MODEL skill-3  (recorded, not a gate)
+2026-08-20T15:02:48+09:00 CACHE skill-3 verdict=cache_credited ratio=0.289 (threshold 0.6)
+2026-08-20T15:02:48+09:00 TAIL skill-3 suspected=False
+2026-08-20T15:02:48+09:00 START noskill-3
+backend identity verified: listing afc7adb7cb672ad8… health 6cdd746cdc72635b…
+trial=noskill-3 arm=noskill status=0 outcome=completed elapsed=3483s
+2026-08-20T16:00:51+09:00 LOOP noskill-3 outcome=completed elapsed=3483s
+2026-08-20T16:02:02+09:00 VERIFY noskill-3 verdict=verified
+2026-08-20T16:02:02+09:00 ECHOED-MODEL noskill-3  (recorded, not a gate)
+2026-08-20T16:02:03+09:00 CACHE noskill-3 verdict=cache_credited ratio=0.208 (threshold 0.6)
+2026-08-20T16:02:03+09:00 TAIL noskill-3 suspected=False
+2026-08-20T16:02:03+09:00 SERIES COMPLETE: 6 trials

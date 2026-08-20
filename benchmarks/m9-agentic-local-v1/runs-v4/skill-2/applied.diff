@@ -1,0 +1,30 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m9-verify-skill-2/crates/reviewgraphen-ingest/src/rust.rs	2026-08-20 13:02:13.289221888 +0900
+@@ -1852,6 +1852,27 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                // A block-local `extern "C" { .. }` puts its `fn` and `static`
++                // names in the *value* namespace of the enclosing block, exactly
++                // like a block-local `fn`/`static` item (Rust hoists them for the
++                // whole block), so a same-named naked call in this block must be
++                // treated as shadowed, never matched to a same-named module item.
++                // Only the value-namespace members bind a name for a naked call:
++                // a foreign `type` is type-namespace-only and a foreign
++                // `macro`/verbatim is not a value binding, so -- mirroring the
++                // named-struct exclusion above -- they deliberately contribute no
++                // shadow and cannot wrongly block an otherwise-valid resolution.
++                // The name is scoped to this block by the surrounding
++                // push/pop_scope, so it never leaks past it (see `visit_block`).
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    for foreign in &nested.items {
++                        match foreign {
++                            syn::ForeignItem::Fn(decl) => hoisted.push(decl.sig.ident.to_string()),
++                            syn::ForeignItem::Static(decl) => hoisted.push(decl.ident.to_string()),
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }

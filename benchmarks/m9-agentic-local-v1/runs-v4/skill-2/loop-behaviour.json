@@ -1,0 +1,105 @@
+{
+  "from_stream_events": {
+    "assistant_stream_events": 227,
+    "bash_calls": 52,
+    "bash_commands_mentioning_cargo_path_only": 12,
+    "cargo_build_invocations": 6,
+    "cargo_check_invocations": 0,
+    "cargo_invocations": 20,
+    "cargo_test_invocations": 5,
+    "compiler_errors_observed": 0,
+    "edits_to_target_file": 6,
+    "error_then_edit_pairs": 0,
+    "model_ids_seen": [
+      "qwen3.8:27b-mlx"
+    ],
+    "provenance": "counted from tool_use / tool_result blocks in the transcript -- trustworthy",
+    "saw_error_then_edited": false,
+    "tool_calls": {
+      "Bash": 52,
+      "Edit": 7,
+      "Grep": 6,
+      "Read": 17,
+      "Skill": 1,
+      "Write": 5
+    },
+    "tool_calls_total": 88
+  },
+  "result_event": {
+    "api_error_status": null,
+    "duration_ms": 5292096,
+    "final_text": "\n\nThe working tree is clean and the final build passes. The work is complete. Here is the summary per the methodology's Stage 5/6.\n\n---\n\n## What I changed\n\n**One file, one location:** `crates/reviewgraphen-ingest/src/rust.rs`, `FunctionBodyVisitor::visit_block` (rust.rs:1867). A new match arm for `syn::Stmt::Item(Item::ForeignMod)` hoists the **value-namespace** members of a block-local `extern \"C\" { .. }` into the block's lexical scope: `ForeignItem::Fn` (via `sig.ident`) and `ForeignItem::Static` (via `ident`), exactly as block-local `fn`/`static` items are treated. Foreign `type` (type-namespace only \u2014 never a naked-call target, mirroring the existing named-struct exclusion), `macro`, and verbatim members are deliberately not hoisted. Names land in `hoisted`, which the existing `push_scope`/`pop_scope` already binds to the whole block \u2014 so scoping and non-leakage fall out of the existing mechanism. No other line of the file was touched; no `unsafe` (clippy `forbid` passed); rustfmt-clean.\n\n## What I ran (evidence)\n\n1. **`cargo build -p reviewgraphen-ingest`** \u2014 exit 0, no diagnostics (ran pre- and post-change, including final code).\n2. **`cargo clippy -p reviewgraphen-ingest --all-targets`** \u2014 exit 0, zero warnings (final code).\n3. **`cargo test -p reviewgraphen-ingest`** \u2014 113/115 pass on the final code: 67 unit/lib tests, 8 schema tests, 38 of 40 integration tests \u2014 including the crate's entire existing shadowing, glob-`use`, obstruction-ledger, and base-invariance suites. **2 integration tests fail, but identically on the unmodified baseline I ran first**: `ingests_a_bounded_git_snapshot_with_rust_facts_and_changed_structure` and `external_registry_dependency_is_still_marked_external` panic in *this sandbox* because its only writable path is inside the cargo workspace, so the fixture `TempDir` lands in a workspace and `cargo metadata` refuses \u2014 a `git.rs`/`cargo_metadata` concern, provably disjoint from a `rust.rs` shadowing change. I proved no *new* failures:",
+    "is_error": false,
+    "logical_turns": 90,
+    "stop_reason": "end_turn",
+    "subtype": "success"
+  },
+  "schema": "reviewgraphen.benchmark.m9_loop_behaviour.v2",
+  "stream_events": 67342,
+  "timeline": [
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "cargo",
+    "edit_target",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo"
+  ],
+  "tokens_authoritative": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 7381169,
+    "model_usage": {
+      "qwen3.8:27b-mlx": {
+        "cacheCreationInputTokens": 0,
+        "cacheReadInputTokens": 0,
+        "canonicalModel": "qwen3.8:27b-mlx",
+        "contextWindow": 200000,
+        "costUSD": 39.102084999999995,
+        "inputTokens": 7383047,
+        "maxOutputTokens": 32000,
+        "outputTokens": 87474,
+        "provider": "firstParty",
+        "webSearchRequests": 0
+      }
+    },
+    "output_tokens": 87359,
+    "provenance": "the client's terminal `result` event, which Claude Code computes itself -- the only trustworthy token source on this backend",
+    "thinking_tokens": 0
+  },
+  "tokens_backend_per_turn": {
+    "input_tokens_last": 112526,
+    "input_tokens_max": 112526,
+    "input_tokens_min": 27880,
+    "input_tokens_monotonic_non_decreasing": true,
+    "input_tokens_naive_sum_DO_NOT_USE": 19843040,
+    "keys_ever_seen": [
+      "input_tokens",
+      "output_tokens"
+    ],
+    "output_tokens_all_zero": true,
+    "provenance": "raw per-turn `usage` from the backend -- SUSPECT, retained as evidence of what it reports",
+    "turns_with_usage": 227,
+    "why_the_naive_sum_is_wrong": "each turn's input_tokens re-reports the whole accumulated context, and several stream events share one API call's usage, so summing multiply-counts the same prefix"
+  },
+  "trial": "skill-2"
+}

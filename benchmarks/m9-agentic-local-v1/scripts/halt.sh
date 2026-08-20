@@ -33,6 +33,12 @@
 #     Fix: derive a group id from EVERY survivor found by path and kill
 #     those groups too, not just the recorded one.
 #
+#  5. THE DRIVER ITSELF must be stoppable. It now runs in its own session
+#     (scripts/launch_series.sh) so a group kill aimed at whatever
+#     launched it cannot reach it -- which is the point -- but that also
+#     means this script has to target it deliberately. Its pgid is
+#     recorded at <runs>/driver.pgid and swept with the trial groups.
+#
 # `--dry-run` prints what would be signalled and sends nothing.
 set -uo pipefail
 
@@ -50,7 +56,7 @@ survivors() {
 }
 
 for signal in TERM TERM KILL; do
-  for pgid_file in "$runs"/*/trial.pgid; do
+  for pgid_file in "$runs"/driver.pgid "$runs"/*/trial.pgid; do
     [[ -f "$pgid_file" ]] || continue
     pgid=$(tr -d ' \n' < "$pgid_file")
     [[ -n "$pgid" && "$pgid" != "$own_pgid" ]] || continue

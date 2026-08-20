@@ -1,0 +1,64 @@
+{
+  "schema": "reviewgraphen.benchmark.m9_v4_judge_truth.v1",
+  "protocol": {
+    "source": "benchmarks/m8-impl-local-v1/AMENDMENT-003.md",
+    "task": "task2",
+    "judge": "claude-opus",
+    "calls": "one fresh blind call per distinct resulting file",
+    "session_persistence": false,
+    "tools": false,
+    "reference_solution_shown": false,
+    "mechanical_outcome_shown": false
+  },
+  "note": "This arm mapping was kept outside every packet sent to the judge.",
+  "results": [
+    {
+      "trial": "skill-1",
+      "arm": "skill",
+      "result_directory_id": "1720095d51be15b7",
+      "judged_change_id": "b6adae1a98003eff",
+      "judge_status": 0,
+      "judge_elapsed_seconds": 78
+    },
+    {
+      "trial": "noskill-1",
+      "arm": "noskill",
+      "result_directory_id": "a04f50669498950c",
+      "judged_change_id": "274a12fa9d3b1f4a",
+      "judge_status": 0,
+      "judge_elapsed_seconds": 64
+    },
+    {
+      "trial": "skill-2",
+      "arm": "skill",
+      "result_directory_id": "fb3b16e5f5b441b6",
+      "judged_change_id": "cb18f48cfffcbc02",
+      "judge_status": 0,
+      "judge_elapsed_seconds": 87
+    },
+    {
+      "trial": "noskill-2",
+      "arm": "noskill",
+      "result_directory_id": "560ad64b5879bcdc",
+      "judged_change_id": "974915a408b8f2ef",
+      "judge_status": 0,
+      "judge_elapsed_seconds": 111
+    },
+    {
+      "trial": "skill-3",
+      "arm": "skill",
+      "result_directory_id": "4909f53e8f08a9a5",
+      "judged_change_id": "ba6d5921d6ba35c7",
+      "judge_status": 0,
+      "judge_elapsed_seconds": 53
+    },
+    {
+      "trial": "noskill-3",
+      "arm": "noskill",
+      "result_directory_id": "0a9c749cd3fb2a92",
+      "judged_change_id": "6f8e987379e2133d",
+      "judge_status": 0,
+      "judge_elapsed_seconds": 94
+    }
+  ]
+}

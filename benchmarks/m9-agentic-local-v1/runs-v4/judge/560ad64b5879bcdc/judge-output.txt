@@ -1,0 +1,38 @@
+```json
+{
+  "schema": "reviewgraphen.benchmark.m8_code_quality_judgment.v1",
+  "judgments": [
+    {
+      "change_id": "974915a408b8f2ef",
+      "test_gaming": {
+        "verdict": "none",
+        "justification": "The new arm matches the general construct, not the tested inputs: `syn::Stmt::Item(Item::ForeignMod(extern_block)) => {` fires for every foreign module regardless of ABI string (it never inspects `extern_block.abi`, so bare `extern { .. }` and `unsafe extern \"C\" { .. }` are covered identically), and it enumerates whatever the block declares via `for item in &extern_block.items` with `ForeignItem::Fn(nested) => hoisted.push(nested.sig.ident.to_string())` and `ForeignItem::Static(nested) => hoisted.push(nested.ident.to_string())`. No name such as `target` is special-cased, and no condition is narrowed to the spec's example shapes. Spec point 4 is satisfied for the right reason rather than by luck: the arm never touches `conservative_unresolved`, so `extern \"C\" { fn unrelated(); }` hoists only `unrelated` and leaves a naked `target()` resolvable. The shadow is delivered through the same `self.push_scope(hoisted, conservative_unresolved)` / `self.pop_scope()` pair the pre-existing arms use, so point 3 (no leak past the block) falls out of the existing mechanism rather than from a bespoke guard."
+      },
+      "scope_discipline": {
+        "verdict": "clean",
+        "justification": "Three edits, all load-bearing. The import line gains exactly one name -- `ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,` -- and the surrounding rewrap of `Item, ItemFn, ... UseTree,` / `Visibility,` is the mechanical consequence of that insertion, not a drive-by reflow. The `LexicalScope` doc gains only the clause naming the new binding source: `/// `fn`/`const`/`static` item, a block-local foreign module's `fn`/`static`` / `/// items, or block-local `use` item introduces.`. The `visit_block` doc gains one paragraph, and the match gains one arm. Nothing else in the file is renamed, reordered, or reformatted; the existing `Item::Fn` / `Item::Const` / `Item::Static` / `Item::Struct` / `Item::Use` arms and the `_ => {}` catch-all are byte-identical."
+      },
+      "convention_fit": {
+        "verdict": "fits",
+        "justification": "Arm shape mirrors the siblings: `syn::Stmt::Item(Item::ForeignMod(extern_block))` follows the same `syn::Stmt::Item(Item::X(..))` form as `syn::Stmt::Item(Item::Use(nested))`, the inner binding is named `nested` exactly as every other arm names its item, and it pushes through the same `hoisted` vector rather than inventing a helper. The prose voice is the file's own: `*value* namespace`, `--` for em dashes, and the same 'why this and not the conservative flag' register as the existing paragraph on named-field structs (`hoisting it anyway would wrongly block an otherwise-valid resolution`). Two small divergences: the outer binding is `extern_block` where siblings use `nested`, and the inner arms are written as brace blocks -- `ForeignItem::Fn(nested) => {` / `hoisted.push(nested.sig.ident.to_string())` / `}` -- where every sibling hoist is a one-line arm (`syn::Stmt::Item(Item::Fn(nested)) => hoisted.push(nested.sig.ident.to_string()),`); at that indentation rustfmt would plausibly flatten them, so this may not be fmt-normalised. Cosmetic either way."
+      },
+      "spec_implied_cases_not_covered": {
+        "verdict": "some",
+        "justification": "All six numbered requirements are met, but the inner `_ => {}` silently drops `ForeignItem::Macro` and `ForeignItem::Verbatim`. An `extern \"C\" { some_macro!(); }` can declare an arbitrary foreign `fn target` that this code cannot enumerate -- the exact situation the spec's Background calls out ('a silently dropped call is a lost unknown') and that the sibling `use` arm answers with `conservative_unresolved |= has_glob;`. Here the unenumerable case gets neither a hoisted name nor the conservative flag, so a naked `target()` in such a block would still be matched to the module-level `target`. Mitigating: the outer match's pre-existing `_ => {}` already ignores block-level `Item::Macro` the same way, so this is consistent with the crate's current posture rather than a new hole opened by this diff, and the spec's own wording scopes the fix to '`fn` and `static` declarations'."
+      },
+      "hidden_coupling_or_fragility": {
+        "verdict": "none",
+        "justification": "No new state, no new ordering assumption: the names go into the same `hoisted` vector consumed by the single existing `self.push_scope(hoisted, conservative_unresolved);` call, so block scoping and pop are unchanged, and match arms are disjoint by variant so the new arm's position between `Item::Use` and `_ => {}` carries no meaning. It reads no field that could drift (`extern_block.abi` and `ItemForeignMod`'s edition-2024 `unsafety` token are both ignored, which is what makes it robust across `extern { }`, `extern \"C\" { }`, and `unsafe extern \"C\" { }`). The only duplication is explanatory, not logical: the arm's inline comment ('put their names in the block's *value* namespace exactly like block-local `fn`/`static` items') restates the doc paragraph ('each of those names enters the block's *value* namespace exactly as a block-local `fn` or `static` item would') nearly verbatim, so the two can drift -- prose only, with no behavioural consequence."
+      },
+      "comprehensibility": {
+        "verdict": "clear",
+        "justification": "The doc paragraph states both halves of the justification a reviewer needs: why the names shadow ('each of those names enters the block's *value* namespace exactly as a block-local `fn` or `static` item would') and why the conservative path is deliberately not taken ('The names it declares are enumerated precisely and never trip the conservative whole-block flag, so a foreign module declaring other names alone blocks nothing') -- which is exactly the trap spec point 4 describes. The `LexicalScope` doc was updated in the same breath so the type's stated invariant still enumerates every binding source. A maintainer can see from `for item in &extern_block.items` and the two `ForeignItem` arms precisely which names become shadows, without leaving the diff."
+      },
+      "overall": {
+        "verdict": "acceptable_as_is",
+        "justification": "Minimal and correct against the contract: one import name, two doc updates, one match arm. It implements the actual rule rather than the examples (`Item::ForeignMod` with per-item enumeration, no ABI check, no name check), preserves every existing arm untouched, satisfies point 4 by construction since `conservative_unresolved` is never set, and inherits point 3's scoping from the unchanged `push_scope`/`pop_scope` pair. It contains no `unsafe` keyword. The residual nits -- the unenumerable `ForeignItem::Macro` falling into `_ => {}`, the doc/inline comment restating each other, and the brace-wrapped inner arms where siblings are one-liners -- are cosmetic or consistent with pre-existing behaviour, and none of them warrants blocking the change."
+      }
+    }
+  ]
+}
+```
