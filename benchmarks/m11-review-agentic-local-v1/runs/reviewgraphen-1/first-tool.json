@@ -1,0 +1,12 @@
+{
+  "compliant": true,
+  "first_tool": {
+    "input": {
+      "command": "reviewgraphen-context lower_compose",
+      "description": "Get ReviewGraphen target-context projection"
+    },
+    "name": "Bash"
+  },
+  "schema": "reviewgraphen.benchmark.m11_first_tool.v1",
+  "tool_call_count": 16
+}
