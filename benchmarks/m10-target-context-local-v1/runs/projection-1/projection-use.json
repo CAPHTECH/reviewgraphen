@@ -1,0 +1,10 @@
+{
+  "call_count": 3,
+  "commands": [
+    "./.reviewgraphen/bin/reviewgraphen-context visit_block 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get('extraction',{}).get('information_loss', 'NO information_loss KEY'), indent=2)); print('---UNKNOWN---'); print(json.dumps(d.get('extraction',{}).get('unknowns','no key'), indent=2)[:2000])\"",
+    "./.reviewgraphen/bin/reviewgraphen-context visit_block 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print('top:', list(d.keys())); print('extraction:', list(d['extraction'].keys()))\"",
+    "./.reviewgraphen/bin/reviewgraphen-context visit_block 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print(json.dumps(d['information_loss'], indent=2))\""
+  ],
+  "schema": "reviewgraphen.benchmark.m10_projection_use.v1",
+  "used": true
+}

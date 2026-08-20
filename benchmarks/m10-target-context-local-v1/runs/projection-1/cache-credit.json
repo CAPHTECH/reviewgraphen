@@ -1,0 +1,407 @@
+{
+  "api_calls": 77,
+  "calls_beating_their_own_full_recompute": 72,
+  "calls_total": 77,
+  "elapsed_seconds": 3973,
+  "full_recompute_projection_seconds": 20724.9,
+  "identity_holds": true,
+  "identity_note": "holds in BOTH cache states -- a reporting artifact, not a cache signal",
+  "per_call": [
+    {
+      "context_tokens": 27938,
+      "elapsed_s": 0.0,
+      "full_recompute_s": 89.8
+    },
+    {
+      "context_tokens": 54777,
+      "elapsed_s": 235.5,
+      "full_recompute_s": 176.1
+    },
+    {
+      "context_tokens": 55944,
+      "elapsed_s": 18.3,
+      "full_recompute_s": 179.9
+    },
+    {
+      "context_tokens": 59519,
+      "elapsed_s": 31.7,
+      "full_recompute_s": 191.4
+    },
+    {
+      "context_tokens": 61213,
+      "elapsed_s": 21.7,
+      "full_recompute_s": 196.8
+    },
+    {
+      "context_tokens": 63148,
+      "elapsed_s": 36.9,
+      "full_recompute_s": 203.0
+    },
+    {
+      "context_tokens": 68863,
+      "elapsed_s": 39.7,
+      "full_recompute_s": 221.4
+    },
+    {
+      "context_tokens": 69104,
+      "elapsed_s": 10.7,
+      "full_recompute_s": 222.2
+    },
+    {
+      "context_tokens": 69408,
+      "elapsed_s": 7.8,
+      "full_recompute_s": 223.2
+    },
+    {
+      "context_tokens": 69626,
+      "elapsed_s": 9.2,
+      "full_recompute_s": 223.9
+    },
+    {
+      "context_tokens": 69853,
+      "elapsed_s": 215.0,
+      "full_recompute_s": 224.6
+    },
+    {
+      "context_tokens": 70140,
+      "elapsed_s": 20.9,
+      "full_recompute_s": 225.5
+    },
+    {
+      "context_tokens": 70333,
+      "elapsed_s": 8.1,
+      "full_recompute_s": 226.2
+    },
+    {
+      "context_tokens": 70603,
+      "elapsed_s": 8.8,
+      "full_recompute_s": 227.0
+    },
+    {
+      "context_tokens": 70738,
+      "elapsed_s": 9.1,
+      "full_recompute_s": 227.5
+    },
+    {
+      "context_tokens": 70879,
+      "elapsed_s": 14.4,
+      "full_recompute_s": 227.9
+    },
+    {
+      "context_tokens": 71040,
+      "elapsed_s": 10.4,
+      "full_recompute_s": 228.4
+    },
+    {
+      "context_tokens": 71171,
+      "elapsed_s": 7.1,
+      "full_recompute_s": 228.8
+    },
+    {
+      "context_tokens": 71794,
+      "elapsed_s": 13.0,
+      "full_recompute_s": 230.8
+    },
+    {
+      "context_tokens": 71975,
+      "elapsed_s": 16.5,
+      "full_recompute_s": 231.4
+    },
+    {
+      "context_tokens": 73337,
+      "elapsed_s": 20.2,
+      "full_recompute_s": 235.8
+    },
+    {
+      "context_tokens": 74072,
+      "elapsed_s": 184.7,
+      "full_recompute_s": 238.2
+    },
+    {
+      "context_tokens": 74562,
+      "elapsed_s": 10.8,
+      "full_recompute_s": 239.7
+    },
+    {
+      "context_tokens": 74942,
+      "elapsed_s": 279.7,
+      "full_recompute_s": 241.0
+    },
+    {
+      "context_tokens": 76459,
+      "elapsed_s": 274.6,
+      "full_recompute_s": 245.8
+    },
+    {
+      "context_tokens": 76902,
+      "elapsed_s": 31.8,
+      "full_recompute_s": 247.3
+    },
+    {
+      "context_tokens": 77434,
+      "elapsed_s": 15.9,
+      "full_recompute_s": 249.0
+    },
+    {
+      "context_tokens": 77721,
+      "elapsed_s": 38.7,
+      "full_recompute_s": 249.9
+    },
+    {
+      "context_tokens": 78586,
+      "elapsed_s": 11.2,
+      "full_recompute_s": 252.7
+    },
+    {
+      "context_tokens": 79017,
+      "elapsed_s": 35.5,
+      "full_recompute_s": 254.1
+    },
+    {
+      "context_tokens": 79575,
+      "elapsed_s": 26.6,
+      "full_recompute_s": 255.9
+    },
+    {
+      "context_tokens": 80735,
+      "elapsed_s": 73.5,
+      "full_recompute_s": 259.6
+    },
+    {
+      "context_tokens": 81110,
+      "elapsed_s": 14.6,
+      "full_recompute_s": 260.8
+    },
+    {
+      "context_tokens": 81845,
+      "elapsed_s": 73.5,
+      "full_recompute_s": 263.2
+    },
+    {
+      "context_tokens": 82216,
+      "elapsed_s": 13.4,
+      "full_recompute_s": 264.4
+    },
+    {
+      "context_tokens": 83224,
+      "elapsed_s": 35.0,
+      "full_recompute_s": 267.6
+    },
+    {
+      "context_tokens": 83476,
+      "elapsed_s": 15.4,
+      "full_recompute_s": 268.4
+    },
+    {
+      "context_tokens": 83699,
+      "elapsed_s": 18.1,
+      "full_recompute_s": 269.1
+    },
+    {
+      "context_tokens": 84145,
+      "elapsed_s": 15.0,
+      "full_recompute_s": 270.6
+    },
+    {
+      "context_tokens": 84502,
+      "elapsed_s": 16.9,
+      "full_recompute_s": 271.7
+    },
+    {
+      "context_tokens": 85484,
+      "elapsed_s": 54.9,
+      "full_recompute_s": 274.9
+    },
+    {
+      "context_tokens": 85909,
+      "elapsed_s": 51.1,
+      "full_recompute_s": 276.2
+    },
+    {
+      "context_tokens": 86239,
+      "elapsed_s": 8.8,
+      "full_recompute_s": 277.3
+    },
+    {
+      "context_tokens": 86709,
+      "elapsed_s": 32.0,
+      "full_recompute_s": 278.8
+    },
+    {
+      "context_tokens": 87009,
+      "elapsed_s": 16.0,
+      "full_recompute_s": 279.8
+    },
+    {
+      "context_tokens": 87216,
+      "elapsed_s": 16.1,
+      "full_recompute_s": 280.4
+    },
+    {
+      "context_tokens": 87508,
+      "elapsed_s": 26.1,
+      "full_recompute_s": 281.4
+    },
+    {
+      "context_tokens": 88019,
+      "elapsed_s": 42.7,
+      "full_recompute_s": 283.0
+    },
+    {
+      "context_tokens": 88892,
+      "elapsed_s": 21.7,
+      "full_recompute_s": 285.8
+    },
+    {
+      "context_tokens": 89805,
+      "elapsed_s": 73.7,
+      "full_recompute_s": 288.8
+    },
+    {
+      "context_tokens": 92617,
+      "elapsed_s": 37.0,
+      "full_recompute_s": 297.8
+    },
+    {
+      "context_tokens": 93179,
+      "elapsed_s": 150.4,
+      "full_recompute_s": 299.6
+    },
+    {
+      "context_tokens": 94419,
+      "elapsed_s": 112.5,
+      "full_recompute_s": 303.6
+    },
+    {
+      "context_tokens": 94728,
+      "elapsed_s": 9.7,
+      "full_recompute_s": 304.6
+    },
+    {
+      "context_tokens": 94860,
+      "elapsed_s": 9.6,
+      "full_recompute_s": 305.0
+    },
+    {
+      "context_tokens": 95002,
+      "elapsed_s": 34.0,
+      "full_recompute_s": 305.5
+    },
+    {
+      "context_tokens": 95519,
+      "elapsed_s": 70.9,
+      "full_recompute_s": 307.1
+    },
+    {
+      "context_tokens": 95797,
+      "elapsed_s": 27.1,
+      "full_recompute_s": 308.0
+    },
+    {
+      "context_tokens": 97361,
+      "elapsed_s": 125.0,
+      "full_recompute_s": 313.1
+    },
+    {
+      "context_tokens": 97680,
+      "elapsed_s": 392.1,
+      "full_recompute_s": 314.1
+    },
+    {
+      "context_tokens": 99037,
+      "elapsed_s": 30.8,
+      "full_recompute_s": 318.4
+    },
+    {
+      "context_tokens": 99263,
+      "elapsed_s": 31.1,
+      "full_recompute_s": 319.2
+    },
+    {
+      "context_tokens": 99535,
+      "elapsed_s": 17.1,
+      "full_recompute_s": 320.0
+    },
+    {
+      "context_tokens": 99758,
+      "elapsed_s": 18.9,
+      "full_recompute_s": 320.8
+    },
+    {
+      "context_tokens": 100054,
+      "elapsed_s": 23.2,
+      "full_recompute_s": 321.7
+    },
+    {
+      "context_tokens": 100374,
+      "elapsed_s": 17.9,
+      "full_recompute_s": 322.7
+    },
+    {
+      "context_tokens": 100607,
+      "elapsed_s": 27.5,
+      "full_recompute_s": 323.5
+    },
+    {
+      "context_tokens": 100929,
+      "elapsed_s": 27.2,
+      "full_recompute_s": 324.5
+    },
+    {
+      "context_tokens": 101382,
+      "elapsed_s": 16.6,
+      "full_recompute_s": 326.0
+    },
+    {
+      "context_tokens": 101768,
+      "elapsed_s": 67.9,
+      "full_recompute_s": 327.2
+    },
+    {
+      "context_tokens": 101987,
+      "elapsed_s": 28.2,
+      "full_recompute_s": 327.9
+    },
+    {
+      "context_tokens": 102321,
+      "elapsed_s": 16.2,
+      "full_recompute_s": 329.0
+    },
+    {
+      "context_tokens": 102747,
+      "elapsed_s": 72.0,
+      "full_recompute_s": 330.4
+    },
+    {
+      "context_tokens": 103244,
+      "elapsed_s": 46.4,
+      "full_recompute_s": 332.0
+    },
+    {
+      "context_tokens": 103717,
+      "elapsed_s": 58.7,
+      "full_recompute_s": 333.5
+    },
+    {
+      "context_tokens": 104316,
+      "elapsed_s": 11.2,
+      "full_recompute_s": 335.4
+    },
+    {
+      "context_tokens": 104827,
+      "elapsed_s": 82.0,
+      "full_recompute_s": 337.1
+    }
+  ],
+  "prefill_tok_per_s_assumed": 311.0,
+  "ratio_elapsed_over_projection": 0.192,
+  "ratio_threshold": 0.6,
+  "reference_skill_1_ratio": 1.323,
+  "reported_total_input_tokens": 6445443,
+  "reported_total_output_tokens": 62729,
+  "schema": "reviewgraphen.benchmark.m10_cache_credit.v1",
+  "summed_context_tokens": 6445443,
+  "trial": "projection-1",
+  "verdict": "cache_credited",
+  "verdict_rule": "any call beating its own full-recompute time is direct evidence of crediting and outranks the aggregate ratio"
+}

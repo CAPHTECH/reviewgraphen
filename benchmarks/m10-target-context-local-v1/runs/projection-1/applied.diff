@@ -1,0 +1,71 @@
+--- /tmp/m10-runs/projection-1/pinned-rust.rs	2026-08-20 20:02:54.185450621 +0900
++++ /tmp/m10-verify-projection-1/crates/reviewgraphen-ingest/src/rust.rs	2026-08-20 20:02:54.185450621 +0900
+@@ -12,8 +12,9 @@
+ use syn::visit::{self, Visit};
+ use syn::{
+     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
+-    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
++    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,
++    Item, ItemFn, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree,
++    Visibility,
+ };
+ 
+ /// Extracts only the M2 Rust AST subset from immutable Git file bytes.
+@@ -1375,6 +1376,29 @@
+     }
+ }
+ 
++/// The names a block-local foreign module (`extern "C" { ... }`) introduces
++/// into its enclosing block's *value* namespace, exactly as a block-local
++/// `fn`/`static` item does (see `visit_block`): those are its `fn` and
++/// `static` items, which are callable/referenceable by a naked name and so
++/// shadow a same-named module-level item. A foreign `type` (type namespace
++/// only, like a named-field struct) and a foreign `macro`/`verbatim` are
++/// deliberately never returned: a `type` cannot be a naked call target and a
++/// macro is not a callable name, so neither shadows a same-named function.
++/// `ForeignItem` is `#[non_exhaustive]`, so the wildcard below is fail-closed
++/// only in the sense that it ignores names this adapter does not recognize --
++/// it never marks the enclosing block conservative, which would (wrongly)
++/// block unrelated names merely because a foreign module is present.
++fn value_namespace_names(items: &[ForeignItem]) -> Vec<String> {
++    items
++        .iter()
++        .filter_map(|item| match item {
++            ForeignItem::Fn(nested) => Some(nested.sig.ident.to_string()),
++            ForeignItem::Static(nested) => Some(nested.ident.to_string()),
++            _ => None,
++        })
++        .collect()
++}
++
+ /// Normalizes a `>= 2`-segment call path against the calling module's
+ /// logical label, using only the syntactic `crate`/`self`/`super` module
+ /// path grammar -- never `use`-alias or type resolution. Returns `None` when
+@@ -1833,7 +1857,15 @@
+     /// namespace, never the value namespace, so it can never itself be a
+     /// call target and does not shadow a same-named callable at all --
+     /// hoisting it anyway would wrongly block an otherwise-valid resolution
+-    /// to the outer `fn target`.
++    /// to the outer `fn target`. A block-local foreign module
++    /// (`extern "C" { ... }`) is hoisted the same way as a block-local
++    /// `fn`/`static`: only the value-namespace names it declares -- its
++    /// `fn` and `static` items -- are bound, exactly like the `fn`/`static`
++    /// arms above, so they shadow a same-named module-level item for a
++    /// naked call in this block (see `value_namespace_names`), while a
++    /// foreign `type` or `macro` is left alone (they never enter the value
++    /// namespace a naked call can resolve against) and the block is never
++    /// marked conservative, so unrelated names still resolve.
+     fn visit_block(&mut self, block: &Block) {
+         let mut hoisted = Vec::new();
+         let mut conservative_unresolved = false;
+@@ -1852,6 +1884,9 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    hoisted.extend(value_namespace_names(&nested.items));
++                }
+                 _ => {}
+             }
+         }

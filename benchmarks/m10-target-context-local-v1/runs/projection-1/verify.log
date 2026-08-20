@@ -1,0 +1,50 @@
+{
+  "build_errors": [],
+  "changed_files": [
+    "./crates/reviewgraphen-ingest/src/rust.rs"
+  ],
+  "clippy_exit": 0,
+  "clippy_warnings": 0,
+  "compiles": true,
+  "diff_line_count": 71,
+  "elapsed_seconds": 3973,
+  "loop_outcome": "completed",
+  "out_of_scope_change_count": 0,
+  "out_of_scope_changed_files": [],
+  "result_unchanged_from_pinned": false,
+  "schema": "reviewgraphen.benchmark.m10_trial_verification.v1",
+  "target_file_changed": true,
+  "test_result_lines": [
+    [
+      "ok",
+      "67",
+      "0"
+    ],
+    [
+      "ok",
+      "8",
+      "0"
+    ],
+    [
+      "ok",
+      "40",
+      "0"
+    ],
+    [
+      "ok",
+      "5",
+      "0"
+    ],
+    [
+      "ok",
+      "0",
+      "0"
+    ]
+  ],
+  "tests_pass": true,
+  "touched_a_test_file": false,
+  "trial": "projection-1",
+  "verdict": "verified",
+  "verify_tree_created": true
+}
+VERDICT: verified
