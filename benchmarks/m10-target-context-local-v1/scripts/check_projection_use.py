@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -30,7 +31,10 @@ def main() -> None:
             if value.get("name") != "Bash":
                 continue
             command = value.get("input", {}).get("command")
-            if isinstance(command, str) and "reviewgraphen-context" in command:
+            if isinstance(command, str) and re.search(
+                r"reviewgraphen-context\s+(?:visit_block|crate::crates::reviewgraphen-ingest::src::rust::visit_block::FunctionBodyVisitor)(?:\s|$)",
+                command,
+            ):
                 commands.append(command)
     record = {
         "schema": "reviewgraphen.benchmark.m10_projection_use.v1",
