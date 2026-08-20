@@ -1,0 +1,4 @@
+178fe72140f7952759e014a71f36bb1d57c37a746f22ecc3fee215c7256a0389  rust/fsl-core/src/bin/fsl-parse-kernel.rs
+00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567  rust/fsl-core/src/compose.rs
+4934408e1782a2aa7cd5c917da89f8b66f6cbfacc55626a87564fa78ab17bd1d  rust/fsl-core/src/db.rs
+b8b91b65d1e7f160b5c8eede378af797af5b4685b7c16a6cd656a37849c8ce18  rust/fsl-core/src/diagnostics.rs

@@ -1,0 +1,45 @@
+{
+  "gate": "passed",
+  "health": {
+    "confidence_threshold": 0.0,
+    "context_window": 262144,
+    "drafter": null,
+    "lookup_drafts": false,
+    "max_draft": "auto",
+    "max_output_tokens": 32768,
+    "mode": "baseline",
+    "model": "Qwen3.8-27B-MLX-4bit",
+    "race_arm_confidence": true,
+    "reasoning_effort": "low",
+    "small_m": true,
+    "status": "ok",
+    "supports_reasoning_effort": true,
+    "target": "/Users/rizumita/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit"
+  },
+  "health_canonical": "{\"confidence_threshold\":0.0,\"context_window\":262144,\"drafter\":null,\"lookup_drafts\":false,\"max_draft\":\"auto\",\"max_output_tokens\":32768,\"mode\":\"baseline\",\"model\":\"Qwen3.8-27B-MLX-4bit\",\"reasoning_effort\":\"low\",\"supports_reasoning_effort\":true,\"target\":\"/Users/rizumita/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit\"}",
+  "health_expected": "6cdd746cdc72635b96ad28e97233deeefb917bc35a1b04499f96d632f4873149",
+  "health_gate": "passed",
+  "health_sha256": "6cdd746cdc72635b96ad28e97233deeefb917bc35a1b04499f96d632f4873149",
+  "listing": {
+    "data": [
+      {
+        "created": 1787188093,
+        "display_name": "Qwen3.8-27B-MLX-4bit (mlx-dspark baseline)",
+        "id": "Qwen3.8-27B-MLX-4bit",
+        "object": "model",
+        "owned_by": "mlx-dspark",
+        "x_mlx_dspark": {
+          "drafter": null,
+          "mode": "baseline",
+          "target": "/Users/rizumita/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit"
+        }
+      }
+    ],
+    "object": "list"
+  },
+  "listing_canonical": "[{\"drafter\":null,\"id\":\"Qwen3.8-27B-MLX-4bit\",\"mode\":\"baseline\",\"owned_by\":\"mlx-dspark\",\"target\":\"/Users/rizumita/.lmstudio/models/lmstudio-community/Qwen3.8-27B-MLX-4bit\"}]",
+  "listing_expected": "afc7adb7cb672ad830ffbb0eacf263356b89da15188dc05795725ed166cd8df3",
+  "listing_gate": "passed",
+  "listing_sha256": "afc7adb7cb672ad830ffbb0eacf263356b89da15188dc05795725ed166cd8df3",
+  "schema": "reviewgraphen.benchmark.backend_identity.v2"
+}

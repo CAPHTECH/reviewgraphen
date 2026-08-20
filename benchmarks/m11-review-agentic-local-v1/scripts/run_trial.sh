@@ -41,7 +41,7 @@ set +e
   --ro-bind / / --dev-bind /dev /dev --proc /proc \
   --tmpfs /home/rizumita/workspace --tmpfs /tmp/claude-1000 \
   --bind "$scratch" "$scratch" --bind "$config" "$config" \
-  --ro-bind "$exp" /opt/m11 \
+  --ro-bind "$exp" "$exp" \
   --setenv CLAUDE_CONFIG_DIR "$config" \
   --setenv ANTHROPIC_BASE_URL http://192.168.68.71:11999 \
   --setenv ANTHROPIC_API_KEY ollama \
