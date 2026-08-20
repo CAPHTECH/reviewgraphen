@@ -1,0 +1,67 @@
+--- /home/rizumita/workspace/reviewgraphen/.claude/worktrees/agent-abbf383d1b02d8726/crates/reviewgraphen-ingest/src/rust.rs	2026-08-19 04:38:56.442367313 +0900
++++ /tmp/m9-verify-noskill-2/crates/reviewgraphen-ingest/src/rust.rs	2026-08-20 13:30:16.694555146 +0900
+@@ -12,8 +12,9 @@
+ use syn::visit::{self, Visit};
+ use syn::{
+     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
+-    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
++    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,
++    Item, ItemFn, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree,
++    Visibility,
+ };
+ 
+ /// Extracts only the M2 Rust AST subset from immutable Git file bytes.
+@@ -1426,7 +1427,8 @@
+ /// visited. `bindings` is every name a parameter, `let`/`let-else` binding,
+ /// closure parameter, match-arm pattern, `for` loop pattern, `if let`/
+ /// `while let` pattern (including `&&`-chained forms), block-scoped nested
+-/// `fn`/`const`/`static` item, or block-local `use` item introduces.
++/// `fn`/`const`/`static` item, a block-local foreign module's `fn`/`static`
++/// items, or block-local `use` item introduces.
+ /// `conservative_unresolved` is set when this scope also contains a glob
+ /// `use` (or another `use` shape this crate cannot reduce to an exact bound
+ /// name): such a scope can introduce *any* name, so an unqualified call
+@@ -1811,7 +1813,14 @@
+     /// *whole* block, not just after its textual position -- matching
+     /// Rust's own item-scoping rule and preventing a call positioned
+     /// before such a local item from wrongly falling through to a
+-    /// same-named module-level function. A block-local `use` naming a
++    /// same-named module-level function. A block-local foreign module
++    /// (`extern "C" { .. }`) contributes its `fn` and `static` items the
++    /// same way: each of those names enters the block's *value* namespace
++    /// exactly as a block-local `fn` or `static` item would, shadowing a
++    /// same-named module-level function for a naked call in this block. The
++    /// names it declares are enumerated precisely and never trip the
++    /// conservative whole-block flag, so a foreign module declaring other
++    /// names alone blocks nothing. A block-local `use` naming a
+     /// module-level function (for example `use ext::target;` shadowing an
+     /// unrelated same-module `fn target`) is exactly as much a shadow as a
+     /// local `fn`/`let` -- and is never itself resolved further (proving
+@@ -1852,6 +1861,26 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                syn::Stmt::Item(Item::ForeignMod(extern_block)) => {
++                    // A block-local foreign module's `fn` and `static` items
++                    // put their names in the block's *value* namespace exactly
++                    // like block-local `fn`/`static` items, so they shadow a
++                    // same-named module-level function for a naked call in
++                    // this block. Only the names it actually declares are
++                    // hoisted -- never a conservative whole-block flag -- so a
++                    // foreign module declaring other names alone blocks nothing.
++                    for item in &extern_block.items {
++                        match item {
++                            ForeignItem::Fn(nested) => {
++                                hoisted.push(nested.sig.ident.to_string())
++                            }
++                            ForeignItem::Static(nested) => {
++                                hoisted.push(nested.ident.to_string())
++                            }
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }
