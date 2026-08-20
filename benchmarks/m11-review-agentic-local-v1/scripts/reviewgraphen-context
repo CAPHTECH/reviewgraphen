@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -ne 1 || "$1" != "lower_compose" ]]; then
+  echo "usage: reviewgraphen-context lower_compose" >&2
+  exit 64
+fi
+artifact=/opt/m11/projection/lower_compose.json
+if [[ ! -f "$artifact" ]]; then
+  artifact=/home/rizumita/workspace/reviewgraphen/benchmarks/m11-review-agentic-local-v1/projection/lower_compose.json
+fi
+cat "$artifact"

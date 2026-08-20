@@ -1,0 +1,80 @@
+{
+  "schema": "reviewgraphen.benchmark.m11_preregistration.v1",
+  "status": "frozen_before_first_generation_request",
+  "date": "2026-08-21",
+  "question": "Does the current local-server condition allow the previously failing unscaffolded code-review task to complete, and how does a ReviewGraphen-first agentic workflow compare when the model is not first required to enumerate obligations?",
+  "predecessor": {
+    "experiment": "m7-head-local-v1",
+    "observation": "head-local-00 qwen_b1 ended after 6548.797 seconds with 65535/65536 provider output tokens consumed and zero final bytes",
+    "interpretation_ceiling": "That observation established failure under the old execution condition only; it did not establish that unscaffolded review is intrinsically unable to complete."
+  },
+  "task": {
+    "repository": "fsl",
+    "revision": "e589014d1655b1224f5b83a7f2de99532a0dcdba",
+    "unit": "head-local-00",
+    "unit_definition": "../m7-head-local-v1/units.json unit_index 0",
+    "files": [
+      "rust/fsl-core/src/bin/fsl-parse-kernel.rs",
+      "rust/fsl-core/src/compose.rs",
+      "rust/fsl-core/src/db.rs",
+      "rust/fsl-core/src/diagnostics.rs"
+    ],
+    "source_bytes": 82622,
+    "source_hashes_must_match_unit_definition": true,
+    "instruction": "Review the four files for actionable correctness, security, reliability, or data-integrity defects; do not modify source; submit the common structured finding report."
+  },
+  "arms": {
+    "reviewgraphen": {
+      "intervention": "The first tool call must invoke reviewgraphen-context lower_compose. The model then reviews normally and may inspect or invoke further context itself.",
+      "no_initial_enumeration": true,
+      "no_obligation_or_claim_evidence_ledger": true,
+      "projection_file": "projection/lower_compose.json",
+      "projection_file_sha256": "230f599d67583344044b1190a73e71c588fbcb8ac323485eed22489d34431f26",
+      "projection_id": "benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177",
+      "projection_hash": "sha256:33bea1019ae48984ed738d4cf4945d94d441a46a984961c860b42250ee131ecf",
+      "projection_snapshot": "The unchanged FSL unit was reconstructed byte-for-byte as an isolated empty-base-to-four-file-addition Git snapshot because projecting against the actual parent produced duplicate unchanged base/head symbols. Source hashes are gated by SOURCE_MANIFEST.sha256; synthetic base 92feacb15a3c58bf89e6acb77c427cfbdc036b53, target fa96b95e59368b0aa5193d7b68646d061356918d.",
+      "projection_authority": "research projection only; accepted ProgramSpace facts and explicit extraction unknowns are inputs, not review claims, evidence, verification, or decisions"
+    },
+    "control": {
+      "intervention": "none",
+      "reviewgraphen_tool_available": false
+    }
+  },
+  "execution": {
+    "order": ["reviewgraphen-1", "control-1", "reviewgraphen-2", "control-2", "reviewgraphen-3", "control-3"],
+    "trials_per_arm": 3,
+    "concurrency": 1,
+    "retries": 0,
+    "replacements": 0,
+    "wall_clock_cap_seconds_per_trial": 5400,
+    "completion": "agent exits zero and review.json validates against the common experiment schema",
+    "reviewgraphen_compliance": "first recorded tool call is Bash containing reviewgraphen-context lower_compose; otherwise intervention_not_used and stop",
+    "source_mutation": "forbidden and checked by hashes"
+  },
+  "backend": {
+    "endpoint": "http://192.168.68.71:11999 only",
+    "model_sent": "qwen3.8:27b-mlx",
+    "resolved_health_model": "Qwen3.8-27B-MLX-4bit",
+    "mode": "baseline",
+    "drafter": null,
+    "reasoning_effort": "low",
+    "context_window": 262144,
+    "server_max_output_tokens": 32768,
+    "client_max_output_tokens": 32000,
+    "pinned_listing_sha256": "afc7adb7cb672ad830ffbb0eacf263356b89da15188dc05795725ed166cd8df3",
+    "pinned_health_sha256": "6cdd746cdc72635b96ad28e97233deeefb917bc35a1b04499f96d632f4873149"
+  },
+  "outcomes": {
+    "primary": ["completion per trial", "provider output tokens", "reasoning tokens", "elapsed seconds"],
+    "quality": "All completed reports are pooled by content hash and judged blind by Codex gpt-5.6-sol high using the frozen m7 issue-worthiness dimensions, with arm identity and completion metrics hidden.",
+    "judge_authority": "unreviewed non-authority disposition only",
+    "no_post_hoc_thresholds": true
+  },
+  "stopping": [
+    "backend identity mismatch before a request",
+    "upstream generation failure",
+    "truncated response tail",
+    "ReviewGraphen intervention not used first",
+    "Codex limit at judging records judge_not_run and is never counted as candidate failure"
+  ]
+}
