@@ -1,0 +1,78 @@
+--- /tmp/m10-runs/projection-2/pinned-rust.rs	2026-08-20 21:10:47.658426439 +0900
++++ /tmp/m10-verify-projection-2/crates/reviewgraphen-ingest/src/rust.rs	2026-08-20 21:10:47.658426439 +0900
+@@ -1426,7 +1426,8 @@
+ /// visited. `bindings` is every name a parameter, `let`/`let-else` binding,
+ /// closure parameter, match-arm pattern, `for` loop pattern, `if let`/
+ /// `while let` pattern (including `&&`-chained forms), block-scoped nested
+-/// `fn`/`const`/`static` item, or block-local `use` item introduces.
++/// `fn`/`const`/`static` item, block-local `extern` block's `fn`/`static`
++/// declarations, or block-local `use` item introduces.
+ /// `conservative_unresolved` is set when this scope also contains a glob
+ /// `use` (or another `use` shape this crate cannot reduce to an exact bound
+ /// name): such a scope can introduce *any* name, so an unqualified call
+@@ -1806,12 +1807,24 @@
+ 
+     /// Every nested block introduces its own lexical scope, so a shadow
+     /// introduced inside it never leaks to sibling or enclosing code once
+-    /// the block ends. A nested `fn`/`const`/`static` item, and every name
+-    /// a block-local `use` item introduces, is hoisted -- bound for the
+-    /// *whole* block, not just after its textual position -- matching
+-    /// Rust's own item-scoping rule and preventing a call positioned
+-    /// before such a local item from wrongly falling through to a
+-    /// same-named module-level function. A block-local `use` naming a
++    /// the block ends. A nested `fn`/`const`/`static` item, every name a
++    /// block-local `use` item introduces, and every `fn`/`static`
++    /// declaration of a block-local `extern` block, is hoisted -- bound
++    /// for the *whole* block, not just after its textual position --
++    /// matching Rust's own item-scoping rule and preventing a call
++    /// positioned before such a local item from wrongly falling through
++    /// to a same-named module-level function. A block-local `extern`
++    /// block's `fn`/`static` names enter the *value* namespace of the
++    /// enclosing block exactly as the block's own `fn`/`static` items do
++    /// (a foreign `static` is a value name, as a foreign `fn` is); they
++    /// shadow a same-named module-level function for a naked call in that
++    /// block and only in it. A foreign `type` lives only in the *type*
++    /// namespace, as a named-field struct does, and the remaining
++    /// foreign-item shapes bind no name this resolver tracks, so their
++    /// presence alone never blocks: a block whose extern declarations
++    /// name only other identifiers still resolves its naked calls to
++    /// same-named module functions, and the block is never marked
++    /// conservative because a foreign module is present. A block-local `use` naming a
+     /// module-level function (for example `use ext::target;` shadowing an
+     /// unrelated same-module `fn target`) is exactly as much a shadow as a
+     /// local `fn`/`let` -- and is never itself resolved further (proving
+@@ -1852,6 +1865,34 @@
+                     hoisted.extend(names);
+                     conservative_unresolved |= has_glob;
+                 }
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    // A block-local foreign module is hoisted the same way a
++                    // block-local `fn`/`static` item is: its `fn` and
++                    // `static` declarations put their names in the *value*
++                    // namespace of the enclosing block, so they shadow a
++                    // same-named module-level function for a naked call in
++                    // it. Only those two foreign-item shapes bind
++                    // value-namespace names -- a foreign `type` lives only
++                    // in the *type* namespace, as a named-field struct
++                    // does, and the other shapes bind no name this
++                    // resolver tracks -- so the presence of a foreign
++                    // module in itself never marks the block conservative:
++                    // a block whose extern declarations name only other
++                    // identifiers must still resolve naked calls to
++                    // same-named module functions exactly as without the
++                    // extern block (see the `visit_block` doc).
++                    for foreign_item in &nested.items {
++                        match foreign_item {
++                            syn::ForeignItem::Fn(decl) => {
++                                hoisted.push(decl.sig.ident.to_string())
++                            }
++                            syn::ForeignItem::Static(decl) => {
++                                hoisted.push(decl.ident.to_string())
++                            }
++                            _ => {}
++                        }
++                    }
++                }
+                 _ => {}
+             }
+         }

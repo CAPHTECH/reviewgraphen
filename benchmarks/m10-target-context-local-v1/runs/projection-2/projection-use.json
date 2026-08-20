@@ -1,0 +1,9 @@
+{
+  "call_count": 2,
+  "commands": [
+    "/tmp/m10-scratch-projection-2/.reviewgraphen/bin/reviewgraphen-context 'visit_block' 2>&1 | head -150",
+    "/tmp/m10-scratch-projection-2/.reviewgraphen/bin/reviewgraphen-context 'visit_block' 2>&1 | sed -n '150,260p'"
+  ],
+  "schema": "reviewgraphen.benchmark.m10_projection_use.v1",
+  "used": true
+}

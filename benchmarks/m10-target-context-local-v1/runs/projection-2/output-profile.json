@@ -1,0 +1,32 @@
+{
+  "api_calls": 78,
+  "calls_beating_own_full_recompute": 75,
+  "char_estimated_output_tokens": 35744,
+  "context_depth_max": 88904,
+  "context_depth_min": 28002,
+  "deep": {
+    "calls": 8,
+    "output_tokens": 20431,
+    "seconds": 1104.7,
+    "share_of_span": 0.397,
+    "tok_per_s": 18.5
+  },
+  "deep_threshold_output_tokens": 1000,
+  "final_text_chars": 11323,
+  "full_recompute_seconds_if_no_cache": 15611.7,
+  "note": "deep/shallow split is by a call's own output volume; elapsed includes tool execution between calls and is not separated",
+  "reported_input_tokens": 4855230,
+  "reported_output_tokens": 48664,
+  "schema": "reviewgraphen.benchmark.m10_output_profile.v1",
+  "shallow": {
+    "calls": 70,
+    "output_tokens": 15312,
+    "seconds": 1675.1,
+    "tok_per_s": 9.1
+  },
+  "span_seconds": 2782.9,
+  "summed_context_tokens": 4855230,
+  "thinking_chars": 131652,
+  "thinking_share": 0.9208,
+  "trial": "projection-2"
+}

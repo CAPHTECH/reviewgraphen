@@ -22,6 +22,15 @@ def walk(value):
 def main() -> None:
     result = Path(sys.argv[1])
     commands = []
+    selectors = (
+        "visit_block",
+        "crate::crates::reviewgraphen-ingest::src::rust::visit_block::FunctionBodyVisitor",
+    )
+    selector_pattern = "|".join(
+        re.escape(form)
+        for selector in selectors
+        for form in (selector, f"'{selector}'", f'"{selector}"')
+    )
     for line in (result / "stream.jsonl").read_text(errors="replace").splitlines():
         try:
             event = json.loads(line)
@@ -32,7 +41,7 @@ def main() -> None:
                 continue
             command = value.get("input", {}).get("command")
             if isinstance(command, str) and re.search(
-                r"reviewgraphen-context\s+(?:visit_block|crate::crates::reviewgraphen-ingest::src::rust::visit_block::FunctionBodyVisitor)(?:\s|$)",
+                rf"reviewgraphen-context\s+(?:{selector_pattern})(?:\s|$)",
                 command,
             ):
                 commands.append(command)
