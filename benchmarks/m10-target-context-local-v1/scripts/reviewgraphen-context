@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: reviewgraphen-context <symbol-selector>" >&2
+  exit 64
+fi
+case "$1" in
+  visit_block|crate::crates::reviewgraphen-ingest::src::rust::visit_block::FunctionBodyVisitor)
+    exec jq . "$(dirname "$0")/../visit_block.json"
+    ;;
+  *)
+    echo "no frozen ReviewGraphen target context for selector: $1" >&2
+    exit 3
+    ;;
+esac

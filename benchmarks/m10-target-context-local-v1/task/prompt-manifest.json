@@ -1,0 +1,17 @@
+{
+  "prompt_delta_is_only_the_target_context_paragraph": true,
+  "prompts": {
+    "control": {
+      "bytes": 5521,
+      "path": "benchmarks/m10-target-context-local-v1/task/PROMPT-control.md",
+      "sha256": "8e25d717bb1ff287a55ae6e7abbe277b72d759b82465b05c2aea676534cad36f"
+    },
+    "projection": {
+      "bytes": 6340,
+      "path": "benchmarks/m10-target-context-local-v1/task/PROMPT-projection.md",
+      "sha256": "33b2c1d90f15e39e025c05cf7a7ebb76c74a24f6a0ef51ed1a7bf68f4ab362ee"
+    }
+  },
+  "schema": "reviewgraphen.benchmark.m10_prompt_manifest.v1",
+  "source_control_prompt_sha256": "8e25d717bb1ff287a55ae6e7abbe277b72d759b82465b05c2aea676534cad36f"
+}

@@ -1,0 +1,121 @@
+{
+  "schema": "reviewgraphen.benchmark.m10_preregistration.v1",
+  "status": "frozen_before_first_generation_request",
+  "date": "2026-08-20",
+  "question": "Can an implementation agent use a deterministic ReviewGraphen target-context projection as working context, without first emitting an obligation enumeration or a claim/evidence ledger, and complete the same bounded code change more reliably or economically than a clean control?",
+  "relationship_to_prior_work": {
+    "m9": "Fresh experiment. No m9 trial is pooled or reused. Both arms run again under one contemporaneous server window.",
+    "feasibility_basis": "docs/24_context_projection_feasibility_for_implementation.md identified the missing symbol seed and single-window subject-loss blockers. The research-only target projection introduced at commit 93d482f closes those two experiment blockers without changing accepted ReviewGraphen state.",
+    "not_the_m9_skill": "No implementation-methodology skill is installed. The agent is not instructed to enumerate obligations, claims, evidence statuses, or limitations before editing."
+  },
+  "task": {
+    "source": "m8-impl-local-v1 task 2, also used by m9",
+    "pinned_revision": "05573bb6b3491b6849512e75e055d4cf6279b606",
+    "allowed_file": "crates/reviewgraphen-ingest/src/rust.rs",
+    "acceptance_test_path": "benchmarks/m8-impl-local-v1/task2/m8_extern_block_shadow.rs",
+    "acceptance_test_sha256": "dd79b76edd5b0bfea46611cde32bdd1ff5ef9bc1d6a94c3a98f0ffd4adf754ef",
+    "acceptance_hash_note": "This is the actual task-2 file hash. Earlier m9 preregistrations accidentally carried task 1's 47fd74... hash; their verifier path nevertheless copied this task-2 file. The mismatch is separately disclosed."
+  },
+  "arms": {
+    "projection": {
+      "prompt_sha256": "33b2c1d90f15e39e025c05cf7a7ebb76c74a24f6a0ef51ed1a7bf68f4ab362ee",
+      "intervention": "Before the first edit, invoke reviewgraphen-context at least once using a task-selected symbol; use the returned target context as one input; do not first enumerate obligations or emit a methodology ledger.",
+      "tool_available": true
+    },
+    "control": {
+      "prompt_sha256": "8e25d717bb1ff287a55ae6e7abbe277b72d759b82465b05c2aea676534cad36f",
+      "prompt_identity": "Byte-identical to m9's clean noskill prompt.",
+      "tool_available": false
+    },
+    "prompt_delta": "Only the ReviewGraphen target-context paragraph recorded by task/prompt-manifest.json. The task and final response demand are otherwise byte-identical.",
+    "output_surface": "Identical ordinary coding-agent output in both arms. Neither arm is required to serialize obligations or evidence records."
+  },
+  "projection": {
+    "implementation_commit": "93d482f36846664fdd93b14564f6f81384968891",
+    "schema": "reviewgraphen.benchmark.target_context.v1",
+    "artifact_path": "projection/visit_block.json",
+    "artifact_sha256": "70868f24ea76ee7994db785aa1ac6374f9049e3f19e444f3a76d911301adbdb0",
+    "projection_id": "benchmark-target-context:sha256:3fa176a200925c7559dda259529ca0ab8b5c3dc1e1766744f44261c62957f91c",
+    "projection_hash": "sha256:fd47e59323fc98cfb049c5416c8f10538a6b4346db3e7bd8d38d3df4875328ee",
+    "wrapper_sha256": "da4fda7a979c6df1a36f28abdfb256097ee97879f3ea7ffc44c3310a63ebd8ac",
+    "target": "crate::crates::reviewgraphen-ingest::src::rust::visit_block::FunctionBodyVisitor",
+    "accepted_neighborhood_count": 4,
+    "accepted_relation_count": 3,
+    "relevant_obstruction_count": 15,
+    "omitted_obstruction_count": 316763,
+    "source_windows": [
+      {"path": "crates/reviewgraphen-ingest/src/rust.rs", "start": 1, "end": 49, "bytes": 2329},
+      {"path": "crates/reviewgraphen-ingest/src/rust.rs", "start": 1300, "end": 1410, "bytes": 4391},
+      {"path": "crates/reviewgraphen-ingest/src/rust.rs", "start": 1759, "end": 1909, "bytes": 6600}
+    ],
+    "determinism_check": "Two independent generations from the same pinned revision produced projection hash sha256:fd47e593...5328ee.",
+    "authority_ceiling": "Research projection only. It is not a ReviewClaim, Evidence, Verification, Decision, accepted ProgramSpace mutation, or proof of correctness.",
+    "dependency_api_surface": "The syn dependency source/API is not included. This intentionally leaves m9's principal exploration bottleneck unchanged."
+  },
+  "execution": {
+    "order": ["projection-1", "control-1", "projection-2", "control-2", "projection-3", "control-3"],
+    "trials_per_arm": 3,
+    "maximum_generation_trials": 6,
+    "one_request_in_flight": true,
+    "retry": "none",
+    "replacement": "none",
+    "wall_clock_cap_seconds_per_trial": 5400,
+    "loop": "agentic edit -> compile/test -> inspect -> fix, with shell tools inside an isolated writable scratch tree",
+    "hidden_acceptance_test": true,
+    "fresh_private_cargo_target_per_trial": true,
+    "half_edited_tree_rule": "Classify how the loop ended before inspecting code. exit 124 is loop_incomplete_timeout; other nonzero is loop_incomplete_error. Such trials are excluded from compile/test success tallies while their resulting code state remains reported.",
+    "projection_compliance": "A projection trial with no recorded Bash invocation containing reviewgraphen-context stops the series and is reported as intervention_not_used; it is not silently relabeled control."
+  },
+  "backend": {
+    "endpoint": "http://192.168.68.71:11999 only",
+    "model_sent": "qwen3.8:27b-mlx",
+    "resolved_health_model": "Qwen3.8-27B-MLX-4bit",
+    "mode": "baseline",
+    "drafter": null,
+    "reasoning_effort": "low",
+    "context_window": 262144,
+    "server_max_output_tokens": 32768,
+    "client_max_output_tokens": 32000,
+    "pinned_listing_sha256": "afc7adb7cb672ad830ffbb0eacf263356b89da15188dc05795725ed166cd8df3",
+    "pinned_health_sha256": "6cdd746cdc72635b96ad28e97233deeefb917bc35a1b04499f96d632f4873149",
+    "verified_live_before_freezing": true,
+    "gate": "Both identity hashes must pass before every trial; refusal happens before generation. Cache-credit and truncated-tail diagnostics run after every trial."
+  },
+  "mechanical_outcomes": {
+    "verdicts": ["verified", "no_change_made", "does_not_compile", "tests_failed", "loop_incomplete_timeout", "loop_incomplete_error"],
+    "verification_commands": [
+      "cargo build -p reviewgraphen-ingest",
+      "cargo test -p reviewgraphen-ingest",
+      "cargo clippy -p reviewgraphen-ingest --all-targets"
+    ],
+    "test_gaming_control": "Verifier reconstructs a fresh pinned tree, applies only rust.rs, then adds the hidden acceptance test. Every other agent edit is discarded but reported."
+  },
+  "analysis": {
+    "primary": "Per-trial descriptive records: loop outcome, mechanical verdict, build/test/clippy results, projection use, elapsed seconds, output tokens, thinking share, maximum context depth, and changed-file scope.",
+    "arm_level_authority": "No causal accepted claim. n=3 per arm on one task is descriptive; comparative interpretations remain review claims.",
+    "named_suggestive_outcome": "Complete scheduled-trial outcome separation: 3/3 verified in one arm and 0/3 in the other.",
+    "named_suggestive_economics": "With equal 3/3 verified outcomes, complete wall-time and output-token separation in one direction: the slower arm's minimum exceeds the faster arm's maximum on both measures.",
+    "named_suggestive_harm": "Projection verifies fewer scheduled trials and its minimum wall time and output volume both exceed the control maxima.",
+    "no_post_hoc_thresholds": true
+  },
+  "blind_judging": {
+    "protocol": "m8 AMENDMENT-003: one fresh cross-family Claude Opus call per distinct resulting file; no tools or session persistence; arm identity, mechanical outcome, acceptance tests, and reference solution hidden; content-addressed packets in hash order; identical files collapse.",
+    "status": "to be run only after all surviving scheduled trials are mechanically recorded",
+    "authority": "Judge output is an unreviewed claim, never executable evidence."
+  },
+  "stopping_rules": [
+    "Any backend identity gate failure stops before a generation request.",
+    "Any upstream generation failure stops the series; no retry or replacement.",
+    "A truncated-tail signature stops the series.",
+    "A cache diagnostic that cannot establish credited reuse stops the series.",
+    "A projection-arm trial that does not invoke the intervention stops the series.",
+    "A per-trial timeout does not stop later trials by itself."
+  ],
+  "not_started": [
+    "a dependency-API projection containing syn's exact ForeignItem surface",
+    "a product ReviewContextEnvelope contract for symbol-seeded implementation context",
+    "a second task",
+    "a second model family",
+    "a second blind judge family"
+  ]
+}
