@@ -1,0 +1,66 @@
+--- /tmp/m10-runs/control-3/pinned-rust.rs	2026-08-20 23:19:19.106158086 +0900
++++ /tmp/m10-verify-control-3/crates/reviewgraphen-ingest/src/rust.rs	2026-08-20 23:19:19.106158086 +0900
+@@ -12,8 +12,9 @@
+ use syn::visit::{self, Visit};
+ use syn::{
+     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
+-    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
++    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,
++    Item, ItemFn, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree,
++    Visibility,
+ };
+ 
+ /// Extracts only the M2 Rust AST subset from immutable Git file bytes.
+@@ -1375,6 +1376,39 @@
+     }
+ }
+ 
++/// The value-namespace names a block-local `extern` block's items shadow in
++/// its enclosing block, and whether any item is opaque enough that the names
++/// it might introduce cannot be enumerated. A foreign `fn` and a foreign
++/// `static` both sit in the *value* namespace exactly as a block-local
++/// `fn`/`static` item does (see `visit_block`), so their names are hoisted and
++/// shadow a same-named module-level function for a naked call in the block. A
++/// foreign `type` is *type*-namespace only -- the same distinction that keeps
++/// a named-field struct from being hoisted in `visit_block` -- so it can never
++/// be a call target and never shadows a same-named callable; it is provably
++/// safe and contributes nothing. A foreign `Macro` or `Verbatim` item is
++/// opaque in exactly the way a glob `use` or a `Pat::Macro`/`Pat::Verbatim`
++/// binding is (see those callers): it may declare a `fn`/`static` of *any*
++/// name, so the whole block must be marked conservatively unresolved rather
++/// than let a naked call fall through to a same-named module item.
++/// `ForeignItem` is `#[non_exhaustive]`, so the wildcard arm fails *closed*
++/// on any future variant: an unrecognized shape might bind any name, so it is
++/// treated as unresolvable, never as provably safe the way a bare `_ => {}`
++/// would.
++fn foreign_item_value_bindings(items: &[ForeignItem]) -> (Vec<String>, bool) {
++    let mut names = Vec::new();
++    let mut has_unresolvable = false;
++    for item in items {
++        match item {
++            ForeignItem::Fn(nested) => names.push(nested.sig.ident.to_string()),
++            ForeignItem::Static(nested) => names.push(nested.ident.to_string()),
++            ForeignItem::Type(_) => {}
++            ForeignItem::Macro(_) | ForeignItem::Verbatim(_) => has_unresolvable = true,
++            _ => has_unresolvable = true,
++        }
++    }
++    (names, has_unresolvable)
++}
++
+ /// Normalizes a `>= 2`-segment call path against the calling module's
+ /// logical label, using only the syntactic `crate`/`self`/`super` module
+ /// path grammar -- never `use`-alias or type resolution. Returns `None` when
+@@ -1847,6 +1881,11 @@
+                 {
+                     hoisted.push(nested.ident.to_string());
+                 }
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    let (names, has_unresolvable) = foreign_item_value_bindings(&nested.items);
++                    hoisted.extend(names);
++                    conservative_unresolved |= has_unresolvable;
++                }
+                 syn::Stmt::Item(Item::Use(nested)) => {
+                     let (names, has_glob) = use_item_bindings(&nested.tree);
+                     hoisted.extend(names);
