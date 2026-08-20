@@ -1,0 +1,91 @@
+{
+  "from_stream_events": {
+    "assistant_stream_events": 69,
+    "bash_calls": 17,
+    "bash_commands_mentioning_cargo_path_only": 1,
+    "cargo_build_invocations": 2,
+    "cargo_check_invocations": 0,
+    "cargo_invocations": 10,
+    "cargo_test_invocations": 7,
+    "compiler_errors_observed": 0,
+    "edits_to_target_file": 5,
+    "error_then_edit_pairs": 0,
+    "model_ids_seen": [
+      "qwen3.8:27b-mlx"
+    ],
+    "provenance": "counted from tool_use / tool_result blocks in the transcript -- trustworthy",
+    "saw_error_then_edited": false,
+    "tool_calls": {
+      "Bash": 17,
+      "Edit": 5,
+      "Read": 3
+    },
+    "tool_calls_total": 25
+  },
+  "result_event": {
+    "api_error_status": null,
+    "duration_ms": 1014760,
+    "final_text": "\n\nThe change is complete and verified. Final summary:\n\n## What I changed\n\nExactly one file: `crates/reviewgraphen-ingest/src/rust.rs`, with two minimal edits:\n\n1. **Import** (`rust.rs:15`): added `ForeignItem` to the existing `syn` import list.\n2. **`visit_block`** (`rust.rs:1846`): added a `syn::Stmt::Item(Item::ForeignMod(nested))` arm between the `Item::Static` and `Item::Struct` arms. It walks the extern block's items and hoists the identifiers of `ForeignItem::Fn` and `ForeignItem::Static` declarations into the block's shadow set; all other foreign item shapes are ignored.\n\nWhy this satisfies each required behaviour:\n- **Points 1\u20132**: A block-local `extern \"C\" { fn target(); }` / `{ static target: u8; }` is hoisted into the block's `LexicalScope` bindings exactly like a local `fn`/`static`, so a naked `target()` call in that block hits the existing `is_locally_bound` check in `record_call` \u2014 no `calls` relation, and the existing shadowed-call `RelationUnresolved` obstruction naming the enclosing function.\n- **Point 3**: `visit_block` pushes/pops the scope around the block, so the shadow dies with the block \u2014 the outer `target()` still resolves; exactly one resolved edge.\n- **Point 4**: Only names actually declared in the extern block are hoisted (`fn`/`static` are the only value-namespace shapes), never a conservative whole-block block, so an extern declaring only `unrelated()` leaves `target()` resolvable. A foreign `type` goes in the type namespace only (like a named-field struct) and deliberately never shadows a callable.\n- **Points 5\u20136**: Nothing else was touched; every other arm, the glob-`use` conservatism, pattern handling, obstruction ledger, and ID derivation are byte-identical to before.\n\n## What I ran\n\n- `cargo build -p reviewgraphen-ingest` \u2014 clean.\n- `cargo clippy -p reviewgraphen-ingest --all-targets` \u2014 no warnings, exit 0.\n- `cargo test -p reviewgraphen-ingest` \u2014 lib tests **67/67 passed**, `extraction_report_schema` **8/8 passed**, `m2` **38/40 ",
+    "is_error": false,
+    "logical_turns": 26,
+    "stop_reason": "end_turn",
+    "subtype": "success"
+  },
+  "schema": "reviewgraphen.benchmark.m10_loop_behaviour.v1",
+  "stream_events": 6171,
+  "timeline": [
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "edit_target",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo"
+  ],
+  "tokens_authoritative": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 1439688,
+    "model_usage": {
+      "qwen3.8:27b-mlx": {
+        "cacheCreationInputTokens": 0,
+        "cacheReadInputTokens": 0,
+        "canonicalModel": "qwen3.8:27b-mlx",
+        "contextWindow": 200000,
+        "costUSD": 7.500605000000001,
+        "inputTokens": 1441526,
+        "maxOutputTokens": 32000,
+        "outputTokens": 11719,
+        "provider": "firstParty",
+        "webSearchRequests": 0
+      }
+    },
+    "output_tokens": 11566,
+    "provenance": "the client's terminal `result` event, which Claude Code computes itself -- the only trustworthy token source on this backend",
+    "thinking_tokens": 0
+  },
+  "tokens_backend_per_turn": {
+    "input_tokens_last": 68290,
+    "input_tokens_max": 68290,
+    "input_tokens_min": 27828,
+    "input_tokens_monotonic_non_decreasing": true,
+    "input_tokens_naive_sum_DO_NOT_USE": 4154075,
+    "keys_ever_seen": [
+      "input_tokens",
+      "output_tokens"
+    ],
+    "output_tokens_all_zero": true,
+    "provenance": "raw per-turn `usage` from the backend -- SUSPECT, retained as evidence of what it reports",
+    "turns_with_usage": 69,
+    "why_the_naive_sum_is_wrong": "each turn's input_tokens re-reports the whole accumulated context, and several stream events share one API call's usage, so summing multiply-counts the same prefix"
+  },
+  "trial": "control-1"
+}

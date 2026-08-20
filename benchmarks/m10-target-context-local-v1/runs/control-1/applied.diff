@@ -1,0 +1,45 @@
+--- /tmp/m10-runs/control-1/pinned-rust.rs	2026-08-20 20:21:04.256373631 +0900
++++ /tmp/m10-verify-control-1/crates/reviewgraphen-ingest/src/rust.rs	2026-08-20 20:21:04.256373631 +0900
+@@ -12,8 +12,9 @@
+ use syn::visit::{self, Visit};
+ use syn::{
+     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
+-    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
++    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem, ImplItem,
++    Item, ItemFn, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree,
++    Visibility,
+ };
+ 
+ /// Extracts only the M2 Rust AST subset from immutable Git file bytes.
+@@ -1842,6 +1843,30 @@
+                 syn::Stmt::Item(Item::Fn(nested)) => hoisted.push(nested.sig.ident.to_string()),
+                 syn::Stmt::Item(Item::Const(nested)) => hoisted.push(nested.ident.to_string()),
+                 syn::Stmt::Item(Item::Static(nested)) => hoisted.push(nested.ident.to_string()),
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    // An `extern "C" { fn target(); }` or `{ static target: u8; }`
++                    // written inside a block puts that name in the block's
++                    // value namespace exactly like a local `fn`/`static` item
++                    // would, so it shadows a same-named module-level function
++                    // for a bare call in this block (scoped to it, via the
++                    // hoisting below). Only `fn`/`static` declarations bind a
++                    // value name -- a foreign type, like a named-field struct,
++                    // puts its name only in the type namespace and never
++                    // shadows a callable -- so exactly those are listed rather
++                    // than conservatively blocking the whole block whenever an
++                    // extern block is present.
++                    for foreign in &nested.items {
++                        match foreign {
++                            ForeignItem::Fn(decl) => {
++                                hoisted.push(decl.sig.ident.to_string())
++                            }
++                            ForeignItem::Static(decl) => {
++                                hoisted.push(decl.ident.to_string())
++                            }
++                            _ => {}
++                        }
++                    }
++                }
+                 syn::Stmt::Item(Item::Struct(nested))
+                     if !matches!(nested.fields, Fields::Named(_)) =>
+                 {
