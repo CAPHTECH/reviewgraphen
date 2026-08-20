@@ -1,0 +1,71 @@
+--- /tmp/m10-runs/projection-3/pinned-rust.rs	2026-08-20 22:03:18.565171386 +0900
++++ /tmp/m10-verify-projection-3/crates/reviewgraphen-ingest/src/rust.rs	2026-08-20 22:03:18.565171386 +0900
+@@ -12,8 +12,9 @@
+ use syn::visit::{self, Visit};
+ use syn::{
+     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
+-    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
+-    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
++    ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ForeignItem,
++    ImplItem, Item, ItemFn, ItemForeignMod, ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat,
++    Signature, Type, UseTree, Visibility,
+ };
+ 
+ /// Extracts only the M2 Rust AST subset from immutable Git file bytes.
+@@ -1345,6 +1346,30 @@
+     }
+ }
+ 
++/// The names a block-local `extern` foreign module declares in its enclosing
++/// block's value namespace. Real Rust hoists foreign-module items into the
++/// block like any other item, and a foreign `fn` or `static` puts its name
++/// in the *value* namespace -- so each one shadows a same-named
++/// module-level function for an unqualified call in the block exactly as a
++/// block-local `fn` or `static` item would. A foreign module's `type`
++/// declarations go to the *type* namespace only, so they are deliberately
++/// never hoisted here (the same reason a named-field struct is not, see
++/// `visit_block`). Unlike a glob `use` this is a closed, exact set: a
++/// foreign module cannot declare a name we fail to enumerate, so a block
++/// whose foreign module declares only *other* names shadows nothing at all
++/// and blocks no resolution.
++fn foreign_mod_bindings(extern_block: &ItemForeignMod) -> Vec<String> {
++    extern_block
++        .items
++        .iter()
++        .filter_map(|item| match item {
++            ForeignItem::Fn(function) => Some(function.sig.ident.to_string()),
++            ForeignItem::Static(statik) => Some(statik.ident.to_string()),
++            _ => None,
++        })
++        .collect()
++}
++
+ /// The names a block-local `use` item shadows in its enclosing block's
+ /// lexical scope, and whether it also contains a glob whose actual
+ /// introduced names cannot be enumerated. Deliberately a separate walker
+@@ -1833,7 +1858,14 @@
+     /// namespace, never the value namespace, so it can never itself be a
+     /// call target and does not shadow a same-named callable at all --
+     /// hoisting it anyway would wrongly block an otherwise-valid resolution
+-    /// to the outer `fn target`.
++    /// to the outer `fn target`. A block-local foreign module (`extern
++    /// "C" { .. }`) is hoisted the same way a block-local `fn`/`static`
++    /// item is: each foreign `fn` or `static` inside it is in the *value*
++    /// namespace, so it shadows a same-named module-level function for an
++    /// unqualified call in this block. The hoisting is exact, never
++    /// conservative: a foreign module declaring only other names contributes
++    /// no shadow at all and blocks nothing, and its scope is its own block
++    /// like every other hoisted name.
+     fn visit_block(&mut self, block: &Block) {
+         let mut hoisted = Vec::new();
+         let mut conservative_unresolved = false;
+@@ -1847,6 +1879,9 @@
+                 {
+                     hoisted.push(nested.ident.to_string());
+                 }
++                syn::Stmt::Item(Item::ForeignMod(nested)) => {
++                    hoisted.extend(foreign_mod_bindings(nested));
++                }
+                 syn::Stmt::Item(Item::Use(nested)) => {
+                     let (names, has_glob) = use_item_bindings(&nested.tree);
+                     hoisted.extend(names);

@@ -1,0 +1,110 @@
+{
+  "from_stream_events": {
+    "assistant_stream_events": 149,
+    "bash_calls": 39,
+    "bash_commands_mentioning_cargo_path_only": 3,
+    "cargo_build_invocations": 6,
+    "cargo_check_invocations": 0,
+    "cargo_invocations": 23,
+    "cargo_test_invocations": 13,
+    "compiler_errors_observed": 1,
+    "edits_to_target_file": 10,
+    "error_then_edit_pairs": 1,
+    "model_ids_seen": [
+      "qwen3.8:27b-mlx"
+    ],
+    "provenance": "counted from tool_use / tool_result blocks in the transcript -- trustworthy",
+    "saw_error_then_edited": true,
+    "tool_calls": {
+      "Bash": 39,
+      "Edit": 10,
+      "Read": 5
+    },
+    "tool_calls_total": 54
+  },
+  "result_event": {
+    "api_error_status": null,
+    "duration_ms": 1841559,
+    "final_text": "\n\nThe only `unsafe`-containing line is the pre-existing `implementation.unsafety.to_token_stream()` (a `syn` field named `unsafety` at line 381) \u2014 my change introduces no `unsafe` keyword. Everything checks out.\n\n## Done\n\nI changed exactly one file, `crates/reviewgraphen-ingest/src/rust.rs`, in three coordinated spots to make a block-local `extern` foreign module shadow same-named module functions:\n\n1. **Imports** (line 13\u201318): added `ForeignItem` and `ItemForeignMod` to the `syn` import (syn 2.0.119 spells them these, not `ForeignMod`/`ForeignModItem`).\n2. **New helper `foreign_mod_bindings`** (line 1361): returns the names a block-local `extern` module declares in the block's value namespace \u2014 the `fn` and `static` items, and only those (foreign `type`/`macro` go to the type/macro namespaces, so they're excluded). Like a block-local `fn`/`static`, it's a *closed, exact* set, never conservative.\n3. **`visit_block` arm** (line 1882): a new `Item::ForeignMod` case hoists those names into the block's lexical scope \u2014 exactly like the existing `fn`/`const`/`static`/struct-ctor cases \u2014 so the existing `is_locally_bound` check in `record_call` handles the shadowing with the standard \"shadowed \u2192 `RelationUnresolved` obstruction, no match\" path. The shadow is scoped to its own block via the existing push/pop, and a foreign module declaring only other names contributes no binding and blocks nothing (points 1\u20135 of the spec; point 4 holds because I never mark the block conservative).\n\nI preserved all existing behavior (fn/const/static/struct/use shadowing, glob-`use` conservatism, pattern-position shadowing, obstruction ledger, ID invariance are untouched).\n\n**What I ran** (against the fresh checkout; `reviewgraphen-context visit_block` first, as required, to inspect the target):\n- `cargo build -p reviewgraphen-ingest` \u2014 clean, no warnings.\n- `cargo clippy -p reviewgraphen-ingest --all-targets` \u2014 clean.\n- `cargo test -p reviewgraphen-ingest` \u2014 unit 67/67 and one integration su",
+    "is_error": false,
+    "logical_turns": 55,
+    "stop_reason": "end_turn",
+    "subtype": "success"
+  },
+  "schema": "reviewgraphen.benchmark.m10_loop_behaviour.v1",
+  "stream_events": 14031,
+  "timeline": [
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "compiler_error_seen",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "edit_target",
+    "edit_target",
+    "edit_target",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo",
+    "cargo"
+  ],
+  "tokens_authoritative": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3865416,
+    "model_usage": {
+      "qwen3.8:27b-mlx": {
+        "cacheCreationInputTokens": 0,
+        "cacheReadInputTokens": 0,
+        "canonicalModel": "qwen3.8:27b-mlx",
+        "contextWindow": 200000,
+        "costUSD": 19.978905,
+        "inputTokens": 3867426,
+        "maxOutputTokens": 32000,
+        "outputTokens": 25671,
+        "provider": "firstParty",
+        "webSearchRequests": 0
+      }
+    },
+    "output_tokens": 25542,
+    "provenance": "the client's terminal `result` event, which Claude Code computes itself -- the only trustworthy token source on this backend",
+    "thinking_tokens": 0
+  },
+  "tokens_backend_per_turn": {
+    "input_tokens_last": 84965,
+    "input_tokens_max": 84965,
+    "input_tokens_min": 28002,
+    "input_tokens_monotonic_non_decreasing": true,
+    "input_tokens_naive_sum_DO_NOT_USE": 10688534,
+    "keys_ever_seen": [
+      "input_tokens",
+      "output_tokens"
+    ],
+    "output_tokens_all_zero": true,
+    "provenance": "raw per-turn `usage` from the backend -- SUSPECT, retained as evidence of what it reports",
+    "turns_with_usage": 149,
+    "why_the_naive_sum_is_wrong": "each turn's input_tokens re-reports the whole accumulated context, and several stream events share one API call's usage, so summing multiply-counts the same prefix"
+  },
+  "trial": "projection-3"
+}

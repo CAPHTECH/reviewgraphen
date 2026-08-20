@@ -1,0 +1,9 @@
+{
+  "call_count": 2,
+  "commands": [
+    "reviewgraphen-context visit_block 2>&1 | head -80",
+    "reviewgraphen-context visit_block 2>&1 | tail -40"
+  ],
+  "schema": "reviewgraphen.benchmark.m10_projection_use.v1",
+  "used": true
+}
