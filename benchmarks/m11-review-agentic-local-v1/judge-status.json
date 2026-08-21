@@ -1,0 +1,9 @@
+{
+  "schema": "reviewgraphen.benchmark.m11_judge_status.v1",
+  "judge": "codex",
+  "status": "no_valid_candidate",
+  "calls_issued": 0,
+  "reason": "Neither review observation produced a schema-valid review.json before timeout.",
+  "authority": "runtime routing record only; no quality disposition exists"
+}
+
