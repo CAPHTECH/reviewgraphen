@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=.reviewgraphen
+cards=$root/cards
+step_file=$root/step
+step=0
+[[ -f "$step_file" ]] && step=$(cat "$step_file")
+tokens=(unused m16-next-1-7c91 m16-next-2-b4e6 m16-next-3-2ad8)
+
+if [[ $# -eq 2 && "$1" == overview && "$2" == lower_compose ]]; then
+  [[ "$step" -eq 0 ]] || { printf '%s\n' '{"schema":"reviewgraphen.benchmark.projection_error.v1","error":"overview_already_returned"}'; exit 73; }
+  card=overview
+  next_step=1
+elif [[ $# -eq 3 && "$1" == expand ]]; then
+  [[ "$step" -ge 1 && "$step" -le 3 ]] || { printf '%s\n' '{"schema":"reviewgraphen.benchmark.projection_error.v1","error":"expansion_budget_exhausted"}'; exit 74; }
+  card=$2
+  [[ "$3" == "${tokens[$step]}" ]] || { printf '%s\n' '{"schema":"reviewgraphen.benchmark.projection_error.v1","error":"stale_or_invalid_next_token"}'; exit 75; }
+  next_step=$((step + 1))
+else
+  printf '%s\n' '{"schema":"reviewgraphen.benchmark.projection_error.v1","error":"invalid_request"}'
+  exit 64
+fi
+
+payload=$cards/$card.json
+[[ -f "$payload" ]] || { printf '%s\n' '{"schema":"reviewgraphen.benchmark.projection_error.v1","error":"unknown_card"}'; exit 65; }
+ledger=$root/requested-projections
+touch "$ledger"
+grep -Fxq "$card" "$ledger" && { printf '%s\n' '{"schema":"reviewgraphen.benchmark.projection_error.v1","error":"projection_already_returned"}'; exit 73; }
+printf '%s\n' "$next_step" > "$step_file"
+printf '%s\n' "$card" >> "$ledger"
+if [[ "$next_step" -le 3 ]]; then
+  jq -c --arg token "${tokens[$next_step]}" '. + {next_token:$token}' "$payload"
+else
+  jq -c '. + {next_action:"write_review",expansion_budget_remaining:0}' "$payload"
+fi
+

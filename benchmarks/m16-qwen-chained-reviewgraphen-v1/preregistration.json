@@ -1,0 +1,44 @@
+{
+  "schema": "reviewgraphen.benchmark.m16_preregistration.v1",
+  "status": "frozen_before_first_generation_request",
+  "date": "2026-08-22",
+  "question": "When ReviewGraphen mechanically forces one observation-dependent expansion at a time, can Qwen select a useful path and converge on a grounded report?",
+  "predecessor": {
+    "experiment": "m15-qwen-intelligent-reviewgraphen-v1",
+    "4bit_low": "Off-protocol exploration after overview plus one card; 13 calls and timeout.",
+    "8bit_high": "Six unique in-scope calls, but all five expansions were emitted in one assistant message before their results and no final response arrived."
+  },
+  "intervention": {
+    "description": "Each successful result reveals an opaque single-use token required by exactly the next expansion.",
+    "effect": "Future expansions cannot be validly batched before the prior result is observed.",
+    "prompt_sha256": "5ffe6deae9ae0539e1baefe83686feece43280621ea70cf063faa3ea710aaaf0",
+    "tool_sha256": "ce3e5808cb50ad0ce840575a3cc7d388f8b9966ff834a9eb1e235a4ba05abc2c",
+    "cards_inventory_sha256": "a39c7135e5d811562bdf15f7fd5ea90da9f8ae703318f48c32654d8509b3e035",
+    "cards_source_experiment": "m15-qwen-intelligent-reviewgraphen-v1"
+  },
+  "task": {
+    "target": "lower_compose and directly used helpers in frozen rust/fsl-core/src/compose.rs",
+    "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+    "no_initial_model_enumeration": true,
+    "first_call": "reviewgraphen-context overview lower_compose",
+    "maximum_expansions": 3,
+    "maximum_reviewgraphen_calls": 4,
+    "maximum_all_tool_calls": 5,
+    "maximum_findings": 3,
+    "wall_clock_seconds": 900,
+    "client_max_output_tokens": 12000
+  },
+  "cells": [
+    {"trial": "8bit-high-r1", "model": "Qwen3.8-27B-MLX-8bit", "requested_effort": "high"},
+    {"trial": "4bit-low-r1", "model": "Qwen3.8-27B-MLX-4bit", "requested_effort": "low"}
+  ],
+  "execution": {"order": ["8bit-high-r1", "4bit-low-r1"], "concurrency": 1, "replicates_per_cell": 1, "retries": 0},
+  "success": "One tool per assistant message; exact chained tokens; unique in-scope requests; budget compliance; exact projection trace; final schema-valid report; every finding grounded only in received source IDs.",
+  "quality": "Completed findings are independently judged by Codex gpt-5.6-sol high with model cell hidden. Judge output is review evidence, not verified or human accepted.",
+  "interpretation_ceiling": "The chained controller tests whether Qwen can operate under enforced sequentiality, not whether Qwen would voluntarily serialize an unconstrained interface. One replicate per cell cannot establish stable rates; quantization and requested effort remain jointly varied; applied server effort is not observable.",
+  "backend": {
+    "endpoint": "http://192.168.68.71:11999",
+    "listing_sha256": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
+    "health_sha256": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74"
+  }
+}
