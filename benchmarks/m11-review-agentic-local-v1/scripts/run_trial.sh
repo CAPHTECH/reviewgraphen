@@ -18,9 +18,11 @@ config=/tmp/m11-config-$trial
 mkdir -p "$result"
 identity_file=$exp/PINNED_BACKEND_IDENTITY
 health_file=$exp/PINNED_BACKEND_HEALTH
+model=qwen3.8:27b-mlx
 if [[ "$arm" == control && -f "$exp/PINNED_BACKEND_IDENTITY-CONTROL-DIAGNOSTIC" ]]; then
   identity_file=$exp/PINNED_BACKEND_IDENTITY-CONTROL-DIAGNOSTIC
   health_file=$exp/PINNED_BACKEND_HEALTH-CONTROL-DIAGNOSTIC
+  model=Qwen3.8-27B-MLX-4bit
 fi
 python3 "$exp/scripts/check_backend_identity.py" \
   "$(cat "$identity_file")" \
@@ -54,7 +56,7 @@ set +e
   --setenv CLAUDE_CODE_MAX_OUTPUT_TOKENS 32000 \
   --setenv PATH "$scratch/.reviewgraphen/bin:/home/rizumita/.local/share/mise/installs/claude/latest:/usr/local/bin:/usr/bin:/bin" \
   --setenv HOME /home/rizumita --chdir "$scratch" \
-  timeout 5400 claude --print --model qwen3.8:27b-mlx \
+  timeout 5400 claude --print --model "$model" \
     --output-format stream-json --verbose --permission-mode bypassPermissions \
     --allowedTools "Read,Write,Bash,Grep,Glob" \
     < "$exp/task/PROMPT-$arm.md" > "$result/stream.jsonl" 2> "$result/claude.stderr"
