@@ -1,0 +1,11 @@
+{
+  "schema": "reviewgraphen.benchmark.projection_payload_recognition_output.v1",
+  "observed_header_nonce": "m14-compact-header-6b21",
+  "observed_trailer_nonce": "m14-compact-trailer-a84e",
+  "projection_id": "benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177",
+  "recognized_as_completed_tool_result": true,
+  "should_repeat_context_call": false,
+  "result_appeared_truncated": false,
+  "result_appeared_error": true,
+  "summary": "Received a complete ReviewGraphen compact-variant projection of lower_compose with both nonces, though the command exited 1 on a read-only filesystem error."
+}

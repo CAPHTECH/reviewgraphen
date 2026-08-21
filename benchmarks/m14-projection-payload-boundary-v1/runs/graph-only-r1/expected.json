@@ -1,0 +1,8 @@
+{
+  "variant": "graph-only",
+  "bytes": 9367,
+  "sha256": "181a6de6c1e13f4e669b08c764eb483f02c22d47585124889ff0089edb9f94c2",
+  "header_nonce": "m14-graph-only-header-6b21",
+  "trailer_nonce": "m14-graph-only-trailer-a84e",
+  "projection_id": "benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177"
+}

@@ -1,0 +1,42 @@
+{
+  "assistant_models": [
+    "Qwen3.8-27B-MLX-4bit"
+  ],
+  "context_call_count": 1,
+  "first_tool_result": {
+    "contains_header_nonce": true,
+    "contains_trailer_nonce": true,
+    "contains_truncation_marker": false,
+    "content_chars": 1193,
+    "is_error": true,
+    "starts_with_exit_code": true,
+    "tool_use_id": "call_2bef8e12"
+  },
+  "payload_bytes": 1131,
+  "payload_sha256": "59b0ca3d36f6a09f48b30492d3620641bb9fa8bacfd2409194f62cbbd9ed48ce",
+  "report_error": null,
+  "report_valid": true,
+  "schema": "reviewgraphen.benchmark.m14_trial_analysis.v1",
+  "sequence_compliant": true,
+  "success": true,
+  "tool_call_count": 2,
+  "tool_calls": [
+    {
+      "id": "call_2bef8e12",
+      "input": {
+        "command": "reviewgraphen-context-probe",
+        "description": "Run context probe command"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_15b9f7a6",
+      "input": {
+        "content": "{\n  \"schema\": \"reviewgraphen.benchmark.projection_payload_recognition_output.v1\",\n  \"observed_header_nonce\": \"m14-compact-header-6b21\",\n  \"observed_trailer_nonce\": \"m14-compact-trailer-a84e\",\n  \"projection_id\": \"benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177\",\n  \"recognized_as_completed_tool_result\": true,\n  \"should_repeat_context_call\": false,\n  \"result_appeared_truncated\": false,\n  \"result_appeared_error\": true,\n  \"summary\": \"Received a complete ReviewGraphen compact-variant projection of lower_compose with both nonces, though the command exited 1 on a read-only filesystem error.\"\n}\n",
+        "file_path": "/tmp/m14-scratch-compact-r1/probe.json"
+      },
+      "name": "Write"
+    }
+  ],
+  "variant": "compact"
+}

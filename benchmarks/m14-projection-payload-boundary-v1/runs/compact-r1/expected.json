@@ -1,0 +1,8 @@
+{
+  "variant": "compact",
+  "bytes": 1131,
+  "sha256": "59b0ca3d36f6a09f48b30492d3620641bb9fa8bacfd2409194f62cbbd9ed48ce",
+  "header_nonce": "m14-compact-header-6b21",
+  "trailer_nonce": "m14-compact-trailer-a84e",
+  "projection_id": "benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177"
+}

@@ -1,0 +1,38 @@
+{
+  "schema": "reviewgraphen.benchmark.m14_aggregate.v1",
+  "status": "stopped_by_documented_post_request_amendment",
+  "trials": [
+    {
+      "trial": "compact-r1",
+      "payload_bytes": 1131,
+      "tool_result_chars": 1193,
+      "header_received": true,
+      "trailer_received": true,
+      "transport_is_error": true,
+      "transport_truncated": false,
+      "context_calls": 1,
+      "all_tool_calls": 2,
+      "elapsed_seconds": 279,
+      "reported_output_tokens": 3128,
+      "outcome": "recognized"
+    },
+    {
+      "trial": "graph-only-r1",
+      "payload_bytes": 9367,
+      "tool_result_chars": 9429,
+      "header_received": true,
+      "trailer_received": true,
+      "transport_is_error": true,
+      "transport_truncated": false,
+      "context_calls": 1,
+      "all_tool_calls": 13,
+      "elapsed_seconds": 600,
+      "reported_output_tokens": 7960,
+      "outcome": "timeout"
+    }
+  ],
+  "unrun_preregistered_trials": ["source-rich-r1", "full-r1"],
+  "deterministic_conclusion": "The graph-only failure occurred despite complete delivery through the trailer nonce; it was not a transport truncation failure.",
+  "interpretation_ceiling": "The two payloads differed in both size and semantic content. The result does not establish a byte threshold or a stable stochastic rate."
+}
+

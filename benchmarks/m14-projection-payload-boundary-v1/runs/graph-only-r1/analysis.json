@@ -1,0 +1,130 @@
+{
+  "assistant_models": [
+    "Qwen3.8-27B-MLX-4bit"
+  ],
+  "context_call_count": 1,
+  "first_tool_result": {
+    "contains_header_nonce": true,
+    "contains_trailer_nonce": true,
+    "contains_truncation_marker": false,
+    "content_chars": 9429,
+    "is_error": true,
+    "starts_with_exit_code": true,
+    "tool_use_id": "call_5d6f31cb"
+  },
+  "payload_bytes": 9367,
+  "payload_sha256": "181a6de6c1e13f4e669b08c764eb483f02c22d47585124889ff0089edb9f94c2",
+  "report_error": null,
+  "report_valid": false,
+  "schema": "reviewgraphen.benchmark.m14_trial_analysis.v1",
+  "sequence_compliant": false,
+  "success": false,
+  "tool_call_count": 13,
+  "tool_calls": [
+    {
+      "id": "call_5d6f31cb",
+      "input": {
+        "command": "reviewgraphen-context-probe",
+        "description": "Run ReviewGraphen context probe command"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_d656a00c",
+      "input": {
+        "command": "pwd; echo \"---CWD---\"; ls -la; echo \"---RUST---\"; ls -la rust 2>/dev/null; echo \"---CORE---\"; ls -la rust/fsl-core 2>/dev/null; echo \"---COMPOSE---\"; ls -la rust/fsl-core/src 2>/dev/null",
+        "description": "Inspect working directory and locate the fsl-core compose source"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_27f508ee",
+      "input": {
+        "command": "find .reviewgraphen -maxdepth 4 -printf '%y %p\\n' 2>/dev/null | head -100; echo \"===SIZE===\"; du -sh .reviewgraphen 2>/dev/null; echo \"===FIND RUST ANYWHERE===\"; find /tmp -maxdepth 4 -iname 'compose.rs' 2>/dev/null | head; echo \"===FIND FSL===\"; find /tmp -maxdepth 5 -iname 'fsl-core' -type d 2>/dev/null | head",
+        "description": "Explore .reviewgraphen and search for the target source anywhere under /tmp"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_1f419440",
+      "input": {
+        "command": "for d in /tmp/m7-head-local-v1-recovered-sources/head-local-00 /tmp/m7-head-local-v1-recovered-sources/head-local-01 /tmp/m11-projection-repo /tmp/m11-smoke-fixed /tmp/m11-scratch-control-1 /tmp/m12-scratch-convergent-1; do\n  f=\"$d/rust/fsl-core/src/compose.rs\"\n  if [ -f \"$f\" ]; then\n    echo \"=== $f ($(wc -l < \"$f\") lines) ===\"\n    md5sum \"$f\" 2>/dev/null\n  fi\ndone\necho \"=== judge input copies ===\"\nfor f in /tmp/m12-codex-judge-input-2-20260821/sources/rust/fsl-core/src/compose.rs /tmp/m12-codex-judge-input-20260821/sources/rust/fsl-core/src/compose.rs; do\n  [ -f \"$f\" ] && echo \"$f: $(wc -l < \"$f\") lines\" && md5sum \"$f\"\ndone",
+        "description": "Check which copies contain compose.rs and their line counts"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_54ded724",
+      "input": {
+        "command": "echo \"=== projection.json (full) ===\"; cat .reviewgraphen/projection.json\necho; echo \"=== probe-called ===\"; cat .reviewgraphen/probe-called\necho; echo \"=== context-probe binary? ===\"; file .reviewgraphen/bin/reviewgraphen-context-probe; head -c 2000 .reviewgraphen/bin/reviewgraphen-context-probe",
+        "description": "Read projection.json, probe-called, and inspect the probe binary"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_e3a7eb92",
+      "input": {
+        "command": "wc -l rust/fsl-core/src/compose.rs; echo \"---\"; ls -la rust/fsl-core/src/",
+        "description": "Check file length and src directory"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_f6d77eff",
+      "input": {
+        "command": "pwd; echo \"---\"; ls -la; echo \"--- find compose.rs ---\"; find . -name 'compose.rs' 2>/dev/null; echo \"--- find fsl-core ---\"; find . -type d -name 'fsl-core' 2>/dev/null; find . -path '*fsl*' -name '*.rs' 2>/dev/null | head -50",
+        "description": "Locate compose.rs and fsl-core in the working tree"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_f7754a0e",
+      "input": {
+        "command": "cd /Users/paba/Documents/repo/alisw-a1-zeus/.reviewgraphen 2>/dev/null && pwd && echo \"---CWD---\" && ls -la 2>/dev/null; echo \"---PROBE-CALLED---\"; cat /Users/paba/Documents/repo/alisw-a1-zeus/.reviewgraphen/probe-called 2>&1 | head -40; echo \"---FIND PROBE BIN---\"; ls -la /Users/paba/Documents/repo/alisw-a1-zeus/.reviewgraphen/bin 2>&1 | head; echo \"---CWD DIR---\"; ls -la /tmp/claude-13c7-cwd 2>&1 | head",
+        "description": "Read probe-called, list bin, inspect probe binary, check cwd"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_2a94678f",
+      "input": {
+        "command": "pwd; echo \"---\"; ls -la; echo \"---HOME---\"; echo $HOME; echo \"---SEARCH REVIEWGRAPHEN---\"; find . -name \"projection.json\" 2>/dev/null; find . -name \"probe-called\" 2>/dev/null; find . -name \"reviewgraphen-*\" 2>/dev/null",
+        "description": "Find actual cwd and locate probe files"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_8480678f",
+      "input": {
+        "command": "echo \"===== probe-called =====\"; cat .reviewgraphen/probe-called; echo; echo \"===== bin dir =====\"; ls -la .reviewgraphen/bin/; echo \"===== file type of probe =====\"; file .reviewgraphen/bin/* 2>/dev/null",
+        "description": "Read probe-called and list bin directory"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_55297ab3",
+      "input": {
+        "command": "cat .reviewgraphen/bin/reviewgraphen-context-probe",
+        "description": "Read the probe shell script"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_4db61dfa",
+      "input": {
+        "command": "cd /tmp/m14-scratch-graph-only-r1 2>/dev/null\necho \"=== full tree ===\"; find . -type f 2>/dev/null | head -50\necho \"=== any rust dir? ===\"; find . -name \"*.rs\" 2>/dev/null | head\necho \"=== compose.rs anywhere? ===\"; find . -name \"compose.rs\" 2>/dev/null\necho \"=== git? ===\"; git -C . rev-parse --is-inside-work-tree 2>&1 | head -1; git -C . rev-parse HEAD 2>&1 | head -1\necho \"=== base_ref? ===\"; git -C . rev-parse base_ref 2>&1 | head -1; git -C . rev-parse HEAD^ 2>&1 | head -1\necho \"=== build_adapter? ===\"; find . -name \"build_adapter*\" 2>/dev/null; which build_adapter 2>&1\necho \"=== writable test ===\"; touch .reviewgraphen/.wtest 2>&1 && echo \"WRITABLE\" && rm -f .reviewgraphen/.wtest || echo \"NOT-WRITABLE\"",
+        "description": "Inventory filesystem: rust files, git, base_ref, build_adapter, writability"
+      },
+      "name": "Bash"
+    },
+    {
+      "id": "call_887523a9",
+      "input": {
+        "command": "cd /tmp/m14-scratch-graph-only-r1\nprobe=.reviewgraphen/bin/reviewgraphen-context-probe\necho \"=== run with no args (defaults) ===\"\nbash \"$probe\"; echo \"exit=$?\"\necho\necho \"=== run with 'called' as caller, explicit payload ===\"\nbash \"$probe\" called .reviewgraphen/projection.json; echo \"exit=$?\"\necho\necho \"=== does output contain PATH_OK? ===\"\nbash \"$probe\" called .reviewgraphen/projection.json | grep -o 'PATH_OK' || echo \"NO PATH_OK TOKEN IN OUTPUT\"",
+        "description": "Run the probe and check for PATH_OK token"
+      },
+      "name": "Bash"
+    }
+  ],
+  "variant": "graph-only"
+}
