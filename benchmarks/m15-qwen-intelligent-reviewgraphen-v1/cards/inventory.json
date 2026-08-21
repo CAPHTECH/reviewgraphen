@@ -1,0 +1,95 @@
+{
+  "schema": "reviewgraphen.benchmark.m15_card_inventory.v1",
+  "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+  "overview": {
+    "projection_id": "m15:lower_compose:overview",
+    "bytes": 2164,
+    "sha256": "03a290dfd8852da5bbe6fe2cae6814999c08cfbfe4a8e23b2231465b0b3f8e94"
+  },
+  "cards": [
+    {
+      "card_id": "parse-front",
+      "projection_id": "m15:lower_compose:parse-front",
+      "source_id": "rust/fsl-core/src/compose.rs:51-154",
+      "bytes": 4805,
+      "sha256": "ec6d619d675adecf440206a4a62961e6a3c4fea7e07954a435a9c44f5a5c0998"
+    },
+    {
+      "card_id": "component-definitions",
+      "projection_id": "m15:lower_compose:component-definitions",
+      "source_id": "rust/fsl-core/src/compose.rs:155-248",
+      "bytes": 5001,
+      "sha256": "fce0f1fb4e697a81704241f85fbb15f24eebfcff901bf7c4d5ef0b19b90244cb"
+    },
+    {
+      "card_id": "target-body",
+      "projection_id": "m15:lower_compose:target-body",
+      "source_id": "rust/fsl-core/src/compose.rs:249-372",
+      "bytes": 5570,
+      "sha256": "db07c5ee5dc38ee2749eedcdb55249121d3c6560c799b030abfe10005eaadc87"
+    },
+    {
+      "card_id": "component-rewrite-front",
+      "projection_id": "m15:lower_compose:component-rewrite-front",
+      "source_id": "rust/fsl-core/src/compose.rs:388-499",
+      "bytes": 4717,
+      "sha256": "ad6cf25c358858deec785d4fafe71a171fc4a22e61fb6c2c98da2d78f5a852e3"
+    },
+    {
+      "card_id": "component-rewrite-tail",
+      "projection_id": "m15:lower_compose:component-rewrite-tail",
+      "source_id": "rust/fsl-core/src/compose.rs:500-584",
+      "bytes": 4055,
+      "sha256": "616ba347b4f30e3b5ecd4392e7b2150623ef6e6cd4a697f03cba1bbd1c135646"
+    },
+    {
+      "card_id": "statement-rewrite",
+      "projection_id": "m15:lower_compose:statement-rewrite",
+      "source_id": "rust/fsl-core/src/compose.rs:585-740",
+      "bytes": 6605,
+      "sha256": "f04717e223a8f171053c7aaa7c8677637b937d76600055d9b5c5f9fd05256b10"
+    },
+    {
+      "card_id": "expression-rewrite",
+      "projection_id": "m15:lower_compose:expression-rewrite",
+      "source_id": "rust/fsl-core/src/compose.rs:741-855",
+      "bytes": 5331,
+      "sha256": "08e06c548383e3d20929fc0229f3db2d473957a758b31e322c02aabfc4d0cc7b"
+    },
+    {
+      "card_id": "compose-rewrite",
+      "projection_id": "m15:lower_compose:compose-rewrite",
+      "source_id": "rust/fsl-core/src/compose.rs:856-1008",
+      "bytes": 5812,
+      "sha256": "1af813b72df3e96b4775f692245c11b8d6cdaa2dfdf5325d804dcbf38150f45d"
+    },
+    {
+      "card_id": "sync-alias-boundary",
+      "projection_id": "m15:lower_compose:sync-alias-boundary",
+      "source_id": "rust/fsl-core/src/compose.rs:1009-1120",
+      "bytes": 5427,
+      "sha256": "33b22ff9cb2a37d8c4302c955ce49afdd41e58264aae4d9f2af48ef71d68e5c2"
+    },
+    {
+      "card_id": "alias-resolution",
+      "projection_id": "m15:lower_compose:alias-resolution",
+      "source_id": "rust/fsl-core/src/compose.rs:1121-1240",
+      "bytes": 5275,
+      "sha256": "090c0b568eb24d90618f494e2e97efd90bc0b2627d5984d00c0d752509afc1a9"
+    },
+    {
+      "card_id": "substitution-front",
+      "projection_id": "m15:lower_compose:substitution-front",
+      "source_id": "rust/fsl-core/src/compose.rs:1241-1335",
+      "bytes": 4608,
+      "sha256": "db1ad5fcf332d16bc1d876b563846b59a1f39f78ee56245becd10f66dd5ae223"
+    },
+    {
+      "card_id": "substitution-tail",
+      "projection_id": "m15:lower_compose:substitution-tail",
+      "source_id": "rust/fsl-core/src/compose.rs:1336-1421",
+      "bytes": 4113,
+      "sha256": "fad9d504b6eec33bb09508bf88ee04af0b182b9413725a93db9a88f204bd4439"
+    }
+  ]
+}

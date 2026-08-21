@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=.reviewgraphen
+state=$root/requested-projections
+if [[ $# -eq 2 && "$1" == overview && "$2" == lower_compose ]]; then
+  card=overview
+elif [[ $# -eq 2 && "$1" == expand ]]; then
+  card=$2
+else
+  printf '%s\n' '{"schema":"reviewgraphen.benchmark.projection_error.v1","error":"invalid_request"}'
+  exit 64
+fi
+payload=$root/cards/$card.json
+if [[ ! -f "$payload" ]]; then
+  printf '{"schema":"reviewgraphen.benchmark.projection_error.v1","error":"unknown_card","card":"%s"}\n' "$card"
+  exit 65
+fi
+touch "$state"
+if grep -Fxq "$card" "$state"; then
+  printf '{"schema":"reviewgraphen.benchmark.projection_error.v1","error":"projection_already_returned","card":"%s"}\n' "$card"
+  exit 73
+fi
+printf '%s\n' "$card" >> "$state"
+cat "$payload"

@@ -1,0 +1,63 @@
+{
+  "schema": "reviewgraphen.benchmark.m15_preregistration.v1",
+  "status": "frozen_before_first_generation_request",
+  "date": "2026-08-22",
+  "question": "Can Qwen use ReviewGraphen intelligently as an incremental external review controller: select relevant bounded projections, avoid duplicate/off-protocol exploration, preserve projection state, converge, and ground review claims?",
+  "motivation": {
+    "m12": "A 116 KB one-shot projection was truncated and the context command was repeated five times.",
+    "m13": "Compact receipt recognition succeeded in all quantization/effort cells, despite the Bash result being marked as an error.",
+    "m14": "A complete 9.3 KB semantic graph projection triggered objective loss and 13 total calls without a report; this was not transport truncation.",
+    "operator_priority": "Evaluate intelligent ReviewGraphen use, not only passive tool-result recognition."
+  },
+  "task": {
+    "target": "lower_compose and directly used helpers in frozen rust/fsl-core/src/compose.rs",
+    "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+    "prompt_sha256": "f844b67218df22a0a53de0acb1ec7b1e83911017566c55b464e33003e1831e5b",
+    "no_initial_model_enumeration": true,
+    "first_call": "reviewgraphen-context overview lower_compose",
+    "report": "review.json"
+  },
+  "incremental_interface": {
+    "kind": "frozen benchmark adapter, not production CLI",
+    "inventory_sha256": "a39c7135e5d811562bdf15f7fd5ea90da9f8ae703318f48c32654d8509b3e035",
+    "overview_bytes": 2164,
+    "source_card_count": 12,
+    "source_card_bytes": {"minimum": 4055, "maximum": 6605},
+    "overview_single_use": true,
+    "each_card_single_use": true,
+    "state_owner": "tool-side requested-projections ledger",
+    "source_visibility": "only requested cards; no repository source is present in the workspace"
+  },
+  "budgets": {
+    "reviewgraphen_calls": 6,
+    "expansion_calls": 5,
+    "all_tool_calls_including_write": 7,
+    "maximum_findings": 3,
+    "wall_clock_seconds": 900,
+    "client_max_output_tokens": 12000
+  },
+  "cells": [
+    {"trial": "4bit-low-r1", "model": "Qwen3.8-27B-MLX-4bit", "requested_effort": "low"},
+    {"trial": "8bit-high-r1", "model": "Qwen3.8-27B-MLX-8bit", "requested_effort": "high"}
+  ],
+  "execution": {"order": ["4bit-low-r1", "8bit-high-r1"], "concurrency": 1, "replicates_per_cell": 1, "retries": 0},
+  "mechanical_dimensions": {
+    "selectivity": "requested card sequence and fraction of the 12-card catalog",
+    "state_management": "no duplicate projection request and exact projection_ids trace",
+    "scope_control": "all Bash commands match the two ReviewGraphen forms",
+    "convergence": "within call/time budget with valid final Write",
+    "grounding": "every finding source_id belongs to a card actually received"
+  },
+  "quality_dimension": {
+    "method": "Codex gpt-5.6-sol high judges completed findings against frozen source after arm identity is withheld",
+    "authority": "judge dispositions are unreviewed review evidence, not verified or human accepted",
+    "no_required_seeded_finding": true
+  },
+  "primary_interpretation": "Intelligent use requires all mechanical dimensions; finding quality is reported separately. A valid zero-finding report may pass mechanics but does not demonstrate defect detection.",
+  "interpretation_ceiling": "One replicate per cell does not establish stable rates. Requested reasoning effort is observable as a client request but applied backend effort is not exposed. The benchmark adapter approximates incremental ReviewGraphen use and does not establish production CLI usability.",
+  "backend": {
+    "endpoint": "http://192.168.68.71:11999",
+    "listing_sha256": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
+    "health_sha256": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74"
+  }
+}
