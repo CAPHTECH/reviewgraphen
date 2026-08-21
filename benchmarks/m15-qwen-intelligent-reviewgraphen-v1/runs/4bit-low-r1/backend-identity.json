@@ -1,0 +1,63 @@
+{
+  "gate": "passed",
+  "health": {
+    "default_model": "Qwen3.8-27B-MLX-4bit",
+    "engine_pool": {
+      "current_model_memory": 16857268678,
+      "final_ceiling": 115448725504,
+      "loaded_count": 1,
+      "model_count": 5
+    },
+    "mcp": null,
+    "status": "healthy"
+  },
+  "health_canonical": "{\"confidence_threshold\":null,\"context_window\":null,\"drafter\":null,\"lookup_drafts\":null,\"max_draft\":null,\"max_output_tokens\":null,\"mode\":null,\"model\":null,\"reasoning_effort\":null,\"supports_reasoning_effort\":null,\"target\":null}",
+  "health_expected": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74",
+  "health_gate": "passed",
+  "health_sha256": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74",
+  "listing": {
+    "data": [
+      {
+        "created": 1787352058,
+        "id": "Qwen3.8-27B-MLX-4bit",
+        "max_model_len": 262144,
+        "object": "model",
+        "owned_by": "omlx"
+      },
+      {
+        "created": 1787352058,
+        "id": "Qwen3.8-27B-MLX-8bit",
+        "max_model_len": 262144,
+        "object": "model",
+        "owned_by": "omlx"
+      },
+      {
+        "created": 1787352058,
+        "id": "RadixArk--Qwen3.8-27B-DSpark",
+        "max_model_len": 262144,
+        "object": "model",
+        "owned_by": "omlx"
+      },
+      {
+        "created": 1787352058,
+        "id": "mlx-community--Qwen3.8-27B-8bit",
+        "max_model_len": 262144,
+        "object": "model",
+        "owned_by": "omlx"
+      },
+      {
+        "created": 1787352058,
+        "id": "z-lab--Qwen3.8-27B-DFlash2",
+        "max_model_len": 262144,
+        "object": "model",
+        "owned_by": "omlx"
+      }
+    ],
+    "object": "list"
+  },
+  "listing_canonical": "[{\"drafter\":null,\"id\":\"Qwen3.8-27B-MLX-4bit\",\"mode\":null,\"owned_by\":\"omlx\",\"target\":null},{\"drafter\":null,\"id\":\"Qwen3.8-27B-MLX-8bit\",\"mode\":null,\"owned_by\":\"omlx\",\"target\":null},{\"drafter\":null,\"id\":\"RadixArk--Qwen3.8-27B-DSpark\",\"mode\":null,\"owned_by\":\"omlx\",\"target\":null},{\"drafter\":null,\"id\":\"mlx-community--Qwen3.8-27B-8bit\",\"mode\":null,\"owned_by\":\"omlx\",\"target\":null},{\"drafter\":null,\"id\":\"z-lab--Qwen3.8-27B-DFlash2\",\"mode\":null,\"owned_by\":\"omlx\",\"target\":null}]",
+  "listing_expected": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
+  "listing_gate": "passed",
+  "listing_sha256": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
+  "schema": "reviewgraphen.benchmark.backend_identity.v2"
+}

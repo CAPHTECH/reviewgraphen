@@ -101,7 +101,8 @@ analysis = {
     "schema": "reviewgraphen.benchmark.m15_trial_analysis.v1",
     "tool_calls": calls,
     "tool_call_count": len(calls),
-    "reviewgraphen_call_count": len(bash_calls),
+    "bash_call_count": len(bash_calls),
+    "reviewgraphen_call_count": len(request_keys),
     "request_keys": request_keys,
     "projection_ids_received": projection_ids,
     "source_ids_received": sorted(source_ids),
@@ -117,4 +118,3 @@ analysis = {
 }
 (result / "analysis.json").write_text(json.dumps(analysis, indent=2, sort_keys=True) + "\n")
 raise SystemExit(0 if analysis["success"] else 1)
-
