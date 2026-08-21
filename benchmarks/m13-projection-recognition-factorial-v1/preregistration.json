@@ -1,0 +1,44 @@
+{
+  "schema": "reviewgraphen.benchmark.m13_preregistration.v1",
+  "status": "frozen_before_first_generation_request",
+  "date": "2026-08-22",
+  "question": "Does Qwen3.8 Projection-result recognition vary with 4bit versus 8bit quantization or requested low versus high thinking effort?",
+  "predecessor": {
+    "experiment": "m12-review-convergent-local-v1",
+    "observation": "The 4bit/low-requested reviewer called reviewgraphen-context lower_compose five times and later undercounted its completed calls.",
+    "unknown": "Whether that behavior came from the large/truncated projection, tool-result transport, quantization, or effort."
+  },
+  "probe": {
+    "first_tool_exact_command": "reviewgraphen-context-probe",
+    "tool_is_single_use": true,
+    "nonce_hidden_from_prompt": true,
+    "expected_nonce": "m13-rg-projection-receipt-7f91c2",
+    "expected_projection_id": "benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177",
+    "source_projection_sha256": "230f599d67583344044b1190a73e71c588fbcb8ac323485eed22489d34431f26",
+    "probe_tool_sha256": "ce30f301554f36f4510267f5e733d1e963dbc7c5b425aaa178df4d84c6d17a1a",
+    "maximum_tool_calls": 2,
+    "required_sequence": ["Bash:reviewgraphen-context-probe", "Write:probe.json"],
+    "success": "exactly one context Bash call, exact hidden nonce and projection ID copied into a valid probe.json, recognized_as_completed_tool_result=true, should_repeat_context_call=false, and no other tool calls"
+  },
+  "factorial": {
+    "models": ["Qwen3.8-27B-MLX-4bit", "Qwen3.8-27B-MLX-8bit"],
+    "requested_efforts": ["low", "high"],
+    "order": ["4bit-low", "4bit-high", "8bit-low", "8bit-high"],
+    "replicates_per_cell": 1,
+    "concurrency": 1,
+    "retries": 0,
+    "interpretation_ceiling": "The server does not expose applied reasoning effort, so low/high are verified client requests, not verified backend states. One replicate per cell cannot establish rates."
+  },
+  "execution": {
+    "wall_clock_cap_seconds_per_trial": 600,
+    "client_max_output_tokens_per_model_call": 4096,
+    "source_tools": ["Bash", "Write"],
+    "source_checkout": "empty except for the single-use projection command",
+    "completion": "agent exits zero and the deterministic probe validator passes"
+  },
+  "backend": {
+    "endpoint": "http://192.168.68.71:11999",
+    "listing_sha256": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
+    "health_sha256": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74"
+  }
+}

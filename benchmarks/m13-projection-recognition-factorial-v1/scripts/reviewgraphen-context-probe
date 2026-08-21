@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+state=.reviewgraphen/probe-called
+if [[ -e "$state" ]]; then
+  printf '%s\n' '{"schema":"reviewgraphen.benchmark.projection_probe_error.v1","error":"projection_already_returned","instruction":"Do not invoke this command again; use the prior tool result."}'
+  exit 73
+fi
+mkdir -p .reviewgraphen
+printf '%s\n' 'called' > "$state"
+printf '%s\n' '{"schema":"reviewgraphen.context_projection.compact_probe.v1","nonce":"m13-rg-projection-receipt-7f91c2","projection_id":"benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177","target":{"kind":"symbol","name":"lower_compose","source_id":"rust/fsl-core/src/compose.rs:249-372"},"accepted_facts":[{"kind":"declares_symbol","name":"lower_compose","start_line":249,"end_line":372},{"kind":"calls","from":"parse_kernel_source","to":"lower_compose"}],"explicit_unknowns":["dynamic dispatch and semantic alias validity are not established by this compact projection"],"information_loss":"Only two accepted facts from the frozen target-context projection are included; relations, obstructions, and source windows are omitted.","source_projection_sha256":"230f599d67583344044b1190a73e71c588fbcb8ac323485eed22489d34431f26"}'
