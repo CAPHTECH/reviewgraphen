@@ -1,0 +1,56 @@
+{
+  "schema": "reviewgraphen.benchmark.m12_preregistration.v1",
+  "status": "frozen_before_first_generation_request",
+  "date": "2026-08-21",
+  "question": "Can a ReviewGraphen-first code review produce a valid bounded artifact when the agent is not asked to enumerate obligations first and is given explicit convergence constraints?",
+  "predecessor": {
+    "experiment": "m11-review-agentic-local-v1",
+    "reviewgraphen_observation": "The exact first tool call was reviewgraphen-context lower_compose, but the four-file task timed out at 5400 seconds with no review.json after 107447 provider output tokens.",
+    "control_diagnostic_observation": "The current-server no-ReviewGraphen diagnostic also timed out at 5400 seconds with no review.json after 58935 provider output tokens.",
+    "diagnosis_under_test": "Open review scope plus no explicit convergence policy allowed repeated source re-reading and final-check loops; projection use alone did not force artifact production."
+  },
+  "task": {
+    "repository": "fsl",
+    "revision": "e589014d1655b1224f5b83a7f2de99532a0dcdba",
+    "target_file": "rust/fsl-core/src/compose.rs",
+    "target_symbol": "lower_compose",
+    "scope": "lower_compose and helpers it directly uses in compose.rs only",
+    "no_initial_obligation_enumeration": true,
+    "existing_methodology_skill_used": false,
+    "existing_methodology_skill_exclusion_reason": "It explicitly forbids ReviewGraphen tool use and requires obligations to be enumerated before defect review."
+  },
+  "intervention": {
+    "first_tool_exact_command": "reviewgraphen-context lower_compose",
+    "maximum_hypotheses": 3,
+    "maximum_recorded_review_tool_calls": 8,
+    "provisional_report_required_by_tool_call": 5,
+    "post_checkpoint_policy": "validate, refine, or remove existing findings only; no new hypothesis or scope expansion",
+    "insufficient_budget_policy": "keep a schema-valid artifact, record limitation, and stop",
+    "projection_dependency": "../m11-review-agentic-local-v1/projection/lower_compose.json",
+    "projection_sha256": "230f599d67583344044b1190a73e71c588fbcb8ac323485eed22489d34431f26",
+    "projection_tool_dependency": "../m11-review-agentic-local-v1/scripts/reviewgraphen-context",
+    "projection_tool_sha256": "72dcd4470805e165bc2cbdb6132b053af488b7266bf237e7001d3ca7582d916d"
+  },
+  "execution": {
+    "trials": 1,
+    "concurrency": 1,
+    "retries": 0,
+    "wall_clock_cap_seconds": 1800,
+    "client_max_output_tokens_per_model_call": 12000,
+    "client_effort": "low",
+    "model": "Qwen3.8-27B-MLX-4bit",
+    "source_mutation": "forbidden and hash-checked",
+    "completion": "agent exits zero, source is unchanged, report validates, first tool is compliant, tool-call/checkpoint bounds pass, and no truncated tail is detected"
+  },
+  "backend": {
+    "endpoint": "http://192.168.68.71:11999",
+    "listing_sha256": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
+    "health_sha256": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74",
+    "unknowns": ["server decode mode", "server drafter", "server reasoning-effort handling", "server maximum output tokens"]
+  },
+  "quality": {
+    "judge": "A valid candidate is judged blind by Codex gpt-5.6-sol high using issue-worthiness, source support, and bounded-scope compliance.",
+    "judge_authority": "unreviewed non-authority disposition only",
+    "no_candidate": "If no valid report exists, Codex is not called and the run remains an execution failure."
+  }
+}
