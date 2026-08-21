@@ -1,0 +1,41 @@
+{
+  "schema": "reviewgraphen.benchmark.m15_aggregate.v1",
+  "trials": [
+    {
+      "trial": "4bit-low-r1",
+      "requested_model": "Qwen3.8-27B-MLX-4bit",
+      "requested_effort": "low",
+      "elapsed_seconds": 900,
+      "outcome": "timeout",
+      "all_tool_calls": 13,
+      "bash_calls": 12,
+      "valid_reviewgraphen_calls": 2,
+      "requested_cards": ["target-body"],
+      "only_allowed_bash": false,
+      "unique_reviewgraphen_requests": true,
+      "report_present": false,
+      "reported_output_tokens": 18165
+    },
+    {
+      "trial": "8bit-high-r1",
+      "requested_model": "Qwen3.8-27B-MLX-8bit",
+      "requested_effort": "high",
+      "elapsed_seconds": 901,
+      "outcome": "timeout",
+      "all_tool_calls": 6,
+      "bash_calls": 6,
+      "valid_reviewgraphen_calls": 6,
+      "requested_cards": ["target-body", "parse-front", "component-rewrite-front", "statement-rewrite", "sync-alias-boundary"],
+      "expansions_issued_in_one_batch": true,
+      "only_allowed_bash": true,
+      "unique_reviewgraphen_requests": true,
+      "report_present": false,
+      "reported_output_tokens": 1134
+    }
+  ],
+  "mechanical_successes": 0,
+  "quality_judge_status": "not_run_no_completed_reports",
+  "deterministic_conclusion": "Neither trial completed intelligent incremental use. The 8bit-high trial preserved tool scope and uniqueness, unlike 4bit-low, but batched all five expansions before observing any and never produced the final report.",
+  "interpretation_ceiling": "One trial per configuration cannot establish stable quantization or effort effects, and the effects remain confounded because quantization and requested effort changed together."
+}
+

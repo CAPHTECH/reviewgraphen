@@ -1,0 +1,84 @@
+{
+  "assistant_models": [
+    "Qwen3.8-27B-MLX-8bit"
+  ],
+  "bash_call_count": 6,
+  "finding_count": 0,
+  "findings_grounded_in_received_sources": false,
+  "only_allowed_bash": true,
+  "projection_ids_received": [
+    "m15:lower_compose:overview",
+    "m15:lower_compose:target-body",
+    "m15:lower_compose:parse-front",
+    "m15:lower_compose:component-rewrite-front",
+    "m15:lower_compose:statement-rewrite",
+    "m15:lower_compose:sync-alias-boundary"
+  ],
+  "protocol_compliant": false,
+  "report_error": null,
+  "report_valid": false,
+  "request_keys": [
+    "overview",
+    "target-body",
+    "parse-front",
+    "component-rewrite-front",
+    "statement-rewrite",
+    "sync-alias-boundary"
+  ],
+  "reviewgraphen_call_count": 6,
+  "schema": "reviewgraphen.benchmark.m15_trial_analysis.v1",
+  "source_ids_received": [
+    "rust/fsl-core/src/compose.rs:1009-1120",
+    "rust/fsl-core/src/compose.rs:249-372",
+    "rust/fsl-core/src/compose.rs:388-499",
+    "rust/fsl-core/src/compose.rs:51-154",
+    "rust/fsl-core/src/compose.rs:585-740"
+  ],
+  "success": false,
+  "tool_call_count": 6,
+  "tool_calls": [
+    {
+      "input": {
+        "command": "reviewgraphen-context overview lower_compose",
+        "description": "Get ReviewGraphen overview for lower_compose"
+      },
+      "name": "Bash"
+    },
+    {
+      "input": {
+        "command": "reviewgraphen-context expand target-body",
+        "description": "Expand lower_compose body card"
+      },
+      "name": "Bash"
+    },
+    {
+      "input": {
+        "command": "reviewgraphen-context expand parse-front",
+        "description": "Expand parse_component card"
+      },
+      "name": "Bash"
+    },
+    {
+      "input": {
+        "command": "reviewgraphen-context expand component-rewrite-front",
+        "description": "Expand rewrite_component_item front card"
+      },
+      "name": "Bash"
+    },
+    {
+      "input": {
+        "command": "reviewgraphen-context expand statement-rewrite",
+        "description": "Expand rewrite_compose_statements card"
+      },
+      "name": "Bash"
+    },
+    {
+      "input": {
+        "command": "reviewgraphen-context expand sync-alias-boundary",
+        "description": "Expand sync_action card"
+      },
+      "name": "Bash"
+    }
+  ],
+  "unique_requests": true
+}
