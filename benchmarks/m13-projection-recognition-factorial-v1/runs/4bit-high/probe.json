@@ -1,0 +1,8 @@
+{
+  "schema": "reviewgraphen.benchmark.projection_recognition_output.v1",
+  "observed_nonce": "m13-rg-projection-receipt-7f91c2",
+  "projection_id": "benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177",
+  "recognized_as_completed_tool_result": true,
+  "should_repeat_context_call": false,
+  "summary": "A compact ReviewGraphen projection of the lower_compose symbol at rust/fsl-core/src/compose.rs:249-372, including its declaration and a caller relation."
+}

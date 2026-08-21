@@ -1,0 +1,31 @@
+{
+  "assistant_models": [
+    "Qwen3.8-27B-MLX-4bit"
+  ],
+  "context_call_count": 1,
+  "report_error": null,
+  "report_valid": true,
+  "schema": "reviewgraphen.benchmark.m13_trial_analysis.v1",
+  "sequence_compliant": true,
+  "success": true,
+  "tool_call_count": 2,
+  "tool_calls": [
+    {
+      "input": {
+        "command": "reviewgraphen-context-probe",
+        "description": "Run ReviewGraphen context probe projection"
+      },
+      "name": "Bash"
+    },
+    {
+      "input": {
+        "content": "{\n  \"schema\": \"reviewgraphen.benchmark.projection_recognition_output.v1\",\n  \"observed_nonce\": \"m13-rg-projection-receipt-7f91c2\",\n  \"projection_id\": \"benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177\",\n  \"recognized_as_completed_tool_result\": true,\n  \"should_repeat_context_call\": false,\n  \"summary\": \"A compact deterministic projection of a frozen target context pointing at the lower_compose symbol in rust/fsl-core/src/compose.rs with two accepted facts.\"\n}\n",
+        "file_path": "/tmp/m13-scratch-4bit-low/probe.json"
+      },
+      "name": "Write"
+    }
+  ],
+  "write_paths": [
+    "/tmp/m13-scratch-4bit-low/probe.json"
+  ]
+}

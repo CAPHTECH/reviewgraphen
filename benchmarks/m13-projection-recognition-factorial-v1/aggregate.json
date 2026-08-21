@@ -1,0 +1,62 @@
+{
+  "schema": "reviewgraphen.benchmark.m13_aggregate.v1",
+  "trials": [
+    {
+      "trial": "4bit-low",
+      "requested_model": "Qwen3.8-27B-MLX-4bit",
+      "observed_assistant_models": ["Qwen3.8-27B-MLX-4bit"],
+      "requested_effort": "low",
+      "success": true,
+      "context_calls": 1,
+      "tool_calls": 2,
+      "elapsed_seconds": 63,
+      "reported_output_tokens": 892,
+      "thinking_chars": 2094
+    },
+    {
+      "trial": "4bit-high",
+      "requested_model": "Qwen3.8-27B-MLX-4bit",
+      "observed_assistant_models": ["Qwen3.8-27B-MLX-4bit"],
+      "requested_effort": "high",
+      "success": true,
+      "context_calls": 1,
+      "tool_calls": 2,
+      "elapsed_seconds": 50,
+      "reported_output_tokens": 547,
+      "thinking_chars": 837
+    },
+    {
+      "trial": "8bit-low",
+      "requested_model": "Qwen3.8-27B-MLX-8bit",
+      "observed_assistant_models": ["Qwen3.8-27B-MLX-8bit"],
+      "requested_effort": "low",
+      "success": true,
+      "context_calls": 1,
+      "tool_calls": 2,
+      "elapsed_seconds": 73,
+      "reported_output_tokens": 529,
+      "thinking_chars": 805
+    },
+    {
+      "trial": "8bit-high",
+      "requested_model": "Qwen3.8-27B-MLX-8bit",
+      "observed_assistant_models": ["Qwen3.8-27B-MLX-8bit"],
+      "requested_effort": "high",
+      "success": true,
+      "context_calls": 1,
+      "tool_calls": 2,
+      "elapsed_seconds": 89,
+      "reported_output_tokens": 861,
+      "thinking_chars": 1940
+    }
+  ],
+  "successes": 4,
+  "failures": 0,
+  "conclusion": "Neither 4bit quantization nor requested low effort alone reproduced m12's Projection-result recognition failure under the compact probe.",
+  "limitations": [
+    "one replicate per cell",
+    "compact mechanism probe rather than full review",
+    "applied server reasoning effort is not observable",
+    "model-load and order effects are not randomized"
+  ]
+}
