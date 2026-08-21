@@ -1,0 +1,22 @@
+{
+  "all_tool_call_count": 12,
+  "checkpoint_compliant": false,
+  "compliant": false,
+  "first_tool": {
+    "input": {
+      "command": "reviewgraphen-context lower_compose",
+      "description": "Fetch ReviewGraphen target-context projection for lower_compose"
+    },
+    "name": "Bash"
+  },
+  "first_tool_compliant": true,
+  "note": "The maximum-three-hypothesis and no-new-hypothesis-after-checkpoint rules are prompt constraints and require stream-content review; this checker does not promote them to deterministic facts.",
+  "review_write_tool_indexes": [
+    9,
+    12
+  ],
+  "schema": "reviewgraphen.benchmark.m12_protocol_check.v1",
+  "skill_tool_call_count": 0,
+  "tool_call_count": 12,
+  "tool_count_compliant": false
+}

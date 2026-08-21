@@ -1,0 +1,17 @@
+{
+  "schema": "reviewgraphen.benchmark.m12_judge_status.v1",
+  "status": "completed_final_candidate",
+  "judge": "codex gpt-5.6-sol high",
+  "provider_attempts": 4,
+  "generation_attempts": 2,
+  "successful_calls": 2,
+  "pre_generation_schema_rejections": 2,
+  "result": {
+    "issue_should_be_created": 1,
+    "should_not_be_created": 1,
+    "unable_to_determine": 0
+  },
+  "process_record": "judge/codex-result/final-process-record.json",
+  "checkpoint_process_record": "judge/codex-result/process-record-3.json",
+  "amendment": "AMENDMENT-002.md"
+}

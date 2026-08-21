@@ -1,0 +1,12 @@
+{
+  "schema": "reviewgraphen.benchmark.m12_operator_stop.v1",
+  "reason": "The reviewer reached the preregistered eight-tool-call cap without the checkpoint required by call five.",
+  "signal": "SIGINT",
+  "tool_calls_at_signal": 8,
+  "tool_calls_after_child_completion": 12,
+  "review_json_present_at_signal": false,
+  "review_json_present_after_child_completion": true,
+  "source_unchanged": true,
+  "event_span_seconds": 1564.4,
+  "amendment": "../../AMENDMENT-001.md"
+}

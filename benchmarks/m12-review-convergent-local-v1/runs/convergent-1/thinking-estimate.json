@@ -1,0 +1,8 @@
+{
+  "schema": "reviewgraphen.benchmark.m12_incremental_thinking_estimate.v1",
+  "method": "For each assistant response ending in one or more tool calls, take the maximum preceding system/thinking_tokens estimated_tokens value; parallel tool calls share one response estimate.",
+  "per_response_estimated_thinking_tokens": [30, 41, 569, 30, 132, 792, 10940, 0, 583, 81, 91, 2690, 461],
+  "total_estimated_thinking_tokens": 16440,
+  "terminal_provider_usage_available": true,
+  "terminal_reported_output_tokens": 18555
+}

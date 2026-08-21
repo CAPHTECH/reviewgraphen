@@ -1,0 +1,11 @@
+{
+  "schema": "reviewgraphen.benchmark.m12_agent_terminal.v1",
+  "stream_result_subtype": "success",
+  "terminal_reason": "completed",
+  "duration_ms": 1596259,
+  "num_turns": 13,
+  "reported_output_tokens": 18555,
+  "reported_cache_creation_input_tokens": 129302,
+  "reported_cache_read_input_tokens": 595968,
+  "outer_runner_interrupted_before_finalization": true
+}

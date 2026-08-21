@@ -1,0 +1,27 @@
+{
+  "schema": "reviewgraphen.benchmark.agentic_review_output.v1",
+  "summary": "Bounded review of lower_compose and its direct helpers in rust/fsl-core/src/compose.rs. Three hypotheses investigated; two defects confirmed from source and kept, one (Until/Unless/Def passed through without rewriting) withdrawn because the fsl_syntax variant shapes are not present in this checkout and the claim rests on an unverified assumption. No scope was broadened after the provisional artifact.",
+  "findings": [
+    {
+      "title": "rewrite_compose_statements panics on unknown alias instead of returning CoreError",
+      "severity": "high",
+      "file": "rust/fsl-core/src/compose.rs",
+      "line": 960,
+      "description": "rewrite_compose_statements collects a Result and calls .expect(\"compose alias validation occurs during lowering\"). resolve_alias_qualified_name (lines 1138-1147) returns Err for a namespace that is not a declared alias, and that error is reachable from a user-authored compose document: a common init statement containing a ForAll binder with an alias-qualified type name, or an Assign/If expression containing a Quantified/Aggregate binder with one, flows through resolve_alias_statement/resolve_alias_expr into that Err and the expect panics the process. lower_compose's documented contract (line 253) promises CoreError for unknown aliases, and the parallel path in sync_action (line 1018, resolve_alias_param with '?') returns the same error gracefully - the same class of user error is a CoreError on one path and a crash on the other.",
+      "evidence": "compose.rs:959-960 collect::<Result<_, _>>().expect(...); compose.rs:1138-1147 Err returned when components.contains_key(&alias) is false; the only 'unknown alias' occurrences in the crate are compose.rs:1024 (sync_action) and 1141 (resolve_alias_qualified_name), so no earlier validator intercepts the statement path; entry point is ComposeItem::Common(SpecItem::Init) at compose.rs:345, which is the only caller of rewrite_compose_statements."
+    },
+    {
+      "title": "rewrite_lvalue ignores the bound set, so binder-shadowed state names are mis-prefixed",
+      "severity": "high",
+      "file": "rust/fsl-core/src/compose.rs",
+      "line": 689,
+      "description": "rewrite_expr's Var arm skips prefixing when the name is in the bound set (lines 711-717), and rewrite_statement's ForAll arm deliberately builds a nested bound inserting the binder name to suppress prefixing inside the body - but rewrite_lvalue calls rewrite_state_name without any bound argument, so an assignment target whose name is shadowed by a binder yet matches a component state name is still rewritten to the aliased state. Concrete failure: a component with state 'count' and an action or init containing 'forall count: ... { count = <expr> }' rewrites the target to '{alias}__count' while the right-hand-side variable 'count' remains local (bound); the composed statement assigns to the component's global state instead of the loop variable, silently changing semantics. The same missing bound check applies to LValue::Index's collection name at line 691. Both entry paths are live: component actions via rewrite_component_item -> rewrite_action_items -> rewrite_statement, and component inits via lower_compose line 315 -> rewrite_statements.",
+      "evidence": "compose.rs:689 'LValue::Var(name) => LValue::Var(rewrite_state_name(name, component))' and line 691 for Index; rewrite_state_name (lines 700-706) prefixes whenever component.names.state.contains(&name) and takes no bound parameter; contrast compose.rs:711-717 where Expr::Var is guarded by !bound.contains(&name), and compose.rs:676-680 where the ForAll arm inserts the (unrenamed) binder name into a nested bound precisely so in-body references are not prefixed."
+    }
+  ],
+  "limitations": [
+    "A third hypothesis - that rewrite_component_item's catch-all arm (lines 557-562) returns Until, Unless, Def, Entity, Number, and VerifyBounds items without rewriting reference-bearing expressions, leaving them un-prefixed in the composite - was investigated but could not be confirmed: the fsl_syntax crate defining these variants is not vendored in this checkout (the identifier Until appears only in compose.rs), so whether Until/Unless/Def carry expression fields is unverified. It is recorded here as an open suspicion, not a finding; if the variants carry expressions, Invariant/Trans/Reachable/LeadsTo are rewritten while Until/Unless are not, and references would silently bind to same-named common or foreign state.",
+    "The crate::substitute/IndexedReplacements helpers (outside compose.rs) were treated as given and not audited; capture of substituted expressions through ForAll binders in sync_action was noted but not pursued, keeping the review within the three-hypothesis budget.",
+    "Component internal alias names are prefix-joined as '{alias}__{name}' without checking for collisions with names a component already declares under that spelling; an adversarial component name could collide, but no in-repo evidence of a concrete trigger was found, so it was not reported."
+  ]
+}

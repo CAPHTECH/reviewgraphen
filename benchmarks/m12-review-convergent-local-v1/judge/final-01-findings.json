@@ -1,0 +1,27 @@
+{
+  "schema": "reviewgraphen.benchmark.head_local_judge_input.v1",
+  "unit_id": "m12-convergent-1-final",
+  "findings": [
+    {
+      "finding_id": "finding:237d5c2217a03555ed223986c265af7d",
+      "locations": [
+        {"path": "rust/fsl-core/src/compose.rs", "start_line": 952, "end_line": 961},
+        {"path": "rust/fsl-core/src/compose.rs", "start_line": 1138, "end_line": 1147},
+        {"path": "rust/fsl-core/src/compose.rs", "start_line": 340, "end_line": 350}
+      ],
+      "mechanism_tags": ["panic_on_invalid_input", "error_contract_violation"],
+      "severity": "high",
+      "rationale": "Claim: rewrite_compose_statements collects a fallible alias-resolution result and calls expect, while resolve_alias_qualified_name returns Err for an undeclared namespace. A user-authored common init containing a ForAll binder with an unknown alias-qualified type, or a quantified/aggregate binder in an expression, therefore panics rather than returning the CoreError promised by lower_compose. Evidence status: source-supported but not executed; requested evidence is a regression test with an unknown alias in a common-init binder."
+    },
+    {
+      "finding_id": "finding:78e4faa529357ae005943e2f43b69afb",
+      "locations": [
+        {"path": "rust/fsl-core/src/compose.rs", "start_line": 669, "end_line": 692},
+        {"path": "rust/fsl-core/src/compose.rs", "start_line": 700, "end_line": 717}
+      ],
+      "mechanism_tags": ["scope_capture", "incorrect_state_write"],
+      "severity": "high",
+      "rationale": "Claim: rewrite_statement records a ForAll binder in the nested bound set and rewrite_expr respects that set, but rewrite_lvalue has no bound parameter and unconditionally sends Var and Index base names through rewrite_state_name. If a ForAll binder shadows a component state name, an assignment target is rewritten to alias__state while the right-hand variable remains the local binder, silently changing a local write into a component-state write. Evidence status: source-supported but language admissibility and runtime behavior were not executed; requested evidence is a lowering test with a binder whose name equals a state name."
+    }
+  ]
+}
