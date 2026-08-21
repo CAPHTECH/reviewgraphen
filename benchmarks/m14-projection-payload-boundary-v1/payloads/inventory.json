@@ -1,0 +1,37 @@
+{
+  "schema": "reviewgraphen.benchmark.m14_payload_inventory.v1",
+  "payloads": [
+    {
+      "variant": "compact",
+      "bytes": 1131,
+      "sha256": "59b0ca3d36f6a09f48b30492d3620641bb9fa8bacfd2409194f62cbbd9ed48ce",
+      "header_nonce": "m14-compact-header-6b21",
+      "trailer_nonce": "m14-compact-trailer-a84e",
+      "projection_id": "benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177"
+    },
+    {
+      "variant": "graph-only",
+      "bytes": 9367,
+      "sha256": "181a6de6c1e13f4e669b08c764eb483f02c22d47585124889ff0089edb9f94c2",
+      "header_nonce": "m14-graph-only-header-6b21",
+      "trailer_nonce": "m14-graph-only-trailer-a84e",
+      "projection_id": "benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177"
+    },
+    {
+      "variant": "source-rich",
+      "bytes": 40721,
+      "sha256": "c07d1107e292e2de3e49ac79ded2b660f3e90357b4f47c3f7845ea00fa813ed4",
+      "header_nonce": "m14-source-rich-header-6b21",
+      "trailer_nonce": "m14-source-rich-trailer-a84e",
+      "projection_id": "benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177"
+    },
+    {
+      "variant": "full",
+      "bytes": 116328,
+      "sha256": "952cd3689016a8ab3c866d05c987ca388a49ce0736b023fb70b506dccb6711a0",
+      "header_nonce": "m14-full-header-6b21",
+      "trailer_nonce": "m14-full-trailer-a84e",
+      "projection_id": "benchmark-target-context:sha256:82272361a1f20d32bb4580f27626994fec18549ab6b1c78db5bcada984778177"
+    }
+  ]
+}

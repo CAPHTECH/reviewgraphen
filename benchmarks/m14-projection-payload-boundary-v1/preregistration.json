@@ -1,0 +1,72 @@
+{
+  "schema": "reviewgraphen.benchmark.m14_preregistration.v1",
+  "status": "frozen_before_first_generation_request",
+  "date": "2026-08-22",
+  "question": "At what Projection payload class does the m12 transport/error behavior appear, and is that behavior sufficient to reproduce failure to recognize the context call as completed?",
+  "predecessors": {
+    "m12": {
+      "source_projection_bytes": 116203,
+      "observed_context_calls": 5,
+      "observed_tool_result_chars_each": 10040,
+      "observed_tool_result_is_error": true,
+      "observed_prefix": "Exit code 1",
+      "observed_truncation_marker": "... [20012 characters truncated] ..."
+    },
+    "m13": "All four compact 4bit/8bit by low/high cells recognized one completed context call."
+  },
+  "controlled_configuration": {
+    "model": "Qwen3.8-27B-MLX-4bit",
+    "requested_effort": "low",
+    "prompt": "task/PROMPT.md",
+    "prompt_sha256": "39a8330f45d212102da0aaa5ca9429df57f01d4f7551fdee0cb641657689578c",
+    "first_tool_exact_command": "reviewgraphen-context-probe",
+    "tool_is_single_use": true,
+    "maximum_tool_calls": 2,
+    "wall_clock_cap_seconds": 600,
+    "client_max_output_tokens": 4096
+  },
+  "independent_variable": {
+    "name": "projection_payload_class",
+    "source_projection_sha256": "230f599d67583344044b1190a73e71c588fbcb8ac323485eed22489d34431f26",
+    "inventory_sha256": "ac6f4bed23f020f2c2d1127f6f7db25ff9b728aad28ff30df812c699789cdf3b",
+    "ordered_variants": [
+      {"variant": "compact", "bytes": 1131, "content": "metadata, target, and declared information loss"},
+      {"variant": "graph-only", "bytes": 9367, "content": "frozen projection without sources or extraction diagnostics"},
+      {"variant": "source-rich", "bytes": 40721, "content": "frozen projection without extraction diagnostics"},
+      {"variant": "full", "bytes": 116328, "content": "complete frozen projection plus benchmark receipts"}
+    ]
+  },
+  "receipt_design": {
+    "header_nonce_near_start": true,
+    "trailer_nonce_at_end": true,
+    "purpose": "Separate call recognition, front-of-result availability, end-of-result loss, truncation markers, and error transport."
+  },
+  "phase_1": {
+    "order": ["compact-r1", "graph-only-r1", "source-rich-r1", "full-r1"],
+    "replicates_per_variant": 1,
+    "concurrency": 1,
+    "retries": 0
+  },
+  "adaptive_phase_2": {
+    "condition": "Run only if phase 1 contains both recognized and not-recognized outcomes.",
+    "cells": "largest recognized payload and smallest not-recognized payload",
+    "additional_replicates_per_cell": 2,
+    "order": "ascending payload size, alternating cells by replicate",
+    "purpose": "Check whether the observed boundary is stable enough to attribute to payload class rather than a single stochastic run."
+  },
+  "deterministic_measures": [
+    "tool-result content character count",
+    "tool-result is_error field and Exit code prefix",
+    "presence of header nonce, trailer nonce, and truncation marker",
+    "context call count and complete tool sequence",
+    "exact receipt fields written to probe.json",
+    "actual assistant model identifiers"
+  ],
+  "success": "Exactly Bash then Write, one context call, available receipt values copied exactly, visible truncation/error classified exactly, and completed/no-repeat booleans true/false.",
+  "interpretation_ceiling": "The experiment can isolate payload-class-associated Claude tool transport and immediate call recognition. It does not test full review convergence, cannot observe applied server reasoning effort, and one phase-1 replicate alone cannot establish a stochastic rate.",
+  "backend": {
+    "endpoint": "http://192.168.68.71:11999",
+    "listing_sha256": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
+    "health_sha256": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74"
+  }
+}

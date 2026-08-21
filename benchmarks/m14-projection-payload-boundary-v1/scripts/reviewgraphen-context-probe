@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+state=.reviewgraphen/probe-called
+payload=.reviewgraphen/projection.json
+if [[ -e "$state" ]]; then
+  printf '%s\n' '{"schema":"reviewgraphen.benchmark.projection_probe_error.v1","error":"projection_already_returned","instruction":"Do not invoke this command again; use the prior tool result."}'
+  exit 73
+fi
+[[ -f "$payload" ]] || exit 66
+printf '%s\n' called > "$state"
+cat "$payload"
+
