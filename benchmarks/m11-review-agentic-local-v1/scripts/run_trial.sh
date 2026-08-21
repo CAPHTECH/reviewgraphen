@@ -16,9 +16,15 @@ bwrap=/home/rizumita/.local/share/mise/installs/codex/0.147.0/codex-resources/bw
 scratch=/tmp/m11-scratch-$trial
 config=/tmp/m11-config-$trial
 mkdir -p "$result"
+identity_file=$exp/PINNED_BACKEND_IDENTITY
+health_file=$exp/PINNED_BACKEND_HEALTH
+if [[ "$arm" == control && -f "$exp/PINNED_BACKEND_IDENTITY-CONTROL-DIAGNOSTIC" ]]; then
+  identity_file=$exp/PINNED_BACKEND_IDENTITY-CONTROL-DIAGNOSTIC
+  health_file=$exp/PINNED_BACKEND_HEALTH-CONTROL-DIAGNOSTIC
+fi
 python3 "$exp/scripts/check_backend_identity.py" \
-  "$(cat "$exp/PINNED_BACKEND_IDENTITY")" \
-  "$(cat "$exp/PINNED_BACKEND_HEALTH")" \
+  "$(cat "$identity_file")" \
+  "$(cat "$health_file")" \
   "$result/backend-identity.json" || exit 66
 rm -rf "$scratch" "$config"
 mkdir -p "$config"
