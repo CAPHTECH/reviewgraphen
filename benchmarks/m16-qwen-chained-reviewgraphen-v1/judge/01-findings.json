@@ -1,0 +1,50 @@
+{
+  "schema": "reviewgraphen.benchmark.m16_blind_findings.v1",
+  "unit_id": "m16-completed-01",
+  "findings": [
+    {
+      "finding_id": "finding:06acbf9cd1d6ecc9d64ad3897c281af7",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 249,
+          "end_line": 372
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "medium",
+      "rationale": "internal references to unknown aliases or actions are silently ignored instead of returning CoreError. lower_compose collects ComposeItem::Internal { alias, action } pairs into the `internal` set (compose.rs:294-298) and uses it only to suppress matching exposed actions (compose.rs:326); the dispatch arm `ComposeItem::Internal { .. } => {}` (compose.rs:357) never checks that the alias names a used component or that the action exists in that component. A misspelled or dangling `internal a.foo` is therefore accepted with no diagnostic, and the action it was meant to hide (if it exists under the correct spelling) remains in the composed kernel's public action surface. This contradicts the function's documented contract: \"Returns CoreError for missing/invalid components, unknown aliases or actions\" (compose.rs:251-254). Concrete trigger: a compose document with `use a = \"...\"` plus `internal a.nonexistent` (or an alias that is never `use`d); lowering succeeds and the hiding request is a silent no-op."
+    },
+    {
+      "finding_id": "finding:b35be303af3e35e7520078b77556090c",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 249,
+          "end_line": 372
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "low",
+      "rationale": "meta of later init blocks is silently dropped when multiple inits are merged into one. When merging SpecItem::Init blocks (from components at compose.rs:310-324 and from ComposeItem::Common at compose.rs:340-350), `init_annotations` is accumulated from every block, but `init_meta` is only adopted from the first block seen via `if init_meta.is_none()` (compose.rs:320-322, 346-348). Meta from all subsequent init blocks is discarded with no error and no warning, even though the same function records diagnostics in `warnings` for other merge hazards (e.g. fair_not_inherited via sync_action, compose.rs:354-356) before calling composed_kernel. Concrete trigger: two used components, or a component plus a common block, each declaring an init with non-None meta; the composed SpecItem::Init (compose.rs:360-364) keeps only the first block's meta, silently losing the rest."
+    },
+    {
+      "finding_id": "finding:86bdaa10a79b4103be49e9b678047c12",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 249,
+          "end_line": 372
+        },
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 1009,
+          "end_line": 1120
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "medium",
+      "rationale": "sync action names are not uniqueness-checked before being pushed into the composed kernel. sync_action builds the composite action with the user-supplied, unprefixed name `action.name` (compose.rs:1106-1115), and lower_compose pushes every sync action into `actions` (compose.rs:354-356, 365) with no duplicate-name check — in contrast to component aliases, which are rejected on duplication (compose.rs:273-275), and to rewrite_component_item, which prefix-qualifies component-level names with the alias (compose.rs:392, 430, 470). Two sync blocks with the same name in one compose document both reach composed_kernel. Whether composed_kernel rejects the duplicate is not decidable from the received projections because its source was never included, so the concrete outcome (silent shadowing of one body by the other, changing which statements run under that name) is unverified. Concrete trigger: one compose document containing two `sync` actions named `x`."
+    }
+  ]
+}
