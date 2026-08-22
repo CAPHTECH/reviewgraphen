@@ -3,10 +3,21 @@
   "status": "runtime_owned_unreviewed",
   "casegraphen": {
     "version": "0.9.1 (acb4a50)",
-    "worker": "shell",
+    "role": "acceptance_ledger_not_runtime",
+    "model_worker": null,
+    "governed_work_cells": [
+      "work:8bit-high-r1",
+      "work:4bit-low-r1",
+      "work:aggregate"
+    ],
+    "accepted_state_is_not_review_state": true
+  },
+  "external_runtime": {
+    "role": "model_node_scheduler_and_typed_handoff_owner",
     "max_parallel": 1,
     "workspace_strategy": "ephemeral",
-    "accepted_state_is_not_review_state": true
+    "micro_nodes_remain_runtime_trace": true,
+    "runtime_reports_enter_casegraphen_as_unreviewed_evidence": true
   },
   "reviewgraphen": {
     "cards_source": "benchmarks/m15-qwen-intelligent-reviewgraphen-v1/cards",

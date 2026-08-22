@@ -646,7 +646,7 @@
       ],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:8bit-high-r1:project-overview"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-selection",
@@ -688,7 +688,7 @@
       ],
       "side_effects": "external",
       "verification_policy_id": null,
-      "work_cell_id": "work:8bit-high-r1:select-1"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -733,7 +733,7 @@
       ],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:8bit-high-r1:expand-1"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-selection",
@@ -775,7 +775,7 @@
       ],
       "side_effects": "external",
       "verification_policy_id": null,
-      "work_cell_id": "work:8bit-high-r1:select-2"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -820,7 +820,7 @@
       ],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:8bit-high-r1:expand-2"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-selection",
@@ -862,7 +862,7 @@
       ],
       "side_effects": "external",
       "verification_policy_id": null,
-      "work_cell_id": "work:8bit-high-r1:select-3"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -907,7 +907,7 @@
       ],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:8bit-high-r1:expand-3"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-final-review",
@@ -949,7 +949,7 @@
       ],
       "side_effects": "external",
       "verification_policy_id": "verification:m17-independent-codex-judge",
-      "work_cell_id": "work:8bit-high-r1:final-review"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -994,7 +994,7 @@
       ],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:8bit-high-r1:validate"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-judge",
@@ -1039,7 +1039,7 @@
       ],
       "side_effects": "external",
       "verification_policy_id": "verification:m17-independent-codex-judge",
-      "work_cell_id": "work:8bit-high-r1:judge"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -1075,7 +1075,7 @@
       "resource_claims": [],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:8bit-high-r1:outcome"
+      "work_cell_id": "work:8bit-high-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -1115,7 +1115,7 @@
       ],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:4bit-low-r1:project-overview"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-selection",
@@ -1157,7 +1157,7 @@
       ],
       "side_effects": "external",
       "verification_policy_id": null,
-      "work_cell_id": "work:4bit-low-r1:select-1"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -1202,7 +1202,7 @@
       ],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:4bit-low-r1:expand-1"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-selection",
@@ -1244,7 +1244,7 @@
       ],
       "side_effects": "external",
       "verification_policy_id": null,
-      "work_cell_id": "work:4bit-low-r1:select-2"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -1289,7 +1289,7 @@
       ],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:4bit-low-r1:expand-2"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-selection",
@@ -1331,7 +1331,7 @@
       ],
       "side_effects": "external",
       "verification_policy_id": null,
-      "work_cell_id": "work:4bit-low-r1:select-3"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -1376,7 +1376,7 @@
       ],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:4bit-low-r1:expand-3"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-final-review",
@@ -1418,7 +1418,7 @@
       ],
       "side_effects": "external",
       "verification_policy_id": "verification:m17-independent-codex-judge",
-      "work_cell_id": "work:4bit-low-r1:final-review"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -1463,7 +1463,7 @@
       ],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:4bit-low-r1:validate"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-judge",
@@ -1508,7 +1508,7 @@
       ],
       "side_effects": "external",
       "verification_policy_id": "verification:m17-independent-codex-judge",
-      "work_cell_id": "work:4bit-low-r1:judge"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -1544,7 +1544,7 @@
       "resource_claims": [],
       "side_effects": "none",
       "verification_policy_id": null,
-      "work_cell_id": "work:4bit-low-r1:outcome"
+      "work_cell_id": "work:4bit-low-r1"
     },
     {
       "budget_policy_id": "budget:m17-deterministic",
@@ -1581,7 +1581,7 @@
         "created_by": "actor:codex-experiment-designer",
         "source": "benchmark:m17-preregistration"
       },
-      "purpose": "Compare CaseGraphen-controlled arms with their frozen m16 baselines while preserving replicate limits",
+      "purpose": "Compare CaseGraphen-governed external-runtime arms with their frozen m16 baselines while preserving replicate limits",
       "resource_claims": [
         {
           "mode": "read",

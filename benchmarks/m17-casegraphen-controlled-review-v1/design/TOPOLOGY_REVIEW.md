@@ -9,7 +9,9 @@ The manifest binds the canonical topology hash emitted by CaseGraphen lint and t
 
 ## Intended boundary
 
-CaseGraphen owns dependency ordering, attempt and wall-clock budgets, barriers, completeness, and typed artifact handoffs. ReviewGraphen owns all review semantics: the frozen Projection cards, included source IDs, information-loss declarations, consumed-card ledger, finding schema, grounding validation, and claim/evidence meaning. A CaseGraphen node report or completed cell must not be treated as an accepted, evidence-supported, verified, or human-accepted ReviewGraphen claim.
+The external runtime owns model-node dependency ordering, attempt and wall-clock budgets, barriers, typed artifact handoffs, and liveness. CaseGraphen owns accepted topology, authority, three arm/aggregate acceptance units, evidence review, revision-bound transitions, and replayable history. ReviewGraphen owns all review semantics: the frozen Projection cards, included source IDs, information-loss declarations, consumed-card ledger, finding schema, grounding validation, and claim/evidence meaning. A CaseGraphen runtime report or completed cell must not be treated as an accepted, evidence-supported, verified, or human-accepted ReviewGraphen claim.
+
+All micro-nodes in an arm share one `work_cell_id`. Individual Qwen calls, projection calls, retries, tool events, and token streams remain in the external runtime trace. This follows CaseGraphen ADR 0002's semantic granularity boundary.
 
 ## Lint findings requiring judgment
 
@@ -26,5 +28,9 @@ CaseGraphen owns dependency ordering, attempt and wall-clock budgets, barriers, 
 3. Are the three strict expansion barriers and cross-arm backend serialization justified?
 4. Is final protocol validation correctly separated from blind quality judgment?
 5. Should selector calls receive a distinct route-quality verification policy, or is final-outcome judgment sufficient for this feasibility experiment?
+
+## Superseded approval
+
+The user approved canonical topology hash `ec250ab924a66bf0959162e3f70da8c5ed4b208882555ae3062f76503f519aa6`. That proposal incorrectly mapped every micro-node to a distinct CaseGraphen work cell and overstated CaseGraphen as the scheduler. It was not accepted into a case space and no Qwen request was made. The corrected topology has a different canonical hash and therefore requires a new exact topology review; the earlier approval is preserved as an observed user decision but cannot be silently rebased.
 
 No topology review, mutation, worker enablement, or execution has occurred.

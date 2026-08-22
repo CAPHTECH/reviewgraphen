@@ -63,9 +63,17 @@ def node(
     delivery: str = "barrier",
     side_effects: str = "none",
 ) -> dict[str, object]:
+    if node_id.startswith("node:8bit-high-r1:"):
+        work_cell_id = "work:8bit-high-r1"
+    elif node_id.startswith("node:4bit-low-r1:"):
+        work_cell_id = "work:4bit-low-r1"
+    elif node_id == "node:aggregate":
+        work_cell_id = "work:aggregate"
+    else:
+        raise ValueError(f"no governed work-cell mapping for {node_id}")
     return {
         "node_id": node_id,
-        "work_cell_id": node_id.replace("node:", "work:"),
+        "work_cell_id": work_cell_id,
         "purpose": purpose,
         "inputs": inputs,
         "outputs": outputs,
@@ -335,7 +343,7 @@ def main() -> None:
     ))
     nodes.append(node(
         "node:aggregate",
-        "Compare CaseGraphen-controlled arms with their frozen m16 baselines while preserving replicate limits",
+        "Compare CaseGraphen-governed external-runtime arms with their frozen m16 baselines while preserving replicate limits",
         [
             io("8bit_high", "schema:m17-arm-result", "node:8bit-high-r1:outcome#arm_result"),
             io("4bit_low", "schema:m17-arm-result", "node:4bit-low-r1:outcome#arm_result"),

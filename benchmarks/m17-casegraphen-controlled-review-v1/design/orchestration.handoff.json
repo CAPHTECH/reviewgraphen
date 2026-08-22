@@ -2,17 +2,17 @@
   "accepted_state_changed": false,
   "artifacts": [
     {
-      "content_hash": "sha256:71848ad42742381c4859b0c090e23ed6645a44c1e73aec27dd3bdaa9909a462c",
+      "content_hash": "sha256:d97352b2b84c4fec7fa6cd0fb5fe96a96238f85848f66c0982a65a2a7b720557",
       "path": "design/execution.topology.json",
       "role": "proposal"
     },
     {
-      "content_hash": "sha256:66d318ff5f4b63d41ab15606222da8b686e111faa1469aefdfc1fbd550af95bf",
+      "content_hash": "sha256:a46837afa95e15f5e3250eddef8f1c593003cc4dc3197aacaa472233c448e2f6",
       "path": "design/graph.analysis.report.json",
       "role": "proposal"
     },
     {
-      "content_hash": "sha256:b39d3aba118cea17547188355497da65afb6fbf2b8825a6830dce7fe195043d2",
+      "content_hash": "sha256:49f67382cc5149c7a91b5dd504508a0652f4eeebca280ede4fb83fee41e6a65a",
       "path": "design/deployment-policy-manifest.json",
       "role": "proposal"
     },
@@ -22,27 +22,27 @@
       "role": "proposal"
     },
     {
-      "content_hash": "sha256:e50a0fde0d13a41475c1dd0003ed86d193d897d5ecfab89dc996614836abf079",
+      "content_hash": "sha256:e3cf44bce80ae667eaf15b50add4ba64bf5f1a71837219575a43215f8bc18f20",
       "path": "design/runtime.deployment.json",
       "role": "proposal"
     },
     {
-      "content_hash": "sha256:2b68837d5242cd8ce7ed08432bdc2dc25e8a810a63b538b56a7813fbfcd8ea17",
+      "content_hash": "sha256:73ddc2c0ae6046290e514aa95e4e31378f31879d3405bc04cbd9ad1505268f22",
       "path": "design/genesis.mapping.proposal.md",
       "role": "proposal"
     },
     {
-      "content_hash": "sha256:76d61d7764f5aa4d70e34be323ba09b7a05836cf1fef5a391b3195be908f3762",
+      "content_hash": "sha256:740b1fcbd1dba94f4225cb6819de1714c0268bcae4a7d94bf328e846fcb72221",
       "path": "design/execution-plan.mapping.proposal.md",
       "role": "proposal"
     },
     {
-      "content_hash": "sha256:f252a38f0661d345499cf7e2ebeb5a4143f271b9f26b1a6cedf7136ef65cea58",
+      "content_hash": "sha256:c213ff156ef3019f0b5d85433ddc9bb08e03588a16fa7449decc0286499b524e",
       "path": "design/TOPOLOGY_REVIEW.md",
       "role": "proposal"
     },
     {
-      "content_hash": "sha256:6420de631e4e9cfce5ba9377439e2606de40384ce78f8b0866d79cac73420008",
+      "content_hash": "sha256:c5d09f334e973386a5f34daa691b0faa9a76b54dba7888109508d90c78a5a7d1",
       "path": "preregistration.json",
       "role": "proposal"
     },
@@ -76,10 +76,10 @@
   "observed": {
     "case_space_id": "case-space:m17-casegraphen-controlled-review-v1",
     "report_ids": [
-      "graph-lint:ec250ab924a66bf0"
+      "graph-lint:69aa1a16bad5a6d3"
     ],
     "revision_id": null,
-    "topology_content_hash": "sha256:ec250ab924a66bf0959162e3f70da8c5ed4b208882555ae3062f76503f519aa6"
+    "topology_content_hash": "sha256:69aa1a16bad5a6d39674610881094f279923b54b5151b98f5176b734cc4b8653"
   },
   "phase": "topology_proposed",
   "return_required": true,
