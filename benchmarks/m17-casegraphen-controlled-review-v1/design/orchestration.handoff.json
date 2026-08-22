@@ -1,0 +1,97 @@
+{
+  "accepted_state_changed": false,
+  "artifacts": [
+    {
+      "content_hash": "sha256:71848ad42742381c4859b0c090e23ed6645a44c1e73aec27dd3bdaa9909a462c",
+      "path": "design/execution.topology.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:66d318ff5f4b63d41ab15606222da8b686e111faa1469aefdfc1fbd550af95bf",
+      "path": "design/graph.analysis.report.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:b39d3aba118cea17547188355497da65afb6fbf2b8825a6830dce7fe195043d2",
+      "path": "design/deployment-policy-manifest.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:0c3578e04e753cd5a7769cfbe10191d1ca184592337b4865a02d5cfbd023ef95",
+      "path": "design/verification.policy.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:e50a0fde0d13a41475c1dd0003ed86d193d897d5ecfab89dc996614836abf079",
+      "path": "design/runtime.deployment.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:2b68837d5242cd8ce7ed08432bdc2dc25e8a810a63b538b56a7813fbfcd8ea17",
+      "path": "design/genesis.mapping.proposal.md",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:76d61d7764f5aa4d70e34be323ba09b7a05836cf1fef5a391b3195be908f3762",
+      "path": "design/execution-plan.mapping.proposal.md",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:f252a38f0661d345499cf7e2ebeb5a4143f271b9f26b1a6cedf7136ef65cea58",
+      "path": "design/TOPOLOGY_REVIEW.md",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:6420de631e4e9cfce5ba9377439e2606de40384ce78f8b0866d79cac73420008",
+      "path": "preregistration.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:b3c7000dffcdbf57ca66791500ba3d728bb56edf6c028ebfdcf816819763f74e",
+      "path": "design/budget-m17-deterministic.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:7910594457c8c73dd83f8bc07ab23ce52d9c8993b0662ab41958078010a01a30",
+      "path": "design/budget-m17-selection.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:94453c9f674af3ceb10fa54fddcb24448f3db99f941a30e5604ed2c63a83ad8b",
+      "path": "design/budget-m17-final-review.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:28266319d6b394de698f7d07fc11f03a68e4a32b8b6f338ae17c300d465680e9",
+      "path": "design/budget-m17-judge.json",
+      "role": "proposal"
+    }
+  ],
+  "handoff_id": "handoff:m17:topology-review",
+  "mutation_performed": false,
+  "next_action": {
+    "kind": "return_for_review",
+    "task_skill": null
+  },
+  "observed": {
+    "case_space_id": "case-space:m17-casegraphen-controlled-review-v1",
+    "report_ids": [
+      "graph-lint:ec250ab924a66bf0"
+    ],
+    "revision_id": null,
+    "topology_content_hash": "sha256:ec250ab924a66bf0959162e3f70da8c5ed4b208882555ae3062f76503f519aa6"
+  },
+  "phase": "topology_proposed",
+  "return_required": true,
+  "schema": "casegraphen.experimental.skill.orchestration_handoff.v0",
+  "seams": [
+    {
+      "kind": "topology_review",
+      "required_actor_or_policy": "independent reviewer of the exact topology and deployment policy manifest",
+      "status": "open"
+    }
+  ],
+  "selected_task_skill": "casegraphen-design",
+  "selection_reason": "The completed phase produced an unreviewed CaseGraphen topology for the m17 ReviewGraphen/Qwen experiment.",
+  "unresolved_evidence": []
+}

@@ -1,0 +1,37 @@
+{
+  "actor_must_differ": true,
+  "allowed_runtime_attestations": [
+    "separate_session",
+    "model_identity",
+    "prompt_hash"
+  ],
+  "lenses": [
+    "correctness",
+    "source-validity",
+    "actionability"
+  ],
+  "producer_constraints": {
+    "capability_ids": [
+      "capability:qwen-review-producer"
+    ]
+  },
+  "provenance": {
+    "created_by": "actor:codex-experiment-designer",
+    "source": "benchmark:m17-preregistration"
+  },
+  "quorum": {
+    "minimum_accepts": 1,
+    "total_verifiers": 1
+  },
+  "required_anchors": [
+    "anchor:frozen-compose-source",
+    "anchor:normalized-findings"
+  ],
+  "schema": "casegraphen.experimental.verification_policy.v0",
+  "verification_policy_id": "verification:m17-independent-codex-judge",
+  "verifier_constraints": {
+    "capability_ids": [
+      "capability:codex-blind-judge"
+    ]
+  }
+}

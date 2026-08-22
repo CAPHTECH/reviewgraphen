@@ -1,0 +1,31 @@
+{
+  "budget_policies": [
+    {
+      "content_hash": "b3c7000dffcdbf57ca66791500ba3d728bb56edf6c028ebfdcf816819763f74e",
+      "policy_id": "budget:m17-deterministic"
+    },
+    {
+      "content_hash": "7910594457c8c73dd83f8bc07ab23ce52d9c8993b0662ab41958078010a01a30",
+      "policy_id": "budget:m17-selection"
+    },
+    {
+      "content_hash": "94453c9f674af3ceb10fa54fddcb24448f3db99f941a30e5604ed2c63a83ad8b",
+      "policy_id": "budget:m17-final-review"
+    },
+    {
+      "content_hash": "28266319d6b394de698f7d07fc11f03a68e4a32b8b6f338ae17c300d465680e9",
+      "policy_id": "budget:m17-judge"
+    }
+  ],
+  "expansion_policies": [],
+  "schema": "casegraphen.experimental.deployment_policy_manifest.v0",
+  "schema_version": 0,
+  "topology_content_hash": "ec250ab924a66bf0959162e3f70da8c5ed4b208882555ae3062f76503f519aa6",
+  "topology_id": "topology:m17-casegraphen-controlled-review-v1",
+  "verification_policies": [
+    {
+      "content_hash": "0c3578e04e753cd5a7769cfbe10191d1ca184592337b4865a02d5cfbd023ef95",
+      "policy_id": "verification:m17-independent-codex-judge"
+    }
+  ]
+}

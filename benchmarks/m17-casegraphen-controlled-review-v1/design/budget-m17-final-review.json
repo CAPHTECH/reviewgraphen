@@ -1,0 +1,10 @@
+{
+  "limits": {
+    "max_attempts": 1,
+    "max_output_tokens": 12000,
+    "wall_clock_seconds": 420
+  },
+  "policy_id": "budget:m17-final-review",
+  "schema": "reviewgraphen.benchmark.m17_budget_policy.v1",
+  "status": "proposed_deployment_policy"
+}

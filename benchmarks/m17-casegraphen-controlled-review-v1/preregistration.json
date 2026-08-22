@@ -1,0 +1,52 @@
+{
+  "schema": "reviewgraphen.benchmark.m17_preregistration.v1",
+  "status": "frozen_before_first_generation_request",
+  "date": "2026-08-22",
+  "question": "Can a CaseGraphen-controlled checkpoint DAG make Qwen converge reliably while ReviewGraphen remains the sole owner of projections, source trace, and review semantics?",
+  "predecessor": {
+    "experiment": "m16-qwen-chained-reviewgraphen-v1",
+    "8bit_high": "Completed in 782 seconds with one issue-worthy finding out of three, but selected an incomplete review path.",
+    "4bit_low": "Timed out after stale-token batching, a nonexistent card request, a duplicate request, and budget violation."
+  },
+  "intervention": {
+    "description": "CaseGraphen schedules each route selection, validated ReviewGraphen expansion, final review, validation, blind judgment, and reduction as a separate dependency-bound checkpoint.",
+    "semantic_boundary": "ReviewGraphen owns the overview, source cards, consumed-card ledger, projection source IDs, loss declarations, report schema, grounding validation, and review claims. CaseGraphen owns only execution dependencies, budgets, attempts, barriers, completeness, and artifact handoffs.",
+    "qwen_context": "Each selector is a fresh bounded invocation that can return exactly one structured expansion request. It cannot call projection tools or batch future requests.",
+    "fixed_rounds": 3,
+    "dynamic_topology_expansion": false
+  },
+  "comparability": {
+    "frozen_task": "lower_compose and directly used helpers in frozen rust/fsl-core/src/compose.rs",
+    "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+    "cards_inventory_sha256": "a39c7135e5d811562bdf15f7fd5ea90da9f8ae703318f48c32654d8509b3e035",
+    "maximum_expansions": 3,
+    "maximum_findings": 3,
+    "baseline": "benchmarks/m16-qwen-chained-reviewgraphen-v1/aggregate.json"
+  },
+  "arms": [
+    {
+      "trial": "8bit-high-r1",
+      "model": "Qwen3.8-27B-MLX-8bit",
+      "requested_effort": "high"
+    },
+    {
+      "trial": "4bit-low-r1",
+      "model": "Qwen3.8-27B-MLX-4bit",
+      "requested_effort": "low"
+    }
+  ],
+  "execution": {
+    "order": ["8bit-high-r1", "4bit-low-r1"],
+    "concurrency": 1,
+    "replicates_per_cell": 1,
+    "retries": 0,
+    "casegraphen_version": "0.9.1 (acb4a50)",
+    "topology_review_required": true
+  },
+  "primary_success": {
+    "per_arm": "All expected CaseGraphen nodes report; three unique valid source cards are selected; final report passes schema, budget, projection-trace, and grounding validation; no stale, duplicate, unknown, or batched expansion can advance state.",
+    "comparison": "A previously failing 4bit/low configuration completes under the checkpoint DAG without reducing the three-expansion or final-review contract."
+  },
+  "secondary_quality": "Blind Codex judgment is reported separately from protocol completion and remains review evidence, not verified or human accepted truth.",
+  "interpretation_ceiling": "One replicate per cell estimates feasibility, not stable rates. The intervention combines fresh-session decomposition with CaseGraphen scheduling, so a positive result does not isolate which of those two mechanisms caused the improvement. Quantization and requested effort remain jointly varied across cells. Runtime-reported provider, model, effort, session separation, and token use remain declarations unless independently anchored."
+}
