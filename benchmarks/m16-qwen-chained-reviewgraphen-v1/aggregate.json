@@ -1,0 +1,54 @@
+{
+  "schema": "reviewgraphen.benchmark.m16_aggregate.v1",
+  "trials": [
+    {
+      "trial": "8bit-high-r1",
+      "requested_model": "Qwen3.8-27B-MLX-8bit",
+      "requested_effort": "high",
+      "elapsed_seconds": 782,
+      "outcome": "completed_chained_use",
+      "tool_calls": 5,
+      "reviewgraphen_calls": 4,
+      "request_keys": ["overview", "target-body", "sync-alias-boundary", "component-rewrite-front"],
+      "unique_requests": true,
+      "tokens_valid": true,
+      "one_tool_per_assistant_message": true,
+      "only_allowed_bash": true,
+      "report_valid": true,
+      "findings_grounded_in_received_sources": true,
+      "finding_count": 3,
+      "reported_output_tokens": 10343
+    },
+    {
+      "trial": "4bit-low-r1",
+      "requested_model": "Qwen3.8-27B-MLX-4bit",
+      "requested_effort": "low",
+      "elapsed_seconds": 901,
+      "outcome": "timeout",
+      "tool_calls": 6,
+      "valid_reviewgraphen_requests_parsed": 5,
+      "successful_projection_results": ["overview", "target-body", "statement-rewrite", "component-rewrite-front"],
+      "invalid_parallel_requests": 2,
+      "unique_requests": false,
+      "tokens_valid": false,
+      "one_tool_per_assistant_message": false,
+      "only_allowed_bash": false,
+      "report_valid": false,
+      "finding_count": 0,
+      "reported_output_tokens": 13146
+    }
+  ],
+  "blind_judge": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "exit_status": 0,
+    "elapsed_seconds": 60,
+    "issue_should_be_created": 1,
+    "should_not_be_created": 1,
+    "unable_to_determine": 1,
+    "authority": "non-authoritative review evidence"
+  },
+  "deterministic_conclusion": "The chained controller enabled 8bit-high to complete a selective, sequential, grounded ReviewGraphen workflow and produce one independently issue-worthy finding. The 4bit-low trial reused one token across parallel requests, exceeded the tool budget, and timed out without a report; the controller rejected stale-token requests and preserved state.",
+  "interpretation_ceiling": "This is one replicate per jointly varied quantization/effort cell. It supports a configuration-associated difference, not a causal estimate for quantization or effort separately. Chaining mechanically enforced sequentiality, so success does not show that 8bit-high would voluntarily serialize an unconstrained interface."
+}
+

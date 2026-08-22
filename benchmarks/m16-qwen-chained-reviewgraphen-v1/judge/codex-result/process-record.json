@@ -1,0 +1,27 @@
+{
+  "schema": "reviewgraphen.benchmark.m16_codex_judge_record.v1",
+  "backend": {
+    "kind": "codex_cli",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "protocol_version": "codex-exec@0.147.0"
+  },
+  "isolation": "bwrap read-only blind input workspace; writable output only",
+  "input_hashes": {
+    "00-instructions.md": "sha256:56989c8876251af7a25800ba1c13baf729d2173025b5e1f7caaa12d02d07642a",
+    "01-findings.json": "sha256:5c865024bd326253cd03afd6c27eb8adc0dbcd2efbf05d2f015391bb685b180d",
+    "output-schema.json": "sha256:244fbde8ae1d093eb45866d637c631451531577eaffd335ca5f00d296ccb5be9",
+    "sources/rust/fsl-core/src/compose.rs": "sha256:00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567"
+  },
+  "runner_hash": "sha256:4b05e5ce559870b2e788c83441016ba64f10f9c64fc2b7a17e27d0be1e219168",
+  "exit_status": 0,
+  "elapsed_seconds": 60,
+  "output_hashes": {
+    "events.jsonl": "sha256:3ebc5ecb0dc3c92ce934ee1334960c884397426ab9c9cac7b8ab99a6cc114cb8",
+    "stderr.log": "sha256:1aa26269eb1cc57f86b235a03cda53c004edb5b1e9fc99d4da4f00843293d721",
+    "judgment.json": "sha256:dd7babb0b0e1956ff576bf688b05ada41d7920e3f2d1a89f44cbddd5fa8101ad"
+  },
+  "schema_validation": "passed",
+  "finding_id_set_validation": "passed",
+  "authority": "non-authoritative blind review evidence; not verification or human acceptance"
+}
