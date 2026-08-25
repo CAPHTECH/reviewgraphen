@@ -1,0 +1,49 @@
+{
+  "pairs": [
+    {
+      "base_commit": "2be279ed11354cc4856a6be2d84a4b2f631ab611",
+      "base_fixture": null,
+      "base_sha256": null,
+      "clause_7_count": 3,
+      "repository": "fsl",
+      "target_commit": "ec0a40a91570127c8fc91cec75fffe920e229d5b",
+      "target_fixture": "fsl-ec0a40a-target.rs",
+      "target_path": "rust/fslc/src/literate_access.rs",
+      "target_sha256": "sha256:d772da17fd0fad5c9ecc63097b7fbf8c0f824bd96d2ca098ba84ddcbc99b521e"
+    },
+    {
+      "base_commit": "fbcb62df43d8079ed55ecfe9fc0823eb672babdb",
+      "base_fixture": null,
+      "base_sha256": null,
+      "clause_7_count": 1,
+      "repository": "fsl",
+      "target_commit": "fd5b8c68d2f03f19e7c75c4389e5ea7db6a8f7fe",
+      "target_fixture": "fsl-fd5b8c6-target.rs",
+      "target_path": "rust/fslc/src/outcome.rs",
+      "target_sha256": "sha256:6eea262483505eb7e3f04f7dd2a0f69011b25dcdfed6d8f4625cf12ed3745e03"
+    },
+    {
+      "base_commit": "947f347f219a60775bcf71b226ce778cc8ea21f4",
+      "base_fixture": null,
+      "base_sha256": null,
+      "clause_7_count": 1,
+      "repository": "casegraphen",
+      "target_commit": "095f1fbf81a6ad6f636c64986f799d5cc2cc1646",
+      "target_fixture": "casegraphen-095f1fb-index-target.rs",
+      "target_path": "src/memory/index.rs",
+      "target_sha256": "sha256:440bd8626beddb40f823e710c49322a9ffb3428db02f60f19ca67f45026f673d"
+    },
+    {
+      "base_commit": "9a63d0ad0614035d1309477a2553a770f1d2c94a",
+      "base_fixture": "casegraphen-56f2ef5-base.rs",
+      "base_sha256": "sha256:01c5e7be5a4f28c73ea41e5941183dc1a0e4f0689ec0c19933e2c81c13f433ea",
+      "clause_7_count": 3,
+      "repository": "casegraphen",
+      "target_commit": "56f2ef5d4cc1abe3fa64ddf80a8db79b596fff38",
+      "target_fixture": "casegraphen-56f2ef5-target.rs",
+      "target_path": "src/resource_protocol.rs",
+      "target_sha256": "sha256:0d4df968611d96691af5c74858239abaf74dce0aeef4a409313b860e907c54e9"
+    }
+  ],
+  "schema": "reviewgraphen.runtime.real_subject_fixture_manifest.v1"
+}

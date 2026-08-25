@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.dev/schemas/reviewgraphen.generic_review_request.v2.schema.json",
+  "title": "ReviewGraphen generic review request v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "workspace_admission_root", "repository_admission_root", "repository_identity", "base_revision", "target_revision", "ingest", "plan", "observer", "verifier_descriptor_id"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.generic_review_request.v2"},
+    "workspace_admission_root": {"$ref": "#/$defs/path"},
+    "repository_admission_root": {"$ref": "#/$defs/path"},
+    "repository_identity": {"type": "string", "minLength": 1, "maxLength": 16384},
+    "base_revision": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "target_revision": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "ingest": {"$ref": "#/$defs/ingest"},
+    "plan": {"$ref": "#/$defs/plan"},
+    "observer": {"$ref": "#/$defs/observer"},
+    "verifier_descriptor_id": {"oneOf": [{"type": "null"}, {"const": "workspace.cargo_test@1"}]}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "path": {"type": "string", "minLength": 1, "maxLength": 32768},
+    "ingest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile_id", "profile_version", "rule_set_hash", "max_files", "max_file_bytes", "max_total_source_bytes"],
+      "properties": {
+        "profile_id": {"const": "rust.production.v1"}, "profile_version": {"const": "1"},
+        "rule_set_hash": {"$ref": "#/$defs/hash"},
+        "max_files": {"type": "integer", "minimum": 1, "maximum": 20000},
+        "max_file_bytes": {"type": "integer", "minimum": 1, "maximum": 4194304},
+        "max_total_source_bytes": {"type": "integer", "minimum": 1, "maximum": 17179869184}
+      }
+    },
+    "plan": {
+      "type": "object", "additionalProperties": false, "required": ["max_waves", "max_obligations_per_wave"],
+      "properties": {"max_waves": {"type": "integer", "minimum": 1, "maximum": 1024}, "max_obligations_per_wave": {"type": "integer", "minimum": 1, "maximum": 2048}}
+    },
+    "observer": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "codex_cli"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "claude_cli"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "codex_app_server"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "records"], "properties": {"kind": {"const": "replay"}, "records": {"type": "array", "maxItems": 2048, "items": {"$ref": "#/$defs/path"}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "deterministic_abstain"}}}
+      ]
+    }
+  }
+}

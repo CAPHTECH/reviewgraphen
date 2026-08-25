@@ -6,6 +6,7 @@
 //! objects. They do not treat a report as state.
 
 mod bounds;
+mod generic_non_authority;
 mod report_v3;
 mod report_v4;
 // The public V5 seam is intentionally fail-closed pending the Store-owned
@@ -17,6 +18,11 @@ mod report_v5;
 pub use bounds::{
     BoundsError, LogicalCharge, OwnershipError, ReportAccounting, ReportCounts, ReportLimits,
     ownership_charge,
+};
+pub use generic_non_authority::{
+    GenericHumanReport, GenericHumanReportError, generate_generic_human_report,
+    generate_generic_human_report_v3, validate_generic_human_report,
+    validate_generic_human_report_v3,
 };
 pub use report_v3::{ReportRequestV3, generate_v3, generate_v3_with_limits};
 pub use report_v4::{

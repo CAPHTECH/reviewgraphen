@@ -10,6 +10,7 @@
 //! separate, explicit Core-governed human-authority operation, and this crate
 //! exposes no arbitrary command, path, environment, network, or runner input.
 
+pub mod diagnostics;
 pub mod fixed_offline;
 pub mod generic;
 pub mod m4_verification;

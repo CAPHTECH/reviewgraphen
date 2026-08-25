@@ -165,6 +165,13 @@ ReviewGraphenの価値は「AIがレビューした」という文ではなく�
 
 **追記（2026-08-18）**: 上の一文は本ドキュメント群が最初に書かれた時点のものです。現在は `crates/` 配下に実装が存在し、テストスイートも整備されています（[`DEVELOPMENT.md`](DEVELOPMENT.md)）。実コードに対して現在何ができるかは [`docs/23_current_capability_status.md`](docs/23_current_capability_status.md) を参照してください。この一文は書き換えず、経緯として残します。
 
+**追記（2026-08-24）**: 現在の実装状態の唯一の正典は引き続き
+[`docs/23_current_capability_status.md`](docs/23_current_capability_status.md) です。
+同文書は、コードと実行したテストで再現できた事項だけを「実装済」とし、
+未確認事項を明記します。特に、モデル評価、Stage 0、および free-form
+baseline との比較は実行されていません。したがって、本READMEは
+free-form reviewとの優劣や実運用上の効用を主張しません。
+
 ## FSLとの関係
 
 `benchmarks/`配下の一部の実験（m7-real-v1、m7-head-local-v1など）は、[FSL](https://github.com/ymm-oss/fsl)という別組織(`ymm-oss`)配下の公開リポジトリを実コードのレビュー対象として使っています。このリポジトリの運営者は`ymm-oss/fsl`のadminでもあります。

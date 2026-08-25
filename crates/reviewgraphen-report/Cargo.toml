@@ -12,15 +12,15 @@ workspace = true
 
 [dependencies]
 reviewgraphen-core = { path = "../reviewgraphen-core" }
+reviewgraphen-runtime = { path = "../reviewgraphen-runtime" }
 reviewgraphen-store = { path = "../reviewgraphen-store" }
+jsonschema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-jsonschema.workspace = true
 reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer" }
-reviewgraphen-runtime = { path = "../reviewgraphen-runtime" }
 reviewgraphen-store = { path = "../reviewgraphen-store", features = ["test-support"] }
 serde_json.workspace = true
 tempfile.workspace = true

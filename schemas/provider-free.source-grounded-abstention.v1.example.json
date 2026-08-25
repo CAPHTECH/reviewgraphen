@@ -1,0 +1,10 @@
+{
+  "schema": "provider-free.source-grounded-abstention@1",
+  "task_id": "provider-free-review-task:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "source_inventory_id": "source-inventory:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "disposition": {
+    "kind": "abstention",
+    "reason": "required_evidence_unavailable",
+    "detail": "deterministic.abstain@1 does not evaluate semantic properties"
+  }
+}

@@ -1,7 +1,9 @@
 use crate::git::GitSnapshot;
 use crate::{
-    AdapterReport, AdapterStatus, ArtifactDraft, CapabilityState, IngestionObstructionKind,
-    IssueDraft, LocationDraft, ObstructionSeverity, RelationDraft,
+    AdapterReport, AdapterStatus, ArtifactDraft, CallKind, CallObstructionReason,
+    CallOccurrenceDraft, CapabilityState, IngestionObstructionKind, IssueDraft,
+    LatentOccurrenceCount, LocationDraft, ObstructionSeverity, RelationDraft,
+    V2IngestionObstructionDraft,
 };
 use proc_macro2::Span;
 use quote::ToTokens;
@@ -25,6 +27,7 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
         .collect::<Vec<_>>();
     let mut parsed = Vec::new();
     let mut issues = Vec::new();
+    let mut v2_obstructions = Vec::new();
     for source in &rust_files {
         match std::str::from_utf8(&source.content)
             .map_err(|error| error.to_string())
@@ -62,6 +65,7 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
             &mut artifacts,
             &mut relations,
             &mut issues,
+            &mut v2_obstructions,
             &mut resolver,
         );
     }
@@ -79,6 +83,7 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
         let mut visitor = FunctionBodyVisitor::new(&file.path, &file.function_sources, &resolver);
         visitor.visit_file(&file.ast);
         issues.extend(visitor.issues);
+        v2_obstructions.extend(visitor.v2_obstructions);
         for write in visitor.writes {
             let state_key = format!("state:{}:{}", file.path, write.label);
             state_artifacts
@@ -191,6 +196,23 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
         paths: parsed.iter().map(|file| file.path.clone()).collect(),
         related_capabilities: bounded_capabilities.iter().cloned().collect(),
     });
+    // This v2-specific limitation is deliberately separate from the
+    // historical combined five-capability limitation above.  It names only
+    // direct-call candidate-space incompleteness and remains present even
+    // when this snapshot happened not to contain an unresolved occurrence.
+    v2_obstructions.push(V2IngestionObstructionDraft {
+        kind: IngestionObstructionKind::RelationUnresolved,
+        severity: ObstructionSeverity::Info,
+        description: "unique-local syntactic direct-call resolution is incomplete; \
+            imported, cross-crate, dispatch, and macro-expanded calls may remain unenumerated; \
+            macro expansion latent_occurrence_count is unknown"
+            .to_owned(),
+        source_keys: rust_source_keys.clone(),
+        paths: parsed.iter().map(|file| file.path.clone()).collect(),
+        related_capabilities: BTreeSet::from(["direct_calls".to_owned()]),
+        call_occurrence: None,
+        latent_occurrence_count: Some(LatentOccurrenceCount::Unknown),
+    });
     let mut capability_sources = BTreeMap::<String, BTreeSet<String>>::new();
     for capability in ["ast", "concurrency_model", "containment"]
         .into_iter()
@@ -204,6 +226,7 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
         relations,
         symbol_anchors,
         issues,
+        v2_obstructions,
         capabilities,
         capability_sources,
         adapter_report: AdapterReport {
@@ -226,6 +249,7 @@ pub(crate) struct RustExtraction {
     pub(crate) relations: Vec<RelationDraft>,
     pub(crate) symbol_anchors: BTreeMap<String, RustSymbolAnchorV1>,
     pub(crate) issues: Vec<IssueDraft>,
+    pub(crate) v2_obstructions: Vec<V2IngestionObstructionDraft>,
     pub(crate) capabilities: BTreeMap<String, CapabilityState>,
     pub(crate) capability_sources: BTreeMap<String, BTreeSet<String>>,
     pub(crate) adapter_report: AdapterReport,
@@ -284,6 +308,7 @@ fn collect_file_declarations(
     artifacts: &mut Vec<ArtifactDraft>,
     relations: &mut Vec<RelationDraft>,
     issues: &mut Vec<IssueDraft>,
+    v2_obstructions: &mut Vec<V2IngestionObstructionDraft>,
     resolver: &mut BTreeMap<String, Vec<String>>,
 ) {
     artifacts.push(module_artifact(
@@ -307,7 +332,14 @@ fn collect_file_declarations(
     };
     let items = file.ast.items.clone();
     collect_items(
-        &items, file, context, artifacts, relations, issues, resolver,
+        &items,
+        file,
+        context,
+        artifacts,
+        relations,
+        issues,
+        v2_obstructions,
+        resolver,
     );
 }
 
@@ -512,6 +544,7 @@ fn collect_items(
     artifacts: &mut Vec<ArtifactDraft>,
     relations: &mut Vec<RelationDraft>,
     issues: &mut Vec<IssueDraft>,
+    v2_obstructions: &mut Vec<V2IngestionObstructionDraft>,
     resolver: &mut BTreeMap<String, Vec<String>>,
 ) {
     for item in items {
@@ -568,17 +601,25 @@ fn collect_items(
                 relations,
             ),
             Item::Mod(module) => collect_module(
-                module, file, &context, artifacts, relations, issues, resolver,
+                module,
+                file,
+                &context,
+                artifacts,
+                relations,
+                issues,
+                v2_obstructions,
+                resolver,
             ),
             Item::Use(item) => {
                 collect_import(item.tree.clone(), file, &context, artifacts, relations)
             }
-            Item::Macro(item) => collect_item_macro(item, file, &context, issues),
+            Item::Macro(item) => collect_item_macro(item, file, &context, issues, v2_obstructions),
             _ => {}
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_module(
     module: &ItemMod,
     file: &mut ParsedFile,
@@ -586,6 +627,7 @@ fn collect_module(
     artifacts: &mut Vec<ArtifactDraft>,
     relations: &mut Vec<RelationDraft>,
     issues: &mut Vec<IssueDraft>,
+    v2_obstructions: &mut Vec<V2IngestionObstructionDraft>,
     resolver: &mut BTreeMap<String, Vec<String>>,
 ) {
     let module_label = format!("{}::{}", context.module_label, module.ident);
@@ -616,6 +658,7 @@ fn collect_module(
             artifacts,
             relations,
             issues,
+            v2_obstructions,
             resolver,
         );
     } else {
@@ -840,6 +883,7 @@ fn collect_item_macro(
     file: &ParsedFile,
     context: &DeclarationContext,
     issues: &mut Vec<IssueDraft>,
+    v2_obstructions: &mut Vec<V2IngestionObstructionDraft>,
 ) {
     let name = item
         .mac
@@ -858,6 +902,24 @@ fn collect_item_macro(
         source_keys: BTreeSet::from([context.module_key.clone()]),
         paths: BTreeSet::from([file.path.clone()]),
         related_capabilities: BTreeSet::new(),
+    });
+    v2_obstructions.push(V2IngestionObstructionDraft {
+        kind: IngestionObstructionKind::MacroExpansionUnresolved,
+        severity: ObstructionSeverity::Medium,
+        description: format!(
+            "macro invocation `{name}!` was retained as an unresolved expansion at line {}",
+            item.span().start().line
+        ),
+        source_keys: BTreeSet::from([context.module_key.clone()]),
+        paths: BTreeSet::from([file.path.clone()]),
+        related_capabilities: BTreeSet::from(["direct_calls".to_owned()]),
+        call_occurrence: Some(CallOccurrenceDraft {
+            call_kind: CallKind::MacroInvocation,
+            reason: CallObstructionReason::MacroExpansionUnresolved,
+            span: location(&file.path, item.span()),
+            extractor_id: "reviewgraphen.ingest.rust-call-enumeration@2",
+        }),
+        latent_occurrence_count: None,
     });
 }
 
@@ -1118,7 +1180,10 @@ fn location(path: &str, span: Span) -> LocationDraft {
         start_line: u64::try_from(start.line.max(1)).expect("usize fits u64"),
         end_line: u64::try_from(end.line.max(start.line).max(1)).expect("usize fits u64"),
         start_column: u64::try_from(start.column + 1).expect("usize fits u64"),
-        end_column: u64::try_from(end.column + 1).expect("usize fits u64"),
+        // `Span::end().column` is zero-based and exclusive.  Its numeric
+        // value is therefore already the corresponding one-based inclusive
+        // column; adding one would point one character beyond the syntax.
+        end_column: u64::try_from(end.column).expect("usize fits u64"),
     }
 }
 
@@ -1311,8 +1376,7 @@ fn pattern_bindings(
                 .last()
                 .map(|segment| segment.ident.to_string())
                 .unwrap_or_else(|| "unknown_macro".to_owned());
-            visitor.unresolved(
-                IngestionObstructionKind::MacroExpansionUnresolved,
+            visitor.unresolved_pattern_macro(
                 format!(
                     "pattern-position macro invocation `{name}!` was not expanded at line {}",
                     pat.span().start().line
@@ -1457,6 +1521,7 @@ struct FunctionBodyVisitor<'a> {
     relations: Vec<RelationDraft>,
     writes: Vec<StateWrite>,
     issues: Vec<IssueDraft>,
+    v2_obstructions: Vec<V2IngestionObstructionDraft>,
 }
 
 impl<'a> FunctionBodyVisitor<'a> {
@@ -1475,6 +1540,7 @@ impl<'a> FunctionBodyVisitor<'a> {
             relations: Vec::new(),
             writes: Vec::new(),
             issues: Vec::new(),
+            v2_obstructions: Vec::new(),
         }
     }
 
@@ -1606,12 +1672,85 @@ impl<'a> FunctionBodyVisitor<'a> {
         let _ = span;
     }
 
+    fn unresolved_call(
+        &mut self,
+        call_kind: CallKind,
+        reason: CallObstructionReason,
+        kind: IngestionObstructionKind,
+        description: String,
+        span: Span,
+    ) {
+        let Some(source_key) = self.current() else {
+            return;
+        };
+        // Preserve the historical v1 diagnostic unchanged.  The distinct v2
+        // record below carries the closed occurrence contract; it is never
+        // inferred from this prose.
+        self.issues.push(IssueDraft {
+            kind,
+            severity: ObstructionSeverity::Medium,
+            description: description.clone(),
+            source_keys: BTreeSet::from([source_key.clone()]),
+            paths: BTreeSet::from([self.path.to_owned()]),
+            related_capabilities: BTreeSet::new(),
+        });
+        self.v2_obstructions.push(V2IngestionObstructionDraft {
+            kind,
+            severity: ObstructionSeverity::Medium,
+            description,
+            source_keys: BTreeSet::from([source_key]),
+            paths: BTreeSet::from([self.path.to_owned()]),
+            related_capabilities: BTreeSet::from(["direct_calls".to_owned()]),
+            call_occurrence: Some(CallOccurrenceDraft {
+                call_kind,
+                reason,
+                span: location(self.path, span),
+                extractor_id: "reviewgraphen.ingest.rust-call-enumeration@2",
+            }),
+            latent_occurrence_count: None,
+        });
+    }
+
+    fn unresolved_pattern_macro(&mut self, description: String, span: Span) {
+        let Some(source_key) = self.current() else {
+            return;
+        };
+        // Preserve the original v1 extraction obstruction unchanged. The v2
+        // sidecar is an additional, isolated projection and must not erase a
+        // historical legacy loss record.
+        self.issues.push(IssueDraft {
+            kind: IngestionObstructionKind::MacroExpansionUnresolved,
+            severity: ObstructionSeverity::Medium,
+            description: description.clone(),
+            source_keys: BTreeSet::from([source_key.clone()]),
+            paths: BTreeSet::from([self.path.to_owned()]),
+            related_capabilities: BTreeSet::new(),
+        });
+        self.v2_obstructions.push(V2IngestionObstructionDraft {
+            kind: IngestionObstructionKind::MacroExpansionUnresolved,
+            severity: ObstructionSeverity::Medium,
+            description,
+            source_keys: BTreeSet::from([source_key]),
+            paths: BTreeSet::from([self.path.to_owned()]),
+            related_capabilities: BTreeSet::from(["direct_calls".to_owned()]),
+            call_occurrence: Some(CallOccurrenceDraft {
+                call_kind: CallKind::MacroInvocation,
+                reason: CallObstructionReason::MacroExpansionUnresolved,
+                span: location(self.path, span),
+                extractor_id: "reviewgraphen.ingest.rust-call-enumeration@2",
+            }),
+            latent_occurrence_count: None,
+        });
+    }
+
     fn record_call(&mut self, call: &ExprCall) {
         let Some(source_key) = self.current() else {
             return;
         };
         let Expr::Path(path) = call.func.as_ref() else {
-            self.unresolved(
+            self.unresolved_call(
+                CallKind::Direct,
+                CallObstructionReason::DirectNonPath,
                 IngestionObstructionKind::RelationUnresolved,
                 format!(
                     "non-path function call was not resolved at line {}",
@@ -1628,6 +1767,16 @@ impl<'a> FunctionBodyVisitor<'a> {
             .map(|segment| segment.ident.to_string())
             .collect::<Vec<_>>();
         if segments.is_empty() {
+            self.unresolved_call(
+                CallKind::Direct,
+                CallObstructionReason::DirectEmptyPath,
+                IngestionObstructionKind::RelationUnresolved,
+                format!(
+                    "direct call path contained no segments at line {}",
+                    call.span().start().line
+                ),
+                call.span(),
+            );
             return;
         }
         let full = segments.join("::");
@@ -1662,7 +1811,9 @@ impl<'a> FunctionBodyVisitor<'a> {
         // requires knowing the receiver's type -- the call is retained as
         // an explicit unresolved relation instead of guessed.
         if segments.len() == 1 && self.is_locally_bound(&segments[0]) {
-            self.unresolved(
+            self.unresolved_call(
+                CallKind::Direct,
+                CallObstructionReason::DirectShadowedBinding,
                 IngestionObstructionKind::RelationUnresolved,
                 format!(
                     "unqualified call `{full}` is shadowed by a local binding at line {}; it \
@@ -1680,7 +1831,9 @@ impl<'a> FunctionBodyVisitor<'a> {
         // be proven safe, so it is conservatively unresolved regardless of
         // whether `segments[0]` is already a known local binding.
         if segments.len() == 1 && self.in_conservative_unresolved_scope() {
-            self.unresolved(
+            self.unresolved_call(
+                CallKind::Direct,
+                CallObstructionReason::DirectUnresolvedScope,
                 IngestionObstructionKind::RelationUnresolved,
                 format!(
                     "unqualified call `{full}` at line {} is in a scope reachable by a glob \
@@ -1706,7 +1859,13 @@ impl<'a> FunctionBodyVisitor<'a> {
                 .unwrap_or_default()
         };
         if candidates.len() != 1 {
-            self.unresolved(
+            self.unresolved_call(
+                CallKind::Direct,
+                if candidates.is_empty() {
+                    CallObstructionReason::DirectTargetCountZero
+                } else {
+                    CallObstructionReason::DirectTargetCountMultiple
+                },
                 IngestionObstructionKind::RelationUnresolved,
                 format!(
                     "direct call `{full}` has {} local syntactic targets at line {}",
@@ -1939,7 +2098,9 @@ impl Visit<'_> for FunctionBodyVisitor<'_> {
     }
 
     fn visit_expr_method_call(&mut self, call: &ExprMethodCall) {
-        self.unresolved(
+        self.unresolved_call(
+            CallKind::Method,
+            CallObstructionReason::MethodDispatchUnresolved,
             IngestionObstructionKind::DynamicDispatchUnresolved,
             format!(
                 "method call `{}` was not resolved beyond syntactic dispatch at line {}",
@@ -1958,7 +2119,9 @@ impl Visit<'_> for FunctionBodyVisitor<'_> {
             .last()
             .map(|segment| segment.ident.to_string())
             .unwrap_or_else(|| "unknown_macro".to_owned());
-        self.unresolved(
+        self.unresolved_call(
+            CallKind::MacroInvocation,
+            CallObstructionReason::MacroExpansionUnresolved,
             IngestionObstructionKind::MacroExpansionUnresolved,
             format!(
                 "macro invocation `{name}!` was not expanded at line {}",

@@ -49,9 +49,17 @@
 | `reviewgraphen.benchmark.real_full_run_summary.v1.schema.json` | Additive full-ReviewGraphen-only real-fix summary; the frozen B1/G3 paired summary remains unchanged. |
 | `reviewgraphen.process_reviewer_record.v1.schema.json` | Hash-bound raw Codex/Claude process observation for deterministic replay; explicitly non-authority. |
 | `reviewgraphen.generic_review_request.v1.schema.json` | Ordinary Git generic orchestration request with explicit ingest/plan bounds and a swappable local-process or replay backend. |
+| `reviewgraphen.generic_review_request.v2.schema.json` | ADR 0038 closed generic request: admitted local Git roots, `rust.production.v1` ingest bounds, the D relation review profile, bounded plan, provider-free/replay observer selection, and the deferred workspace verifier selection. |
 | `reviewgraphen.reviewer_output.v1.schema.json` | Preserved strict non-authority reviewer output contract; root-level exclusivity makes it unsuitable as the current provider Structured Outputs schema. |
 | `reviewgraphen.reviewer_output.v2.schema.json` | Provider-facing non-authority output with a root object and a nested closed `anyOf` between structured claims and abstention; new generic packets emit v2 and deterministically lower it through the strict v1 parser. |
 | `reviewgraphen.generic_review_run.v1.schema.json` | Denominator-preserving generic run projection with raw process records, parsed proposal outcomes, and a fixed non-authority/incomplete ceiling. |
+| `reviewgraphen.generic_review_run.v2.schema.json` | ADR 0038 canonical non-authority audit projection. It records the D two-layer obligation denominator, `context.subject_windows@2`, observation/coverage partitions, partial direct-call enumeration trace, a closed deferred verifier result, and a fixed incomplete authority ceiling. |
+| `reviewgraphen.generic_review_human_report.v1.schema.json` | Closed non-authority manifest derived only from a validated run-v2 audit; it binds audit and Markdown hashes, source/window trace, meaningful loss, proposal/abstention state, and verifier status. |
+| `reviewgraphen.generic_review_diagnostics.v1.schema.json` | Closed non-authority operational diagnostic with nullable request/run bindings and exactly six ordered stage observations; the adjacent `.example.json` uses real v3 run bindings, while elapsed microseconds remain non-canonical operational observations. |
+| `provider-free.source-grounded-packet.v1.schema.json` | Closed provider-free reviewer packet containing only admitted source payloads and a fixed abstention response schema; it is not an authority artifact. |
+| `provider-free.source-grounded-abstention.v1.schema.json` | The sole fixed output for `deterministic.abstain@1`: an explicit abstention, never a semantic finding. |
+| `provider-free.source-inventory.v1.schema.json` | Canonical admitted-source inventory bound into the provider-free packet and abstention. |
+| `reviewgraphen.review_profile.v1.schema.json` | Closed `rust.production.v1` profile used by the ADR 0038 changed-public-callee path; declared exclusions remain visible in the obligation universe. |
 
 ## Validation layers
 

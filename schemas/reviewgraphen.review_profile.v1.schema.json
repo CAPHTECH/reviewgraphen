@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capht.tech/schemas/reviewgraphen/review_profile.v1.schema.json",
+  "title": "ReviewGraphen rust.production.v1 Review Profile",
+  "type": "object",
+  "const": {"category_precedence":["vendor","generated","test","example","docs"],"exclusion_matchers":[{"category":"vendor","id":"path.vendor_component@1","operator":"component_equals_any","values":["third_party","vendor","vendored"]},{"category":"generated","id":"path.generated_component@1","operator":"component_equals_any","values":["generated","target"]},{"category":"generated","id":"path.generated_suffix@1","operator":"basename_suffix_any","values":[".generated.rs"]},{"category":"test","id":"path.test_component@1","operator":"component_equals_any","values":["benches","tests"]},{"category":"test","id":"path.test_basename@1","operator":"basename_equals_any","values":["test.rs","tests.rs"]},{"category":"test","id":"path.test_suffix@1","operator":"basename_suffix_any","values":["_test.rs","_tests.rs"]},{"category":"example","id":"path.example_component@1","operator":"component_equals_any","values":["example","examples"]},{"category":"docs","id":"path.docs_component@1","operator":"component_equals_any","values":["doc","docs"]}],"id":"rust.production.v1","path_normalization":{"absolute":"reject","backslash":"reject","case_fold":false,"dot":"reject","dot_dot":"reject","empty_component":"reject","encoding":"utf-8","nul":"reject","separator":"/","unicode_normalization":"none"},"reason_ids":{"docs":"profile.exclude.docs@1","example":"profile.exclude.example@1","generated":"profile.exclude.generated@1","test":"profile.exclude.test@1","vendor":"profile.exclude.vendor@1"},"rust_source":{"basename_suffix":".rs","case_sensitive":true},"schema":"reviewgraphen.review_profile.v1"},
+  "additionalProperties": false,
+  "required": [
+    "category_precedence",
+    "exclusion_matchers",
+    "id",
+    "path_normalization",
+    "reason_ids",
+    "rust_source",
+    "schema"
+  ],
+  "properties": {
+    "category_precedence": {
+      "type": "array",
+      "const": ["vendor", "generated", "test", "example", "docs"]
+    },
+    "exclusion_matchers": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/matcher" }
+    },
+    "id": { "const": "rust.production.v1" },
+    "path_normalization": { "$ref": "#/$defs/pathNormalization" },
+    "reason_ids": { "$ref": "#/$defs/reasonIds" },
+    "rust_source": { "$ref": "#/$defs/rustSource" },
+    "schema": { "const": "reviewgraphen.review_profile.v1" }
+  },
+  "$defs": {
+    "matcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "id", "operator", "values"],
+      "properties": {
+        "category": { "enum": ["vendor", "generated", "test", "example", "docs"] },
+        "id": {
+          "enum": [
+            "path.vendor_component@1",
+            "path.generated_component@1",
+            "path.generated_suffix@1",
+            "path.test_component@1",
+            "path.test_basename@1",
+            "path.test_suffix@1",
+            "path.example_component@1",
+            "path.docs_component@1"
+          ]
+        },
+        "operator": {
+          "enum": ["component_equals_any", "basename_equals_any", "basename_suffix_any"]
+        },
+        "values": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "minItems": 1
+        }
+      }
+    },
+    "pathNormalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "absolute", "backslash", "case_fold", "dot", "dot_dot",
+        "empty_component", "encoding", "nul", "separator", "unicode_normalization"
+      ],
+      "properties": {
+        "absolute": { "const": "reject" },
+        "backslash": { "const": "reject" },
+        "case_fold": { "const": false },
+        "dot": { "const": "reject" },
+        "dot_dot": { "const": "reject" },
+        "empty_component": { "const": "reject" },
+        "encoding": { "const": "utf-8" },
+        "nul": { "const": "reject" },
+        "separator": { "const": "/" },
+        "unicode_normalization": { "const": "none" }
+      }
+    },
+    "reasonIds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["docs", "example", "generated", "test", "vendor"],
+      "properties": {
+        "docs": { "const": "profile.exclude.docs@1" },
+        "example": { "const": "profile.exclude.example@1" },
+        "generated": { "const": "profile.exclude.generated@1" },
+        "test": { "const": "profile.exclude.test@1" },
+        "vendor": { "const": "profile.exclude.vendor@1" }
+      }
+    },
+    "rustSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["basename_suffix", "case_sensitive"],
+      "properties": {
+        "basename_suffix": { "const": ".rs" },
+        "case_sensitive": { "const": true }
+      }
+    }
+  }
+}

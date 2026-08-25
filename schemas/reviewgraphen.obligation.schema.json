@@ -353,7 +353,71 @@
               }
             }
           }
+        },
+        "d_two_layer_coverage": {
+          "$ref": "#/$defs/dTwoLayerCoverage"
         }
+      }
+    },
+    "dTwoLayerCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "resolved_target_obligation_ids",
+        "candidate_space_gap_obligation_ids",
+        "target_support_capability_gaps",
+        "enumeration_capability_gaps",
+        "enumeration_capability_states",
+        "enumeration_limitation_ids",
+        "planned_obligation_ids",
+        "deferred_obligation_ids",
+        "executed_obligation_ids",
+        "structured_obligation_ids",
+        "abstained_obligation_ids",
+        "malformed_obligation_ids",
+        "provider_failed_obligation_ids",
+        "verifier_observed_obligation_ids",
+        "call_graph_complete",
+        "global_call_coverage_claim"
+      ],
+      "properties": {
+        "rule": { "const": "relation.changed_public_callee@1" },
+        "resolved_target_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "candidate_space_gap_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "target_support_capability_gaps": { "$ref": "#/$defs/capabilityGapMap" },
+        "enumeration_capability_gaps": { "$ref": "#/$defs/capabilityGapMap" },
+        "enumeration_capability_states": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["complete", "partial", "missing", "unknown"]
+          },
+          "required": ["direct_calls"]
+        },
+        "enumeration_limitation_ids": { "$ref": "#/$defs/identifierSet" },
+        "planned_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "deferred_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "executed_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "structured_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "abstained_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "malformed_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "provider_failed_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "verifier_observed_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "call_graph_complete": { "const": false },
+        "global_call_coverage_claim": { "const": "prohibited" }
+      }
+    },
+    "identifierSet": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/identifier" },
+      "uniqueItems": true
+    },
+    "capabilityGapMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^capability_(partial|missing|unknown|undeclared):[A-Za-z0-9_.-]+$"
       }
     },
     "target": {
@@ -411,7 +475,7 @@
         }
       }
     },
-    "contextRequirement": {
+    "legacyContextRequirement": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -456,6 +520,114 @@
           "type": "boolean"
         }
       }
+    },
+    "splitContextRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_ids",
+        "target_support_capabilities",
+        "enumeration_capabilities",
+        "include_relation_kinds",
+        "max_relation_depth",
+        "include_tests",
+        "include_existing_evidence"
+      ],
+      "properties": {
+        "context_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        },
+        "target_support_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "enumeration_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "include_relation_kinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "max_relation_depth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "include_tests": {
+          "type": "boolean"
+        },
+        "include_existing_evidence": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "required_capabilities"
+            ]
+          }
+        },
+        {
+          "not": {
+            "properties": {
+              "target_support_capabilities": {
+                "contains": {
+                  "enum": [
+                    "direct_calls"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "target_support_capabilities"
+            ]
+          }
+        },
+        {
+          "not": {
+            "properties": {
+              "enumeration_capabilities": {
+                "contains": {
+                  "enum": [
+                    "ast",
+                    "containment",
+                    "changed_structure"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "enumeration_capabilities"
+            ]
+          }
+        }
+      ]
+    },
+    "contextRequirement": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/legacyContextRequirement"
+        },
+        {
+          "$ref": "#/$defs/splitContextRequirement"
+        }
+      ]
     },
     "evidenceRequirement": {
       "type": "object",

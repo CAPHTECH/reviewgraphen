@@ -1,0 +1,51 @@
+{
+  "schema": "provider-free.source-grounded-packet@1",
+  "task_id": "provider-free-review-task:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "instruction": "Return the fixed provider-free abstention using the supplied closed schema.",
+  "response_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schema", "task_id", "source_inventory_id", "disposition"],
+    "properties": {
+      "schema": {"const": "provider-free.source-grounded-abstention@1"},
+      "task_id": {"const": "provider-free-review-task:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "source_inventory_id": {"const": "source-inventory:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      "disposition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "reason", "detail"],
+        "properties": {
+          "kind": {"const": "abstention"},
+          "reason": {"const": "required_evidence_unavailable"},
+          "detail": {"const": "deterministic.abstain@1 does not evaluate semantic properties"}
+        }
+      }
+    }
+  },
+  "source_inventory": {
+    "schema": "provider-free.source-inventory@1",
+    "source_inventory_id": "source-inventory:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "admitted_sources": [
+      {
+        "source_id": "source:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "path": "src/lib.rs",
+        "range": {"start_line": 1, "end_line": 1},
+        "payload_id": "source-payload:sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "bytes": 10,
+        "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    ],
+    "canonical_sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "payloads": [
+    {
+      "payload_id": "source-payload:sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "encoding": "utf-8",
+      "media_type": "text/x-rust; charset=utf-8",
+      "byte_length": 10,
+      "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "text": "fn f() {}\n"
+    }
+  ]
+}

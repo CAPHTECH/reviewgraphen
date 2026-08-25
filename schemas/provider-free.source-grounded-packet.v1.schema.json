@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.dev/schemas/provider-free.source-grounded-packet.v1.schema.json",
+  "title": "Provider-free source-grounded packet v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "task_id", "instruction", "response_schema", "source_inventory", "payloads"],
+  "properties": {
+    "schema": {"const": "provider-free.source-grounded-packet@1"},
+    "task_id": {"type": "string", "pattern": "^provider-free-review-task:sha256:[0-9a-f]{64}$"},
+    "instruction": {"const": "Return the fixed provider-free abstention using the supplied closed schema."},
+    "response_schema": {"$ref": "#/$defs/response_schema"},
+    "source_inventory": {"$ref": "#/$defs/inventory"},
+    "payloads": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/payload"}}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*:sha256:[0-9a-f]{64}$"},
+    "range": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start_line", "end_line"],
+      "properties": {"start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}}
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_id", "path", "range", "payload_id", "bytes", "sha256"],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/id"},
+        "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$"},
+        "range": {"$ref": "#/$defs/range"}, "payload_id": {"$ref": "#/$defs/id"},
+        "bytes": {"type": "integer", "minimum": 1}, "sha256": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "inventory": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "source_inventory_id", "admitted_sources", "canonical_sha256"],
+      "properties": {
+        "schema": {"const": "provider-free.source-inventory@1"},
+        "source_inventory_id": {"type": "string", "pattern": "^source-inventory:sha256:[0-9a-f]{64}$"},
+        "admitted_sources": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/source"}},
+        "canonical_sha256": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["payload_id", "encoding", "media_type", "byte_length", "sha256", "text"],
+      "properties": {
+        "payload_id": {"$ref": "#/$defs/id"}, "encoding": {"const": "utf-8"},
+        "media_type": {"const": "text/x-rust; charset=utf-8"}, "byte_length": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/$defs/hash"}, "text": {"type": "string", "minLength": 1}
+      }
+    },
+    "required_abstention_fields": {
+      "type": "array", "uniqueItems": true, "minItems": 4, "maxItems": 4,
+      "prefixItems": [
+        {"const": "schema"}, {"const": "task_id"}, {"const": "source_inventory_id"}, {"const": "disposition"}
+      ],
+      "items": false
+    },
+    "required_disposition_fields": {
+      "type": "array", "uniqueItems": true, "minItems": 3, "maxItems": 3,
+      "prefixItems": [{"const": "kind"}, {"const": "reason"}, {"const": "detail"}],
+      "items": false
+    },
+    "const_provider_free_schema": {
+      "type": "object", "additionalProperties": false, "required": ["const"],
+      "properties": {"const": {"const": "provider-free.source-grounded-abstention@1"}}
+    },
+    "const_task_id": {
+      "type": "object", "additionalProperties": false, "required": ["const"],
+      "properties": {"const": {"type": "string", "pattern": "^provider-free-review-task:sha256:[0-9a-f]{64}$"}}
+    },
+    "const_source_inventory_id": {
+      "type": "object", "additionalProperties": false, "required": ["const"],
+      "properties": {"const": {"type": "string", "pattern": "^source-inventory:sha256:[0-9a-f]{64}$"}}
+    },
+    "const_abstention": {
+      "type": "object", "additionalProperties": false, "required": ["const"],
+      "properties": {"const": {"const": "abstention"}}
+    },
+    "const_required_evidence_unavailable": {
+      "type": "object", "additionalProperties": false, "required": ["const"],
+      "properties": {"const": {"const": "required_evidence_unavailable"}}
+    },
+    "const_abstention_detail": {
+      "type": "object", "additionalProperties": false, "required": ["const"],
+      "properties": {"const": {"const": "deterministic.abstain@1 does not evaluate semantic properties"}}
+    },
+    "disposition_schema": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "additionalProperties", "required", "properties"],
+      "properties": {
+        "type": {"const": "object"}, "additionalProperties": {"const": false},
+        "required": {"$ref": "#/$defs/required_disposition_fields"},
+        "properties": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "reason", "detail"],
+          "properties": {
+            "kind": {"$ref": "#/$defs/const_abstention"},
+            "reason": {"$ref": "#/$defs/const_required_evidence_unavailable"},
+            "detail": {"$ref": "#/$defs/const_abstention_detail"}
+          }
+        }
+      }
+    },
+    "response_schema": {
+      "type": "object", "additionalProperties": false,
+      "required": ["$schema", "type", "additionalProperties", "required", "properties"],
+      "properties": {
+        "$schema": {"const": "https://json-schema.org/draft/2020-12/schema"},
+        "type": {"const": "object"}, "additionalProperties": {"const": false},
+        "required": {"$ref": "#/$defs/required_abstention_fields"},
+        "properties": {
+          "type": "object", "additionalProperties": false,
+          "required": ["schema", "task_id", "source_inventory_id", "disposition"],
+          "properties": {
+            "schema": {"$ref": "#/$defs/const_provider_free_schema"},
+            "task_id": {"$ref": "#/$defs/const_task_id"},
+            "source_inventory_id": {"$ref": "#/$defs/const_source_inventory_id"},
+            "disposition": {"$ref": "#/$defs/disposition_schema"}
+          }
+        }
+      }
+    }
+  }
+}

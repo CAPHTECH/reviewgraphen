@@ -7,6 +7,7 @@
 
 mod canonical;
 mod context;
+mod context_validation_oracle;
 mod coverage;
 mod error;
 mod event;
@@ -20,6 +21,7 @@ pub mod m6;
 #[cfg(test)]
 mod m6_test_support;
 mod planning;
+pub mod profile;
 mod program;
 mod projection;
 mod review;
@@ -36,9 +38,23 @@ mod m1_tests;
 
 pub use canonical::{CanonicalJson, canonical_hash, canonical_json, canonical_json_value};
 pub use context::{
-    BuiltContextProjection, ContextBuildSession, ContextError, ContextPolicyV1,
-    ContextSourceRequest, EnvelopeLoss, EnvelopeUnknown, ExcerptRange, ExcludedSourceRef,
-    ExclusionReason, ReviewContextEnvelope, SourceArtifactRef, prepare_context,
+    BuiltContextProjection, BuiltContextSubjectWindowsV2, BuiltContextSubjectWindowsV3,
+    ContextBuildEffect, ContextBuildProbe, ContextBuildSession, ContextBuildTrace,
+    ContextDenominatorCommitmentV3, ContextError, ContextKnownCardinalityV3,
+    ContextLatentCardinalityV3, ContextMaterializedSourceV3, ContextPolicyV1, ContextSourceRequest,
+    ContextSubjectBindingErrorV2, ContextSubjectLossV2, ContextSubjectLossV3,
+    ContextSubjectOutcomeV3, ContextSubjectWindowsPolicyV2, ContextSubjectWindowsPolicyV3,
+    ContextSubjectWindowsSessionV2, ContextSubjectWindowsSessionV3,
+    ContextSubjectWindowsV3ValidationError, ContextSupportLossSummaryV3, ContextValidationBasisV3,
+    ContextWindowCandidateV2, ContextWindowInputV2, ContextWindowLossReasonV2, ContextWindowRoleV2,
+    ContextWindowV2, ContextWindowV3, EnvelopeLoss, EnvelopeUnknown, ExcerptRange,
+    ExcludedSourceRef, ExclusionReason, ReviewContextEnvelope,
+    SemanticallyValidatedContextSubjectWindowsV3, SourceArtifactRef,
+    ValidatedContextSubjectWindowsV3, WireValidatedContextSubjectWindowsV3, prepare_context,
+    prepare_subject_windows_v2, prepare_subject_windows_v2_with_probe, prepare_subject_windows_v3,
+    prepare_subject_windows_v3_with_probe, resolve_subject_windows_v2,
+    validate_subject_windows_v3_against_basis, validate_subject_windows_v3_read_only,
+    validate_subject_windows_v3_wire_read_only,
 };
 pub use coverage::{Coverage, CoverageMeasure, Ratio};
 pub use error::{DomainError, PlanningError, Result};
@@ -201,5 +217,5 @@ pub use review::{
 pub use source::{SnapshotSourceBundle, SnapshotSourceEntry};
 pub use synthesize::{
     ExclusionRecord, MvpRulePack, ObligationBundle, ObligationContract, RuleDescriptor,
-    UniverseDescriptor,
+    UniverseDescriptor, plan_resolved_target_obligations,
 };

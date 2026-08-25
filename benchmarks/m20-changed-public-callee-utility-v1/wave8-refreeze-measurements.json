@@ -1,0 +1,106 @@
+{
+  "schema": "m20.wave8-refreeze-measurements.v1",
+  "authority": "pre-seal operational diagnostic; not a Stage 0 gate, model result, corpus outcome, denominator, or scoring input",
+  "measured_on": "2026-08-25",
+  "superseded_freeze_manifest_sha256": "sha256:19014d24b608ee51547f0f3a99c9559583b312b0eeaa848d69441876dd51c1e6",
+  "environment": {
+    "platform": "Linux 6.12.101+deb13-cloud-amd64 x86_64 GNU/Linux",
+    "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+    "workspace_head_before_dirty_changes": "1a2fefb10c1bffb088f8377e102d391086e094a9"
+  },
+  "algorithm_sources": {
+    "context_validation_oracle.rs": "sha256:4afb9ed6e6c07c3c23367c5bd2e8729d413de0064aacc9324ce2b6f492c52a94",
+    "context.rs": "sha256:e4e49e2b16e5ee7d626117a97eab498ef04a8a4f2aa6e2cb1ff21e6da5b4ee77",
+    "generic.rs": "sha256:2174b53bcdff80e250652ad6c66015350ccddcefcf1d52d594d8b799df1fd6bd",
+    "generic_v3.rs": "sha256:7579bf62c92a29459e172abc88aa112a3da9639bc561101cc0be8a1ec4876989",
+    "real-subject-pairs.v1.json": "sha256:8e27d0d8fc763e74515723d1100a748d22edc5356a2f6593575e6988f2948e22"
+  },
+  "real_pairs": [
+    {
+      "repository": "fsl",
+      "base_commit": "2be279ed11354cc4856a6be2d84a4b2f631ab611",
+      "target_commit": "ec0a40a91570127c8fc91cec75fffe920e229d5b",
+      "clause_7_obligations": 3,
+      "basis_lifecycle_events": 8,
+      "accepted_files_per_context": 1,
+      "reached_files_per_context": 1,
+      "support_anchors_per_context": 27,
+      "oracle_operation_counts_per_context": {"accepted_artifact_visits": 39, "relation_scan_visits": 100, "containment_relation_visits": 9700, "structural_ids": 30},
+      "elapsed_milliseconds": [196, 196],
+      "canonical_run_sha256": "sha256:8a7c3859f4b81709e6ed8db5879e98e2144af342e2dff853c6a43f4c37c4117d"
+    },
+    {
+      "repository": "fsl",
+      "base_commit": "fbcb62df43d8079ed55ecfe9fc0823eb672babdb",
+      "target_commit": "fd5b8c68d2f03f19e7c75c4389e5ea7db6a8f7fe",
+      "clause_7_obligations": 1,
+      "basis_lifecycle_events": 4,
+      "accepted_files_per_context": 1,
+      "reached_files_per_context": 1,
+      "support_anchors_per_context": 21,
+      "oracle_operation_counts_per_context": {"accepted_artifact_visits": 27, "relation_scan_visits": 72, "containment_relation_visits": 5400, "structural_ids": 24},
+      "elapsed_milliseconds": [81, 81],
+      "canonical_run_sha256": "sha256:b32350307e15466207684ab0c8e1d56755385e473c6faad9daa54a253e544d04"
+    },
+    {
+      "repository": "casegraphen",
+      "base_commit": "947f347f219a60775bcf71b226ce778cc8ea21f4",
+      "target_commit": "095f1fbf81a6ad6f636c64986f799d5cc2cc1646",
+      "clause_7_obligations": 1,
+      "basis_lifecycle_events": 4,
+      "accepted_files_per_context": 1,
+      "reached_files_per_context": 1,
+      "support_anchors_per_context": 5,
+      "oracle_operation_counts_per_context": {"accepted_artifact_visits": 18, "relation_scan_visits": 30, "containment_relation_visits": 510, "structural_ids": 9},
+      "elapsed_milliseconds": [43, 42],
+      "canonical_run_sha256": "sha256:52defda82cc7573bdcdcee405b5149d19f0363932b08403e0ea1d393548fa677"
+    },
+    {
+      "repository": "casegraphen",
+      "base_commit": "9a63d0ad0614035d1309477a2553a770f1d2c94a",
+      "target_commit": "56f2ef5d4cc1abe3fa64ddf80a8db79b596fff38",
+      "clause_7_obligations": 3,
+      "basis_lifecycle_events": 8,
+      "accepted_files_per_context": 1,
+      "reached_files_per_context": 1,
+      "support_anchors_per_context": 39,
+      "oracle_operation_counts_per_context": {"accepted_artifact_visits": 49, "relation_scan_visits": 125, "containment_relation_visits": 11000, "structural_ids": 42},
+      "elapsed_milliseconds": [384, 382],
+      "canonical_run_sha256": "sha256:45cde6659b864849be837ba779a6d822603a7a8edbd4ee796784fcdd3e68ac03"
+    }
+  ],
+  "representative_cluster": {
+    "pair": "fsl:2be279ed11354cc4856a6be2d84a4b2f631ab611->ec0a40a91570127c8fc91cec75fffe920e229d5b",
+    "clean_runs": 2,
+    "elapsed_milliseconds": [196, 196],
+    "canonical_bytes_equal": true,
+    "canonical_run_sha256": "sha256:8a7c3859f4b81709e6ed8db5879e98e2144af342e2dff853c6a43f4c37c4117d",
+    "operation_counts_equal": true,
+    "basis_lifecycle_events": 8
+  },
+  "positive_4816_file_pair": {
+    "base_commit": "a8b6b24d5ed704f53f721b25db42d5d631f946c7",
+    "target_commit": "8569a2261e8a62145228872a2fde9f4c48093d00",
+    "accepted_file_count": 4816,
+    "accepted_artifact_visits_per_oracle": 38779,
+    "relation_scan_visits_per_oracle": 84434,
+    "containment_relation_visits_per_oracle": 50829268,
+    "structural_ids_per_oracle": 262,
+    "reached_files_per_oracle": 1,
+    "support_anchors_per_oracle": 259,
+    "oracle_invocations_per_run": 2,
+    "clean_runs": 2,
+    "context_count": 2,
+    "candidate_metadata_unique_files": 1,
+    "materialized_unique_files": 1,
+    "source_bytes_requested_unique_files": 1,
+    "source_submitted_unique_files": 1,
+    "elapsed_milliseconds": [212464, 211399],
+    "canonical_run_sha256": "sha256:61a43cdce87cf40740b21b91d5d68560b4edc871e03f66511d749912376168b2",
+    "oracle_builder_set_equality": true,
+    "production_replay_equality": true
+  },
+  "stage_0_observed": false,
+  "model_observed": false,
+  "corpus_outcome_observed": false
+}

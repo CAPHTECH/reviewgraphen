@@ -1,0 +1,1 @@
+Inspect the admitted Rust source and return one source-grounded disposition using the supplied closed schema. Cite exact admitted locations. If the task cannot be decided, cite only a declared loss marked eligible for primary abstention and state the blocked question and evidence needed.

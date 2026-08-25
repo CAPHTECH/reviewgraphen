@@ -24,6 +24,14 @@ pub const FIXTURE_WITNESS_MEDIA_TYPE: &str =
 pub const FIXTURE_HARNESS_SOURCE_HASH: &str =
     "sha256:74d708edd94103e3bab724c71df8c151a89ea613ad06fd8c6bd21ba78027848a";
 
+/// The sole v2 verifier name. Selecting it is intentionally not authority to
+/// resolve or execute Cargo.
+pub const DEFERRED_WORKSPACE_CARGO_TEST_DESCRIPTOR_ID: &str = "workspace.cargo_test@1";
+/// The only outcome for the deferred workspace verifier seam.
+pub const DEFERRED_WORKSPACE_CARGO_TEST_OUTCOME: &str = "unsupported";
+/// The fixed, typed explanation for the deferred workspace verifier seam.
+pub const DEFERRED_WORKSPACE_CARGO_TEST_REASON: &str = "workspace_cargo_test_deferred";
+
 const STATIC_DESCRIPTOR: Descriptor = Descriptor::StaticFact;
 const FIXTURE_DESCRIPTOR: Descriptor = Descriptor::FixtureTest;
 
@@ -114,9 +122,367 @@ pub enum VerifierError {
     FixtureConstantMismatch,
     #[error("checked-in fixture harness source hash differs from registry")]
     HarnessSourceMismatch,
+    #[error("deferred workspace verifier request is schema-invalid: `{field}` is not allowed")]
+    DeferredWorkspaceRequestSchema { field: &'static str },
+    #[error("deferred workspace verifier request is schema-invalid: unsupported descriptor")]
+    DeferredWorkspaceDescriptorSchema,
+    #[error("deferred workspace unsupported record is invalid: `{field}`")]
+    DeferredWorkspaceRecordInvalid { field: &'static str },
 }
 
 pub type Result<T> = std::result::Result<T, VerifierError>;
+
+/// A request field which is forbidden by the deferred workspace verifier
+/// descriptor. Presence is invalid even if its value is empty.
+///
+/// This closed list gives the v2 request validator a typed way to reject every
+/// execution-control field before the seam can produce its typed result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeferredWorkspaceRequestField<'a> {
+    Command,
+    Executable,
+    Argv,
+    Path,
+    Cwd,
+    Environment,
+    Mount,
+    Cache,
+    Credential,
+    Toolchain,
+    ResourceLimit,
+    Identity,
+    /// An unknown schema field is also fail-closed.
+    Other(&'a str),
+}
+
+impl DeferredWorkspaceRequestField<'_> {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::Executable => "executable",
+            Self::Argv => "argv",
+            Self::Path => "path",
+            Self::Cwd => "cwd",
+            Self::Environment => "environment",
+            Self::Mount => "mount",
+            Self::Cache => "cache",
+            Self::Credential => "credential",
+            Self::Toolchain => "toolchain",
+            Self::ResourceLimit => "resource_limit",
+            Self::Identity => "identity",
+            Self::Other(_) => "unknown_field",
+        }
+    }
+}
+
+/// The narrow v2 input admitted by the deferred workspace verifier seam.
+///
+/// `descriptor_id` may be absent, in which case validation produces no record.
+/// Its only non-null value is [`DEFERRED_WORKSPACE_CARGO_TEST_DESCRIPTOR_ID`].
+/// The request carries no executable data; callers that decoded such fields
+/// must pass their presence through `forbidden_fields` and receive a schema
+/// error rather than an unsupported outcome.
+#[derive(Clone, Copy, Debug)]
+pub struct DeferredWorkspaceVerifierRequest<'a> {
+    pub descriptor_id: Option<&'a str>,
+    pub request_id: &'a StableId,
+    pub snapshot_id: &'a StableId,
+    pub universe_id: &'a StableId,
+    /// Opaque, untrusted workspace fixture bytes. The deferred seam may carry
+    /// them only to prove that they cannot select process behavior; they are
+    /// never parsed, resolved, executed, retained, or bound into the result.
+    pub untrusted_fixture: &'a [u8],
+    pub forbidden_fields: &'a [DeferredWorkspaceRequestField<'a>],
+}
+
+/// A field forbidden on the closed unsupported record itself.
+///
+/// These variants make process/executable/output/resource/obligation material
+/// invalid data instead of optional metadata that a future caller could ignore.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeferredWorkspaceUnsupportedRecordField<'a> {
+    ProcessIdentity(&'a str),
+    ExecutableIdentity(&'a str),
+    Output(&'a str),
+    ResourceObservation(&'a str),
+    ObligationBinding(&'a StableId),
+    Other(&'a str),
+}
+
+impl DeferredWorkspaceUnsupportedRecordField<'_> {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::ProcessIdentity(_) => "process_identity",
+            Self::ExecutableIdentity(_) => "executable_identity",
+            Self::Output(_) => "output",
+            Self::ResourceObservation(_) => "resource_observation",
+            Self::ObligationBinding(_) => "obligation_binding",
+            Self::Other(_) => "unknown_field",
+        }
+    }
+}
+
+/// Decoded form accepted only to validate the closed unsupported-record
+/// contract. Successful validation returns [`DeferredWorkspaceUnsupportedRecord`],
+/// whose private fields prevent adding execution data afterwards.
+#[derive(Clone, Copy, Debug)]
+pub struct DeferredWorkspaceUnsupportedRecordInput<'a> {
+    pub id: &'a StableId,
+    pub descriptor_id: &'a str,
+    pub request_id: &'a StableId,
+    pub snapshot_id: &'a StableId,
+    pub universe_id: &'a StableId,
+    pub outcome: &'a str,
+    pub reason: &'a str,
+    pub process_started: bool,
+    pub executable_resolved: bool,
+    pub verifier_observed: &'a [StableId],
+    pub forbidden_field: Option<DeferredWorkspaceUnsupportedRecordField<'a>>,
+}
+
+/// The one closed, non-authoritative result permitted for a selected deferred
+/// workspace verifier descriptor. It is neither a verifier observation nor
+/// evidence material.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeferredWorkspaceUnsupportedRecord {
+    id: StableId,
+    request_id: StableId,
+    snapshot_id: StableId,
+    universe_id: StableId,
+}
+
+impl DeferredWorkspaceUnsupportedRecord {
+    /// Validates every fixed field, the empty observation numerator, and the
+    /// exact stable-ID preimage before constructing the closed record.
+    pub fn validate(input: DeferredWorkspaceUnsupportedRecordInput<'_>) -> Result<Self> {
+        validate_deferred_workspace_id_kinds(
+            input.request_id,
+            input.snapshot_id,
+            input.universe_id,
+            |field| VerifierError::DeferredWorkspaceRecordInvalid { field },
+        )?;
+        if input.descriptor_id != DEFERRED_WORKSPACE_CARGO_TEST_DESCRIPTOR_ID {
+            return Err(VerifierError::DeferredWorkspaceRecordInvalid {
+                field: "descriptor_id",
+            });
+        }
+        if input.outcome != DEFERRED_WORKSPACE_CARGO_TEST_OUTCOME {
+            return Err(VerifierError::DeferredWorkspaceRecordInvalid { field: "outcome" });
+        }
+        if input.reason != DEFERRED_WORKSPACE_CARGO_TEST_REASON {
+            return Err(VerifierError::DeferredWorkspaceRecordInvalid { field: "reason" });
+        }
+        if input.process_started {
+            return Err(VerifierError::DeferredWorkspaceRecordInvalid {
+                field: "process_started",
+            });
+        }
+        if input.executable_resolved {
+            return Err(VerifierError::DeferredWorkspaceRecordInvalid {
+                field: "executable_resolved",
+            });
+        }
+        if !input.verifier_observed.is_empty() {
+            return Err(VerifierError::DeferredWorkspaceRecordInvalid {
+                field: "verifier_observed",
+            });
+        }
+        if let Some(field) = input.forbidden_field {
+            return Err(VerifierError::DeferredWorkspaceRecordInvalid {
+                field: field.name(),
+            });
+        }
+
+        let expected_id = deferred_workspace_unsupported_id(
+            input.request_id,
+            input.snapshot_id,
+            input.universe_id,
+        )?;
+        if input.id != &expected_id {
+            return Err(VerifierError::DeferredWorkspaceRecordInvalid { field: "id" });
+        }
+        Ok(Self {
+            id: expected_id,
+            request_id: input.request_id.clone(),
+            snapshot_id: input.snapshot_id.clone(),
+            universe_id: input.universe_id.clone(),
+        })
+    }
+
+    /// Stable identity of this exact closed unsupported result.
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn descriptor_id(&self) -> &'static str {
+        DEFERRED_WORKSPACE_CARGO_TEST_DESCRIPTOR_ID
+    }
+
+    #[must_use]
+    pub fn request_id(&self) -> &StableId {
+        &self.request_id
+    }
+
+    #[must_use]
+    pub fn snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+
+    #[must_use]
+    pub fn universe_id(&self) -> &StableId {
+        &self.universe_id
+    }
+
+    #[must_use]
+    pub const fn outcome(&self) -> &'static str {
+        DEFERRED_WORKSPACE_CARGO_TEST_OUTCOME
+    }
+
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
+        DEFERRED_WORKSPACE_CARGO_TEST_REASON
+    }
+
+    #[must_use]
+    pub const fn process_started(&self) -> bool {
+        false
+    }
+
+    #[must_use]
+    pub const fn executable_resolved(&self) -> bool {
+        false
+    }
+
+    /// The resolved-target verifier-observed numerator is permanently empty.
+    #[must_use]
+    pub fn verifier_observed(&self) -> &[StableId] {
+        &[]
+    }
+
+    /// Canonical bytes of the exact StableId preimage. No schema tag, output,
+    /// process identity, resource observation, or obligation binding is bound.
+    #[must_use]
+    pub fn id_preimage(&self) -> Vec<u8> {
+        deferred_workspace_unsupported_preimage(
+            &self.request_id,
+            &self.snapshot_id,
+            &self.universe_id,
+        )
+    }
+}
+
+/// Typed result of the deferred workspace verifier seam. The enum makes
+/// disabled verification record-free and selected verification exactly one
+/// closed unsupported record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeferredWorkspaceVerifierResolution {
+    Disabled,
+    Unsupported(DeferredWorkspaceUnsupportedRecord),
+}
+
+/// Validates and resolves the fixed deferred verifier seam without resolving
+/// an executable, spawning a process, or producing observation/evidence data.
+pub fn resolve_deferred_workspace_verifier(
+    request: DeferredWorkspaceVerifierRequest<'_>,
+) -> Result<DeferredWorkspaceVerifierResolution> {
+    validate_deferred_workspace_id_kinds(
+        request.request_id,
+        request.snapshot_id,
+        request.universe_id,
+        |field| VerifierError::DeferredWorkspaceRequestSchema { field },
+    )?;
+    // This is intentionally the only interaction with fixture bytes. It is a
+    // compiler-visible, process-free read: fixture contents cannot become a
+    // command, executable, path, environment, or output channel.
+    std::hint::black_box(request.untrusted_fixture);
+    if let Some(field) = request.forbidden_fields.first().copied() {
+        return Err(VerifierError::DeferredWorkspaceRequestSchema {
+            field: field.name(),
+        });
+    }
+    match request.descriptor_id {
+        None => Ok(DeferredWorkspaceVerifierResolution::Disabled),
+        Some(DEFERRED_WORKSPACE_CARGO_TEST_DESCRIPTOR_ID) => {
+            let id = deferred_workspace_unsupported_id(
+                request.request_id,
+                request.snapshot_id,
+                request.universe_id,
+            )?;
+            let record = DeferredWorkspaceUnsupportedRecord::validate(
+                DeferredWorkspaceUnsupportedRecordInput {
+                    id: &id,
+                    descriptor_id: DEFERRED_WORKSPACE_CARGO_TEST_DESCRIPTOR_ID,
+                    request_id: request.request_id,
+                    snapshot_id: request.snapshot_id,
+                    universe_id: request.universe_id,
+                    outcome: DEFERRED_WORKSPACE_CARGO_TEST_OUTCOME,
+                    reason: DEFERRED_WORKSPACE_CARGO_TEST_REASON,
+                    process_started: false,
+                    executable_resolved: false,
+                    verifier_observed: &[],
+                    forbidden_field: None,
+                },
+            )?;
+            Ok(DeferredWorkspaceVerifierResolution::Unsupported(record))
+        }
+        Some(_) => Err(VerifierError::DeferredWorkspaceDescriptorSchema),
+    }
+}
+
+fn validate_deferred_workspace_id_kinds(
+    request_id: &StableId,
+    snapshot_id: &StableId,
+    universe_id: &StableId,
+    error: impl FnOnce(&'static str) -> VerifierError + Copy,
+) -> Result<()> {
+    if request_id.kind() != "request" {
+        return Err(error("request_id"));
+    }
+    if snapshot_id.kind() != "snapshot" {
+        return Err(error("snapshot_id"));
+    }
+    if universe_id.kind() != "universe" {
+        return Err(error("universe_id"));
+    }
+    Ok(())
+}
+
+fn deferred_workspace_unsupported_id(
+    request_id: &StableId,
+    snapshot_id: &StableId,
+    universe_id: &StableId,
+) -> Result<StableId> {
+    let preimage = deferred_workspace_unsupported_preimage(request_id, snapshot_id, universe_id);
+    StableId::parse(format!(
+        "verifier-unsupported:{}",
+        ContentHash::sha256(&preimage)
+    ))
+    .map_err(|_| VerifierError::DeferredWorkspaceRecordInvalid { field: "id" })
+}
+
+fn deferred_workspace_unsupported_preimage(
+    request_id: &StableId,
+    snapshot_id: &StableId,
+    universe_id: &StableId,
+) -> Vec<u8> {
+    // All interpolated values are StableId grammar values and the remaining
+    // strings are fixed ASCII constants, so this is canonical JSON without a
+    // general JSON serializer or a permissive decoder.
+    format!(
+        concat!(
+            "{{\"descriptor_id\":\"workspace.cargo_test@1\",",
+            "\"executable_resolved\":false,\"outcome\":\"unsupported\",",
+            "\"process_started\":false,",
+            "\"reason\":\"workspace_cargo_test_deferred\",",
+            "\"request_id\":\"{}\",\"snapshot_id\":\"{}\",",
+            "\"universe_id\":\"{}\"}}"
+        ),
+        request_id, snapshot_id, universe_id
+    )
+    .into_bytes()
+}
 
 /// Resolves only the two compiled descriptors. It treats every other string
 /// as data and never interprets it as a command, path, profile, or tool call.

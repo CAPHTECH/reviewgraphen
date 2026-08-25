@@ -20,3 +20,19 @@ thiserror.workspace = true
 [dev-dependencies]
 jsonschema.workspace = true
 proptest.workspace = true
+
+[[test]]
+name = "review_profile"
+path = "tests/review_profile.rs"
+
+[[test]]
+name = "context_subject_windows"
+path = "tests/context_subject_windows.rs"
+
+[[test]]
+name = "changed_public_callee_rule"
+path = "tests/changed_public_callee_rule.rs"
+
+[[test]]
+name = "context_effect_contract"
+path = "tests/context_effect_contract.rs"

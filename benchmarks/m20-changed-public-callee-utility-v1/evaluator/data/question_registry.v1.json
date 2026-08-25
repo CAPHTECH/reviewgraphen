@@ -1,0 +1,1 @@
+{"entries":[{"key":"required_source_body","reason":"task_blocking_source_unavailable","scope":"source"},{"key":"required_reference_target","reason":"task_blocking_reference_unresolved","scope":"reference"},{"key":"required_projection_integrity","reason":"task_blocking_projection_integrity","scope":"projection"}],"schema":"m20.question-registry.v1"}

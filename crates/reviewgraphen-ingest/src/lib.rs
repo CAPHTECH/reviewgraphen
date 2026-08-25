@@ -11,7 +11,7 @@ use reviewgraphen_core::{
     self as rg_core, ContentHash, DomainError, ProgramSpace, SnapshotSourceBundle,
     SnapshotSourceEntry, StableId, canonical_json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -21,6 +21,18 @@ pub use git::ChangeKind;
 
 /// Versioned identifier for the public ingestion report shape.
 pub const EXTRACTION_REPORT_SCHEMA: &str = "reviewgraphen.extraction_report.v1";
+
+/// Closed schema identifier for one v2 unresolved call occurrence.
+pub const INGESTION_OBSTRUCTION_V2_SCHEMA: &str = "reviewgraphen.ingestion_obstruction.v2";
+
+/// Versioned identifier for the isolated v2 ingestion sidecar.
+pub const INGESTION_REPORT_V2_SCHEMA: &str = "reviewgraphen.ingestion_report.v2";
+
+/// Versioned identifier for the distinct global v2 limitation.
+pub const INGESTION_GLOBAL_LIMITATION_V2_SCHEMA: &str =
+    "reviewgraphen.ingestion_global_limitation.v2";
+
+const INGESTION_V2_PROJECTION_EXTRACTOR_ID: &str = "reviewgraphen.ingest.rust-call-enumeration@2";
 
 /// The exact `syn` version this crate was actually built against, read from
 /// the workspace `Cargo.lock` at compile time by `build.rs` -- never a
@@ -162,7 +174,7 @@ impl IngestRequest {
 }
 
 /// Capability completeness reported by an adapter or fact family.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityState {
     /// The bounded adapter completely covered its declared input subset.
@@ -187,7 +199,7 @@ impl CapabilityState {
 }
 
 /// Stable adapter status in the public ingestion report.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdapterStatus {
     /// The adapter completed its declared bounded scope.
@@ -253,8 +265,162 @@ pub struct IngestionObstruction {
     pub paths: BTreeSet<String>,
 }
 
+/// Closed v2 serialization of one located unresolved call occurrence.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IngestionObstructionV2 {
+    /// Versioned closed record discriminator.
+    schema: String,
+    /// Stable obstruction ID whose preimage binds every field except
+    /// `description`.
+    id: StableId,
+    /// Typed extraction-loss category.
+    kind: IngestionObstructionKind,
+    /// Review impact, not a program-correctness assertion.
+    severity: ObstructionSeverity,
+    /// Deterministic rendering of the typed record fields.
+    description: String,
+    /// Sorted, nonempty accepted source IDs.
+    source_ids: BTreeSet<StableId>,
+    /// Exact normalized source path as a singleton set.
+    paths: BTreeSet<String>,
+    /// Exactly `["direct_calls"]` for every occurrence.
+    related_capabilities: BTreeSet<String>,
+    /// Closed call syntax family.
+    call_kind: CallKind,
+    /// Closed unresolved-call reason.
+    reason: CallObstructionReason,
+    /// Exact inclusive source span.
+    span: IngestionObstructionSpan,
+    /// Snapshot source ID.
+    snapshot_id: StableId,
+    /// Extractor contract identifier.
+    extractor_id: String,
+}
+
+/// The global direct-call limitation is deliberately a different closed type
+/// from a located occurrence; it has no path or span.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IngestionGlobalLimitationV2 {
+    schema: String,
+    id: StableId,
+    snapshot_id: StableId,
+    projection_extractor_id: String,
+    kind: String,
+    severity: ObstructionSeverity,
+    description: String,
+    source_ids: BTreeSet<StableId>,
+    related_capabilities: BTreeSet<String>,
+    latent_occurrence_count: LatentOccurrenceCount,
+}
+
+/// Validated, isolated v2 ingestion sidecar. Private fields prevent an
+/// unchecked deserializer or legacy builder from constructing it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IngestionReportV2 {
+    schema: String,
+    report_id: StableId,
+    snapshot_id: StableId,
+    target_revision: String,
+    legacy_program_space_sha256: ContentHash,
+    legacy_extraction_report_sha256: ContentHash,
+    projection_extractor_id: String,
+    located_call_occurrences: Vec<IngestionObstructionV2>,
+    global_direct_calls_limitation: IngestionGlobalLimitationV2,
+}
+
+/// The closed syntactic family of a v2 unresolved call occurrence.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallKind {
+    /// A direct `ExprCall` occurrence.
+    Direct,
+    /// A method-call occurrence whose dispatch target was not resolved.
+    Method,
+    /// A macro invocation whose expansion was not inspected.
+    MacroInvocation,
+}
+
+impl CallKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Method => "method",
+            Self::MacroInvocation => "macro_invocation",
+        }
+    }
+}
+
+/// The closed reason vocabulary for a v2 unresolved call occurrence.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallObstructionReason {
+    /// A direct call did not use a path expression.
+    DirectNonPath,
+    /// A direct path expression did not contain a path segment.
+    DirectEmptyPath,
+    /// A direct call name was shadowed by a local binding.
+    DirectShadowedBinding,
+    /// A direct call occurred in a scope with an unresolved import shape.
+    DirectUnresolvedScope,
+    /// Syntactic lookup found no accepted target.
+    DirectTargetCountZero,
+    /// Syntactic lookup found more than one accepted target.
+    DirectTargetCountMultiple,
+    /// Method dispatch was deliberately not resolved.
+    MethodDispatchUnresolved,
+    /// Macro expansion was deliberately not inspected.
+    MacroExpansionUnresolved,
+}
+
+impl CallObstructionReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::DirectNonPath => "direct_non_path",
+            Self::DirectEmptyPath => "direct_empty_path",
+            Self::DirectShadowedBinding => "direct_shadowed_binding",
+            Self::DirectUnresolvedScope => "direct_unresolved_scope",
+            Self::DirectTargetCountZero => "direct_target_count_zero",
+            Self::DirectTargetCountMultiple => "direct_target_count_multiple",
+            Self::MethodDispatchUnresolved => "method_dispatch_unresolved",
+            Self::MacroExpansionUnresolved => "macro_expansion_unresolved",
+        }
+    }
+}
+
+/// Exact inclusive source coordinates retained for a v2 occurrence record.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct IngestionObstructionSpan {
+    /// Normalized repository-relative source path.
+    pub path: String,
+    /// One-based inclusive start line.
+    pub start_line: u64,
+    /// One-based inclusive end line.
+    pub end_line: u64,
+    /// One-based inclusive start column.
+    pub start_column: u64,
+    /// One-based inclusive end column.
+    pub end_column: u64,
+}
+
+/// The only permitted latent call-cardinality state for the current Rust
+/// macro-expansion boundary.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LatentOccurrenceCount {
+    /// Expansion can contain an unbounded, unobserved number of call sites.
+    Unknown,
+}
+
+impl LatentOccurrenceCount {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// Categories of analysis loss intentionally retained by the M2 contract.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IngestionObstructionKind {
     /// A file could not be parsed as Rust.
@@ -291,7 +457,7 @@ impl IngestionObstructionKind {
 }
 
 /// Descriptive severity for an ingestion obstruction.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObstructionSeverity {
     /// Informational retained loss.
@@ -365,6 +531,21 @@ pub struct IngestWithSourcesResult {
     pub source_bundle: SnapshotSourceBundle,
 }
 
+/// The only public route that couples unchanged legacy ingestion with the
+/// separately validated v2 call-enumeration sidecar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IngestResultV2 {
+    pub legacy: IngestResult,
+    pub ingestion_report_v2: IngestionReportV2,
+}
+
+/// Source-retaining counterpart to [`IngestResultV2`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct IngestWithSourcesResultV2 {
+    pub legacy: IngestWithSourcesResult,
+    pub ingestion_report_v2: IngestionReportV2,
+}
+
 impl IngestResult {
     /// Returns byte-stable JSON for the ProgramSpace plus its M2 report.
     pub fn canonical_output(&self) -> Result<Vec<u8>, IngestError> {
@@ -373,6 +554,59 @@ impl IngestResult {
             extraction_report: &self.extraction_report,
         })
         .map_err(IngestError::from)
+    }
+}
+
+impl IngestionReportV2 {
+    /// Canonical standalone sidecar bytes. There is intentionally no combined
+    /// v1/v2 serializer.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, IngestError> {
+        canonical_json(self).map_err(IngestError::from)
+    }
+
+    #[must_use]
+    pub fn report_id(&self) -> &StableId {
+        &self.report_id
+    }
+
+    #[must_use]
+    pub fn located_call_occurrences(&self) -> &[IngestionObstructionV2] {
+        &self.located_call_occurrences
+    }
+
+    #[must_use]
+    pub fn global_direct_calls_limitation(&self) -> &IngestionGlobalLimitationV2 {
+        &self.global_direct_calls_limitation
+    }
+}
+
+impl IngestionObstructionV2 {
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn call_kind(&self) -> CallKind {
+        self.call_kind
+    }
+    #[must_use]
+    pub fn reason(&self) -> CallObstructionReason {
+        self.reason
+    }
+    #[must_use]
+    pub fn span(&self) -> &IngestionObstructionSpan {
+        &self.span
+    }
+}
+
+impl IngestionGlobalLimitationV2 {
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn latent_occurrence_count(&self) -> LatentOccurrenceCount {
+        self.latent_occurrence_count
     }
 }
 
@@ -470,7 +704,7 @@ pub enum IngestError {
 /// fixed `cargo metadata --offline --no-deps` invocation. Target repository
 /// bytes are read through Git; target files are never written or executed.
 pub fn ingest(request: &IngestRequest) -> Result<IngestResult, IngestError> {
-    let result = ingest_pipeline(request, None)?;
+    let result = ingest_pipeline(request, None, false)?;
     Ok(result.ingest)
 }
 
@@ -480,7 +714,7 @@ pub fn ingest_with_sources(
     request: &IngestRequest,
     max_total_source_bytes: u64,
 ) -> Result<IngestWithSourcesResult, IngestError> {
-    let result = ingest_pipeline(request, Some(max_total_source_bytes))?;
+    let result = ingest_pipeline(request, Some(max_total_source_bytes), false)?;
     let source_bundle = result
         .source_bundle
         .expect("source-retaining pipeline always produces a source bundle");
@@ -491,15 +725,49 @@ pub fn ingest_with_sources(
     })
 }
 
+/// Ingests the unchanged legacy v1 product and its isolated v2 sidecar.
+pub fn ingest_v2(request: &IngestRequest) -> Result<IngestResultV2, IngestError> {
+    let result = ingest_pipeline(request, None, true)?;
+    Ok(IngestResultV2 {
+        legacy: result.ingest,
+        ingestion_report_v2: result
+            .ingestion_report_v2
+            .expect("v2 pipeline always constructs a sidecar"),
+    })
+}
+
+/// Source-retaining v2 ingestion with the same legacy source-budget contract.
+pub fn ingest_with_sources_v2(
+    request: &IngestRequest,
+    max_total_source_bytes: u64,
+) -> Result<IngestWithSourcesResultV2, IngestError> {
+    let result = ingest_pipeline(request, Some(max_total_source_bytes), true)?;
+    let source_bundle = result
+        .source_bundle
+        .expect("source-retaining pipeline always produces a source bundle");
+    Ok(IngestWithSourcesResultV2 {
+        legacy: IngestWithSourcesResult {
+            program_space: result.ingest.program_space,
+            extraction_report: result.ingest.extraction_report,
+            source_bundle,
+        },
+        ingestion_report_v2: result
+            .ingestion_report_v2
+            .expect("v2 pipeline always constructs a sidecar"),
+    })
+}
+
 struct IngestPipelineResult {
     ingest: IngestResult,
     source_bundle: Option<SnapshotSourceBundle>,
+    ingestion_report_v2: Option<IngestionReportV2>,
 }
 
 /// Shared private pipeline for source-retaining and ordinary ingestion.
 fn ingest_pipeline(
     request: &IngestRequest,
     max_total_source_bytes: Option<u64>,
+    include_v2: bool,
 ) -> Result<IngestPipelineResult, IngestError> {
     validate_config(&request.config)?;
     let snapshot = git::load_snapshot(request, max_total_source_bytes)?;
@@ -531,6 +799,7 @@ fn ingest_pipeline(
     drafts.extend(rust.artifacts);
     let mut relation_drafts = rust.relations;
     let rust_anchor_drafts = rust.symbol_anchors;
+    let v2_obstruction_drafts = rust.v2_obstructions;
 
     let cargo = git::extract_cargo_metadata(&snapshot, &identities.snapshot_id);
     adapter_reports.push(cargo.adapter_report);
@@ -671,13 +940,985 @@ fn ingest_pipeline(
             capability_sources,
         },
     )?;
+    let ingestion_report_v2 = if include_v2 {
+        let legacy_index = V2LegacyValidationIndex::new(&lifted)?;
+        let report = build_ingestion_report_v2(
+            &snapshot,
+            &identities,
+            &lifted,
+            &legacy_index,
+            v2_obstruction_drafts,
+        )?;
+        // Admission is a second immutable-snapshot reconstruction, not a
+        // trust decision over the first in-memory record collection.
+        let rebuilt_obstructions =
+            rust::extract(&snapshot, &identities.snapshot_id).v2_obstructions;
+        let rebuilt = build_ingestion_report_v2(
+            &snapshot,
+            &identities,
+            &lifted,
+            &legacy_index,
+            rebuilt_obstructions,
+        )?;
+        // The closed report DTO derives field-wise equality over every field
+        // it serializes. Comparing the typed reconstructions is therefore
+        // exactly equivalent to comparing their canonical encodings, without
+        // allocating two very large temporary JSON buffers.
+        if report != rebuilt {
+            return Err(IngestError::AdapterOutput(
+                "v2 ingestion sidecar did not reproduce from the immutable snapshot".to_owned(),
+            ));
+        }
+        Some(report)
+    } else {
+        None
+    };
     let source_bundle = max_total_source_bytes
         .map(|_| source_bundle_from_snapshot(&snapshot, &lifted.program_space))
         .transpose()?;
     Ok(IngestPipelineResult {
         ingest: lifted,
         source_bundle,
+        ingestion_report_v2,
     })
+}
+
+struct V2LegacyValidationIndex {
+    program_hash: ContentHash,
+    extraction_hash: ContentHash,
+    known_ids: BTreeSet<StableId>,
+    accepted_file_paths: BTreeSet<String>,
+}
+
+impl V2LegacyValidationIndex {
+    fn new(legacy: &IngestResult) -> Result<Self, IngestError> {
+        Ok(Self {
+            program_hash: ContentHash::sha256(&canonical_json(&legacy.program_space)?),
+            extraction_hash: ContentHash::sha256(&canonical_json(&legacy.extraction_report)?),
+            known_ids: legacy.program_space.known_ids(),
+            accepted_file_paths: legacy
+                .program_space
+                .artifacts()
+                .iter()
+                .filter(|artifact| artifact.kind == "file")
+                .filter_map(|artifact| {
+                    artifact
+                        .location
+                        .as_ref()
+                        .map(|location| location.path.clone())
+                })
+                .collect(),
+        })
+    }
+}
+
+struct V2OccurrenceSourceIndex {
+    line_lengths_by_path: BTreeMap<String, Vec<usize>>,
+}
+
+impl V2OccurrenceSourceIndex {
+    fn new(snapshot: &git::GitSnapshot, drafts: &[V2IngestionObstructionDraft]) -> Self {
+        let occurrence_paths = drafts
+            .iter()
+            .filter_map(|draft| draft.call_occurrence.as_ref())
+            .map(|occurrence| occurrence.span.path.as_str())
+            .collect::<BTreeSet<_>>();
+        let line_lengths_by_path = snapshot
+            .files
+            .iter()
+            .filter(|file| occurrence_paths.contains(file.path.as_str()))
+            .map(|file| (file.path.clone(), v2_line_lengths(&file.content)))
+            .collect();
+        Self {
+            line_lengths_by_path,
+        }
+    }
+
+    fn line_lengths(&self, path: &str) -> Option<&[usize]> {
+        self.line_lengths_by_path.get(path).map(Vec::as_slice)
+    }
+}
+
+fn v2_line_lengths(bytes: &[u8]) -> Vec<usize> {
+    bytes
+        .split(|byte| *byte == b'\n')
+        .map(<[u8]>::len)
+        .collect()
+}
+
+fn build_ingestion_report_v2(
+    snapshot: &git::GitSnapshot,
+    identities: &SnapshotIdentities,
+    legacy: &IngestResult,
+    legacy_index: &V2LegacyValidationIndex,
+    drafts: Vec<V2IngestionObstructionDraft>,
+) -> Result<IngestionReportV2, IngestError> {
+    let occurrence_source_index = V2OccurrenceSourceIndex::new(snapshot, &drafts);
+    let source_id_index =
+        build_v2_source_id_index(&drafts, &legacy_index.known_ids, &identities.snapshot_id)?;
+    let direct_sources = legacy
+        .program_space
+        .extraction()
+        .capabilities
+        .get("direct_calls")
+        .ok_or_else(|| IngestError::AdapterOutput("missing direct_calls capability".to_owned()))?
+        .source_ids
+        .clone();
+    if direct_sources.is_empty() {
+        return Err(IngestError::AdapterOutput(
+            "v2 global direct_calls limitation requires accepted sources".to_owned(),
+        ));
+    }
+
+    let mut occurrences = Vec::new();
+    let mut globals = Vec::new();
+    for draft in drafts {
+        match (&draft.call_occurrence, draft.latent_occurrence_count) {
+            (Some(occurrence), None) => {
+                let source_ids = resolve_v2_source_ids(&draft.source_keys, &source_id_index)?;
+                validate_occurrence_draft(
+                    &occurrence_source_index,
+                    &draft,
+                    occurrence,
+                    &source_ids,
+                )?;
+                let span = IngestionObstructionSpan {
+                    path: occurrence.span.path.clone(),
+                    start_line: occurrence.span.start_line,
+                    end_line: occurrence.span.end_line,
+                    start_column: occurrence.span.start_column,
+                    end_column: occurrence.span.end_column,
+                };
+                let description = render_v2_call_occurrence_description(occurrence);
+                let id = derived_id(
+                    "ingestion-obstruction",
+                    [
+                        (
+                            "schema",
+                            Value::String(INGESTION_OBSTRUCTION_V2_SCHEMA.to_owned()),
+                        ),
+                        (
+                            "snapshot_id",
+                            Value::String(identities.snapshot_id.to_string()),
+                        ),
+                        (
+                            "extractor_id",
+                            Value::String(occurrence.extractor_id.to_owned()),
+                        ),
+                        ("kind", Value::String(format!("{:?}", draft.kind))),
+                        ("severity", Value::String(format!("{:?}", draft.severity))),
+                        ("source_ids", stable_id_values(&source_ids)),
+                        ("paths", string_set_values(&draft.paths)),
+                        (
+                            "related_capabilities",
+                            string_set_values(&draft.related_capabilities),
+                        ),
+                        (
+                            "call_kind",
+                            Value::String(occurrence.call_kind.as_str().to_owned()),
+                        ),
+                        (
+                            "reason",
+                            Value::String(occurrence.reason.as_str().to_owned()),
+                        ),
+                        ("span", span_value(&span)),
+                    ],
+                )?;
+                occurrences.push(IngestionObstructionV2 {
+                    schema: INGESTION_OBSTRUCTION_V2_SCHEMA.to_owned(),
+                    id,
+                    kind: draft.kind,
+                    severity: draft.severity,
+                    description,
+                    source_ids,
+                    paths: draft.paths,
+                    related_capabilities: draft.related_capabilities,
+                    call_kind: occurrence.call_kind,
+                    reason: occurrence.reason,
+                    span,
+                    snapshot_id: identities.snapshot_id.clone(),
+                    extractor_id: occurrence.extractor_id.to_owned(),
+                });
+            }
+            (None, Some(LatentOccurrenceCount::Unknown)) => globals.push(draft),
+            _ => {
+                return Err(IngestError::AdapterOutput(
+                    "v2 draft must be exactly one located occurrence or the global limitation"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+    if globals.len() != 1 {
+        return Err(IngestError::AdapterOutput(
+            "v2 sidecar requires exactly one global direct_calls limitation".to_owned(),
+        ));
+    }
+    let global_draft = globals.pop().expect("length checked");
+    if global_draft.kind != IngestionObstructionKind::RelationUnresolved
+        || global_draft.severity != ObstructionSeverity::Info
+        || global_draft.related_capabilities != BTreeSet::from(["direct_calls".to_owned()])
+    {
+        return Err(IngestError::AdapterOutput(
+            "v2 global direct_calls limitation violates its closed contract".to_owned(),
+        ));
+    }
+    let global_sources = direct_sources;
+    let global_description = render_v2_global_description();
+    let global_id = derived_id(
+        "ingestion-limitation",
+        [
+            (
+                "schema",
+                Value::String(INGESTION_GLOBAL_LIMITATION_V2_SCHEMA.to_owned()),
+            ),
+            (
+                "snapshot_id",
+                Value::String(identities.snapshot_id.to_string()),
+            ),
+            (
+                "projection_extractor_id",
+                Value::String(INGESTION_V2_PROJECTION_EXTRACTOR_ID.to_owned()),
+            ),
+            (
+                "kind",
+                Value::String("global_direct_calls_limitation".to_owned()),
+            ),
+            ("severity", Value::String("Info".to_owned())),
+            ("source_ids", stable_id_values(&global_sources)),
+            (
+                "related_capabilities",
+                Value::Array(vec![Value::String("direct_calls".to_owned())]),
+            ),
+            (
+                "latent_occurrence_count",
+                Value::String("unknown".to_owned()),
+            ),
+        ],
+    )?;
+    let global = IngestionGlobalLimitationV2 {
+        schema: INGESTION_GLOBAL_LIMITATION_V2_SCHEMA.to_owned(),
+        id: global_id,
+        snapshot_id: identities.snapshot_id.clone(),
+        projection_extractor_id: INGESTION_V2_PROJECTION_EXTRACTOR_ID.to_owned(),
+        kind: "global_direct_calls_limitation".to_owned(),
+        severity: ObstructionSeverity::Info,
+        description: global_description,
+        source_ids: global_sources,
+        related_capabilities: BTreeSet::from(["direct_calls".to_owned()]),
+        latent_occurrence_count: LatentOccurrenceCount::Unknown,
+    };
+    occurrences.sort_by(|left, right| left.id.cmp(&right.id));
+    let program_hash = legacy_index.program_hash.clone();
+    let extraction_hash = legacy_index.extraction_hash.clone();
+    let report_id = derived_id(
+        "ingestion-report",
+        [
+            (
+                "schema",
+                Value::String(INGESTION_REPORT_V2_SCHEMA.to_owned()),
+            ),
+            (
+                "snapshot_id",
+                Value::String(identities.snapshot_id.to_string()),
+            ),
+            (
+                "target_revision",
+                Value::String(legacy.program_space.target_revision().to_owned()),
+            ),
+            (
+                "legacy_program_space_sha256",
+                Value::String(program_hash.to_string()),
+            ),
+            (
+                "legacy_extraction_report_sha256",
+                Value::String(extraction_hash.to_string()),
+            ),
+            (
+                "projection_extractor_id",
+                Value::String(INGESTION_V2_PROJECTION_EXTRACTOR_ID.to_owned()),
+            ),
+            (
+                "located_call_occurrences",
+                stable_id_values(&occurrences.iter().map(|value| value.id.clone()).collect()),
+            ),
+            (
+                "global_direct_calls_limitation",
+                Value::String(global.id.to_string()),
+            ),
+        ],
+    )?;
+    let report = IngestionReportV2 {
+        schema: INGESTION_REPORT_V2_SCHEMA.to_owned(),
+        report_id,
+        snapshot_id: identities.snapshot_id.clone(),
+        target_revision: legacy.program_space.target_revision().to_owned(),
+        legacy_program_space_sha256: program_hash,
+        legacy_extraction_report_sha256: extraction_hash,
+        projection_extractor_id: INGESTION_V2_PROJECTION_EXTRACTOR_ID.to_owned(),
+        located_call_occurrences: occurrences,
+        global_direct_calls_limitation: global,
+    };
+    validate_ingestion_report_v2_with_index(&report, legacy, legacy_index)?;
+    Ok(report)
+}
+
+fn stable_id_values(ids: &BTreeSet<StableId>) -> Value {
+    Value::Array(ids.iter().map(|id| Value::String(id.to_string())).collect())
+}
+
+fn string_set_values(values: &BTreeSet<String>) -> Value {
+    Value::Array(values.iter().cloned().map(Value::String).collect())
+}
+
+fn span_value(span: &IngestionObstructionSpan) -> Value {
+    Value::Object(Map::from_iter([
+        ("path".to_owned(), Value::String(span.path.clone())),
+        (
+            "start_line".to_owned(),
+            Value::Number(span.start_line.into()),
+        ),
+        ("end_line".to_owned(), Value::Number(span.end_line.into())),
+        (
+            "start_column".to_owned(),
+            Value::Number(span.start_column.into()),
+        ),
+        (
+            "end_column".to_owned(),
+            Value::Number(span.end_column.into()),
+        ),
+    ]))
+}
+
+fn build_v2_source_id_index(
+    drafts: &[V2IngestionObstructionDraft],
+    known_ids: &BTreeSet<StableId>,
+    snapshot_id: &StableId,
+) -> Result<BTreeMap<String, StableId>, IngestError> {
+    drafts
+        .iter()
+        .flat_map(|draft| draft.source_keys.iter())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|key| {
+            let id = derived_id(
+                v2_source_key_kind(key)?,
+                [
+                    ("snapshot", Value::String(snapshot_id.to_string())),
+                    ("key", Value::String(key.clone())),
+                ],
+            )?;
+            if !known_ids.contains(&id) {
+                return Err(IngestError::AdapterOutput(
+                    "v2 source key did not resolve to an accepted source ID".to_owned(),
+                ));
+            }
+            Ok((key.clone(), id))
+        })
+        .collect()
+}
+
+fn resolve_v2_source_ids(
+    keys: &BTreeSet<String>,
+    source_id_index: &BTreeMap<String, StableId>,
+) -> Result<BTreeSet<StableId>, IngestError> {
+    if keys.is_empty() {
+        return Err(IngestError::AdapterOutput(
+            "v2 source keys cannot be empty".to_owned(),
+        ));
+    }
+    keys.iter()
+        .map(|key| {
+            source_id_index.get(key).cloned().ok_or_else(|| {
+                IngestError::AdapterOutput(
+                    "v2 source key did not resolve to an accepted source ID".to_owned(),
+                )
+            })
+        })
+        .collect()
+}
+
+fn v2_source_key_kind(key: &str) -> Result<&str, IngestError> {
+    match key.split(':').next() {
+        Some("file") => Ok("file"),
+        Some("function") => Ok("function"),
+        Some("method") => Ok("method"),
+        Some("test") => Ok("test"),
+        Some("module") => Ok("module"),
+        _ => Err(IngestError::AdapterOutput(format!(
+            "v2 source key has no accepted artifact kind: {key}"
+        ))),
+    }
+}
+
+fn validate_occurrence_draft(
+    source_index: &V2OccurrenceSourceIndex,
+    draft: &V2IngestionObstructionDraft,
+    occurrence: &CallOccurrenceDraft,
+    source_ids: &BTreeSet<StableId>,
+) -> Result<(), IngestError> {
+    let expected_kind = match occurrence.call_kind {
+        CallKind::Direct => IngestionObstructionKind::RelationUnresolved,
+        CallKind::Method => IngestionObstructionKind::DynamicDispatchUnresolved,
+        CallKind::MacroInvocation => IngestionObstructionKind::MacroExpansionUnresolved,
+    };
+    if draft.kind != expected_kind
+        || draft.severity != ObstructionSeverity::Medium
+        || draft.related_capabilities != BTreeSet::from(["direct_calls".to_owned()])
+        || draft.paths != BTreeSet::from([occurrence.span.path.clone()])
+        || source_ids.is_empty()
+        || occurrence.extractor_id != INGESTION_V2_PROJECTION_EXTRACTOR_ID
+    {
+        return Err(IngestError::AdapterOutput(
+            "v2 occurrence violates its closed contract".to_owned(),
+        ));
+    }
+    let line_lengths = source_index
+        .line_lengths(&occurrence.span.path)
+        .ok_or_else(|| {
+            IngestError::AdapterOutput("v2 occurrence path is not an admitted source".to_owned())
+        })?;
+    validate_span_in_line_lengths(&occurrence.span, line_lengths)
+}
+
+fn validate_span_in_line_lengths(
+    span: &LocationDraft,
+    line_lengths: &[usize],
+) -> Result<(), IngestError> {
+    if span.start_line == 0
+        || span.end_line < span.start_line
+        || span.start_column == 0
+        || span.end_column == 0
+        || (span.start_line == span.end_line && span.end_column < span.start_column)
+    {
+        return Err(IngestError::AdapterOutput(
+            "v2 occurrence span is not inclusive".to_owned(),
+        ));
+    }
+    let line = |number: u64| {
+        line_lengths.get(usize::try_from(number.saturating_sub(1)).unwrap_or(usize::MAX))
+    };
+    let Some(start) = line(span.start_line) else {
+        return Err(IngestError::AdapterOutput(
+            "v2 occurrence start lies outside accepted source".to_owned(),
+        ));
+    };
+    let Some(end) = line(span.end_line) else {
+        return Err(IngestError::AdapterOutput(
+            "v2 occurrence end lies outside accepted source".to_owned(),
+        ));
+    };
+    if span.start_column > u64::try_from(*start + 1).expect("usize fits u64")
+        || span.end_column > u64::try_from(*end).expect("usize fits u64")
+    {
+        return Err(IngestError::AdapterOutput(
+            "v2 occurrence columns lie outside accepted source".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod v2_occurrence_performance_tests {
+    use super::*;
+
+    #[test]
+    fn large_source_is_indexed_once_for_many_occurrence_validations() {
+        const LINE_COUNT: usize = 82_401;
+        const OCCURRENCE_COUNT: usize = 321_099;
+
+        let mut bytes = Vec::with_capacity(LINE_COUNT * 41);
+        for line in 0..LINE_COUNT {
+            bytes.extend_from_slice(b"0123456789012345678901234567890123456789");
+            if line + 1 != LINE_COUNT {
+                bytes.push(b'\n');
+            }
+        }
+        let line_lengths = v2_line_lengths(&bytes);
+        assert_eq!(line_lengths.len(), LINE_COUNT);
+        assert_eq!(line_lengths.iter().sum::<usize>(), LINE_COUNT * 40);
+
+        let span = LocationDraft {
+            path: "large.rs".to_owned(),
+            start_line: LINE_COUNT as u64,
+            end_line: LINE_COUNT as u64,
+            start_column: 1,
+            end_column: 40,
+        };
+        for _ in 0..OCCURRENCE_COUNT {
+            validate_span_in_line_lengths(&span, &line_lengths)
+                .expect("an indexed span remains valid");
+        }
+
+        // The per-occurrence API receives only the O(lines) index, not the
+        // 3.4 MiB source bytes, making a source-byte rescan inside this loop
+        // structurally impossible.
+        assert_eq!(line_lengths.len(), LINE_COUNT);
+    }
+}
+
+fn render_v2_call_occurrence_description(occurrence: &CallOccurrenceDraft) -> String {
+    format!(
+        "direct_calls unresolved occurrence: call_kind={}; reason={}; path={}; span={}:{}-{}:{}",
+        occurrence.call_kind.as_str(),
+        occurrence.reason.as_str(),
+        occurrence.span.path,
+        occurrence.span.start_line,
+        occurrence.span.start_column,
+        occurrence.span.end_line,
+        occurrence.span.end_column
+    )
+}
+
+fn render_v2_global_description() -> String {
+    "direct_calls enumeration is incomplete; macro latent occurrence count is unknown".to_owned()
+}
+
+/// Decodes only canonical, closed v2 sidecar bytes and revalidates every
+/// semantic binding against the unchanged legacy pair. No unchecked serde
+/// value can be obtained as an [`IngestionReportV2`].
+pub fn decode_and_validate_ingestion_report_v2(
+    bytes: &[u8],
+    legacy_program_space: &ProgramSpace,
+    legacy_extraction_report: &ExtractionReport,
+) -> Result<IngestionReportV2, IngestError> {
+    let value: Value = serde_json::from_slice(bytes)?;
+    if canonical_json(&value)? != bytes {
+        return Err(IngestError::AdapterOutput(
+            "v2 ingestion report is not canonical JSON".to_owned(),
+        ));
+    }
+    let raw: RawIngestionReportV2 = serde_json::from_value(value)?;
+    let legacy = IngestResult {
+        program_space: legacy_program_space.clone(),
+        extraction_report: legacy_extraction_report.clone(),
+    };
+    let report = raw.into_validated()?;
+    validate_ingestion_report_v2(&report, &legacy)?;
+    Ok(report)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawIngestionReportV2 {
+    schema: String,
+    report_id: StableId,
+    snapshot_id: StableId,
+    target_revision: String,
+    legacy_program_space_sha256: ContentHash,
+    legacy_extraction_report_sha256: ContentHash,
+    projection_extractor_id: String,
+    located_call_occurrences: Vec<RawIngestionObstructionV2>,
+    global_direct_calls_limitation: RawIngestionGlobalLimitationV2,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawIngestionObstructionV2 {
+    schema: String,
+    id: StableId,
+    kind: IngestionObstructionKind,
+    severity: ObstructionSeverity,
+    description: String,
+    source_ids: Vec<StableId>,
+    paths: Vec<String>,
+    related_capabilities: Vec<String>,
+    call_kind: CallKind,
+    reason: CallObstructionReason,
+    span: RawIngestionObstructionSpan,
+    snapshot_id: StableId,
+    extractor_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawIngestionObstructionSpan {
+    path: String,
+    start_line: u64,
+    end_line: u64,
+    start_column: u64,
+    end_column: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawIngestionGlobalLimitationV2 {
+    schema: String,
+    id: StableId,
+    snapshot_id: StableId,
+    projection_extractor_id: String,
+    kind: String,
+    severity: ObstructionSeverity,
+    description: String,
+    source_ids: Vec<StableId>,
+    related_capabilities: Vec<String>,
+    latent_occurrence_count: LatentOccurrenceCount,
+}
+
+impl RawIngestionReportV2 {
+    fn into_validated(self) -> Result<IngestionReportV2, IngestError> {
+        let occurrences = self
+            .located_call_occurrences
+            .into_iter()
+            .map(RawIngestionObstructionV2::into_validated)
+            .collect::<Result<Vec<_>, _>>()?;
+        if !strictly_sorted(occurrences.iter().map(|item| &item.id)) {
+            return Err(IngestError::AdapterOutput(
+                "v2 occurrence IDs must be strictly sorted".to_owned(),
+            ));
+        }
+        Ok(IngestionReportV2 {
+            schema: self.schema,
+            report_id: self.report_id,
+            snapshot_id: self.snapshot_id,
+            target_revision: self.target_revision,
+            legacy_program_space_sha256: self.legacy_program_space_sha256,
+            legacy_extraction_report_sha256: self.legacy_extraction_report_sha256,
+            projection_extractor_id: self.projection_extractor_id,
+            located_call_occurrences: occurrences,
+            global_direct_calls_limitation: self.global_direct_calls_limitation.into_validated()?,
+        })
+    }
+}
+
+impl RawIngestionObstructionV2 {
+    fn into_validated(self) -> Result<IngestionObstructionV2, IngestError> {
+        Ok(IngestionObstructionV2 {
+            schema: self.schema,
+            id: self.id,
+            kind: self.kind,
+            severity: self.severity,
+            description: self.description,
+            source_ids: ordered_set(self.source_ids, "v2 occurrence source_ids")?,
+            paths: ordered_set(self.paths, "v2 occurrence paths")?,
+            related_capabilities: ordered_set(
+                self.related_capabilities,
+                "v2 occurrence related_capabilities",
+            )?,
+            call_kind: self.call_kind,
+            reason: self.reason,
+            span: IngestionObstructionSpan {
+                path: self.span.path,
+                start_line: self.span.start_line,
+                end_line: self.span.end_line,
+                start_column: self.span.start_column,
+                end_column: self.span.end_column,
+            },
+            snapshot_id: self.snapshot_id,
+            extractor_id: self.extractor_id,
+        })
+    }
+}
+
+impl RawIngestionGlobalLimitationV2 {
+    fn into_validated(self) -> Result<IngestionGlobalLimitationV2, IngestError> {
+        Ok(IngestionGlobalLimitationV2 {
+            schema: self.schema,
+            id: self.id,
+            snapshot_id: self.snapshot_id,
+            projection_extractor_id: self.projection_extractor_id,
+            kind: self.kind,
+            severity: self.severity,
+            description: self.description,
+            source_ids: ordered_set(self.source_ids, "v2 global source_ids")?,
+            related_capabilities: ordered_set(
+                self.related_capabilities,
+                "v2 global related_capabilities",
+            )?,
+            latent_occurrence_count: self.latent_occurrence_count,
+        })
+    }
+}
+
+fn strictly_sorted<'a, T: Ord + 'a>(values: impl IntoIterator<Item = &'a T>) -> bool {
+    values
+        .into_iter()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .all(|pair| pair[0] < pair[1])
+}
+
+fn ordered_set<T: Ord>(values: Vec<T>, field: &str) -> Result<BTreeSet<T>, IngestError> {
+    if !strictly_sorted(values.iter()) {
+        return Err(IngestError::AdapterOutput(format!(
+            "{field} must be strictly sorted and duplicate-free"
+        )));
+    }
+    Ok(values.into_iter().collect())
+}
+
+fn validate_ingestion_report_v2(
+    report: &IngestionReportV2,
+    legacy: &IngestResult,
+) -> Result<(), IngestError> {
+    let legacy_index = V2LegacyValidationIndex::new(legacy)?;
+    validate_ingestion_report_v2_with_index(report, legacy, &legacy_index)
+}
+
+fn validate_ingestion_report_v2_with_index(
+    report: &IngestionReportV2,
+    legacy: &IngestResult,
+    legacy_index: &V2LegacyValidationIndex,
+) -> Result<(), IngestError> {
+    let snapshot_id = legacy.program_space.snapshot_id();
+    if report.schema != INGESTION_REPORT_V2_SCHEMA
+        || report.snapshot_id != *snapshot_id
+        || report.target_revision != legacy.program_space.target_revision()
+        || report.projection_extractor_id != INGESTION_V2_PROJECTION_EXTRACTOR_ID
+        || legacy.extraction_report.snapshot_id != *snapshot_id
+        || legacy.extraction_report.target_revision != legacy.program_space.target_revision()
+    {
+        return Err(IngestError::AdapterOutput(
+            "v2 report identity mismatch".to_owned(),
+        ));
+    }
+    if report.legacy_program_space_sha256 != legacy_index.program_hash
+        || report.legacy_extraction_report_sha256 != legacy_index.extraction_hash
+    {
+        return Err(IngestError::AdapterOutput(
+            "v2 report legacy hash mismatch".to_owned(),
+        ));
+    }
+    let direct_sources = legacy
+        .program_space
+        .extraction()
+        .capabilities
+        .get("direct_calls")
+        .ok_or_else(|| {
+            IngestError::AdapterOutput("legacy report lacks direct_calls capability".to_owned())
+        })?
+        .source_ids
+        .clone();
+    validate_global_v2(
+        &report.global_direct_calls_limitation,
+        snapshot_id,
+        &direct_sources,
+    )?;
+    let mut occurrence_ids = BTreeSet::new();
+    let mut previous = None;
+    for occurrence in &report.located_call_occurrences {
+        if previous
+            .as_ref()
+            .is_some_and(|id: &StableId| id >= &occurrence.id)
+        {
+            return Err(IngestError::AdapterOutput(
+                "v2 occurrence order is not canonical".to_owned(),
+            ));
+        }
+        previous = Some(occurrence.id.clone());
+        validate_occurrence_v2(
+            occurrence,
+            snapshot_id,
+            &legacy_index.known_ids,
+            &legacy_index.accepted_file_paths,
+        )?;
+        occurrence_ids.insert(occurrence.id.clone());
+    }
+    let expected_report_id = derived_id(
+        "ingestion-report",
+        [
+            (
+                "schema",
+                Value::String(INGESTION_REPORT_V2_SCHEMA.to_owned()),
+            ),
+            ("snapshot_id", Value::String(snapshot_id.to_string())),
+            (
+                "target_revision",
+                Value::String(legacy.program_space.target_revision().to_owned()),
+            ),
+            (
+                "legacy_program_space_sha256",
+                Value::String(report.legacy_program_space_sha256.to_string()),
+            ),
+            (
+                "legacy_extraction_report_sha256",
+                Value::String(report.legacy_extraction_report_sha256.to_string()),
+            ),
+            (
+                "projection_extractor_id",
+                Value::String(INGESTION_V2_PROJECTION_EXTRACTOR_ID.to_owned()),
+            ),
+            (
+                "located_call_occurrences",
+                stable_id_values(&occurrence_ids),
+            ),
+            (
+                "global_direct_calls_limitation",
+                Value::String(report.global_direct_calls_limitation.id.to_string()),
+            ),
+        ],
+    )?;
+    if report.report_id != expected_report_id {
+        return Err(IngestError::AdapterOutput(
+            "v2 report ID preimage mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_global_v2(
+    global: &IngestionGlobalLimitationV2,
+    snapshot_id: &StableId,
+    direct_sources: &BTreeSet<StableId>,
+) -> Result<(), IngestError> {
+    if global.schema != INGESTION_GLOBAL_LIMITATION_V2_SCHEMA
+        || global.snapshot_id != *snapshot_id
+        || global.projection_extractor_id != INGESTION_V2_PROJECTION_EXTRACTOR_ID
+        || global.kind != "global_direct_calls_limitation"
+        || global.severity != ObstructionSeverity::Info
+        || global.related_capabilities != BTreeSet::from(["direct_calls".to_owned()])
+        || global.latent_occurrence_count != LatentOccurrenceCount::Unknown
+        || global.source_ids != *direct_sources
+        || global.source_ids.is_empty()
+        || global.description.as_bytes() != render_v2_global_description().as_bytes()
+    {
+        return Err(IngestError::AdapterOutput(
+            "v2 global limitation validation failed".to_owned(),
+        ));
+    }
+    let expected_id = derived_id(
+        "ingestion-limitation",
+        [
+            (
+                "schema",
+                Value::String(INGESTION_GLOBAL_LIMITATION_V2_SCHEMA.to_owned()),
+            ),
+            ("snapshot_id", Value::String(snapshot_id.to_string())),
+            (
+                "projection_extractor_id",
+                Value::String(INGESTION_V2_PROJECTION_EXTRACTOR_ID.to_owned()),
+            ),
+            (
+                "kind",
+                Value::String("global_direct_calls_limitation".to_owned()),
+            ),
+            ("severity", Value::String("Info".to_owned())),
+            ("source_ids", stable_id_values(&global.source_ids)),
+            (
+                "related_capabilities",
+                string_set_values(&global.related_capabilities),
+            ),
+            (
+                "latent_occurrence_count",
+                Value::String(global.latent_occurrence_count.as_str().to_owned()),
+            ),
+        ],
+    )?;
+    if global.id != expected_id {
+        return Err(IngestError::AdapterOutput(
+            "v2 global limitation ID preimage mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_occurrence_v2(
+    occurrence: &IngestionObstructionV2,
+    snapshot_id: &StableId,
+    known_ids: &BTreeSet<StableId>,
+    accepted_file_paths: &BTreeSet<String>,
+) -> Result<(), IngestError> {
+    let expected_kind = match occurrence.call_kind {
+        CallKind::Direct => IngestionObstructionKind::RelationUnresolved,
+        CallKind::Method => IngestionObstructionKind::DynamicDispatchUnresolved,
+        CallKind::MacroInvocation => IngestionObstructionKind::MacroExpansionUnresolved,
+    };
+    if occurrence.schema != INGESTION_OBSTRUCTION_V2_SCHEMA
+        || occurrence.snapshot_id != *snapshot_id
+        || occurrence.extractor_id != INGESTION_V2_PROJECTION_EXTRACTOR_ID
+        || occurrence.kind != expected_kind
+        || occurrence.severity != ObstructionSeverity::Medium
+        || occurrence.related_capabilities.len() != 1
+        || !occurrence.related_capabilities.contains("direct_calls")
+        || occurrence.source_ids.is_empty()
+        || !occurrence
+            .source_ids
+            .iter()
+            .all(|id| known_ids.contains(id))
+        || occurrence.paths.len() != 1
+        || !occurrence.paths.contains(&occurrence.span.path)
+        || !normalized_repository_path(&occurrence.span.path)
+        || occurrence.description.as_bytes() != render_occurrence_from_span(occurrence).as_bytes()
+    {
+        return Err(IngestError::AdapterOutput(
+            "v2 occurrence validation failed".to_owned(),
+        ));
+    }
+    if !accepted_file_paths.contains(&occurrence.span.path)
+        || occurrence.span.start_line == 0
+        || occurrence.span.end_line < occurrence.span.start_line
+        || occurrence.span.start_column == 0
+        || occurrence.span.end_column == 0
+        || (occurrence.span.start_line == occurrence.span.end_line
+            && occurrence.span.end_column < occurrence.span.start_column)
+    {
+        return Err(IngestError::AdapterOutput(
+            "v2 occurrence span is outside accepted source".to_owned(),
+        ));
+    }
+    let expected_id = derived_id(
+        "ingestion-obstruction",
+        [
+            (
+                "schema",
+                Value::String(INGESTION_OBSTRUCTION_V2_SCHEMA.to_owned()),
+            ),
+            ("snapshot_id", Value::String(snapshot_id.to_string())),
+            (
+                "extractor_id",
+                Value::String(occurrence.extractor_id.clone()),
+            ),
+            ("kind", Value::String(format!("{:?}", occurrence.kind))),
+            (
+                "severity",
+                Value::String(format!("{:?}", occurrence.severity)),
+            ),
+            ("source_ids", stable_id_values(&occurrence.source_ids)),
+            ("paths", string_set_values(&occurrence.paths)),
+            (
+                "related_capabilities",
+                string_set_values(&occurrence.related_capabilities),
+            ),
+            (
+                "call_kind",
+                Value::String(occurrence.call_kind.as_str().to_owned()),
+            ),
+            (
+                "reason",
+                Value::String(occurrence.reason.as_str().to_owned()),
+            ),
+            ("span", span_value(&occurrence.span)),
+        ],
+    )?;
+    if occurrence.id != expected_id {
+        return Err(IngestError::AdapterOutput(
+            "v2 occurrence ID preimage mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn render_occurrence_from_span(occurrence: &IngestionObstructionV2) -> String {
+    format!(
+        "direct_calls unresolved occurrence: call_kind={}; reason={}; path={}; span={}:{}-{}:{}",
+        occurrence.call_kind.as_str(),
+        occurrence.reason.as_str(),
+        occurrence.span.path,
+        occurrence.span.start_line,
+        occurrence.span.start_column,
+        occurrence.span.end_line,
+        occurrence.span.end_column
+    )
+}
+
+fn normalized_repository_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains('\0')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 fn source_bundle_from_snapshot(
@@ -918,6 +2159,27 @@ pub(crate) struct IssueDraft {
     pub(crate) related_capabilities: BTreeSet<String>,
 }
 
+#[derive(Clone)]
+pub(crate) struct V2IngestionObstructionDraft {
+    pub(crate) kind: IngestionObstructionKind,
+    pub(crate) severity: ObstructionSeverity,
+    #[allow(dead_code)]
+    pub(crate) description: String,
+    pub(crate) source_keys: BTreeSet<String>,
+    pub(crate) paths: BTreeSet<String>,
+    pub(crate) related_capabilities: BTreeSet<String>,
+    pub(crate) call_occurrence: Option<CallOccurrenceDraft>,
+    pub(crate) latent_occurrence_count: Option<LatentOccurrenceCount>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CallOccurrenceDraft {
+    pub(crate) call_kind: CallKind,
+    pub(crate) reason: CallObstructionReason,
+    pub(crate) span: LocationDraft,
+    pub(crate) extractor_id: &'static str,
+}
+
 /// Whether a location falls within a base-comparison's changed-line set.
 /// Only ever consulted while building the change family's own
 /// `changed_by`/`contains` relations: the result must never be folded into
@@ -1129,6 +2391,21 @@ fn lift(
                 ))
             },
         )?;
+        let source_values = Value::Array(
+            source_ids
+                .iter()
+                .map(|value| Value::String(value.to_string()))
+                .collect(),
+        );
+        let path_values = Value::Array(issue.paths.iter().cloned().map(Value::String).collect());
+        let capability_values = Value::Array(
+            issue
+                .related_capabilities
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect(),
+        );
         let id = derived_id(
             "limitation",
             [
@@ -1138,30 +2415,9 @@ fn lift(
                 ),
                 ("kind", Value::String(format!("{:?}", issue.kind))),
                 ("description", Value::String(issue.description.clone())),
-                (
-                    "sources",
-                    Value::Array(
-                        source_ids
-                            .iter()
-                            .map(|value| Value::String(value.to_string()))
-                            .collect(),
-                    ),
-                ),
-                (
-                    "paths",
-                    Value::Array(issue.paths.iter().cloned().map(Value::String).collect()),
-                ),
-                (
-                    "related_capabilities",
-                    Value::Array(
-                        issue
-                            .related_capabilities
-                            .iter()
-                            .cloned()
-                            .map(Value::String)
-                            .collect(),
-                    ),
-                ),
+                ("sources", source_values),
+                ("paths", path_values),
+                ("related_capabilities", capability_values),
             ],
         )?;
         if !limitation_by_id.contains_key(&id) {
@@ -1493,6 +2749,114 @@ mod source_key_resolution_tests {
             paths: BTreeSet::new(),
             related_capabilities: BTreeSet::new(),
         }
+    }
+
+    fn snapshot_with_rust_source() -> git::GitSnapshot {
+        let mut snapshot = snapshot();
+        let content = b"pub fn caller() { nowhere(); }\n".to_vec();
+        snapshot.files = vec![git::SnapshotFile {
+            path: "known.rs".to_owned(),
+            content_hash: ContentHash::sha256(&content),
+            content,
+            changed_lines: BTreeSet::from([1]),
+        }];
+        snapshot
+    }
+
+    fn v2_occurrence_draft(
+        reason: CallObstructionReason,
+        start_column: u64,
+    ) -> V2IngestionObstructionDraft {
+        V2IngestionObstructionDraft {
+            kind: IngestionObstructionKind::RelationUnresolved,
+            severity: ObstructionSeverity::Medium,
+            description: String::new(),
+            source_keys: BTreeSet::from(["file:known.rs".to_owned()]),
+            paths: BTreeSet::from(["known.rs".to_owned()]),
+            related_capabilities: BTreeSet::from(["direct_calls".to_owned()]),
+            call_occurrence: Some(CallOccurrenceDraft {
+                call_kind: CallKind::Direct,
+                reason,
+                span: LocationDraft {
+                    path: "known.rs".to_owned(),
+                    start_line: 1,
+                    end_line: 1,
+                    start_column,
+                    end_column: start_column + 8,
+                },
+                extractor_id: INGESTION_V2_PROJECTION_EXTRACTOR_ID,
+            }),
+            latent_occurrence_count: None,
+        }
+    }
+
+    fn v2_global_draft() -> V2IngestionObstructionDraft {
+        V2IngestionObstructionDraft {
+            kind: IngestionObstructionKind::RelationUnresolved,
+            severity: ObstructionSeverity::Info,
+            description: String::new(),
+            source_keys: BTreeSet::from(["file:known.rs".to_owned()]),
+            paths: BTreeSet::from(["known.rs".to_owned()]),
+            related_capabilities: BTreeSet::from(["direct_calls".to_owned()]),
+            call_occurrence: None,
+            latent_occurrence_count: Some(LatentOccurrenceCount::Unknown),
+        }
+    }
+
+    #[test]
+    fn reordered_v2_draft_vector_retains_occurrence_ids_and_canonical_bytes() {
+        let snapshot = snapshot_with_rust_source();
+        let identities = identities_for(&snapshot);
+        let mut inputs = base_inputs();
+        inputs.drafts = snapshot.files.iter().map(file_artifact_draft).collect();
+        inputs
+            .capabilities
+            .insert("direct_calls".to_owned(), CapabilityState::Partial);
+        inputs.capability_sources.insert(
+            "direct_calls".to_owned(),
+            BTreeSet::from(["file:known.rs".to_owned()]),
+        );
+        inputs.issues.push(IssueDraft {
+            kind: IngestionObstructionKind::RelationUnresolved,
+            severity: ObstructionSeverity::Info,
+            description: "legacy direct_calls limitation".to_owned(),
+            source_keys: BTreeSet::from(["file:known.rs".to_owned()]),
+            paths: BTreeSet::from(["known.rs".to_owned()]),
+            related_capabilities: BTreeSet::from(["direct_calls".to_owned()]),
+        });
+        let legacy = lift(&snapshot, &identities, inputs).expect("legacy lift succeeds");
+        let legacy_index =
+            V2LegacyValidationIndex::new(&legacy).expect("legacy validation index builds");
+        let first = v2_occurrence_draft(CallObstructionReason::DirectTargetCountZero, 19);
+        let second = v2_occurrence_draft(CallObstructionReason::DirectNonPath, 1);
+        let forward = build_ingestion_report_v2(
+            &snapshot,
+            &identities,
+            &legacy,
+            &legacy_index,
+            vec![first.clone(), second.clone(), v2_global_draft()],
+        )
+        .expect("forward v2 build succeeds");
+        let reversed = build_ingestion_report_v2(
+            &snapshot,
+            &identities,
+            &legacy,
+            &legacy_index,
+            vec![v2_global_draft(), second, first],
+        )
+        .expect("reversed v2 build succeeds");
+        let ids = |report: &IngestionReportV2| {
+            report
+                .located_call_occurrences()
+                .iter()
+                .map(|item| item.id().clone())
+                .collect::<BTreeSet<_>>()
+        };
+        assert_eq!(ids(&forward), ids(&reversed));
+        assert_eq!(
+            forward.canonical_bytes().expect("forward bytes"),
+            reversed.canonical_bytes().expect("reversed bytes")
+        );
     }
 
     #[test]
@@ -2330,13 +3694,52 @@ mod cargo_executable_path_independence_tests {
         "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then\n  echo \"cargo 1.75.0-test\"\n  exit 0\nfi\necho '{}'\nexit 0\n"
     }
 
-    fn write_executable(path: &Path, contents: &str) {
-        std::fs::write(path, contents).expect("write fake cargo script");
-        let mut permissions = std::fs::metadata(path)
-            .expect("fake cargo metadata")
-            .permissions();
+    /// Initial execution plus at most seven retries; sleeps total at most 35ms.
+    const TEST_EXEC_RETRY_LIMIT: usize = 7;
+    const TEST_EXEC_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
+    const TEST_EXEC_PROBE_ARGUMENT: &str = "--reviewgraphen-test-exec-probe";
+
+    fn write_executable(path: &Path, contents: &str) -> std::io::Result<()> {
+        let body = contents.strip_prefix("#!/bin/sh\n").ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "fake executable must use the expected /bin/sh shebang",
+            )
+        })?;
+        std::fs::write(
+            path,
+            format!(
+                "#!/bin/sh\nif [ \"${{1:-}}\" = \"{TEST_EXEC_PROBE_ARGUMENT}\" ]; then\n  exit 0\nfi\n{body}"
+            ),
+        )?;
+        let mut permissions = std::fs::metadata(path)?.permissions();
         permissions.set_mode(0o755);
-        std::fs::set_permissions(path, permissions).expect("set fake cargo permissions");
+        std::fs::set_permissions(path, permissions)?;
+        wait_for_test_executable(path)
+    }
+
+    fn wait_for_test_executable(path: &Path) -> std::io::Result<()> {
+        for retry in 0..=TEST_EXEC_RETRY_LIMIT {
+            match std::process::Command::new(path)
+                .arg(TEST_EXEC_PROBE_ARGUMENT)
+                .status()
+            {
+                Ok(status) if status.success() => return Ok(()),
+                Ok(status) => {
+                    return Err(std::io::Error::other(format!(
+                        "test executable probe exited unsuccessfully with {status}"
+                    )));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    if retry == TEST_EXEC_RETRY_LIMIT {
+                        return Err(error);
+                    }
+                    std::thread::sleep(TEST_EXEC_RETRY_DELAY);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("bounded test executable retry either succeeds or returns its typed error")
     }
 
     /// Stages a private snapshot directory carrying the same `Cargo.toml`
@@ -2359,7 +3762,8 @@ mod cargo_executable_path_independence_tests {
             b"[package]\nname = \"m2-fixture\"\nversion = \"0.1.0\"\n".to_vec();
         let bin_dir = tempfile::tempdir().expect("fake cargo bin dir");
         let cargo_path = bin_dir.path().join("cargo");
-        write_executable(&cargo_path, fake_cargo_script());
+        write_executable(&cargo_path, fake_cargo_script())
+            .expect("fake cargo executable becomes exec-ready within the bounded retry");
         let staged = staged_snapshot_with_cargo_toml(&cargo_toml_content);
         let (executable, version) = git::resolve_cargo(
             &CargoToolAdmission::TrustedExecutable(cargo_path),

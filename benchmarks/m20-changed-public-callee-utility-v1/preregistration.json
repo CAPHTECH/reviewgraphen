@@ -1,0 +1,398 @@
+{
+  "schema": "reviewgraphen.benchmark.preregistration.v1",
+  "experiment_id": "m20-changed-public-callee-utility-v1",
+  "status": "frozen-before-corpus-resolution",
+  "question": "Over the frozen open-development commit sample, does one relation.changed_public_callee@1 obligation plus a context.subject_windows@3 packet increase usable source-grounded disposition completion relative to a base/head-production-diff-only review by the same model under the same 65536-byte admitted-source ceiling and common requested backend settings?",
+  "authority_ceiling": "descriptive frozen-corpus evaluation only; no claim, judge result, or completion is verified, human-accepted, or defect truth",
+  "frozen_identities": {
+    "rule_id": "relation.changed_public_callee@1",
+    "property_id": "rust.callee_contract_review@1",
+    "profile_id": "rust.production.v1",
+    "profile_schema": "reviewgraphen.review_profile.v1",
+    "profile_sha256": "sha256:4b6cca93794ab03b1576e17d2e395ec43f731d316685247a89363ae2e840dd96",
+    "context_policy_id": "context.subject_windows@3",
+    "context_policy_sha256": "sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8",
+    "context_v2_immutable_sha256": "sha256:7c4ceca165588cd38b28cc6882bb68a1ff4040dbb19ee34dfd792216d70bbf26",
+    "reviewer_visible_contract": "arm-neutral.source-grounded-disposition@1",
+    "reviewer_visible_packet": "arm-neutral.source-grounded-packet@2"
+  },
+  "public_seeds": {
+    "repository_selection": "m20-repository-selection-v1",
+    "obligation_selection": "m20-obligation-selection-v1",
+    "commit_selection": "m20-commit-selection-v1",
+    "arm_order": "m20-arm-order-v1",
+    "judge_permutation": "m20-judge-permutation-v1"
+  },
+  "corpus": {
+    "resolve_after_freeze": true,
+    "roots": [
+      "direct child Git repositories of /home/rizumita/github/",
+      "/home/rizumita/workspace/reviewgraphen"
+    ],
+    "repository_count": 3,
+    "selection": "eligible repositories sorted by SHA-256(repository_selection seed + NUL + canonical repository ID), then ID; take first three without substitution",
+    "commits_per_repository": 100,
+    "history": "resolved HEAD, first-parent chain; each analysis unit is first_parent(commit)->commit",
+    "commit_cluster_count": 300,
+    "zero_obligation_clusters_retained": true,
+    "open_development": true
+  },
+  "analysis": {
+    "unit": "commit_cluster",
+    "sample": "one label-independent hash order over all model-eligible clusters; Stage 1 first 10, Stage 2A first 40 cumulative",
+    "within_commit_claims_are_not_independent": true,
+    "repository_reporting": "publish overall, each repository, and three leave-one-repository-out cells",
+    "estimand": "(B-only completion - A-only completion) / paired commit clusters",
+    "inferential_claims": "none; no m20 p-value, alpha, confidence interval, significance, population power, or general Rust effect"
+  },
+  "arms": {
+    "common": {
+      "model": "Qwen3.8-27B-MLX-4bit",
+      "effective_reasoning_effort": "low (mlx-dspark server default)",
+      "reasoning_effort_request_override": null,
+      "reasoning_effort_request_rule": "omit the reasoning_effort field; any explicit low, high, xhigh, or other override is a prelaunch refusal",
+      "model_pin_rationale": "MODEL_PIN_RATIONALE.md",
+      "hard_timeout_seconds": 900,
+      "tools": [],
+      "repository_mount": false,
+      "admitted_source_byte_ceiling": 65536,
+      "input_token_policy": "no evaluator-enforced input-token ceiling or tokenizer preflight; backend tokenizer and usage data are observation-only and never affect eligibility, ordering, scoring, failure codes, or decisions",
+      "requested_backend_max_output_tokens": 12000,
+      "output_budget_status": "frozen; selection basis, probe provenance, and interpretation limits are recorded only in MODEL_PIN_RATIONALE.md",
+      "maximum_claims": 3,
+      "retries": 0,
+      "instruction_id": "arm-neutral.source-grounded-disposition@1",
+      "budget_meaning": "equal input budget is enforced only by applying admitted_source_bytes <= 65536 to each complete arm packet; packets are not padded; this is not equality of tokens, information, serialized request bytes, or cost",
+      "byte_ceiling_terminal": "if either arm is 65537 bytes or more, the pair is sealed as model_ineligible with reason admitted_source_byte_ceiling_exceeded, null arm results, zero reviewer/judge calls, CLI exit 0, and no membership in n/b/c/n00",
+      "budget_boundary_fixtures": "both arms exactly 65536 bytes pass; changing one arm to 65537 bytes yields the sealed pair-wide model_ineligible terminal result and no primary record"
+    },
+    "A": "profile-defined base/head production diff only, encoded with the common visible contract and no D metadata",
+    "B": "one selected D obligation's bounded subject-window source bytes, encoded with the same visible contract; D metadata exists only in the hidden binding",
+    "order": "low bit of SHA-256(arm_order seed + NUL + commit_cluster_id): 0=A then B, 1=B then A"
+  },
+  "arm_neutral_contracts": {
+    "normative_implementation_spec": "EVALUATOR_SPEC.md",
+    "evaluator_version": "m20-evaluator.pipeline.v1",
+    "implementation_language": "Python 3 standard library only",
+    "implementation_path": "benchmarks/m20-changed-public-callee-utility-v1/evaluator/",
+    "implementation_status": "wave8_postseal_source_binding_atomic_refreeze_complete",
+    "role_separation": {
+      "evaluator_author": "independent evaluator agent",
+      "slice_implementer": "Candidate D implementation agent",
+      "must_differ": true,
+      "freeze_order": "one atomic coordinated freeze of occurrence-summary closure and context.subject_windows@3, together with the single-pipeline evaluator, schemas, vectors, generated fixtures, attacks, and hashes, before any Stage 0/model observation or corpus resolution; no occurrence-only intermediate freeze"
+    },
+    "normative_boundary": {
+      "prose_retains": [
+        "question, authority ceiling, corpus, analysis unit, sample order",
+        "seven Stage 0 gates and exact set boundaries",
+        "descriptive rectangles, budgets, control timing, sealing order, interpretation limits"
+      ],
+      "executable_bundle_owns_exclusively": [
+        "restricted JSON and canonical hashing",
+        "source excerpt extraction, payload closure, packet construction, and reviewer-lens scan",
+        "undecidable-question registry, loss derivation, and paired abstention opportunity",
+        "substantive-text normalization and mechanical scoring",
+        "two-candidate judge batch construction, permutation, validation, and reconciliation",
+        "primary conjunction, ordered failure codes, full-run artifact generation, and attack behavior",
+        "one production run from authenticated repository/commit/obligation selectors with no intermediate artifact inputs",
+        "exact internal occurrence-set rebuild into per-file summaries/report/coverage commitments and per-cluster resource metrics",
+        "context.subject_windows@3 four-denominator rebuild, subject-first materialization, exact anchor partition, latent union, and projection hash",
+        "Option C independent accepted/reached/support-anchor reconstruction, production replay comparison, semantic mutants, and pre-seal measurements"
+      ],
+      "no_duplicate_algorithm_rule": "The four prose documents may state outcomes and authority but must not restate executable algorithms. EVALUATOR_SPEC.md governs implementation until non-null freeze hashes bind the evaluator bundle.",
+      "trust_boundary": "Only raw reviewer and judge invocation results cross into scoring as untrusted values. Packet, loss, binding, opportunity, candidate, batch, and primary values are private in-process constructions and written artifacts are never production inputs."
+    },
+    "generated_schema_ids": [
+      "m20.pipeline_launch.v1",
+      "arm-neutral.source-grounded-packet@2",
+      "arm-neutral.source-grounded-disposition@1",
+      "m20.source-inventory.v3",
+      "m20.utility_judge_batch_input.v1",
+      "m20.utility_judge_batch_output.v1",
+      "m20.primary_score.v3",
+      "m20.run_manifest.v1",
+      "m20.stage0-occurrence-closure.v1",
+      "reviewgraphen.ingestion_obstruction_summary.v1",
+      "m20.evaluator_freeze.v1"
+    ],
+    "source_body_contract": {
+      "design_section": "EVALUATOR_SPEC.md sections 3-4",
+      "outcome": "Every admitted source closes to directly reviewer-readable strict-UTF-8 excerpt text in a closed content-addressed payload table; UTF8(text), byte length, and hashes must agree. Payload text and exact normalized repository paths are the only lens-scan exceptions."
+    },
+    "abstention_opportunity_contract": {
+      "design_sections": "EVALUATOR_SPEC.md sections 5-6",
+      "outcome": "Availability is derived only from pinned repository lookup plus EXTRACT; no status input exists. Eligibility is constructed by a closed total registry and can contribute only under equal paired question/reason signatures."
+    },
+    "text_and_scorer_contract": {
+      "design_sections": "EVALUATOR_SPEC.md sections 7-8",
+      "outcome": "Hash-bound code and reference vectors exclusively decide normalization, mechanical predicates, failure ordering, and completion."
+    },
+    "judge_batch_contract": {
+      "design_section": "EVALUATOR_SPEC.md section 9",
+      "candidates_per_batch": 2,
+      "batches_stage_1": 10,
+      "batches_stage_2A_cumulative": 40,
+      "seconds_per_batch": 90,
+      "outcome": "One in-process arm-hidden batch contains two opaque co-derived candidates and returns one independent score for each; the in-memory sealed permutation restores arms without rereading its artifact."
+    },
+    "reference_vectors": {
+      "version": "m20-reference-vectors.v1",
+      "total": 74,
+      "sets": {
+        "text": 20,
+        "source_payload": 10,
+        "loss_opportunity": 10,
+        "judge_batch": 12,
+        "occurrence_summary": 6,
+        "context_v3": 16
+      },
+      "original_52_rule": "The original 52 rows and order are byte-for-byte unchanged; 22 static literals cover occurrence, context v3, Option C identity/source/measurement/mutant bindings, freeze history, and the three-input execution formula.",
+      "non_circularity": "Expected values are static specification literals copied by the generator; production normalize or closure functions never generate expected values.",
+      "source": "EVALUATOR_SPEC.md section 10",
+      "generated_artifact": "evaluator/generated/reference_vectors.generated.json"
+    },
+    "fixture_policy": {
+      "hand_written_scored_fixtures_forbidden": true,
+      "generator_seed": "m20-evaluator-fixtures-v1",
+      "generator_version": "m20-pipeline-fixture-generator.v1",
+      "required_classes": [
+        "A/B claim success",
+        "A/B paired-opportunity abstention success",
+        "A/B routine-only blanket abstention zero",
+        "A/B inconclusive zero",
+        "A/B source-ID echo zero",
+        "all reference vector expansions",
+        "direct execution of occurrence-summary, context-v3 closure, and Option C semantic-acceptance literals",
+        "full audit artifacts and seal for each fixture",
+        "all applicable D4 and D5 production, model-boundary, and hostile-artifact attacks from EVALUATOR_SPEC.md section 11"
+      ],
+      "regeneration_rule": "write_generated copies static vector literals and executes the real pipeline for generated run fixtures; evaluator generate-fixtures --check must reproduce every generated byte; evaluator run-attacks must apply each named production mutation or hostile input rather than count manifest rows; deleting text casefold must make T09/T15 fail",
+      "attack_artifact": "evaluator/generated/attacks.generated.json"
+    },
+    "freeze_hashes": {
+      "evaluator_bundle_sha256": "sha256:8572a5ad60d0f01a4152e9f190888a558b310fc9bc247f2bb927384a18c2ceb0",
+      "evaluator_execution_sha256": "sha256:8a83e1270ff1ded4cfd01558d51b2c30342de1e9daad3eb9bd9ec4bfe565d8bc",
+      "generated_fixture_inventory_sha256": "sha256:e73a2b487f0ec7669ebb4535dc9358d394bea93efe881b7a2273d08a7895df36",
+      "reference_vector_set_sha256": "sha256:14d12778aae0716816f33d89e470331ec3e3b1404a2d8514a512f3f2fd5a3c2f",
+      "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
+      "semantic_acceptance_reference_sha256": "sha256:ca63178a27f33aa4c1db04159eb82262a1ef0a9063db626b51ff84045426c9d6",
+      "measurement_record_sha256": "sha256:030c843441d74d7c706c8e7306e2b1e7cc8971eb9578a6fbe793392df2f09066",
+      "freeze_manifest_path": "benchmarks/m20-changed-public-callee-utility-v1/freeze-manifest.json",
+      "non_null_gate": "All seven hashes and the manifest path must be non-null and verify-frozen must pass on a compatible runtime before preregistration status may become frozen-before-corpus-resolution."
+    },
+    "freeze_history": [
+      {
+        "freeze_manifest_sha256": "sha256:95b75a62353b56111fe8913700c72bf9881f93efdc99629e72adb3e2c6a9fa73",
+        "status": "superseded_pre_oracle",
+        "reason": "Wave 3-5 independent review changed semantic acceptance to Option C; this pre-oracle freeze is retained as history and is not valid for Stage 0.",
+        "evaluator_bundle_sha256": "sha256:1b6fa89d33b9af81a0e4dbda423a02b911020b1c64db08106abcb83cb25cea02",
+        "evaluator_execution_sha256": "sha256:bbca5459839f9b37286ef17212beb34fab053b73aab3c8cb149972998b6c229e",
+        "generated_fixture_inventory_sha256": "sha256:ad9598ea0a85941ad6299f2cccc5349f98b67489f316812b6023db24bd0953e1",
+        "reference_vector_set_sha256": "sha256:7087f1255ac426fdffc6c1a47ebfd33e4acaec2de1e65fd9cc9733c8bb6d807d",
+        "mutation_manifest_sha256": "sha256:530a9ec18b09a8f69090c67b1f8f098d371c73dfd77f61a76321fa48e694b294"
+      },
+      {
+        "freeze_manifest_sha256": "sha256:eb207a22a41ac6635b68affa1fb8febb123799d89c31ba0a01089794753e1a7e",
+        "status": "superseded_spec_contract_mismatch",
+        "reason": "Wave 7 found that the normative specification still declared a two-input execution hash and 12 manifest keys while the frozen implementation used three inputs and 15 keys.",
+        "evaluator_bundle_sha256": "sha256:6b3c2b0d7e13d4085d16ce4b700401adf180e5478f7a09482f1d38d0924939fd",
+        "evaluator_execution_sha256": "sha256:c2632ceee45d8b562b7aca6e12db697ed49cff48d2c89fab38ba12684ca47968",
+        "semantic_acceptance_reference_sha256": "sha256:ebe18ffaf9da9e6b0a555c275e78dbefaf2d80a4742ed2f192ddfa8c4f276288",
+        "measurement_record_sha256": "sha256:74b8ecb41aa4c0adcf2873d9412f15a933dd068937d3f66b21d3c4e2a6a1d852",
+        "generated_fixture_inventory_sha256": "sha256:a3b0af959c16e0fb8c5088d61650316327cdd61c241e6ce16de82df8645773a4",
+        "reference_vector_set_sha256": "sha256:3e46f4854b4052ec81028a5e8a428dda331311fe505fb06aa56c4855e7594a36",
+        "mutation_manifest_sha256": "sha256:6cc8e3a2ef2f2600d4bc4a190451616e3bd028c42f19b3dd4fd78aae7d223ad4"
+      },
+      {
+        "freeze_manifest_sha256": "sha256:19014d24b608ee51547f0f3a99c9559583b312b0eeaa848d69441876dd51c1e6",
+        "status": "superseded_postseal_source_binding_drift",
+        "reason": "Hash-bound context.rs, generic.rs, and generic_v3.rs changed after the Wave 7 seal; generated files remained present and byte-identical, but the semantic workspace binding no longer matched.",
+        "evaluator_bundle_sha256": "sha256:31b80a42a0e8c393ae7845fcb4c4418447bd8699dc9ce454a994da30b084af89",
+        "evaluator_execution_sha256": "sha256:80be879f7f5a450888ec80535b4cbd64736200a130222045c7a9731a5fe475d2",
+        "semantic_acceptance_reference_sha256": "sha256:67a8c04190964c6be46099d5dc34ee207b9553be3dd01f812cf3071fa05de94d",
+        "measurement_record_sha256": "sha256:2d0557ea63fe3d3cdf942c4a60957791d15db21ec6bcb63f1adabb019291bc6e",
+        "generated_fixture_inventory_sha256": "sha256:be07c1283db12e0a55ada7edbfd3a9909a7a75c6a9818dfca08f84af20e9b151",
+        "reference_vector_set_sha256": "sha256:3762ae125eb807f592a408bdc71fbcefbcc3f48d0844d7f19ca45d0703e2c1e7",
+        "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57"
+      }
+    ],
+    "runtime_contract": {
+      "implementation": "cpython",
+      "python_version": [
+        3,
+        13,
+        5
+      ],
+      "unicodedata_version": "15.1.0",
+      "stdlib_only": true,
+      "mismatch_rule": "A semantic runtime mismatch is verify-frozen exit 3 before pipeline launch, not a warning or arm zero. Provisioning the matching runtime preserves the study; changing this contract requires a new versioned study.",
+      "provenance_rule": "Exact executable hash and platform are recorded but excluded from evaluator_bundle_sha256 and evaluator_execution_sha256. Compatible provenance changes are allowed only after all frozen checks pass."
+    },
+    "change_rule": "A normative evaluator-tree file change changes evaluator_bundle_sha256 and evaluator_execution_sha256. A semantic runtime-contract change changes evaluator_execution_sha256. A design-spec change changes its separately recorded manifest/protocol hash. Every normative post-freeze change requires a new versioned study; compatible observed executable/platform provenance changes none of these identities."
+  },
+  "primary_endpoint": {
+    "name": "usable_grounded_disposition_completed(commit, arm)",
+    "normative_scorer": "The m20-evaluator.pipeline.v1 bundle and semantic runtime contract jointly identified by evaluator_execution_sha256; the single in-process pipeline and EVALUATOR_SPEC.md sections 8-9 are the only scorer before freeze.",
+    "value_one": "The generated m20.primary_score.v3 record has completed=true under the frozen evaluator. No prose reimplementation may rescore a cell.",
+    "forced_zero_classes": [
+      "process, timeout, empty, parse, schema, closure, source-payload, policy, tool, truncation, or retained-hash failure",
+      "foreign/out-of-range source, inconclusive, non-substantive text, routine/mixed/asymmetric abstention opportunity",
+      "judge batch unavailable/invalid, candidate/hash/reverse-map mismatch, or utility threshold failure"
+    ],
+    "missing_data_rule": "After sealed launch, every missing or failed arm result is 0 with no retry.",
+    "interpretation": "frozen usability-proxy completion only; not truth, verification, evidence support, or human acceptance"
+  },
+  "stage_0": {
+    "model_calls": 0,
+    "commit_clusters": 300,
+    "gate_count": 7,
+    "all_gates_required": true,
+    "exact_sets": {
+      "C": "exact sorted set of all 300 commit-cluster IDs, including zero-obligation clusters",
+      "A_c": "for each c in C, exact sorted substantive D obligation IDs whose applicability is applicable after rust.production.v1 exclusions; excluded, target-support-unknown, and rule-gap IDs are not members",
+      "A": "exact union of all A_c; snapshot-bound IDs make cluster sets disjoint",
+      "S_c": "exact subset of A_c whose selected packet admits both exact caller and exact callee subject windows, each closing to its required source ID and full subject span",
+      "S": "exact union of all S_c; every ID in A\\S has a typed subject_loss or subject_unknown record with source and recovery reference, never a profile exclusion",
+      "D_c": "for each c in C, exact subset of A_c whose plan status is deferred",
+      "D": "exact union of all D_c; deferred fraction is zero if A is empty, while prevalence separately fails"
+    },
+    "gates": [
+      {
+        "id": "prevalence",
+        "pass": "at least 45 of 300 A_c sets are nonempty and |A|>=60"
+      },
+      {
+        "id": "subject_retention",
+        "pass": "20*|S| >= 19*|A|",
+        "exact_fixture": "|A|=60,|S|=57 passes",
+        "plus_one_failure_fixture": "|A|=60,|S|=56 fails"
+      },
+      {
+        "id": "bounded_context",
+        "pass": "median admitted bytes <=0.50*median whole changed production-file bytes over A packets and nearest-rank p90 admitted bytes <=65536; even median is midpoint average"
+      },
+      {
+        "id": "determinism",
+        "pass": "two clean rebuilds match obligation, universe, source, applicability, context.subject_windows@3 four-denominator commitments/subject outcomes/anchor partitions, inventory, loss, occurrence summaries/count/digest/coverage, and canonical bytes for all clusters"
+      },
+      {
+        "id": "enumeration_honesty",
+        "pass": "direct_calls=partial, one source-backed global unknown-latent limitation, exact enumeration_obstruction_summary_ids and enumeration_limitation_ids with their exact union enumeration_obstruction_ids, observed occurrence count/digest, and the D rule-level gap remain visible for every repository snapshot; no complete-call claim and no located_call_occurrences rows"
+      },
+      {
+        "id": "fan_out",
+        "pass": "sort all 300 (c,|A_c|) by (|A_c|,c), including zeros; 1-indexed nearest-rank p95 index 285 <=50",
+        "exact_fixture": "index 285=50 passes",
+        "plus_one_failure_fixture": "index 285=51 fails"
+      },
+      {
+        "id": "deferred_fraction",
+        "pass": "20*|D| <= |A|",
+        "exact_fixture": "|A|=60,|D|=3 passes",
+        "plus_one_failure_fixture": "|A|=60,|D|=4 fails"
+      }
+    ],
+    "occurrence_record_shape": "one exact source_occurrence_summary per accepted Rust file with observed occurrences, plus report/rule count and sorted occurrence-ID-set SHA-256; spans and owner source IDs are typed omitted_rebuildable detail, not deleted observations",
+    "occurrence_operational_measurement": "Stage 0 records wall milliseconds, peak bytes, canonical report bytes, summary rows, and observed occurrences per cluster; 183.2 seconds per measured cluster implies about 15.3 serial hours for 300 clusters, while the rejected row shape would retain 96329400 individual records",
+    "context_v3_shape": "accepted/reached/materialized/support-anchor domains each retain known count plus sorted-ID-set SHA-256; only subject-file IDs union reached-file IDs materialize, subject outcomes are callee then caller, and uncovered known anchors close through at most 15 exact reason summaries",
+    "failure": "Any gate failure stops all model execution, is slice failure, and is not feasibility success; no cap, drop, weight change, count-only surrogate, or post-result filter may simulate a pass."
+  },
+  "control_labels": {
+    "timing": "Both labels and rationales for every model-eligible commit are sealed before any arm outcome.",
+    "membership_effect": "none; labels cannot alter the fixed public-hash membership or order regardless of whether labelers know a candidate's public rank",
+    "labelers": 2,
+    "labeler_constraint": "neither implemented the slice",
+    "rubric": {
+      "clean_refactor_control": "source inspection affirmatively supports semantics-preserving/refactor-only change and no caller-visible precondition, postcondition, error-path, or return-meaning change; cite exact hunks",
+      "not_control": "source supports a caller-visible semantic change or does not affirmatively establish clean/refactor",
+      "unable": "insufficient source basis"
+    },
+    "adjudication": "two clean labels form a control; disagreement, unable, or missing is unresolved and remains primary",
+    "minimum_agreed_controls": {
+      "stage_1": 2,
+      "stage_2A_cumulative": 8
+    },
+    "insufficient": "primary cells remain reportable but advance/final success is blocked"
+  },
+  "secondary_endpoints": {
+    "rescue_primary": false,
+    "same_judge_batch": "The same one-per-commit two-candidate batch may emit a separately labeled defect projection after both primary utility records; it remains secondary.",
+    "measures": [
+      "issue_should_be_created commits by arm and among agreed controls",
+      "usable completions and defect-positive commits per 1000 observed reviewer-model seconds",
+      "usable completions per admitted source byte and total serialized packet byte",
+      "timeout, parse failure, claim/abstention counts, source/total bytes, observation-only backend-reported tokens, truncation, and wall time"
+    ],
+    "authority": "non-authority descriptive proxy only; never defect truth and never able to rescue primary completion or a rectangle"
+  },
+  "stage_1": {
+    "pairs": 10,
+    "reviewer_invocations": 20,
+    "reviewer_model_ceiling_seconds": 18000,
+    "judge_batches": 10,
+    "judge_model_ceiling_seconds": 900,
+    "cumulative_model_ceiling_seconds": 18900,
+    "cumulative_model_ceiling_hours": 5.25,
+    "reserve_seconds": 2700,
+    "cumulative_wall_clock_envelope_seconds": 21600,
+    "cumulative_wall_clock_envelope_hours": 6,
+    "primary_operational_pass": "b>=8 and c<=1",
+    "advance_requires": "all seven Stage 0 gates, primary rectangle, all repository/leave-one-out cells, backend/leakage integrity, all primary judge batches, >=2 controls, and safety gate"
+  },
+  "stage_2A": {
+    "pairs_cumulative": 40,
+    "fresh_pairs_added": 30,
+    "reviewer_invocations_cumulative": 80,
+    "reviewer_model_ceiling_seconds_cumulative": 72000,
+    "judge_batches_cumulative": 40,
+    "judge_model_ceiling_seconds_cumulative": 3600,
+    "cumulative_model_ceiling_seconds": 75600,
+    "cumulative_model_ceiling_hours": 21,
+    "reserve_seconds_cumulative": 10800,
+    "cumulative_wall_clock_envelope_seconds": 86400,
+    "cumulative_wall_clock_envelope_hours": 24,
+    "primary_operational_pass": "b>=18 and c<=7",
+    "success_requires": "Stage 1 advanced, cumulative rectangle, all repository/leave-one-out cells, backend/leakage integrity, all primary judge batches, >=8 controls, and safety gate"
+  },
+  "stage_2B": {
+    "authorized": false,
+    "wall_clock_hours": 72
+  },
+  "safety_gate": {
+    "failure": "judge-positive agreed-control count in B > corresponding A count + 1",
+    "meaning": "small-sample safety stop, not powered non-inferiority"
+  },
+  "backend_gate": {
+    "reviewer_endpoint": "http://192.168.68.71:11999",
+    "pinned_listing_sha256": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
+    "pinned_health_sha256": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74",
+    "concurrency": 1,
+    "network_during_authoring": "none",
+    "rule": "reacquire identity/health before each stage and reviewer invocation; prelaunch failure stops without imputation, postlaunch failure is 0"
+  },
+  "realized_cost_audit": {
+    "deterministic_budget": "seal budget.json with each packet hash, admitted-source byte count, <=65536 result, pair eligibility, and content-derived audit ID; verify-run recomputes it from the two sealed packets",
+    "per_launched_arm": "seal exact serialized packet and component bytes; observation-only backend tokenizer/usage data or typed unavailable; truncation; output bytes; raw/parsed hashes",
+    "token_observation": "closed observation_only record; never independently recomputed, compared with a ceiling, or used as authority",
+    "client_truncation": "forbidden; no tokenizer preflight exists; admitted-source byte overflow produces the pair-wide sealed model_ineligible terminal result before sampling or calls",
+    "provider_truncation_or_context_rejection": "after an eligible request is sent, postlaunch primary 0 without retry"
+  },
+  "freeze_and_seal": {
+    "freeze_point": "independent executable evaluator bundle, Option C oracle/reference/mutants, measurements, and these five design files freeze before Stage 0, model observation, corpus resolution, repository identities, or ranges",
+    "before_stage_0": "verify non-null evaluator bundle/execution/fixture/vector/mutation/semantic-reference/measurement hashes and runtime manifest on the exact semantic runtime contract, then seal implementation/protocol/profile/context/repository manifests",
+    "after_stage_0": "seal builds, exact C/A/S/D sets, all seven gates, boundary fixtures, and model eligibility",
+    "before_each_model_stage": "seal all eligible labels/rationales, label-independent sample, evaluator-generated A/B packets, payload/inventory closure, deterministic source-byte budget records, observation-only token schema, backend and arm order",
+    "before_primary_judging": "within the same run, write-only seal both raw/parsed outputs, usage/truncation, generated packet hashes, per-arm hidden bindings, judge permutation, opaque candidate IDs, and reverse-map hash; continue from original in-memory values without rereading artifacts",
+    "before_disclosure": "seal primary judge/scorer records, cells, sensitivities, safety counts, and decision",
+    "repair": "any repair creates a new versioned study and cannot replace a frozen result"
+  },
+  "interpretation_limits": [
+    "Open development on one machine/Unix identity; commitments are procedural, not access separation or organizational blindness.",
+    "Adjacent commits and findings are dependent; rectangles are frozen-corpus descriptive gates only.",
+    "The primary judge is a frozen non-authority usability proxy and a source of correlated model dependence, not defect truth.",
+    "No population precision/recall, general Rust utility, significance, or holdout validity.",
+    "The study enforces an equal 65536-byte admitted-source ceiling, not an equal token budget; token counts may differ between arms and any backend reports are descriptive observations only.",
+    "direct_calls is partial; accepted edges do not generalize to all callers."
+  ]
+}

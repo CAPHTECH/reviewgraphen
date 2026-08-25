@@ -2,7 +2,7 @@ use crate::context::context_domain_error;
 use crate::{
     ArtifactRegistered, ArtifactRegisteredV3, ArtifactSensitivity, ArtifactSource,
     ArtifactSourceV3, ContentHash, DomainError, Evidence, ExecutionClaimV2, ExecutionRecord,
-    ProgramSpace, Result, ReviewContextEnvelope, ReviewPlan, RunGenesisManifest,
+    ObligationBundle, ProgramSpace, Result, ReviewContextEnvelope, ReviewPlan, RunGenesisManifest,
     SnapshotSourcesRecorded, StableId, UniverseDescriptor, VersionTuple,
 };
 use serde::{Deserialize, Serialize};
@@ -1910,6 +1910,134 @@ impl ReviewAggregate {
         };
         aggregate.validate()?;
         Ok(aggregate)
+    }
+
+    /// Builds a metadata-only aggregate for a validated D two-layer bundle.
+    ///
+    /// The returned value is intended for read-only consumers such as the v2
+    /// context projector. It retains both the resolved-target denominator and
+    /// candidate-space-gap obligations exactly as synthesized; callers cannot
+    /// use it to reinterpret the two-layer universe as the legacy one-layer
+    /// event aggregate accepted by [`Self::new`].
+    pub fn read_only_from_d_two_layer_bundle(
+        program: ProgramSpace,
+        bundle: &ObligationBundle,
+    ) -> Result<Self> {
+        let universe = bundle.universe().clone();
+        if universe.candidate_space_gap_obligation_ids().is_none() {
+            return Err(DomainError::Validation(
+                "read-only D aggregate requires a two-layer universe".to_owned(),
+            ));
+        }
+
+        let mut obligations = BTreeMap::new();
+        for obligation in bundle.obligations() {
+            let obligation_id = obligation.id().clone();
+            if obligations
+                .insert(obligation_id.clone(), obligation.clone())
+                .is_some()
+            {
+                return Err(DomainError::IdCollision { id: obligation_id });
+            }
+        }
+        universe.validate_against(&program, &obligations)?;
+
+        let mut evidence = BTreeMap::new();
+        for item in program.evidence() {
+            if evidence.insert(item.id().clone(), item.clone()).is_some() {
+                return Err(DomainError::IdCollision {
+                    id: item.id().clone(),
+                });
+            }
+        }
+        Ok(Self {
+            program,
+            universe,
+            obligations,
+            claims: BTreeMap::new(),
+            evidence,
+            bindings: BTreeMap::new(),
+            verifications: BTreeMap::new(),
+            decisions: BTreeMap::new(),
+            findings: BTreeMap::new(),
+            genesis_manifest: None,
+            registered_artifacts: BTreeMap::new(),
+            registered_artifacts_v3: BTreeMap::new(),
+            snapshot_sources: BTreeMap::new(),
+            plans: BTreeMap::new(),
+            envelopes: BTreeMap::new(),
+            offline_execution_envelopes: BTreeMap::new(),
+            executions: BTreeMap::new(),
+            execution_claims: BTreeMap::new(),
+            execution_raw_sizes: BTreeMap::new(),
+        })
+    }
+
+    /// Attaches the exact registered-source closure to a pristine read-only D
+    /// aggregate without creating an event stream or any review authority.
+    ///
+    /// This consuming builder admits only registrations named by `sources` and
+    /// reuses the ordinary snapshot-source closure validation. It therefore
+    /// cannot be used to add an authority-bearing event, a plan, or a claim.
+    pub fn with_read_only_d_snapshot_sources(
+        mut self,
+        run_id: StableId,
+        registrations: Vec<ArtifactRegistered>,
+        sources: SnapshotSourcesRecorded,
+    ) -> Result<Self> {
+        if self.universe.candidate_space_gap_obligation_ids().is_none() {
+            return Err(DomainError::Validation(
+                "read-only D source registration requires a two-layer universe".to_owned(),
+            ));
+        }
+        if run_id.kind() != "run" {
+            return Err(DomainError::Validation(
+                "read-only D source registration requires a run ID".to_owned(),
+            ));
+        }
+        if !self.claims.is_empty()
+            || !self.bindings.is_empty()
+            || !self.verifications.is_empty()
+            || !self.decisions.is_empty()
+            || !self.findings.is_empty()
+            || self.genesis_manifest.is_some()
+            || !self.registered_artifacts.is_empty()
+            || !self.registered_artifacts_v3.is_empty()
+            || !self.snapshot_sources.is_empty()
+            || !self.plans.is_empty()
+            || !self.envelopes.is_empty()
+            || !self.offline_execution_envelopes.is_empty()
+            || !self.executions.is_empty()
+            || !self.execution_claims.is_empty()
+            || !self.execution_raw_sizes.is_empty()
+        {
+            return Err(DomainError::Validation(
+                "read-only D source registration requires a pristine aggregate".to_owned(),
+            ));
+        }
+
+        let registration_ids = registrations
+            .iter()
+            .map(|registration| registration.registration_id().clone())
+            .collect::<BTreeSet<_>>();
+        let source_registration_ids = sources
+            .entries()
+            .iter()
+            .map(|entry| entry.registration_id().clone())
+            .collect::<BTreeSet<_>>();
+        if registrations.len() != registration_ids.len()
+            || registration_ids != source_registration_ids
+        {
+            return Err(DomainError::Validation(
+                "read-only D source registrations must exactly match snapshot-source entries"
+                    .to_owned(),
+            ));
+        }
+        for registration in registrations {
+            self.register_artifact(&run_id, registration)?;
+        }
+        self.record_snapshot_sources(sources)?;
+        Ok(self)
     }
 
     /// Validates all cross-space references and trust-state rules.

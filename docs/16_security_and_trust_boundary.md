@@ -3,6 +3,23 @@
 > Status: Draft v0.1  
 > Security posture: untrusted repository, untrusted model output, least capability
 
+**実装状態追記（2026-08-24）**: この文書のsandbox、network、resource-limitの
+列挙は目標契約を含む。ADR 0038で現に確認できたworkspace verifierの境界は、より
+狭い。`workspace.cargo_test@1`を選ぶと、固定のtyped
+`unsupported` / `workspace_cargo_test_deferred`だけを返し、processを開始せず、
+executableも解決せず、Evidenceやverifier observationを作らない
+（`crates/reviewgraphen-verifier/src/lib.rs:243-245,254-362`）。command、argv、cwd、
+environment、mount、credential、toolchain、resource-limit等のexecution-control fieldは
+unsupportedへのfallbackではなくschema-invalidである。これはallow-listedかつ
+workspace-scopedな検証の実装ではない。**その検証機能はdeferredで未達**である。
+
+この限界は「`cargo test`が安全又は不要」という意味ではない。repository、
+`build.rs`、proc macro、test binary、Cargo設定、toolchain入力は任意実行になり得る。
+2026-08-24に `cargo test -p reviewgraphen-verifier --test deferred_workspace_seam` を
+実行し35/35通過した。悪意あるbuild script、proc macro、doctest、Cargo config、
+network、fork bomb等を開始しないことと、閉じたunsupported recordを検査する範囲で
+のみ、現在のfail-closed境界を確認した。
+
 ## 1. Threat model
 
 ReviewGraphenは「コードを読むAI」を動かすため、通常のCLIより広い攻撃面を持ちます。

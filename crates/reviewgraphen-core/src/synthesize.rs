@@ -1,3 +1,10 @@
+use crate::planning::{
+    PlanBudget, PlannerInput, PlannerObligation, PlannerPolicyV1, ReviewPlan, plan_input,
+};
+use crate::profile::{
+    CHANGED_PUBLIC_CALLEE_RULE, CandidateClassification, D_OBLIGATION_WEIGHT, DExclusionCandidate,
+    RUST_PRODUCTION_PROFILE_ID, rust_production_v1,
+};
 use crate::program::{attribute_bool, attribute_string};
 use crate::review::ObligationParts;
 use crate::{
@@ -62,6 +69,31 @@ pub struct UniverseDescriptor {
     exclusions: Vec<ExclusionRecord>,
     /// Extraction limitations that qualify the universe.
     limitation_ids: BTreeSet<StableId>,
+    /// D-only separation between resolved targets and incomplete candidate
+    /// enumeration.  Legacy universes retain `None` and their canonical form.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    d_two_layer_coverage: Option<Box<DTwoLayerCoverage>>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct DTwoLayerCoverage {
+    rule: String,
+    resolved_target_obligation_ids: BTreeSet<StableId>,
+    candidate_space_gap_obligation_ids: BTreeSet<StableId>,
+    target_support_capability_gaps: BTreeMap<String, String>,
+    enumeration_capability_gaps: BTreeMap<String, String>,
+    enumeration_capability_states: BTreeMap<String, CapabilityState>,
+    enumeration_limitation_ids: BTreeSet<StableId>,
+    planned_obligation_ids: BTreeSet<StableId>,
+    deferred_obligation_ids: BTreeSet<StableId>,
+    executed_obligation_ids: BTreeSet<StableId>,
+    structured_obligation_ids: BTreeSet<StableId>,
+    abstained_obligation_ids: BTreeSet<StableId>,
+    malformed_obligation_ids: BTreeSet<StableId>,
+    provider_failed_obligation_ids: BTreeSet<StableId>,
+    verifier_observed_obligation_ids: BTreeSet<StableId>,
+    call_graph_complete: bool,
+    global_call_coverage_claim: String,
 }
 
 impl UniverseDescriptor {
@@ -163,6 +195,27 @@ impl UniverseDescriptor {
         &self.obligation_ids
     }
 
+    /// D's exact substantive-target denominator. Legacy universes use their
+    /// sole eligible denominator.
+    #[must_use]
+    pub fn resolved_target_obligation_ids(&self) -> &BTreeSet<StableId> {
+        self.d_two_layer_coverage
+            .as_ref()
+            .map_or(&self.obligation_ids, |coverage| {
+                &coverage.resolved_target_obligation_ids
+            })
+    }
+
+    /// D's retained unknown candidate-space obligations. These IDs are never
+    /// executable resolved targets and remain visible beside their coverage
+    /// denominator instead of being silently discarded.
+    #[must_use]
+    pub fn candidate_space_gap_obligation_ids(&self) -> Option<&BTreeSet<StableId>> {
+        self.d_two_layer_coverage
+            .as_ref()
+            .map(|coverage| &coverage.candidate_space_gap_obligation_ids)
+    }
+
     /// The total explicit excluded weight, kept outside eligible coverage.
     #[must_use]
     pub fn excluded_weight(&self) -> f64 {
@@ -177,11 +230,63 @@ impl UniverseDescriptor {
         program: &ProgramSpace,
         obligations: &BTreeMap<StableId, Obligation>,
     ) -> Result<()> {
-        let expected_obligation_ids = obligations.keys().cloned().collect::<BTreeSet<_>>();
+        let all_obligation_ids = obligations.keys().cloned().collect::<BTreeSet<_>>();
+        let expected_obligation_ids = self.d_two_layer_coverage.as_ref().map_or_else(
+            || all_obligation_ids.clone(),
+            |coverage| coverage.resolved_target_obligation_ids.clone(),
+        );
         if self.obligation_ids != expected_obligation_ids {
             return Err(DomainError::Validation(
                 "universe denominator IDs do not match obligation records".to_owned(),
             ));
+        }
+        if let Some(coverage) = &self.d_two_layer_coverage {
+            let mut covered_obligation_ids = coverage.resolved_target_obligation_ids.clone();
+            covered_obligation_ids.extend(coverage.candidate_space_gap_obligation_ids.clone());
+            let stage_sets = [
+                &coverage.planned_obligation_ids,
+                &coverage.deferred_obligation_ids,
+                &coverage.executed_obligation_ids,
+                &coverage.structured_obligation_ids,
+                &coverage.abstained_obligation_ids,
+                &coverage.malformed_obligation_ids,
+                &coverage.provider_failed_obligation_ids,
+                &coverage.verifier_observed_obligation_ids,
+            ];
+            if coverage.rule != CHANGED_PUBLIC_CALLEE_RULE
+                || !coverage
+                    .resolved_target_obligation_ids
+                    .is_disjoint(&coverage.candidate_space_gap_obligation_ids)
+                || !coverage
+                    .resolved_target_obligation_ids
+                    .is_subset(&all_obligation_ids)
+                || covered_obligation_ids != all_obligation_ids
+                || stage_sets
+                    .iter()
+                    .any(|stage| !stage.is_subset(&coverage.resolved_target_obligation_ids))
+                || coverage.call_graph_complete
+                || coverage.global_call_coverage_claim != "prohibited"
+                || !coverage
+                    .enumeration_capability_states
+                    .contains_key("direct_calls")
+            {
+                return Err(DomainError::Validation(
+                    "D two-layer denominator must retain disjoint resolved and candidate-space sets"
+                        .to_owned(),
+                ));
+            }
+            if coverage
+                .enumeration_capability_states
+                .get("direct_calls")
+                .is_some_and(|state| *state != CapabilityState::Complete)
+                && (coverage.enumeration_limitation_ids.is_empty()
+                    || coverage.candidate_space_gap_obligation_ids.is_empty())
+            {
+                return Err(DomainError::Validation(
+                    "incomplete D enumeration requires limitation and capability-gap traces"
+                        .to_owned(),
+                ));
+            }
         }
         if self.snapshot_id != *program.snapshot_id()
             || self.profile_id != program.profile_key()
@@ -238,11 +343,22 @@ impl UniverseDescriptor {
                 "universe limitation trace must match ProgramSpace extraction".to_owned(),
             ));
         }
+        // Historical M1 records intentionally did not bind their descriptive
+        // rule-pack version into the universe preimage; retain that replay
+        // behavior for every legacy value.  The D-only pack is the first
+        // explicitly version-bound alternative.
+        let identity_rule_pack = if self.rule_pack_version == "changed-public-callee@1" {
+            self.rule_pack_version.as_str()
+        } else {
+            "m1.fixture@1"
+        };
         let expected_id = universe_id(
             program,
             &self.obligation_ids,
             &self.exclusions,
             &self.limitation_ids,
+            identity_rule_pack,
+            self.d_two_layer_coverage.as_deref(),
         )?;
         if self.id != expected_id {
             return Err(DomainError::Validation(
@@ -409,6 +525,78 @@ impl ObligationBundle {
     }
 }
 
+/// Plans only the resolved D target denominator while retaining the bundle's
+/// candidate-space-gap trace in its immutable universe.
+///
+/// This entry point accepts only a D two-layer bundle. The returned plan is
+/// deliberately a normal [`ReviewPlan`]: callers retain `bundle.universe()`
+/// to report the gap IDs, enumeration state, and limitation trace without ever
+/// treating those gap obligations as executable targets.
+pub fn plan_resolved_target_obligations(
+    program: &ProgramSpace,
+    bundle: &ObligationBundle,
+    budget: PlanBudget,
+) -> Result<ReviewPlan> {
+    let universe = bundle.universe();
+    let Some(candidate_space_gap_obligation_ids) = universe.candidate_space_gap_obligation_ids()
+    else {
+        return Err(DomainError::Planning(crate::PlanningError::InvalidInput));
+    };
+    let resolved_target_obligation_ids = universe.resolved_target_obligation_ids();
+    if resolved_target_obligation_ids.len() > PlannerPolicyV1::MAX_OBLIGATIONS {
+        return Err(DomainError::Incomplete {
+            operation: "resolved-target planner input obligations",
+            limit: PlannerPolicyV1::MAX_OBLIGATIONS,
+            observed: resolved_target_obligation_ids.len(),
+        });
+    }
+    if !resolved_target_obligation_ids.is_disjoint(candidate_space_gap_obligation_ids) {
+        return Err(DomainError::Planning(crate::PlanningError::InvalidInput));
+    }
+
+    let mut all_obligations = BTreeMap::new();
+    for obligation in bundle.obligations() {
+        let obligation_id = obligation.id().clone();
+        if all_obligations
+            .insert(obligation_id.clone(), obligation.clone())
+            .is_some()
+        {
+            return Err(DomainError::IdCollision { id: obligation_id });
+        }
+    }
+    universe.validate_against(program, &all_obligations)?;
+
+    let mut obligations = Vec::new();
+    obligations
+        .try_reserve_exact(resolved_target_obligation_ids.len())
+        .map_err(|_| DomainError::Incomplete {
+            operation: "resolved-target planner input obligations",
+            limit: PlannerPolicyV1::MAX_OBLIGATIONS,
+            observed: resolved_target_obligation_ids.len(),
+        })?;
+    let mut selected_ids = BTreeSet::new();
+    for obligation in bundle.obligations() {
+        if resolved_target_obligation_ids.contains(obligation.id()) {
+            selected_ids.insert(obligation.id().clone());
+            obligations.push(PlannerObligation::from_obligation(obligation));
+        }
+    }
+    if obligations.len() != resolved_target_obligation_ids.len()
+        || selected_ids != *resolved_target_obligation_ids
+    {
+        return Err(DomainError::Planning(crate::PlanningError::InvalidInput));
+    }
+    if universe.snapshot_id() != program.snapshot_id() {
+        return Err(DomainError::Planning(crate::PlanningError::InvalidInput));
+    }
+    plan_input(PlannerInput::new(
+        budget,
+        obligations,
+        universe.snapshot_id().clone(),
+        universe.id().clone(),
+    )?)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct ContractSource {
     kind: &'static str,
@@ -428,6 +616,8 @@ struct ContractUniverse {
     obligation_ids: Vec<StableId>,
     limitation_ids: Vec<StableId>,
     exclusions: Vec<ContractExclusion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    d_two_layer_coverage: Option<Box<DTwoLayerCoverage>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -471,7 +661,12 @@ struct ContractProperty {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct ContractContextRequirement {
     context_ids: Vec<StableId>,
-    required_capabilities: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required_capabilities: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_support_capabilities: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enumeration_capabilities: Option<Vec<String>>,
     include_relation_kinds: Vec<String>,
     max_relation_depth: u64,
     include_tests: bool,
@@ -559,6 +754,9 @@ impl MvpRulePack {
 
     /// Synthesizes the supported M1 slice with stable IDs and stable ordering.
     pub fn synthesize(program: &ProgramSpace) -> Result<ObligationBundle> {
+        if program.profile_id() == RUST_PRODUCTION_PROFILE_ID {
+            return Self::synthesize_changed_public_callee(program);
+        }
         if program.profile_key() != "code-review@1"
             && program.profile_key() != crate::m5::DOUBLE_SUBMIT_PROFILE_ID
         {
@@ -914,6 +1112,371 @@ impl MvpRulePack {
             contract,
         })
     }
+
+    /// This endpoint validation is public so callers can retain the typed
+    /// obstruction even when a malformed relation was rejected before a full
+    /// ProgramSpace can be admitted.
+    pub fn validate_changed_public_callee_endpoints(
+        program: &ProgramSpace,
+        relation: &crate::Relation,
+    ) -> Result<(StableId, StableId)> {
+        let caller = accepted_caller(program, relation)?;
+        let callee = exact_accepted_callee_id(program, relation)?;
+        Ok((caller.id.clone(), callee))
+    }
+
+    /// Synthesizes the ADR-0038 changed-public-callee relation universe.
+    ///
+    /// This is deliberately a separate entry point from [`Self::synthesize`]:
+    /// the legacy M1 pack remains replayable with its original rule set and
+    /// canonical bytes.  The D rule has its own production profile and its
+    /// own capability contract.
+    pub fn synthesize_changed_public_callee(program: &ProgramSpace) -> Result<ObligationBundle> {
+        if program.profile_id() != RUST_PRODUCTION_PROFILE_ID {
+            return Err(DomainError::Validation(format!(
+                "{CHANGED_PUBLIC_CALLEE_RULE} requires profile `{RUST_PRODUCTION_PROFILE_ID}`"
+            )));
+        }
+
+        let profile = rust_production_v1();
+        let split_capabilities = SplitCapabilitySpec::d_rule()?;
+        let mut obligations = Vec::new();
+        let mut exclusions = Vec::new();
+
+        for relation in program.relations() {
+            if relation.kind != "calls"
+                || attribute_string(&relation.attributes, "resolution") != Some("syntactic_unique")
+            {
+                continue;
+            }
+
+            let (caller_id, callee_id) =
+                Self::validate_changed_public_callee_endpoints(program, relation)?;
+            let caller = program
+                .artifact(&caller_id)
+                .expect("validated D caller must be accepted");
+            let Some(callee) = program.artifact(&callee_id) else {
+                continue;
+            };
+            if callee.kind != "function" || !attribute_bool(&callee.attributes, "public") {
+                continue;
+            }
+
+            let (change_artifact_ids, containment_witness_ids) =
+                changed_containment_witnesses(program, &callee_id);
+            if change_artifact_ids.is_empty() {
+                continue;
+            }
+
+            let mut generator_ids =
+                BTreeSet::from([relation.id.clone(), caller.id.clone(), callee.id.clone()]);
+            generator_ids.extend(change_artifact_ids.iter().cloned());
+            generator_ids.extend(containment_witness_ids.iter().cloned());
+
+            match profile.classify_candidate(
+                callee
+                    .location
+                    .as_ref()
+                    .map(|location| location.path.as_bytes()),
+                caller
+                    .location
+                    .as_ref()
+                    .map(|location| location.path.as_bytes()),
+            ) {
+                Ok(CandidateClassification::Excluded(profile_match)) => {
+                    let record = profile
+                        .exclusion_record(
+                            DExclusionCandidate {
+                                snapshot_id: program.snapshot_id().clone(),
+                                relation_id: relation.id.clone(),
+                                caller_id: caller.id.clone(),
+                                callee_id: callee.id.clone(),
+                                change_artifact_ids,
+                                containment_witness_ids,
+                            },
+                            &profile_match,
+                        )
+                        .map_err(|error| DomainError::Validation(error.to_string()))?;
+                    exclusions.push(ExclusionRecord {
+                        id: record.id,
+                        candidate_key: record.candidate_key,
+                        reason: record.reason_id,
+                        source_ids: record.source_ids,
+                        excluded_weight: D_OBLIGATION_WEIGHT.parse().map_err(|_| {
+                            DomainError::Validation("invalid fixed D weight".to_owned())
+                        })?,
+                    });
+                }
+                Ok(CandidateClassification::Included) => {
+                    let mut context_ids = BTreeSet::new();
+                    for id in [&relation.id, &caller.id, &callee.id] {
+                        context_ids.extend(contexts_containing_id(program, id));
+                    }
+                    let mut additional_source_ids =
+                        generator_ids.iter().cloned().collect::<Vec<_>>();
+                    additional_source_ids.push(program.repository_id().clone());
+                    additional_source_ids.push(program.snapshot_id().clone());
+                    let obligation = materialize_split(
+                        program,
+                        ObligationSpec {
+                            rule: CHANGED_PUBLIC_CALLEE_RULE,
+                            origin_rule: None,
+                            target_kind: "relation",
+                            target_refs: vec![relation.id.clone()],
+                            property_id: "rust.callee_contract_review@1",
+                            context_ids: context_ids.into_iter().collect(),
+                            required_capabilities: BTreeSet::new(),
+                            weight: D_OBLIGATION_WEIGHT.parse().map_err(|_| {
+                                DomainError::Validation("invalid fixed D weight".to_owned())
+                            })?,
+                            depends_on: Vec::new(),
+                            generator_ids,
+                            additional_source_ids,
+                        },
+                        &split_capabilities,
+                    )?;
+                    obligations.push(obligation);
+                }
+                Err(error) => {
+                    // A malformed or absent endpoint path is a retained
+                    // target-support obstruction, not a profile exclusion.
+                    // The relation remains reviewable only as `unknown`.
+                    let mut context_ids = BTreeSet::new();
+                    for id in [&relation.id, &caller.id, &callee.id] {
+                        context_ids.extend(contexts_containing_id(program, id));
+                    }
+                    let mut additional_source_ids =
+                        generator_ids.iter().cloned().collect::<Vec<_>>();
+                    additional_source_ids.push(program.repository_id().clone());
+                    additional_source_ids.push(program.snapshot_id().clone());
+                    let obligation = obligation(
+                        program,
+                        ObligationSpec {
+                            rule: CHANGED_PUBLIC_CALLEE_RULE,
+                            origin_rule: None,
+                            target_kind: "relation",
+                            target_refs: vec![relation.id.clone()],
+                            property_id: "rust.callee_contract_review@1",
+                            context_ids: context_ids.into_iter().collect(),
+                            required_capabilities: split_capabilities
+                                .target_support_capabilities
+                                .iter()
+                                .cloned()
+                                .collect(),
+                            weight: D_OBLIGATION_WEIGHT.parse().map_err(|_| {
+                                DomainError::Validation("invalid fixed D weight".to_owned())
+                            })?,
+                            depends_on: Vec::new(),
+                            generator_ids,
+                            additional_source_ids,
+                        },
+                        "unknown".to_owned(),
+                        BTreeSet::from([format!("profile_obstruction:{error}")]),
+                        BTreeSet::new(),
+                    )?;
+                    obligations.push(obligation);
+                }
+            }
+        }
+
+        let unavailable_target_support = split_capabilities
+            .target_support_capabilities
+            .iter()
+            .filter(|capability| !capability_fully_available(program, capability))
+            .map(|capability| (*capability).to_owned())
+            .collect::<BTreeSet<_>>();
+        let unavailable_enumeration = split_capabilities
+            .enumeration_capabilities
+            .iter()
+            .filter(|capability| !capability_fully_available(program, capability))
+            .map(|capability| (*capability).to_owned())
+            .collect::<BTreeSet<_>>();
+        if !unavailable_target_support.is_empty() || !unavailable_enumeration.is_empty() {
+            let mut unavailable = unavailable_target_support;
+            unavailable.extend(unavailable_enumeration);
+            let missing = unavailable.into_iter().collect::<Vec<_>>();
+            let mut reasons = missing
+                .iter()
+                .map(|capability| capability_gap_reason(program, capability))
+                .collect::<BTreeSet<_>>();
+            reasons.insert(format!("origin_rule:{CHANGED_PUBLIC_CALLEE_RULE}"));
+            obligations.push(obligation(
+                program,
+                ObligationSpec {
+                    rule: CAPABILITY_GAP_RULE,
+                    origin_rule: Some(CHANGED_PUBLIC_CALLEE_RULE),
+                    target_kind: "subgraph",
+                    target_refs: vec![program.snapshot_id().clone()],
+                    property_id: CAPABILITY_GAP_PROPERTY,
+                    context_ids: Vec::new(),
+                    required_capabilities: missing.iter().cloned().collect(),
+                    weight: D_OBLIGATION_WEIGHT.parse().map_err(|_| {
+                        DomainError::Validation("invalid fixed D weight".to_owned())
+                    })?,
+                    depends_on: Vec::new(),
+                    generator_ids: BTreeSet::from([
+                        program.repository_id().clone(),
+                        program.snapshot_id().clone(),
+                    ]),
+                    additional_source_ids: vec![program.repository_id().clone()],
+                },
+                "unknown".to_owned(),
+                reasons,
+                capability_qualification_ids(program, &missing),
+            )?);
+        }
+
+        obligations.sort_by(|left, right| {
+            let left_d = left.version().rule() == CHANGED_PUBLIC_CALLEE_RULE;
+            let right_d = right.version().rule() == CHANGED_PUBLIC_CALLEE_RULE;
+            right_d.cmp(&left_d).then_with(|| left.id().cmp(right.id()))
+        });
+        exclusions.sort_by(|left, right| left.id.cmp(&right.id));
+        let resolved_target_obligation_ids = obligations
+            .iter()
+            .filter(|obligation| obligation.version().rule() == CHANGED_PUBLIC_CALLEE_RULE)
+            .map(|obligation| obligation.id().clone())
+            .collect::<BTreeSet<_>>();
+        let candidate_space_gap_obligation_ids = obligations
+            .iter()
+            .filter(|obligation| {
+                obligation.version().rule() == CAPABILITY_GAP_RULE
+                    && obligation
+                        .applicability_reasons()
+                        .contains(&format!("origin_rule:{CHANGED_PUBLIC_CALLEE_RULE}"))
+            })
+            .map(|obligation| obligation.id().clone())
+            .collect::<BTreeSet<_>>();
+        let enumeration_limitation_ids =
+            capability_qualification_ids(program, &["direct_calls".to_owned()]);
+        let d_two_layer_coverage = DTwoLayerCoverage {
+            rule: CHANGED_PUBLIC_CALLEE_RULE.to_owned(),
+            resolved_target_obligation_ids,
+            candidate_space_gap_obligation_ids,
+            target_support_capability_gaps: split_capabilities
+                .target_support_capabilities
+                .iter()
+                .filter(|capability| !capability_fully_available(program, capability))
+                .map(|capability| {
+                    (
+                        capability.clone(),
+                        capability_gap_reason(program, capability),
+                    )
+                })
+                .collect(),
+            enumeration_capability_gaps: split_capabilities
+                .enumeration_capabilities
+                .iter()
+                .filter(|capability| !capability_fully_available(program, capability))
+                .map(|capability| {
+                    (
+                        capability.clone(),
+                        capability_gap_reason(program, capability),
+                    )
+                })
+                .collect(),
+            enumeration_capability_states: BTreeMap::from([(
+                "direct_calls".to_owned(),
+                program
+                    .extraction()
+                    .capabilities
+                    .get("direct_calls")
+                    .map_or(CapabilityState::Unknown, |capability| capability.state),
+            )]),
+            enumeration_limitation_ids,
+            planned_obligation_ids: BTreeSet::new(),
+            deferred_obligation_ids: BTreeSet::new(),
+            executed_obligation_ids: BTreeSet::new(),
+            structured_obligation_ids: BTreeSet::new(),
+            abstained_obligation_ids: BTreeSet::new(),
+            malformed_obligation_ids: BTreeSet::new(),
+            provider_failed_obligation_ids: BTreeSet::new(),
+            verifier_observed_obligation_ids: BTreeSet::new(),
+            call_graph_complete: false,
+            global_call_coverage_claim: "prohibited".to_owned(),
+        };
+        let mut limitation_ids = program
+            .extraction()
+            .limitations
+            .iter()
+            .map(|limitation| limitation.id.clone())
+            .collect::<BTreeSet<_>>();
+        limitation_ids.extend(
+            obligations
+                .iter()
+                .flat_map(|obligation| obligation.qualification_ids().iter().cloned()),
+        );
+        let universe = universe_with_rule_pack(
+            program,
+            d_two_layer_coverage.resolved_target_obligation_ids.clone(),
+            exclusions,
+            limitation_ids,
+            "changed-public-callee@1",
+            Some(d_two_layer_coverage),
+        )?;
+        let contract = contract(&universe, &obligations)?;
+        Ok(ObligationBundle {
+            universe,
+            obligations,
+            contract,
+        })
+    }
+}
+
+fn exact_accepted_callee_id(
+    program: &ProgramSpace,
+    relation: &crate::Relation,
+) -> Result<StableId> {
+    if relation.target_ids.len() != 1 {
+        return Err(DomainError::Incomplete {
+            operation: "D calls relation accepted callee target arity",
+            limit: 1,
+            observed: relation.target_ids.len(),
+        });
+    }
+    let target = relation.target_ids.iter().next().expect("one target");
+    if program.artifact(target).is_none() {
+        return Err(DomainError::DanglingReference {
+            owner: "D calls relation",
+            owner_id: relation.id.clone(),
+            reference: target.clone(),
+        });
+    }
+    Ok(target.clone())
+}
+
+fn accepted_caller<'a>(
+    program: &'a ProgramSpace,
+    relation: &crate::Relation,
+) -> Result<&'a crate::Artifact> {
+    program
+        .artifact(&relation.source_id)
+        .ok_or_else(|| DomainError::DanglingReference {
+            owner: "D calls relation",
+            owner_id: relation.id.clone(),
+            reference: relation.source_id.clone(),
+        })
+}
+
+fn changed_containment_witnesses(
+    program: &ProgramSpace,
+    callee_id: &StableId,
+) -> (BTreeSet<StableId>, BTreeSet<StableId>) {
+    let mut change_artifact_ids = BTreeSet::new();
+    let mut containment_witness_ids = BTreeSet::new();
+    for relation in program.relations() {
+        if relation.kind != "contains" || !relation.target_ids.contains(callee_id) {
+            continue;
+        }
+        if program
+            .artifact(&relation.source_id)
+            .is_some_and(|artifact| attribute_bool(&artifact.attributes, "changed"))
+        {
+            change_artifact_ids.insert(relation.source_id.clone());
+            containment_witness_ids.insert(relation.id.clone());
+        }
+    }
+    (change_artifact_ids, containment_witness_ids)
 }
 
 fn fallback_weight(rule: &str) -> Result<f64> {
@@ -923,6 +1486,7 @@ fn fallback_weight(rule: &str) -> Result<f64> {
         "relation.changed_call_contract@1" => Ok(5.0),
         "path.external_side_effect@1" => Ok(6.0),
         "invariant.payment_at_most_once@1" => Ok(7.0),
+        CHANGED_PUBLIC_CALLEE_RULE => Ok(4.0),
         _ => Err(DomainError::Validation(format!(
             "M1 does not define a fallback weight for rule `{rule}`"
         ))),
@@ -935,17 +1499,43 @@ fn universe(
     exclusions: Vec<ExclusionRecord>,
     limitation_ids: BTreeSet<StableId>,
 ) -> Result<UniverseDescriptor> {
+    universe_with_rule_pack(
+        program,
+        obligation_ids,
+        exclusions,
+        limitation_ids,
+        "m1.fixture@1",
+        None,
+    )
+}
+
+fn universe_with_rule_pack(
+    program: &ProgramSpace,
+    obligation_ids: BTreeSet<StableId>,
+    exclusions: Vec<ExclusionRecord>,
+    limitation_ids: BTreeSet<StableId>,
+    rule_pack_version: &str,
+    d_two_layer_coverage: Option<DTwoLayerCoverage>,
+) -> Result<UniverseDescriptor> {
     Ok(UniverseDescriptor {
-        id: universe_id(program, &obligation_ids, &exclusions, &limitation_ids)?,
+        id: universe_id(
+            program,
+            &obligation_ids,
+            &exclusions,
+            &limitation_ids,
+            rule_pack_version,
+            d_two_layer_coverage.as_ref(),
+        )?,
         snapshot_id: program.snapshot_id().clone(),
         profile_id: program.profile_key(),
         rule_set_hash: program.rule_set_hash().clone(),
         extractor_set_hash: program.extractor_set_hash().clone(),
         policy_version: program.policy_version().to_owned(),
-        rule_pack_version: "m1.fixture@1".to_owned(),
+        rule_pack_version: rule_pack_version.to_owned(),
         obligation_ids,
         exclusions,
         limitation_ids,
+        d_two_layer_coverage: d_two_layer_coverage.map(Box::new),
     })
 }
 
@@ -954,8 +1544,10 @@ fn universe_id(
     obligation_ids: &BTreeSet<StableId>,
     exclusions: &[ExclusionRecord],
     limitation_ids: &BTreeSet<StableId>,
+    rule_pack_version: &str,
+    d_two_layer_coverage: Option<&DTwoLayerCoverage>,
 ) -> Result<StableId> {
-    let bindings = BTreeMap::from([
+    let mut bindings = BTreeMap::from([
         (
             "denominator_obligation_ids".to_owned(),
             Value::Array(
@@ -1013,9 +1605,16 @@ fn universe_id(
         ),
         (
             "rule_pack".to_owned(),
-            Value::String("m1.fixture@1".to_owned()),
+            Value::String(rule_pack_version.to_owned()),
         ),
     ]);
+    if let Some(coverage) = d_two_layer_coverage {
+        bindings.insert(
+            "d_two_layer_coverage".to_owned(),
+            serde_json::to_value(coverage)
+                .map_err(|error| DomainError::CanonicalJson(error.to_string()))?,
+        );
+    }
     StableId::derived("universe", &bindings)
 }
 
@@ -1078,6 +1677,90 @@ struct ObligationSpec {
     depends_on: Vec<StableId>,
     generator_ids: BTreeSet<StableId>,
     additional_source_ids: Vec<StableId>,
+}
+
+/// A closed capability contract for a v2 rule.  It deliberately stays apart
+/// from `ObligationSpec`, whose `required_capabilities` field is the frozen
+/// legacy M1 representation.
+struct SplitCapabilitySpec {
+    target_support_capabilities: Vec<String>,
+    enumeration_capabilities: Vec<String>,
+}
+
+impl SplitCapabilitySpec {
+    fn new(
+        target_support_capabilities: Vec<String>,
+        enumeration_capabilities: Vec<String>,
+    ) -> Result<Self> {
+        validate_sorted_unique_capabilities(
+            &target_support_capabilities,
+            "target_support_capabilities",
+        )?;
+        validate_sorted_unique_capabilities(&enumeration_capabilities, "enumeration_capabilities")?;
+        if target_support_capabilities
+            .iter()
+            .any(|capability| enumeration_capabilities.contains(capability))
+        {
+            return Err(DomainError::Validation(
+                "target_support_capabilities and enumeration_capabilities must be disjoint"
+                    .to_owned(),
+            ));
+        }
+        Ok(Self {
+            target_support_capabilities,
+            enumeration_capabilities,
+        })
+    }
+
+    fn d_rule() -> Result<Self> {
+        Self::d_rule_from(
+            vec![
+                "ast".to_owned(),
+                "changed_structure".to_owned(),
+                "containment".to_owned(),
+            ],
+            vec!["direct_calls".to_owned()],
+        )
+    }
+
+    fn d_rule_from(
+        target_support_capabilities: Vec<String>,
+        enumeration_capabilities: Vec<String>,
+    ) -> Result<Self> {
+        let value = Self::new(target_support_capabilities, enumeration_capabilities)?;
+        if value.target_support_capabilities != ["ast", "changed_structure", "containment"]
+            || value.enumeration_capabilities != ["direct_calls"]
+        {
+            return Err(DomainError::Validation(
+                "D capability split must use its exact target-support and enumeration sets"
+                    .to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+}
+
+fn validate_sorted_unique_capabilities(values: &[String], field: &str) -> Result<()> {
+    if values.iter().any(String::is_empty) || values.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(DomainError::Validation(format!(
+            "{field} must be sorted, unique, and contain only nonempty values"
+        )));
+    }
+    Ok(())
+}
+
+fn materialize_split(
+    program: &ProgramSpace,
+    spec: ObligationSpec,
+    capabilities: &SplitCapabilitySpec,
+) -> Result<Obligation> {
+    let mut spec = spec;
+    spec.required_capabilities = capabilities
+        .target_support_capabilities
+        .iter()
+        .cloned()
+        .collect();
+    materialize(program, spec)
 }
 
 fn materialize(program: &ProgramSpace, spec: ObligationSpec) -> Result<Obligation> {
@@ -1319,10 +2002,14 @@ fn contract(
         rule_set_hash: universe.rule_set_hash.clone(),
         extractor_set_hash: universe.extractor_set_hash.clone(),
         policy_version: universe.policy_version.clone(),
-        obligation_ids: obligations
-            .iter()
-            .map(|obligation| obligation.id().clone())
-            .collect(),
+        obligation_ids: if universe.d_two_layer_coverage.is_some() {
+            universe.obligation_ids.iter().cloned().collect()
+        } else {
+            obligations
+                .iter()
+                .map(|obligation| obligation.id().clone())
+                .collect()
+        },
         limitation_ids: universe.limitation_ids().iter().cloned().collect(),
         exclusions: universe
             .exclusions()
@@ -1335,6 +2022,7 @@ fn contract(
                 excluded_weight: item.excluded_weight,
             })
             .collect(),
+        d_two_layer_coverage: universe.d_two_layer_coverage.clone(),
     };
     let obligations = obligations
         .iter()
@@ -1348,6 +2036,20 @@ fn contract_obligation(
     source: &ContractSource,
 ) -> Result<ContractObligation> {
     let rule = rule_contract(obligation.version().rule())?;
+    let (required_capabilities, target_support_capabilities, enumeration_capabilities) =
+        if obligation.version().rule() == CHANGED_PUBLIC_CALLEE_RULE {
+            (
+                None,
+                Some(obligation.required_capabilities().iter().cloned().collect()),
+                Some(vec!["direct_calls".to_owned()]),
+            )
+        } else {
+            (
+                Some(obligation.required_capabilities().iter().cloned().collect()),
+                None,
+                None,
+            )
+        };
     Ok(ContractObligation {
         id: obligation.id().clone(),
         target: ContractTarget {
@@ -1361,7 +2063,9 @@ fn contract_obligation(
         },
         context_requirement: ContractContextRequirement {
             context_ids: obligation.context_ids().to_vec(),
-            required_capabilities: obligation.required_capabilities().iter().cloned().collect(),
+            required_capabilities,
+            target_support_capabilities,
+            enumeration_capabilities,
             include_relation_kinds: rule
                 .include_relation_kinds
                 .iter()
@@ -1492,6 +2196,19 @@ fn rule_contract(rule: &str) -> Result<RuleContract> {
             structural_reach: 3.0,
             rationale: "A business invariant bounds this scope to at most one external \
                         effect, and the accepted facts do not yet show the bound holds.",
+        },
+        CHANGED_PUBLIC_CALLEE_RULE => RuleContract {
+            required_capabilities: &["ast", "containment", "changed_structure"],
+            include_relation_kinds: &["calls", "contains"],
+            max_relation_depth: 1,
+            accepted_modes: &["source_inspection", "test"],
+            evidence_policy: "default-evidence@1",
+            impact: "high",
+            exposure: 1.0,
+            uncertainty: 0.4,
+            structural_reach: 1.0,
+            rationale: "A syntactically unique local caller reaches a changed public callee, \
+                        so callers' assumptions about its contract require review.",
         },
         CAPABILITY_GAP_RULE => RuleContract {
             required_capabilities: &[],
@@ -1718,5 +2435,66 @@ mod tests {
             first.normalized_context_ids(),
             second.normalized_context_ids()
         );
+    }
+
+    #[test]
+    fn malformed_d_endpoints_are_typed_before_they_can_be_materialized() {
+        let program = ProgramSpace::from_json_slice(include_bytes!(
+            "../../../examples/double-submit-payment/program-space.json"
+        ))
+        .expect("reference fixture");
+        let mut relation = program
+            .relation(&StableId::parse("relation:submit-calls-payment").expect("relation ID"))
+            .expect("relation")
+            .clone();
+        relation.source_id = StableId::parse("function:not-accepted").expect("ID");
+        assert!(matches!(
+            accepted_caller(&program, &relation),
+            Err(DomainError::DanglingReference { .. })
+        ));
+
+        relation.source_id = StableId::parse("function:checkout-submit").expect("ID");
+        relation.target_ids.clear();
+        assert!(matches!(
+            exact_accepted_callee_id(&program, &relation),
+            Err(DomainError::Incomplete {
+                operation: "D calls relation accepted callee target arity",
+                limit: 1,
+                observed: 0
+            })
+        ));
+    }
+
+    #[test]
+    fn split_capability_spec_refuses_omission_duplicate_overlap_and_exchange() {
+        assert!(SplitCapabilitySpec::new(Vec::new(), vec!["direct_calls".to_owned()]).is_ok());
+        for (target_support, enumeration) in [
+            (
+                vec!["ast".to_owned(), "ast".to_owned()],
+                vec!["direct_calls".to_owned()],
+            ),
+            (
+                vec!["direct_calls".to_owned()],
+                vec!["direct_calls".to_owned()],
+            ),
+            (vec!["".to_owned()], vec!["direct_calls".to_owned()]),
+        ] {
+            assert!(SplitCapabilitySpec::new(target_support, enumeration).is_err());
+        }
+        for (target_support, enumeration) in [
+            (vec!["direct_calls".to_owned()], vec!["ast".to_owned()]),
+            (
+                vec!["ast".to_owned(), "changed_structure".to_owned()],
+                vec!["direct_calls".to_owned()],
+            ),
+        ] {
+            assert!(SplitCapabilitySpec::d_rule_from(target_support, enumeration).is_err());
+        }
+        let d = SplitCapabilitySpec::d_rule().expect("fixed D split");
+        assert_eq!(
+            d.target_support_capabilities,
+            vec!["ast", "changed_structure", "containment"]
+        );
+        assert_eq!(d.enumeration_capabilities, vec!["direct_calls"]);
     }
 }

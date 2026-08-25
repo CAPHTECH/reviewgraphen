@@ -18,6 +18,38 @@ acceptance operation. ADR 0028 likewise withdraws the detached-report-only
 `gate <report.json>` command. The Store-bound `gate` described later in this
 draft remains a future contract, not currently accepted command syntax.
 
+**実装状態追記（2026-08-24）**: 上のv1説明は歴史的な契約説明として残す。
+現行ツリーには、ADR 0038用に独立した
+`reviewgraphen.generic_review_request.v2` / `reviewgraphen.generic_review_run.v2`
+に加え、`reviewgraphen.generic_review_request.v3` /
+`reviewgraphen.generic_review_run.v3` のexact dispatchがある。v2は
+`context.subject_windows@2`、v3は`context.subject_windows@3`を使い、双方とも
+`relation.changed_public_callee@1`、`deterministic.abstain@1` を使う
+provider-free経路がある（`crates/reviewgraphen-cli/src/lib.rs:58-64`,
+`crates/reviewgraphen-runtime/src/generic.rs:1353-1365,1778-1802`）。v2は
+`codex_cli`、`claude_cli`、`codex_app_server`を選べるschema形状を持つが、
+現在の実行器はそれらをtyped `unsupported`として拒否し、実際に起動するのは
+deterministic abstentionまたは検証済みreplayだけである
+（`generic.rs:2054-2062`）。
+
+v3の製品経路とartifact layoutは実装済みだが、exact command sequence、exit code、
+expected hashを伴うclone quickstartは`expected-hashes.json`と独立した2 cloneでの
+検証が完了してから確定する。それまでは、
+ここにあるv1のコマンド例や将来形のcommand familyを、v2 quickstartの確定した
+操作手順として読んではならない。現時点の再現済み範囲と未確認範囲は
+[`23_current_capability_status.md`](23_current_capability_status.md)を正典とする。
+
+ADR 0038 §11.1 は固定秒数、stage別、入力比例のいずれの製品deadlineも定義せず、
+exit 21を割り当てない。10秒watchdogはprebuilt fail-fast fixtureを監視する
+テストハーネスだけの失敗条件であり、製品CLI契約ではない。任意の
+`--diagnostics <fresh-file>` はartifact rootの外部にだけ、非canonicalな
+`reviewgraphen.generic_review_diagnostics.v1`をcreate-newで書く。既定では書かず、
+artifact rootと同一・配下・祖先、既存file、symlinkはexit 2で拒否する。
+診断の有無はcanonical audit / manifest bytesを変更しない。
+v3 human reportはlive実行が返すbasis-bound
+`ValidatedGenericReviewRunV3`から直接生成する。bytes-only decodeが返す
+`UnvalidatedGenericReviewRunV3`からhuman report v2を生成する経路は持たない。
+
 ## 1. CLIの役割
 
 CLIは人間向けUIの代替ではなく、次を安定して提供するagent-facing execution surfaceです。

@@ -251,3 +251,105 @@ attribution) stands as an accurate historical record of the system as it
 existed when measured. None of the m7-* benchmark results were
 re-computed, and none of this document's claims are retroactively
 applied to them.
+
+## 6. 2026-08-25 addendum — ADR 0038 changed-public-callee slice
+
+This dated addendum is append-only. It does not revise the 2026-08-18
+diagnosis above. The claims in this section were checked against the working
+tree's code and product-binary runs recorded through 2026-08-25; no commit
+message or another operator's report was used as evidence. A command that did
+not reproduce successfully is recorded as such, and the associated capability
+is not called implemented here.
+
+### 6.1 Narrow, independently reproduced capabilities
+
+The current ADR 0038 path is restricted to `rust.production.v1` and to an
+accepted `calls` relation whose resolution is `syntactic_unique`, with an
+accepted caller, an exact accepted public function callee, and changed
+containment for that callee. It synthesizes the review question
+`relation.changed_public_callee@1` / `rust.callee_contract_review@1`; this is
+not a statement that a callee contract changed or that a bug exists. The
+trigger and property are visible in
+`crates/reviewgraphen-core/src/synthesize.rs:1128-1238`. Calls outside that
+accepted set, including methods, imports, macros, dynamic dispatch, ambiguous
+targets, and other unresolved forms, are not silently counted as complete.
+`direct_calls` remains partial, with explicit occurrence obstructions and a
+global limitation.
+
+`context.subject_windows@2` is a bounded projection policy with a fixed
+policy hash (`crates/reviewgraphen-core/src/context.rs:247-262`). It carries
+source/window IDs, a projection hash, and typed subject loss rather than
+pretending that a whole source file was supplied. The independent tests below
+covered its golden policy bytes, deterministic windows, and inclusive/+1 line,
+byte, and total-byte limits.
+
+The generic v2 audit has a fixed non-authority ceiling:
+`classification = non_authority`, `trusted_pass = false`, and
+`result_status = incomplete`
+(`crates/reviewgraphen-runtime/src/generic.rs:2731-2765`). Its deterministic
+observer is `deterministic.abstain@1`; it produces a structured abstention
+rather than treating prose as canonical state. Provider-backed observer kinds
+are present in the request schema but the current v2 executor rejects them as
+unsupported (`generic.rs:2054-2062`). Therefore no real model-adapter run has
+been reproduced.
+
+### 6.2 Practical-usefulness gates — current evidence
+
+| Gate | Status | Evidence checked through 2026-08-25 |
+| --- | --- | --- |
+| 1. Local repo + base/head → deterministic ingest → versioned universe | **Partial** | The product-binary v3 run completed on the positive D pair `a8b6b24d…` → `8569a226…` with exit 0 in 212s. Its accepted-file denominator was 4,816, its reached-file denominator was 1, and it carried 2 D obligations. Two executions produced byte-identical audit and manifest files; enabling `--diagnostics` did not change those canonical bytes. The path remains limited to the Rust production profile and D rule, not general-language ingest. |
+| 2. Non-fixture Relation obligation | **Achieved, narrow** | `cargo test -p reviewgraphen-core --test changed_public_callee_rule` passed 24/24; `cargo test -p reviewgraphen-ingest --test changed_public_callee_facts` passed 19/19. These include trigger negatives, endpoint rejection, split capability traces, and deterministic canonical contracts. |
+| 3. Bounded projection with source IDs/loss/hash | **Achieved, narrow** | `context.subject_windows@3` completed the positive D pair with the 4,816 accepted-file / 1 reached-file commitments above. Canonical bytes contain counts and digests, not the accepted/reached file-ID sets or per-reason lost-anchor ID sets: bytes-only validation establishes structural and wire-visible closure, not denominator correctness. Before sealing, the Runtime path uses trusted `ContextValidationBasisV3`, bound to the immutable snapshot, to rebuild and validate the denominator sets, counts, digests, and partitions. The five premise-locking test families passed across Core, Runtime, and CLI. |
+| 4. Structured claim or abstention; prose not canonical | **Partial** | The deterministic structured abstention and non-authority audit are implemented for request/run v3. Actual model output has never been executed; the structured-claim path therefore remains unconfirmed. |
+| 5. Claim / evidence / verification / human decision are separate | **Partial** | v2 is explicitly prevented from minting Evidence, Verification, Decision, Finding, accepted claim, or Store admission (`generic.rs:1349-1352`). This confirms its non-promotion boundary, not an end-to-end human-decision workflow for the D slice. |
+| 6. Allow-listed, workspace-scoped verification | **Unmet (deferred)** | `workspace.cargo_test@1` returns only typed `unsupported`; it starts no process and resolves no executable. `cargo test -p reviewgraphen-verifier --test deferred_workspace_seam` passed 35/35. This is a security deferral, not an implemented verifier. |
+| 7. Short report + audit JSON in one CLI workflow | **Unconfirmed** | Request/run v3 and human report v2 are implemented, and the positive-pair product run emitted the audit, manifest, and human report. `expected-hashes.json` is complete; verification in two independent clean clones is waiting for a commit. |
+| 8. Provider-free deterministic quickstart + real model-adapter route | **Partial** | Provider-free v3 construction completed deterministically as described above. Real Codex/Claude/App Server observer execution is still rejected as unsupported; model evaluation count is 0. |
+| 9. Reproducible from clone following documentation | **Unconfirmed** | The exact command sequence, product path, and `expected-hashes.json` are complete. The required two independent clean-clone verifications are waiting for a commit; no clone-reproducibility claim is made before they pass. |
+
+### 6.3 Limits and evaluation status
+
+- Mutation sampling exercises representative seams only. It is not an
+  exhaustive score over every branch or every checked call site.
+- Carrier-size limits are regression checks against carrier-layout growth.
+  They are not a formal maximum-stack proof for every toolchain or platform.
+- The legacy byte oracle fixes checked-in fixtures and a fixed live-ingest
+  sample. It is not a universal observational-equivalence proof for arbitrary
+  repository inputs.
+
+No model-based evaluation has ever been run: the model evaluation count is 0.
+Stage 0 (the model-free measurement) has not been run, and no comparison with
+a free-form baseline exists. This
+repository therefore makes no claim that ReviewGraphen is better than
+free-form review. M20 has been atomically re-frozen at SHA-256
+`f3af4c7b6ec1e3bec422d25daaa51e9252e01d37537282cfc73de948fa0adcb8`.
+The `95b75a62…fa73`, `eb207a22…e1a7e`, and `19014d24…c1e6` freezes remain as
+superseded history. The manifest binds each of four generated artifacts by its
+individual SHA-256.
+Specification and implementation now agree on the 3-input execution hash and
+15-key manifest; executable-drift checks SC01/SC02 were added. Vectors passed
+74/74 and the mutation sweep passed 3,990/3,990 with `SCORE_AFFECTING=0`.
+Stage 0, model results, and corpus outcomes remain unobserved, and the model
+evaluation count is 0. A freeze, model pin, product-binary completion, or the
+source-level tests in §6.2 is not evidence of utility. The
+practical-usefulness gate therefore remains **fail**: gate #6 is intentionally
+deferred and there are zero model evaluations.
+
+Wave 12 independent review concluded **BLOCKING 0 / MAJOR 0 — accepted**.
+All Wave 3--12 findings are closed: reconstruction basis, report validated
+types, execution of four real pairs, harness watchdog, schema validation,
+specification/implementation reseal, and every measured deep-clone path.
+
+The v2 policy remains a supported, typed failure boundary for this pair: the
+product binary exited 20 after 204s at the 4,097th candidate, reporting the
+4,096 limit. The former six-hour nontermination is therefore replaced by a
+typed failure. The product has no deadline, assigns no exit 21, and the
+withdrawn 10-second watchdog is only a test-harness condition.
+
+### 6.4 Latest observed verification
+
+The 2026-08-25 quiescent-state verification recorded Core 600, Runtime 50,
+Report 87, and CLI 7, all with exit 0; workspace clippy and formatting also
+exited 0. The product-binary v3 run exited 0 in 209s, `verify.py` exited 0, and
+the audit was byte-identical to the first run; a second invocation exited 20.
+The two-clone quickstart check remains pending a commit.

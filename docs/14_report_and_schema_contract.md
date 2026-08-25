@@ -75,6 +75,43 @@ foreign-key graph. This does not add a V5 event or report array. A proof or
 terminal marker without that source-bound closure is insufficient and is
 refused for the gluing branch.
 
+**Generic v2/v3追記（2026-08-25）**: ADR 0038のgeneric経路は、既存のsource-bound
+report v1--v5をauthorityとして置換しない。新しい
+[`reviewgraphen.generic_review_run.v2`](../schemas/reviewgraphen.generic_review_run.v2.schema.json)
+はcanonical audit projectionであり、v2 request、ingestion projection、D relation
+obligation、plan/deferral、`context.subject_windows@2`、observation、coverage、
+deferred verifier、固定のauthority ceilingを閉じた形で記録する。authorityは常に
+`classification: "non_authority"`、`trusted_pass: false`、`result_status:
+"incomplete"`であり、generic v2はEvidence、Verification、Decision、Finding、
+accepted claim、Store admissionを生成しない（
+`crates/reviewgraphen-runtime/src/generic.rs:1349-1357,2731-2765`）。
+
+v3 request/runはv2 domainを再解釈せず、別schemaとして
+`context.subject_windows@3`の4 denominator commitment、latent cardinality、
+2件のsubject outcome、anchor-bearing window、support-loss summaryを閉じる。
+v2/v3はcross-decodeせず、basis-bound validation済みv3 runから生成するhuman projectionは
+[`reviewgraphen.generic_review_human_report.v2`](../schemas/reviewgraphen.generic_review_human_report.v2.schema.json)
+である。公開entry pointの`generate_generic_human_report_v3`と
+`validate_generic_human_report_v3`は`ValidatedGenericReviewRunV3`だけを受け取る。
+report/CLIのbytes-only decodeはschema、
+canonical encoding、wire-visibleな構造・closure、hash、projection equalityの検査に
+限定される。canonical contextはfile ID集合と理由別lost-anchor ID集合を持たず、
+countとdigestだけなので、bytes単独では分母の正しさを再構築検証できない。
+`UnvalidatedGenericReviewRunV3`からhuman report v2を生成する入口はない。
+完全なsemantic validationは、immutable snapshotに束縛されたtrusted
+`ContextValidationBasisV3`から集合・count・digest・partitionを再構築し、Runtimeの
+実経路でseal前に必ず通す。human report v2はその下流projectionであり、bytes-only
+report validationがsource semanticsを回復したとは扱わない。Markdown/state import入口はない。
+
+対応するv2 run用の
+[`reviewgraphen.generic_review_human_report.v1`](../schemas/reviewgraphen.generic_review_human_report.v1.schema.json)
+は、audit SHA-256、source/window trace、information loss、proposed claimまたは
+abstention、そしてverifierの未実行/unsupported状態を表示するclosed manifestである。
+Markdownはそのprojectionでありcanonical stateへのimport入口ではない。
+v3/human-report v2の実装と製品経路は完走済みである。ただし一つのCLI workflowの
+実用性gateは、`expected-hashes.json`と独立した2 cloneでの検証が完了するまで
+**未確認**のままとする。
+
 ## 1. Report-first principle
 
 ReviewGraphenはCLI表示より先にstable report contractを定義します。

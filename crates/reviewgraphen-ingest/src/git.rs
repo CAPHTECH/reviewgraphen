@@ -21,6 +21,11 @@ use tempfile::TempDir;
 /// adversarially slow subprocess, not a tuned performance budget.
 const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Polling resolution for short-lived bounded children. Snapshot ingestion
+/// runs one allow-listed `git show` per admitted file, so a coarse interval
+/// is paid once per file even when Git exits immediately.
+const SUBPROCESS_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
 /// Captured-output bound (stdout and stderr each) for one allow-listed
 /// child process. This is a coarse subprocess safety net, independent of
 /// and in addition to `IngestLimits::max_file_bytes`, which already bounds
@@ -92,6 +97,15 @@ pub(crate) fn git_command_policy_fingerprint() -> Value {
         "no_replace_objects": true,
         "no_color": true,
     })
+}
+
+#[cfg(test)]
+#[test]
+fn short_lived_subprocess_polling_has_a_per_file_millisecond_bound() {
+    assert!(
+        SUBPROCESS_POLL_INTERVAL <= Duration::from_millis(1),
+        "a snapshot pays this polling interval once for every admitted file"
+    );
 }
 
 /// Version of the deterministic Cargo tool admission policy (below): this
@@ -1865,7 +1879,7 @@ fn run_with_bounds(
                 ),
             });
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(SUBPROCESS_POLL_INTERVAL);
     };
 
     // Join both reader threads unconditionally (the child has already
@@ -2639,14 +2653,57 @@ mod cargo_dependency_resolution_tests {
 /// every test module below that stages a fake `cargo` executable on disk
 /// (Unix-only: shell shebangs and permission bits are POSIX-specific).
 #[cfg(all(test, unix))]
-fn write_test_executable(path: &Path, contents: &str) {
+/// Initial execution plus at most seven retries; sleeps total at most 35ms.
+const TEST_EXEC_RETRY_LIMIT: usize = 7;
+#[cfg(all(test, unix))]
+const TEST_EXEC_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
+#[cfg(all(test, unix))]
+const TEST_EXEC_PROBE_ARGUMENT: &str = "--reviewgraphen-test-exec-probe";
+
+#[cfg(all(test, unix))]
+fn write_test_executable(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    fs::write(path, contents).expect("write fake executable script");
-    let mut permissions = fs::metadata(path)
-        .expect("fake executable metadata")
-        .permissions();
+    let body = contents.strip_prefix("#!/bin/sh\n").ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "fake executable must use the expected /bin/sh shebang",
+        )
+    })?;
+    fs::write(
+        path,
+        format!(
+            "#!/bin/sh\nif [ \"${{1:-}}\" = \"{TEST_EXEC_PROBE_ARGUMENT}\" ]; then\n  exit 0\nfi\n{body}"
+        ),
+    )?;
+    let mut permissions = fs::metadata(path)?.permissions();
     permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions).expect("set fake executable permissions");
+    fs::set_permissions(path, permissions)?;
+    wait_for_test_executable(path)
+}
+
+#[cfg(all(test, unix))]
+fn wait_for_test_executable(path: &Path) -> std::io::Result<()> {
+    for retry in 0..=TEST_EXEC_RETRY_LIMIT {
+        match std::process::Command::new(path)
+            .arg(TEST_EXEC_PROBE_ARGUMENT)
+            .status()
+        {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                return Err(std::io::Error::other(format!(
+                    "test executable probe exited unsuccessfully with {status}"
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                if retry == TEST_EXEC_RETRY_LIMIT {
+                    return Err(error);
+                }
+                std::thread::sleep(TEST_EXEC_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("bounded test executable retry either succeeds or returns its typed error")
 }
 
 /// A fake `cargo` that only understands `metadata`: it reports one local
@@ -2722,7 +2779,8 @@ mod cargo_version_precondition_tests {
         // returned `GitSnapshot`'s.
         let cargo_executable = staged_snapshot.as_ref().map(|staged| {
             let path = staged.path().join("fake-cargo.sh");
-            write_test_executable(&path, FAKE_CARGO_METADATA_SCRIPT);
+            write_test_executable(&path, FAKE_CARGO_METADATA_SCRIPT)
+                .expect("fake cargo executable becomes exec-ready within the bounded retry");
             std::fs::canonicalize(&path).expect("canonicalize fake cargo executable")
         });
         GitSnapshot {
@@ -2973,7 +3031,8 @@ exit 0
         let staged_root = tempfile::tempdir().expect("staged root");
         let log_path = staged_root.path().join("invocations.log");
         let cargo_path = staged_root.path().join("fake-cargo.sh");
-        write_test_executable(&cargo_path, &fake_logging_cargo_script(&log_path));
+        write_test_executable(&cargo_path, &fake_logging_cargo_script(&log_path))
+            .expect("fake cargo executable becomes exec-ready within the bounded retry");
 
         // `PATH` is guaranteed to be ambiently set in any process this test
         // suite runs in; if `cargo_command`'s `env_clear()` regressed and
@@ -3123,7 +3182,8 @@ exit 0
     fn a_valid_trusted_executable_is_admitted_and_its_real_version_is_reported() {
         let bin_dir = tempfile::tempdir().expect("bin dir");
         let cargo_path = bin_dir.path().join("cargo");
-        write_test_executable(&cargo_path, &fake_cargo_version_script("cargo 1.99.0-test"));
+        write_test_executable(&cargo_path, &fake_cargo_version_script("cargo 1.99.0-test"))
+            .expect("fake cargo executable becomes exec-ready within the bounded retry");
         let staged_root = tempfile::tempdir().expect("staged root");
         let admission = CargoToolAdmission::TrustedExecutable(cargo_path.clone());
         let (executable, version) = resolve_cargo(&admission, staged_root.path())
@@ -3140,7 +3200,8 @@ exit 0
         let staged_root = tempfile::tempdir().expect("staged root");
         let log_path = staged_root.path().join("invocations.log");
         let cargo_path = staged_root.path().join("fake-cargo.sh");
-        write_test_executable(&cargo_path, &fake_logging_cargo_script(&log_path));
+        write_test_executable(&cargo_path, &fake_logging_cargo_script(&log_path))
+            .expect("fake cargo executable becomes exec-ready within the bounded retry");
 
         let version =
             cargo_version(&cargo_path, staged_root.path()).expect("fake cargo --version succeeds");

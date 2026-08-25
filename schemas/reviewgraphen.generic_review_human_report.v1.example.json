@@ -1,0 +1,64 @@
+{
+  "schema": "reviewgraphen.generic_review_human_report.v1",
+  "audit": {
+    "schema": "reviewgraphen.generic_review_run.v2",
+    "run_id": "run:sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "snapshot_id": "snapshot:sha256:0000000000000000000000000000000000000000000000000000000000000002",
+    "universe_id": "universe:sha256:0000000000000000000000000000000000000000000000000000000000000010",
+    "canonical_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "authority": {
+    "classification": "non_authority",
+    "trusted_pass": false,
+    "result_status": "incomplete",
+    "incomplete_reasons": ["candidate_space_enumeration_incomplete", "human_decision_not_recorded", "model_observer_non_authority"]
+  },
+  "coverage": {
+    "resolved_target_obligation_ids": [],
+    "stage_ids": [],
+    "candidate_space": {
+      "capabilities": {"direct_calls": "partial"},
+      "limitation_ids": ["ingestion-limitation:sha256:0000000000000000000000000000000000000000000000000000000000000006"],
+      "gap_obligation_ids": ["obligation:sha256:0000000000000000000000000000000000000000000000000000000000000008"],
+      "obstruction_summary_ids": [],
+      "obstruction_ids": ["ingestion-limitation:sha256:0000000000000000000000000000000000000000000000000000000000000006"],
+      "observed_unresolved_call_occurrence_count": 0,
+      "occurrence_id_set_sha256": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "source_occurrence_summaries": [],
+      "global_direct_calls_limitation": {
+        "schema": "reviewgraphen.ingestion_global_limitation.v2",
+        "id": "ingestion-limitation:sha256:0000000000000000000000000000000000000000000000000000000000000006",
+        "snapshot_id": "snapshot:sha256:0000000000000000000000000000000000000000000000000000000000000002",
+        "projection_extractor_id": "reviewgraphen.ingest.rust-call-enumeration@2",
+        "kind": "global_direct_calls_limitation",
+        "severity": "info",
+        "description": "direct_calls enumeration is incomplete; macro latent occurrence count is unknown",
+        "source_ids": ["file:sha256:0000000000000000000000000000000000000000000000000000000000000007"],
+        "related_capabilities": ["direct_calls"],
+        "latent_occurrence_count": "unknown"
+      },
+      "call_graph_complete": false,
+      "global_call_coverage_claim": "prohibited"
+    }
+  },
+  "proposed_claims": [],
+  "abstentions": [],
+  "malformed_outputs": [],
+  "provider_failures": [],
+  "verifier": {"status": "not_selected"},
+  "exclusions": [],
+  "deferrals": [],
+  "source_window_trace": {
+    "source_ids": ["snapshot:sha256:0000000000000000000000000000000000000000000000000000000000000002"],
+    "window_ids": [],
+    "context_ids": []
+  },
+  "information_loss": [{
+    "kind": "bounded_audit_reduction",
+    "meaningful": true,
+    "reason": "Raw observer responses, full obligation contracts, and unrendered audit details are omitted from this human projection.",
+    "recovery_ref": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "source_ids": ["run:sha256:0000000000000000000000000000000000000000000000000000000000000000"]
+  }],
+  "rendered_markdown_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}
