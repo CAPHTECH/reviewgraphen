@@ -1,0 +1,1 @@
+{"context_items":[{"end_line":12,"path":"src/b.rs","reason":"reference","start_line":10,"symbol_id":"s:b"}],"coverage_claim":"partial","declared_losses":[{"attempt_source_ids":["source:fixture"],"reason":"unresolved_symbol","scope":"unknown calls"}],"packet_id":"packet:fixture","policy_id":"m21.task_subject_windows@1","source_ids":["source:fixture"],"task_id":"task:fixture"}
