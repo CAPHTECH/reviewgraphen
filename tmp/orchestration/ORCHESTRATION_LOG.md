@@ -949,3 +949,22 @@ MINOR test_stage0_driver.py:83 — 並列等価テストが 300 件でなく 6 �
    呼んでおり、low 条件 3/6 がすべて 900 s timeout / output tokens null / malformed。stream.jsonl は Claude Code の init JSON
    のみで thinking event なし。**モデルの結果ではなく harness の欠陥**。run_pilot.py（pid 740819）を kill。
    直接 /v1/chat/completions の疎通を別途確認。
+- WIP commit（driver 未 seal・Wave 17 修正未レビュー・pilot 無効を明記）
+- Wave 18: **BLOCKING 0 受理**（gate が実 prereg の 8 hash/path を検査、公開 stage0 経路、null/path/hash/bundle 改竄拒否）。Codex 枠は解除済み。4 回目 seal へ
+- evaluator 検証（seal 進行中に実行）: vectors 74/74、attacks 72/72、validate_bundle 0、unittest は setUpClass で semantic_acceptance_source_mismatch（Rust source binding が 3 回目 seal 後に変わったため。4 回目 seal で reference 再生成予定）→ seal 後に再実行
+- pilot 再実行: 疎通 gate で停止。直接 /v1/chat/completions の 8-token request が 900 s 超でも choices 未返却（chunked 待ち）。reviewer / xhigh / judge request 0。harness は urllib 直接 HTTP + hard timeout に修正済み。**バックエンド（192.168.68.71:11999）が hang** — 再起動はユーザー側
+- バックエンド再起動（ユーザー）。8-token probe が 1 s で choices 返却 → pilot 再開
+
+## pilot 診断（私）
+low 6 件が全て 12,000 token 上限で malformed。応答本文: reasoning が content に平文で流れ（reasoning_content 空）、回答未到達。
+再起動後サーバは 17*23 probe で reasoning_content を分離（content="391"、finish=stop）→ サーバは正常。
+差分: 以前の成功 probe は「Answer ONLY with a single JSON object matching this schema」で終わる強い出力制約 + `reasoning_effort` 明示 +
+max_tokens 131,072（実使用 2,599 / xhigh 24,128）。pilot prompt は制約が弱く、思考が content に漏れた。→ harness 修正を指示。
+
+## 4 回目 atomic seal 完了（sol-prereg2）
+新 freeze SHA-256 `6b71b4b63f550bd4896d13658f4ce295b8113e68eec3ce788414ed2fca99bbd7`。
+実測: 4 実ペア一致、4,816-file 245,492 / 242,540 ms、代表 cluster 221/215 ms。Stage0 並列等価 幅 1/6/逆順 = 176/236/358 ms で
+604 ファイル tree hash 一致。endpoint/denominator/rectangle diff 0。casefold 破壊で T09/T10/T15 失敗→復元 74/74。
+mutation sweep SCORE_AFFECTING=0 / UNDETERMINED=0、SC01/SC02 pass。prereg 8 hash + path 充填、f3af4c… 履歴保持。verify-frozen 全 true。
+Stage0 dry freeze gate 通過（root 未生成）。→ 私の検証 + commit、Stage 0 実行者（sol-stage0b）起動、docs 更新。
+- Stage 0 起動承認: root benchmarks/m20-…/stage0-20260825-seal4-r1、--jobs 14、detached

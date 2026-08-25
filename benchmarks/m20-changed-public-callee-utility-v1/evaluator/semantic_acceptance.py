@@ -12,10 +12,13 @@ PRE_ORACLE_FREEZE_MANIFEST_SHA256 = (
 WAVE7_SPEC_CONTRACT_MISMATCH_FREEZE_SHA256 = (
     "sha256:eb207a22a41ac6635b68affa1fb8febb123799d89c31ba0a01089794753e1a7e"
 )
-SUPERSEDED_FREEZE_MANIFEST_SHA256 = (
+WAVE8_POSTSEAL_SOURCE_BINDING_FREEZE_SHA256 = (
     "sha256:19014d24b608ee51547f0f3a99c9559583b312b0eeaa848d69441876dd51c1e6"
 )
-MEASUREMENT_SHA256 = "sha256:030c843441d74d7c706c8e7306e2b1e7cc8971eb9578a6fbe793392df2f09066"
+SUPERSEDED_FREEZE_MANIFEST_SHA256 = (
+    "sha256:f3af4c7b6ec1e3bec422d25daaa51e9252e01d37537282cfc73de948fa0adcb8"
+)
+MEASUREMENT_SHA256 = "sha256:af68524b891cdd86169a0789ff386a071694e3976cc35238bec5c164fee26cae"
 ALGORITHM_SOURCE_SHA256 = {
     "crates/reviewgraphen-core/src/context_validation_oracle.rs":
         "sha256:4afb9ed6e6c07c3c23367c5bd2e8729d413de0064aacc9324ce2b6f492c52a94",
@@ -37,7 +40,7 @@ REQUIRED_MUTANTS = [
     "production-helper-reuse",
 ]
 SEMANTIC_ACCEPTANCE_REFERENCE_SHA256 = (
-    "sha256:ca63178a27f33aa4c1db04159eb82262a1ef0a9063db626b51ff84045426c9d6"
+    "sha256:081298c64a946c722846496fb0d4dfd3c949d21c2700445382f09d447ad9d64d"
 )
 
 
@@ -74,13 +77,14 @@ def reference_body() -> dict[str, Any]:
         "algorithm_source_sha256": ALGORITHM_SOURCE_SHA256,
         "measurement_path": (
             "benchmarks/m20-changed-public-callee-utility-v1/"
-            "wave8-refreeze-measurements.json"
+            "wave18-seal4-measurements.json"
         ),
         "measurement_sha256": MEASUREMENT_SHA256,
         "required_mutants": REQUIRED_MUTANTS,
         "freeze_history": [
             PRE_ORACLE_FREEZE_MANIFEST_SHA256,
             WAVE7_SPEC_CONTRACT_MISMATCH_FREEZE_SHA256,
+            WAVE8_POSTSEAL_SOURCE_BINDING_FREEZE_SHA256,
             SUPERSEDED_FREEZE_MANIFEST_SHA256,
         ],
     }

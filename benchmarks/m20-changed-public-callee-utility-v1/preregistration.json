@@ -1,7 +1,7 @@
 {
   "schema": "reviewgraphen.benchmark.preregistration.v1",
   "experiment_id": "m20-changed-public-callee-utility-v1",
-  "status": "pending-stage0-driver-atomic-refreeze",
+  "status": "frozen-before-corpus-resolution",
   "question": "Over the frozen open-development commit sample, does one relation.changed_public_callee@1 obligation plus a context.subject_windows@3 packet increase usable source-grounded disposition completion relative to a base/head-production-diff-only review by the same model under the same 65536-byte admitted-source ceiling and common requested backend settings?",
   "authority_ceiling": "descriptive frozen-corpus evaluation only; no claim, judge result, or completion is verified, human-accepted, or defect truth",
   "frozen_identities": {
@@ -75,7 +75,7 @@
     "evaluator_version": "m20-evaluator.pipeline.v1",
     "implementation_language": "Python 3 standard library only",
     "implementation_path": "benchmarks/m20-changed-public-callee-utility-v1/evaluator/",
-    "implementation_status": "stage0_driver_contract_decided_refreeze_pending",
+    "implementation_status": "wave18_stage0_driver_atomic_refreeze_complete",
     "role_separation": {
       "evaluator_author": "independent evaluator agent",
       "slice_implementer": "Candidate D implementation agent",
@@ -172,15 +172,15 @@
       "attack_artifact": "evaluator/generated/attacks.generated.json"
     },
     "freeze_hashes": {
-      "evaluator_bundle_sha256": null,
-      "evaluator_execution_sha256": null,
-      "generated_fixture_inventory_sha256": null,
-      "reference_vector_set_sha256": null,
-      "mutation_manifest_sha256": null,
-      "semantic_acceptance_reference_sha256": null,
-      "measurement_record_sha256": null,
-      "freeze_manifest_sha256": null,
-      "freeze_manifest_path": null,
+      "evaluator_bundle_sha256": "sha256:5f7214bcda25db3ab23010f5c5de7711038f4cbfb96da65afacea3baea76971f",
+      "evaluator_execution_sha256": "sha256:ce1128c364b4e50bfec68a7657172d6be7afacf983414fe8576d482ac156bfce",
+      "generated_fixture_inventory_sha256": "sha256:f1a0e48d711a6cb6b6cd3d070a40607927de9d40b23949f89e96e9b87e0e6545",
+      "reference_vector_set_sha256": "sha256:c5f9bc0e7723869bcc7eff8ac08a41ba0340f02fa0fc8b247c637b23ff735f8d",
+      "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
+      "semantic_acceptance_reference_sha256": "sha256:081298c64a946c722846496fb0d4dfd3c949d21c2700445382f09d447ad9d64d",
+      "measurement_record_sha256": "sha256:af68524b891cdd86169a0789ff386a071694e3976cc35238bec5c164fee26cae",
+      "freeze_manifest_sha256": "sha256:6b71b4b63f550bd4896d13658f4ce295b8113e68eec3ce788414ed2fca99bbd7",
+      "freeze_manifest_path": "freeze-manifest.json",
       "non_null_gate": "After the Stage 0 driver is implemented and atomically re-sealed, all eight hashes and the manifest path must be non-null; SHA-256 of the exact manifest bytes must equal freeze_manifest_sha256, its bundle/execution hashes must equal the active slots, its supersedes_freeze_manifest_sha256 must equal the last freeze_history manifest hash, and verify-frozen must pass before status may return to frozen-before-corpus-resolution."
     },
     "freeze_history": [
@@ -359,7 +359,7 @@
     "judge_batches": 10,
     "judge_model_ceiling_seconds": 900,
     "cumulative_model_ceiling_seconds": 18900,
-    "cumulative_model_ceiling_hours": 5.25,
+    "cumulative_model_ceiling_hours": "5.25",
     "reserve_seconds": 2700,
     "cumulative_wall_clock_envelope_seconds": 21600,
     "cumulative_wall_clock_envelope_hours": 6,

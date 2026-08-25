@@ -46,7 +46,7 @@ class Stage0DriverTest(unittest.TestCase):
         os.environ["M20_SWEEP_WORKER"] = fixture_suffix
         cls.previous_fixture_root = support.FIXTURE_ROOT
         support.FIXTURE_ROOT = Path("/tmp/m20-evaluator-pipeline-fixture-v1" + fixture_suffix)
-        source_workspace = Path(__file__).parents[4]
+        source_workspace = Path(os.environ.get("M20_TEST_SOURCE_WORKSPACE", Path(__file__).parents[4]))
         cls.source_preregistration = Path(__file__).parents[2] / "preregistration.json"
         cls.freeze_root = workspace / "benchmarks" / "m20-changed-public-callee-utility-v1"
         cls.freeze_root.mkdir(parents=True)

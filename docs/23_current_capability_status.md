@@ -318,28 +318,25 @@ been reproduced.
   repository inputs.
 
 No model-based evaluation has ever been run: the model evaluation count is 0.
-Stage 0 (the model-free measurement) has not been run because the frozen
-evaluator has no Stage 0 driver entry point; the required contract is awaiting
-adjudication. No comparison with a free-form baseline exists. This
-repository therefore makes no claim that ReviewGraphen is better than
-free-form review. M20 has been atomically re-frozen at SHA-256
-`f3af4c7b6ec1e3bec422d25daaa51e9252e01d37537282cfc73de948fa0adcb8`.
-The `95b75a62…fa73`, `eb207a22…e1a7e`, and `19014d24…c1e6` freezes remain as
-superseded history. The manifest binds each of four generated artifacts by its
-individual SHA-256.
+Stage 0 (the model-free measurement) has started through the accepted driver,
+but no Stage 0 result has yet been observed. No comparison with a free-form
+baseline exists. This repository therefore makes no claim that ReviewGraphen
+is better than free-form review. M20 has completed its fourth atomic re-freeze at SHA-256
+`6b71b4b63f550bd4896d13658f4ce295b8113e68eec3ce788414ed2fca99bbd7`.
+The `95b75a62…fa73`, `eb207a22…e1a7e`, `19014d24…c1e6`, and
+`f3af4c7b…adcb8` freezes remain as superseded history. The manifest binds each
+of four generated artifacts by its individual SHA-256.
 Specification and implementation now agree on the 3-input execution hash and
 15-key manifest; executable-drift checks SC01/SC02 were added. Vectors passed
 74/74 and the mutation sweep passed 3,990/3,990 with `SCORE_AFFECTING=0`.
-Stage 0, model results, and corpus outcomes remain unobserved, and the model
-evaluation count is 0. A freeze, model pin, product-binary completion, or the
-source-level tests in §6.2 is not evidence of utility. The
+Stage 0 results, model results, and corpus outcomes remain unobserved, and the
+model evaluation count is 0. A freeze, model pin, product-binary completion,
+or the source-level tests in §6.2 is not evidence of utility. The
 practical-usefulness gate therefore remains **fail**: gate #6 is intentionally
 deferred and there are zero model evaluations.
 
-Wave 12 independent review concluded **BLOCKING 0 / MAJOR 0 — accepted**.
-All Wave 3--12 findings are closed: reconstruction basis, report validated
-types, execution of four real pairs, harness watchdog, schema validation,
-specification/implementation reseal, and every measured deep-clone path.
+Wave 18 independent review concluded **BLOCKING 0 — accepted** for the Stage 0
+driver, including its parallel-execution contract and pre-corpus freeze gate.
 
 The v2 policy remains a supported, typed failure boundary for this pair: the
 product binary exited 20 after 204s at the 4,097th candidate, reporting the

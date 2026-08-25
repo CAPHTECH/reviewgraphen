@@ -138,12 +138,12 @@ def _commands() -> dict[str, list[str]]:
     }
 
 
-def _oracle_run(work: Path, worker: str, timeouts: dict[str,int], stop_on_detection: bool = False) -> dict:
+def _oracle_run(work: Path, worker: str, timeouts: dict[str,int], source_workspace: Path, stop_on_detection: bool = False) -> dict:
     exits, elapsed = {}, {}
     for name, command in _commands().items():
         # Physical fixture state is oracle-local.  Its logical identity, and
         # therefore every canonical byte, is deliberately independent of it.
-        env = {"PYTHONPATH":str(work), "PATH":os.environ.get("PATH", ""), "LC_ALL":"C", "PYTHONDONTWRITEBYTECODE":"1", "M20_SWEEP_WORKER":worker+"-"+work.name+"-"+name}
+        env = {"PYTHONPATH":str(work), "PATH":os.environ.get("PATH", ""), "LC_ALL":"C", "PYTHONDONTWRITEBYTECODE":"1", "M20_SWEEP_WORKER":worker+"-"+work.name+"-"+name, "M20_TEST_SOURCE_WORKSPACE":str(source_workspace)}
         started = time.monotonic_ns()
         try:
             result = subprocess.run(command, cwd=work, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeouts[name], check=False, shell=False)
@@ -160,6 +160,7 @@ def _isolated_copy(root: Path) -> tuple[Path,Path]:
     work = Path(tempfile.mkdtemp(prefix="m20-mutation-sweep-", dir="/tmp")); evaluator = work / "evaluator"
     shutil.copytree(root, evaluator, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copy2(root.parent / "EVALUATOR_SPEC.md", work / "EVALUATOR_SPEC.md")
+    shutil.copy2(root.parent / "preregistration.json", work / "preregistration.json")
     return work, evaluator
 
 
@@ -197,7 +198,7 @@ def _run_copy(root: Path, worker: str, timeouts: dict[str,int], mutant: dict | N
             _apply_mutant(evaluator, mutant)
         if calibration is not None:
             _apply_calibration(evaluator, calibration)
-        return _oracle_run(work, worker, timeouts, stop_on_detection=mutant is not None)
+        return _oracle_run(work, worker, timeouts, root.parents[2], stop_on_detection=mutant is not None)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

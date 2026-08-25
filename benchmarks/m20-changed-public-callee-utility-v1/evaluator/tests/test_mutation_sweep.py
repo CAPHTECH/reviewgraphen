@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import unittest
 from collections import Counter
@@ -12,12 +13,24 @@ from .mutation_sweep import (
     OPERATORS,
     _apply_mutant,
     _classify,
+    _isolated_copy,
     generate_mutants,
     sweep,
 )
 
 
 class MutationSweepTest(unittest.TestCase):
+    def test_isolated_oracle_copies_stage0_freeze_registration(self):
+        root = Path(__file__).parents[1]
+        work, _ = _isolated_copy(root)
+        try:
+            self.assertEqual(
+                (work / "preregistration.json").read_bytes(),
+                (root.parent / "preregistration.json").read_bytes(),
+            )
+        finally:
+            shutil.rmtree(work)
+
     @unittest.skipIf(bool(os.environ.get("M20_SWEEP_WORKER")), "the parent sweep already generated the complete mutant set")
     def test_scoring_boundary_and_operator_space_are_explicit_and_exhaustive(self):
         root = Path(__file__).parents[1]
