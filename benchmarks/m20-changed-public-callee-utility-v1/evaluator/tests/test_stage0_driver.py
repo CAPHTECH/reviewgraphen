@@ -1,4 +1,6 @@
 import os
+import io
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -13,7 +15,8 @@ from evaluator.canonical import canonical_bytes, parse_json_bytes, sha256_bytes
 from evaluator.pipeline import PipelineError, _primary
 from evaluator.freeze import freeze_manifest, write_generated
 from evaluator.semantic_acceptance import ALGORITHM_SOURCE_SHA256, reference_body
-from evaluator.stage0_driver import Stage0Error, _ordered_terminal_builds, build_payload_hash, commit_cluster_id, enumerate_clusters, run_stage0, worker_ceiling
+from evaluator.stage0_driver import Cluster, Stage0Error, _ordered_terminal_builds, build_payload_hash, commit_cluster_id, enumerate_clusters, run_stage0, worker_ceiling
+from evaluator.stage0_production import run_frozen_cluster_pipeline
 from evaluator.tests import support
 
 
@@ -182,6 +185,108 @@ class Stage0DriverTest(unittest.TestCase):
             self.assertEqual(result["model_calls"], 0)
             self.assertTrue(all(item["passed"] for item in result["gates"]))
             self.assertEqual(len(list((root / "clusters").glob("*/build-*"))), 6)
+
+    def test_real_fixture_cluster_passes_product_cli_artifact_admission(self):
+        repository = Path(os.environ.get("M20_TEST_SOURCE_WORKSPACE", Path(__file__).parents[4]))
+        cluster = Cluster(
+            "github.com/CAPHTECH/reviewgraphen",
+            str(repository),
+            "a8b6b24d5ed704f53f721b25db42d5d631f946c7",
+            "8569a2261e8a62145228872a2fde9f4c48093d00",
+        )
+        with tempfile.TemporaryDirectory() as parent:
+            stage_root = Path(parent) / "stage0"
+            build_root = stage_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1"
+            build_root.mkdir(parents=True)
+            diagnostic_root = Path(tempfile.gettempdir()) / "m20-stage0-diagnostics" / hashlib.sha256(str(stage_root.resolve()).encode()).hexdigest()
+            try:
+                value = run_frozen_cluster_pipeline(cluster, build_root)
+                self.assertEqual(value["schema"], "m20.stage0-cluster-build.v1")
+                self.assertEqual(value["commit_cluster_id"], cluster.commit_cluster_id)
+                request = parse_json_bytes((build_root / "pipeline-request.v3.json").read_bytes())
+                self.assertEqual(request["ingest"]["max_files"], 20000)
+                self.assertTrue((build_root / "pipeline-artifacts" / "artifact-manifest.v1.json").is_file())
+                diagnostic = parse_json_bytes((diagnostic_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1" / "generic-review-diagnostics.v1.json").read_bytes())
+                self.assertEqual(diagnostic["schema"], "reviewgraphen.generic_review_diagnostics.v1")
+            finally:
+                if diagnostic_root.exists(): shutil.rmtree(diagnostic_root)
+
+    def test_product_cli_failure_is_external_and_identifies_cluster(self):
+        repository = Path(os.environ.get("M20_TEST_SOURCE_WORKSPACE", Path(__file__).parents[4]))
+        cluster = Cluster("github.com/CAPHTECH/reviewgraphen", str(repository), "a8b6b24d5ed704f53f721b25db42d5d631f946c7", "0" * 40)
+        with tempfile.TemporaryDirectory() as parent:
+            stage_root = Path(parent) / "stage0"
+            build_root = stage_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1"
+            build_root.mkdir(parents=True)
+            diagnostic_root = Path(tempfile.gettempdir()) / "m20-stage0-diagnostics" / hashlib.sha256(str(stage_root.resolve()).encode()).hexdigest()
+            try:
+                with self.assertRaisesRegex(Stage0Error, "frozen_cluster_pipeline_failed") as raised:
+                    run_frozen_cluster_pipeline(cluster, build_root)
+                self.assertEqual(raised.exception.diagnostic["commit_cluster_id"], cluster.commit_cluster_id)
+                failure = parse_json_bytes((diagnostic_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1" / "pipeline-failure.v1.json").read_bytes())
+                self.assertEqual(failure["commit_cluster_id"], cluster.commit_cluster_id)
+                self.assertNotEqual(failure["product_exit_code"], 0)
+                self.assertEqual(failure["typed_reason"], "product_cli_error")
+                self.assertTrue(failure["product_stderr"])
+                self.assertFalse((build_root / "pipeline-artifacts").exists())
+            finally:
+                if diagnostic_root.exists(): shutil.rmtree(diagnostic_root)
+
+    def test_product_cli_timeout_records_partial_failure_diagnostic(self):
+        repository = Path(os.environ.get("M20_TEST_SOURCE_WORKSPACE", Path(__file__).parents[4]))
+        cluster = Cluster("github.com/CAPHTECH/reviewgraphen", str(repository), "a8b6b24d5ed704f53f721b25db42d5d631f946c7", "8569a2261e8a62145228872a2fde9f4c48093d00")
+        with tempfile.TemporaryDirectory() as parent:
+            stage_root = Path(parent) / "stage0"
+            build_root = stage_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1"
+            build_root.mkdir(parents=True)
+            diagnostic_root = Path(tempfile.gettempdir()) / "m20-stage0-diagnostics" / hashlib.sha256(str(stage_root.resolve()).encode()).hexdigest()
+            try:
+                with self.assertRaisesRegex(Stage0Error, "frozen_cluster_pipeline_failed") as raised:
+                    run_frozen_cluster_pipeline(cluster, build_root, _pipeline_timeout=0.000001)
+                self.assertEqual(raised.exception.diagnostic["typed_reason"], "timeout")
+                self.assertIsNone(raised.exception.diagnostic["product_exit_code"])
+                failure = parse_json_bytes((diagnostic_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1" / "pipeline-failure.v1.json").read_bytes())
+                self.assertEqual(failure["commit_cluster_id"], cluster.commit_cluster_id)
+                self.assertEqual(failure["typed_reason"], "timeout")
+                self.assertIsNone(failure["product_exit_code"])
+                self.assertIn("product_stderr", failure)
+                self.assertGreater(float(failure["elapsed_seconds"]), 0)
+                self.assertFalse((build_root / "pipeline-artifacts").exists())
+            finally:
+                if diagnostic_root.exists(): shutil.rmtree(diagnostic_root)
+
+    def test_ingest_max_files_overflow_is_typed_stage0_failure(self):
+        repository = Path(os.environ.get("M20_TEST_SOURCE_WORKSPACE", Path(__file__).parents[4]))
+        cluster = Cluster("github.com/CAPHTECH/reviewgraphen", str(repository), "a8b6b24d5ed704f53f721b25db42d5d631f946c7", "8569a2261e8a62145228872a2fde9f4c48093d00")
+        with tempfile.TemporaryDirectory() as parent:
+            stage_root = Path(parent) / "stage0"
+            build_root = stage_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1"
+            build_root.mkdir(parents=True)
+            diagnostic_root = Path(tempfile.gettempdir()) / "m20-stage0-diagnostics" / hashlib.sha256(str(stage_root.resolve()).encode()).hexdigest()
+            try:
+                with self.assertRaisesRegex(Stage0Error, "stage0_ingest_max_files_exceeded") as raised:
+                    run_frozen_cluster_pipeline(cluster, build_root, _max_files=1)
+                self.assertEqual(raised.exception.code, "stage0_ingest_max_files_exceeded")
+                self.assertEqual(raised.exception.diagnostic["typed_reason"], "stage0_ingest_max_files_exceeded")
+                failure = parse_json_bytes((diagnostic_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1" / "pipeline-failure.v1.json").read_bytes())
+                self.assertEqual(failure["typed_reason"], "stage0_ingest_max_files_exceeded")
+                self.assertNotEqual(failure["product_exit_code"], 0)
+                request = parse_json_bytes((build_root / "pipeline-request.v3.json").read_bytes())
+                self.assertEqual(request["ingest"]["max_files"], 1)
+                self.assertFalse((build_root / "pipeline-artifacts").exists())
+            finally:
+                if diagnostic_root.exists(): shutil.rmtree(diagnostic_root)
+
+    def test_cli_stage0_failure_writes_cluster_json_to_stderr(self):
+        from evaluator import cli
+        diagnostic = {"schema":"m20.stage0-error-diagnostic.v1", "code":"frozen_cluster_pipeline_failed", "commit_cluster_id":"commit-cluster:sha256:" + "1" * 64, "product_exit_code":20}
+        class Stream:
+            def __init__(self): self.buffer = io.BytesIO()
+        stdout, stderr = Stream(), Stream()
+        with patch("evaluator.stage0_driver.production_stage0", side_effect=Stage0Error("frozen_cluster_pipeline_failed", diagnostic=diagnostic)), patch.object(sys, "stdout", stdout), patch.object(sys, "stderr", stderr):
+            self.assertEqual(cli.main(["stage0", "/unused"]), 4)
+        self.assertEqual(parse_json_bytes(stdout.buffer.getvalue()), {"schema":"m20.cli-error.v1", "code":"frozen_cluster_pipeline_failed"})
+        self.assertEqual(parse_json_bytes(stderr.buffer.getvalue()), diagnostic)
 
     def test_worker_ceiling_contract_and_jobs_bounds(self):
         self.assertEqual(worker_ceiling(1), 1)

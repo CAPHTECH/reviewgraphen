@@ -17,8 +17,8 @@ EXPECTED_CLUSTERS = 300
 
 
 class Stage0Error(ValueError):
-    def __init__(self, code: str, exit_code: int = 4):
-        self.code, self.exit_code = code, exit_code
+    def __init__(self, code: str, exit_code: int = 4, *, diagnostic: dict | None = None):
+        self.code, self.exit_code, self.diagnostic = code, exit_code, diagnostic
         super().__init__(code)
 
 

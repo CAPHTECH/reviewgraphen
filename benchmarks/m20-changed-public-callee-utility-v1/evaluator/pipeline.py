@@ -1,4 +1,4 @@
-"""Sole end-to-end constructor and scorer for one paired m20 unit."""; import hashlib; import unicodedata; from pathlib import Path; from .artifacts import ArtifactSink; from .canonical import canonical_bytes, hash_json, parse_json_bytes, sha256_bytes, stable_id; from .model_boundary import DIMENSIONS, DecodedModel, ModelResult, TypedError, decode_model; from .repository import GitRepository, PreflightError, production_rust, valid_path; from .source_payload import extract, payload_record, source_record, validate_payload_closure; from .stage0_contract import CONTEXT_POLICY_ID, CONTEXT_V2_HASH, CONTEXT_V3_HASH, PROFILE_HASH, Stage0ContractError, validate_context_projection_public, validate_occurrence_public; from .textnorm import normalize; MAX_SOURCE_BYTES = 65_536; CONTEXT_HASH = CONTEXT_V3_HASH; RULE_ID = "relation.changed_public_callee@1"; PROPERTY_ID = "rust.callee_contract_review@1"; _FIXTURE_EXECUTION_IDENTITY: str | None = None
+"""Sole end-to-end constructor and scorer for one paired m20 unit."""; import hashlib; import unicodedata; from pathlib import Path; from .artifacts import ArtifactSink; from .canonical import canonical_bytes, hash_json, parse_json_bytes, sha256_bytes, stable_id; from .model_boundary import DIMENSIONS, DecodedModel, ModelResult, TypedError, decode_model; from .repository import GitRepository, PreflightError, production_rust, valid_path; from .source_payload import extract, payload_record, source_record, validate_payload_closure; from .stage0_contract import CONTEXT_POLICY_ID, CONTEXT_V2_HASH, CONTEXT_V3_HASH, PROFILE_HASH, Stage0ContractError, validate_context_projection_public, validate_occurrence_public; from .textnorm import normalize; MAX_SOURCE_BYTES = 65_536; CONTEXT_HASH = CONTEXT_V3_HASH; RULE_ID = "relation.changed_public_callee@1"; PROPERTY_ID = "rust.callee_contract_review@1"; PACKET_V2 = "arm-neutral.source-grounded-packet@2"; PACKET_V3 = "arm-neutral.source-grounded-packet@3"; _FIXTURE_EXECUTION_IDENTITY: str | None = None
 class PipelineError(ValueError):
     def __init__(self, code: str, exit_code: int = 4): self.code, self.exit_code = code, exit_code; super().__init__(code)
 def _data(name: str): return parse_json_bytes((Path(__file__).with_name("data") / name).read_bytes())
@@ -123,13 +123,35 @@ def _lens(packet: dict) -> None:
             folded = unicodedata.normalize("NFKC", value).casefold()
             if any(term in folded for term in forbidden) or pointer.endswith("/role") and folded in {"caller", "callee", "endpoint", "subject"}: raise PipelineError("reviewer_lens_leak")
     walk(packet)
-def _packet(arm: dict, task_id: str) -> dict:
+def _packet_with_schema(arm: dict, task_id: str, schema: str) -> dict:
     losses = sorted([arm["routine_loss"], *arm["task_losses"]], key=lambda x: x["loss_id"]); body = {"schema": "m20.source-inventory.v3", "admitted_sources": arm["sources"], "declared_losses": losses}; inventory = {"schema": body["schema"], "source_inventory_id": stable_id("source-inventory", body), "admitted_sources": arm["sources"], "declared_losses": losses, "canonical_sha256": hash_json(body)}; instruction = (Path(__file__).with_name("data") / "common_instruction.txt").read_bytes()
     if not instruction.endswith(b"\n") or instruction.endswith(b"\n\n"): raise PipelineError("instruction_invalid")
-    packet = {"schema": "arm-neutral.source-grounded-packet@2", "task_id": task_id, "instruction": instruction[:-1].decode("utf-8"), "response_schema": _schema("reviewer_output.v1.json"), "source_inventory": inventory, "payloads": arm["payloads"]}
+    packet = {"schema": schema, "task_id": task_id, "instruction": instruction[:-1].decode("utf-8"), "response_schema": _schema("reviewer_output.v1.json"), "source_inventory": inventory, "payloads": arm["payloads"]}
     _lens(packet)
     if validate_payload_closure(packet): raise PipelineError("source_payload_closure_invalid")
     return packet
+def _packet_v2(arm: dict, task_id: str) -> dict: return _packet_with_schema(arm, task_id, PACKET_V2)
+def _packet(arm: dict, task_id: str) -> dict: return _packet_with_schema(arm, task_id, PACKET_V3)
+
+
+def _union_specs(core: list[dict], additions: list[dict]) -> list[dict]:
+    by_key = {}
+    for spec in [*core, *additions]:
+        key = (spec["snapshot_side"], spec["path"], spec["start_line"], spec["end_line"])
+        previous = by_key.get(key)
+        if previous is None: by_key[key] = dict(spec)
+        elif previous["blob_oid"] != spec["blob_oid"]: raise PipelineError("shared_core_source_conflict", 2)
+    return sorted(by_key.values(), key=lambda x: (x["path"].encode(), x["snapshot_side"] != "base", x["start_line"], x["end_line"], x["role"].encode()))
+
+
+def _shared_core_specs(repository, trees: tuple[dict, dict], obligation: dict) -> list[dict]:
+    baseline = repository.baseline_specs(trees)
+    callee = next((item for item in obligation["projection"]["subject_outcomes"] if item["role"] == "callee" and item["status"] == "admitted"), None)
+    if callee is None: raise PipelineError("shared_core_callee_invalid", 2)
+    materialized = next((item for item in obligation["projection"]["materialized_sources"] if item["source_artifact_id"] == callee["source_artifact_id"]), None)
+    if materialized is None or materialized["snapshot_side"] != "head": raise PipelineError("shared_core_callee_invalid", 2)
+    body = {"role":"changed", "snapshot_side":"head", "path":materialized["path"], "start_line":callee["start_line"], "end_line":callee["end_line"], "blob_oid":materialized["blob_oid"]}
+    return _union_specs(baseline, [{"required_id":stable_id("source-request", body), **body}])
 def _codes(codes) -> list[str]:
     order = _data("failure_codes.v1.json")["codes"]; unknown = set(codes) - set(order)
     if unknown: raise PipelineError("unknown_failure_code")
@@ -218,11 +240,12 @@ def _budget(unit_id: str, packets: list[dict], admitted_source_bytes: list[int] 
 def RUN(frozen_launch: dict, model_transport, new_output_root: str | Path) -> dict:
     launch = _launch(frozen_launch); stage, _ = _read_authenticated(launch["stage_manifest_path"], launch["stage_manifest_sha256"]); obligation, _ = _read_authenticated(launch["frozen_obligation_path"], launch["frozen_obligation_sha256"]); stage, obligation = _stage(stage, launch), _obligation(obligation, launch["unit_id"]); descriptor = model_transport.descriptor() if hasattr(model_transport, "descriptor") else None
     if descriptor != stage["backend_adapters"]: raise PipelineError("backend_adapter_mismatch", 2)
-    repository = GitRepository(launch["repository_root"], stage["repository_allow_list"]); trees = repository.snapshots(launch["base_commit_oid"], launch["head_commit_oid"]); base_specs = repository.baseline_specs(trees[:2])
-    if not base_specs: raise PipelineError("baseline_empty", 2)
-    task_id = stable_id("review-task", {"unit_id": launch["unit_id"], "obligation_ids": obligation["obligation_ids"], "rule_id": RULE_ID, "property_id": PROPERTY_ID}); arm_ids = [stable_id("hidden-arm", {"task_id": task_id, "construction_kind": kind}) for kind in ("baseline_diff", "subject_windows")]; projections = [{"projection_id": stable_id("baseline-projection", {"unit_id": launch["unit_id"]}), "source_required_ids": sorted([x["required_id"] for x in base_specs], key=lambda x: x.encode())}, obligation["projection"]]; projections[0]["canonical_sha256"] = hash_json(projections[0])
-    arms = [_arm(repository, trees[:2], base_specs, [], projections[0], task_id, arm_ids[0], stable_id("scope", {"task_id": task_id, "arm": "baseline"})),
-            _arm(repository, trees[:2], obligation["sources"], obligation["required_references"], projections[1], task_id, arm_ids[1], obligation["bounded_scope_manifest_id"])]
+    repository = GitRepository(launch["repository_root"], stage["repository_allow_list"]); trees = repository.snapshots(launch["base_commit_oid"], launch["head_commit_oid"]); core_specs = _shared_core_specs(repository, trees[:2], obligation)
+    if not core_specs: raise PipelineError("baseline_empty", 2)
+    treatment_specs = _union_specs(core_specs, obligation["sources"])
+    task_id = stable_id("review-task", {"unit_id": launch["unit_id"], "obligation_ids": obligation["obligation_ids"], "rule_id": RULE_ID, "property_id": PROPERTY_ID}); arm_ids = [stable_id("hidden-arm", {"task_id": task_id, "construction_kind": kind}) for kind in ("baseline_diff", "subject_windows")]; core_projection = {"projection_id": stable_id("baseline-projection", {"unit_id": launch["unit_id"]}), "source_required_ids": sorted([x["required_id"] for x in core_specs], key=lambda x: x.encode())}; core_projection["canonical_sha256"] = hash_json(core_projection)
+    arms = [_arm(repository, trees[:2], core_specs, [], core_projection, task_id, arm_ids[0], stable_id("scope", {"task_id": task_id, "arm": "baseline"})),
+            _arm(repository, trees[:2], treatment_specs, obligation["required_references"], obligation["projection"], task_id, arm_ids[1], obligation["bounded_scope_manifest_id"])]
     opportunity = _opportunity(arms); packets = [_packet(arm, task_id) for arm in arms]; admitted_by_arm = {arm["hidden_arm_id"]:sum(source["bytes"] for source in arm["sources"]) for arm in arms}; slot_arms = arms if _bit(stage["public_seeds"]["arm_order"], launch["unit_id"]) == 0 else list(reversed(arms)); arm_packet = {arm["hidden_arm_id"]: packet for arm, packet in zip(arms, packets)}; slot_packets = [arm_packet[arm["hidden_arm_id"]] for arm in slot_arms]; budget = _budget(launch["unit_id"], slot_packets, [admitted_by_arm[arm["hidden_arm_id"]] for arm in slot_arms]); from .freeze import execution_identity, runtime_compatible
     if not runtime_compatible(): raise PipelineError("runtime_incompatible", 3)
     execution_sha = _FIXTURE_EXECUTION_IDENTITY or execution_identity(Path(__file__).resolve().parent)
@@ -246,7 +269,7 @@ def RUN(frozen_launch: dict, model_transport, new_output_root: str | Path) -> di
     sink.json("judge/utility.json", utility, "utility"); primary = _primary(mechanicals, utility); sink.json("primary.json", primary, "primary"); seal = sink.finalize(execution_sha, launch["stage_manifest_sha256"], run_id, "sealed"); return {"schema": "m20.run-result.v1", "run_id": run_id, "pipeline_terminal_state": "sealed", "primary": primary, "seal": seal}
 def _packet_audit(packet: dict) -> None:
     _closed(packet, {"schema", "task_id", "instruction", "response_schema", "source_inventory", "payloads"}, "packet_invalid"); instruction = (Path(__file__).with_name("data") / "common_instruction.txt").read_bytes()[:-1].decode("utf-8")
-    if packet["schema"] != "arm-neutral.source-grounded-packet@2" or packet["instruction"] != instruction or packet["response_schema"] != _schema("reviewer_output.v1.json"): raise PipelineError("packet_constants_invalid")
+    if packet["schema"] != PACKET_V3 or packet["instruction"] != instruction or packet["response_schema"] != _schema("reviewer_output.v1.json"): raise PipelineError("packet_constants_invalid")
     inventory = _closed(packet["source_inventory"], {"schema", "source_inventory_id", "admitted_sources", "declared_losses", "canonical_sha256"}, "inventory_invalid")
     for source in inventory["admitted_sources"]: _closed(source, {"source_id", "role", "snapshot_side", "path", "range", "payload_id", "bytes", "sha256"}, "source_invalid")
     for loss in inventory["declared_losses"]: _closed(loss, {"loss_id", "reason", "omitted_scope", "recovery_reference", "primary_abstention_eligible", "undecidable_question_id"}, "loss_invalid")

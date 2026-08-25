@@ -2,7 +2,7 @@
   "schema": "reviewgraphen.benchmark.preregistration.v1",
   "experiment_id": "m20-changed-public-callee-utility-v1",
   "status": "frozen-before-corpus-resolution",
-  "question": "Over the frozen open-development commit sample, does one relation.changed_public_callee@1 obligation plus a context.subject_windows@3 packet increase usable source-grounded disposition completion relative to a base/head-production-diff-only review by the same model under the same 65536-byte admitted-source ceiling and common requested backend settings?",
+  "question": "Over the frozen open-development commit sample, does one relation.changed_public_callee@1 obligation's context.subject_windows@3 inventory increase usable source-grounded disposition completion beyond a byte-identical shared change-evidence core containing the complete profile-defined base/head production diff and selected changed callee implementation, for the same model under the same 65536-byte admitted-source ceiling and common requested backend settings?",
   "authority_ceiling": "descriptive frozen-corpus evaluation only; no claim, judge result, or completion is verified, human-accepted, or defect truth",
   "frozen_identities": {
     "rule_id": "relation.changed_public_callee@1",
@@ -14,7 +14,7 @@
     "context_policy_sha256": "sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8",
     "context_v2_immutable_sha256": "sha256:7c4ceca165588cd38b28cc6882bb68a1ff4040dbb19ee34dfd792216d70bbf26",
     "reviewer_visible_contract": "arm-neutral.source-grounded-disposition@1",
-    "reviewer_visible_packet": "arm-neutral.source-grounded-packet@2"
+    "reviewer_visible_packet": "arm-neutral.source-grounded-packet@3"
   },
   "public_seeds": {
     "repository_selection": "m20-repository-selection-v1",
@@ -58,7 +58,7 @@
       "admitted_source_byte_ceiling": 65536,
       "input_token_policy": "no evaluator-enforced input-token ceiling or tokenizer preflight; backend tokenizer and usage data are observation-only and never affect eligibility, ordering, scoring, failure codes, or decisions",
       "requested_backend_max_output_tokens": 12000,
-      "output_budget_status": "frozen; selection basis, probe provenance, and interpretation limits are recorded only in MODEL_PIN_RATIONALE.md",
+      "output_budget_status": "retained after the excluded nonregistered corrected pilot: 1/6 primary completions at 12000 and 5/12 responses reaching 32000 do not supply a preregistered rule for choosing a new cap; budget terminals remain primary zero, and a higher-budget question requires a new versioned experiment",
       "maximum_claims": 3,
       "retries": 0,
       "instruction_id": "arm-neutral.source-grounded-disposition@1",
@@ -66,16 +66,16 @@
       "byte_ceiling_terminal": "if either arm is 65537 bytes or more, the pair is sealed as model_ineligible with reason admitted_source_byte_ceiling_exceeded, null arm results, zero reviewer/judge calls, CLI exit 0, and no membership in n/b/c/n00",
       "budget_boundary_fixtures": "both arms exactly 65536 bytes pass; changing one arm to 65537 bytes yields the sealed pair-wide model_ineligible terminal result and no primary record"
     },
-    "A": "profile-defined base/head production diff only, encoded with the common visible contract and no D metadata",
-    "B": "one selected D obligation's bounded subject-window source bytes, encoded with the same visible contract; D metadata exists only in the hidden binding",
+    "A": "exactly the shared change-evidence core, encoded with the common visible contract and no D metadata",
+    "B": "the byte-identical shared change-evidence core union one selected D obligation's bounded subject-window source bytes, encoded with the same visible contract; D metadata exists only in the hidden binding",
     "order": "low bit of SHA-256(arm_order seed + NUL + commit_cluster_id): 0=A then B, 1=B then A"
   },
   "arm_neutral_contracts": {
     "normative_implementation_spec": "EVALUATOR_SPEC.md",
-    "evaluator_version": "m20-evaluator.pipeline.v1",
+    "evaluator_version": "m20-evaluator.pipeline.v2",
     "implementation_language": "Python 3 standard library only",
     "implementation_path": "benchmarks/m20-changed-public-callee-utility-v1/evaluator/",
-    "implementation_status": "wave19_test_isolation_atomic_refreeze_complete",
+    "implementation_status": "pre_stage1_shared_change_evidence_atomic_reseal_required",
     "role_separation": {
       "evaluator_author": "independent evaluator agent",
       "slice_implementer": "Candidate D implementation agent",
@@ -106,7 +106,7 @@
     },
     "generated_schema_ids": [
       "m20.pipeline_launch.v1",
-      "arm-neutral.source-grounded-packet@2",
+      "arm-neutral.source-grounded-packet@3",
       "arm-neutral.source-grounded-disposition@1",
       "m20.source-inventory.v3",
       "m20.utility_judge_batch_input.v1",
@@ -120,6 +120,15 @@
     "source_body_contract": {
       "design_section": "EVALUATOR_SPEC.md sections 3-4",
       "outcome": "Every admitted source closes to directly reviewer-readable strict-UTF-8 excerpt text in a closed content-addressed payload table; UTF8(text), byte length, and hashes must agree. Payload text and exact normalized repository paths are the only lens-scan exceptions."
+    },
+    "shared_change_evidence_contract": {
+      "design_section": "ADR 0038 section 8.2; the next atomic seal must update EVALUATOR_SPEC.md, schemas, vectors, attacks, and hashes before use",
+      "basis": "the complete profile-defined base/head production-diff inventory from the frozen baseline planner plus the selected changed public callee's exact complete head implementation range",
+      "symmetry": "the normalized source records and payloads are byte-identical in A and B; they use only generic visible roles and reveal no D binding",
+      "arm_unions": "A is exactly the shared core; B adds context.subject_windows@3 admitted sources; exact duplicate keys/payloads are serialized once and conflicts are invalid",
+      "budget_and_loss": "each complete union independently satisfies <=65536 admitted source bytes without padding or truncation; inability to derive or close mandatory common evidence is the same typed task-blocking source/reference loss in both arms and is never silent",
+      "estimand_effect": "the treatment contrast is subject-window context beyond a common task/change basis, not diff-aware versus change-blind review",
+      "stage0_effect": "C/A/S/D sets and seven gate definitions are unchanged, but packet byte counts, model eligibility, and Stage 1 selection can change; Stage 0 must be rerun under the new seal and earlier Stage 0 output is not reusable"
     },
     "abstention_opportunity_contract": {
       "design_sections": "EVALUATOR_SPEC.md sections 5-6",
@@ -241,6 +250,18 @@
         "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
         "semantic_acceptance_reference_sha256": "sha256:081298c64a946c722846496fb0d4dfd3c949d21c2700445382f09d447ad9d64d",
         "measurement_record_sha256": "sha256:af68524b891cdd86169a0789ff386a071694e3976cc35238bec5c164fee26cae"
+      },
+      {
+        "freeze_manifest_sha256": "sha256:0ea5b16d8690b3e3b017aeeae7e29ca46501a83dec0c4d98b3920693aab6c921",
+        "status": "superseded_wave21_stage0_real_corpus_driver_fix",
+        "reason": "Wave 21 corrected product-CLI Stage 0 execution to use repository-relative artifact paths in independent repository copies, external typed diagnostics, and the preregistered 20000-file ingest admission bound; no Stage 0, model, or corpus outcome was observed.",
+        "evaluator_bundle_sha256": "sha256:2133480e76487abded2ff5bcc7dab7ae01d07f6525bea99ca946797ad14d02ba",
+        "evaluator_execution_sha256": "sha256:159871d6fd8e5ea38434ef544fb0d4b3c1eb2a39822e7fd322b9bf7fd8a209d0",
+        "generated_fixture_inventory_sha256": "sha256:ef6ef899d70d5ca941fcd74eb9330dd9781eaf37089a567132998b64a9f08c33",
+        "reference_vector_set_sha256": "sha256:8c9fb64ea8f1c89b9bf791dd1f35a60a7a442999280a7860eca0c1b1aea57c7d",
+        "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
+        "semantic_acceptance_reference_sha256": "sha256:ee7e670ede21ee4c74bd1e50ddff215049c5187c51212e2094056b17b2dd4d43",
+        "measurement_record_sha256": "sha256:9acf4adcdbe588b198eb7d6bcf553a2e13519b614d641c1fe211a0e18f479ad7"
       }
     ],
     "runtime_contract": {
@@ -259,7 +280,7 @@
   },
   "primary_endpoint": {
     "name": "usable_grounded_disposition_completed(commit, arm)",
-    "normative_scorer": "The m20-evaluator.pipeline.v1 bundle and semantic runtime contract jointly identified by evaluator_execution_sha256; the single in-process pipeline and EVALUATOR_SPEC.md sections 8-9 are the only scorer before freeze.",
+    "normative_scorer": "The m20-evaluator.pipeline.v2 bundle and semantic runtime contract jointly identified by evaluator_execution_sha256 after the required atomic reseal; the single in-process pipeline and EVALUATOR_SPEC.md sections 8-9 are the only scorer before registered Stage 1.",
     "value_one": "The generated m20.primary_score.v3 record has completed=true under the frozen evaluator. No prose reimplementation may rescore a cell.",
     "forced_zero_classes": [
       "process, timeout, empty, parse, schema, closure, source-payload, policy, tool, truncation, or retained-hash failure",
@@ -276,6 +297,7 @@
       "output_root": "caller-selected initially nonexistent destination; path is not an identity input; closed layout is corpus-manifest.v1.json, clusters/<commit-cluster digest>/build-1/, clusters/<commit-cluster digest>/build-2/, stage0-result.v1.json, stage0-selection.v1.json, and artifact-manifest.v1.json",
       "commit_cluster_id": "D(commit-cluster,{cluster_contract:m20.commit_cluster@1,experiment_id:m20-changed-public-callee-utility-v1,repository_id:canonical repository ID,base_commit_oid:exact Git object ID,head_commit_oid:exact Git object ID}) under frozen restricted canonical JSON",
       "responsibilities": "resolve and seal corpus; process every one of 300 clusters in two clean builds; evaluate exactly seven gates; derive and seal exact model-eligible hash order and first 10/40 cumulative membership; make zero model calls",
+      "ingest_admission": "every Stage 0 product request sets ingest.max_files=20000, the closed v3 schema maximum and section 11 quickstart value; this is an admission/resource bound, not C/A/S/D membership: overflow is typed Stage 0 failure and cannot truncate accepted files, remove a cluster from C, or create model ineligibility; the separate materialized-source bound remains 4096",
       "endpoint_separation": "Stage 0 may only authorize/block launch and select exact IDs; its records contain no arm/model/judge/primary values and cannot enter scoring or n/b/c/n00; each later run authenticates the selection-manifest hash and membership",
       "parallelism": "cluster-level parallelism is allowed; worker ceiling=max(1,min(16,available logical CPUs-2)), with unavailable or <=2 CPUs yielding one; --jobs is a public operational argument constrained to 1..=ceiling, omitted means ceiling, and its value is excluded from every output, ID, manifest, hash, gate, and selection input; each worker owns one cluster with two isolated clean builds",
       "freeze_gate": "before corpus resolution or output-root creation, load preregistration.json, require all active hashes and manifest path non-null, and require verify-frozen ok=true; otherwise refuse without repository observation",
@@ -423,7 +445,8 @@
     "before_each_model_stage": "seal all eligible labels/rationales, label-independent sample, evaluator-generated A/B packets, payload/inventory closure, deterministic source-byte budget records, observation-only token schema, backend and arm order",
     "before_primary_judging": "within the same run, write-only seal both raw/parsed outputs, usage/truncation, generated packet hashes, per-arm hidden bindings, judge permutation, opaque candidate IDs, and reverse-map hash; continue from original in-memory values without rereading artifacts",
     "before_disclosure": "seal primary judge/scorer records, cells, sensitivities, safety counts, and decision",
-    "repair": "any repair creates a new versioned study and cannot replace a frozen result"
+    "repair": "any repair creates a new versioned study and cannot replace a frozen result",
+    "pre_stage1_packet_amendment": "Before registered Stage 1, atomically reseal the shared change-evidence packet contract and rerun Stage 0; this construct-validity repair changes neither the frozen primary endpoint/thresholds nor the retained 12000-token/900-second model budget and cannot reinterpret any earlier observation as a registered result"
   },
   "interpretation_limits": [
     "Open development on one machine/Unix identity; commitments are procedural, not access separation or organizational blindness.",

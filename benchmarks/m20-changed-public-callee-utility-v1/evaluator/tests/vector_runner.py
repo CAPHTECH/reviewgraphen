@@ -55,7 +55,7 @@ def _source(row):
         return result["text"] == row["expected"]["text"] and result["sha256"] == row["expected"]["sha256"] and result["payload_id"] == row["expected"]["payload_id"] and source["source_id"] == row["expected"]["source_id"]
     result = extract(b"a\nb\n", 2, 2); payload = payload_record(result); source = source_record("changed", "head", "src/lib.rs", 2, 2, result)
     body = {"schema": "m20.source-inventory.v3", "admitted_sources": [source], "declared_losses": []}
-    packet = {"schema": "arm-neutral.source-grounded-packet@2", "task_id": "task", "instruction": "instruction", "response_schema": {}, "source_inventory": {**body, "source_inventory_id": stable_id("source-inventory", body), "canonical_sha256": hash_json(body)}, "payloads": [payload]}
+    packet = {"schema": "arm-neutral.source-grounded-packet@3", "task_id": "task", "instruction": "instruction", "response_schema": {}, "source_inventory": {**body, "source_inventory_id": stable_id("source-inventory", body), "canonical_sha256": hash_json(body)}, "payloads": [payload]}
     if row["id"] == "S08":
         packet["payloads"][0]["text"] = "c\n"; return "payload_hash_mismatch" in validate_payload_closure(packet)
     if row["id"] == "S09":

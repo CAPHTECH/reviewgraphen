@@ -285,6 +285,22 @@ def probe(identifier: str) -> bool:
     if identifier in {"OCC01","OCC02","CTX01","CTX02","CTX03","CTX04","CTX05","CTX06","CTX07","SC01"}:
         from evaluator.tests.vector_runner import run_vectors
         return run_vectors()["failed"]==0
+    if identifier == "PKT01":
+        import shutil
+        from evaluator import pipeline
+        from evaluator.tests.support import FIXTURE_ROOT, Transport, fixture_run, launch
+        selected, output = launch("packet-core-attack", subject_bytes=32)
+        previous = pipeline._FIXTURE_EXECUTION_IDENTITY; pipeline._FIXTURE_EXECUTION_IDENTITY = "sha256:" + "d" * 64
+        try:
+            fixture_run(selected, Transport(), output)
+            packets = [parse_json_bytes((output / f"slots/{slot}/packet.json").read_bytes()) for slot in range(2)]
+            smaller, larger = sorted(packets, key=lambda packet: len(packet["source_inventory"]["admitted_sources"]))
+            core = {canonical_bytes(source) for source in smaller["source_inventory"]["admitted_sources"]}
+            treatment = {canonical_bytes(source) for source in larger["source_inventory"]["admitted_sources"]}
+            return bool(core) and core < treatment
+        finally:
+            pipeline._FIXTURE_EXECUTION_IDENTITY = previous
+            if FIXTURE_ROOT.exists(): shutil.rmtree(FIXTURE_ROOT)
     if identifier == "SC02":
         from evaluator.spec_contract import verify_spec_contract
         verify_spec_contract(Path(__file__).parents[2]/"EVALUATOR_SPEC.md")

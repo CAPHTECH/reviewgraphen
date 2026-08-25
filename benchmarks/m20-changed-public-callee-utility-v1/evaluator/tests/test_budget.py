@@ -28,7 +28,7 @@ class InputBudgetTest(unittest.TestCase):
             shutil.rmtree(FIXTURE_ROOT)
 
     def _run(self, size):
-        selected, root = launch(f"budget-{size}", source_bytes=65_536, subject_bytes=size)
+        selected, root = launch(f"budget-{size}", source_bytes=65_536, subject_bytes=None if size == 65_536 else 1)
         transport = CountingTransport()
         previous = pipeline._FIXTURE_EXECUTION_IDENTITY
         pipeline._FIXTURE_EXECUTION_IDENTITY = "sha256:" + "b" * 64

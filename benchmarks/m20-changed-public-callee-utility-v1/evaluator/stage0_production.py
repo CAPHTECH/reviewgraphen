@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
 from .canonical import canonical_bytes, parse_json_bytes
@@ -61,13 +64,52 @@ def resolve_corpus() -> list[dict]:
     return output
 
 
-def run_frozen_cluster_pipeline(cluster, build_root: Path) -> dict:
+def _stderr_text(value: bytes | str | None) -> str:
+    if isinstance(value, bytes): return value.decode("utf-8", "replace").strip()
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _record_pipeline_failure(diagnostic_build: Path, cluster_id: str, exit_code: int | None, stderr: str, reason: str, elapsed_seconds: float, stage0_code: str = "frozen_cluster_pipeline_failed") -> dict:
+    elapsed = f"{elapsed_seconds:.6f}"
+    failure = {"schema":"m20.stage0-cluster-pipeline-failure.v1", "commit_cluster_id":cluster_id, "product_exit_code":exit_code, "product_stderr":stderr, "typed_reason":reason, "elapsed_seconds":elapsed}
+    with (diagnostic_build / "pipeline-failure.v1.json").open("xb") as sink: sink.write(canonical_bytes(failure))
+    return {"schema":"m20.stage0-error-diagnostic.v1", "code":stage0_code, "commit_cluster_id":cluster_id, "product_exit_code":exit_code, "typed_reason":reason, "product_stderr":stderr, "elapsed_seconds":elapsed}
+
+
+def run_frozen_cluster_pipeline(cluster, build_root: Path, *, _pipeline_timeout: float = 1800, _max_files: int = 20000) -> dict:
     if not PIPELINE.is_file() or PIPELINE.is_symlink(): raise Stage0Error("frozen_cluster_pipeline_unavailable", 3)
-    request = {"schema":"reviewgraphen.generic_review_request.v3", "workspace_admission_root":".", "repository_admission_root":".", "repository_identity":cluster.repository_id, "base_revision":cluster.base_commit_oid, "target_revision":cluster.head_commit_oid, "ingest":{"profile_id":"rust.production.v1", "profile_version":"1", "rule_set_hash":PROFILE_HASH, "max_files":4096, "max_file_bytes":4194304, "max_total_source_bytes":67108864}, "plan":{"max_waves":1024, "max_obligations_per_wave":1024}, "observer":{"kind":"deterministic_abstain"}, "verifier_descriptor_id":"workspace.cargo_test@1", "context_policy_id":"context.subject_windows@3"}
+    # ADR 0038 §§5.4.1/11 and preregistration arm_neutral_contracts.ingest_admission:
+    # this is the v3 admission/resource ceiling, never a C/A/S/D denominator.
+    request = {"schema":"reviewgraphen.generic_review_request.v3", "workspace_admission_root":".", "repository_admission_root":".", "repository_identity":cluster.repository_id, "base_revision":cluster.base_commit_oid, "target_revision":cluster.head_commit_oid, "ingest":{"profile_id":"rust.production.v1", "profile_version":"1", "rule_set_hash":PROFILE_HASH, "max_files":_max_files, "max_file_bytes":4194304, "max_total_source_bytes":67108864}, "plan":{"max_waves":1024, "max_obligations_per_wave":1024}, "observer":{"kind":"deterministic_abstain"}, "verifier_descriptor_id":"workspace.cargo_test@1", "context_policy_id":"context.subject_windows@3"}
     request_path = build_root / "pipeline-request.v3.json"; request_path.write_bytes(canonical_bytes(request))
     artifact_root = build_root / "pipeline-artifacts"
-    result = subprocess.run([str(PIPELINE), "review", "--request", str(request_path), "--artifacts", str(artifact_root)], cwd=Path(cluster.repository_root), env={"PATH":"", "LC_ALL":"C"}, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, timeout=1800, check=False)
-    if result.returncode or result.stderr: raise Stage0Error("frozen_cluster_pipeline_failed")
+    stage_root = build_root.parents[2].resolve()
+    diagnostic_root = Path(tempfile.gettempdir()) / "m20-stage0-diagnostics" / hashlib.sha256(str(stage_root).encode()).hexdigest()
+    diagnostic_build = diagnostic_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / build_root.name
+    execution_root = diagnostic_build / "repository"
+    try:
+        diagnostic_build.mkdir(parents=True, exist_ok=False)
+        clone = subprocess.run([str(GIT), "clone", "--shared", "--no-checkout", "--quiet", cluster.repository_root, str(execution_root)], cwd=diagnostic_build, env=ENV, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, timeout=300, check=False)
+        if clone.returncode or clone.stderr:
+            raise Stage0Error("frozen_cluster_repository_copy_failed")
+        started = time.monotonic()
+        try:
+            result = subprocess.run([str(PIPELINE), "review", "--request", str(request_path.resolve()), "--artifacts", "pipeline-artifacts", "--diagnostics", "generic-review-diagnostics.v1.json"], cwd=execution_root, env={"PATH":"/usr/bin", "LC_ALL":"C"}, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, timeout=_pipeline_timeout, check=False)
+        except subprocess.TimeoutExpired as error:
+            diagnostic = _record_pipeline_failure(diagnostic_build, cluster.commit_cluster_id, None, _stderr_text(error.stderr), "timeout", time.monotonic() - started)
+            raise Stage0Error("frozen_cluster_pipeline_failed", diagnostic=diagnostic) from error
+        product_diagnostic = execution_root / "generic-review-diagnostics.v1.json"
+        if product_diagnostic.is_file(): product_diagnostic.replace(diagnostic_build / product_diagnostic.name)
+        if result.returncode or result.stderr:
+            stderr = _stderr_text(result.stderr)
+            overflow = "Git tree contains more than the configured " in stderr and " regular-file bound" in stderr
+            code = "stage0_ingest_max_files_exceeded" if overflow else "frozen_cluster_pipeline_failed"
+            reason = code if overflow else "product_cli_error"
+            diagnostic = _record_pipeline_failure(diagnostic_build, cluster.commit_cluster_id, result.returncode, stderr, reason, time.monotonic() - started, code)
+            raise Stage0Error(code, diagnostic=diagnostic)
+        (execution_root / "pipeline-artifacts").replace(artifact_root)
+    finally:
+        if execution_root.exists(): shutil.rmtree(execution_root)
     try: run = parse_json_bytes(result.stdout)
     except ValueError as error: raise Stage0Error("frozen_cluster_pipeline_output_invalid") from error
     obligations = sorted(item["id"] for item in run.get("obligation_contract", []) if item.get("rule_id") == "relation.changed_public_callee@1" and item.get("applicability_status") == "applicable")

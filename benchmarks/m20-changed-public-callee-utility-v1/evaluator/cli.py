@@ -37,5 +37,8 @@ def main(argv=None):
             if output.exists() or output.is_symlink(): raise PipelineError("output_exists",2)
             result=freeze_manifest(root,design); output.write_bytes(canonical_bytes(result)); _emit(result); return 0
         manifest=parse_json_bytes(Path(args.manifest).read_bytes()); result=verify_manifest(root,design,manifest); _emit(result); return 0 if result["ok"] else 3
-    except (PipelineError,Stage0Error) as error: _emit({"schema":"m20.cli-error.v1","code":error.code}); return error.exit_code
+    except (PipelineError,Stage0Error) as error:
+        _emit({"schema":"m20.cli-error.v1","code":error.code})
+        if isinstance(error,Stage0Error) and error.diagnostic is not None: sys.stderr.buffer.write(canonical_bytes(error.diagnostic)+b"\n")
+        return error.exit_code
     except (OSError,ValueError,KeyError) as error: _emit({"schema":"m20.cli-error.v1","code":"invalid_input"}); return 2

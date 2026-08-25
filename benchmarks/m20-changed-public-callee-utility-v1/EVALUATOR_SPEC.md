@@ -1,7 +1,7 @@
 # m20 executable evaluator specification
 
 Status: single-pipeline implementation specification, version
-`m20-evaluator.pipeline.v1`.
+`m20-evaluator.pipeline.v2`.
 
 This document is normative only until the evaluator bundle described in
 section 12 is implemented and frozen. After freeze, the hash-bound evaluator,
@@ -343,11 +343,11 @@ did not decode are inapplicable, not inferred failures.
 
 ### 3.1 Packet DTO
 
-Only `pipeline.py` constructs `arm-neutral.source-grounded-packet@2`; there is
+Only pipeline v2 constructs `arm-neutral.source-grounded-packet@3`; there is
 no function accepting a packet. Its audit/model serialization is a closed
 object with exactly:
 
-- `schema`, constant `arm-neutral.source-grounded-packet@2`;
+- `schema`, constant `arm-neutral.source-grounded-packet@3`;
 - `task_id`, matching `^review-task:sha256:[0-9a-f]{64}$`;
 - `instruction`, byte-equal to the frozen common instruction template;
 - `response_schema`, the complete closed
@@ -356,7 +356,20 @@ object with exactly:
 - `payloads`, section 3.3.
 
 A and B have byte-identical `task_id`, `instruction`, and `response_schema`.
-Only `source_inventory` and `payloads` may differ. Packet hash is `H(packet)`.
+Before packet construction the pipeline forms one shared change-evidence core:
+the complete three-line-expanded/merged profile-defined production diff plus
+the selected callee's complete exact head implementation range. A contains
+exactly that core. B contains the byte-identical core union the admitted
+`context.subject_windows@3` sources. Exact physical source duplicates are
+serialized once and conflicting duplicates are rejected; test files receive
+no exception to the profile. Only B's additional windows may differ. Packet
+hash is `H(packet)`.
+
+The superseded @2 constructor is compatibility-only and is never selected by
+pipeline v2 or accepted by its audit decoder. For the literal empty-source
+compatibility fixture with task ID `review-task:legacy`, its 3,375 canonical
+bytes remain `sha256:6e11066715318cdcca91dc2e8669d5631449853fab23b6ba477f0fa7011c087c`.
+Every @2/@3 cross-decode is rejected.
 `admitted_source_bytes` is the integer sum of `source.bytes` over source
 records, even when two records deduplicate to one payload; it is bounded by
 65,536. `payload_table_utf8_bytes` is separately the sum of `UTF8(text)` byte
@@ -1246,6 +1259,7 @@ These are applied source mutations, not manifest-only rows:
 | CTX05 | change the independent-oracle source hash | C11/C12 fails |
 | CTX06 | change the pre-seal measurement hash | C11/C13 fails |
 | CTX07 | remove the production-helper-reuse mutant | C11/C14 fails |
+| PKT01 | remove the shared core from one arm | the packet-core equality oracle fails |
 | SC01 | substitute the runtime hash for the semantic-reference input | C16 fails |
 | SC02 | remove `measurement_record_sha256` from the implementation manifest key literal | normative spec check fails |
 
@@ -1290,7 +1304,7 @@ different claims.
 The portable identity is computed without inspecting the current process:
 
 `evaluator_bundle_sha256 = H({schema:"m20.evaluator_bundle.v1",
-evaluator_version:"m20-evaluator.pipeline.v1",files})`.
+evaluator_version:"m20-evaluator.pipeline.v2",files})`.
 
 Thus any clone containing byte-identical canonical evaluator files reproduces
 the same bundle hash on any host. Runtime, design-document bytes, executable,
@@ -1448,7 +1462,26 @@ public CLI surface but not a corpus/identity input, and its value is absent from
 every output, manifest, hash, gate, and selection input. Each job
 owns one cluster directory, runs that cluster's two builds against distinct
 empty output/cache directories, and shares no mutable cache or reduction state
-with another job. The reducer waits for 300 unique
+with another job. The product CLI runs from an independent root-external
+repository copy and receives the literal repository-relative
+`pipeline-artifacts` argument required by its admission contract. Its v3
+request uses the ADR sections 5.4.1 and 11 `max_files=20000` ingest admission
+bound: the closed v3 schema maximum and the already fixed quickstart value,
+chosen instead of a corpus-fitted 5,000 cutoff after the measured complete
+4,816-file denominator. This resource bound does not change `C`, `A`, `S`, or
+`D`; overflow is a typed Stage 0 failure and never truncation, cluster removal,
+or model ineligibility. The separate materialized-source candidate bound
+remains 4,096. On success that
+directory moves to the canonical
+`clusters/<digest>/build-N/pipeline-artifacts` location and the repository copy
+is removed. Absolute and traversing `--artifacts` arguments are forbidden.
+Product diagnostics and, for every failed invocation, a create-new record of
+commit-cluster ID, product exit code, and stderr typed error exist only below
+`/tmp/m20-stage0-diagnostics/<output-root-digest>/clusters/<digest>/build-N/`.
+They never enter an output, manifest, hash, gate, identity, or selection
+preimage. `frozen_cluster_pipeline_failed` also writes a non-normative stderr
+JSON record with the first observed failed cluster ID and product exit code.
+The reducer waits for 300 unique
 terminal cluster IDs and sorts by their UTF-8 bytes; it never consumes
 submission or completion order.
 

@@ -42,8 +42,8 @@ class MutationSweepTest(unittest.TestCase):
         self.assertEqual(before, {path:(root / path).read_bytes() for path in MODULES})
         self.assertEqual({path for path,(category,_) in MODULES.items() if category == "scoring-relevant"}, {"canonical.py","source_payload.py","textnorm.py","repository.py","model_boundary.py","stage0_contract.py","pipeline.py"})
         self.assertEqual(Counter(classify_mutant(row)[0] for row in mutants), {
-            "SCORE_AFFECTING": 3990,
-            "NON_SCORE": 123,
+            "SCORE_AFFECTING": 4033,
+            "NON_SCORE": 132,
             "EQUIVALENT": 6,
         })
 

@@ -1031,3 +1031,10 @@ primary completed: **low-32k structured 2/3 / free-form 1/3、xhigh-32k structur
 5/12 が 32,000 tokens 到達（32k でも完了性問題が残る）。free-form usable 所見の structured packet 内再現性 **0/2**
 （base→head diff と更新 test、remove 実装が packet 外）。合計 12,494 s。judge は TP/FP を判定せず、真実ではない。
 harness 差分: Stage 0 manifest 不在、casegraphen baseline 65,536 B 超過、FSL symlink。旧非対称結果は無効枠保存。
+
+## 裁定（Stage 1 前、sol-audit）
+1. 出力予算 pin **12,000 / 900 s を維持**（観測後に 32k へ変える事前規則が無く、32k でも 5/12 到達。予算終了は欠測でなく primary 0 として公開）。再 seal 不要
+2. **packet 改訂**: 両 arm に同一の shared core（profile-defined の完全 base→head diff + 選択 callee の完全 head 実装）。A = core のみ、B = core + subject_windows@3。測るのは共通変更根拠に対する**文脈の増分効用**。packet @3 / pipeline v2 へ版上げ → atomic 再 seal、Stage 0 再実行。C/A/S/D・7 gates・DTO hash 不変
+→ seal 6（sweep 中）は packet@3 で即 supersede されるため中止し、packet@3 実装後に seal 7 で 1 回。
+- seal 6 中止確認（sweep プロセス 0）。custodian は /tmp の seal6 一時物を削除中
+- packet@3 / pipeline v2 実装（sollow-eval2）: 両 arm shared core（完全 diff + callee 実装）、B のみ windows、@2 bytes 固定 + cross-decode 拒否、fixtures/SC01/02/PKT01 更新、unittest 67/67、vectors 74/74、attacks 73/73、片 arm core 欠落変異検出。→ 私の検証 + Wave 22

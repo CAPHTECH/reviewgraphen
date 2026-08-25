@@ -42,8 +42,9 @@ MUTATIONS = {
     "CTX03": ("stage0_contract.py", "if set(admitted_anchor_ids) & set(lost_anchor_ids) or set(admitted_anchor_ids) | set(lost_anchor_ids) != set(anchor_ids):", "if False:"),
     "CTX04": ("semantic_acceptance.py", 'ALGORITHM_ID = "context.subject_windows.v3.semantic_acceptance.option_c@1"', 'ALGORITHM_ID = "context.subject_windows.v3.semantic_acceptance.option_b@1"'),
     "CTX05": ("semantic_acceptance.py", '"sha256:4afb9ed6e6c07c3c23367c5bd2e8729d413de0064aacc9324ce2b6f492c52a94"', '"sha256:0afb9ed6e6c07c3c23367c5bd2e8729d413de0064aacc9324ce2b6f492c52a94"'),
-    "CTX06": ("semantic_acceptance.py", 'MEASUREMENT_SHA256 = "sha256:9acf4adcdbe588b198eb7d6bcf553a2e13519b614d641c1fe211a0e18f479ad7"', 'MEASUREMENT_SHA256 = "sha256:0acf4adcdbe588b198eb7d6bcf553a2e13519b614d641c1fe211a0e18f479ad7"'),
+    "CTX06": ("semantic_acceptance.py", 'MEASUREMENT_SHA256 = "sha256:7286d700f8684893477c8e6660986239cc52ffde35394160fc1ab844e642a7b8"', 'MEASUREMENT_SHA256 = "sha256:8286d700f8684893477c8e6660986239cc52ffde35394160fc1ab844e642a7b8"'),
     "CTX07": ("semantic_acceptance.py", '    "production-helper-reuse",\n', ''),
+    "PKT01": ("pipeline.py", "treatment_specs = _union_specs(core_specs, obligation[\"sources\"])", "treatment_specs = obligation[\"sources\"]"),
     "SC01": ("spec_contract.py", '        "semantic_acceptance_reference_sha256": semantic_acceptance_reference_sha256,', '        "semantic_acceptance_reference_sha256": runtime_requirements_sha256,'),
     "SC02": ("spec_contract.py", '    "measurement_record_sha256",\n', ''),
 }

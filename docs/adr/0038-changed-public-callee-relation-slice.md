@@ -1034,6 +1034,17 @@ of serialized detail rows:
    accepted owner, inclusive range)` satisfying section 5.2's reached and
    exact-path rules.
 
+Every m20 Stage 0 product request sets `ingest.max_files` to exactly **20,000**,
+the closed v3 request-schema maximum and the value already fixed by the section
+11 quickstart. This admits the measured complete 4,816-file denominator without
+introducing a corpus-fitted 5,000 cutoff. It is an ingest admission/resource
+bound, not a Stage 0 sampling or coverage denominator: `C` remains all 300
+clusters, and `A_c`, `S_c`, and `D_c` are derived only from each cluster's
+complete accepted facts. Exceeding 20,000 is a typed Stage 0 failure; it may not
+truncate the accepted-file set, remove the cluster from `C`, or reinterpret it
+as model-ineligible. The separate materialized-source bound remains 4,096. This
+literal is included in the sixth atomic m20 seal.
+
 Each domain is serialized as a closed known-cardinality commitment containing
 `cardinality = "known"`, checked `observed_count`, and
 `sorted_id_set_sha256`. The digest is SHA-256 of the canonical sorted JSON
@@ -1434,6 +1445,36 @@ ranges, hashes, and bytes, but not their caller/callee/subject roles. A and B
 must receive byte-identical task ID, disposition schema, and instruction. Only
 their admitted source inventory and corresponding inventory/hash IDs differ.
 
+Before adding arm-specific sources, the evaluator constructs one
+**shared change-evidence core** from the authenticated selected-D binding and
+the pinned base/head trees. It contains (a) the complete profile-defined
+base/head production-diff inventory produced by the frozen baseline planner,
+using its existing three-line expansion and merge rules, and (b) the selected
+changed public callee's exact complete head implementation source range. These
+bytes, normalized paths, ranges, snapshot sides, IDs, and hashes are identical
+in A and B; visible roles
+remain only the generic `changed`, `context`, or `support` vocabulary and never
+reveal the binding. A is exactly this core. B is the union of this core and the
+admitted `context.subject_windows@3` inventory. Exact duplicate source
+keys/payloads are serialized once; a conflicting duplicate is invalid. The complete union in
+each arm independently remains subject to the frozen 65,536-byte ceiling, with
+no padding or truncation. Failure to derive or close a mandatory core source is
+the same typed task-blocking source/reference loss in both arms and must never
+be silently omitted.
+
+Thus m20 measures the incremental utility of subject-window context beyond a
+shared task/change basis; it does not compare a diff-aware baseline with a
+change-blind projection. Updated tests are included in both arms when the
+already frozen profile/baseline rules admit their changed hunks; other context
+remains included only when the subject-window rules admit it. There is no
+special test-file exception. This is an evaluator packet-contract
+change, not a change to `context.subject_windows@3`, its DTO, projection hash,
+or the C/A/S/D denominators. The packet constructor, schemas, hidden bindings,
+reference vectors, attacks, and hashes require one new atomic seal. Stage 0's
+semantic sets and seven gate definitions are unchanged, but packet byte counts,
+model eligibility, and the Stage 1 selection manifest can change, so Stage 0
+must be rerun under that seal and an earlier Stage 0 output is not reusable.
+
 The property relation remains auditable through a **hidden task binding** in
 every canonical run v3 participating in m20. For each task, the binding
 contains task ID, comparison/unit IDs, exact sorted obligation IDs,
@@ -1577,12 +1618,15 @@ authority ceiling.
 
 The two packet families are non-substitutable: their schema names, task-ID
 kinds, response schemas, builders, and audit bindings differ, and every
-cross-decode or cross-binding must fail. The m20 pipeline continues to be the
-only constructor of `arm-neutral.source-grounded-packet@2` and continues to
-reject caller-supplied packets. This packet-family separation by itself changes
-no frozen m20 file or algorithm. Section 5.4 independently changes m20 context
-construction and was included in the completed coordinated re-freeze specified
-in sections 3.4 and 5.4.3.
+cross-decode or cross-binding must fail. The superseded sealed m20 pipeline was
+the only constructor of `arm-neutral.source-grounded-packet@2`; the section 8.2
+shared-change-evidence successor is
+`arm-neutral.source-grounded-packet@3`. Its pipeline remains the only
+constructor and continues to reject caller-supplied packets. The packet-family
+separation itself changes no m20 algorithm; the explicit section 8.2 amendment
+does and therefore requires the stated successor seal. Section 5.4 independently
+changes m20 context construction and was included in the completed coordinated
+re-freeze specified in sections 3.4 and 5.4.3.
 Allowing m20 to accept or
 construct the provider-free contract would instead require a new evaluator
 version and complete re-freeze.
@@ -1926,6 +1970,21 @@ generalization. Changing the primary endpoint, timeout classification, unit,
 thresholds, or missing-data rule after observing an arm result creates a new
 versioned experiment; it cannot replace a failed frozen result.
 
+The excluded, nonregistered corrected pilot observed only one of six completed
+primary outcomes at the frozen 12,000-token output request and five of twelve
+responses reaching 32,000 tokens under the exploratory condition. This does
+not authorize a new m20 output cap: no preregistered selection or stopping rule
+chooses 32,000, and that value demonstrably does not eliminate truncation.
+Accordingly m20 retains the common 12,000-token request and 900-second hard
+timeout. A budget terminal is a primary zero under the frozen bounded-utility
+estimand, not missing data, and arm-specific completion/truncation must be
+published. A higher-budget question is a new versioned experiment and cannot
+replace m20; no seal or time rectangle changes solely for this ruling.
+
+M21 must likewise keep task/change evidence common when it compares context
+construction treatments, but this m20 ruling neither freezes nor otherwise
+changes that separate benchmark.
+
 ### 11. Clone-reproducible provider-free quickstart
 
 Implementation of this ADR is incomplete until a normal clone contains this
@@ -1954,8 +2013,9 @@ active quickstart contract and must not be relabeled or rewritten as v3.
   `8569a2261e8a62145228872a2fde9f4c48093d00`. It uses
   `rust.production.v1`, the D `@1` rule/property contract,
   `context.subject_windows@3`, `deterministic.abstain@1`, and verification
-  disabled. It contains no provider executable, credential, replay record,
-  fixture key, machine-specific absolute path, branch name, or mutable `HEAD`.
+  disabled, with `ingest.max_files` exactly 20,000. It contains no provider
+  executable, credential, replay record, fixture key, machine-specific absolute
+  path, branch name, or mutable `HEAD`.
 - `expected-hashes.json` is a closed canonical JSON object that pins the request
   SHA-256, the exact first/second exit codes, and a sorted map from every
   expected artifact path to its literal lowercase `sha256:<64 hex>` value and
