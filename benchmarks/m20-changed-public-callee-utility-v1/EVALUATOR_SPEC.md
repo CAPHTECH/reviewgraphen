@@ -189,12 +189,14 @@ Per-rule coverage contains exactly
 `enumeration_obstruction_summary_ids`, `enumeration_limitation_ids`, their
 sorted union `enumeration_obstruction_ids`,
 `observed_unresolved_call_occurrence_count`, and
-`occurrence_id_set_sha256`. It is rebuilt from the report. The Stage-0 metric
-record carries integer milliseconds, peak bytes, exact canonical report
-bytes, summary-row count, and observed occurrence count per cluster. The
-measured 183.2 seconds per cluster (about 15.3 serial hours for 300 clusters)
-and the rejected 96,329,400-row projection are operational observations, not
-changed gates or denominators.
+`occurrence_id_set_sha256`. It is rebuilt from the report. Canonical Stage-0
+closure may retain only deterministic report bytes, summary-row count, and
+observed occurrence count. Wall time, process CPU time, peak bytes, worker
+count/utilization, and scheduling order are noncanonical operational
+diagnostics outside the Stage-0 output root and every artifact/hash preimage.
+The measured 183.2 seconds per cluster (about 15.3 serial hours for 300
+clusters) and the rejected 96,329,400-row projection are pre-seal operational
+observations, not changed gates or denominators.
 
 The v2 context tuple remains an immutable compatibility literal:
 
@@ -1394,6 +1396,7 @@ named in section 11; a separate shallow freeze-only test path is forbidden.
 
 The CLI surface is fixed:
 
+- `python3 -m evaluator stage0 NEW_OUTPUT_ROOT [--jobs N]`
 - `python3 -m evaluator run FROZEN_LAUNCH NEW_OUTPUT_ROOT`
 - `python3 -m evaluator verify-run RUN_ROOT`
 - `python3 -m evaluator generate-fixtures --check`
@@ -1419,6 +1422,66 @@ file, parsed output, asserted hash, packet, status, loss, binding, candidate,
 batch, score, seed, arbitrary module/command/shell string, network location, or
 repository outside the authenticated allow list. Old intermediate subcommands
 must be absent, not retained as undocumented aliases.
+
+### 13.1 Frozen Stage 0 production entrance
+
+`stage0` accepts exactly one initially nonexistent destination, the optional
+operational `--jobs` control described below, and no corpus, packet, score,
+model result, clock, seed, or asserted intermediate input. Before corpus
+resolution or root creation it loads `preregistration.json`, requires every
+active hash/path to be non-null, hashes the exact manifest bytes and matches
+`freeze_manifest_sha256`, matches manifest bundle/execution hashes to their
+active slots, requires manifest `supersedes_freeze_manifest_sha256` to equal the
+last `freeze_history` manifest hash, and requires `verify-frozen` to return
+`ok=true`; otherwise it refuses without repository observation. It
+enumerates the frozen corpus, rejects any frame other than 300 unique clusters,
+and invokes the existing frozen generic v3 pipeline twice from independently
+empty `build-1` and `build-2` directories for every cluster. The driver owns
+only typed closure validation, exact-set reductions, the seven frozen gates,
+and label-independent selection. It invokes no reviewer or judge transport.
+
+The driver schedules clusters concurrently. It computes its worker
+ceiling once as `max(1, min(16, available_logical_cpus - 2))`, with unavailable
+CPU count or a count at most two yielding one worker. The optional `--jobs`
+operational argument may select a width from one through that ceiling; it is
+public CLI surface but not a corpus/identity input, and its value is absent from
+every output, manifest, hash, gate, and selection input. Each job
+owns one cluster directory, runs that cluster's two builds against distinct
+empty output/cache directories, and shares no mutable cache or reduction state
+with another job. The reducer waits for 300 unique
+terminal cluster IDs and sorts by their UTF-8 bytes; it never consumes
+submission or completion order.
+
+The complete output tree, every file byte, artifact-manifest hash, gate result,
+and selection-manifest hash MUST be identical for one worker and the computed
+ceiling. Acceptance injects widths 1 and the ceiling plus reversed completion
+order over the same fixed corpus. Worker count/order, PID, host, wall time,
+per-cluster process CPU time, peak bytes, and utilization are excluded from all
+canonical values. Optional timing diagnostics are written only outside the
+closed output root and cannot affect a gate, identity, or selection.
+
+For canonical repository ID `r`, base object ID `b`, and head object ID `h`,
+the implementation computes exactly
+`D("commit-cluster",{"cluster_contract":"m20.commit_cluster@1",
+"experiment_id":"m20-changed-public-callee-utility-v1",
+"repository_id":r,"base_commit_oid":b,"head_commit_oid":h})`.
+The literal, non-generator-derived reference vector is:
+
+```json
+{"base_commit_oid":"0123456789abcdef0123456789abcdef01234567","commit_cluster_id":"commit-cluster:sha256:f140a5acf366f5e1195aed47206d17c9c858c8d5a4821181f1588aa02261787e","head_commit_oid":"89abcdef0123456789abcdef0123456789abcdef","repository_id":"github.com/example/repository"}
+```
+
+The root is closed to `corpus-manifest.v1.json`, the 300 digest-named cluster
+directories with two clean build directories, `stage0-result.v1.json`,
+`stage0-selection.v1.json`, and `artifact-manifest.v1.json`. The artifact
+manifest lists every file; its own row is an explicit self-description marker,
+not a circular self-hash. Missing, duplicate, foreign, reordered, unlisted, or
+nondeterministic material is a typed refusal.
+
+`m20.stage0-selection.v1` is a distinct launch-authorization type. It contains
+only eligible IDs, frozen hash order, cumulative 10/40 memberships, and its
+seal. The primary scorer rejects that type before inspecting score fields, so
+Stage 0 cannot contribute to `n`, `b`, `c`, `n00`, or a primary cell.
 
 Implementation acceptance is the conjunction of the named section 11 oracles,
 byte-identical full-run regeneration, unchanged original 52-vector

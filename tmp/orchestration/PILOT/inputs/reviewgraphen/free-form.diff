@@ -1,0 +1,83 @@
+diff --git a/crates/reviewgraphen-core/src/context.rs b/crates/reviewgraphen-core/src/context.rs
+index bf3a82f..4ec5cc7 100644
+--- a/crates/reviewgraphen-core/src/context.rs
++++ b/crates/reviewgraphen-core/src/context.rs
+@@ -1942,12 +1942,32 @@ pub fn prepare_context(
+         let (Some(start), Some(end)) = (location.start_line, location.end_line) else {
+             continue;
+         };
+-        let owners = file_for.get(&artifact.id).ok_or_else(|| {
+-            DomainError::Validation(format!(
+-                "reached range-bearing artifact {} has no containing candidate file",
+-                artifact.id
+-            ))
+-        })?;
++        // ADR 0016 defines a file's anchors as exactly the range-bearing
++        // locations whose owner is reached *and* whose path equals that
++        // file's path through the accepted reverse-`contains` closure. An
++        // artifact that lies outside every file's containment closure
++        // therefore satisfies no file's anchor definition: it is not an
++        // anchor, and that is not a failure.
++        //
++        // ProgramSpace never promised that every range-bearing artifact has
++        // a containing file. `contains` is one relation kind among many
++        // (docs/03_conceptual_model.md), and M2's containment family is
++        // exactly file -> module and module -> declared symbol
++        // (docs/20_m2_ingestion_contract.md). A `state:*` write target is a
++        // syntactic assignment target, not a declared symbol, so it is
++        // deliberately linked by `writes` alone -- and since the change
++        // family gained its own `contains` edges it became *reachable*
++        // without ever becoming *contained*. Demanding a containment parent
++        // here asked ProgramSpace to be shaped the way this one traversal
++        // happened to expect. Discovery already tolerates the shape
++        // everywhere else: a node with an empty containing-file closure
++        // simply contributes no candidate file, no path-cap entry, and no
++        // test-cap entry. Only the exact-path check below is a real
++        // integrity claim -- an artifact located in one file must never be
++        // contained by another.
++        let Some(owners) = file_for.get(&artifact.id) else {
++            continue;
++        };
+         let mut matched = false;
+         for owner in owners {
+             let Some(index) = candidate_indexes.get(owner).copied() else {
+@@ -5090,8 +5110,17 @@ mod tests {
+         );
+     }
+ 
++    /// A range-bearing artifact outside every file's reverse-`contains`
++    /// closure is not an anchor of any file, which is what ADR 0016's anchor
++    /// definition says and not a defect: `contains` is one relation kind
++    /// among many, and ProgramSpace never promised that everything with a
++    /// location is a member of a file. Discovery already draws that
++    /// conclusion silently -- such a node contributes no candidate file --
++    /// so anchoring must draw it too. The exact-path claim is different: an
++    /// artifact that *is* contained by a file must be located in that file,
++    /// and a violation is still a typed failure.
+     #[test]
+-    fn reached_range_locations_require_containment_and_exact_owner_path() {
++    fn reached_range_locations_without_containment_are_not_anchors_but_owner_path_must_match() {
+         let mut missing = context_ready_program_value();
+         missing["relations"]
+             .as_array_mut()
+@@ -5099,11 +5128,15 @@ mod tests {
+             .retain(|relation| relation["kind"] != "contains");
+         let (missing_aggregate, _) = fixture_from_program_value(missing, default_source_bytes());
+         let obligation = missing_aggregate.obligations().next().unwrap().id().clone();
+-        assert!(matches!(
+-            prepare_context(&missing_aggregate, obligation),
+-            Err(ContextError::Domain(DomainError::Validation(message)))
+-                if message.contains("has no containing candidate file")
+-        ));
++        let session = prepare_context(&missing_aggregate, obligation)
++            .expect("an unparented range-bearing artifact is not an anchor, not a failure");
++        assert!(
++            session
++                .candidates
++                .iter()
++                .all(|candidate| candidate.anchors.is_empty()),
++            "with no accepted containment there is no anchor to attribute to any file"
++        );
+ 
+         let mut mismatched = context_ready_program_value();
+         for artifact in mismatched["artifacts"].as_array_mut().unwrap() {

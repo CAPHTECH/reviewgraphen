@@ -1,0 +1,317 @@
+diff --git a/src/resource_protocol.rs b/src/resource_protocol.rs
+index 9920a24..17f285c 100644
+--- a/src/resource_protocol.rs
++++ b/src/resource_protocol.rs
+@@ -95,6 +95,149 @@ pub struct RateLimitCapacity {
+     pub capacity: u32,
+ }
+ 
++/// Canonical derived occupancy used by long-lived allocators. Fields are
++/// private so callers cannot assert occupancy; construct it from canonical
++/// active reservations or let the allocator maintain it after durable events.
++#[derive(Clone, Debug, Default, Eq, PartialEq)]
++pub struct ResourceOccupancyIndex {
++    reservation_ids: BTreeSet<String>,
++    attempt_ids: BTreeSet<String>,
++    resources: BTreeMap<String, ResourceModeOccupancy>,
++    rate_limit_units: BTreeMap<String, u64>,
++}
++
++#[derive(Clone, Debug, Default, Eq, PartialEq)]
++struct ResourceModeOccupancy {
++    readers: BTreeSet<String>,
++    writers: BTreeSet<String>,
++    exclusive: BTreeSet<String>,
++}
++
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub(crate) enum ResourceOccupancyIndexError {
++    MissingReservationIdentity,
++    MissingAttemptIdentity,
++    MissingResourceHolder(String),
++    MissingRateLimitUsage(String),
++    RateLimitUsageUnderflow(String),
++}
++
++impl ResourceOccupancyIndex {
++    /// Derive occupancy from the exact canonical active reservation set.
++    pub fn from_active_reservations(active: &[ResourceReservation]) -> Self {
++        let mut index = Self::default();
++        for reservation in active {
++            index.insert(reservation);
++        }
++        index
++    }
++
++    pub(crate) fn insert(&mut self, reservation: &ResourceReservation) {
++        self.reservation_ids
++            .insert(reservation.reservation_id.clone());
++        self.attempt_ids.insert(reservation.attempt_id.clone());
++        for grant in &reservation.grants {
++            let holders = self.resources.entry(grant.resource_id.clone()).or_default();
++            match grant.mode {
++                ResourceMode::Read => &mut holders.readers,
++                ResourceMode::Write => &mut holders.writers,
++                ResourceMode::Exclusive => &mut holders.exclusive,
++            }
++            .insert(reservation.reservation_id.clone());
++            if let Some(group) = &grant.rate_limit_group {
++                *self.rate_limit_units.entry(group.clone()).or_default() +=
++                    u64::from(grant.rate_limit_units);
++            }
++        }
++    }
++
++    pub(crate) fn remove(
++        &mut self,
++        reservation: &ResourceReservation,
++    ) -> Result<(), ResourceOccupancyIndexError> {
++        if !self.reservation_ids.contains(&reservation.reservation_id) {
++            return Err(ResourceOccupancyIndexError::MissingReservationIdentity);
++        }
++        if !self.attempt_ids.contains(&reservation.attempt_id) {
++            return Err(ResourceOccupancyIndexError::MissingAttemptIdentity);
++        }
++        for grant in &reservation.grants {
++            let Some(holders) = self.resources.get(&grant.resource_id) else {
++                return Err(ResourceOccupancyIndexError::MissingResourceHolder(
++                    grant.resource_id.clone(),
++                ));
++            };
++            let mode_holders = match grant.mode {
++                ResourceMode::Read => &holders.readers,
++                ResourceMode::Write => &holders.writers,
++                ResourceMode::Exclusive => &holders.exclusive,
++            };
++            if !mode_holders.contains(&reservation.reservation_id) {
++                return Err(ResourceOccupancyIndexError::MissingResourceHolder(
++                    grant.resource_id.clone(),
++                ));
++            }
++            if let Some(group) = &grant.rate_limit_group {
++                let Some(units) = self.rate_limit_units.get(group) else {
++                    return Err(ResourceOccupancyIndexError::MissingRateLimitUsage(
++                        group.clone(),
++                    ));
++                };
++                if units
++                    .checked_sub(u64::from(grant.rate_limit_units))
++                    .is_none()
++                {
++                    return Err(ResourceOccupancyIndexError::RateLimitUsageUnderflow(
++                        group.clone(),
++                    ));
++                }
++            }
++        }
++        self.reservation_ids.remove(&reservation.reservation_id);
++        self.attempt_ids.remove(&reservation.attempt_id);
++        let mut empty_resources = Vec::new();
++        for grant in &reservation.grants {
++            let Some(holders) = self.resources.get_mut(&grant.resource_id) else {
++                return Err(ResourceOccupancyIndexError::MissingResourceHolder(
++                    grant.resource_id.clone(),
++                ));
++            };
++            match grant.mode {
++                ResourceMode::Read => &mut holders.readers,
++                ResourceMode::Write => &mut holders.writers,
++                ResourceMode::Exclusive => &mut holders.exclusive,
++            }
++            .remove(&reservation.reservation_id);
++            if holders.readers.is_empty()
++                && holders.writers.is_empty()
++                && holders.exclusive.is_empty()
++            {
++                empty_resources.push(grant.resource_id.clone());
++            }
++            if let Some(group) = &grant.rate_limit_group {
++                let Some(units) = self.rate_limit_units.get_mut(group) else {
++                    return Err(ResourceOccupancyIndexError::MissingRateLimitUsage(
++                        group.clone(),
++                    ));
++                };
++                let Some(remaining) = units.checked_sub(u64::from(grant.rate_limit_units)) else {
++                    return Err(ResourceOccupancyIndexError::RateLimitUsageUnderflow(
++                        group.clone(),
++                    ));
++                };
++                *units = remaining;
++                if *units == 0 {
++                    self.rate_limit_units.remove(group);
++                }
++            }
++        }
++        for resource in empty_resources {
++            self.resources.remove(&resource);
++        }
++        Ok(())
++    }
++}
++
+ #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+ #[serde(deny_unknown_fields)]
+ pub struct RuntimeResourceAllocation {
+@@ -226,44 +369,66 @@ pub fn grant_reservation(
+     assertions: &[ReservationDispositionAssertion],
+     capacities: &[RateLimitCapacity],
+ ) -> Result<ResourceReservation, Vec<ResourceProtocolFinding>> {
+-    let mut findings = validate_declaration_and_reservation(declaration, candidate);
+     let active = existing
+         .iter()
+         .filter(|reservation| reservation_is_active(reservation, assertions))
++        .cloned()
+         .collect::<Vec<_>>();
++    let occupancy = ResourceOccupancyIndex::from_active_reservations(&active);
++    grant_indexed_reservation(declaration, candidate, &occupancy, capacities)
++}
+ 
+-    for reservation in &active {
+-        if reservation.reservation_id == candidate.reservation_id {
+-            findings.push(finding(
+-                "duplicate_reservation_id",
+-                None,
+-                Some(candidate.reservation_id.clone()),
+-                None,
+-                "an active reservation already uses this reservation id",
+-            ));
+-        }
+-        if reservation.attempt_id == candidate.attempt_id {
+-            findings.push(finding(
+-                "attempt_already_reserved",
+-                None,
+-                Some(candidate.reservation_id.clone()),
+-                None,
+-                "an active reservation already joins this attempt id",
+-            ));
+-        }
++/// Validate and grant against a canonical derived occupancy index. This is the
++/// single conflict/capacity evaluator used by both compatibility and allocator
++/// paths; the index changes lookup cost, not protocol meaning.
++pub fn grant_indexed_reservation(
++    declaration: &ResourceDeclaration,
++    candidate: &ResourceReservation,
++    occupancy: &ResourceOccupancyIndex,
++    capacities: &[RateLimitCapacity],
++) -> Result<ResourceReservation, Vec<ResourceProtocolFinding>> {
++    let mut findings = validate_declaration_and_reservation(declaration, candidate);
++    if occupancy
++        .reservation_ids
++        .contains(&candidate.reservation_id)
++    {
++        findings.push(finding(
++            "duplicate_reservation_id",
++            None,
++            Some(candidate.reservation_id.clone()),
++            None,
++            "an active reservation already uses this reservation id",
++        ));
++    }
++    if occupancy.attempt_ids.contains(&candidate.attempt_id) {
++        findings.push(finding(
++            "attempt_already_reserved",
++            None,
++            Some(candidate.reservation_id.clone()),
++            None,
++            "an active reservation already joins this attempt id",
++        ));
+     }
+-
+     for grant in &candidate.grants {
+-        for reservation in &active {
+-            for held in &reservation.grants {
+-                if held.resource_id == grant.resource_id && modes_conflict(held.mode, grant.mode) {
+-                    findings.push(finding(
+-                        "resource_conflict",
+-                        Some(grant.resource_id.clone()),
+-                        Some(reservation.reservation_id.clone()),
+-                        None,
+-                        "an active reservation holds a conflicting resource mode",
+-                    ));
++        if let Some(holders) = occupancy.resources.get(&grant.resource_id) {
++            let mut record_conflict = |reservation_id: &String| {
++                findings.push(finding(
++                    "resource_conflict",
++                    Some(grant.resource_id.clone()),
++                    Some(reservation_id.clone()),
++                    None,
++                    "an active reservation holds a conflicting resource mode",
++                ));
++            };
++            match grant.mode {
++                ResourceMode::Read => {
++                    holders.writers.iter().for_each(&mut record_conflict);
++                    holders.exclusive.iter().for_each(&mut record_conflict);
++                }
++                ResourceMode::Write | ResourceMode::Exclusive => {
++                    holders.readers.iter().for_each(&mut record_conflict);
++                    holders.writers.iter().for_each(&mut record_conflict);
++                    holders.exclusive.iter().for_each(&mut record_conflict);
+                 }
+             }
+         }
+@@ -306,18 +471,14 @@ pub fn grant_reservation(
+             ));
+         }
+     }
+-    let mut used = BTreeMap::<&str, u64>::new();
+-    for grant in active
+-        .iter()
+-        .flat_map(|reservation| reservation.grants.iter())
+-        .chain(&candidate.grants)
+-    {
++    let mut used = occupancy.rate_limit_units.clone();
++    for grant in &candidate.grants {
+         if let Some(group) = grant.rate_limit_group.as_deref() {
+-            *used.entry(group).or_default() += u64::from(grant.rate_limit_units);
++            *used.entry(group.to_owned()).or_default() += u64::from(grant.rate_limit_units);
+         }
+     }
+     for (group, units) in used {
+-        match capacity_by_group.get(group).copied() {
++        match capacity_by_group.get(group.as_str()).copied() {
+             Some(capacity) if units <= u64::from(capacity) => {}
+             Some(capacity) => findings.push(finding(
+                 "rate_limit_capacity_exceeded",
+@@ -375,6 +536,30 @@ pub fn grant_topology_reservation(
+     }
+ }
+ 
++/// Topology-bound variant of [`grant_indexed_reservation`] for long-lived
++/// canonical allocators.
++pub fn grant_indexed_topology_reservation(
++    topology: &ExecutionTopology,
++    declaration: &ResourceDeclaration,
++    candidate: &ResourceReservation,
++    occupancy: &ResourceOccupancyIndex,
++    capacities: &[RateLimitCapacity],
++) -> Result<ResourceReservation, Vec<ResourceProtocolFinding>> {
++    let mut findings = validate_resource_declaration(topology, declaration);
++    if let Err(mut grant_findings) =
++        grant_indexed_reservation(declaration, candidate, occupancy, capacities)
++    {
++        findings.append(&mut grant_findings);
++    }
++    findings.sort_by(finding_order);
++    findings.dedup();
++    if findings.is_empty() {
++        Ok(candidate.clone())
++    } else {
++        Err(findings)
++    }
++}
++
+ /// Validates the declaration/topology join without granting or reserving.
+ pub fn validate_resource_declaration(
+     topology: &ExecutionTopology,
+@@ -749,10 +934,6 @@ fn allocation_as_grant(allocation: &RuntimeResourceAllocation) -> ResourceGrant
+     }
+ }
+ 
+-fn modes_conflict(left: ResourceMode, right: ResourceMode) -> bool {
+-    left != ResourceMode::Read || right != ResourceMode::Read
+-}
+-
+ fn is_canonical_id(value: &str) -> bool {
+     let Some((namespace, identity)) = value.split_once(':') else {
+         return false;

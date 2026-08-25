@@ -1,0 +1,1 @@
+{"free_form_source_bytes":4577,"free_form_within_ceiling":true,"pair_id":"reviewgraphen","production_paths":["crates/reviewgraphen-core/src/context.rs"],"schema":"m20.nonregistered-pilot.input-metrics.v1","source_ceiling_bytes":65536,"structured_packet_count":2,"structured_source_bytes":24949,"structured_within_ceiling":true}

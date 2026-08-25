@@ -1,7 +1,7 @@
 {
   "schema": "reviewgraphen.benchmark.preregistration.v1",
   "experiment_id": "m20-changed-public-callee-utility-v1",
-  "status": "frozen-before-corpus-resolution",
+  "status": "pending-stage0-driver-atomic-refreeze",
   "question": "Over the frozen open-development commit sample, does one relation.changed_public_callee@1 obligation plus a context.subject_windows@3 packet increase usable source-grounded disposition completion relative to a base/head-production-diff-only review by the same model under the same 65536-byte admitted-source ceiling and common requested backend settings?",
   "authority_ceiling": "descriptive frozen-corpus evaluation only; no claim, judge result, or completion is verified, human-accepted, or defect truth",
   "frozen_identities": {
@@ -75,7 +75,7 @@
     "evaluator_version": "m20-evaluator.pipeline.v1",
     "implementation_language": "Python 3 standard library only",
     "implementation_path": "benchmarks/m20-changed-public-callee-utility-v1/evaluator/",
-    "implementation_status": "wave8_postseal_source_binding_atomic_refreeze_complete",
+    "implementation_status": "stage0_driver_contract_decided_refreeze_pending",
     "role_separation": {
       "evaluator_author": "independent evaluator agent",
       "slice_implementer": "Candidate D implementation agent",
@@ -98,7 +98,8 @@
         "one production run from authenticated repository/commit/obligation selectors with no intermediate artifact inputs",
         "exact internal occurrence-set rebuild into per-file summaries/report/coverage commitments and per-cluster resource metrics",
         "context.subject_windows@3 four-denominator rebuild, subject-first materialization, exact anchor partition, latent union, and projection hash",
-        "Option C independent accepted/reached/support-anchor reconstruction, production replay comparison, semantic mutants, and pre-seal measurements"
+        "Option C independent accepted/reached/support-anchor reconstruction, production replay comparison, semantic mutants, and pre-seal measurements",
+        "one model-free Stage 0 production entry that owns corpus enumeration, 300-cluster completeness, two clean builds, seven-gate reduction, and exact Stage 1/2A selection"
       ],
       "no_duplicate_algorithm_rule": "The four prose documents may state outcomes and authority but must not restate executable algorithms. EVALUATOR_SPEC.md governs implementation until non-null freeze hashes bind the evaluator bundle.",
       "trust_boundary": "Only raw reviewer and judge invocation results cross into scoring as untrusted values. Packet, loss, binding, opportunity, candidate, batch, and primary values are private in-process constructions and written artifacts are never production inputs."
@@ -171,15 +172,16 @@
       "attack_artifact": "evaluator/generated/attacks.generated.json"
     },
     "freeze_hashes": {
-      "evaluator_bundle_sha256": "sha256:8572a5ad60d0f01a4152e9f190888a558b310fc9bc247f2bb927384a18c2ceb0",
-      "evaluator_execution_sha256": "sha256:8a83e1270ff1ded4cfd01558d51b2c30342de1e9daad3eb9bd9ec4bfe565d8bc",
-      "generated_fixture_inventory_sha256": "sha256:e73a2b487f0ec7669ebb4535dc9358d394bea93efe881b7a2273d08a7895df36",
-      "reference_vector_set_sha256": "sha256:14d12778aae0716816f33d89e470331ec3e3b1404a2d8514a512f3f2fd5a3c2f",
-      "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
-      "semantic_acceptance_reference_sha256": "sha256:ca63178a27f33aa4c1db04159eb82262a1ef0a9063db626b51ff84045426c9d6",
-      "measurement_record_sha256": "sha256:030c843441d74d7c706c8e7306e2b1e7cc8971eb9578a6fbe793392df2f09066",
-      "freeze_manifest_path": "benchmarks/m20-changed-public-callee-utility-v1/freeze-manifest.json",
-      "non_null_gate": "All seven hashes and the manifest path must be non-null and verify-frozen must pass on a compatible runtime before preregistration status may become frozen-before-corpus-resolution."
+      "evaluator_bundle_sha256": null,
+      "evaluator_execution_sha256": null,
+      "generated_fixture_inventory_sha256": null,
+      "reference_vector_set_sha256": null,
+      "mutation_manifest_sha256": null,
+      "semantic_acceptance_reference_sha256": null,
+      "measurement_record_sha256": null,
+      "freeze_manifest_sha256": null,
+      "freeze_manifest_path": null,
+      "non_null_gate": "After the Stage 0 driver is implemented and atomically re-sealed, all eight hashes and the manifest path must be non-null; SHA-256 of the exact manifest bytes must equal freeze_manifest_sha256, its bundle/execution hashes must equal the active slots, its supersedes_freeze_manifest_sha256 must equal the last freeze_history manifest hash, and verify-frozen must pass before status may return to frozen-before-corpus-resolution."
     },
     "freeze_history": [
       {
@@ -215,6 +217,18 @@
         "generated_fixture_inventory_sha256": "sha256:be07c1283db12e0a55ada7edbfd3a9909a7a75c6a9818dfca08f84af20e9b151",
         "reference_vector_set_sha256": "sha256:3762ae125eb807f592a408bdc71fbcefbcc3f48d0844d7f19ca45d0703e2c1e7",
         "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57"
+      },
+      {
+        "freeze_manifest_sha256": "sha256:f3af4c7b6ec1e3bec422d25daaa51e9252e01d37537282cfc73de948fa0adcb8",
+        "status": "superseded_missing_stage0_driver",
+        "reason": "The frozen bundle had per-cluster Stage 0 closure helpers but no production Stage 0 entrance, deterministic commit-cluster identity, complete output-root contract, or authenticated Stage 1 selection handoff; no Stage 0 or model result was observed.",
+        "evaluator_bundle_sha256": "sha256:8572a5ad60d0f01a4152e9f190888a558b310fc9bc247f2bb927384a18c2ceb0",
+        "evaluator_execution_sha256": "sha256:8a83e1270ff1ded4cfd01558d51b2c30342de1e9daad3eb9bd9ec4bfe565d8bc",
+        "generated_fixture_inventory_sha256": "sha256:e73a2b487f0ec7669ebb4535dc9358d394bea93efe881b7a2273d08a7895df36",
+        "reference_vector_set_sha256": "sha256:14d12778aae0716816f33d89e470331ec3e3b1404a2d8514a512f3f2fd5a3c2f",
+        "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
+        "semantic_acceptance_reference_sha256": "sha256:ca63178a27f33aa4c1db04159eb82262a1ef0a9063db626b51ff84045426c9d6",
+        "measurement_record_sha256": "sha256:030c843441d74d7c706c8e7306e2b1e7cc8971eb9578a6fbe793392df2f09066"
       }
     ],
     "runtime_contract": {
@@ -244,6 +258,18 @@
     "interpretation": "frozen usability-proxy completion only; not truth, verification, evidence support, or human acceptance"
   },
   "stage_0": {
+    "driver_contract": {
+      "authority": "hash-frozen evaluator production surface; no unfrozen scripts driver",
+      "command": "python3 -m evaluator stage0 NEW_OUTPUT_ROOT [--jobs N]",
+      "output_root": "caller-selected initially nonexistent destination; path is not an identity input; closed layout is corpus-manifest.v1.json, clusters/<commit-cluster digest>/build-1/, clusters/<commit-cluster digest>/build-2/, stage0-result.v1.json, stage0-selection.v1.json, and artifact-manifest.v1.json",
+      "commit_cluster_id": "D(commit-cluster,{cluster_contract:m20.commit_cluster@1,experiment_id:m20-changed-public-callee-utility-v1,repository_id:canonical repository ID,base_commit_oid:exact Git object ID,head_commit_oid:exact Git object ID}) under frozen restricted canonical JSON",
+      "responsibilities": "resolve and seal corpus; process every one of 300 clusters in two clean builds; evaluate exactly seven gates; derive and seal exact model-eligible hash order and first 10/40 cumulative membership; make zero model calls",
+      "endpoint_separation": "Stage 0 may only authorize/block launch and select exact IDs; its records contain no arm/model/judge/primary values and cannot enter scoring or n/b/c/n00; each later run authenticates the selection-manifest hash and membership",
+      "parallelism": "cluster-level parallelism is allowed; worker ceiling=max(1,min(16,available logical CPUs-2)), with unavailable or <=2 CPUs yielding one; --jobs is a public operational argument constrained to 1..=ceiling, omitted means ceiling, and its value is excluded from every output, ID, manifest, hash, gate, and selection input; each worker owns one cluster with two isolated clean builds",
+      "freeze_gate": "before corpus resolution or output-root creation, load preregistration.json, require all active hashes and manifest path non-null, and require verify-frozen ok=true; otherwise refuse without repository observation",
+      "parallel_determinism": "final reduction is sorted only by commit_cluster_id UTF-8 bytes; one-worker, computed-ceiling, and reversed-completion tests must produce byte-identical complete output trees and identical artifact/selection hashes",
+      "timing": "wall time, per-cluster process CPU time, peak bytes, worker count/utilization, PID, host, and scheduling order may appear only in diagnostics outside the closed output root; they are not gates, canonical values, manifest members, hash inputs, or selection inputs"
+    },
     "model_calls": 0,
     "commit_clusters": 300,
     "gate_count": 7,
@@ -294,7 +320,7 @@
       }
     ],
     "occurrence_record_shape": "one exact source_occurrence_summary per accepted Rust file with observed occurrences, plus report/rule count and sorted occurrence-ID-set SHA-256; spans and owner source IDs are typed omitted_rebuildable detail, not deleted observations",
-    "occurrence_operational_measurement": "Stage 0 records wall milliseconds, peak bytes, canonical report bytes, summary rows, and observed occurrences per cluster; 183.2 seconds per measured cluster implies about 15.3 serial hours for 300 clusters, while the rejected row shape would retain 96329400 individual records",
+    "occurrence_operational_measurement": "Canonical Stage 0 retains deterministic report bytes, summary rows, and observed occurrences only. The pre-seal 183.2-second per-cluster observation implies about 15.3 serial hours for 300 clusters; wall time, per-cluster process CPU time, peak bytes, and parallelism are external noncanonical diagnostics and never gate or selection inputs. The rejected row shape would retain 96329400 individual records.",
     "context_v3_shape": "accepted/reached/materialized/support-anchor domains each retain known count plus sorted-ID-set SHA-256; only subject-file IDs union reached-file IDs materialize, subject outcomes are callee then caller, and uncovered known anchors close through at most 15 exact reason summaries",
     "failure": "Any gate failure stops all model execution, is slice failure, and is not feasibility success; no cap, drop, weight change, count-only surrogate, or post-result filter may simulate a pass."
   },
@@ -379,7 +405,7 @@
     "provider_truncation_or_context_rejection": "after an eligible request is sent, postlaunch primary 0 without retry"
   },
   "freeze_and_seal": {
-    "freeze_point": "independent executable evaluator bundle, Option C oracle/reference/mutants, measurements, and these five design files freeze before Stage 0, model observation, corpus resolution, repository identities, or ranges",
+    "freeze_point": "independent executable evaluator bundle including its Stage 0 driver, Option C oracle/reference/mutants, measurements, and these five design files freeze before Stage 0, model observation, corpus resolution, repository identities, or ranges",
     "before_stage_0": "verify non-null evaluator bundle/execution/fixture/vector/mutation/semantic-reference/measurement hashes and runtime manifest on the exact semantic runtime contract, then seal implementation/protocol/profile/context/repository manifests",
     "after_stage_0": "seal builds, exact C/A/S/D sets, all seven gates, boundary fixtures, and model eligibility",
     "before_each_model_stage": "seal all eligible labels/rationales, label-independent sample, evaluator-generated A/B packets, payload/inventory closure, deterministic source-byte budget records, observation-only token schema, backend and arm order",

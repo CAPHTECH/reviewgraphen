@@ -1,0 +1,1 @@
+{"free_form_source_bytes":20703,"free_form_within_ceiling":true,"pair_id":"fsl","production_paths":["rust/fslc/src/outcome.rs"],"schema":"m20.nonregistered-pilot.input-metrics.v1","source_ceiling_bytes":65536,"structured_packet_count":1,"structured_source_bytes":9104,"structured_within_ceiling":true}

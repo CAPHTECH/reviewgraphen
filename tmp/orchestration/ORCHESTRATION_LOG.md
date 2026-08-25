@@ -900,3 +900,52 @@ manifest が生成物 4 件を個別 SHA-256 で拘束。verify-frozen 全 true�
 commit `f68e764`（183 files。出力ディレクトリと m17-19 は不含、m17-19 は untracked のまま）。
 `git clone --no-local` ×2 → `cargo build --locked` 0 → run1 exit 0（238s / 235s）→ verify.py exit 0 → run2 exit 20。
 clone1 vs clone2 audit bytes 同一、clone vs 作業ツリー同一。
+
+## 裁定: Stage 0 driver は凍結契約の一部（sol-audit）
+preregistration:259 が 300 clusters / 7 gates を規定する一方、EVALUATOR_SPEC:23 は単一 pair RUN のみで CLI に stage0 が無い → 契約欠落。
+新契約: `stage0` 入口（NEW_OUTPUT_ROOT、決定論的 commit_cluster_id、closed root layout、2 clean builds、300 件完全性）。
+Stage 0 は selection manifest だけを Stage 1 へ渡し、primary scorer / n,b,c,n00 には入力不可。
+**4 回目の atomic 再 seal が必要**。旧 f3af4c… は superseded、active hash は null 化。endpoint / denominator / rectangle / DTO 不変。
+→ 実装は sol/low（新 sollow-eval）、seal は sol-prereg2。私の .quickstart-clone-{1,2}（検証済み）は削除。
+
+## 裁定: Stage 0 並列化を許可（sol-audit）
+serial 規定はモデル arm のみ（PROTOCOL:365 / SPEC:67）。worker 上限 max(1, min(16, CPUs−2))。並列度は公開入力・ID・manifest に含めない。
+cluster ごとに独立 root/cache、全 300 件完了後 commit_cluster_id 順に集約。worker 幅 1 / 上限 / 逆順完了で output tree bytes と
+selection hash の完全一致を必須化（SPEC:1436）。wall/CPU/peak は root 外の非 canonical 診断（prereg:267）。第 4 回 seal に同梱。
+
+## Stage 0 driver 実装（sollow-eval）— 受理保留
+`stage0_driver.py` / `stage0_production.py`、`python3 -m evaluator stage0 NEW_OUTPUT_ROOT`、決定論 cluster ID、300 件完全性、
+2 clean builds、7 gates、selection-only handoff、primary scorer への型拒否、3-cluster 合成 E2E。
+私の検証: evaluator tests **52/52 OK**（`-t .` 指定要）、vectors 74/74、attacks 72 全 pass、validate_bundle 0。
+**問題 2 点**: (1) 並列契約（worker / 逆順等価テスト）が**未実装**（driver 内に jobs/worker 参照 0）—転送が完了後だった。
+(2) pane 表示が **gpt-5.6-luna low** に切替わっていた（rate-limit プロンプトで luna へ移行した模様）→ ユーザー指示（実装は sol/low）
+に反するため、その pane を閉じ、**sollow-eval2（sol/low）**で並列分を実装。luna で書かれた分は独立レビュー（sol-r1）で検証する。
+- pilot: 入力固定（structured/free-form source bytes: RG 24,949/4,577、fsl 9,104/20,703、casegraphen 14,678/12,938、全 ≤65,536）。6 request 直列送信を承認
+- sollow-eval2: 並列契約実装（幅1/ceiling/逆順完了で bytes・selection hash 一致、集約順破壊/jobs 混入変異で失敗）。私の検証実行中
+
+## sol-r1 Wave 13（Stage 0 driver）— BLOCKING 1 / MAJOR 1 / MINOR 1
+BLOCKING stage0_driver.py:247 — freeze / non-null gate なしで corpus resolution 開始（prereg:174 の active hash は現在 null）
+MAJOR cli.py:19 — `--jobs` を公開しているが PROTOCOL:125 / prereg:267 は明示的に禁止（裁定文と契約文の不一致）
+MINOR test_stage0_driver.py:83 — 並列等価テストが 300 件でなく 6 件
+確認済み: 逆順 hook は実際に完了順を変える、299 件拒否、literal reference vector。私の検証: vectors 74/74、attacks 72/72、validate_bundle 0。
+- 裁定: --jobs は公開 CLI の運用引数（1..=ceiling）、出力・ID・manifest・hash・gate・selection に不混入（PROTOCOL:113 / prereg:267 / SPEC:1399 改訂）。Freeze gate: corpus 参照・root 作成前に active hash non-null + verify-frozen ok を必須 → Wave 13 MAJOR は契約側で閉鎖
+- sollow-eval2 Wave 13 修正: freeze gate（null/不一致/改竄を typed 拒否、root 未作成）、並列等価 corpus 300 件、--jobs 0/超過を typed 拒否。私の検証実行中、Wave 14 投入
+- Wave 14: **不受理**。BLOCKING: freeze gate テスト（test_stage0_driver.py:31）が Path.read_bytes と verify_manifest を stub
+  しており実 manifest 読取を検証していない（null / 不一致でも通過可能）。MAJOR: `_future_order=reversed`（:117）は
+  submission list を逆順に待つだけで実完了順を逆転していない。良: --jobs 幅 1/6 で 604 files bytes 一致、300 cluster を実処理。
+- sollow-eval2 Wave 14 修正: stub 全廃（実 bundle/manifest/prereg を実 verify_manifest で 4 ケース）、barrier executor で 300 cluster を実逆順完了・イベント列 assert、両変異 kill。私の再検証 + Wave 15 投入
+- Wave 15 不受理: BLOCKING gate テスト（:70）が production wiring（stage0 入口）でなく内部 gate を直接呼び、bundle しか preregister していない（global gate 差替え未検出）。MAJOR（:168）event 列が Future done 前の append で実完了順を保証しない
+- sollow-eval2 Wave 15 修正: freeze 4 ケースを公開 CLI 経路で、prereg active hash を実ファイル化、完了記録を done callback へ、記録時に出力存在検証、wiring 除去/callback 除去変異 kill。私の再検証 + Wave 16
+- Wave 16 不受理: BLOCKING — gate が freeze_manifest_path を無視 / 公開 CLI テスト（:80）が bundle だけ記録して「正常」扱い。MAJOR 閉鎖（CLI は実 subprocess、done callback は書込後、300 件逆順成立）
+- sollow-eval2 Wave 16 修正: manifest path / manifest SHA-256 / bundle hash / verify_manifest を独立検証、三点 fixture、path 差替え・active hash 改竄・読取除去変異を確認。私の再検証 + Wave 17
+- Wave 17 不受理: BLOCKING — 実 preregistration.json に gate が期待する active field 形状が無く、テストは合成 prereg にだけ追加して不一致を隠している。現行 bundle は常に stage0_freeze_input_invalid。独立比較自体は確認
+- sollow-eval2 正しく停止: 実 active 形状は arm_neutral_contracts.freeze_hashes（freeze_manifest_path あり、freeze_manifest_sha256 なし。freeze_history[*].freeze_manifest_sha256 は全 superseded）。custodian の裁定要 → sol-audit へ
+- 裁定: preregistration:174 に active freeze_manifest_sha256:null 新設、non_null_gate 文言（8 hash + path non-null、manifest bytes SHA、bundle/execution = active、supersedes = history 末尾、verify-frozen）。第 4 回 seal に同梱。eval2 再開済み
+
+## 停止事象 2 件
+1. **Codex 利用枠を使い切った**（「You've hit your usage limit … try again at Aug 31st, 2026 9:41 AM」）。sol-stage0 の pane で確認。
+   以後 Codex（sol / terra / luna）は 8/31 まで、または credit 購入まで使えない。
+2. **pilot harness が無効**: run_pilot.py はモデルを Claude CLI（`~/.local/share/mise/installs/claude/latest/claude`）経由で
+   呼んでおり、low 条件 3/6 がすべて 900 s timeout / output tokens null / malformed。stream.jsonl は Claude Code の init JSON
+   のみで thinking event なし。**モデルの結果ではなく harness の欠陥**。run_pilot.py（pid 740819）を kill。
+   直接 /v1/chat/completions の疎通を別途確認。

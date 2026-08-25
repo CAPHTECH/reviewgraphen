@@ -42,9 +42,15 @@ Before Candidate D slice implementation and before resolving any m20 repository
 or range, the custodian MUST verify and hash-bind the independent evaluator
 bundle, semantic runtime contract, runtime provenance manifest, all schemas, 74
 reference vectors, generated full-run fixtures, and attack manifest as specified in
-`EVALUATOR_SPEC.md`. All seven hash slots and the manifest-path slot in
+`EVALUATOR_SPEC.md`. All eight hash slots, including the active exact-byte
+`freeze_manifest_sha256`, and the manifest-path slot in
 `preregistration.json` MUST be non-null and `verify-frozen` MUST pass on CPython
 3.13.5 with Unicode database 15.1.0.
+
+The prior bundle lacked the Stage 0 production entrance required by section
+3.1 and is recorded as superseded in `preregistration.json`. Its active hash
+slots are intentionally null until the fourth atomic pre-observation re-seal.
+Corpus resolution and Stage 0 execution are forbidden while they are null.
 
 `evaluator_bundle_sha256` binds only canonical evaluator-tree file bytes and is
 portable across clones. The design-spec hash is recorded and protocol-frozen
@@ -99,6 +105,66 @@ Terms such as `production`, `production diff`, `non-test Rust source`, path
 normalization, category precedence, and typed exclusion reasons mean exactly
 the canonical `rust.production.v1` contract in ADR 0038. This protocol MUST NOT
 invent a second matcher definition.
+
+### 3.1 Frozen Stage 0 driver
+
+The 300-cluster driver is part of the hash-frozen evaluator. It is not an
+unfrozen orchestration script and MUST NOT be implemented under `scripts/`.
+The only Stage 0 production entrance is
+`python3 -m evaluator stage0 NEW_OUTPUT_ROOT [--jobs N]`, where
+`NEW_OUTPUT_ROOT` does not exist and is used only as a filesystem destination.
+Immediately before corpus resolution, the command must load
+`preregistration.json`; require every active hash and manifest path non-null;
+independently match the exact manifest-byte SHA-256, its bundle/execution hashes,
+and its `supersedes_freeze_manifest_sha256` against respectively the active
+slots and last `freeze_history` manifest hash; and require `verify-frozen` to
+return `ok=true`. Otherwise it refuses without resolving a repository or
+creating the output root. The evaluator itself
+performs corpus enumeration, two independent clean deterministic builds of
+every cluster, all seven gate reductions, model-eligibility derivation, and the
+label-independent Stage 1/2A hash selection. It MUST make zero reviewer and
+zero judge calls.
+
+Cluster execution MAY be parallel. The serial requirement in section 8 applies
+only to the two model arms within a selected commit and does not constrain
+model-free Stage 0. At process start the evaluator computes the worker ceiling
+as `max(1, min(16, available_logical_cpus - 2))`, treating unavailable CPU
+count or a count at most two as one worker. Omitted `--jobs` selects that
+ceiling; supplied `N` must be an integer in `1..=ceiling` or is a typed refusal.
+`--jobs` is a public operational argument only: its value, worker count,
+scheduling/completion order, PID, host, and timing are forbidden from every
+identity, canonical result, selection record, and artifact-manifest hash.
+
+Each worker owns one digest-named cluster directory and performs that cluster's
+`build-1` and `build-2` against distinct initially empty output/cache
+directories. No cache or mutable aggregate is shared across clusters. Final
+reduction waits for all 300 cluster terminals and sorts exclusively by the
+UTF-8 bytes of `commit_cluster_id`; discovery, submission, and completion order
+are irrelevant. Acceptance tests run the same fixed corpus with one worker and
+with the computed ceiling, including reversed completion order, and require
+byte-identical complete output trees and identical selection-manifest hashes.
+
+For canonical repository ID `r`, base Git object ID `b`, and head Git object ID
+`h`, define
+`commit_cluster_id = D("commit-cluster",
+{"cluster_contract":"m20.commit_cluster@1",
+"experiment_id":"m20-changed-public-callee-utility-v1",
+"repository_id":r,"base_commit_oid":b,"head_commit_oid":h})` under the
+frozen evaluator canonicalization. The preimage contains no path, ordinal,
+clock, or result. The closed root layout is exactly
+`corpus-manifest.v1.json`, `clusters/<64hex>/build-1/`,
+`clusters/<64hex>/build-2/`, `stage0-result.v1.json`,
+`stage0-selection.v1.json`, and `artifact-manifest.v1.json`; `<64hex>` is the
+digest suffix of the corresponding cluster ID. All files are listed by the
+artifact manifest. Missing, duplicate, extra, reordered, or foreign clusters,
+unlisted files, and writes outside the root are invariant failure.
+
+Wall-clock, per-cluster process CPU time, peak bytes, and worker utilization MAY
+be captured in a separate operational diagnostic outside `NEW_OUTPUT_ROOT`.
+They are never a gate, canonical Stage 0 record, artifact-manifest member, hash
+preimage, or selection input. The measured 183.2 seconds per cluster remains a
+pre-seal feasibility observation; parallel wall time does not replace it or
+change any denominator.
 
 ## 4. Stage 0 exact sets and seven gates
 
@@ -161,6 +227,14 @@ post-result filter is allowed.
 
 Any gate failure stops all model execution, is a slice failure, and MUST NOT be
 called feasibility success.
+
+The Stage 0 result and selection schemas contain no arm outcome, model/judge
+record, primary score, or endpoint cell. If and only if every gate passes,
+`stage0-selection.v1.json` seals the exact eligible cluster-ID set, its frozen
+hash order, and the first 10/40 cumulative memberships. Every later `run`
+launch authenticates that manifest hash and its own membership. Stage 0 values
+can authorize or block launch but cannot enter the primary scorer, turn an
+ineligible cluster into a zero, or contribute to `n`, `b`, `c`, or `n00`.
 
 ## 5. One obligation and one label-independent hash sample
 
