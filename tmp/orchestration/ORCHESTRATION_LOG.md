@@ -1008,3 +1008,4 @@ outer 契約が渡らず内側 abstention schema を正規契約と解釈。abst
 新 freeze SHA-256 `0ea5b16d8690b3e3b017aeeae7e29ca46501a83dec0c4d98b3920693aab6c921`。
 4 実ペア一致、4,816-file 234,144 / 231,630 ms、Stage0 並列 3 方式 byte 一致、契約 diff 0、vectors 74/74、casefold 破壊検出、
 mutation 3,990/3,990、SC01/SC02、unittest 60/60、verify-frozen 全 true、dry gate 通過。sweep 3 時間は **87 件の timeout retry**（ハングではない）。
+- Stage 0 起動失敗は pilot 実行者の bundle 内 evaluator 実行による一時状態変化。pilot 待機、seal 5 を commit、Stage 0 再起動
