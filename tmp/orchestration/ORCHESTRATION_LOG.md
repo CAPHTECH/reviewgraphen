@@ -1071,3 +1071,17 @@ selection hash・membership が無く、operator 合成は「frozen evaluator �
 - `stage2a STAGE1_ROOT ROOT`: advance 済み Stage 1 を完全検証・内包し rank 11–40 を実行、40 件累積集計
 - reviewer/judge は固定 bind-mount path のみ。公開単一 pair run / resume / append / Stage 2B / operator 集計は廃止
 - closed layout、6h / 24h、12,000 / 900 s、矩形固定。packet@3 と同じ seal に同梱 → その後 Stage 0
+- m21 修正（sollow-m21）: oracle 入力を repo + base/fix OID に限定（内部 git diff + 製品 CLI accepted facts）、外部集合注入不能、B packet 構築時間 + 固定 token 近似を harness 内記録、65,536 超 typed 拒否、score は typed measurement のみ、selector が oracle closure を内部導出、8 tests exit 0。→ Wave m21-2。以後の m21 作業は sol/high
+- m21 Wave 2（sol-r1）: BLOCKING 3 — oracle.py:38-53 任意 cli を受け audit を schema/OID だけで信頼（偽 CLI で context 注入可）; :59-70 accepted facts でなく contexts.subject_outcomes のみで T_old ∪ T_match ∪ R を導出していない; __main__.py:15 / harness.py:23-30 B 計時が既成 packet 読込だけで ingest/projection を含まず、scoring.py:19-33 が捏造 measurement を受理。token 近似は A/B 共通・宣言済み。→ sol/high（sol-impl-m21）へ
+- m21 修正（sol-impl-m21、sol/high）: CLI pin、audit 実 OID 照合、T_old∪T_match∪R を accepted facts から導出、B 計時に ingest→projection、typed measurement、leakage tests。13 tests exit 0、変異 3 種 kill。→ m21 Wave 3
+- m21 Wave 3（sol-r1）: BLOCKING 3 — oracle.py:366-373 T_old を target definition/new_start で算出（base span/old_start でない、削除のみ hunk で再現、fixture は T_old=T_match で独立検査なし）; harness.py:218-224/product.py:275-300 B が parent→base 履歴 diff を使い fix object を含む shared clone に到達可能、FS 隔離テスト無し、task-subject projection でなく旧 D projection; harness.py:33,55-104 private token/class が import 可能で捏造 measurement を scoring が受理。CLI pin と audit hash 照合は確認
+- sol-impl-m21 正しく停止: 製品に task→subject 入口が無い（request.v3 は additionalProperties:false で subject 項目なし、runtime generic.rs:2543 は D relation の caller/callee を subject に固定）。m21 arm B（custom ReviewGraphen）には製品側の追加が必要 → sol-audit に設計裁定。crates 変更は m20 seal を壊すため、m21 用は別 worktree/branch で分離する案を併せて諮問
+
+## 裁定: task→subject 入口（ADR 0039、sol-audit）
+- (b) 専用 `reviewgraphen context` subcommand。`context_request.v1` / `context_packet.v1` を新設し review / obligation / observer / claim / evidence から分離
+- m21 の deterministic binder が accepted ProgramSpace から exact symbol IDs を生成（hint は解決・ID・projection に不使用）。未解決・曖昧・unknown は typed loss
+- policy は `context.task_subject_windows@1` として版付け（D 専用 v3 を偽装しない）
+- 製品実装は **専用 branch + worktree + CARGO_TARGET_DIR**。commit / tree / toolchain / binary hash を m21 で pin、m20 終結前は merge しない
+- m21: A = task brief + read tools、B = 同条件 + task-subject packet のみ（未来 diff / shared core なし）。B は packet tokens・binding・ingest・projection 時間を全て課金
+- request v4 案は却下（review 境界の混同）
+→ worktree `../reviewgraphen-m21`（branch m21-task-subject-context）を作成、sol/high 実装者 sol-impl-ctx を起動
