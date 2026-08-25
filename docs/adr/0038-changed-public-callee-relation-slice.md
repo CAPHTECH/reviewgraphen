@@ -1902,15 +1902,43 @@ the primary scorer accepts no Stage 0 metric or gate field. Ineligible clusters
 are selection exclusions, not primary zeros, and no Stage 0 count contributes
 to `n`, `b`, `c`, or `n00`.
 
-The current evaluator freeze has no such production entry point and is
-incomplete despite containing the per-cluster `stage0_contract.py` closure
-helpers. Because Stage 0 and model results remain unobserved, one further
-atomic pre-observation re-seal is permitted and required. It must add the
-entry point, closed launch/result/selection/layout schemas, corpus and
-missing/duplicate/reordered-cluster attacks, and authenticated Stage 1 handoff.
-The primary endpoint, its denominator and forced-zero rules, seven gates,
-sample sizes/order, rectangles, profile/context DTOs, and reviewer-visible
-packet remain byte-for-byte and semantically unchanged.
+The frozen model-stage handoff is also evaluator-owned. The operator may not
+author a per-unit launch or stage manifest. After separately sealing the two
+independent control-labeler records against the exact Stage 0 selection hash,
+the only Stage 1 entrance is `stage1 STAGE0_SELECTION NEW_OUTPUT_ROOT
+--controls CONTROL_MANIFEST`. It hostile-verifies the complete Stage 0/control
+roots, takes cumulative ranks 1--10 in sealed order, and privately constructs
+`m20.pipeline_launch.v2` for each. Every launch binds the selection-manifest
+hash, exact `{stage,cumulative_rank}` membership, selected-obligation hash, and
+the evaluator-generated stage-manifest hash; launch v1 is not a production
+input. The evaluator alone constructs both packet-`@3` arms, invokes reviewer
+and judge, seals the opaque permutation/reverse map, computes all primary cells,
+`b`, `c`, repository/leave-one-out/control/safety records, and decides the
+`b >= 8 && c <= 1` rectangle.
+
+Stage 2A has exactly one entrance, `stage2a STAGE1_ROOT NEW_OUTPUT_ROOT`. It
+requires a complete hostile-verified Stage 1 result of `advance`, imports that
+root byte-for-byte, runs cumulative ranks 11--40 exactly once, revalidates the
+first ten primary records, and alone computes the cumulative forty-pair
+`b >= 18 && c <= 7` terminal decision. There is no Stage 2B, resume, append,
+retry, public single-unit run, caller-authored launch, or caller-supplied
+aggregate. Stage 1's closed root contains imported selection/control manifests,
+a stage manifest, ten rank-prefixed unit roots, stage result, and artifact
+manifest. Stage 2A contains the exact Stage 1 predecessor, its stage manifest,
+thirty new unit roots, cumulative result, and artifact manifest.
+
+The evaluator accepts reviewer and judge transport only at the exact paths
+`/usr/local/bin/m20-reviewer-backend` and
+`/usr/local/bin/m20-judge-backend`. The operator must make a private mount
+namespace and read-only bind the intended executables there; CLI, PATH,
+environment, symlink, and fallback selection are forbidden. Selection/control/
+predecessor mutations, missing/duplicate/reordered ranks, obligation swaps,
+launch-v1 injection, foreign transports, and operator aggregates are required
+attacks. Because neither Stage 0 nor a registered model result has been
+observed, these model-stage drivers, packet `@3`, schemas, fixtures, attacks,
+and hashes are included in one atomic pre-Stage-1 seal, followed by a fresh
+Stage 0 run. The primary endpoint, forced-zero rules, seven gates, sample
+sizes/order, rectangles, budgets, and profile/context DTOs remain unchanged.
 
 Packet construction and primary scoring must be executable evaluator code, not
 an interpretation of prose in this ADR. The m20 preregistration and freeze

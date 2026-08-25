@@ -99,13 +99,17 @@
         "exact internal occurrence-set rebuild into per-file summaries/report/coverage commitments and per-cluster resource metrics",
         "context.subject_windows@3 four-denominator rebuild, subject-first materialization, exact anchor partition, latent union, and projection hash",
         "Option C independent accepted/reached/support-anchor reconstruction, production replay comparison, semantic mutants, and pre-seal measurements",
-        "one model-free Stage 0 production entry that owns corpus enumeration, 300-cluster completeness, two clean builds, seven-gate reduction, and exact Stage 1/2A selection"
+        "one model-free Stage 0 production entry that owns corpus enumeration, 300-cluster completeness, two clean builds, seven-gate reduction, and exact Stage 1/2A selection",
+        "control-label sealing plus the only Stage 1 and Stage 2A production entrances, launch-v2 construction, selection/membership authentication, fixed transports, cumulative aggregation, and terminal stage seals"
       ],
       "no_duplicate_algorithm_rule": "The four prose documents may state outcomes and authority but must not restate executable algorithms. EVALUATOR_SPEC.md governs implementation until non-null freeze hashes bind the evaluator bundle.",
       "trust_boundary": "Only raw reviewer and judge invocation results cross into scoring as untrusted values. Packet, loss, binding, opportunity, candidate, batch, and primary values are private in-process constructions and written artifacts are never production inputs."
     },
     "generated_schema_ids": [
-      "m20.pipeline_launch.v1",
+      "m20.pipeline_launch.v2",
+      "m20.control_labels.v1",
+      "m20.model_stage_manifest.v1",
+      "m20.model_stage_result.v1",
       "arm-neutral.source-grounded-packet@3",
       "arm-neutral.source-grounded-disposition@1",
       "m20.source-inventory.v3",
@@ -360,6 +364,9 @@
   },
   "control_labels": {
     "timing": "Both labels and rationales for every model-eligible commit are sealed before any arm outcome.",
+    "ingress_command": "python3 -m evaluator seal-controls STAGE0_SELECTION LABELER_1 LABELER_2 NEW_CONTROL_ROOT",
+    "ingress_contract": "the frozen evaluator hostile-verifies the complete Stage 0 root and exact selection hash, closed-validates one source-cited label per model-eligible cluster from each independent labeler, and seals a separate closed control root; evaluator/operator/model transports cannot author or repair labels",
+    "closed_layout": "labeler-1.json, labeler-2.json, control-labels.v1.json, artifact-manifest.v1.json",
     "membership_effect": "none; labels cannot alter the fixed public-hash membership or order regardless of whether labelers know a candidate's public rank",
     "labelers": 2,
     "labeler_constraint": "neither implemented the slice",
@@ -387,6 +394,11 @@
     "authority": "non-authority descriptive proxy only; never defect truth and never able to rescue primary completion or a rectangle"
   },
   "stage_1": {
+    "command": "python3 -m evaluator stage1 STAGE0_SELECTION NEW_OUTPUT_ROOT --controls CONTROL_MANIFEST",
+    "input_gate": "hostile-verify the complete Stage 0 and control roots under the active seal before root creation; bind the exact selection hash and ranks 1..10; launch v1, detached manifests, caller-authored launches/stages/aggregates, and nonmembers are refused",
+    "launch_contract": "the evaluator privately derives m20.pipeline_launch.v2 per rank with selection_manifest_sha256, selection_membership={stage:stage1,cumulative_rank:1..10}, selected obligation path/hash, and evaluator-generated stage-manifest hash; it alone constructs both packet@3 arms and judge batch",
+    "closed_layout": "selection/stage0-selection.v1.json, controls/control-labels.v1.json, stage-manifest.v1.json, units/0001-<digest>/ through units/0010-<digest>/ using the closed paired-run layout, stage-result.v1.json, artifact-manifest.v1.json",
+    "aggregation_authority": "frozen evaluator only: validate ten run seals and compute four cells, n, b=count(A=0,B=1), c=count(A=1,B=0), repository/leave-one-out tables, judge/backend/leakage/control/safety gates, and advance|stop with typed reasons",
     "pairs": 10,
     "reviewer_invocations": 20,
     "reviewer_model_ceiling_seconds": 18000,
@@ -397,10 +409,16 @@
     "reserve_seconds": 2700,
     "cumulative_wall_clock_envelope_seconds": 21600,
     "cumulative_wall_clock_envelope_hours": 6,
+    "wall_clock_scope": "active frozen stage1 command only; reserve cannot authorize calls or retries",
     "primary_operational_pass": "b>=8 and c<=1",
     "advance_requires": "all seven Stage 0 gates, primary rectangle, all repository/leave-one-out cells, backend/leakage integrity, all primary judge batches, >=2 controls, and safety gate"
   },
   "stage_2A": {
+    "command": "python3 -m evaluator stage2a STAGE1_ROOT NEW_OUTPUT_ROOT",
+    "input_gate": "hostile-verify a complete Stage 1 root with decision=advance and the same active freeze/selection/control/packet/transport/budget tuple before root creation",
+    "membership": "copy the verified Stage 1 root byte-for-byte, make no calls for ranks 1..10, and privately launch exact cumulative ranks 11..40 once each through launch v2",
+    "closed_layout": "predecessor/stage1/, stage-manifest.v1.json, units/0011-<digest>/ through units/0040-<digest>/, stage-result.v1.json, artifact-manifest.v1.json",
+    "aggregation_authority": "frozen evaluator only: revalidate the ten predecessor primary records, validate thirty new run seals, compute all cumulative forty-pair cells/tables/gates and success|failure; no resume, append, retry, Stage 2B, single-unit production, or caller aggregate exists",
     "pairs_cumulative": 40,
     "fresh_pairs_added": 30,
     "reviewer_invocations_cumulative": 80,
@@ -412,6 +430,7 @@
     "reserve_seconds_cumulative": 10800,
     "cumulative_wall_clock_envelope_seconds": 86400,
     "cumulative_wall_clock_envelope_hours": 24,
+    "wall_clock_scope": "sum of recorded active stage1 and stage2a command durations; idle operator delay is excluded and cannot authorize calls or retries",
     "primary_operational_pass": "b>=18 and c<=7",
     "success_requires": "Stage 1 advanced, cumulative rectangle, all repository/leave-one-out cells, backend/leakage integrity, all primary judge batches, >=8 controls, and safety gate"
   },
@@ -425,11 +444,14 @@
   },
   "backend_gate": {
     "reviewer_endpoint": "http://192.168.68.71:11999",
+    "reviewer_transport_path": "/usr/local/bin/m20-reviewer-backend",
+    "judge_transport_path": "/usr/local/bin/m20-judge-backend",
+    "transport_mount_contract": "before a model stage the operator creates a private mount namespace and read-only bind-mounts the intended executables at the two exact paths; the evaluator accepts no path/URL/command argument and no PATH, environment, symlink, or fallback selection",
     "pinned_listing_sha256": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
     "pinned_health_sha256": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74",
     "concurrency": 1,
     "network_during_authoring": "none",
-    "rule": "reacquire identity/health before each stage and reviewer invocation; prelaunch failure stops without imputation, postlaunch failure is 0"
+    "rule": "invoke both transports only with shell=false, an empty workspace-scoped cwd, and the closed environment allow-list; reacquire identity/health before each stage and reviewer invocation; prelaunch failure stops without imputation, postlaunch failure is 0"
   },
   "realized_cost_audit": {
     "deterministic_budget": "seal budget.json with each packet hash, admitted-source byte count, <=65536 result, pair eligibility, and content-derived audit ID; verify-run recomputes it from the two sealed packets",
@@ -446,7 +468,7 @@
     "before_primary_judging": "within the same run, write-only seal both raw/parsed outputs, usage/truncation, generated packet hashes, per-arm hidden bindings, judge permutation, opaque candidate IDs, and reverse-map hash; continue from original in-memory values without rereading artifacts",
     "before_disclosure": "seal primary judge/scorer records, cells, sensitivities, safety counts, and decision",
     "repair": "any repair creates a new versioned study and cannot replace a frozen result",
-    "pre_stage1_packet_amendment": "Before registered Stage 1, atomically reseal the shared change-evidence packet contract and rerun Stage 0; this construct-validity repair changes neither the frozen primary endpoint/thresholds nor the retained 12000-token/900-second model budget and cannot reinterpret any earlier observation as a registered result"
+    "pre_stage1_packet_amendment": "Before registered Stage 1, one atomic seal must include shared change-evidence packet@3, pipeline launch v2, control-label sealing, Stage 1/2A drivers, fixed transports, closed stage layouts/aggregation, schemas, vectors, and attacks, then Stage 0 must be rerun; this changes neither the frozen primary endpoint/thresholds nor the retained 12000-token/900-second model budget and cannot reinterpret any earlier observation as a registered result"
   },
   "interpretation_limits": [
     "Open development on one machine/Unix identity; commitments are procedural, not access separation or organizational blindness.",

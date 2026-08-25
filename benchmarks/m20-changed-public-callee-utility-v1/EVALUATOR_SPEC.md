@@ -20,11 +20,13 @@ permitted.
 
 ### 1.1 Production topology
 
-There is one production entry point:
+There are three public production stage entries: `stage0`, `stage1`, and
+`stage2a`. The model stages are the only public constructors of launches. They
+invoke the private paired-unit operation
+`RUN(frozen_launch_v2, model_transport, new_unit_root) -> RunResult`.
+No public `run` command accepts an operator-authored launch.
 
-`RUN(frozen_launch, model_transport, new_output_root) -> RunResult`.
-
-It executes one paired commit unit end to end in one process:
+`RUN` executes one paired commit unit end to end in one process:
 
 ```text
 verify freeze/runtime and authenticated launch selectors
@@ -47,11 +49,16 @@ or reconstructed from files written by this run. The process may serialize a
 value for a model request or audit artifact, but continues with the original
 in-memory value. Serialization is one-way on the production path.
 
-The authenticated `m20.pipeline_launch.v1` is a frozen study selector, not a
+The authenticated `m20.pipeline_launch.v2` is a frozen study selector, not a
 scoring DTO. It contains exactly `schema`, `experiment_id`, `unit_id`,
 `repository_root`, `base_commit_oid`, `head_commit_oid`,
 `frozen_obligation_path`, `frozen_obligation_sha256`, `stage_manifest_path`,
-`stage_manifest_sha256`, `context_policy_id`, and `context_policy_sha256`.
+`stage_manifest_sha256`, `selection_manifest_sha256`,
+`selection_membership`, `context_policy_id`, and `context_policy_sha256`.
+`selection_membership` is the closed object `{stage,cumulative_rank}` and must
+match the exact unit at that rank in both the authenticated selection and stage
+manifests. Version 1 is retained only as a superseded fixture and is rejected
+by every pipeline-v2 production entry.
 The last two fields are exactly `context.subject_windows@3` and
 `sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`.
 It contains no source bytes/status, packet, loss,
@@ -117,7 +124,7 @@ forward without algorithm changes: `canonical.py`, `source_payload.py`, and
 | `pipeline.py` | private state types and the sole end-to-end constructor/scorer; owns loss, packet, permutation, judge, and primary logic |
 | `artifacts.py` | one-way atomic artifact sink plus separate read-only `verify_run`; production never calls the reader |
 | `freeze.py` | G6 portable bundle/execution/provenance contract plus complete acceptance gate |
-| `cli.py` | only `run`, offline verification/vector/attack commands, and freeze dispatch |
+| `cli.py` | only frozen stage/control entrances, offline verification/vector/attack commands, and freeze dispatch |
 
 `__main__.py` only dispatches. All other imports are side-effect free. Python
 dependencies are standard-library only. `repository.py` may invoke only a
@@ -131,7 +138,7 @@ framing, type, mode, OID, tree edge, duplicate path, or hash mismatch is a
 typed preflight failure. Git version/executable hashes are run provenance,
 never scoring authority.
 
-The normative tree has 10 responsibility modules, 5 closed
+The normative tree has 10 responsibility modules, 8 closed
 schemas instead of 16, and no public intermediate-command schemas:
 
 ```text
@@ -145,7 +152,9 @@ evaluator/
     utility_rubric.v1.json  failure_codes.v1.json
     fixture_templates.v1.json
   schemas/
-    pipeline_launch.v1.json  reviewer_output.v1.json
+    pipeline_launch.v2.json  control_labels.v1.json
+    model_stage_manifest.v1.json  model_stage_result.v1.json
+    reviewer_output.v1.json
     judge_batch_output.v1.json  run_manifest.v1.json
     freeze_manifest.v1.json
   reference_vectors/
@@ -360,8 +369,11 @@ Before packet construction the pipeline forms one shared change-evidence core:
 the complete three-line-expanded/merged profile-defined production diff plus
 the selected callee's complete exact head implementation range. A contains
 exactly that core. B contains the byte-identical core union the admitted
-`context.subject_windows@3` sources. Exact physical source duplicates are
-serialized once and conflicting duplicates are rejected; test files receive
+`context.subject_windows@3` sources. Same-source overlapping or adjacent ranges
+are merged before serialization and byte accounting only when the union stays
+within both frozen bounds copied from the policy DTO: `excerpt_lines=400` and
+`max_excerpt_bytes=262144` (an exact duplicate remains one);
+conflicting source blobs are rejected. Test files receive
 no exception to the profile. Only B's additional windows may differ. Packet
 hash is `H(packet)`.
 
@@ -1411,7 +1423,10 @@ named in section 11; a separate shallow freeze-only test path is forbidden.
 The CLI surface is fixed:
 
 - `python3 -m evaluator stage0 NEW_OUTPUT_ROOT [--jobs N]`
-- `python3 -m evaluator run FROZEN_LAUNCH NEW_OUTPUT_ROOT`
+- `python3 -m evaluator seal-controls STAGE0_SELECTION LABELER_1 LABELER_2 NEW_CONTROL_ROOT`
+- `python3 -m evaluator stage1 STAGE0_SELECTION NEW_OUTPUT_ROOT --controls CONTROL_MANIFEST`
+- `python3 -m evaluator stage2a STAGE1_ROOT NEW_OUTPUT_ROOT`
+- `python3 -m evaluator verify-stage STAGE_ROOT`
 - `python3 -m evaluator verify-run RUN_ROOT`
 - `python3 -m evaluator generate-fixtures --check`
 - `python3 -m evaluator verify-reference-vectors`
@@ -1419,23 +1434,25 @@ The CLI surface is fixed:
 - `python3 -m evaluator freeze-manifest OUTPUT`
 - `python3 -m evaluator verify-frozen MANIFEST`
 
-`run` requires a nonexistent output root and uses create-new writes. It returns
-0 when a sealed terminal paired result or the section 3.3.1 sealed non-model
-eligibility result exists, including registered post-launch model failure
-zeros; 2 on authenticated launch/preflight rejection other than the byte
-ceiling; 3 on
-freeze/runtime incompatibility; and 4 on evaluator invariant or artifact-write
-failure. Exit 4 stops the study and MUST NOT be converted into an arm zero.
-Other commands return 0 only for their complete semantic operation, 2 for an
-invalid hostile artifact/input, 3 for freeze mismatch, and 4 for an evaluator
-invariant failure. Stdout is one canonical JSON record; stderr is
-non-normative diagnostics.
+Every production output-root argument must be nonexistent and all writes are
+create-new. A model-stage command returns 0 only with a closed terminal stage
+result, including registered post-launch failure zeros; 2 on authenticated
+selection/control/preflight rejection; 3 on freeze/runtime incompatibility;
+and 4 on evaluator invariant or artifact-write failure. Exit 4 stops the study
+and MUST NOT become a primary zero. Other commands return 0 only for their
+complete semantic operation, 2 for invalid hostile input, 3 for freeze
+mismatch, and 4 for an evaluator invariant failure. Stdout is one canonical
+JSON record; stderr is non-normative diagnostics.
 
-No production command accepts an intermediate JSON artifact, raw-response
-file, parsed output, asserted hash, packet, status, loss, binding, candidate,
-batch, score, seed, arbitrary module/command/shell string, network location, or
-repository outside the authenticated allow list. Old intermediate subcommands
-must be absent, not retained as undocumented aliases.
+The only prior artifacts accepted by a production command are the hostile-
+verified Stage 0 selection/root, the two raw control-labeler records and their
+sealed control manifest, and the hostile-verified Stage 1 predecessor root at
+the explicit stage boundaries below. No command accepts a reviewer/judge raw
+response file, parsed output, asserted hash, packet, status, loss, binding,
+candidate, batch, score, seed, arbitrary module/command/shell string, network
+location, or repository outside the authenticated allow list. Old intermediate
+subcommands and public single-unit `run` must be absent, not undocumented
+aliases.
 
 ### 13.1 Frozen Stage 0 production entrance
 
@@ -1485,6 +1502,11 @@ The reducer waits for 300 unique
 terminal cluster IDs and sorts by their UTF-8 bytes; it never consumes
 submission or completion order.
 
+Stage 0 calls the pipeline-v2 packet-plan and interval-union implementation for
+each retained obligation. `model_eligible` is true only when both the shared
+core arm and its union with `context.subject_windows@3` have at most 65,536
+admitted UTF-8 bytes. Window-only estimates are forbidden.
+
 The complete output tree, every file byte, artifact-manifest hash, gate result,
 and selection-manifest hash MUST be identical for one worker and the computed
 ceiling. Acceptance injects widths 1 and the ceiling plus reversed completion
@@ -1515,6 +1537,109 @@ nondeterministic material is a typed refusal.
 only eligible IDs, frozen hash order, cumulative 10/40 memberships, and its
 seal. The primary scorer rejects that type before inspecting score fields, so
 Stage 0 cannot contribute to `n`, `b`, `c`, `n00`, or a primary cell.
+
+### 13.2 Control-label seal and Stage 1 entrance
+
+`seal-controls` is the only control-label ingress. It first treats
+`STAGE0_SELECTION` as the exact `stage0-selection.v1.json` member of a closed
+Stage 0 root and runs the same hostile full-root verification used by
+`verify-stage`; a detached copy, failed gate, foreign active freeze tuple, or
+artifact-manifest mismatch is rejected. Each labeler input is a closed raw
+record bound to that exact selection hash and contains one source-cited
+`clean_refactor_control | not_control | unable` value for every model-eligible
+cluster, the labeler identity, and an explicit declaration that the labeler did
+not implement the slice. The evaluator, operator, and model transports cannot
+author or repair a label. The initially nonexistent control root is closed to
+`labeler-1.json`, `labeler-2.json`, `control-labels.v1.json`, and
+`artifact-manifest.v1.json`. The combined record retains disagreements and
+`unable` as unresolved; it never changes selection order or membership.
+
+`stage1` performs the active freeze gate and hostile verification of the Stage
+0 root and control root before creating its output root. It accepts no launch,
+obligation, packet, arm order, backend path, score, or intermediate artifact.
+It selects exactly cumulative ranks 1 through 10 in the manifest's frozen
+order. For each rank it resolves the selected obligation only from the two
+byte-identical canonical Stage 0 builds, constructs packet `@3`, and derives a
+private `m20.pipeline_launch.v2`. The launch binds the exact selection hash,
+`{stage:"stage1",cumulative_rank:<1..10>}`, selected obligation path/hash, and
+the stage-manifest hash. A missing, duplicate, reordered, foreign, or
+non-member unit refuses the stage before a reviewer call.
+
+Before the first arm outcome, the driver writes a closed
+`m20.model_stage_manifest.v1` containing the active freeze/execution tuple,
+Stage 0 artifact- and selection-manifest hashes, control-manifest hash, stage
+ID, exact ordered membership, per-unit repository/base/head/obligation hashes,
+the common packet/budget contract, arm-order seed, fixed transport identities,
+and all ten launch preimages except the stage-manifest hash itself. This avoids
+a hash cycle; each derived launch then adds the completed stage-manifest hash.
+
+The Stage 1 root is exactly:
+
+```text
+selection/stage0-selection.v1.json
+controls/control-labels.v1.json
+stage-manifest.v1.json
+units/0001-<cluster-digest>/ ... units/0010-<cluster-digest>/
+stage-result.v1.json
+artifact-manifest.v1.json
+```
+
+Each unit directory has section 11.1's closed paired-run layout. The stage
+artifact manifest lists every file including the two exact imported manifests.
+The evaluator alone reduces the ten validated unit seals into the four paired
+cells, `n`, `b = count(A=0,B=1)`, `c = count(A=1,B=0)`, repository and
+leave-one-repository-out cells, judge-batch completeness, backend/leakage
+integrity, control adequacy, safety, and the exact `b>=8 && c<=1` decision. The
+closed result is `advance | stop` with typed reasons; operator arithmetic is
+never an input.
+
+The reviewer and judge adapters are fixed respectively at
+`/usr/local/bin/m20-reviewer-backend` and
+`/usr/local/bin/m20-judge-backend`. No CLI flag, environment value, PATH
+lookup, symlink, or fallback may select another adapter. The operator creates a
+private mount namespace and read-only bind-mounts the intended executables at
+those exact paths before invoking the stage. The evaluator uses `shell=false`,
+an empty workspace-scoped cwd, and its closed environment allow-list, and
+rechecks the pinned backend identity/health before the stage and each reviewer
+call. Stage 1 enforces 20 reviewer calls at 12,000 requested output tokens and
+900 seconds each, ten judge calls at 90 seconds each, the 18,900-second model
+ceiling, and the 21,600-second active-command wall envelope. Reserve never
+authorizes another call or retry.
+
+### 13.3 Stage 2A entrance, cumulative reduction, and terminal seal
+
+`stage2a STAGE1_ROOT NEW_OUTPUT_ROOT` first runs hostile `verify-stage` over
+the complete Stage 1 root, requires its result to be `advance`, and requires
+the same active freeze, selection, control, transport, packet, and budget
+tuple. It refuses without creating a root if any predecessor byte is missing,
+extra, stale, or invalid. It copies the verified Stage 1 root byte-for-byte
+under `predecessor/stage1/`, then launches exactly cumulative ranks 11 through
+40 in frozen order through the same launch-v2 constructor. It never repeats a
+rank or calls a model for the first ten.
+
+The Stage 2A root is closed to `predecessor/stage1/`,
+`stage-manifest.v1.json`, `units/0011-<cluster-digest>/` through
+`units/0040-<cluster-digest>/`, `stage-result.v1.json`, and
+`artifact-manifest.v1.json`. Its stage manifest binds the predecessor artifact
+manifest, predecessor result, selection, controls, exact added membership, and
+active tuple. The evaluator validates the ten predecessor primary records and
+the thirty new records, then exclusively computes all cumulative 40-pair cells,
+repository/leave-one-out tables, control/safety/backend/leakage/judge gates,
+`b>=18 && c<=7`, and terminal `success | failure`. It charges the recorded
+Stage 1 model seconds plus at most 60 new reviewer and 30 new judge calls
+against 75,600 seconds, and the two active command durations against 86,400
+seconds; idle operator delay between commands is not authorized execution and
+is excluded. Stage 2B and every resume, append, retry, single-unit production
+entrance, caller-authored launch, or caller-supplied aggregate are absent.
+
+`verify-stage` is hostile read-only verification for Stage 0, control, Stage 1,
+or Stage 2A closed roots. It recomputes layouts, manifest edges, membership,
+per-unit `verify-run`, reductions, budgets, and seals, but never resumes or
+changes a result. Acceptance must cover selection-hash/membership mutations,
+rank omission/duplication/reordering, launch-v1 injection, swapped obligations,
+foreign controls/transports, predecessor tampering, operator aggregates, and
+Stage 2A-before-advance. These stage drivers, schemas, fixtures, attacks, and
+CLI removals are one atomic seal with packet `@3`; Stage 0 must be rerun.
 
 Implementation acceptance is the conjunction of the named section 11 oracles,
 byte-identical full-run regeneration, unchanged original 52-vector

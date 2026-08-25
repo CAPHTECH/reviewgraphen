@@ -166,6 +166,49 @@ preimage, or selection input. The measured 183.2 seconds per cluster remains a
 pre-seal feasibility observation; parallel wall time does not replace it or
 change any denominator.
 
+### 3.2 Frozen model-stage entrances
+
+The operator MUST NOT author `m20.pipeline_launch` or invoke a public
+single-pair command. The frozen evaluator exposes only:
+
+```text
+seal-controls STAGE0_SELECTION LABELER_1 LABELER_2 NEW_CONTROL_ROOT
+stage1 STAGE0_SELECTION NEW_OUTPUT_ROOT --controls CONTROL_MANIFEST
+stage2a STAGE1_ROOT NEW_OUTPUT_ROOT
+verify-stage STAGE_ROOT
+```
+
+`seal-controls` hostile-verifies the closed Stage 0 root and seals both
+independent source-cited label records for every model-eligible cluster before
+any arm outcome. `stage1` hostile-verifies that root and the control root,
+authenticates the exact selection-manifest hash, and uses ranks 1--10 only.
+`stage2a` accepts only a complete verified Stage 1 root whose evaluator-owned
+decision is `advance`, imports it byte-for-byte, and uses ranks 11--40 only.
+Each private `m20.pipeline_launch.v2` binds the selection hash, exact
+`{stage,cumulative_rank}` membership, selected obligation hash, and frozen
+stage-manifest hash. Launch v1 and operator-supplied launch/stage/aggregate
+objects are rejected.
+
+Before invoking either model stage, the operator MUST create a private mount
+namespace and read-only bind the reviewer and judge transports at exactly
+`/usr/local/bin/m20-reviewer-backend` and
+`/usr/local/bin/m20-judge-backend`. The CLI provides no backend argument and
+PATH/environment/symlink fallback is forbidden. The evaluator alone builds
+both packet-`@3` arms, serial order, opaque judge permutation/candidate IDs,
+reverse-map seal, primary records, repository/leave-one-out cells, controls,
+safety and stage decision.
+
+The Stage 1 root contains exact imported selection/control manifests,
+`stage-manifest.v1.json`, ten rank-prefixed closed unit roots,
+`stage-result.v1.json`, and `artifact-manifest.v1.json`. The Stage 2A root
+contains an exact `predecessor/stage1/` copy, its own stage manifest, thirty new
+rank-prefixed unit roots, cumulative stage result, and artifact manifest. Every
+file is listed; missing, extra, reordered, foreign, stale, or caller-computed
+material is refusal. Stage 1 alone computes `b>=8,c<=1`; Stage 2A alone
+revalidates the first ten, aggregates all forty, and computes `b>=18,c<=7`.
+There is no Stage 2B, resume, append, retry, single-unit production, or
+caller-supplied aggregation entrance.
+
 ## 4. Stage 0 exact sets and seven gates
 
 Run frozen ingest, synthesis, universe, planning, and
@@ -279,8 +322,8 @@ defined exclusively by the hash-frozen evaluator in
 [EVALUATOR_SPEC.md](EVALUATOR_SPEC.md). No runner, report, or prose interpreter
 may reproduce or override those algorithms.
 
-The production command accepts only an authenticated repository/commit/
-obligation launch selector and a new output root. Packet, status, loss,
+The private paired-unit operation accepts only the launch-v2 value constructed
+inside an authenticated model-stage driver and its new unit root. Packet, status, loss,
 opportunity, binding, parsed output, hash, candidate, batch, permutation, or
 score artifacts are never production inputs. The only non-authority values
 entering scoring are raw reviewer and judge invocation results. Audit artifacts
@@ -370,6 +413,9 @@ the backend listing and health documents and compare their canonical hashes
 with the two pins in `preregistration.json`. Current reachability is unmeasured;
 this preregistration contacted no endpoint. A pre-launch mismatch/unavailable
 endpoint stops the stage. A post-launch failure scores `0` without retry.
+Reviewer and judge invocation occurs only through the two exact read-only
+bind-mounted adapter paths in section 3.2 with `shell=false`; no caller path,
+URL, command, or environment override reaches the evaluator.
 
 Each commit receives both arms serially (`concurrency=1`). Arm order is the low
 bit of `SHA256(arm_order_seed || NUL || commit_cluster_id)`. Each reviewer call
@@ -419,12 +465,15 @@ Stage 1 runs 10 fixed hash-ranked pairs. It advances only if all seven Stage 0
 gates pass, `b>=8,c<=1`, sensitivity tables are published, backend/leakage/
 judge gates pass, control adequacy holds, and safety passes. Its
 `cumulative_model_ceiling` is 18,900 seconds (5.25 h) inside a 21,600-second
-(6 h) `wall_clock_envelope` with 2,700 seconds reserve.
+(6 h) active-command `wall_clock_envelope` with 2,700 seconds reserve. Only
+the frozen `stage1` driver may compute and seal that decision.
 
 Stage 2A adds 30 fixed pairs and analyzes all 40. Final success additionally
 requires `b>=18,c<=7` and continuing gates. Its `cumulative_model_ceiling` is
 75,600 seconds (21 h) inside an 86,400-second (24 h) `wall_clock_envelope` with
-10,800 seconds reserve. Stage 2B/72 h is unauthorized. Unused time never
+10,800 seconds reserve. The frozen `stage2a` driver adds the recorded Stage 1
+and fresh Stage 2A model charges and active-command durations; operator idle
+time between commands is neither execution nor reserve. Stage 2B/72 h is unauthorized. Unused time never
 authorizes retries, extra pairs, or threshold changes.
 
 ## 11. Seal and reveal order
@@ -450,9 +499,11 @@ The mandatory order is:
 9. terminal disclosure of manifests, exclusions, labels, inventories, hashes,
    leakage records, results, usage, sensitivities, and calculations.
 
-Steps 6--8 are one-way artifact writes within one `run` process. Their seal
-order does not create an intermediate input API, pause/restart seam, or
-permission to deserialize an earlier artifact into scoring state.
+Steps 6--8 are one-way artifact writes within each private paired-unit process
+and its owning stage driver. Their seal order does not create an intermediate
+input API, pause/restart seam, or permission to deserialize a unit artifact
+into scoring state. Stage 2A may read only the complete hostile-verified Stage
+1 predecessor root expressly defined in section 3.2.
 
 If Stage 1 advances, public label disclosure waits until Stage 2A terminates.
 Hash sealing does not provide secrecy on this machine.
