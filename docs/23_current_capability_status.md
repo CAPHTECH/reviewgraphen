@@ -317,30 +317,18 @@ been reproduced.
   sample. It is not a universal observational-equivalence proof for arbitrary
   repository inputs.
 
-A contract-symmetric unregistered pilot covered 3 pairs at low-32k and xhigh-32k: primary completion was structured 3/6 and free-form 2/6 (`n=3`, directional only and excluded from the primary metric).
-Five of 12 runs reached 32k, so completion remains unresolved; of the two usable free-form findings, none was reproducible from structured-packet information because the diff body and updated tests were outside the packet.
-Packet sufficiency and the output-budget pin remain pending decisions before Stage 1; the practical-usefulness gate remains **fail**, and all model evaluation to date is unregistered pilot activity only.
-
-No registered model-based evaluation has been run: the primary model evaluation count is 0.
-Stage 0 (the model-free measurement) was launched under seal 5 through the
-accepted driver, but no Stage 0 result has yet been observed. No registered comparison with a
-free-form baseline exists. This repository therefore makes no claim that ReviewGraphen
-is better than free-form review. M20 has completed its fifth atomic re-freeze at SHA-256
-`0ea5b16d8690b3e3b017aeeae7e29ca46501a83dec0c4d98b3920693aab6c921`.
-The `95b75a62…fa73`, `eb207a22…e1a7e`, `19014d24…c1e6`, and
-`f3af4c7b…adcb8`, and `6b71b4b6…99bbd7` freezes remain as superseded history.
-The manifest binds each of four generated artifacts by its individual SHA-256.
-Specification and implementation now agree on the 3-input execution hash and
-15-key manifest; executable-drift checks SC01/SC02 were added. Vectors passed
-74/74 and the mutation sweep passed 3,990/3,990 with `SCORE_AFFECTING=0`.
-Stage 0 results, model results, and corpus outcomes remain unobserved, and the
-model evaluation count is 0. A freeze, model pin, product-binary completion,
-or the source-level tests in §6.2 is not evidence of utility. The
-practical-usefulness gate therefore remains **fail**: gate #6 is intentionally
-deferred and there are zero model evaluations.
-
-Wave 18 independent review concluded **BLOCKING 0 — accepted** for the Stage 0
-driver, including its parallel-execution contract and pre-corpus freeze gate.
+M20 keeps the 12,000-token/900-second pin; budget exhaustion is published as
+primary 0. Packet @3/pipeline v2 gives both arms the same complete-diff/callee
+shared core; only B adds `subject_windows@3`. Stage-0 `max_files=20,000` is an
+admission bound, not a C/A/S/D denominator. Independent-review Waves 20–25 are accepted
+([log 1020–50](../tmp/orchestration/ORCHESTRATION_LOG.md#L1020-L1050)). The gap
+audit added `seal-controls`, `stage1`, and `stage2a`; public single-pair
+run and operator aggregation are removed, with sol/high implementation in
+progress ([log 1061–73](../tmp/orchestration/ORCHESTRATION_LOG.md#L1061-L1073)).
+Seals 6/7 were cancelled; one seal follows all changes, superseding active
+`0ea5b16d…` ([log 1007–10, 1064–65](../tmp/orchestration/ORCHESTRATION_LOG.md#L1007-L1065)).
+Stage 0 remains unrun. Practical usefulness remains **fail**: only nonregistered
+pilots exist and registered model-evaluation count is 0.
 
 The v2 policy remains a supported, typed failure boundary for this pair: the
 product binary exited 20 after 204s at the 4,097th candidate, reporting the
