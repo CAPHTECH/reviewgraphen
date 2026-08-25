@@ -968,3 +968,38 @@ max_tokens 131,072（実使用 2,599 / xhigh 24,128）。pilot prompt は制約�
 mutation sweep SCORE_AFFECTING=0 / UNDETERMINED=0、SC01/SC02 pass。prereg 8 hash + path 充填、f3af4c… 履歴保持。verify-frozen 全 true。
 Stage0 dry freeze gate 通過（root 未生成）。→ 私の検証 + commit、Stage 0 実行者（sol-stage0b）起動、docs 更新。
 - Stage 0 起動承認: root benchmarks/m20-…/stage0-20260825-seal4-r1、--jobs 14、detached
+
+## seal 後の evaluator unittest に 2 件（commit 80c69d9 は先に成立）
+1. FAIL test_stage0_freeze_gate_rejects_current_null_preregistration — 「現行 prereg は null」を前提にしたテスト。seal で active hash が
+   充填されたため前提が崩れ、fixture bundle との hash 不一致 (stage0_active_freeze_hash_mismatch) を返す。**可変な prereg 状態に依存するテスト設計の欠陥**。
+2. ERROR test_nested_extra_and_raw_tamper_fail_after_reseal（attack_oracles._audit）— 要診断（Stage 0 並走の影響か、seal 後状態か）。
+seal 時の unit run は prereg=null 時点で通過していた。修正すれば bundle 変更 → 5 回目 seal + Stage 0 再実行が必要 → sol-audit に裁定依頼。
+- test_nested_extra_and_raw_tamper_fail_after_reseal は単独実行で OK（2 tests OK）→ Stage 0 並走時の flake。実失敗はテスト 1 のみ
+- 裁定 (a): テスト 1 を自己完結 fixture（null / active 一致 / active 不一致）に、テスト 2 は並列 stress → 共有 /tmp なら一意 temp root。5 回目 seal + Stage 0 再実行
+- Stage 0（seal 4）: detached 実行が exit 3 stage0_freeze_verification_failed — sollow-eval2 の tests 編集で bundle hash が変わり gate が正しく拒否。seal 5 まで Stage 0 は実行不能（設計どおり）→ executor 待機
+- sollow-eval2: freeze fixture を null/一致/不一致 3 ケース自己完結化、artifact audit を一意 temp root 化、stress 4×3 全成功、Stage 0 並走 unittest 60/60 ×2、vectors 74/74、attacks 72/72。validate_bundle は tmp/orchestration/PILOT の空 response-body.json（transport 失敗の証跡）で失敗 → scan 範囲の問題
+- Wave 19: **BLOCKING 0 受理**（3 ケースは公開 subprocess CLI 経路、一致時は gate 通過後 root 未作成で停止、audit は TemporaryDirectory 一意 root、4×3 stress 全成功）→ 5 回目 seal へ
+- seal 5 進行中の私の unittest: setUpClass semantic_acceptance_source_mismatch（seal 中の reference 再生成による一過性。4 回目 seal 時と同型）。vectors 74/74、attacks 72/72、validate_bundle 0 → seal 後に再実行
+- pilot 診断 2: 修正 harness low 6 件中 4 件は reasoning が content 内（reasoning_content 空）、2 件（fsl）は分離。私の probe: `enable_thinking`、`/think`、`/no_think` いずれも本文推論を止められず（proxy が switch を通さない模様）。
+  → harness は「content 末尾の JSON object を抽出」に変更、max_tokens 32,000 で low / xhigh を再実行。**pin 12,000 は実入力で不足**（Stage 1 前に裁定要）。
+- ユーザー指示: 現行検証完了後、Qwen 単独 vs Qwen+custom ReviewGraphen の作業用コンテキスト構築評価。設計を sol-audit に先行依頼（実行は現行完了後）
+- m21 設計（sol-audit）: 3 repo × 20 = 60 paired tasks を実コミットから機械選抜、oracle は後続 fix diff の base symbol + hunk 参照 symbol（LLM/judge 不使用）、arm A/B/C、共通上限 input 65,536 / output 24,000 tokens / 1,800 s / 32 tool calls（packet token と構築時間は B に課金）、primary = line-level F1 と covered oracle line あたり tokens/時間、declared loss は別指標。m20 と分離、現行検証終了まで実行禁止。385 行を NEXT/context-construction-eval.md に記録
+- pilot low-32k: 5/5 completed（6,737〜23,281 tokens、245〜916 s、inline_reasoning=false、JSON 抽出成功）。6/6 実行中 → xhigh-32k へ
+- pilot low-32k 6/6 completed（6,737〜23,472 tokens）。xhigh-32k 実行中（1/6、34 分経過）
+
+## pilot（非登録）完了（sol-stage0）
+low-12k: completed 3 / malformed 3（5/6 が 12,000 到達）。low-32k: 6/6 completed。xhigh-32k: 5 completed / 1 abstain。32k 条件の JSON 抽出 12/12。
+**盲検 judge usable: structured 0/9、free-form 7/9**。有効 serial 合計 11,514 s。3 ペアは Stage 1/2A から除外。judge は真実ではない。
+→ 仮説と逆。原因分析を sol-audit に依頼（primary metric は不変。都合よく変えない）。
+- 私の一次読取（仮説、sol-audit 分析待ち）: judge の unusable 理由は「mandated fixed abstention schema を返さなかった / nonconforming」。
+  structured 出力の limitations に「embedded packet instruction to return a fixed provider-free abstention was treated as untrusted」。
+  → pilot の structured arm は **deterministic.abstain@1 用の provider-free packet**（唯一の正解出力が固定 abstention）を
+  モデルに渡していた疑い。モデル arm には m20 §8.2 の arm-neutral disposition contract を使うべき。**pilot 設計の誤りであり
+  ReviewGraphen の有効性の証拠ではない**可能性。分析結果で確定させる。
+
+## pilot 原因分析（sol-audit、CAUSE_ANALYSIS.md 16.8 KB）
+原因 = **pilot harness の契約非対称**: reviewer は packet 内側の fixed-abstention 指示を無視して semantic review を返し、judge には
+outer 契約が渡らず内側 abstention schema を正規契約と解釈。abstention 自体も usable=false なので structured の成功経路が**閉じていた**。
+- 32k structured で foreign source ID 0 件 → モデルの構造理解は主因でない
+- free-form usable 7 件中、packet 内情報だけで再現可能は fsl の 3 件（reviewgraphen は旧側 diff/test、casegraphen は remove 実装が packet に欠落）→ **packet 充足性の観測**として Stage 1 の分析項目に
+- 0/9 と分母は記録保存、方向性証拠には使えない。Stage 1 は frozen arm-neutral…@2 + 正式 judge batch で実施、再 seal 不要、primary / 分母 / 12k pin 不変
