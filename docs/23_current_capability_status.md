@@ -317,14 +317,14 @@ been reproduced.
   sample. It is not a universal observational-equivalence proof for arbitrary
   repository inputs.
 
-An unregistered pilot ran 3 pairs × 2 arms (Qwen 4-bit, low/xhigh, 32k max tokens): blinded-judge usable was structured 0/9 and free-form 7/9.
-Cause analysis (`tmp/orchestration/PILOT/CAUSE_ANALYSIS.md`) found a harness contract asymmetry closed the structured success path, so these results are not directional evidence.
-Secondary observations only: the 12,000-token pin was insufficient on real inputs (5/6 reached it), and only 3 of 7 usable free-form results were reproducible from packet information alone; primary metrics, denominators, and the practical-usefulness gate remain unchanged.
+A contract-symmetric unregistered pilot covered 3 pairs at low-32k and xhigh-32k: primary completion was structured 3/6 and free-form 2/6 (`n=3`, directional only and excluded from the primary metric).
+Five of 12 runs reached 32k, so completion remains unresolved; of the two usable free-form findings, none was reproducible from structured-packet information because the diff body and updated tests were outside the packet.
+Packet sufficiency and the output-budget pin remain pending decisions before Stage 1; the practical-usefulness gate remains **fail**, and all model evaluation to date is unregistered pilot activity only.
 
 No registered model-based evaluation has been run: the primary model evaluation count is 0.
 Stage 0 (the model-free measurement) was launched under seal 5 through the
-accepted driver, but no Stage 0 result has yet been observed. No comparison with a free-form
-baseline exists. This repository therefore makes no claim that ReviewGraphen
+accepted driver, but no Stage 0 result has yet been observed. No registered comparison with a
+free-form baseline exists. This repository therefore makes no claim that ReviewGraphen
 is better than free-form review. M20 has completed its fifth atomic re-freeze at SHA-256
 `0ea5b16d8690b3e3b017aeeae7e29ca46501a83dec0c4d98b3920693aab6c921`.
 The `95b75a62…fa73`, `eb207a22…e1a7e`, `19014d24…c1e6`, and
