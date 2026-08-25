@@ -80,7 +80,7 @@ class Stage0DriverTest(unittest.TestCase):
             os.environ["M20_SWEEP_WORKER"] = cls.previous_sweep_worker
         cls.freeze_workspace.cleanup()
 
-    def _write_freeze_registration(self, *, path="freeze-manifest.json", manifest_hash=USE_CURRENT, bundle_hash=USE_CURRENT):
+    def _write_freeze_registration(self, *, path="freeze-manifest.json", manifest_hash=USE_CURRENT, bundle_hash=USE_CURRENT, null_active=False):
         raw = (self.freeze_root / "freeze-manifest.json").read_bytes()
         preregistration = parse_json_bytes(self.source_preregistration.read_bytes())
         active = preregistration["arm_neutral_contracts"]["freeze_hashes"]
@@ -88,6 +88,9 @@ class Stage0DriverTest(unittest.TestCase):
         active["freeze_manifest_sha256"] = sha256_bytes(raw) if manifest_hash is USE_CURRENT else manifest_hash
         for key in ("evaluator_bundle_sha256", "evaluator_execution_sha256", "generated_fixture_inventory_sha256", "reference_vector_set_sha256", "mutation_manifest_sha256", "semantic_acceptance_reference_sha256", "measurement_record_sha256"):
             active[key] = self.freeze_value[key]
+        if null_active:
+            for key in ("freeze_manifest_sha256", "evaluator_bundle_sha256", "evaluator_execution_sha256", "generated_fixture_inventory_sha256", "reference_vector_set_sha256", "mutation_manifest_sha256", "semantic_acceptance_reference_sha256", "measurement_record_sha256"):
+                active[key] = None
         if bundle_hash is not USE_CURRENT:
             active["evaluator_bundle_sha256"] = bundle_hash
         (self.freeze_root / "preregistration.json").write_bytes(canonical_bytes(preregistration))
@@ -109,23 +112,18 @@ class Stage0DriverTest(unittest.TestCase):
         self.assertEqual(result.stderr, b"")
         return result.returncode, parse_json_bytes(result.stdout), output
 
-    def test_stage0_freeze_gate_reads_real_files_and_accepts_valid_bundle(self):
-        self._write_freeze_registration()
-        exit_code, result, output = self._run_public_stage0()
-        self.assertEqual((exit_code, result["code"]), (2, "corpus_repository_count_invalid"))
-        self.assertFalse(output.exists())
-
     def test_stage0_freeze_gate_rejects_current_null_preregistration(self):
-        shutil.copy2(self.source_preregistration, self.freeze_root / "preregistration.json")
-        exit_code, result, output = self._run_public_stage0()
-        self.assertEqual((exit_code, result["code"]), (3, "stage0_freeze_input_invalid"))
-        self.assertFalse(output.exists())
-
-    def test_stage0_freeze_gate_rejects_changed_active_manifest_hash(self):
-        self._write_freeze_registration(manifest_hash="sha256:" + "0" * 64)
-        exit_code, result, output = self._run_public_stage0()
-        self.assertEqual((exit_code, result["code"]), (3, "stage0_active_freeze_hash_mismatch"))
-        self.assertFalse(output.exists())
+        cases = (
+            ("null", {"null_active":True}, (3, "stage0_freeze_input_invalid")),
+            ("matching", {}, (2, "corpus_repository_count_invalid")),
+            ("mismatch", {"manifest_hash":"sha256:" + "0" * 64}, (3, "stage0_active_freeze_hash_mismatch")),
+        )
+        for name, registration, expected in cases:
+            with self.subTest(name=name):
+                self._write_freeze_registration(**registration)
+                exit_code, result, output = self._run_public_stage0()
+                self.assertEqual((exit_code, result["code"]), expected)
+                self.assertFalse(output.exists())
 
     def test_stage0_freeze_gate_rejects_replaced_manifest_path(self):
         replacement = self.freeze_root / "replacement-freeze-manifest.json"

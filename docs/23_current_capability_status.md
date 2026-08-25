@@ -317,15 +317,19 @@ been reproduced.
   sample. It is not a universal observational-equivalence proof for arbitrary
   repository inputs.
 
-No model-based evaluation has ever been run: the model evaluation count is 0.
-Stage 0 (the model-free measurement) has started through the accepted driver,
-but no Stage 0 result has yet been observed. No comparison with a free-form
+An unregistered pilot ran 3 pairs × 2 arms (Qwen 4-bit, low/xhigh, 32k max tokens): blinded-judge usable was structured 0/9 and free-form 7/9.
+Cause analysis (`tmp/orchestration/PILOT/CAUSE_ANALYSIS.md`) found a harness contract asymmetry closed the structured success path, so these results are not directional evidence.
+Secondary observations only: the 12,000-token pin was insufficient on real inputs (5/6 reached it), and only 3 of 7 usable free-form results were reproducible from packet information alone; primary metrics, denominators, and the practical-usefulness gate remain unchanged.
+
+No registered model-based evaluation has been run: the primary model evaluation count is 0.
+Stage 0 (the model-free measurement) was launched under seal 5 through the
+accepted driver, but no Stage 0 result has yet been observed. No comparison with a free-form
 baseline exists. This repository therefore makes no claim that ReviewGraphen
-is better than free-form review. M20 has completed its fourth atomic re-freeze at SHA-256
-`6b71b4b63f550bd4896d13658f4ce295b8113e68eec3ce788414ed2fca99bbd7`.
+is better than free-form review. M20 has completed its fifth atomic re-freeze at SHA-256
+`0ea5b16d8690b3e3b017aeeae7e29ca46501a83dec0c4d98b3920693aab6c921`.
 The `95b75a62…fa73`, `eb207a22…e1a7e`, `19014d24…c1e6`, and
-`f3af4c7b…adcb8` freezes remain as superseded history. The manifest binds each
-of four generated artifacts by its individual SHA-256.
+`f3af4c7b…adcb8`, and `6b71b4b6…99bbd7` freezes remain as superseded history.
+The manifest binds each of four generated artifacts by its individual SHA-256.
 Specification and implementation now agree on the 3-input execution hash and
 15-key manifest; executable-drift checks SC01/SC02 were added. Vectors passed
 74/74 and the mutation sweep passed 3,990/3,990 with `SCORE_AFFECTING=0`.

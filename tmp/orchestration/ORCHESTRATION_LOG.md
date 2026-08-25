@@ -1003,3 +1003,8 @@ outer 契約が渡らず内側 abstention schema を正規契約と解釈。abst
 - 32k structured で foreign source ID 0 件 → モデルの構造理解は主因でない
 - free-form usable 7 件中、packet 内情報だけで再現可能は fsl の 3 件（reviewgraphen は旧側 diff/test、casegraphen は remove 実装が packet に欠落）→ **packet 充足性の観測**として Stage 1 の分析項目に
 - 0/9 と分母は記録保存、方向性証拠には使えない。Stage 1 は frozen arm-neutral…@2 + 正式 judge batch で実施、再 seal 不要、primary / 分母 / 12k pin 不変
+
+## 5 回目 atomic seal 完了（sol-prereg2）
+新 freeze SHA-256 `0ea5b16d8690b3e3b017aeeae7e29ca46501a83dec0c4d98b3920693aab6c921`。
+4 実ペア一致、4,816-file 234,144 / 231,630 ms、Stage0 並列 3 方式 byte 一致、契約 diff 0、vectors 74/74、casefold 破壊検出、
+mutation 3,990/3,990、SC01/SC02、unittest 60/60、verify-frozen 全 true、dry gate 通過。sweep 3 時間は **87 件の timeout retry**（ハングではない）。

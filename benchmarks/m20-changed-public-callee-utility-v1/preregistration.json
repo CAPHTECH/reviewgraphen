@@ -75,7 +75,7 @@
     "evaluator_version": "m20-evaluator.pipeline.v1",
     "implementation_language": "Python 3 standard library only",
     "implementation_path": "benchmarks/m20-changed-public-callee-utility-v1/evaluator/",
-    "implementation_status": "wave18_stage0_driver_atomic_refreeze_complete",
+    "implementation_status": "wave19_test_isolation_atomic_refreeze_complete",
     "role_separation": {
       "evaluator_author": "independent evaluator agent",
       "slice_implementer": "Candidate D implementation agent",
@@ -172,14 +172,14 @@
       "attack_artifact": "evaluator/generated/attacks.generated.json"
     },
     "freeze_hashes": {
-      "evaluator_bundle_sha256": "sha256:5f7214bcda25db3ab23010f5c5de7711038f4cbfb96da65afacea3baea76971f",
-      "evaluator_execution_sha256": "sha256:ce1128c364b4e50bfec68a7657172d6be7afacf983414fe8576d482ac156bfce",
-      "generated_fixture_inventory_sha256": "sha256:f1a0e48d711a6cb6b6cd3d070a40607927de9d40b23949f89e96e9b87e0e6545",
-      "reference_vector_set_sha256": "sha256:c5f9bc0e7723869bcc7eff8ac08a41ba0340f02fa0fc8b247c637b23ff735f8d",
+      "evaluator_bundle_sha256": "sha256:2133480e76487abded2ff5bcc7dab7ae01d07f6525bea99ca946797ad14d02ba",
+      "evaluator_execution_sha256": "sha256:159871d6fd8e5ea38434ef544fb0d4b3c1eb2a39822e7fd322b9bf7fd8a209d0",
+      "generated_fixture_inventory_sha256": "sha256:ef6ef899d70d5ca941fcd74eb9330dd9781eaf37089a567132998b64a9f08c33",
+      "reference_vector_set_sha256": "sha256:8c9fb64ea8f1c89b9bf791dd1f35a60a7a442999280a7860eca0c1b1aea57c7d",
       "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
-      "semantic_acceptance_reference_sha256": "sha256:081298c64a946c722846496fb0d4dfd3c949d21c2700445382f09d447ad9d64d",
-      "measurement_record_sha256": "sha256:af68524b891cdd86169a0789ff386a071694e3976cc35238bec5c164fee26cae",
-      "freeze_manifest_sha256": "sha256:6b71b4b63f550bd4896d13658f4ce295b8113e68eec3ce788414ed2fca99bbd7",
+      "semantic_acceptance_reference_sha256": "sha256:ee7e670ede21ee4c74bd1e50ddff215049c5187c51212e2094056b17b2dd4d43",
+      "measurement_record_sha256": "sha256:9acf4adcdbe588b198eb7d6bcf553a2e13519b614d641c1fe211a0e18f479ad7",
+      "freeze_manifest_sha256": "sha256:0ea5b16d8690b3e3b017aeeae7e29ca46501a83dec0c4d98b3920693aab6c921",
       "freeze_manifest_path": "freeze-manifest.json",
       "non_null_gate": "After the Stage 0 driver is implemented and atomically re-sealed, all eight hashes and the manifest path must be non-null; SHA-256 of the exact manifest bytes must equal freeze_manifest_sha256, its bundle/execution hashes must equal the active slots, its supersedes_freeze_manifest_sha256 must equal the last freeze_history manifest hash, and verify-frozen must pass before status may return to frozen-before-corpus-resolution."
     },
@@ -229,6 +229,18 @@
         "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
         "semantic_acceptance_reference_sha256": "sha256:ca63178a27f33aa4c1db04159eb82262a1ef0a9063db626b51ff84045426c9d6",
         "measurement_record_sha256": "sha256:030c843441d74d7c706c8e7306e2b1e7cc8971eb9578a6fbe793392df2f09066"
+      },
+      {
+        "freeze_manifest_sha256": "sha256:6b71b4b63f550bd4896d13658f4ce295b8113e68eec3ce788414ed2fca99bbd7",
+        "status": "superseded_wave19_test_isolation_hardening",
+        "reason": "Wave 19 made the three freeze-gate fixture cases self-contained and assigned artifact audit a unique temporary root; evaluator semantics and preregistered endpoints remained unchanged, and no Stage 0, model, or corpus outcome was observed.",
+        "evaluator_bundle_sha256": "sha256:5f7214bcda25db3ab23010f5c5de7711038f4cbfb96da65afacea3baea76971f",
+        "evaluator_execution_sha256": "sha256:ce1128c364b4e50bfec68a7657172d6be7afacf983414fe8576d482ac156bfce",
+        "generated_fixture_inventory_sha256": "sha256:f1a0e48d711a6cb6b6cd3d070a40607927de9d40b23949f89e96e9b87e0e6545",
+        "reference_vector_set_sha256": "sha256:c5f9bc0e7723869bcc7eff8ac08a41ba0340f02fa0fc8b247c637b23ff735f8d",
+        "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
+        "semantic_acceptance_reference_sha256": "sha256:081298c64a946c722846496fb0d4dfd3c949d21c2700445382f09d447ad9d64d",
+        "measurement_record_sha256": "sha256:af68524b891cdd86169a0789ff386a071694e3976cc35238bec5c164fee26cae"
       }
     ],
     "runtime_contract": {
