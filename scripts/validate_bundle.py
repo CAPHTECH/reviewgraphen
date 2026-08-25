@@ -23,6 +23,8 @@ except ImportError as exc:  # pragma: no cover
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = ROOT / "schemas"
 EXAMPLE = ROOT / "examples" / "double-submit-payment"
+M20_BUNDLE = ROOT / "benchmarks" / "m20-changed-public-callee-utility-v1"
+VALIDATION_ROOTS = (SCHEMAS, M20_BUNDLE, ROOT / "docs")
 IGNORED_PATH_PARTS = {
     ".git",
     ".reviewgraphen",
@@ -61,10 +63,11 @@ def load_json(path: Path) -> Any:
 
 
 def repository_files(pattern: str) -> list[Path]:
-    """Return source-controlled candidates without generated/local state."""
+    """Return canonical bundle candidates, excluding local/output state."""
     return [
         path
-        for path in sorted(ROOT.rglob(pattern))
+        for scope in VALIDATION_ROOTS
+        for path in sorted(scope.rglob(pattern))
         if not IGNORED_PATH_PARTS.intersection(path.relative_to(ROOT).parts)
     ]
 
