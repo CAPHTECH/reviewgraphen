@@ -1010,3 +1010,24 @@ outer 契約が渡らず内側 abstention schema を正規契約と解釈。abst
 mutation 3,990/3,990、SC01/SC02、unittest 60/60、verify-frozen 全 true、dry gate 通過。sweep 3 時間は **87 件の timeout retry**（ハングではない）。
 - Stage 0 起動失敗は pilot 実行者の bundle 内 evaluator 実行による一時状態変化。pilot 待機、seal 5 を commit、Stage 0 再起動
 - Stage 0（seal 5、外部起動）: exit 4 frozen_cluster_pipeline_failed / 46 s。corpus-manifest + 7 cluster の pipeline-request.v3.json まで生成。エラー詳細なし → 診断依頼
+
+## Stage 0 失敗診断（sollow-eval2、stage0-failure-diagnosis.md）
+再現 cluster 00670ed… は **exit 20 「generic review artifact root path traversal」** — driver が **絶対パスの --artifacts** を製品 CLI に渡す
+実装不整合（(b) driver bug、corpus / 環境要因ではない）。加えて driver が **stderr / return code / cluster ID を保存しない**ため
+最初の失敗 cluster を root から特定不能（欠陥）。修正は bundle 変更 → **seal 6 必須**。
+教訓: 19 wave のレビューと 300 件合成テストでは製品 CLI の admission を通していなかった。実 corpus dry run が初めて露呈させた。
+- driver 修正（sollow-eval2）: repo 相対 --artifacts + 独立 clone、root 外 cluster/exit/stderr 診断、失敗 stderr JSON に最初の cluster ID/exit、実 4,816-file pair の製品 CLI integration 成功、max_files を ADR 準拠 5,000 へ、unittest 63/63、absolute-path 変異で失敗確認。seal 6 要
+- Wave 20 不受理: BLOCKING stage0_production.py:68 max_files=5000 は ADR/prereg に根拠なし（従来 4,096、ADR は「上限は request の max_files」と実測 4,816 のみ。SPEC:1454 の ADR §11 引用は誤り）= 未裁定の分母変更。MAJOR :80 timeout 時に cluster/exit/stderr 診断を生成しない。clone 並列衝突なし、診断 canonical 外、integration は stub なし
+- 裁定: Stage 0 request の ingest.max_files = 20,000（v3 schema 上限 = quickstart 同値。corpus-fitted 5,000 を回避）。admission/resource bound であり C/A/S/D の分母ではない。超過は typed Stage 0 failure（切捨て・除外・model-ineligible 化しない）。materialized-source 上限 4,096 不変。ADR/prereg/SPEC 更新、seal 6 対象
+- 私の検証（driver 修正 v1 時点）: unittest OK、vectors 74/74、attacks 72/72、validate_bundle 0
+- driver 修正 v2（sollow-eval2）: timeout 時も cluster ID / exit=null / 部分 stderr / typed_reason=timeout を外部診断 + stderr JSON へ、max_files=20,000 統一、超過は stage0_ingest_max_files_exceeded、4,096 不変。unittest 65/65。→ 私の検証 + Wave 21
+- Wave 21: **受理**（max_files 20,000 が ADR/prereg/SPEC/実装で一致、超過は reduction/selection 前に全停止、timeout 診断は canonical 外。MINOR: 超過型識別が製品 stderr の英語文字列照合依存だが誤認時は generic failure へ fail-closed）→ seal 6
+- 私の検証（driver v2）: unittest OK、vectors 74/74、attacks 72/72、validate 0。max_files=20000 を stage0_production.py:79 で確認
+- 修正版 pilot 中間: low-32k 6 slot 完了（うち 2 slot が 32,000 上限・inline_reasoning=true）、pair ごとに盲検 judge 実行済み。xhigh-32k 2/6。読み出しは完了後
+
+## 修正版 pilot（非登録、契約対称）完了（sol-stage0）
+reviewer 12/12 HTTP 200、retry 0、judge 6/6、verify-run 6/6 true。
+primary completed: **low-32k structured 2/3 / free-form 1/3、xhigh-32k structured 1/3 / free-form 1/3**（n=3、記述のみ）。
+5/12 が 32,000 tokens 到達（32k でも完了性問題が残る）。free-form usable 所見の structured packet 内再現性 **0/2**
+（base→head diff と更新 test、remove 実装が packet 外）。合計 12,494 s。judge は TP/FP を判定せず、真実ではない。
+harness 差分: Stage 0 manifest 不在、casegraphen baseline 65,536 B 超過、FSL symlink。旧非対称結果は無効枠保存。

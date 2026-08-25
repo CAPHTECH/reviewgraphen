@@ -4,6 +4,58 @@
 
 judge は非 authority の usability proxy であり、欠陥の真実、verification、evidence support、human acceptance ではない。
 
+## 契約修正版 pilot（2026-08-26、正式 @2 経路）
+
+この節だけが `CAUSE_ANALYSIS.md` 後のやり直し結果である。これも **非登録 pilot** であり、primary metric の判定、baseline 比較、Stage 1 / 2A の候補選抜には使わない。対象3ペアは Stage 1 / 2A から除外する。
+
+### 実行契約と差分
+
+- source bundle 内では evaluator command を一度も実行していない。`/tmp/m20-pilot-workspace.QtGhHj` へコピーし、コピー上の `verify-frozen` は実行前後とも `bundle_valid/checks_valid/design_spec_valid/execution_contract_valid/runtime_compatible/ok = true`。
+- frozen `pipeline.RUN` が packet、mechanical score、2-candidate blind permutation、utility judge batch、primary、seal を生成し、6 run の `verify_run` はすべて true。全 packet は `arm-neutral.source-grounded-packet@2`、出力は `arm-neutral.source-grounded-disposition@1`。instruction は両 arm 共通で、fixed-abstention 指示は0件。
+- reviewer は `Qwen3.8-27B-MLX-4bit` へ直接 `/v1/chat/completions`。1 request in flight、retry 0、32,000 tokens、low timeout 1,800 s / xhigh timeout 3,600 s。content の最後の balanced JSON を抽出し、frozen decoder が最終判定した。
+- judge は `gpt-5.6-sol/high`。frozen rubric と exact 2-candidate batchを6回（3 pair × 2 condition）使用した。arm label は渡していない。Codex response-format 互換のため const/enum node に `type` だけを追加したが、decode/採点は frozen evaluator のまま。pilot judge timeout は420 s（frozen 引数90 s）で、全件正常終了した。
+- Stage 0 が driver failure で production occurrence manifest を作れなかったため、既存 v3 audit から最小 manifestを合成し、pairごとに hash-ranked obligationを1件選んだ。casegraphen の full baseline diff は 73,061 source bytesで ceiling超過だったため、両 arm とも対象変更ファイル1件に限定した。FSL の Git tree symlink entriesは walker対象外にし、regular blob hash validationは維持した。これらは Stage 1 と異なる harness 差分である。
+- low/xhigh 間は6 armすべて source bytes、packet bytes/hash、reviewer prompt hashが一致した。
+- 対象と選択 obligation は、ReviewGraphen `a8b6b24d… → 8569a226…` / `obligation:sha256:d01cecab…`、fsl `fbcb62d… → fd5b8c6…` / `obligation:sha256:d361…`、casegraphen `9a63d0a… → 56f2ef5…` / `obligation:sha256:bd0c0a86…`。この3ペアを Stage 1 / 2A から除外する。
+
+`response` は frozen parsed disposition が claimなら completed、存在しなければ malformed。`primary` は mechanical validityと judge thresholdを含む正式な `usable_grounded_disposition_completed` 相当である。judge schemaは真陽性/偽陽性を判定しないため、TP/FPを後付けしていない。
+
+### low-32k
+
+| pair | arm | source / packet bytes | output tokens | elapsed s | response | inline | JSON extracted | primary | judge | packet再現 | TP/FP |
+|---|---|---:|---:|---:|---|---|---|---|---|---|---|
+| reviewgraphen | structured | 15,189 / 22,018 | 26,884 | 1,059.138 | completed | false | true | true | 8 / usable | n/a | formal対象外 |
+| reviewgraphen | free-form | 4,936 / 12,860 | 17,041 | 655.227 | completed | false | true | true | 7 / usable | no: base/testがpacket外 | formal対象外 |
+| fsl | structured | 9,104 / 15,803 | 32,000 | 1,260.846 | malformed | true | true | false | 0 / not_usable | n/a | formal対象外 |
+| fsl | free-form | 20,043 / 25,165 | 32,000 | 1,274.640 | malformed | true | true | false | 0 / not_usable | n/a | formal対象外 |
+| casegraphen | structured | 6,184 / 12,696 | 25,741 | 995.478 | completed | false | true | true | 8 / usable | n/a | formal対象外 |
+| casegraphen | free-form | 12,803 / 21,546 | 32,000 | 1,275.623 | malformed | true | true | false | 0 / not_usable | n/a | formal対象外 |
+
+reviewer 6,520.952 s、165,666 output tokens。judge 138.110 s。条件合計 6,659.062 s。primary completed は structured 2/3、free-form 1/3、全体3/6。
+
+### xhigh-32k
+
+| pair | arm | source / packet bytes | output tokens | elapsed s | response | inline | JSON extracted | primary | judge | packet再現 | TP/FP |
+|---|---|---:|---:|---:|---|---|---|---|---|---|---|
+| reviewgraphen | structured | 15,189 / 22,018 | 29,534 | 1,148.714 | completed | false | true | true | 8 / usable | n/a | formal対象外 |
+| reviewgraphen | free-form | 4,936 / 12,860 | 15,622 | 586.914 | malformed | false | true | false | 0 / not_usable | n/a | formal対象外 |
+| fsl | structured | 9,104 / 15,803 | 32,000 | 1,248.151 | malformed | true | false | false | 0 / not_usable | n/a | formal対象外 |
+| fsl | free-form | 20,043 / 25,165 | 32,000 | 1,254.588 | malformed | true | true | false | 0 / not_usable | n/a | formal対象外 |
+| casegraphen | structured | 6,184 / 12,696 | 12,730 | 465.500 | completed | false | true | false | 5 / not_usable | n/a | formal対象外 |
+| casegraphen | free-form | 12,803 / 21,546 | 25,641 | 986.228 | completed | false | true | true | 8 / usable | no: remove範囲がpacket外 | formal対象外 |
+
+reviewer 5,690.095 s、147,527 output tokens。judge 144.307 s。条件合計 5,834.402 s。primary completed は structured 1/3、free-form 1/3、全体2/6。
+
+### 観測
+
+- 12 reviewer は全件HTTP 200 / retry 0で、timeout/crash/transport error は0。5件が32,000 tokensで `finish=length`。そのうち4件はbalanced JSON抽出に成功したが、provider truncation/schema failureにより frozen primaryでは malformed。別の1件（reviewgraphen xhigh free-form）は `finish=stop`・抽出成功でも schema invalidだった。32kでも完了性問題は解消しなかった。
+- formal judge が usable とした free-formは2件。reviewgraphen lowの `issue_absent` は base→head差分と更新testを必要とし、structured packetだけでは再現不能。casegraphen xhighの non-transactional remove は `ResourceOccupancyIndex::remove` の範囲がstructured packet外で再現不能。したがって今回の追跡値は **0/2**。旧契約非対称 pilotの3/7とは同じpacketではなく比較不能である。
+- reviewgraphen structuredは両条件で同じ exact-path owner機序を返し8/usable。casegraphen low structuredは unchecked overflowを8/usable、xhigh free-formは partial removalを8/usable、xhigh structuredは unrelated occupancy機序を5/not_usable。fslは4件すべてprimary前に malformed。これらはjudge所見であり真実ではない。
+- measured request合計は reviewer 12,211.047 s + judge 282.417 s = **12,493.464 s**。preflight 0.939 sを含む記録合計は **12,494.403 s**。成果物は5,171,813 bytes、isolated workspaceは8,401,752 bytes。
+- 最初の low launcher は output parent の作成漏れで transport到達前に失敗（reviewer送信0件）。親だけを作成して開始したため再送は発生していない。失敗前の pilot結果としては計上しない。
+
+## 旧契約非対称 pilot（方向性結果として無効）
+
 ## 無効 harness 観測（結果表から除外）
 
 Claude CLI を reviewer transport に誤用したため無効。以下は pilot 結果ではなく、再試行にも昇格しない。4件目は利用者が kill した pre-result partial run。
@@ -40,7 +92,7 @@ last-balanced-JSON 抽出方針の確定前に開始した xhigh 観測も無効
 
 初回 blind judge は出力 schema の type 欠落によりモデル判定前の HTTP 400 / status 1（5.131 s）。無効枠として保存し、同一候補順で schema 修正後の judge を各ペア1回実行した。
 
-有効 run は low-12k、low-32k、xhigh-32k。各 arm の条件間 input bytes、input artifact hash、prompt hash は judge 準備時に一致検証済み。raw content prose は保存のみで canonical / judge input にせず、最後のbalanced JSON objectだけをschema検証する。
+以下は transport/parser 上は完走した low-12k、low-32k、xhigh-32k だが、`CAUSE_ANALYSIS.md` の契約非対称により方向性結果として無効。各 arm の条件間 input bytes、input artifact hash、prompt hash は judge 準備時に一致検証済み。raw content prose は保存のみで canonical / judge input にせず、最後のbalanced JSON objectだけをschema検証した。
 
 ## low-12k
 
