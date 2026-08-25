@@ -104,17 +104,14 @@ def launch(case: str = "claim", source_bytes: int | None = None, subject_bytes: 
     obligation = {"schema": "m20.frozen_obligation.v1", "unit_id": unit, "rule_id": "relation.changed_public_callee@1", "property_id": "rust.callee_contract_review@1", "obligation_ids": ["obligation:fixture"], "relation_ids": ["relation:fixture"], "endpoint_pairs": endpoint_pairs, "subject_windows": subject_windows, "sources": sources, "required_references": [], "projection": projection, "bounded_scope_manifest_id": "scope:fixture"}
     obligation_path = FIXTURE_ROOT / "obligation.json"
     obligation_path.write_bytes(canonical_bytes(obligation))
-    occurrence_closure = build_occurrence_closure(
-        {"snapshot_id":"snapshot:fixture","target_revision":objects["head"],"legacy_program_space_sha256":"sha256:"+"1"*64,"legacy_extraction_report_sha256":"sha256:"+"2"*64},
-        [{"file_source_id":file_ids[0],"path":sources[0]["path"]}],
-        [],
-        [file_ids[0]],
-        {"schema":"m20.stage0-occurrence-metrics.v1","cluster_id":unit,"wall_time_milliseconds":0,"peak_bytes":0},
-    )
-    stage = {"schema": "m20.stage_manifest.v1", "experiment_id": "m20-changed-public-callee-utility-v1", "unit_id": unit, "repository_root": LOGICAL_ROOT + "/repository", "repository_allow_list": [LOGICAL_ROOT + "/repository"], "base_commit_oid": objects["base"], "head_commit_oid": objects["head"], "frozen_obligation_sha256": sha256_bytes(obligation_path.read_bytes()), "profile_id": "rust.production.v1", "profile_sha256": PROFILE_HASH, "context_policy_id": CONTEXT_POLICY_ID, "context_policy_sha256": CONTEXT_HASH, "occurrence_closure": occurrence_closure, "public_seeds": {"arm_order": "m20-arm-order-v1", "judge_permutation": "m20-judge-permutation-v1"}, "backend_adapters": {"reviewer": "fixture-reviewer.v1", "judge": "fixture-judge.v1"}}
+    selection_sha256 = hash_json({"schema":"m20.test-selection.v1","unit_id":unit})
+    membership = {"stage":"stage1","cumulative_rank":1}
+    unit_record = {"unit_id":unit,"repository_root":LOGICAL_ROOT+"/repository","base_commit_oid":objects["base"],"head_commit_oid":objects["head"],"obligation_id":"obligation:fixture","frozen_obligation_path":LOGICAL_ROOT+"/obligation.json","frozen_obligation_sha256":sha256_bytes(obligation_path.read_bytes())}
+    launch_preimage = {"schema":"m20.pipeline_launch.v2","experiment_id":"m20-changed-public-callee-utility-v1","unit_id":unit,"repository_root":unit_record["repository_root"],"base_commit_oid":objects["base"],"head_commit_oid":objects["head"],"frozen_obligation_path":unit_record["frozen_obligation_path"],"frozen_obligation_sha256":unit_record["frozen_obligation_sha256"],"selection_manifest_sha256":selection_sha256,"selection_membership":membership,"context_policy_id":CONTEXT_POLICY_ID,"context_policy_sha256":CONTEXT_HASH,"stage_manifest_path":None}
+    stage = {"schema":"m20.model_stage_manifest.v1","experiment_id":"m20-changed-public-callee-utility-v1","stage":"stage1","active_freeze":{"freeze_manifest_sha256":"sha256:"+"1"*64,"evaluator_bundle_sha256":"sha256:"+"2"*64,"evaluator_execution_sha256":"sha256:"+"3"*64},"source_stage0_root":LOGICAL_ROOT,"stage0_artifact_manifest_sha256":"sha256:"+"4"*64,"selection_manifest_sha256":selection_sha256,"control_manifest_path":LOGICAL_ROOT+"/controls.json","control_manifest_sha256":"sha256:"+"5"*64,"ordered_membership":[{"unit_id":unit,"cumulative_rank":1}],"units":[unit_record],"packet_contract":{"schema":"arm-neutral.source-grounded-packet@3","context_policy_id":CONTEXT_POLICY_ID,"context_policy_sha256":CONTEXT_HASH,"admitted_source_byte_ceiling":65536},"budget_contract":{"reviewer_output_tokens":12000,"reviewer_timeout_seconds":900,"judge_timeout_seconds":90},"public_seeds":{"arm_order":"m20-arm-order-v1","judge_permutation":"m20-judge-permutation-v1"},"fixed_transports":{"reviewer":{"adapter_id":"m20.fixed-reviewer-process.v1","path":"/usr/local/bin/m20-reviewer-backend","sha256":"sha256:"+"6"*64},"judge":{"adapter_id":"m20.fixed-judge-process.v1","path":"/usr/local/bin/m20-judge-backend","sha256":"sha256:"+"7"*64}},"launch_preimages":[launch_preimage],"predecessor":None}
     stage_path = FIXTURE_ROOT / "stage.json"
     stage_path.write_bytes(canonical_bytes(stage))
-    value = {"schema": "m20.pipeline_launch.v1", "experiment_id": stage["experiment_id"], "unit_id": unit, "repository_root": stage["repository_root"], "base_commit_oid": objects["base"], "head_commit_oid": objects["head"], "frozen_obligation_path": LOGICAL_ROOT + "/obligation.json", "frozen_obligation_sha256": stage["frozen_obligation_sha256"], "stage_manifest_path": LOGICAL_ROOT + "/stage.json", "stage_manifest_sha256": sha256_bytes(stage_path.read_bytes()), "context_policy_id": CONTEXT_POLICY_ID, "context_policy_sha256": CONTEXT_HASH}
+    value = {**{key:item for key,item in launch_preimage.items() if key!="stage_manifest_path"},"stage_manifest_path":LOGICAL_ROOT+"/stage.json","stage_manifest_sha256":sha256_bytes(stage_path.read_bytes())}
     return value, FIXTURE_ROOT / "run"
 
 
@@ -167,7 +164,7 @@ class Transport:
         self.reviewer_mode, self.judge_mode = reviewer, judge
 
     def descriptor(self):
-        return {"reviewer": "fixture-reviewer.v1", "judge": "fixture-judge.v1"}
+        return {"reviewer": "m20.fixed-reviewer-process.v1", "judge": "m20.fixed-judge-process.v1"}
 
     def review(self, request: bytes, slot: int, timeout: int):
         packet = parse_json_bytes(request)

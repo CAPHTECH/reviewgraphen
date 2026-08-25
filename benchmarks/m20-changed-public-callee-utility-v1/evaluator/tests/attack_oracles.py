@@ -26,7 +26,7 @@ MUTATIONS = {
     "H3N01": ("textnorm.py", 'return unicodedata.normalize("NFKC", value).casefold()', 'return unicodedata.normalize("NFKC", value)'),
     "H3A01": ("pipeline.py", 'from .artifacts import ArtifactSink', 'from .artifacts import ArtifactSink, verify_run'),
     "H3F01": ("freeze.py", 'cases=[("claim_success","claim","pass"),("abstention_success"', 'cases=[("abstention_success"'),
-    "H3C01": ("cli.py", 'return error.exit_code\n', 'return 0 if error.exit_code == 4 else error.exit_code\n'),
+    "H3C01": ("cli.py", 'COMMANDS = ("stage0", "seal-controls"', 'COMMANDS = ("stage0", "run", "seal-controls"'),
     "X01": ("model_boundary.py", 'not 1 <= len(disposition["claims"]) <= 3', 'not 0 <= len(disposition["claims"]) <= 3'),
     "X02": ("model_boundary.py", 'not 1 <= len(value) <= 8', 'not 0 <= len(value) <= 8'),
     "X03": ("repository.py", '{"40000", "100644", "100755"}', '{"40000", "100644", "100755", "120000"}'),
@@ -44,7 +44,7 @@ MUTATIONS = {
     "CTX05": ("semantic_acceptance.py", '"sha256:4afb9ed6e6c07c3c23367c5bd2e8729d413de0064aacc9324ce2b6f492c52a94"', '"sha256:0afb9ed6e6c07c3c23367c5bd2e8729d413de0064aacc9324ce2b6f492c52a94"'),
     "CTX06": ("semantic_acceptance.py", 'MEASUREMENT_SHA256 = "sha256:7286d700f8684893477c8e6660986239cc52ffde35394160fc1ab844e642a7b8"', 'MEASUREMENT_SHA256 = "sha256:8286d700f8684893477c8e6660986239cc52ffde35394160fc1ab844e642a7b8"'),
     "CTX07": ("semantic_acceptance.py", '    "production-helper-reuse",\n', ''),
-    "PKT01": ("pipeline.py", "treatment_specs = _union_specs(core_specs, obligation[\"sources\"])", "treatment_specs = obligation[\"sources\"]"),
+    "PKT01": ("pipeline.py", "return core, _union_specs(core, window_specs, union_byte_length)", "return core, _union_specs([], window_specs, union_byte_length)"),
     "SC01": ("spec_contract.py", '        "semantic_acceptance_reference_sha256": semantic_acceptance_reference_sha256,', '        "semantic_acceptance_reference_sha256": runtime_requirements_sha256,'),
     "SC02": ("spec_contract.py", '    "measurement_record_sha256",\n', ''),
 }

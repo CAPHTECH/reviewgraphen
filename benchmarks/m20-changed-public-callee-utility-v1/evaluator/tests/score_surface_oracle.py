@@ -202,4 +202,4 @@ def score_surface_sha256(root: Path) -> str:
     return hash_json(score_surface(root))
 
 
-EXPECTED_SCORE_SURFACE_SHA256 = "sha256:b85031ae931546593fc8c415a5c65ef21ebcb685c55ec6d9a59958539be7bfea"
+EXPECTED_SCORE_SURFACE_SHA256 = "sha256:807245c74a034ba76fdfe28125042292ddd216e790865a3c26888f1b486910c7"

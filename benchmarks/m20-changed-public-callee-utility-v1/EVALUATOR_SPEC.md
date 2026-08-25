@@ -57,15 +57,16 @@ scoring DTO. It contains exactly `schema`, `experiment_id`, `unit_id`,
 `selection_membership`, `context_policy_id`, and `context_policy_sha256`.
 `selection_membership` is the closed object `{stage,cumulative_rank}` and must
 match the exact unit at that rank in both the authenticated selection and stage
-manifests. Version 1 is retained only as a superseded fixture and is rejected
-by every pipeline-v2 production entry.
+manifests. Version 1 has no normative schema or public entrance; its schema
+tag is recognized only long enough to return typed `launch_schema_invalid`.
 The last two fields are exactly `context.subject_windows@3` and
 `sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`.
 It contains no source bytes/status, packet, loss,
 eligibility, binding, candidate, batch, score, seed, prompt, or hash for an
 intermediate value. The stage manifest is sealed before launch and binds the
-profile/context identities, public seeds, backend adapters, repository allow
-list, commit pair, unit, and obligation hash. A mismatch is a pre-launch
+active freeze tuple, selection/control hashes, context identity, public seeds,
+fixed transport paths and hashes, commit pair, rank, unit, and obligation
+hash. A mismatch is a pre-launch
 refusal, not an arm result.
 
 The pipeline derives reviewer slot order from the frozen arm-order seed:
@@ -121,8 +122,9 @@ forward without algorithm changes: `canonical.py`, `source_payload.py`, and
 | `repository.py` | read-only, fixed-argv Git object adapter; verifies tree/blob IDs and returns normalized relative paths and bytes |
 | `model_boundary.py` | total depth-bounded decode of reviewer/judge raw bytes into closed immutable output types |
 | `stage0_contract.py` | pure atomic constructor/validator for occurrence summaries and `context.subject_windows@3` commitments |
-| `pipeline.py` | private state types and the sole end-to-end constructor/scorer; owns loss, packet, permutation, judge, and primary logic |
+| `pipeline.py` | private state types and the sole paired-unit constructor/scorer; owns loss, packet, permutation, judge, and primary logic |
 | `artifacts.py` | one-way atomic artifact sink plus separate read-only `verify_run`; production never calls the reader |
+| `stage_driver.py` | authenticated control seal, closed Stage 1/2A roots, private launch-v2 construction, cumulative reduction, and hostile `verify-stage` |
 | `freeze.py` | G6 portable bundle/execution/provenance contract plus complete acceptance gate |
 | `cli.py` | only frozen stage/control entrances, offline verification/vector/attack commands, and freeze dispatch |
 
@@ -138,14 +140,14 @@ framing, type, mode, OID, tree edge, duplicate path, or hash mismatch is a
 typed preflight failure. Git version/executable hashes are run provenance,
 never scoring authority.
 
-The normative tree has 10 responsibility modules, 8 closed
+The normative tree has 11 responsibility modules, 8 closed
 schemas instead of 16, and no public intermediate-command schemas:
 
 ```text
 evaluator/
   __init__.py  __main__.py  canonical.py  source_payload.py  textnorm.py
   repository.py  model_boundary.py  stage0_contract.py  pipeline.py
-  artifacts.py  freeze.py
+  artifacts.py  stage_driver.py  freeze.py
   cli.py
   data/
     common_instruction.txt  question_registry.v1.json
@@ -1274,6 +1276,24 @@ These are applied source mutations, not manifest-only rows:
 | PKT01 | remove the shared core from one arm | the packet-core equality oracle fails |
 | SC01 | substitute the runtime hash for the semantic-reference input | C16 fails |
 | SC02 | remove `measurement_record_sha256` from the implementation manifest key literal | normative spec check fails |
+| STG01 | inject launch v1 | typed launch rejection |
+| STG02 | change the selection hash bound by a launch | stage/launch equality fails |
+| STG03 | change the cumulative rank | ordered membership fails |
+| STG04 | omit `--controls` | CLI admission fails before root creation |
+| STG05 | remove either fixed backend path | fixed transport preflight fails closed |
+| STG06 | restore pair-run/resume/append/Stage 2B/aggregate | public-surface oracle fails |
+| STG07 | add a budget or transport selector | fixed 12,000/900 contract oracle fails |
+| STG08 | substitute a foreign transport identity | stage contract fails |
+| STG09 | add an externally callable aggregate/resume type | module-surface oracle fails |
+| STG10 | move the Stage 1 `advance` check after Stage 2A root creation | source-order oracle fails |
+| STG11 | remove predecessor verification or byte copy | predecessor-closure oracle fails |
+| STG12 | change any 6h/18,900s/24h/75,600s envelope | literal budget oracle fails |
+
+For this launch-v2/stage-driver contract, the reviewed AST score-surface
+literal is `sha256:807245c74a034ba76fdfe28125042292ddd216e790865a3c26888f1b486910c7`.
+The exhaustive operator inventory is exactly 4,224 `SCORE_AFFECTING`, 141
+`NON_SCORE`, and 6 `EQUIVALENT` mutants; these are drift sentinels, not evidence
+that a mutant was behaviorally detected.
 
 An attack ID without an explicit source mutation or nontrivial probe is a
 failure. The runner refuses unknown IDs and requires each mutation target to

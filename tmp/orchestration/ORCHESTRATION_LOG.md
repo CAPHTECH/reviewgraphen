@@ -1085,3 +1085,4 @@ selection hash・membership が無く、operator 合成は「frozen evaluator �
 - m21: A = task brief + read tools、B = 同条件 + task-subject packet のみ（未来 diff / shared core なし）。B は packet tokens・binding・ingest・projection 時間を全て課金
 - request v4 案は却下（review 境界の混同）
 → worktree `../reviewgraphen-m21`（branch m21-task-subject-context）を作成、sol/high 実装者 sol-impl-ctx を起動
+- m20 stage1 / 2A / seal-controls 実装（sol-impl、sol/high）: launch v2、closed layout、固定 backend・予算、evaluator 内集計、旧 run/resume/append/2B/operator 集計削除、schemas/vectors/attacks/fixtures/SC 更新、合成 40-pair E2E を固定 bind-mount の実 subprocess で確認。unittest 76、vectors 74/74、attacks 85/85。→ 私の検証 + Wave 26

@@ -3,17 +3,17 @@ import unittest
 from evaluator import pipeline
 from evaluator.artifacts import verify_run
 from evaluator.canonical import canonical_bytes, parse_json_bytes, sha256_bytes
-from evaluator.pipeline import PipelineError, _packet_audit, _packet_v2
+from evaluator.pipeline import PipelineError, _packet_audit, _packet_v2, _union_specs, packet_v3_admitted_bytes, packet_v3_plan
 from .support import FIXTURE_ROOT, Transport, fixture_run, launch
 
 class PipelineTest(unittest.TestCase):
     def tearDown(self):
         if FIXTURE_ROOT.exists(): shutil.rmtree(FIXTURE_ROOT)
     def test_end_to_end_seals_two_primary_cells(self):
-        selected,root=launch("pipeline"); old=pipeline._FIXTURE_EXECUTION_IDENTITY; pipeline._FIXTURE_EXECUTION_IDENTITY="sha256:"+"d"*64
+        selected,root=launch("pipeline"); old=pipeline._FIXTURE_EXECUTION_IDENTITY; calls=pipeline._PACKET_V3_ACCOUNT_CALLS; pipeline._FIXTURE_EXECUTION_IDENTITY="sha256:"+"d"*64
         try: result=fixture_run(selected,Transport(),root)
         finally: pipeline._FIXTURE_EXECUTION_IDENTITY=old
-        self.assertEqual(len(result["primary"]["scores"]),2); self.assertTrue(all(x["completed"] for x in result["primary"]["scores"])); self.assertTrue(verify_run(root)["ok"])
+        self.assertEqual(pipeline._PACKET_V3_ACCOUNT_CALLS,calls+1); self.assertEqual(len(result["primary"]["scores"]),2); self.assertTrue(all(x["completed"] for x in result["primary"]["scores"])); self.assertTrue(verify_run(root)["ok"])
 
     def test_shared_core_is_identical_and_only_b_adds_windows(self):
         selected,root=launch("shared-core",subject_bytes=32); old=pipeline._FIXTURE_EXECUTION_IDENTITY; pipeline._FIXTURE_EXECUTION_IDENTITY="sha256:"+"d"*64
@@ -36,3 +36,28 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(len(canonical_bytes(packet)),3375)
         self.assertEqual(sha256_bytes(canonical_bytes(packet)),"sha256:6e11066715318cdcca91dc2e8669d5631449853fab23b6ba477f0fa7011c087c")
         with self.assertRaisesRegex(PipelineError,"packet_constants_invalid"): _packet_audit(packet)
+
+    def test_partial_source_overlap_is_merged_before_byte_accounting(self):
+        class Repository:
+            def blob_for(self, _trees, _side, _path, _oid): return b"".join(f"line-{index:02d}\n".encode() for index in range(1,16))
+        def spec(start,end,role): return {"required_id":f"r-{start}-{end}","role":role,"snapshot_side":"head","path":"src/lib.rs","start_line":start,"end_line":end,"blob_oid":"a"*40}
+        merged=_union_specs([spec(1,10,"changed")],[spec(5,15,"context")],lambda _:120)
+        self.assertEqual([(row["start_line"],row["end_line"]) for row in merged],[(1,15)])
+        self.assertEqual(packet_v3_admitted_bytes(Repository(),({},{}),merged),len(Repository().blob_for(None,None,None,None)))
+        at_bound=_union_specs([spec(1,399,"changed")],[spec(400,400,"context")],lambda _:1)
+        over_bound=_union_specs([spec(1,400,"changed")],[spec(401,401,"context")],lambda _:1)
+        self.assertEqual([(row["start_line"],row["end_line"]) for row in at_bound],[(1,400)])
+        self.assertEqual([(row["start_line"],row["end_line"]) for row in over_bound],[(1,400),(401,401)])
+        exact_bytes=_union_specs([spec(1,1,"changed")],[spec(2,2,"context")],lambda _:262_144)
+        over_bytes=_union_specs([spec(1,1,"changed")],[spec(2,2,"context")],lambda _:262_145)
+        self.assertEqual([(row["start_line"],row["end_line"]) for row in exact_bytes],[(1,2)])
+        self.assertEqual([(row["start_line"],row["end_line"]) for row in over_bytes],[(1,1),(2,2)])
+        class ByteRepository:
+            def __init__(self,total): self.raw=b"a"*131_071+b"\n"+b"b"*(total-131_073)+b"\n"
+            def baseline_specs(self,_trees): return [spec(1,1,"changed")]
+            def blob_for(self,*_): return self.raw
+        callee=spec(2,2,"changed")
+        exact_core,_=packet_v3_plan(ByteRepository(262_144),({},{}),callee,[])
+        over_core,_=packet_v3_plan(ByteRepository(262_145),({},{}),callee,[])
+        self.assertEqual([(row["start_line"],row["end_line"]) for row in exact_core],[(1,2)])
+        self.assertEqual([(row["start_line"],row["end_line"]) for row in over_core],[(1,1),(2,2)])

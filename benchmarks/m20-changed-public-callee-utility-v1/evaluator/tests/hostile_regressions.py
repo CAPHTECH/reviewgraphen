@@ -43,7 +43,7 @@ def f4_results():
         results["importlib_dynamic"]=_typed("freeze_dynamic_code_invalid",lambda:file_records(root),ValueError)
     selected,_=launch("hostile-inputs")
     try:
-        stage=parse_json_bytes(fixture_file(selected["stage_manifest_path"]).read_bytes()); bad=dict(stage); bad["repository_allow_list"]=[{}]; results["allow_list_object"]=_typed("repository_allow_list_invalid",lambda:_stage(bad,selected),PipelineError)
+        stage=parse_json_bytes(fixture_file(selected["stage_manifest_path"]).read_bytes()); bad=dict(stage); bad["selection_manifest_sha256"]="sha256:"+"0"*64; results["selection_binding_tamper"]=_typed("stage_contract_invalid",lambda:_stage(bad,selected),PipelineError)
         obligation=parse_json_bytes(fixture_file(selected["frozen_obligation_path"]).read_bytes()); obligation["obligation_ids"]=[1]; results["integer_obligation_id"]=_typed("duplicate_required_id",lambda:_obligation(obligation,selected["unit_id"]),PipelineError)
     finally:
         if FIXTURE_ROOT.exists():shutil.rmtree(FIXTURE_ROOT)

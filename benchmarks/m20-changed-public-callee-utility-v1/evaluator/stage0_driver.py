@@ -114,7 +114,7 @@ def build_payload_hash(value: dict) -> str:
 
 
 def _validate_build(value: dict, cluster_id: str) -> dict:
-    fields = {"schema", "commit_cluster_id", "applicable_obligation_ids", "subject_retained_obligation_ids", "deferred_obligation_ids", "subject_remainders", "admitted_source_bytes", "whole_changed_production_files_bytes", "model_eligible", "enumeration_honest", "deterministic_payload_sha256"}
+    fields = {"schema", "commit_cluster_id", "repository_root", "base_commit_oid", "head_commit_oid", "applicable_obligation_ids", "subject_retained_obligation_ids", "deferred_obligation_ids", "subject_remainders", "selected_obligation_id", "frozen_obligation_path", "frozen_obligation_sha256", "admitted_source_bytes", "whole_changed_production_files_bytes", "model_eligible", "enumeration_honest", "deterministic_payload_sha256"}
     if not isinstance(value, dict) or set(value) != fields or value["schema"] != "m20.stage0-cluster-build.v1" or value["commit_cluster_id"] != cluster_id:
         raise Stage0Error("cluster_build_invalid")
     applicable = _ids(value["applicable_obligation_ids"], "applicable_set_invalid")
@@ -133,6 +133,14 @@ def _validate_build(value: dict, cluster_id: str) -> dict:
             raise Stage0Error("cluster_bytes_invalid")
     if not isinstance(value["model_eligible"], bool) or not isinstance(value["enumeration_honest"], bool):
         raise Stage0Error("cluster_flag_invalid")
+    selectors = ("repository_root", "base_commit_oid", "head_commit_oid", "selected_obligation_id", "frozen_obligation_path", "frozen_obligation_sha256")
+    if not all(isinstance(value[field], str) for field in selectors):
+        raise Stage0Error("cluster_launch_selector_invalid")
+    if value["model_eligible"]:
+        if not all(value[field] for field in selectors) or value["selected_obligation_id"] not in retained or Path(value["frozen_obligation_path"]).is_absolute() or any(part in {"", ".", ".."} for part in Path(value["frozen_obligation_path"]).parts):
+            raise Stage0Error("cluster_launch_selector_invalid")
+    elif any(value[field] for field in ("selected_obligation_id", "frozen_obligation_path", "frozen_obligation_sha256")):
+        raise Stage0Error("ineligible_launch_selector_present")
     if value["deterministic_payload_sha256"] != build_payload_hash(value):
         raise Stage0Error("cluster_payload_hash_invalid")
     return value
@@ -185,6 +193,10 @@ def _run_cluster(cluster: Cluster, cluster_root: Path, cluster_pipeline: Cluster
             build_root = directory / f"build-{number}"
             build_root.mkdir()
             value = _validate_build(cluster_pipeline(cluster, build_root), cluster.commit_cluster_id)
+            if value["model_eligible"]:
+                obligation_path = build_root / value["frozen_obligation_path"]
+                if obligation_path.is_symlink() or not obligation_path.is_file() or sha256_bytes(obligation_path.read_bytes()) != value["frozen_obligation_sha256"]:
+                    raise Stage0Error("frozen_obligation_artifact_invalid")
             _write(build_root / "cluster-result.v1.json", value)
             pair.append(value)
     except OSError as error:

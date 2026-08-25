@@ -200,7 +200,7 @@ def probe(identifier: str) -> bool:
         finally: freeze.runtime_provenance=original
     if identifier in {"P01","P02","P03","P04","P05","N01","N03","N04","N07"}:
         import evaluator.cli as cli
-        surface=set(cli.COMMANDS); launch_fields=set(parse_json_bytes((Path(cli.__file__).with_name("schemas")/"pipeline_launch.v1.json").read_bytes())["properties"])
+        surface=set(cli.COMMANDS); launch_fields=set(parse_json_bytes((Path(cli.__file__).with_name("schemas")/"pipeline_launch.v2.json").read_bytes())["properties"])
         forbidden={"build-pair","score-mechanical","build-judge-batch","reconcile-judge","score-primary"}
         obligation_fields=set(_valid_obligation())
         return not surface.intersection(forbidden) and not launch_fields.intersection({"packet","loss","opportunity","raw_hash","status","candidate","score"}) and not obligation_fields.intersection({"status","status_records","packet","loss","opportunity"})
@@ -274,11 +274,9 @@ def probe(identifier: str) -> bool:
         return required <= cases and sum(case.startswith("vector_") for case in cases)==52
     if identifier == "H3C01":
         from evaluator import cli
-        from unittest.mock import patch
-        with tempfile.TemporaryDirectory() as value:
-            root=Path(value); stage=root/"stage.json"; launch=root/"launch.json"; stage.write_bytes(canonical_bytes({"backend_adapters":{}})); launch.write_bytes(canonical_bytes({"stage_manifest_path":str(stage)})); args=SimpleNamespace(command="run",launch=str(launch),output_root=str(root/"out")); parser=SimpleNamespace(parse_args=lambda _:args)
-            with patch.object(cli,"_parser",return_value=parser),patch.object(cli,"FixedProcessTransport",return_value=object()),patch.object(cli,"RUN",side_effect=PipelineError("invariant",4)),patch.object(cli,"_emit"):
-                return cli.main([])==4
+        # Public single-pair execution was removed by the atomic stage-entry
+        # amendment; private RUN is reachable only through stage1/stage2a.
+        return "run" not in cli.COMMANDS and not any(name in cli.COMMANDS for name in ("resume","append","stage2b","aggregate"))
     if identifier in {"X01","X02","X03","X04","X05","X06","X07","X08"}:
         from evaluator.tests.contract_runner import x_probe
         return x_probe(identifier)
@@ -301,6 +299,52 @@ def probe(identifier: str) -> bool:
         finally:
             pipeline._FIXTURE_EXECUTION_IDENTITY = previous
             if FIXTURE_ROOT.exists(): shutil.rmtree(FIXTURE_ROOT)
+    if identifier in {"STG01","STG02","STG03","STG08"}:
+        import shutil
+        from evaluator.pipeline import _launch, _stage
+        from evaluator.tests.support import FIXTURE_ROOT, fixture_file, launch
+        selected,_=launch("stage-hostile-"+identifier.lower())
+        try:
+            stage=parse_json_bytes(fixture_file(selected["stage_manifest_path"]).read_bytes())
+            if identifier=="STG01": operation=lambda:_launch({**selected,"schema":"m20.pipeline_launch.v1"})
+            elif identifier=="STG02": operation=lambda:_stage(stage,{**selected,"selection_manifest_sha256":"sha256:"+"0"*64})
+            elif identifier=="STG03": operation=lambda:_stage(stage,{**selected,"selection_membership":{"stage":"stage1","cumulative_rank":2}})
+            else:
+                stage={**stage,"fixed_transports":{**stage["fixed_transports"],"reviewer":{**stage["fixed_transports"]["reviewer"],"adapter_id":"foreign"}}}; operation=lambda:_stage(stage,selected)
+            try: operation(); return False
+            except PipelineError: return True
+        finally:
+            if FIXTURE_ROOT.exists(): shutil.rmtree(FIXTURE_ROOT)
+    if identifier=="STG04":
+        from evaluator.cli import _parser
+        try:_parser().parse_args(["stage1","/selection","/output"]);return False
+        except PipelineError:return True
+    if identifier=="STG05":
+        import unittest.mock
+        from evaluator.cli import FixedProcessTransport
+        with tempfile.TemporaryDirectory() as value,unittest.mock.patch.object(FixedProcessTransport,"REVIEWER",Path(value)/"missing-reviewer"),unittest.mock.patch.object(FixedProcessTransport,"JUDGE",Path(value)/"missing-judge"):
+            try:FixedProcessTransport();return False
+            except PipelineError:return True
+    if identifier=="STG06":
+        from evaluator.cli import COMMANDS
+        return not set(COMMANDS)&{"run","resume","append","stage2b","aggregate"}
+    if identifier=="STG07":
+        from evaluator.cli import _parser
+        from evaluator.stage_driver import REVIEWER_OUTPUT_TOKENS,REVIEWER_TIMEOUT_SECONDS
+        return (REVIEWER_OUTPUT_TOKENS,REVIEWER_TIMEOUT_SECONDS)==(12000,900) and set(vars(_parser().parse_args(["stage1","/s","/o","--controls","/c"])))=={"command","stage0_selection","new_output_root","controls"}
+    if identifier=="STG09":
+        import evaluator.stage_driver as driver
+        return not any(name in vars(driver) for name in ("aggregate","resume","append","stage2b"))
+    if identifier in {"STG10","STG11"}:
+        import ast
+        path=Path(__file__).parents[1]/"stage_driver.py"; tree=ast.parse(path.read_text()); function=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=="stage2a"); calls={node.func.attr if isinstance(node.func,ast.Attribute) else node.func.id for node in ast.walk(function) if isinstance(node,ast.Call) and isinstance(node.func,(ast.Attribute,ast.Name))}
+        if identifier=="STG10":
+            decision_line=next(node.lineno for node in ast.walk(function) if isinstance(node,ast.Subscript) and isinstance(node.slice,ast.Constant) and node.slice.value=="decision"); mkdir_line=next(node.lineno for node in ast.walk(function) if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=="mkdir")
+            return decision_line < mkdir_line
+        return {"_verify_model_stage","copytree"} <= calls
+    if identifier=="STG12":
+        from evaluator.stage_driver import STAGE1_MODEL_SECONDS,STAGE1_WALL_SECONDS,STAGE2A_MODEL_SECONDS,STAGE2A_WALL_SECONDS
+        return (STAGE1_MODEL_SECONDS,STAGE1_WALL_SECONDS,STAGE2A_MODEL_SECONDS,STAGE2A_WALL_SECONDS)==(18900,21600,75600,86400)
     if identifier == "SC02":
         from evaluator.spec_contract import verify_spec_contract
         verify_spec_contract(Path(__file__).parents[2]/"EVALUATOR_SPEC.md")

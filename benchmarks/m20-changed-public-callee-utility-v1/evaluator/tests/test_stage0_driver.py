@@ -12,11 +12,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from evaluator.canonical import canonical_bytes, parse_json_bytes, sha256_bytes
+import evaluator.pipeline as packet_pipeline
 from evaluator.pipeline import PipelineError, _primary
 from evaluator.freeze import freeze_manifest, write_generated
 from evaluator.semantic_acceptance import ALGORITHM_SOURCE_SHA256, reference_body
 from evaluator.stage0_driver import Cluster, Stage0Error, _ordered_terminal_builds, build_payload_hash, commit_cluster_id, enumerate_clusters, run_stage0, worker_ceiling
-from evaluator.stage0_production import run_frozen_cluster_pipeline
+from evaluator.stage0_production import _packet_v3_context_budget, run_frozen_cluster_pipeline
 from evaluator.tests import support
 
 
@@ -30,7 +31,9 @@ def corpus(count=3):
 
 def pipeline(cluster, _root):
     obligation = "obligation:" + cluster.commit_cluster_id[-8:]
-    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "applicable_obligation_ids":[obligation], "subject_retained_obligation_ids":[obligation], "deferred_obligation_ids":[], "subject_remainders":[], "admitted_source_bytes":10, "whole_changed_production_files_bytes":20, "model_eligible":True, "enumeration_honest":True}
+    frozen = canonical_bytes({"schema":"m20.synthetic-frozen-obligation.v1","unit_id":cluster.commit_cluster_id,"obligation_id":obligation})
+    (_root / "frozen-obligation.v1.json").write_bytes(frozen)
+    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":[obligation], "subject_retained_obligation_ids":[obligation], "deferred_obligation_ids":[], "subject_remainders":[], "selected_obligation_id":obligation, "frozen_obligation_path":"frozen-obligation.v1.json", "frozen_obligation_sha256":sha256_bytes(frozen), "admitted_source_bytes":10, "whole_changed_production_files_bytes":20, "model_eligible":True, "enumeration_honest":True}
     value["deterministic_payload_sha256"] = build_payload_hash(value)
     return value
 
@@ -174,6 +177,27 @@ class Stage0DriverTest(unittest.TestCase):
             result = run_stage0(Path(parent) / "new", corpus(), pipeline, 3)
             with self.assertRaisesRegex(PipelineError, "stage0_selection_not_score_input"): _primary(result["selection"], {"scores":[]})
             with self.assertRaisesRegex(PipelineError, "stage0_selection_not_score_input"): _primary([], result["selection"])
+
+    def test_stage0_packet_v3_eligibility_includes_large_shared_core(self):
+        class Repository:
+            def baseline_specs(self, _trees): return [{"required_id":"core","role":"changed","snapshot_side":"head","path":"src/core.rs","start_line":1,"end_line":1,"blob_oid":"a"*40}]
+            def blob_for(self, _trees, _side, path, _oid): return (b"x"*65536+b"\n") if path == "src/core.rs" else b"fn callee() {}\n"
+        trees=({}, {"src/core.rs":("100644","a"*40),"src/callee.rs":("100644","b"*40)})
+        context={"materialized_sources":[{"artifact_id":"file:callee","path":"src/callee.rs"}],"subject_outcomes":[{"role":"callee","state":"admitted","source_artifact_id":"file:callee","requested_range":{"start_line":1,"end_line":1}}],"windows":[{"source_artifact_id":"file:callee","range":{"start_line":1,"end_line":1},"roles":["callee"]}]}
+        self.assertEqual(_packet_v3_context_budget(Repository(),trees,context),(65552,65552,False))
+
+    def test_stage0_calls_the_shared_packet_v3_accounting_function_for_synthetic_corpus(self):
+        calls = packet_pipeline._PACKET_V3_ACCOUNT_CALLS
+        for core_bytes, window_bytes in ((8,4),(65536,4),(65537,1),(65530,16)):
+            with self.subTest(core_bytes=core_bytes,window_bytes=window_bytes):
+                class Repository:
+                    def baseline_specs(self, _trees): return [{"required_id":"core","role":"changed","snapshot_side":"head","path":"src/core.rs","start_line":1,"end_line":1,"blob_oid":"a"*40}]
+                    def blob_for(self, _trees, _side, path, _oid): return (b"c"*(core_bytes-1)+b"\n") if path == "src/core.rs" else (b"w"*(window_bytes-1)+b"\n")
+                repository=Repository(); trees=({}, {"src/core.rs":("100644","a"*40),"src/window.rs":("100644","b"*40)})
+                context={"materialized_sources":[{"artifact_id":"file:window","path":"src/window.rs"}],"subject_outcomes":[{"role":"callee","state":"admitted","source_artifact_id":"file:window","requested_range":{"start_line":1,"end_line":1}}],"windows":[{"source_artifact_id":"file:window","range":{"start_line":1,"end_line":1},"roles":["callee"]}]}
+                stage0_counts = _packet_v3_context_budget(repository,trees,context)
+                self.assertEqual(stage0_counts[2],max(stage0_counts[:2]) <= 65536)
+        self.assertEqual(packet_pipeline._PACKET_V3_ACCOUNT_CALLS,calls+4)
 
     def test_three_cluster_end_to_end_closed_layout_and_no_models(self):
         calls = []
