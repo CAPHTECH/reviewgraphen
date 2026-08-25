@@ -1824,6 +1824,50 @@ section 4.3 are one authority. A mismatch is schema-invalid; an operator may
 not choose between the sections. Any failed gate stops all model execution and
 is slice failure.
 
+Stage 0 orchestration is part of the frozen evaluator contract, not an
+unfrozen protocol script. Repository/commit enumeration, proof that all 300
+clusters were processed twice, seven-gate reduction, model-eligibility, and the
+hash-ranked Stage 1/2A membership can change the evaluated sample and therefore
+cannot be delegated to `scripts/` or operator logic. The evaluator must expose
+exactly one model-free production entry point
+`stage0 NEW_OUTPUT_ROOT`. It resolves the frozen corpus, runs the frozen
+ingest/synthesis/universe/planning/context pipeline twice from independent
+empty caches, evaluates all seven gates, and seals the corpus, per-cluster,
+determinism, gate, and selection records beneath the initially nonexistent
+root. It invokes neither reviewer nor judge transport.
+
+For canonical repository ID `r` and exact Git object IDs `b` and `h`, the
+cluster ID is
+`D("commit-cluster", {"cluster_contract":"m20.commit_cluster@1",
+"experiment_id":"m20-changed-public-callee-utility-v1",
+"repository_id":r,"base_commit_oid":b,"head_commit_oid":h})`, using the
+evaluator's frozen restricted canonical JSON and StableId derivation. Local
+paths, ordinal, timestamps, and observed results are forbidden from the
+preimage. The output root is caller-selected only as a fresh filesystem
+destination; its path is not an identity input. Its closed layout is
+`corpus-manifest.v1.json`, `clusters/<cluster digest>/build-1/`,
+`clusters/<cluster digest>/build-2/`, `stage0-result.v1.json`,
+`stage0-selection.v1.json`, and `artifact-manifest.v1.json`; writes outside the
+root or unlisted files are invariant failure.
+
+Stage 0 records may affect Stage 1 only through the sealed exact eligible-ID
+set and its frozen hash order, conditional on all seven gates passing. They
+contain no arm result, primary cell, judge result, or completion value. The
+paired-run launch must authenticate the selection-manifest hash and membership;
+the primary scorer accepts no Stage 0 metric or gate field. Ineligible clusters
+are selection exclusions, not primary zeros, and no Stage 0 count contributes
+to `n`, `b`, `c`, or `n00`.
+
+The current evaluator freeze has no such production entry point and is
+incomplete despite containing the per-cluster `stage0_contract.py` closure
+helpers. Because Stage 0 and model results remain unobserved, one further
+atomic pre-observation re-seal is permitted and required. It must add the
+entry point, closed launch/result/selection/layout schemas, corpus and
+missing/duplicate/reordered-cluster attacks, and authenticated Stage 1 handoff.
+The primary endpoint, its denominator and forced-zero rules, seven gates,
+sample sizes/order, rectangles, profile/context DTOs, and reviewer-visible
+packet remain byte-for-byte and semantically unchanged.
+
 Packet construction and primary scoring must be executable evaluator code, not
 an interpretation of prose in this ADR. The m20 preregistration and freeze
 manifest must refer to that code and its executable checks through these exact

@@ -303,9 +303,9 @@ been reproduced.
 | 4. Structured claim or abstention; prose not canonical | **Partial** | The deterministic structured abstention and non-authority audit are implemented for request/run v3. Actual model output has never been executed; the structured-claim path therefore remains unconfirmed. |
 | 5. Claim / evidence / verification / human decision are separate | **Partial** | v2 is explicitly prevented from minting Evidence, Verification, Decision, Finding, accepted claim, or Store admission (`generic.rs:1349-1352`). This confirms its non-promotion boundary, not an end-to-end human-decision workflow for the D slice. |
 | 6. Allow-listed, workspace-scoped verification | **Unmet (deferred)** | `workspace.cargo_test@1` returns only typed `unsupported`; it starts no process and resolves no executable. `cargo test -p reviewgraphen-verifier --test deferred_workspace_seam` passed 35/35. This is a security deferral, not an implemented verifier. |
-| 7. Short report + audit JSON in one CLI workflow | **Unconfirmed** | Request/run v3 and human report v2 are implemented, and the positive-pair product run emitted the audit, manifest, and human report. `expected-hashes.json` is complete; verification in two independent clean clones is waiting for a commit. |
+| 7. Short report + audit JSON in one CLI workflow | **Achieved, narrow** | At commit `f68e764`, two independent `git clone --no-local` clones followed the README: locked build succeeded, the CLI emitted the human report and audit with exit 0 in 238s and 235s, `verify.py` exited 0, and each second invocation exited 20. This is limited to the Rust production profile, D rule, and this quickstart. |
 | 8. Provider-free deterministic quickstart + real model-adapter route | **Partial** | Provider-free v3 construction completed deterministically as described above. Real Codex/Claude/App Server observer execution is still rejected as unsupported; model evaluation count is 0. |
-| 9. Reproducible from clone following documentation | **Unconfirmed** | The exact command sequence, product path, and `expected-hashes.json` are complete. The required two independent clean-clone verifications are waiting for a commit; no clone-reproducibility claim is made before they pass. |
+| 9. Reproducible from clone following documentation | **Achieved, narrow** | The two independent clean clones produced byte-identical audits, also identical to the working-tree audit, while following the README and pinned expected hashes. This establishes reproducibility only for the Rust production profile, D rule, and this quickstart. |
 
 ### 6.3 Limits and evaluation status
 
@@ -318,8 +318,9 @@ been reproduced.
   repository inputs.
 
 No model-based evaluation has ever been run: the model evaluation count is 0.
-Stage 0 (the model-free measurement) has not been run, and no comparison with
-a free-form baseline exists. This
+Stage 0 (the model-free measurement) has not been run because the frozen
+evaluator has no Stage 0 driver entry point; the required contract is awaiting
+adjudication. No comparison with a free-form baseline exists. This
 repository therefore makes no claim that ReviewGraphen is better than
 free-form review. M20 has been atomically re-frozen at SHA-256
 `f3af4c7b6ec1e3bec422d25daaa51e9252e01d37537282cfc73de948fa0adcb8`.

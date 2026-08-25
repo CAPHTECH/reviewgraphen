@@ -890,3 +890,13 @@ core 600 / runtime 50 / report 87 / cli 7 exit 0。clippy 0、fmt 0、mise inges
 現行 source binding で atomic 再 seal。新 freeze SHA-256 `f3af4c7b6ec1e3bec422d25daaa51e9252e01d37537282cfc73de948fa0adcb8`。
 manifest が生成物 4 件を個別 SHA-256 で拘束。verify-frozen 全 true（私の確認）。
 教訓: **seal は全コード変更の後に 1 回**。レビュー往復中に seal したのが誤り。
+
+## Stage 0 — 実行不能で正しく停止（sol-stage0）
+凍結 evaluator に **Stage 0 の実行入口が無い**（cli.py は単一 pair の run 等のみ）。commit_cluster_id 生成式と出力 root も
+契約未定義。推測・新規実装は凍結契約変更になるため停止。Stage 0 / モデル呼び出し 0、変更・出力なし。
+→ sol-audit に裁定依頼（契約 gap か、PROTOCOL 上の別 driver か）。
+
+## commit + 2 独立クローン検証（gate #7 / #9）— **達成**
+commit `f68e764`（183 files。出力ディレクトリと m17-19 は不含、m17-19 は untracked のまま）。
+`git clone --no-local` ×2 → `cargo build --locked` 0 → run1 exit 0（238s / 235s）→ verify.py exit 0 → run2 exit 20。
+clone1 vs clone2 audit bytes 同一、clone vs 作業ツリー同一。
