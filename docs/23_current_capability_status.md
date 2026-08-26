@@ -389,3 +389,22 @@ help the local Qwen review?") a **non-registered exploratory 10-pair run** over 
 hash-ranked eligible clusters (same arm-neutral packet contract, low-32k, blind
 judge) is being prepared; its result will be appended here and is not evidence
 under the preregistration.
+
+**Non-registered exploratory 10-pair run (2026-08-26).** Ten hash-ranked model-eligible
+clusters from the completed Stage 0 root, same arm-neutral packet contract (A = full
+base→head diff + callee head implementation; B = that core plus `subject_windows@3`),
+same Qwen3.8-27B-MLX-4bit / low / 32k budget for both arms, blind judge with permuted
+arm order. Two readings:
+
+- Under the frozen contract: **0 pairs scored** — every reviewer output failed the
+  closed `observations` form (`/disposition/claims/0/observations` 10 arms, root 2,
+  `/disposition/abstention/observations` 1). This is contract conformance of the local
+  model's output, not review quality.
+- Judging the same raw outputs without the decode/mechanical gate: **A 5 / B 4 / tie 1**
+  over 10 pairs. No advantage for the ReviewGraphen windows at this n; the difference is
+  within what one pair flipping would change.
+
+The run required disabling the model's thinking channel (`enable_thinking=false`,
+`response_format=json_object`); with thinking on, the model emitted 130 KB of prose into
+`content` and hit the 32k ceiling on every arm. Both arms used the identical setting.
+This is not evidence under the preregistration.
