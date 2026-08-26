@@ -14,15 +14,20 @@ sys.path.insert(0, str(ROOT))
 from evaluator.budget import BudgetExceeded, enforce
 from evaluator.canonical import canonical_bytes, load, sha256
 import evaluator.harness as harness_module
-from evaluator.harness import HarnessError, TreatmentSource, arm_c, arm_workspace, dry_run, request
+from evaluator.harness import HarnessError, TreatmentSource, arm_c, arm_workspace, dry_run, request, token_count
 from evaluator.oracle import OracleError, derive
 from evaluator.packet import build
 from evaluator.product import (
     PRODUCT_CLI_SHA256,
     ProductError,
+    _context_request,
+    _load_context_product_pin,
     _request,
+    _verify_context_packet_extractor_identity,
+    _verify_context_product_cli,
     _validate_product_output,
     expected_snapshot_id,
+    run_context_product,
     run_product_review,
 )
 from evaluator.scoring import ScoreError, score
@@ -211,14 +216,127 @@ class Contract(unittest.TestCase):
                 inventories.append(inventory)
         self.assertEqual(inventories[0], inventories[1])
 
-    def test_arm_b_waits_for_task_subject_product_entry(self):
-        with self.assertRaises(HarnessError) as raised:
-            dry_run(
-                load(V / "task.v1.json"),
-                TreatmentSource(self.repo, "m21-fixture", self.base_oid),
-                arm="B",
+    def test_real_context_binary_is_pinned_schema_valid_and_byte_deterministic(self):
+        vector = load(V / "context_product.v1.json")
+        self.assertFalse(_load_context_product_pin()["frozen"])
+        source = TreatmentSource(self.repo, vector["input"]["repository_id"], self.base_oid)
+        with arm_workspace(source, "B") as workspace:
+            first = run_context_product(
+                workspace,
+                source.repository_id,
+                source.base_oid,
+                [vector["input"]["subject_symbol_id"]],
             )
-        self.assertEqual(str(raised.exception), "task_subject_projection_pending")
+            second = run_context_product(
+                workspace,
+                source.repository_id,
+                source.base_oid,
+                [vector["input"]["subject_symbol_id"]],
+            )
+        self.assertEqual(first.packet_bytes, second.packet_bytes)
+        context = first.packet["context"]
+        observed = {
+            "accepted_file_count":context["accepted_file_denominator"]["observed_count"],
+            "declared_loss_count":len(context["declared_losses"]),
+            "manifest_sha256":first.manifest_sha256,
+            "materialized_source_count":context["materialized_source_denominator"]["observed_count"],
+            "packet_artifact_sha256":first.packet_artifact_sha256,
+            "packet_byte_length":len(first.packet_bytes),
+            "packet_id":first.packet["packet_id"],
+            "packet_sha256":first.packet["packet_sha256"],
+            "reached_file_count":context["reached_file_denominator"]["observed_count"],
+            "request_sha256":first.request_sha256,
+            "support_anchor_count":context["support_anchor_denominator"]["observed_count"],
+            "support_loss_summary_count":len(context["support_loss_summaries"]),
+            "window_count":len(context["windows"]),
+        }
+        self.assertEqual(observed, vector["expected"])
+        pin = _verify_context_product_cli()
+        for field in ("profile_id", "profile_version", "rule_set_hash", "extractor_version"):
+            with self.subTest(packet_echo=field):
+                altered = dict(first.packet)
+                altered[field] = "WRONG"
+                with self.assertRaises(ProductError) as raised:
+                    _verify_context_packet_extractor_identity(altered, pin)
+                self.assertEqual(
+                    raised.exception.record["code"],
+                    f"context_product_identity_mismatch:{field}",
+                )
+
+    def test_context_binary_preregistration_pins_are_observed_and_typed(self):
+        self.assertEqual(
+            list(inspect.signature(run_context_product).parameters),
+            ["repository", "repository_id", "revision", "subject_symbol_ids"],
+        )
+        self.assertEqual(
+            list(inspect.signature(_context_request).parameters),
+            ["repository_id", "revision", "subject_symbol_ids"],
+        )
+        request_value = _context_request("m21-fixture", self.base_oid, ["function:accepted"])
+        self.assertNotIn("hint", canonical_bytes(request_value).decode())
+        mutations = {
+            "binary_sha256":"sha256:" + "0" * 64,
+            "commit":"0" * 40,
+            "tree":"0" * 40,
+            "rustc":"WRONG",
+            "cargo":"WRONG",
+            "profile_id":"WRONG",
+            "profile_version":"WRONG",
+            "rule_set_hash":"sha256:" + "0" * 64,
+            "extractor_version":"WRONG",
+            "context_policy_id":"WRONG",
+            "context_policy_hash":"sha256:" + "0" * 64,
+        }
+        for field, replacement in mutations.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory(prefix="m21-pin-mutation-") as temporary:
+                preregistration = load(ROOT / "preregistration.json")
+                preregistration["product_pins"]["context_projection"][field] = replacement
+                path = pathlib.Path(temporary) / "preregistration.json"
+                path.write_bytes(canonical_bytes(preregistration))
+                with mock.patch("evaluator.product.PREREGISTRATION_PATH", path):
+                    with self.assertRaises(ProductError) as raised:
+                        _verify_context_product_cli()
+                self.assertEqual(
+                    raised.exception.record["code"],
+                    f"context_product_identity_mismatch:{field}",
+                )
+
+    def test_arm_b_uses_product_packet_and_preserves_projection_accounting(self):
+        vector = load(V / "context_product.v1.json")
+        task = {
+            "task_id":"task:treatment",
+            "snapshot_id":self.snapshot_id,
+            "task_kind":"symbol_change",
+            "title":"Improve normalization",
+            "subject_symbol_id":vector["input"]["subject_symbol_id"],
+        }
+        result = dry_run(
+            task,
+            TreatmentSource(self.repo, "m21-fixture", self.base_oid),
+            arm="B",
+        )
+        self.assertEqual(result.packet["schema"], "m21.product_context_packet.v1")
+        self.assertEqual(result.packet["product_schema"], "reviewgraphen.context_packet.v1")
+        self.assertNotIn("revision", result.packet)
+        self.assertGreater(result.measurement.packet_construction_ns, 0)
+        self.assertEqual(result.measurement.product_ingest_operations, 1)
+        self.assertEqual(result.measurement.product_projection_operations, 1)
+        self.assertGreater(result.measurement.product_context_command_elapsed_ns, 0)
+        accounting = result.measurement.product_projection_accounting
+        context = result.packet["context"]
+        self.assertEqual(accounting, {
+            key:context[key]
+            for key in (
+                "accepted_file_denominator", "reached_file_denominator",
+                "materialized_source_denominator", "support_anchor_denominator",
+                "latent_cardinality", "declared_losses", "support_loss_summaries", "unknowns",
+            )
+        })
+        body_bytes = canonical_bytes(result.body)
+        self.assertEqual(result.measurement.input_tokens, token_count(body_bytes))
+        enforce("input_tokens", result.measurement.input_tokens)
+        self.assertEqual(arm_c(task, result.packet)["coverage_claim"], "unknown")
+        self.assertTrue(arm_c(task, result.packet)["context_items"])
 
     def test_huge_public_task_is_typed_input_budget_failure(self):
         task = {"task_id":"t","snapshot_id":"s","task_kind":"symptom_fix","title":"x" * 300000}

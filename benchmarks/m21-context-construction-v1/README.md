@@ -22,10 +22,13 @@ Execution remains prohibited until every `TBD-before-freeze` field is pinned,
 the 60-task manifest exists, all gates pass, and an independent custodian seals
 the evaluator. Dry-run emits exact HTTP request bytes and `http_sent:false`.
 
-Oracle and treatment construction invoke only the repository-local
-`target/debug/reviewgraphen` binary pinned by SHA-256 in `evaluator/product.py`.
-No CLI path, product audit, packet JSON, or artifact root is accepted from the
-command line. Both arms require evaluator-only repository/base arguments and
-receive the same single-commit shallow base export; source remotes, ancestors,
-and future objects are absent. Arm B remains typed-unavailable until the
-separately reviewed product task-subject entry replaces the rejected D path.
+Oracle construction uses its separately pinned repository-local debug binary.
+Arm B uses only the release `reviewgraphen context` binary and complete product,
+toolchain, and extractor identity pinned (but not frozen) in
+`preregistration.json`; evaluator code contains no duplicate pin authority.
+The evaluator constructs the closed request from an exact accepted base symbol;
+task prose and hints never enter the product request. Both arms receive the same
+single-commit shallow base export, with source remotes, ancestors, and future
+objects absent. Product request, packet, manifest, snapshot/tree closure, schema
+validation, and deterministic bytes are checked before its revision-free sealed
+projection envelope reaches B.

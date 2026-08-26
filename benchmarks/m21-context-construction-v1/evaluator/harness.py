@@ -14,9 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .budget import LIMITS, enforce
-from .canonical import canonical_bytes, sha256, stable_id
-from .packet import build
-from .product import ProductError, base_tree_workspace
+from .canonical import canonical_bytes, parse_json_bytes, sha256
+from .product import ProductError, base_tree_workspace, run_context_product
 
 
 MODEL = "Qwen3.8-27B-MLX-4bit"
@@ -61,6 +60,8 @@ def _validate_measurement_values(values: dict) -> None:
     if values["model_elapsed_ns"] > values["elapsed_ns"]:
         raise HarnessError("harness_measurement_invalid")
     if values["product_ingest_elapsed_ns"] + values["product_projection_elapsed_ns"] > values["packet_construction_ns"]:
+        raise HarnessError("harness_measurement_invalid")
+    if values["product_context_command_elapsed_ns"] > values["packet_construction_ns"]:
         raise HarnessError("harness_measurement_invalid")
     enforce("input_tokens", values["input_tokens"])
     enforce("output_tokens", values["output_tokens"])
@@ -119,44 +120,61 @@ def request(task: dict, packet: dict | None = None) -> dict:
     return {"model":MODEL,"messages":[{"role":"user","content":content}],"tools":TOOLS,"temperature":0,"max_tokens":24000,"reasoning_effort":"low","stream":False}
 
 
-def _packet_facts(task: dict, audit: dict) -> list[dict]:
+def _product_projection_accounting(packet: dict) -> dict:
+    context = packet.get("context")
+    keys = (
+        "accepted_file_denominator",
+        "reached_file_denominator",
+        "materialized_source_denominator",
+        "support_anchor_denominator",
+        "latent_cardinality",
+        "declared_losses",
+        "support_loss_summaries",
+        "unknowns",
+    )
+    if not isinstance(context, dict) or any(key not in context for key in keys):
+        raise HarnessError("product_projection_accounting_missing")
+    # Canonical round-trip makes an isolated exact copy without reinterpreting
+    # product denominator or loss semantics.
+    return parse_json_bytes(canonical_bytes({key: context[key] for key in keys}))
+
+
+def _model_product_packet(packet: dict) -> dict:
+    """Remove the raw base commit while retaining the product projection."""
+    keys = (
+        "packet_id", "packet_sha256", "request_id", "repository_identity",
+        "snapshot_id", "tree_hash", "profile_id", "profile_version",
+        "rule_set_hash", "extractor_version", "extractor_set_hash",
+        "context_policy_id", "context_policy_hash", "context",
+    )
+    if packet.get("schema") != "reviewgraphen.context_packet.v1" or any(key not in packet for key in keys):
+        raise HarnessError("product_projection_invalid")
+    envelope = {
+        "schema":"m21.product_context_packet.v1",
+        "product_schema":packet["schema"],
+        **{key:packet[key] for key in keys},
+    }
+    return parse_json_bytes(canonical_bytes(envelope))
+
+
+def _build_treatment_packet(task: dict, source: TreatmentSource, workspace: Path):
     subject_id = task.get("subject_symbol_id")
-    if not isinstance(subject_id, str):
-        return []
-    facts = {}
-    for envelope in audit.get("contexts", []):
-        context = envelope.get("context", {})
-        outcomes = [row for row in context.get("subject_outcomes", []) if row.get("state") == "admitted"]
-        if subject_id not in {row.get("endpoint_id") for row in outcomes}:
-            continue
-        paths = {row.get("artifact_id"):row.get("path") for row in context.get("materialized_sources", [])}
-        for row in outcomes:
-            symbol_id = row.get("endpoint_id")
-            span = row.get("requested_range", {})
-            path = paths.get(row.get("source_artifact_id"))
-            if not isinstance(path, str) or not isinstance(symbol_id, str):
-                raise HarnessError("product_projection_invalid")
-            relation = "subject" if symbol_id == subject_id else row.get("role", "reference")
-            fact_id = stable_id("packet-fact", context.get("context_id", ""), symbol_id, relation)
-            facts[fact_id] = {
-                "fact_id":fact_id,
-                "distance":0 if relation == "subject" else 1,
-                "path":path,
-                "start_line":span.get("start_line"),
-                "end_line":span.get("end_line"),
-                "symbol_id":symbol_id,
-                "relation":relation,
-                "binding":"resolved",
-                "source_id":row.get("source_artifact_id"),
-            }
-    return sorted(facts.values(), key=lambda row: row["fact_id"])
-
-
-def _build_treatment_packet(task: dict, source: TreatmentSource) -> tuple[dict, int, int, int, int]:
-    # The former parent(base)->base D projection is intentionally unavailable:
-    # it requires history and is not a task-subject projection.  The product
-    # task-subject entry will be wired here after the separate design ruling.
-    raise HarnessError("task_subject_projection_pending")
+    if not isinstance(subject_id, str) or not subject_id:
+        raise HarnessError("task_subject_binding_required")
+    try:
+        product = run_context_product(
+            workspace,
+            source.repository_id,
+            source.base_oid,
+            [subject_id],
+        )
+    except ProductError as error:
+        raise HarnessError(error.record["code"]) from error
+    if product.packet.get("snapshot_id") != task.get("snapshot_id"):
+        raise HarnessError("treatment_snapshot_mismatch")
+    packet = _model_product_packet(product.packet)
+    _assert_packet_blind(packet)
+    return product, packet, _product_projection_accounting(product.packet)
 
 
 def dry_run(task: dict, treatment: TreatmentSource | None = None, *, arm: str = "A"):
@@ -164,12 +182,16 @@ def dry_run(task: dict, treatment: TreatmentSource | None = None, *, arm: str = 
     packet = None
     ingest_operations = projection_operations = 0
     ingest_elapsed_ns = projection_elapsed_ns = 0
+    context_command_elapsed_ns = 0
+    projection_accounting = None
     if arm not in {"A", "B"}:
         raise HarnessError("arm_invalid")
     if treatment is not None:
-        with arm_workspace(treatment, arm):
+        with arm_workspace(treatment, arm) as workspace:
             if arm == "B":
-                packet, ingest_operations, projection_operations, ingest_elapsed_ns, projection_elapsed_ns = _build_treatment_packet(task, treatment)
+                product, packet, projection_accounting = _build_treatment_packet(task, treatment, workspace)
+                ingest_operations = projection_operations = 1
+                context_command_elapsed_ns = product.execution_elapsed_ns
     elif arm == "B":
         raise HarnessError("base_workspace_required")
     packet_ns = time.monotonic_ns() - started if treatment is not None else 0
@@ -187,6 +209,7 @@ def dry_run(task: dict, treatment: TreatmentSource | None = None, *, arm: str = 
         "product_projection_operations":projection_operations,
         "product_ingest_elapsed_ns":ingest_elapsed_ns,
         "product_projection_elapsed_ns":projection_elapsed_ns,
+        "product_context_command_elapsed_ns":context_command_elapsed_ns,
     }
     _validate_measurement_values(values)
 
@@ -194,40 +217,58 @@ def dry_run(task: dict, treatment: TreatmentSource | None = None, *, arm: str = 
     # every harness execution.  Neither the type nor key exists at module scope.
     constructor_capability = object()
     authentication_key = secrets.token_bytes(32)
-    payload = canonical_bytes({"schema":"m21.harness_measurement.v1", **values})
+    sealed_record = {
+        "schema":"m21.harness_measurement.v1",
+        "metrics":values,
+        "product_projection_accounting":projection_accounting,
+    }
+    payload = canonical_bytes(sealed_record)
     authentication_tag = hmac.new(authentication_key, payload, hashlib.sha256).digest()
 
     class RunMeasurement:
-        __slots__ = ("_values", "_tag")
+        __slots__ = ("_record", "_tag")
 
         def __new__(cls, capability, *_args):
             if capability is not constructor_capability:
                 raise HarnessError("harness_measurement_private")
             return object.__new__(cls)
 
-        def __init__(self, capability, sealed_values, tag):
-            object.__setattr__(self, "_values", sealed_values)
+        def __init__(self, capability, record, tag):
+            object.__setattr__(self, "_record", record)
             object.__setattr__(self, "_tag", tag)
 
         def __getattr__(self, name):
             if name in values:
                 return self._verified_values()[name]
+            if name == "product_projection_accounting":
+                return self._verified_record()["product_projection_accounting"]
             raise AttributeError(name)
 
         def __setattr__(self, name, value):
             raise AttributeError("harness measurement is immutable")
 
-        def _verified_values(self):
-            sealed = object.__getattribute__(self, "_values")
+        def _verified_record(self):
+            sealed = object.__getattribute__(self, "_record")
             tag = object.__getattribute__(self, "_tag")
-            candidate = canonical_bytes({"schema":"m21.harness_measurement.v1", **sealed})
+            candidate = canonical_bytes(sealed)
             if not hmac.compare_digest(tag, hmac.new(authentication_key, candidate, hashlib.sha256).digest()):
                 raise HarnessError("harness_measurement_authentication_failed")
-            _validate_measurement_values(sealed)
-            return dict(sealed)
+            if set(sealed) != {"schema", "metrics", "product_projection_accounting"} or sealed["schema"] != "m21.harness_measurement.v1":
+                raise HarnessError("harness_measurement_invalid")
+            _validate_measurement_values(sealed["metrics"])
+            return parse_json_bytes(candidate)
+
+        def _verified_values(self):
+            return self._verified_record()["metrics"]
 
         def record(self):
-            return {"schema":"m21.harness_measurement.v1", **self._verified_values(), "tokenizer":dict(TOKENIZER)}
+            verified = self._verified_record()
+            return {
+                "schema":"m21.harness_measurement.v1",
+                **verified["metrics"],
+                "product_projection_accounting":verified["product_projection_accounting"],
+                "tokenizer":dict(TOKENIZER),
+            }
 
     class RunResult:
         __slots__ = ("body", "request_bytes", "request_sha256", "packet", "measurement")
@@ -265,7 +306,7 @@ def dry_run(task: dict, treatment: TreatmentSource | None = None, *, arm: str = 
             from .scoring import _score_values
             return _score_values(context, oracle_lines, subject_lines, self.measurement._verified_values())
 
-    measurement = RunMeasurement(constructor_capability, dict(values), authentication_tag)
+    measurement = RunMeasurement(constructor_capability, sealed_record, authentication_tag)
     return RunResult(constructor_capability, json.loads(body), packet, measurement)
 
 
@@ -279,4 +320,32 @@ def preflight(endpoint):
 def arm_c(task, packet):
     _public_task(task)
     _assert_packet_blind(packet)
-    return {"task_id":task["task_id"],"snapshot_id":task["snapshot_id"],"context_items":packet["context_items"],"coverage_claim":packet["coverage_claim"],"declared_losses":packet["declared_losses"]}
+    context = packet.get("context", {})
+    paths = {
+        row.get("artifact_id"): row.get("path")
+        for row in context.get("materialized_sources", [])
+        if isinstance(row, dict)
+    }
+    subjects = set(context.get("subject_binding", {}).get("symbol_ids", []))
+    items = []
+    for window in context.get("windows", []):
+        if not isinstance(window, dict) or not isinstance(paths.get(window.get("source_artifact_id")), str):
+            raise HarnessError("product_projection_invalid")
+        owners = sorted(window.get("owner_ids", []))
+        subject_owners = sorted(subjects & set(owners))
+        span = window.get("range", {})
+        items.append({
+            "path":paths[window["source_artifact_id"]],
+            "symbol_id":subject_owners[0] if subject_owners else (owners[0] if owners else window["id"]),
+            "start_line":span.get("start_line"),
+            "end_line":span.get("end_line"),
+            "reason":"subject" if "subject" in window.get("roles", []) else "reference",
+        })
+    items.sort(key=lambda row: (row["path"], row["start_line"], row["end_line"], row["symbol_id"]))
+    return {
+        "task_id":task["task_id"],
+        "snapshot_id":task["snapshot_id"],
+        "context_items":items,
+        "coverage_claim":"unknown",
+        "declared_losses":context.get("declared_losses", []),
+    }

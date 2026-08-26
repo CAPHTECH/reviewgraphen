@@ -32,12 +32,19 @@ base-resolved non-local references in admitted fix hunks. It excludes rather
 than guesses unresolved or ambiguous semantics. Canonical JSON, sorted IDs,
 source traces, exclusion ledgers, exact hashes, and typed failures are required.
 
-The implementation admits product facts only through the repository-local
-ReviewGraphen CLI whose executable SHA-256 is pinned in the evaluator. The
-evaluator creates the request and private artifact root, verifies canonical
-audit/manifest bytes, re-derives Git tree and snapshot identities from full
-OIDs, and invokes the product schema validator. Each harness execution creates
-a distinct measurement type and random HMAC key retained only by that run's
-scoring scope; public scoring rejects supplied measurements. Arm B's product
-wiring remains disabled until the reviewed task-subject entry exists and cannot
-fall back to D.
+The implementation admits treatment facts only through the pinned
+`reviewgraphen context` request-to-packet command. The request contains one full
+base commit SHA, extractor identity, and exact accepted symbol IDs; it has no
+task prose, hint, fix, D relation, or model-produced resolver output. The
+evaluator reads pins only from the preregistration and, before context execution,
+observes the binary digest, source commit/tree, rustc/cargo versions, schema-bound
+profile/version/extractor identity, and the committed rule-set material digest.
+It then verifies canonical request/packet/manifest, packet identity hash, base
+snapshot/tree closure, product schema, and packet extractor echo before using the
+packet. Packet bytes count through the common input-token budget.
+The model-facing envelope removes the raw base commit field but preserves the
+validated product context, source windows, IDs, hashes, losses, and denominators.
+Product denominator commitments, declared losses, support-loss summaries,
+latent cardinality, and unknowns pass unchanged into the authenticated harness
+measurement. Each run retains its random HMAC key only in scoring scope; public
+scoring rejects supplied measurements. These pins remain explicitly unfrozen.

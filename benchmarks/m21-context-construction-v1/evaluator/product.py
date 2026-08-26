@@ -8,8 +8,10 @@ validates the resulting canonical artifact closure before returning it.
 from __future__ import annotations
 
 import hashlib
+import shutil
 import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +22,7 @@ from .canonical import CanonicalError, canonical_bytes, hash_json, parse_json_by
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 PRODUCT_CLI = REPOSITORY_ROOT / "target/debug/reviewgraphen"
 PRODUCT_CLI_SHA256 = "sha256:20ee1c3228ad3297f41dbf464ae6c447b42fe79afe74eab435c91209c5667b00"
+PREREGISTRATION_PATH = Path(__file__).resolve().parents[1] / "preregistration.json"
 GIT = Path("/usr/bin/git")
 PRODUCT_TIMEOUT_SECONDS = 1_800
 _ENV = {
@@ -56,6 +59,16 @@ class ProductRun:
     projection_operations: int
     ingest_elapsed_ns: int
     projection_elapsed_ns: int
+
+
+@dataclass(frozen=True)
+class ContextProductRun:
+    packet: dict
+    packet_bytes: bytes
+    request_sha256: str
+    packet_artifact_sha256: str
+    manifest_sha256: str
+    execution_elapsed_ns: int
 
 
 def _run(command: list[str], cwd: Path, *, timeout: int = 60) -> bytes:
@@ -216,6 +229,397 @@ def _verify_product_cli() -> None:
         raise ProductError("product_cli_identity_mismatch", "pinned CLI is not an executable regular file")
     if PRODUCT_CLI.resolve() != PRODUCT_CLI or digest != PRODUCT_CLI_SHA256:
         raise ProductError("product_cli_identity_mismatch", digest)
+
+
+def _context_identity_mismatch(field: str, observed: str) -> ProductError:
+    return ProductError(f"context_product_identity_mismatch:{field}", observed)
+
+
+def _load_context_product_pin() -> dict:
+    """Read the sole expected identity authority from canonical preregistration."""
+    try:
+        source = PREREGISTRATION_PATH.read_bytes()
+        preregistration = parse_json_bytes(source)
+    except (OSError, CanonicalError) as error:
+        raise ProductError("context_product_preregistration_invalid", type(error).__name__) from error
+    encoded = canonical_bytes(preregistration)
+    if source not in {encoded, encoded + b"\n"}:
+        raise ProductError("context_product_preregistration_invalid", "not canonical")
+    try:
+        pin = preregistration["product_pins"]["context_projection"]
+    except (KeyError, TypeError) as error:
+        raise ProductError("context_product_preregistration_invalid", "pin missing") from error
+    required = {
+        "binary_path", "binary_sha256", "build_command", "cargo", "commit",
+        "context_policy_hash", "context_policy_id", "extractor_version", "frozen",
+        "profile_id", "profile_version", "rule_set_hash", "rule_set_material",
+        "rustc", "tree", "worktree",
+    }
+    if (
+        not isinstance(pin, dict)
+        or set(pin) != required
+        or any(type(pin[key]) is not str for key in required - {"frozen"})
+        or type(pin["frozen"]) is not bool
+    ):
+        raise ProductError("context_product_preregistration_invalid", "pin shape")
+    return pin
+
+
+def _observed_tool_version(tool: str) -> str:
+    executable = shutil.which(tool)
+    if executable is None:
+        raise _context_identity_mismatch(tool, "not found")
+    try:
+        result = subprocess.run(
+            [executable, "-V"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise _context_identity_mismatch(tool, type(error).__name__) from error
+    if result.returncode:
+        raise _context_identity_mismatch(tool, f"exit {result.returncode}")
+    return result.stdout.decode("utf-8", "strict").strip()
+
+
+def _schema_const(schema: dict, *path: str) -> str:
+    value = schema
+    try:
+        for key in path:
+            value = value[key]
+    except (KeyError, TypeError) as error:
+        raise ProductError("context_product_identity_surface_invalid", ".".join(path)) from error
+    if not isinstance(value, str):
+        raise ProductError("context_product_identity_surface_invalid", ".".join(path))
+    return value
+
+
+def _verify_context_product_cli() -> dict:
+    """Bind context execution to every preregistered source/tool/extractor pin."""
+    pin = _load_context_product_pin()
+    root = Path(pin["worktree"])
+    cli = Path(pin["binary_path"])
+    if cli != root / "target/release/reviewgraphen":
+        raise _context_identity_mismatch("binary_path", str(cli))
+    try:
+        stat = cli.lstat()
+        digest = "sha256:" + hashlib.sha256(cli.read_bytes()).hexdigest()
+    except OSError as error:
+        raise _context_identity_mismatch("binary_sha256", "missing") from error
+    if (
+        cli.is_symlink()
+        or not cli.is_file()
+        or not stat.st_mode & 0o111
+        or cli.resolve() != cli
+    ):
+        raise _context_identity_mismatch("binary_path", str(cli))
+    if digest != pin["binary_sha256"]:
+        raise _context_identity_mismatch("binary_sha256", digest)
+    try:
+        commit = _git(root, "rev-parse", "HEAD").strip()
+        tree = _git(root, "rev-parse", "HEAD^{tree}").strip()
+    except ProductError as error:
+        raise _context_identity_mismatch("worktree", error.record["detail"]) from error
+    for field, observed in (("commit", commit), ("tree", tree)):
+        if observed != pin[field]:
+            raise _context_identity_mismatch(field, observed)
+    for field in ("rustc", "cargo"):
+        observed = _observed_tool_version(field)
+        if observed != pin[field]:
+            raise _context_identity_mismatch(field, observed)
+    try:
+        request_schema = parse_json_bytes(
+            _run(
+                [str(cli), "schema", "print", "reviewgraphen.context_request.v1"],
+                root,
+                timeout=120,
+            )
+        )
+        packet_schema = parse_json_bytes(
+            _run(
+                [str(cli), "schema", "print", "reviewgraphen.context_packet.v1"],
+                root,
+                timeout=120,
+            )
+        )
+    except CanonicalError as error:
+        raise ProductError("context_product_identity_surface_invalid", str(error)) from error
+    observed_extractor = {
+        "profile_id": _schema_const(
+            request_schema, "properties", "ingest", "properties", "profile_id", "const"
+        ),
+        "profile_version": _schema_const(
+            request_schema, "properties", "ingest", "properties", "profile_version", "const"
+        ),
+        "extractor_version": _schema_const(
+            request_schema, "properties", "ingest", "properties", "extractor_version", "const"
+        ),
+        "context_policy_id": _schema_const(
+            request_schema, "properties", "context_policy_id", "const"
+        ),
+        "context_policy_hash": _schema_const(
+            packet_schema, "properties", "context_policy_hash", "const"
+        ),
+    }
+    for field, observed in observed_extractor.items():
+        if observed != pin[field]:
+            raise _context_identity_mismatch(field, observed)
+    observed_rule_set_hash = sha256(pin["rule_set_material"].encode("utf-8"))
+    if observed_rule_set_hash != pin["rule_set_hash"]:
+        raise _context_identity_mismatch("rule_set_hash", observed_rule_set_hash)
+    return pin
+
+
+def _context_request_from_verified_pin(
+    repository_id: str,
+    revision: str,
+    subject_symbol_ids: list[str],
+    verified_pin: dict,
+) -> dict:
+    """Construct the only admitted request; no task prose or hint is accepted."""
+    if (
+        not isinstance(repository_id, str)
+        or not repository_id
+        or not isinstance(revision, str)
+        or len(revision) != 40
+        or any(character not in "0123456789abcdef" for character in revision)
+        or not isinstance(subject_symbol_ids, list)
+        or not subject_symbol_ids
+        or len(subject_symbol_ids) > 64
+        or any(not isinstance(symbol_id, str) or ":" not in symbol_id for symbol_id in subject_symbol_ids)
+        or subject_symbol_ids != sorted(set(subject_symbol_ids))
+    ):
+        raise ProductError("context_request_invalid")
+    return {
+        "schema": "reviewgraphen.context_request.v1",
+        "repository_identity": repository_id,
+        "revision": revision,
+        "ingest": {
+            "profile_id": verified_pin["profile_id"],
+            "profile_version": verified_pin["profile_version"],
+            "rule_set_hash": verified_pin["rule_set_hash"],
+            "extractor_version": verified_pin["extractor_version"],
+            "max_files": 20_000,
+            "max_file_bytes": 16_777_216,
+            "max_total_source_bytes": 17_179_869_184,
+        },
+        "subject": {"state": "resolved", "symbol_ids": subject_symbol_ids},
+        "context_policy_id": verified_pin["context_policy_id"],
+    }
+
+
+def _context_request(repository_id: str, revision: str, subject_symbol_ids: list[str]) -> dict:
+    """Build a request only after independently observing the preregistered identity."""
+    return _context_request_from_verified_pin(
+        repository_id,
+        revision,
+        subject_symbol_ids,
+        _verify_context_product_cli(),
+    )
+
+
+def _context_packet_identity(packet: dict) -> dict:
+    return {
+        key: packet[key]
+        for key in (
+            "context",
+            "context_policy_hash",
+            "context_policy_id",
+            "extractor_set_hash",
+            "extractor_version",
+            "profile_id",
+            "profile_version",
+            "repository_identity",
+            "request_id",
+            "revision",
+            "rule_set_hash",
+            "schema",
+            "snapshot_id",
+            "tree_hash",
+        )
+    }
+
+
+def _verify_context_packet_extractor_identity(packet: dict, verified_pin: dict) -> None:
+    """Reject product echo drift before any packet-derived measurement is exposed."""
+    for field in ("profile_id", "profile_version", "rule_set_hash", "extractor_version"):
+        observed = packet.get(field)
+        if observed != verified_pin[field]:
+            raise _context_identity_mismatch(field, str(observed))
+
+
+def _validate_context_product_output(
+    repo: Path,
+    request: dict,
+    request_bytes: bytes,
+    packet_bytes: bytes,
+    artifact_packet_bytes: bytes,
+    manifest_bytes: bytes,
+    execution_elapsed_ns: int,
+    verified_pin: dict,
+) -> ContextProductRun:
+    try:
+        packet = parse_json_bytes(packet_bytes)
+        artifact_packet = parse_json_bytes(artifact_packet_bytes)
+        manifest = parse_json_bytes(manifest_bytes)
+    except CanonicalError as error:
+        raise ProductError("context_product_artifact_invalid", str(error)) from error
+    if (
+        canonical_bytes(packet) != packet_bytes
+        or canonical_bytes(artifact_packet) != artifact_packet_bytes
+        or canonical_bytes(manifest) != manifest_bytes
+    ):
+        raise ProductError("context_product_artifact_not_canonical")
+    if packet_bytes != artifact_packet_bytes or packet != artifact_packet:
+        raise ProductError("context_product_stdout_artifact_mismatch")
+    required = {
+        "schema", "packet_id", "packet_sha256", "request_id", "repository_identity",
+        "revision", "snapshot_id", "tree_hash", "profile_id", "profile_version",
+        "rule_set_hash", "extractor_version", "extractor_set_hash", "context_policy_id",
+        "context_policy_hash", "context",
+    }
+    if not isinstance(packet, dict) or set(packet) != required:
+        raise ProductError("context_product_packet_invalid")
+    _verify_context_packet_extractor_identity(packet, verified_pin)
+    revision = resolve_commit(repo, request["revision"])
+    tree = _git(repo, "rev-parse", "--verify", revision + "^{tree}").strip()
+    snapshot = expected_snapshot_id(request["repository_identity"], revision, tree)
+    expected_request_id = _product_id(
+        "request",
+        {"request_sha256": sha256(request_bytes), "schema": request["schema"]},
+    )
+    identity_hash = sha256(canonical_bytes(_context_packet_identity(packet)))
+    context = packet.get("context")
+    if (
+        packet["schema"] != "reviewgraphen.context_packet.v1"
+        or packet["packet_sha256"] != identity_hash
+        or packet["packet_id"] != "context-packet:" + identity_hash
+        or packet["request_id"] != expected_request_id
+        or packet["repository_identity"] != request["repository_identity"]
+        or packet["revision"] != revision
+        or packet["snapshot_id"] != snapshot
+        or packet["tree_hash"] != "git:" + tree
+        or packet["profile_id"] != request["ingest"]["profile_id"]
+        or packet["profile_version"] != request["ingest"]["profile_version"]
+        or packet["rule_set_hash"] != request["ingest"]["rule_set_hash"]
+        or packet["extractor_version"] != request["ingest"]["extractor_version"]
+        or packet["context_policy_id"] != verified_pin["context_policy_id"]
+        or packet["context_policy_hash"] != verified_pin["context_policy_hash"]
+        or not isinstance(context, dict)
+        or context.get("request_id") != expected_request_id
+        or context.get("snapshot_id") != snapshot
+        or context.get("subject_binding") != request["subject"]
+    ):
+        raise ProductError("context_product_identity_closure_invalid")
+    accounting_keys = {
+        "accepted_file_denominator", "reached_file_denominator",
+        "materialized_source_denominator", "support_anchor_denominator",
+        "latent_cardinality", "declared_losses", "support_loss_summaries", "unknowns",
+    }
+    if not accounting_keys <= set(context):
+        raise ProductError("context_product_accounting_missing")
+    artifact_hash = sha256(artifact_packet_bytes)
+    expected_manifest = {
+        "schema": "reviewgraphen.context_artifact_manifest.v1",
+        "request_sha256": sha256(request_bytes),
+        "request_id": expected_request_id,
+        "packet_id": packet["packet_id"],
+        "snapshot_id": snapshot,
+        "artifacts": [{
+            "path": "context_packet.v1.json",
+            "role": "context_packet",
+            "byte_length": len(artifact_packet_bytes),
+            "sha256": artifact_hash,
+        }],
+    }
+    if manifest != expected_manifest:
+        raise ProductError("context_product_manifest_invalid")
+    if type(execution_elapsed_ns) is not int or execution_elapsed_ns <= 0:
+        raise ProductError("context_product_measurement_invalid")
+    return ContextProductRun(
+        packet=packet,
+        packet_bytes=packet_bytes,
+        request_sha256=sha256(request_bytes),
+        packet_artifact_sha256=artifact_hash,
+        manifest_sha256=sha256(manifest_bytes),
+        execution_elapsed_ns=execution_elapsed_ns,
+    )
+
+
+def run_context_product(
+    repository: str | Path,
+    repository_id: str,
+    revision: str,
+    subject_symbol_ids: list[str],
+) -> ContextProductRun:
+    """Execute the pinned request->packet path; callers cannot inject a CLI or hint."""
+    verified_pin = _verify_context_product_cli()
+    context_product_cli = Path(verified_pin["binary_path"])
+    repo = Path(repository)
+    if repo.is_symlink() or not repo.is_dir():
+        raise ProductError("repository_not_allowed")
+    repo = repo.resolve(strict=True)
+    resolved = resolve_commit(repo, revision)
+    history = _git(repo, "rev-list", "--all", "--parents").splitlines()
+    if history != [resolved]:
+        raise ProductError("base_workspace_history_present")
+    request = _context_request_from_verified_pin(
+        repository_id,
+        resolved,
+        subject_symbol_ids,
+        verified_pin,
+    )
+    request_bytes = canonical_bytes(request)
+    with tempfile.TemporaryDirectory(prefix="m21-context-command-", dir=repo) as temporary:
+        root = Path(temporary)
+        request_path = root / "context-request.v1.json"
+        write(request_path, request)
+        artifacts = root / "artifacts"
+        _run(
+            [str(context_product_cli), "schema", "validate", str(request_path)],
+            repo,
+            timeout=120,
+        )
+        started = time.monotonic_ns()
+        stdout = _run(
+            [
+                str(context_product_cli),
+                "context",
+                "--request",
+                str(request_path.relative_to(repo)),
+                "--artifacts",
+                str(artifacts.relative_to(repo)),
+            ],
+            repo,
+            timeout=PRODUCT_TIMEOUT_SECONDS,
+        )
+        execution_elapsed_ns = time.monotonic_ns() - started
+        packet_path = artifacts / "context_packet.v1.json"
+        manifest_path = artifacts / "context-artifact-manifest.v1.json"
+        try:
+            artifact_packet_bytes = packet_path.read_bytes()
+            manifest_bytes = manifest_path.read_bytes()
+        except OSError as error:
+            raise ProductError("context_product_artifact_missing") from error
+        _run(
+            [str(context_product_cli), "schema", "validate", str(packet_path)],
+            repo,
+            timeout=120,
+        )
+        return _validate_context_product_output(
+            repo,
+            request,
+            request_bytes,
+            stdout,
+            artifact_packet_bytes,
+            manifest_bytes,
+            execution_elapsed_ns,
+            verified_pin,
+        )
 
 
 def _manifest_entry(manifest: dict, path: str) -> dict:
