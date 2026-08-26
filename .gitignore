@@ -33,3 +33,6 @@ __pycache__/
 
 # Proptest regression seeds and insta snapshots are executable test fixtures.
 # Do not add ignore rules for **/proptest-regressions/** or **/snapshots/**.
+
+# m20 Stage 0 execution outputs (kept locally, not published)
+benchmarks/m20-changed-public-callee-utility-v1/stage0-run-*/

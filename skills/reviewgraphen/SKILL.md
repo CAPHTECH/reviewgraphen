@@ -5,7 +5,12 @@ description: Use ReviewGraphen to turn a bounded artifact snapshot into explicit
 
 # ReviewGraphen Agent Skill
 
-> Status: Design contract. The document bundle does not assert that the `reviewgraphen` binary has already been implemented.
+> Status: Agent workflow plus an implemented, deliberately narrow product
+> surface. The main worktree implements generic review v2/v3; a separate m21
+> worktree implements an additional, unmerged task-subject context command.
+> The conceptual workflow below is broader than either executable surface, so
+> never translate a conceptual stage into a CLI command unless it is listed in
+> the measured command sections below.
 
 ## Use this skill when
 
@@ -289,24 +294,138 @@ For a new commit/snapshot:
 
 Current sign-off uses fresh verified coverage only.
 
-## Target CLI workflow
+## Implemented CLI workflow: main worktree
 
-When the implementation exists, the intended sequence is:
+The main worktree's measured command surface is exactly:
 
-```bash
-reviewgraphen snapshot from-git --base main --head HEAD --output snapshot.json
-reviewgraphen ingest --snapshot snapshot.json --profile code-review --output program-space.json
-reviewgraphen obligations synthesize --program-space program-space.json --output obligations.json
-reviewgraphen plan --obligations obligations.json --mode risk-first --output plan.json
-reviewgraphen run --plan plan.json --reviewer <reviewer-id>
-reviewgraphen verify --run <run-id>
-reviewgraphen glue --run <run-id>
-reviewgraphen coverage --run <run-id> --fresh-only
-reviewgraphen report --run <run-id> --view human-review --format markdown
-reviewgraphen gate --run <run-id> --policy .reviewgraphen/policies/default.toml
+```text
+reviewgraphen review --request <request.json> --artifacts <fresh-dir> [--diagnostics <fresh-file>]
+reviewgraphen schema list
+reviewgraphen schema print <schema-id>
+reviewgraphen schema validate <json-file>
 ```
 
-Until the binary exists, use the checked-in schemas and `examples/double-submit-payment/` only as design fixtures. Do not claim that commands were executed.
+There are no implemented `snapshot`, `ingest`, `obligations`, `plan`, `run`,
+`verify`, `glue`, `coverage`, `report`, or `gate` subcommands. There is also no
+main-worktree `context` subcommand. Do not invent or claim execution of them.
+`--help` and subcommand `--help` currently print the single usage line and exit
+2 rather than providing separate help pages.
+
+`review` accepts the closed generic-review request v2 or v3 contracts. The
+implemented useful slice is narrow: `rust.production.v1`, the
+`relation.changed_public_callee@1` rule over an accepted direct `calls`
+relation, and `rust.callee_contract_review@1`. V3 selects
+`context.subject_windows@3`; it records caller/callee subjects, relation IDs,
+bounded source windows, denominator commitments, unknowns and declared loss.
+This is not a repository-wide call graph, proof that a contract changed, or
+proof that a bug exists.
+
+Run from the admitted repository root. The request binds immutable base and
+target revisions, profile/rule identity, ingest bounds, plan bounds, observer,
+verifier descriptor and context policy. Both the artifact directory and the
+optional diagnostic file must be fresh, workspace-scoped paths; an absolute
+artifact directory is rejected as path traversal.
+
+Measured v3 form:
+
+```bash
+cd /path/to/admitted/repository
+/home/rizumita/workspace/reviewgraphen/target/release/reviewgraphen review \
+  --request /absolute/path/to/reviewgraphen.generic_review_request.v3.json \
+  --artifacts artifacts \
+  --diagnostics diagnostics.json
+```
+
+On success, the measured v3 run wrote:
+
+```text
+artifacts/artifact-manifest.v1.json
+artifacts/audit.run.v3.json
+artifacts/human-report.manifest.v2.json
+artifacts/human-report.md
+artifacts/records/<execution>.deterministic-observer-output.v1.json
+artifacts/records/<execution>.provider-free-reviewer-packet.v1.json
+diagnostics.json
+```
+
+The audit is `reviewgraphen.generic_review_run.v3` and remains non-authority:
+its claims, observations, coverage and limitations do not become accepted facts,
+Evidence, Verification or human acceptance. Validate a generated audit with:
+
+```bash
+/home/rizumita/workspace/reviewgraphen/target/release/reviewgraphen \
+  schema validate artifacts/audit.run.v3.json
+```
+
+The measured response was
+`{"schema":"reviewgraphen.generic_review_run.v3","valid":true}` with exit 0.
+Use `schema list` before `schema print` or `schema validate`; v2/v3 request/run,
+human-report, reviewer-output, process-reviewer-record and diagnostics contracts
+are available from this surface.
+
+## Unmerged m21 task-subject context command
+
+This command is **not merged into the main worktree**. It exists only in:
+
+```text
+worktree: /home/rizumita/workspace/reviewgraphen-m21
+commit:   2c972dbba16018f11ce471dad1fd774c9be47e44
+binary:   /home/rizumita/workspace/reviewgraphen-m21/target/release/reviewgraphen
+sha256:   b93d47e2114837588ac9a230418a5b5b1bc9bcabe3b16ba0b24f0cac707ba68e
+```
+
+Build that separate binary without changing or substituting the main binary:
+
+```bash
+cd /home/rizumita/workspace/reviewgraphen-m21
+cargo build --release --locked -p reviewgraphen-cli
+sha256sum target/release/reviewgraphen
+```
+
+Its additional measured surface is:
+
+```text
+reviewgraphen context --request <request.json> --artifacts <fresh-dir>
+```
+
+The closed contracts are `reviewgraphen.context_request.v1` and
+`reviewgraphen.context_packet.v1`. The request binds one exact 40-hex revision,
+`rust.production.v1@1`, extractor version `2.0.119`, rule-set hash, explicit
+ingest bounds, `context.task_subject_windows@1`, and a typed resolved,
+unresolved or ambiguous subject binding. Resolved subjects must be exact
+accepted ProgramSpace symbol IDs; free-form hints are not resolved by the
+product. The packet is a non-authority Projection, not an obligation, claim,
+evidence, verification, finding, decision, coverage claim or generic-review run.
+
+Run it from a checkout containing the bound revision and use a fresh relative
+artifact path:
+
+```bash
+cd /path/to/admitted/repository-checkout
+/home/rizumita/workspace/reviewgraphen-m21/target/release/reviewgraphen context \
+  --request /absolute/path/to/reviewgraphen.context_request.v1.json \
+  --artifacts artifacts
+```
+
+The measured successful command returned the canonical
+`reviewgraphen.context_packet.v1` on stdout and wrote exactly:
+
+```text
+artifacts/context-artifact-manifest.v1.json
+artifacts/context_packet.v1.json
+```
+
+Validate the packet with the same m21 binary:
+
+```bash
+/home/rizumita/workspace/reviewgraphen-m21/target/release/reviewgraphen \
+  schema validate artifacts/context_packet.v1.json
+```
+
+The measured response was
+`{"schema":"reviewgraphen.context_packet.v1","valid":true}` with exit 0.
+Never present this unmerged command as a main-worktree capability, and never
+cross-decode its request/packet as generic-review v3.
 
 ## Output checklist
 
