@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -77,6 +78,42 @@ def _record_pipeline_failure(diagnostic_build: Path, cluster_id: str, exit_code:
     return {"schema":"m20.stage0-error-diagnostic.v1", "code":stage0_code, "commit_cluster_id":cluster_id, "product_exit_code":exit_code, "typed_reason":reason, "product_stderr":stderr, "elapsed_seconds":elapsed}
 
 
+def _ingest_admission_reason(stderr: str, diagnostic: dict) -> str | None:
+    """Recognize only bounded-ingest admission failures attested by product diagnostics."""
+    if not stderr.startswith("generic review ingestion failed:") or not isinstance(diagnostic, dict) or diagnostic.get("schema") != "reviewgraphen.generic_review_diagnostics.v1":
+        return None
+    stages = diagnostic.get("stages")
+    if not isinstance(stages, list) or not any(isinstance(row, dict) and row.get("stage") == "ingest" and row.get("status") == "failed" for row in stages):
+        return None
+    detail = stderr[len("generic review ingestion failed:"):].strip()
+    if re.fullmatch(r"Git tree contains more than the configured [0-9]+ regular-file bound", detail):
+        return "max_files"
+    if re.fullmatch(r"snapshot source bytes total [0-9]+, above the 67108864 byte bound", detail):
+        return "snapshot_bytes"
+    if re.fullmatch(r"Git blob .+ is [0-9]+ bytes, above the 4194304 byte bound", detail):
+        return "blob_bytes"
+    return None
+
+
+def _ingest_exclusion_or_fatal(exit_code: int, stderr: str, diagnostic: dict) -> str:
+    reason = _ingest_admission_reason(stderr, diagnostic) if exit_code == 20 else None
+    if reason is None:
+        raise Stage0Error("frozen_cluster_pipeline_failed")
+    return reason
+
+
+def _product_invocation(request_path: Path) -> tuple[str, dict]:
+    executable_sha = sha256_bytes(PIPELINE.read_bytes())
+    invocation = {"product_executable_sha256":executable_sha,"argv":["review","--request","pipeline-request.v3.json","--artifacts","pipeline-artifacts","--diagnostics","generic-review-diagnostics.v1.json"],"cwd_scope":"isolated-repository-copy","request_sha256":sha256_bytes(request_path.read_bytes())}
+    return executable_sha, invocation
+
+
+def _excluded_build(cluster, reason: str) -> dict:
+    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":[], "subject_retained_obligation_ids":[], "deferred_obligation_ids":[], "subject_remainders":[], "selected_obligation_id":"", "frozen_obligation_path":"", "frozen_obligation_sha256":"", "admitted_source_bytes":0, "whole_changed_production_files_bytes":0, "model_eligible":False, "enumeration_honest":True, "ingest_exclusion":{"code":"stage0_ingest_admission_rejected","reason":reason}}
+    value["deterministic_payload_sha256"] = build_payload_hash(value)
+    return value
+
+
 def _packet_v3_context_budget(repository, trees: tuple[dict, dict], context: dict) -> tuple[int, int, bool]:
     materialized = {item["artifact_id"]:item for item in context.get("materialized_sources", [])}
     callee = next((item for item in context.get("subject_outcomes", []) if item.get("role") == "callee" and item.get("state") == "admitted"), None)
@@ -150,14 +187,22 @@ def run_frozen_cluster_pipeline(cluster, build_root: Path, *, _pipeline_timeout:
             diagnostic = _record_pipeline_failure(diagnostic_build, cluster.commit_cluster_id, None, _stderr_text(error.stderr), "timeout", time.monotonic() - started)
             raise Stage0Error("frozen_cluster_pipeline_failed", diagnostic=diagnostic) from error
         product_diagnostic = execution_root / "generic-review-diagnostics.v1.json"
-        if product_diagnostic.is_file(): product_diagnostic.replace(diagnostic_build / product_diagnostic.name)
+        saved_product_diagnostic = diagnostic_build / product_diagnostic.name
+        if product_diagnostic.is_file(): product_diagnostic.replace(saved_product_diagnostic)
         if result.returncode or result.stderr:
             stderr = _stderr_text(result.stderr)
-            overflow = "Git tree contains more than the configured " in stderr and " regular-file bound" in stderr
-            code = "stage0_ingest_max_files_exceeded" if overflow else "frozen_cluster_pipeline_failed"
-            reason = code if overflow else "product_cli_error"
-            diagnostic = _record_pipeline_failure(diagnostic_build, cluster.commit_cluster_id, result.returncode, stderr, reason, time.monotonic() - started, code)
-            raise Stage0Error(code, diagnostic=diagnostic)
+            try: product_diagnostic_value = parse_json_bytes(saved_product_diagnostic.read_bytes())
+            except (OSError, ValueError): product_diagnostic_value = {}
+            try: exclusion_reason = _ingest_exclusion_or_fatal(result.returncode,stderr,product_diagnostic_value)
+            except Stage0Error as error:
+                diagnostic = _record_pipeline_failure(diagnostic_build, cluster.commit_cluster_id, result.returncode, stderr, "product_cli_error", time.monotonic() - started)
+                raise Stage0Error("frozen_cluster_pipeline_failed", diagnostic=diagnostic) from error
+            else:
+                _record_pipeline_failure(diagnostic_build, cluster.commit_cluster_id, result.returncode, stderr, exclusion_reason, time.monotonic() - started, "stage0_ingest_admission_rejected")
+                executable_sha, invocation = _product_invocation(request_path)
+                execution = {"schema":"m20.stage0-product-ingest-exclusion.v1", "product_executable_path":str(PIPELINE), "product_executable_sha256":executable_sha, "invocation_sha256":hash_json(invocation), "request_sha256":sha256_bytes(request_path.read_bytes()), "product_exit_code":result.returncode, "product_stderr":stderr, "diagnostic_stage":"ingest", "diagnostic_status":"failed", "typed_code":"stage0_ingest_admission_rejected", "typed_reason":exclusion_reason}
+                (build_root / "product-execution.v1.json").write_bytes(canonical_bytes(execution))
+                return _excluded_build(cluster, exclusion_reason)
         (execution_root / "pipeline-artifacts").replace(artifact_root)
     finally:
         if execution_root.exists(): shutil.rmtree(execution_root)
@@ -167,11 +212,11 @@ def run_frozen_cluster_pipeline(cluster, build_root: Path, *, _pipeline_timeout:
     (build_root / "product-run.v1.json").write_bytes(run_raw)
     product_manifest = artifact_root / "artifact-manifest.v1.json"
     if not product_manifest.is_file(): raise Stage0Error("frozen_cluster_artifact_manifest_missing")
-    invocation={"product_executable_sha256":sha256_bytes(PIPELINE.read_bytes()),"argv":["review","--request","pipeline-request.v3.json","--artifacts","pipeline-artifacts","--diagnostics","generic-review-diagnostics.v1.json"],"cwd_scope":"isolated-repository-copy","request_sha256":sha256_bytes(request_path.read_bytes())}
+    executable_sha, invocation = _product_invocation(request_path)
     execution = {
         "schema":"m20.stage0-product-execution.v2",
         "product_executable_path":str(PIPELINE),
-        "product_executable_sha256":sha256_bytes(PIPELINE.read_bytes()),
+        "product_executable_sha256":executable_sha,
         "invocation_sha256":hash_json(invocation),
         "request_sha256":sha256_bytes(request_path.read_bytes()),
         "run_sha256":sha256_bytes(run_raw),
@@ -202,5 +247,5 @@ def run_frozen_cluster_pipeline(cluster, build_root: Path, *, _pipeline_timeout:
     if eligible:
         frozen = _frozen_obligation(cluster, run, contexts[selected], repository, trees)
         frozen_raw = canonical_bytes(frozen); (build_root / obligation_relative).write_bytes(frozen_raw); obligation_hash = sha256_bytes(frozen_raw)
-    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":obligations, "subject_retained_obligation_ids":retained, "deferred_obligation_ids":sorted(set(coverage.get("deferred_obligation_ids", [])) & set(obligations)), "subject_remainders":sorted(remainders, key=lambda item:item["obligation_id"]), "selected_obligation_id":selected, "frozen_obligation_path":obligation_relative, "frozen_obligation_sha256":obligation_hash, "admitted_source_bytes":admitted, "whole_changed_production_files_bytes":whole, "model_eligible":eligible, "enumeration_honest":honest}
+    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":obligations, "subject_retained_obligation_ids":retained, "deferred_obligation_ids":sorted(set(coverage.get("deferred_obligation_ids", [])) & set(obligations)), "subject_remainders":sorted(remainders, key=lambda item:item["obligation_id"]), "selected_obligation_id":selected, "frozen_obligation_path":obligation_relative, "frozen_obligation_sha256":obligation_hash, "admitted_source_bytes":admitted, "whole_changed_production_files_bytes":whole, "model_eligible":eligible, "enumeration_honest":honest, "ingest_exclusion":None}
     value["deterministic_payload_sha256"] = build_payload_hash(value); return value

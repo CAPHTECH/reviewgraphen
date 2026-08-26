@@ -17,7 +17,7 @@ from evaluator.pipeline import PipelineError, _primary
 from evaluator.freeze import freeze_manifest, write_generated
 from evaluator.semantic_acceptance import ALGORITHM_SOURCE_SHA256, reference_body
 from evaluator.stage0_driver import Cluster, Stage0Error, _ordered_terminal_builds, build_payload_hash, commit_cluster_id, enumerate_clusters, run_stage0, worker_ceiling
-from evaluator.stage0_production import _packet_v3_context_budget, run_frozen_cluster_pipeline
+from evaluator.stage0_production import _ingest_admission_reason, _ingest_exclusion_or_fatal, _packet_v3_context_budget, run_frozen_cluster_pipeline
 from evaluator.tests import support
 
 
@@ -33,13 +33,50 @@ def pipeline(cluster, _root):
     obligation = "obligation:" + cluster.commit_cluster_id[-8:]
     frozen = canonical_bytes({"schema":"m20.synthetic-frozen-obligation.v1","unit_id":cluster.commit_cluster_id,"obligation_id":obligation})
     (_root / "frozen-obligation.v1.json").write_bytes(frozen)
-    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":[obligation], "subject_retained_obligation_ids":[obligation], "deferred_obligation_ids":[], "subject_remainders":[], "selected_obligation_id":obligation, "frozen_obligation_path":"frozen-obligation.v1.json", "frozen_obligation_sha256":sha256_bytes(frozen), "admitted_source_bytes":10, "whole_changed_production_files_bytes":20, "model_eligible":True, "enumeration_honest":True}
+    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":[obligation], "subject_retained_obligation_ids":[obligation], "deferred_obligation_ids":[], "subject_remainders":[], "selected_obligation_id":obligation, "frozen_obligation_path":"frozen-obligation.v1.json", "frozen_obligation_sha256":sha256_bytes(frozen), "admitted_source_bytes":10, "whole_changed_production_files_bytes":20, "model_eligible":True, "enumeration_honest":True, "ingest_exclusion":None}
     value["deterministic_payload_sha256"] = build_payload_hash(value)
     return value
 
 
 def output_tree(root):
     return {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+
+class Stage0AdmissionTest(unittest.TestCase):
+    def test_all_ingest_admission_bounds_are_typed_but_core_failure_is_fatal(self):
+        ingest_failed={"schema":"reviewgraphen.generic_review_diagnostics.v1","stages":[{"stage":"ingest","status":"failed"}]}
+        cases=(
+            ("generic review ingestion failed: Git tree contains more than the configured 20000 regular-file bound","max_files"),
+            ("generic review ingestion failed: snapshot source bytes total 67108865, above the 67108864 byte bound","snapshot_bytes"),
+            ("generic review ingestion failed: Git blob `vendor/large.bin` is 4194305 bytes, above the 4194304 byte bound","blob_bytes"),
+        )
+        for stderr,reason in cases:
+            with self.subTest(reason=reason): self.assertEqual(_ingest_admission_reason(stderr,ingest_failed),reason)
+        context_failed={"schema":"reviewgraphen.generic_review_diagnostics.v1","stages":[{"stage":"ingest","status":"completed"},{"stage":"context","status":"failed"}]}
+        self.assertIsNone(_ingest_admission_reason(cases[1][0],context_failed))
+        self.assertIsNone(_ingest_admission_reason("generic review context failed: core validation failed",context_failed))
+        with self.assertRaisesRegex(Stage0Error,"frozen_cluster_pipeline_failed"): _ingest_exclusion_or_fatal(20,"generic review context failed: core validation failed",context_failed)
+
+    def test_ingest_exclusion_remains_in_complete_300_cluster_denominator(self):
+        excluded_id=enumerate_clusters(corpus(300))[0].commit_cluster_id
+        def observed(cluster,root):
+            if cluster.commit_cluster_id!=excluded_id: return pipeline(cluster,root)
+            value={"schema":"m20.stage0-cluster-build.v1","commit_cluster_id":cluster.commit_cluster_id,"repository_root":cluster.repository_root,"base_commit_oid":cluster.base_commit_oid,"head_commit_oid":cluster.head_commit_oid,"applicable_obligation_ids":[],"subject_retained_obligation_ids":[],"deferred_obligation_ids":[],"subject_remainders":[],"selected_obligation_id":"","frozen_obligation_path":"","frozen_obligation_sha256":"","admitted_source_bytes":0,"whole_changed_production_files_bytes":0,"model_eligible":False,"enumeration_honest":True,"ingest_exclusion":{"code":"stage0_ingest_admission_rejected","reason":"snapshot_bytes"}}
+            value["deterministic_payload_sha256"]=build_payload_hash(value); return value
+        with tempfile.TemporaryDirectory() as parent:
+            root=Path(parent)/"stage0"; result=run_stage0(root,corpus(300),observed,jobs=1); summary=parse_json_bytes((root/"stage0-result.v1.json").read_bytes())
+            self.assertEqual(summary["cluster_count"],300); self.assertEqual(summary["ingest_exclusion_counts"],{"max_files":0,"snapshot_bytes":1,"blob_bytes":0}); self.assertEqual(len(list((root/"clusters").iterdir())),300); self.assertNotIn(excluded_id,result["selection"].value["eligible_cluster_ids"])
+
+    def test_product_max_files_admission_returns_a_sealed_exclusion(self):
+        repository=Path(os.environ.get("M20_TEST_SOURCE_WORKSPACE",Path(__file__).parents[4])); cluster=Cluster("github.com/CAPHTECH/reviewgraphen",str(repository),"a8b6b24d5ed704f53f721b25db42d5d631f946c7","8569a2261e8a62145228872a2fde9f4c48093d00")
+        with tempfile.TemporaryDirectory() as parent:
+            stage_root=Path(parent)/"stage0"; build_root=stage_root/"clusters"/cluster.commit_cluster_id.rsplit(":",1)[1]/"build-1"; build_root.mkdir(parents=True); diagnostic_root=Path(tempfile.gettempdir())/"m20-stage0-diagnostics"/hashlib.sha256(str(stage_root.resolve()).encode()).hexdigest()
+            try:
+                value=run_frozen_cluster_pipeline(cluster,build_root,_max_files=1); self.assertEqual(value["ingest_exclusion"],{"code":"stage0_ingest_admission_rejected","reason":"max_files"})
+                failure=parse_json_bytes((diagnostic_root/"clusters"/cluster.commit_cluster_id.rsplit(":",1)[1]/"build-1/pipeline-failure.v1.json").read_bytes()); self.assertEqual(failure["typed_reason"],"max_files"); self.assertNotEqual(failure["product_exit_code"],0)
+                execution=parse_json_bytes((build_root/"product-execution.v1.json").read_bytes()); self.assertEqual((execution["typed_code"],execution["typed_reason"]),("stage0_ingest_admission_rejected","max_files")); request=parse_json_bytes((build_root/"pipeline-request.v3.json").read_bytes()); self.assertEqual(request["ingest"]["max_files"],1); self.assertFalse((build_root/"pipeline-artifacts").exists())
+            finally:
+                if diagnostic_root.exists(): shutil.rmtree(diagnostic_root)
 
 
 class Stage0DriverTest(unittest.TestCase):
@@ -275,28 +312,6 @@ class Stage0DriverTest(unittest.TestCase):
                 self.assertIsNone(failure["product_exit_code"])
                 self.assertIn("product_stderr", failure)
                 self.assertGreater(float(failure["elapsed_seconds"]), 0)
-                self.assertFalse((build_root / "pipeline-artifacts").exists())
-            finally:
-                if diagnostic_root.exists(): shutil.rmtree(diagnostic_root)
-
-    def test_ingest_max_files_overflow_is_typed_stage0_failure(self):
-        repository = Path(os.environ.get("M20_TEST_SOURCE_WORKSPACE", Path(__file__).parents[4]))
-        cluster = Cluster("github.com/CAPHTECH/reviewgraphen", str(repository), "a8b6b24d5ed704f53f721b25db42d5d631f946c7", "8569a2261e8a62145228872a2fde9f4c48093d00")
-        with tempfile.TemporaryDirectory() as parent:
-            stage_root = Path(parent) / "stage0"
-            build_root = stage_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1"
-            build_root.mkdir(parents=True)
-            diagnostic_root = Path(tempfile.gettempdir()) / "m20-stage0-diagnostics" / hashlib.sha256(str(stage_root.resolve()).encode()).hexdigest()
-            try:
-                with self.assertRaisesRegex(Stage0Error, "stage0_ingest_max_files_exceeded") as raised:
-                    run_frozen_cluster_pipeline(cluster, build_root, _max_files=1)
-                self.assertEqual(raised.exception.code, "stage0_ingest_max_files_exceeded")
-                self.assertEqual(raised.exception.diagnostic["typed_reason"], "stage0_ingest_max_files_exceeded")
-                failure = parse_json_bytes((diagnostic_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1" / "pipeline-failure.v1.json").read_bytes())
-                self.assertEqual(failure["typed_reason"], "stage0_ingest_max_files_exceeded")
-                self.assertNotEqual(failure["product_exit_code"], 0)
-                request = parse_json_bytes((build_root / "pipeline-request.v3.json").read_bytes())
-                self.assertEqual(request["ingest"]["max_files"], 1)
                 self.assertFalse((build_root / "pipeline-artifacts").exists())
             finally:
                 if diagnostic_root.exists(): shutil.rmtree(diagnostic_root)

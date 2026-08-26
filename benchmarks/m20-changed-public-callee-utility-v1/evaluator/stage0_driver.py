@@ -14,6 +14,7 @@ from .canonical import canonical_bytes, hash_json, sha256_bytes, stable_id
 EXPERIMENT_ID = "m20-changed-public-callee-utility-v1"
 COMMIT_SELECTION_SEED = "m20-commit-selection-v1"
 EXPECTED_CLUSTERS = 300
+INGEST_EXCLUSION_REASONS = ("max_files", "snapshot_bytes", "blob_bytes")
 
 
 class Stage0Error(ValueError):
@@ -114,7 +115,7 @@ def build_payload_hash(value: dict) -> str:
 
 
 def _validate_build(value: dict, cluster_id: str) -> dict:
-    fields = {"schema", "commit_cluster_id", "repository_root", "base_commit_oid", "head_commit_oid", "applicable_obligation_ids", "subject_retained_obligation_ids", "deferred_obligation_ids", "subject_remainders", "selected_obligation_id", "frozen_obligation_path", "frozen_obligation_sha256", "admitted_source_bytes", "whole_changed_production_files_bytes", "model_eligible", "enumeration_honest", "deterministic_payload_sha256"}
+    fields = {"schema", "commit_cluster_id", "repository_root", "base_commit_oid", "head_commit_oid", "applicable_obligation_ids", "subject_retained_obligation_ids", "deferred_obligation_ids", "subject_remainders", "selected_obligation_id", "frozen_obligation_path", "frozen_obligation_sha256", "admitted_source_bytes", "whole_changed_production_files_bytes", "model_eligible", "enumeration_honest", "ingest_exclusion", "deterministic_payload_sha256"}
     if not isinstance(value, dict) or set(value) != fields or value["schema"] != "m20.stage0-cluster-build.v1" or value["commit_cluster_id"] != cluster_id:
         raise Stage0Error("cluster_build_invalid")
     applicable = _ids(value["applicable_obligation_ids"], "applicable_set_invalid")
@@ -133,6 +134,9 @@ def _validate_build(value: dict, cluster_id: str) -> dict:
             raise Stage0Error("cluster_bytes_invalid")
     if not isinstance(value["model_eligible"], bool) or not isinstance(value["enumeration_honest"], bool):
         raise Stage0Error("cluster_flag_invalid")
+    exclusion = value["ingest_exclusion"]
+    if exclusion is not None and (not isinstance(exclusion, dict) or set(exclusion) != {"code", "reason"} or exclusion.get("code") != "stage0_ingest_admission_rejected" or exclusion.get("reason") not in INGEST_EXCLUSION_REASONS):
+        raise Stage0Error("ingest_exclusion_invalid")
     selectors = ("repository_root", "base_commit_oid", "head_commit_oid", "selected_obligation_id", "frozen_obligation_path", "frozen_obligation_sha256")
     if not all(isinstance(value[field], str) for field in selectors):
         raise Stage0Error("cluster_launch_selector_invalid")
@@ -141,6 +145,8 @@ def _validate_build(value: dict, cluster_id: str) -> dict:
             raise Stage0Error("cluster_launch_selector_invalid")
     elif any(value[field] for field in ("selected_obligation_id", "frozen_obligation_path", "frozen_obligation_sha256")):
         raise Stage0Error("ineligible_launch_selector_present")
+    if exclusion is not None and (applicable or retained or deferred or remainder or value["admitted_source_bytes"] != 0 or value["whole_changed_production_files_bytes"] != 0 or value["model_eligible"] or value["enumeration_honest"] is not True):
+        raise Stage0Error("ingest_exclusion_state_invalid")
     if value["deterministic_payload_sha256"] != build_payload_hash(value):
         raise Stage0Error("cluster_payload_hash_invalid")
     return value
@@ -238,7 +244,8 @@ def run_stage0(output_root: str | Path, repositories: Iterable[dict], cluster_pi
     first_builds = _ordered_terminal_builds(completed, expected_ids, expected_count)
     gates = reduce_gates(first_builds, expected_count)
     eligible = sorted((item["commit_cluster_id"] for item in first_builds if item["model_eligible"]), key=lambda identity: _hash_order(COMMIT_SELECTION_SEED, identity))
-    result = {"schema": "m20.stage0-result.v1", "experiment_id": EXPERIMENT_ID, "cluster_count": len(clusters), "model_calls": 0, "gates": gates}
+    exclusion_counts = {reason:sum(item["ingest_exclusion"] == {"code":"stage0_ingest_admission_rejected", "reason":reason} for item in first_builds) for reason in INGEST_EXCLUSION_REASONS}
+    result = {"schema": "m20.stage0-result.v1", "experiment_id": EXPERIMENT_ID, "cluster_count": len(clusters), "ingest_exclusion_counts":exclusion_counts, "model_calls": 0, "gates": gates}
     _write(root / "stage0-result.v1.json", result)
     if not all(gate["passed"] for gate in gates):
         paths = sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())

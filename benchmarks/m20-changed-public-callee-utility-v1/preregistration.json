@@ -11,6 +11,13 @@
       "summary": "The frozen evaluator bundle cannot by itself prove Stage 0 root authenticity; authenticity depends on verification of the bundle-external custodian Ed25519 signature anchor.",
       "affected_claim": "Stage 0 root authenticity",
       "status": "open"
+    },
+    {
+      "id": "wave33-stage1-only-control-label-readout",
+      "wave": 33,
+      "summary": "Only the Stage 1 hash-ranked top 10 clusters receive substantive control labeling; all other control labels are unable because the two labelers are time-constrained. Stage 2A, its operational rectangle, and advance are outside this readout.",
+      "affected_claim": "Stage 2A operational rectangle and advance decision",
+      "status": "open"
     }
   ],
   "frozen_identities": {
@@ -56,7 +63,7 @@
     "cluster_count": 300,
     "cluster_manifest_sha256": "sha256:bcc91196863aad70287324b27def3b044e75430a8e9e0ae34c7a72f28bbdb5ea",
     "product_cli_path": "/home/rizumita/workspace/reviewgraphen/target/release/reviewgraphen",
-    "product_cli_sha256": "sha256:4cbdd04f4b90f8867024fd67df5223c4f308b08b5d82b0b3633556b95ec61623",
+    "product_cli_sha256": "sha256:56baf5b1c3006cdb6632c2f8484f70dee081c1539913cf5cc14b91d658279d43",
     "replay_verification": {
       "schema": "m20.stage0-product-replay-sample.v1",
       "seed": "m20-stage0-product-replay-v1",
@@ -217,14 +224,14 @@
       "attack_artifact": "evaluator/generated/attacks.generated.json"
     },
     "freeze_hashes": {
-      "evaluator_bundle_sha256": "sha256:21d1d666093741cf42096dba0adbec6abd40d02ba5bb98a2a9448e4ef21bfa21",
-      "evaluator_execution_sha256": "sha256:3d7572a476cf3cdaf1ee55b47de03681adf2f8c3373cf2c2b6eeccbe4a5c7150",
-      "generated_fixture_inventory_sha256": "sha256:bdd24a00af4ff968e4c4c3d0ce5e769fb5286afb821f05211f1565633e942daa",
-      "reference_vector_set_sha256": "sha256:39d76b5cd38bd9346df25260b04afca63b3433b566fc4a6b515cdba0da43611a",
+      "evaluator_bundle_sha256": "sha256:44dd55596430eddbccebc4e93ed8bc60129801e90a28e811c268658836d939bc",
+      "evaluator_execution_sha256": "sha256:598f25c5a34b4247df9f08234bf1a473828608f5ec4dd07a02775033c39d0b22",
+      "generated_fixture_inventory_sha256": "sha256:b6fce61e7701962593f18a128cefc16af571aff7fd65e651d939a9393ce3ec3d",
+      "reference_vector_set_sha256": "sha256:d4014284f6b1f6053501131935441fea7849772db6ac47327b31b6108e3847c4",
       "mutation_manifest_sha256": "sha256:d571a9ac92f0fefbd520a2a914a5c68f05c3e0639bedaeb184e299ad811ab10f",
-      "semantic_acceptance_reference_sha256": "sha256:7656b692ec2764026dca5dd468e798ba8ab41fcdaae39950501fee92a497c442",
+      "semantic_acceptance_reference_sha256": "sha256:41083a73826839415e8b5b283d2e9986b6d135b7350a44b5153f604a7513084f",
       "measurement_record_sha256": "sha256:7286d700f8684893477c8e6660986239cc52ffde35394160fc1ab844e642a7b8",
-      "freeze_manifest_sha256": "sha256:2feb89b7b89398666900f2dc071be3af2cf3c6d5dde31309cc437ab24d990f1d",
+      "freeze_manifest_sha256": "sha256:1884880788ac76997b9f6ba4efa484922b3d6e97fee5a60dcc550dbe5f3b2e23",
       "freeze_manifest_path": "freeze-manifest.json",
       "non_null_gate": "After the Stage 0 driver is implemented and atomically re-sealed, all eight hashes and the manifest path must be non-null; SHA-256 of the exact manifest bytes must equal freeze_manifest_sha256, its bundle/execution hashes must equal the active slots, its supersedes_freeze_manifest_sha256 must equal the last freeze_history manifest hash, and verify-frozen must pass before status may return to frozen-before-corpus-resolution."
     },
@@ -298,6 +305,18 @@
         "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
         "semantic_acceptance_reference_sha256": "sha256:ee7e670ede21ee4c74bd1e50ddff215049c5187c51212e2094056b17b2dd4d43",
         "measurement_record_sha256": "sha256:9acf4adcdbe588b198eb7d6bcf553a2e13519b614d641c1fe211a0e18f479ad7"
+      },
+      {
+        "freeze_manifest_sha256": "sha256:2feb89b7b89398666900f2dc071be3af2cf3c6d5dde31309cc437ab24d990f1d",
+        "status": "superseded_seal9_stage0_ingest_exclusion_and_product_pin",
+        "reason": "Seal 9 adds typed Stage 0 ingest-admission exclusions and pins the corrected release product; seal 8 is retained as superseded history.",
+        "evaluator_bundle_sha256": "sha256:21d1d666093741cf42096dba0adbec6abd40d02ba5bb98a2a9448e4ef21bfa21",
+        "evaluator_execution_sha256": "sha256:3d7572a476cf3cdaf1ee55b47de03681adf2f8c3373cf2c2b6eeccbe4a5c7150",
+        "generated_fixture_inventory_sha256": "sha256:bdd24a00af4ff968e4c4c3d0ce5e769fb5286afb821f05211f1565633e942daa",
+        "reference_vector_set_sha256": "sha256:39d76b5cd38bd9346df25260b04afca63b3433b566fc4a6b515cdba0da43611a",
+        "mutation_manifest_sha256": "sha256:d571a9ac92f0fefbd520a2a914a5c68f05c3e0639bedaeb184e299ad811ab10f",
+        "semantic_acceptance_reference_sha256": "sha256:7656b692ec2764026dca5dd468e798ba8ab41fcdaae39950501fee92a497c442",
+        "measurement_record_sha256": "sha256:7286d700f8684893477c8e6660986239cc52ffde35394160fc1ab844e642a7b8"
       }
     ],
     "runtime_contract": {
@@ -333,7 +352,7 @@
       "output_root": "caller-selected initially nonexistent destination; path is not an identity input; closed layout is corpus-manifest.v1.json, clusters/<commit-cluster digest>/build-1/, clusters/<commit-cluster digest>/build-2/, stage0-result.v1.json, stage0-selection.v1.json, and artifact-manifest.v1.json",
       "commit_cluster_id": "D(commit-cluster,{cluster_contract:m20.commit_cluster@1,experiment_id:m20-changed-public-callee-utility-v1,repository_id:canonical repository ID,base_commit_oid:exact Git object ID,head_commit_oid:exact Git object ID}) under frozen restricted canonical JSON",
       "responsibilities": "resolve and seal corpus; process every one of 300 clusters in two clean builds; evaluate exactly seven gates; derive and seal exact model-eligible hash order and first 10/40 cumulative membership; make zero model calls",
-      "ingest_admission": "every Stage 0 product request sets ingest.max_files=20000, the closed v3 schema maximum and section 11 quickstart value; this is an admission/resource bound, not C/A/S/D membership: overflow is typed Stage 0 failure and cannot truncate accepted files, remove a cluster from C, or create model ineligibility; the separate materialized-source bound remains 4096",
+      "ingest_admission": "every Stage 0 product request sets max_files=20000, max_file_bytes=4194304, and max_total_source_bytes=67108864; these are admission/resource bounds, not C/A/S/D denominators: a product exit 20 with an independently attested ingest failure matching max_files, snapshot_bytes, or blob_bytes is sealed as a typed model-ineligible cluster exclusion with empty A_c/S_c/D_c while retaining the cluster in the 300 denominator; no bound may truncate accepted files, and every other product error is fatal; the separate materialized-source bound remains 4096",
       "endpoint_separation": "Stage 0 may only authorize/block launch and select exact IDs; its records contain no arm/model/judge/primary values and cannot enter scoring or n/b/c/n00; each later run authenticates the selection-manifest hash and membership",
       "parallelism": "cluster-level parallelism is allowed; worker ceiling=max(1,min(16,available logical CPUs-2)), with unavailable or <=2 CPUs yielding one; --jobs is a public operational argument constrained to 1..=ceiling, omitted means ceiling, and its value is excluded from every output, ID, manifest, hash, gate, and selection input; each worker owns one cluster with two isolated clean builds",
       "freeze_gate": "before corpus resolution or output-root creation, load preregistration.json, require all active hashes and manifest path non-null, and require verify-frozen ok=true; otherwise refuse without repository observation",
@@ -572,6 +591,12 @@
       "id": "seal8-operational-backend-pin-refresh",
       "reason": "seal-8 shim-envelope compatibility, bundle-external HMAC-key generation, and a changed server listing required an operational pin refresh",
       "impact": "operational pins only; the experimental contract, thresholds, budgets, denominators, and Stage 1/2A operational rectangles are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "seal9-product-and-stage0-ingest-exclusion",
+      "reason": "release product commit 2930546 permits self-recursive callees and independently rebuilds D exclusion-ID validation; the real-corpus 10-cluster product check returned exit 20; Stage 0 now preserves max_files, snapshot_bytes, and blob_bytes admission overflows as typed ineligible exclusions, and the operational run uses --jobs 7 because product peak RSS is 3.8 GB and higher parallelism risks OOM",
+      "impact": "the product executable pin and frozen Stage 0 exclusion handling are updated; the 300-cluster denominator, thresholds, budgets, and Stage 1/2A operational rectangles are unchanged"
     }
   ],
   "interpretation_limits": [

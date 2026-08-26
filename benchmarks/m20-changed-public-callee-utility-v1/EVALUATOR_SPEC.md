@@ -1529,25 +1529,37 @@ empty output/cache directories, and shares no mutable cache or reduction state
 with another job. The product CLI runs from an independent root-external
 repository copy and receives the literal repository-relative
 `pipeline-artifacts` argument required by its admission contract. Its v3
-request uses the ADR sections 5.4.1 and 11 `max_files=20000` ingest admission
-bound: the closed v3 schema maximum and the already fixed quickstart value,
-chosen instead of a corpus-fitted 5,000 cutoff after the measured complete
-4,816-file denominator. This resource bound does not change `C`, `A`, `S`, or
-`D`; overflow is a typed Stage 0 failure and never truncation, cluster removal,
-or model ineligibility. The separate materialized-source candidate bound
-remains 4,096. On success that
+request uses the ADR sections 5.4.1 and 11 closed ingest admission bounds:
+`max_files=20000`, `max_file_bytes=4194304`, and
+`max_total_source_bytes=67108864`. A product exit 20 is an ineligible-cluster
+exclusion only when stderr begins `generic review ingestion failed:` and the
+product diagnostic independently records `stage=ingest,status=failed`. The
+evaluator classifies the three closed bound messages as `max_files`,
+`blob_bytes`, or `snapshot_bytes`, seals
+`{code:stage0_ingest_admission_rejected,reason}` in the cluster build, records
+the three exact counts in `stage0-result.v1.json`, and retains the cluster in
+the 300-commit denominator. It never truncates or creates an obligation from
+the rejected ingest. Any other product error, including synthesis, core, or
+context validation failure, remains fatal `frozen_cluster_pipeline_failed`.
+The separate materialized-source candidate bound remains 4,096. On success that
 directory moves to the canonical
 `clusters/<digest>/build-N/pipeline-artifacts` location and the repository copy
 is removed. Absolute and traversing `--artifacts` arguments are forbidden.
-Product diagnostics and, for every failed invocation, a create-new record of
+Raw product diagnostics and the non-normative timing/failure record of
 commit-cluster ID, product exit code, and stderr typed error exist only below
 `/tmp/m20-stage0-diagnostics/<output-root-digest>/clusters/<digest>/build-N/`.
-They never enter an output, manifest, hash, gate, identity, or selection
-preimage. `frozen_cluster_pipeline_failed` also writes a non-normative stderr
-JSON record with the first observed failed cluster ID and product exit code.
-The reducer waits for 300 unique
-terminal cluster IDs and sorts by their UTF-8 bytes; it never consumes
-submission or completion order.
+Those raw/timing files never enter an output, manifest, hash, gate, identity,
+or selection preimage. A recognized admission exclusion separately seals the
+exact bounded-ingest stderr, typed reason, request/executable hashes, and the
+normalized `ingest/failed` diagnostic status in its canonical execution record.
+`frozen_cluster_pipeline_failed` also writes a non-normative stderr JSON record
+with the first observed failed cluster ID and product exit code.
+The reducer waits for 300 unique terminal cluster IDs, including every sealed
+ingest-admission exclusion, and sorts by their UTF-8 bytes; it never consumes
+submission or completion order. Each excluded build has empty `A_c`, `S_c`,
+and `D_c`, is model-ineligible, and remains auditable through the pinned
+request, normalized failed-ingest execution record, root hash chain, custodian
+anchor, and the registered sample/all replay policy.
 
 Stage 0 calls the pipeline-v2 packet-plan and interval-union implementation for
 each retained obligation. `model_eligible` is true only when both the shared

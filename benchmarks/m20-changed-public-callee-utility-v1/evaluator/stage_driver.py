@@ -18,6 +18,7 @@ from .canonical import canonical_bytes, hash_json, parse_json_bytes, sha256_byte
 from .pipeline import CONTEXT_HASH, CONTEXT_POLICY_ID, PipelineError, RUN, _response_hmac_key
 from .stage0_driver import (
     EXPECTED_CLUSTERS,
+    INGEST_EXCLUSION_REASONS,
     Stage0Error,
     _hash_order,
     _validate_build,
@@ -199,11 +200,47 @@ def _replay_product_execution(build_root: Path, repository_root: str, executable
         raise PipelineError("stage0_product_replay_unavailable", 2) from error
 
 
-def _verify_product_execution(build_root: Path, corpus_contract: dict, replay_repository_root: str | None = None) -> None:
+def _replay_ingest_exclusion(repository_root: str, executable: Path, request_raw: bytes, execution: dict, timeout_seconds: int) -> None:
+    from .stage0_production import _ingest_admission_reason
+    try:
+        with tempfile.TemporaryDirectory(prefix="m20-stage0-ingest-replay-") as temporary:
+            replay_root = Path(temporary) / "repository"
+            cloned = subprocess.run(["/usr/bin/git","clone","--shared","--no-checkout","--quiet",repository_root,str(replay_root)],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={"PATH":"","LC_ALL":"C","LANG":"C"},shell=False,timeout=timeout_seconds,check=False)
+            if cloned.returncode != 0 or cloned.stdout or cloned.stderr: raise PipelineError("stage0_product_replay_repository_invalid",2)
+            (replay_root/"pipeline-request.v3.json").write_bytes(request_raw)
+            replayed=subprocess.run([str(executable),"review","--request","pipeline-request.v3.json","--artifacts","pipeline-artifacts","--diagnostics","generic-review-diagnostics.v1.json"],cwd=replay_root,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={"PATH":"","LC_ALL":"C","LANG":"C"},shell=False,timeout=timeout_seconds,check=False)
+            try: diagnostic=parse_json_bytes((replay_root/"generic-review-diagnostics.v1.json").read_bytes())
+            except (OSError,ValueError) as error: raise PipelineError("stage0_product_replay_mismatch",2) from error
+            stderr=replayed.stderr.decode("utf-8","replace").strip(); reason=_ingest_admission_reason(stderr,diagnostic)
+            if replayed.returncode!=20 or replayed.stdout or stderr!=execution["product_stderr"] or reason!=execution["typed_reason"] or (replay_root/"pipeline-artifacts").exists(): raise PipelineError("stage0_product_replay_mismatch",2)
+    except subprocess.TimeoutExpired as error: raise PipelineError("stage0_product_replay_timeout",2) from error
+    except OSError as error: raise PipelineError("stage0_product_replay_unavailable",2) from error
+
+
+def _verify_product_execution(build_root: Path, corpus_contract: dict, cluster: dict, replay_repository_root: str | None = None) -> dict | None:
     try:
         request, request_raw = _read(build_root / "pipeline-request.v3.json")
-        run, run_raw = _read(build_root / "product-run.v1.json")
         execution, _ = _read(build_root / "product-execution.v1.json")
+    except PipelineError as error:
+        raise PipelineError("stage0_product_execution_invalid", 2) from error
+    executable=Path(corpus_contract["product_cli_path"])
+    try: executable_status=executable.lstat(); executable_sha=sha256_bytes(executable.read_bytes())
+    except OSError as error: raise PipelineError("stage0_product_executable_unavailable",2) from error
+    if executable.is_symlink() or not stat.S_ISREG(executable_status.st_mode) or executable_status.st_mode & 0o111 == 0 or executable_sha!=corpus_contract["product_cli_sha256"]: raise PipelineError("stage0_product_executable_identity_mismatch",2)
+    invocation={"product_executable_sha256":executable_sha,"argv":["review","--request","pipeline-request.v3.json","--artifacts","pipeline-artifacts","--diagnostics","generic-review-diagnostics.v1.json"],"cwd_scope":"isolated-repository-copy","request_sha256":sha256_bytes(request_raw)}
+    if execution.get("schema")=="m20.stage0-product-ingest-exclusion.v1":
+        from .stage0_production import _ingest_admission_reason
+        _closed(execution,{"schema","product_executable_path","product_executable_sha256","invocation_sha256","request_sha256","product_exit_code","product_stderr","diagnostic_stage","diagnostic_status","typed_code","typed_reason"},"stage0_ingest_exclusion_invalid")
+        request_fields={"schema","workspace_admission_root","repository_admission_root","repository_identity","base_revision","target_revision","ingest","plan","observer","verifier_descriptor_id","context_policy_id"}; _closed(request,request_fields,"stage0_product_request_schema_invalid")
+        ingest=request.get("ingest"); _closed(ingest,{"profile_id","profile_version","rule_set_hash","max_files","max_file_bytes","max_total_source_bytes"},"stage0_product_request_schema_invalid")
+        synthetic_diagnostic={"schema":"reviewgraphen.generic_review_diagnostics.v1","stages":[{"stage":"ingest","status":"failed"}]}; reason=_ingest_admission_reason(execution.get("product_stderr"),synthetic_diagnostic) if isinstance(execution.get("product_stderr"),str) else None
+        expected={"schema":"m20.stage0-product-ingest-exclusion.v1","product_executable_path":corpus_contract["product_cli_path"],"product_executable_sha256":executable_sha,"invocation_sha256":hash_json(invocation),"request_sha256":sha256_bytes(request_raw),"product_exit_code":20,"product_stderr":execution.get("product_stderr"),"diagnostic_stage":"ingest","diagnostic_status":"failed","typed_code":"stage0_ingest_admission_rejected","typed_reason":reason}
+        if execution!=expected or request.get("schema")!="reviewgraphen.generic_review_request.v3" or request.get("workspace_admission_root")!="." or request.get("repository_admission_root")!="." or request.get("repository_identity")!=cluster["repository_id"] or request.get("base_revision")!=cluster["base_commit_oid"] or request.get("target_revision")!=cluster["head_commit_oid"] or request.get("observer")!={"kind":"deterministic_abstain"} or request.get("context_policy_id")!=CONTEXT_POLICY_ID or ingest.get("max_files")!=20000 or ingest.get("max_file_bytes")!=4194304 or ingest.get("max_total_source_bytes")!=67108864 or reason is None or {path.name for path in build_root.iterdir()}!={"pipeline-request.v3.json","product-execution.v1.json","cluster-result.v1.json"}:
+            raise PipelineError("stage0_ingest_exclusion_invalid",2)
+        if replay_repository_root is not None: _replay_ingest_exclusion(replay_repository_root,executable,request_raw,execution,corpus_contract["replay_verification"]["timeout_seconds"])
+        return {"code":"stage0_ingest_admission_rejected","reason":reason}
+    try:
+        run, run_raw = _read(build_root / "product-run.v1.json")
         artifact_root = _safe_root(build_root / "pipeline-artifacts", "stage0_product_artifacts_invalid")
         product_manifest, product_raw = _read(artifact_root / "artifact-manifest.v1.json")
     except PipelineError as error:
@@ -223,11 +260,6 @@ def _verify_product_execution(build_root: Path, corpus_contract: dict, replay_re
     actual_paths=sorted(path.relative_to(artifact_root).as_posix() for path in artifact_root.rglob("*") if path.is_file() and not path.is_symlink() and path.name!="artifact-manifest.v1.json")
     if expected_paths != sorted(expected_paths,key=str.encode) or len(expected_paths)!=len(set(expected_paths)) or actual_paths!=expected_paths: raise PipelineError("stage0_product_artifact_manifest_invalid",2)
     request_id=run.get("request_id"); run_id=run.get("run_id")
-    executable=Path(corpus_contract["product_cli_path"])
-    try: executable_status=executable.lstat(); executable_sha=sha256_bytes(executable.read_bytes())
-    except OSError as error: raise PipelineError("stage0_product_executable_unavailable",2) from error
-    if executable.is_symlink() or not stat.S_ISREG(executable_status.st_mode) or executable_status.st_mode & 0o111 == 0 or executable_sha!=corpus_contract["product_cli_sha256"]: raise PipelineError("stage0_product_executable_identity_mismatch",2)
-    invocation={"product_executable_sha256":executable_sha,"argv":["review","--request","pipeline-request.v3.json","--artifacts","pipeline-artifacts","--diagnostics","generic-review-diagnostics.v1.json"],"cwd_scope":"isolated-repository-copy","request_sha256":sha256_bytes(request_raw)}
     if execution != {"schema":"m20.stage0-product-execution.v2","product_executable_path":corpus_contract["product_cli_path"],"product_executable_sha256":executable_sha,"invocation_sha256":hash_json(invocation),"request_sha256":sha256_bytes(request_raw),"run_sha256":sha256_bytes(run_raw),"artifact_manifest_sha256":sha256_bytes(product_raw),"request_id":request_id,"run_id":run_id} or product_manifest["schema"]!="reviewgraphen.generic_review_artifact_manifest.v1" or product_manifest["request_sha256"]!=sha256_bytes(request_raw) or product_manifest["request_id"]!=request_id or product_manifest["run_id"]!=run_id or not all(isinstance(value,str) and value for value in (request_id,run_id)):
         raise PipelineError("stage0_product_execution_invalid",2)
     try:
@@ -238,6 +270,7 @@ def _verify_product_execution(build_root: Path, corpus_contract: dict, replay_re
     _verify_generic_run(request,run,run_raw,artifact_root,product_manifest)
     if replay_repository_root is not None:
         _replay_product_execution(build_root, replay_repository_root, executable, request_raw, run_raw, artifact_root, corpus_contract["replay_verification"]["timeout_seconds"])
+    return None
 
 
 def _verify_custodian_anchor(root: Path, manifest_hash: str, corpus_contract: dict, freeze_hash: str, preregistration_sha256: str) -> None:
@@ -336,7 +369,7 @@ def _stage0_root(selection_path: Path, reexecute_all: bool = False) -> tuple[Pat
         byte_trees = []
         for number in (1, 2):
             build_root = directory / f"build-{number}"
-            _verify_product_execution(build_root, corpus_contract, cluster["repository_root"] if (identity,number) in replay_keys else None)
+            verified_exclusion=_verify_product_execution(build_root, corpus_contract, cluster, cluster["repository_root"] if (identity,number) in replay_keys else None)
             value, _ = _read(build_root / "cluster-result.v1.json")
             try:
                 _validate_build(value, identity)
@@ -344,6 +377,8 @@ def _stage0_root(selection_path: Path, reexecute_all: bool = False) -> tuple[Pat
                 raise PipelineError("stage0_build_invalid", 2) from error
             if any(value[field] != cluster[field] for field in ("repository_root", "base_commit_oid", "head_commit_oid")):
                 raise PipelineError("stage0_build_cluster_mismatch", 2)
+            if value["ingest_exclusion"] != verified_exclusion:
+                raise PipelineError("stage0_ingest_exclusion_mismatch",2)
             if value["model_eligible"]:
                 obligation = build_root / value["frozen_obligation_path"]
                 if obligation.is_symlink() or not obligation.is_file() or sha256_bytes(obligation.read_bytes()) != value["frozen_obligation_sha256"]:
@@ -368,7 +403,8 @@ def _stage0_root(selection_path: Path, reexecute_all: bool = False) -> tuple[Pat
     _selection(selection)
     result, _ = _read(root / "stage0-result.v1.json")
     recomputed_gates = reduce_gates(first_builds, EXPECTED_CLUSTERS)
-    expected_result = {"schema":"m20.stage0-result.v1", "experiment_id":EXPERIMENT_ID, "cluster_count":EXPECTED_CLUSTERS, "model_calls":0, "gates":recomputed_gates}
+    exclusion_counts={reason:sum(item["ingest_exclusion"]=={"code":"stage0_ingest_admission_rejected","reason":reason} for item in first_builds) for reason in INGEST_EXCLUSION_REASONS}
+    expected_result = {"schema":"m20.stage0-result.v1", "experiment_id":EXPERIMENT_ID, "cluster_count":EXPECTED_CLUSTERS, "ingest_exclusion_counts":exclusion_counts, "model_calls":0, "gates":recomputed_gates}
     if result != expected_result or any(row["passed"] is not True for row in recomputed_gates):
         raise PipelineError("stage0_result_invalid", 2)
     eligible = sorted((item["commit_cluster_id"] for item in first_builds if item["model_eligible"]), key=lambda identity: _hash_order("m20-commit-selection-v1", identity))
