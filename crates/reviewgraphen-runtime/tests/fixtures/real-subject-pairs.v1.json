@@ -23,6 +23,17 @@
       "target_sha256": "sha256:6eea262483505eb7e3f04f7dd2a0f69011b25dcdfed6d8f4625cf12ed3745e03"
     },
     {
+      "base_commit": "20f9139172a9072467c243e8e42e21af85fae809",
+      "base_fixture": "fsl-076fad5-base.rs",
+      "base_sha256": "sha256:ca00e28530aceec4c6cae95f5a36a82f016643ee0fbe2a4809278597d705e47a",
+      "clause_7_count": 3,
+      "repository": "fsl",
+      "target_commit": "076fad556730314636140611e559281d68f863cd",
+      "target_fixture": "fsl-076fad5-target.rs",
+      "target_path": "rust/fsl-runtime/src/lib.rs",
+      "target_sha256": "sha256:2643426b3c10e2801601bdfc2372c59ede76da1a3f9ad8e4e3829c17a6617e6c"
+    },
+    {
       "base_commit": "947f347f219a60775bcf71b226ce778cc8ea21f4",
       "base_fixture": null,
       "base_sha256": null,

@@ -6957,7 +6957,6 @@ impl BuiltContextSubjectWindowsV3 {
             || self.property_id != SUBJECT_WINDOWS_D_PROPERTY
             || self.target_refs.len() != 1
             || self.target_refs[0].kind() != "relation"
-            || self.caller_artifact_id == self.callee_artifact_id
         {
             return Err(v3_validation(
                 ContextSubjectWindowsV3ValidationError::SubjectOutcomes,

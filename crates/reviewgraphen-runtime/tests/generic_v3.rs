@@ -50,13 +50,13 @@ fn checked_in_real_subject_fixtures_match_literal_upstream_hashes() {
         "reviewgraphen.runtime.real_subject_fixture_manifest.v1"
     );
     let pairs = manifest["pairs"].as_array().expect("fixture pairs");
-    assert_eq!(pairs.len(), 4);
+    assert_eq!(pairs.len(), 5);
     assert_eq!(
         pairs
             .iter()
             .filter(|pair| pair["repository"] == "fsl")
             .count(),
-        2
+        3
     );
     assert_eq!(
         pairs
@@ -139,6 +139,28 @@ fn checked_in_real_subject_fixtures_match_literal_upstream_hashes() {
                 pair["repository"].as_str().unwrap()
             )
         });
+        if pair["target_commit"] == "076fad556730314636140611e559281d68f863cd" {
+            let contexts = run.value()["contexts"]
+                .as_array()
+                .expect("recursive real-corpus contexts");
+            assert_eq!(contexts.len(), 3);
+            for envelope in contexts {
+                let context = &envelope["context"];
+                assert_eq!(
+                    context["caller_artifact_id"], context["callee_artifact_id"],
+                    "the real cluster contains a valid self-recursive call relation"
+                );
+                let outcomes = context["subject_outcomes"]
+                    .as_array()
+                    .expect("recursive subject outcomes");
+                assert_eq!(outcomes.len(), 2);
+                assert_eq!(outcomes[0]["role"], "callee");
+                assert_eq!(outcomes[1]["role"], "caller");
+                assert_eq!(outcomes[0]["endpoint_id"], outcomes[1]["endpoint_id"]);
+                assert_eq!(outcomes[0]["state"], "admitted");
+                assert_eq!(outcomes[1]["state"], "admitted");
+            }
+        }
         let basis_events = basis_probe.snapshot();
         assert!(matches!(
             basis_events.first(),
@@ -267,6 +289,67 @@ fn checked_in_real_subject_fixtures_match_literal_upstream_hashes() {
             );
         }
     }
+}
+
+#[test]
+fn checked_in_real_profile_exclusion_fixture_reaches_a_valid_empty_target_denominator() {
+    let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(fixture_root.join("real-profile-exclusions.v1.json"))
+            .expect("profile exclusion fixture manifest"),
+    )
+    .expect("profile exclusion fixture manifest JSON");
+    assert_eq!(
+        manifest["schema"],
+        "reviewgraphen.runtime.real_profile_exclusion_fixture_manifest.v1"
+    );
+    let pair = &manifest["pairs"][0];
+    for (fixture_field, hash_field) in [
+        ("base_fixture", "base_sha256"),
+        ("target_fixture", "target_sha256"),
+    ] {
+        let bytes =
+            fs::read(fixture_root.join(pair[fixture_field].as_str().expect("fixture path")))
+                .expect("profile exclusion fixture bytes");
+        assert_eq!(
+            ContentHash::sha256(&bytes).as_str(),
+            pair[hash_field].as_str().expect("fixture hash")
+        );
+    }
+
+    let workspace = tempdir().expect("profile exclusion fixture workspace");
+    let repository = workspace.path().join("repository");
+    fs::create_dir(&repository).expect("profile exclusion fixture repository");
+    git(&repository, &["init", "-q"]);
+    let target_path = pair["target_path"].as_str().expect("target path");
+    let repository_path = repository.join(target_path);
+    fs::create_dir_all(repository_path.parent().expect("target parent"))
+        .expect("target parent directories");
+    fs::write(
+        &repository_path,
+        fs::read(fixture_root.join(pair["base_fixture"].as_str().unwrap())).expect("base fixture"),
+    )
+    .expect("base source");
+    git(&repository, &["add", target_path]);
+    git(&repository, &["commit", "-q", "-m", "fixture base"]);
+    fs::write(
+        &repository_path,
+        fs::read(fixture_root.join(pair["target_fixture"].as_str().unwrap()))
+            .expect("target fixture"),
+    )
+    .expect("target source");
+    git(&repository, &["add", target_path]);
+    git(&repository, &["commit", "-q", "-m", "fixture target"]);
+
+    let run = run_generic_review_v3(&v3_request(&repository))
+        .expect("real profile exclusion must be a valid universe qualification");
+    assert_eq!(
+        run.value()["coverage"]["resolved_target_obligation_ids"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(run.value()["contexts"].as_array().map(Vec::len), Some(0));
 }
 
 fn v2_request(repository: &Path) -> GenericReviewRequestV2 {

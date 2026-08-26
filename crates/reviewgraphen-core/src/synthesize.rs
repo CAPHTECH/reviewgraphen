@@ -395,23 +395,27 @@ impl UniverseDescriptor {
                     });
                 }
             }
-            let expected_id = StableId::derived(
-                "exclusion",
-                &BTreeMap::from([
-                    (
-                        "candidate".to_owned(),
-                        Value::String(exclusion.candidate_key.clone()),
-                    ),
-                    (
-                        "snapshot".to_owned(),
-                        Value::String(program.snapshot_id().to_string()),
-                    ),
-                ]),
-            )?;
-            if exclusion.id != expected_id {
-                return Err(DomainError::Validation(
-                    "universe exclusion ID must bind its candidate and snapshot".to_owned(),
-                ));
+            if self.rule_pack_version == "changed-public-callee@1" {
+                validate_changed_public_callee_exclusion(program, exclusion)?;
+            } else {
+                let expected_id = StableId::derived(
+                    "exclusion",
+                    &BTreeMap::from([
+                        (
+                            "candidate".to_owned(),
+                            Value::String(exclusion.candidate_key.clone()),
+                        ),
+                        (
+                            "snapshot".to_owned(),
+                            Value::String(program.snapshot_id().to_string()),
+                        ),
+                    ]),
+                )?;
+                if exclusion.id != expected_id {
+                    return Err(DomainError::Validation(
+                        "universe exclusion ID must bind its candidate and snapshot".to_owned(),
+                    ));
+                }
             }
         }
         for obligation in obligations.values() {
@@ -1477,6 +1481,102 @@ fn changed_containment_witnesses(
         }
     }
     (change_artifact_ids, containment_witness_ids)
+}
+
+fn validate_changed_public_callee_exclusion(
+    program: &ProgramSpace,
+    exclusion: &ExclusionRecord,
+) -> Result<()> {
+    let relation_text = exclusion
+        .candidate_key
+        .strip_prefix(&format!("{CHANGED_PUBLIC_CALLEE_RULE}|"))
+        .ok_or_else(|| {
+            DomainError::Validation(
+                "D universe exclusion must retain its exact relation candidate key".to_owned(),
+            )
+        })?;
+    let relation_id = StableId::parse(relation_text.to_owned())?;
+    let relation =
+        program
+            .relation(&relation_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "D universe exclusion",
+                owner_id: exclusion.id.clone(),
+                reference: relation_id.clone(),
+            })?;
+    if relation.kind != "calls"
+        || attribute_string(&relation.attributes, "resolution") != Some("syntactic_unique")
+    {
+        return Err(DomainError::Validation(
+            "D universe exclusion candidate must be an accepted syntactic-unique call".to_owned(),
+        ));
+    }
+    let (caller_id, callee_id) =
+        MvpRulePack::validate_changed_public_callee_endpoints(program, relation)?;
+    let caller = program
+        .artifact(&caller_id)
+        .expect("validated D exclusion caller must be accepted");
+    let callee = program
+        .artifact(&callee_id)
+        .expect("validated D exclusion callee must be accepted");
+    if callee.kind != "function" || !attribute_bool(&callee.attributes, "public") {
+        return Err(DomainError::Validation(
+            "D universe exclusion candidate must retain its public function callee".to_owned(),
+        ));
+    }
+    let (change_artifact_ids, containment_witness_ids) =
+        changed_containment_witnesses(program, &callee_id);
+    if change_artifact_ids.is_empty() {
+        return Err(DomainError::Validation(
+            "D universe exclusion candidate must retain changed containment witnesses".to_owned(),
+        ));
+    }
+    let profile = rust_production_v1();
+    let CandidateClassification::Excluded(profile_match) = profile
+        .classify_candidate(
+            callee
+                .location
+                .as_ref()
+                .map(|location| location.path.as_bytes()),
+            caller
+                .location
+                .as_ref()
+                .map(|location| location.path.as_bytes()),
+        )
+        .map_err(|error| DomainError::Validation(error.to_string()))?
+    else {
+        return Err(DomainError::Validation(
+            "D universe exclusion candidate is not excluded by the fixed profile".to_owned(),
+        ));
+    };
+    let record = profile
+        .exclusion_record(
+            DExclusionCandidate {
+                snapshot_id: program.snapshot_id().clone(),
+                relation_id,
+                caller_id,
+                callee_id,
+                change_artifact_ids,
+                containment_witness_ids,
+            },
+            &profile_match,
+        )
+        .map_err(|error| DomainError::Validation(error.to_string()))?;
+    let expected_weight = D_OBLIGATION_WEIGHT
+        .parse::<f64>()
+        .map_err(|_| DomainError::Validation("invalid fixed D weight".to_owned()))?;
+    if exclusion.id != record.id
+        || exclusion.candidate_key != record.candidate_key
+        || exclusion.reason != record.reason_id
+        || exclusion.source_ids != record.source_ids
+        || exclusion.excluded_weight != expected_weight
+    {
+        return Err(DomainError::Validation(
+            "D universe exclusion must bind the fixed profile, candidate, snapshot, and sources"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn fallback_weight(rule: &str) -> Result<f64> {

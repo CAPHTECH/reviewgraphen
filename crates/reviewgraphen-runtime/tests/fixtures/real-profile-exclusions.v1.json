@@ -1,0 +1,16 @@
+{
+  "pairs": [
+    {
+      "base_commit": "265e7e020ba8210b728ed984cd971d06285c8cf3",
+      "base_fixture": "fsl-77ed9a8-exclusion-base.rs",
+      "base_sha256": "sha256:950ea023b90187da7e2a621788f1c0c87c9c9e853b6770fa8cacd2aae3d98533",
+      "excluded_candidate_count": 1,
+      "repository": "fsl",
+      "target_commit": "77ed9a81cb3fb2072de2b497656d72730b582a9c",
+      "target_fixture": "fsl-77ed9a8-exclusion-target.rs",
+      "target_path": "rust/fslc/tests/typed_agreement/engines.rs",
+      "target_sha256": "sha256:64fba8da44191b60f9379ce61b28ff8b5c38112455e0ac3136c0b5fe07d5f431"
+    }
+  ],
+  "schema": "reviewgraphen.runtime.real_profile_exclusion_fixture_manifest.v1"
+}

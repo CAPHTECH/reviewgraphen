@@ -528,7 +528,8 @@ fn production_profile_exclusion_is_visible_outside_the_denominator() {
         .iter_mut()
         .find(|artifact| artifact["id"] == "function:payment-charge")
         .unwrap()["location"]["path"] = json!("tests/payment.rs");
-    let bundle = MvpRulePack::synthesize_changed_public_callee(&program(value)).unwrap();
+    let program = program(value);
+    let bundle = MvpRulePack::synthesize_changed_public_callee(&program).unwrap();
     assert!(
         bundle
             .obligations()
@@ -539,6 +540,8 @@ fn production_profile_exclusion_is_visible_outside_the_denominator() {
     let exclusion = &bundle.universe().exclusions()[0];
     assert_eq!(exclusion.reason, "profile.exclude.test@1");
     assert_eq!(exclusion.excluded_weight, 4.0);
+    ReviewAggregate::read_only_from_d_two_layer_bundle(program, &bundle)
+        .expect("D-specific exclusion identity must survive aggregate validation");
 }
 
 #[test]

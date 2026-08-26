@@ -104,6 +104,12 @@ following predicate. Every clause is mandatory:
 8. The candidate is not excluded by the exact `rust.production.v1` review
    profile defined in section 4.
 
+The caller and callee are semantic roles, not a distinctness constraint. For
+an accepted self-recursive call relation, `r.source_id` and its sole target ID
+may therefore be the same accepted function artifact. Such a relation remains
+a candidate and must not be converted into an unknown or loss merely because
+the two roles share one artifact identity.
+
 The current helper that also accepts `artifact.attributes.changed` is not the
 trigger contract for this rule. A new containment-only predicate must be used.
 The accepted relation remains a Program fact. Clauses 5–7 are deterministic
@@ -753,6 +759,14 @@ exclusion preimage of only candidate and snapshot. A different profile,
 matcher, reason, weight, rule, or source set must therefore have a different
 ID. Exclusions remain outside eligible coverage but visible in the universe.
 
+The inherited universe/aggregate validator must dispatch D exclusions by the
+versioned D rule-pack contract. It rebuilds the accepted relation endpoints,
+changed-containment witnesses, fixed profile match, source set, and full
+D-specific ID, then compares the retained projection fields. Applying the
+legacy candidate-plus-snapshot preimage to a D-specific ID is a validator
+contract error; accepting the record without rebuilding the omitted fixed
+bindings is equally forbidden.
+
 #### 4.3 Planning and exact Stage 0 gates
 
 Planning bounds are not profile exclusions. Every nonexcluded candidate must
@@ -1077,7 +1091,11 @@ a known support-loss summary is forbidden.
 V3 retains exactly two ordered subject outcome records, callee then caller.
 Each names the endpoint and is a closed union of either `admitted`, with its
 source file, requested range, and admitted window ID, or `lost`, with the
-existing high-severity typed subject-loss body and recovery reference. Before
+existing high-severity typed subject-loss body and recovery reference. For a
+self-recursive relation these two records retain the same endpoint ID
+under distinct `callee` and `caller` roles; they may name the same admitted
+window when the deterministic merge contract produces one. Artifact identity
+equality is not itself projection loss. Before
 support processing, the builder reserves both subject source/file/window slots
 and processes every representable subject. A support file, anchor, window, or
 loss-summary row cannot consume those reservations. Missing, invalid, or
