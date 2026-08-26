@@ -108,8 +108,8 @@ def _product_invocation(request_path: Path) -> tuple[str, dict]:
     return executable_sha, invocation
 
 
-def _excluded_build(cluster, reason: str) -> dict:
-    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":[], "subject_retained_obligation_ids":[], "deferred_obligation_ids":[], "subject_remainders":[], "selected_obligation_id":"", "frozen_obligation_path":"", "frozen_obligation_sha256":"", "admitted_source_bytes":0, "whole_changed_production_files_bytes":0, "model_eligible":False, "enumeration_honest":True, "ingest_exclusion":{"code":"stage0_ingest_admission_rejected","reason":reason}}
+def _excluded_build(cluster, reason: str, ignored_symlink_count: int) -> dict:
+    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":[], "subject_retained_obligation_ids":[], "deferred_obligation_ids":[], "subject_remainders":[], "selected_obligation_id":"", "frozen_obligation_path":"", "frozen_obligation_sha256":"", "admitted_source_bytes":0, "whole_changed_production_files_bytes":0, "ignored_symlink_count":ignored_symlink_count, "model_eligible":False, "enumeration_honest":True, "ingest_exclusion":{"code":"stage0_ingest_admission_rejected","reason":reason}}
     value["deterministic_payload_sha256"] = build_payload_hash(value)
     return value
 
@@ -166,6 +166,8 @@ def _frozen_obligation(cluster, run: dict, context: dict, repository, trees: tup
 
 def run_frozen_cluster_pipeline(cluster, build_root: Path, *, _pipeline_timeout: float = 1800, _max_files: int = 20000) -> dict:
     if not PIPELINE.is_file() or PIPELINE.is_symlink(): raise Stage0Error("frozen_cluster_pipeline_unavailable", 3)
+    repository = GitRepository(cluster.repository_root, [cluster.repository_root]); trees = repository.snapshots(cluster.base_commit_oid, cluster.head_commit_oid)[:2]
+    ignored_symlink_count = sum(tree.ignored_symlink_count for tree in trees)
     # ADR 0038 §§5.4.1/11 and preregistration arm_neutral_contracts.ingest_admission:
     # this is the v3 admission/resource ceiling, never a C/A/S/D denominator.
     request = {"schema":"reviewgraphen.generic_review_request.v3", "workspace_admission_root":".", "repository_admission_root":".", "repository_identity":cluster.repository_id, "base_revision":cluster.base_commit_oid, "target_revision":cluster.head_commit_oid, "ingest":{"profile_id":"rust.production.v1", "profile_version":"1", "rule_set_hash":PROFILE_HASH, "max_files":_max_files, "max_file_bytes":4194304, "max_total_source_bytes":67108864}, "plan":{"max_waves":1024, "max_obligations_per_wave":1024}, "observer":{"kind":"deterministic_abstain"}, "verifier_descriptor_id":"workspace.cargo_test@1", "context_policy_id":"context.subject_windows@3"}
@@ -202,7 +204,7 @@ def run_frozen_cluster_pipeline(cluster, build_root: Path, *, _pipeline_timeout:
                 executable_sha, invocation = _product_invocation(request_path)
                 execution = {"schema":"m20.stage0-product-ingest-exclusion.v1", "product_executable_path":str(PIPELINE), "product_executable_sha256":executable_sha, "invocation_sha256":hash_json(invocation), "request_sha256":sha256_bytes(request_path.read_bytes()), "product_exit_code":result.returncode, "product_stderr":stderr, "diagnostic_stage":"ingest", "diagnostic_status":"failed", "typed_code":"stage0_ingest_admission_rejected", "typed_reason":exclusion_reason}
                 (build_root / "product-execution.v1.json").write_bytes(canonical_bytes(execution))
-                return _excluded_build(cluster, exclusion_reason)
+                return _excluded_build(cluster, exclusion_reason, ignored_symlink_count)
         (execution_root / "pipeline-artifacts").replace(artifact_root)
     finally:
         if execution_root.exists(): shutil.rmtree(execution_root)
@@ -236,7 +238,6 @@ def run_frozen_cluster_pipeline(cluster, build_root: Path, *, _pipeline_timeout:
         else:
             loss = next((item for item in outcomes if item.get("state") != "admitted"), None) or {}
             remainders.append({"obligation_id":obligation, "kind":"subject_unknown" if loss.get("state") == "unknown" else "subject_loss", "source_id":loss.get("source_artifact_id") or run["legacy_ingestion"]["snapshot_id"], "recovery_reference":loss.get("recovery_reference") or context.get("projection_hash", run["run_id"]) if isinstance(context, dict) else run["run_id"]})
-    repository = GitRepository(cluster.repository_root, [cluster.repository_root]); trees = repository.snapshots(cluster.base_commit_oid, cluster.head_commit_oid)[:2]
     packet_budgets = [_packet_v3_context_budget(repository, trees, contexts[obligation]) for obligation in retained]
     admitted = sum(treatment_bytes for _, treatment_bytes, _ in packet_budgets)
     changed = {path for path in set(trees[0]) | set(trees[1]) if production_rust(path) and trees[0].get(path) != trees[1].get(path)}
@@ -247,5 +248,5 @@ def run_frozen_cluster_pipeline(cluster, build_root: Path, *, _pipeline_timeout:
     if eligible:
         frozen = _frozen_obligation(cluster, run, contexts[selected], repository, trees)
         frozen_raw = canonical_bytes(frozen); (build_root / obligation_relative).write_bytes(frozen_raw); obligation_hash = sha256_bytes(frozen_raw)
-    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":obligations, "subject_retained_obligation_ids":retained, "deferred_obligation_ids":sorted(set(coverage.get("deferred_obligation_ids", [])) & set(obligations)), "subject_remainders":sorted(remainders, key=lambda item:item["obligation_id"]), "selected_obligation_id":selected, "frozen_obligation_path":obligation_relative, "frozen_obligation_sha256":obligation_hash, "admitted_source_bytes":admitted, "whole_changed_production_files_bytes":whole, "model_eligible":eligible, "enumeration_honest":honest, "ingest_exclusion":None}
+    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":obligations, "subject_retained_obligation_ids":retained, "deferred_obligation_ids":sorted(set(coverage.get("deferred_obligation_ids", [])) & set(obligations)), "subject_remainders":sorted(remainders, key=lambda item:item["obligation_id"]), "selected_obligation_id":selected, "frozen_obligation_path":obligation_relative, "frozen_obligation_sha256":obligation_hash, "admitted_source_bytes":admitted, "whole_changed_production_files_bytes":whole, "ignored_symlink_count":ignored_symlink_count, "model_eligible":eligible, "enumeration_honest":honest, "ingest_exclusion":None}
     value["deterministic_payload_sha256"] = build_payload_hash(value); return value

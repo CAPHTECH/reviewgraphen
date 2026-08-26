@@ -33,7 +33,7 @@ def pipeline(cluster, _root):
     obligation = "obligation:" + cluster.commit_cluster_id[-8:]
     frozen = canonical_bytes({"schema":"m20.synthetic-frozen-obligation.v1","unit_id":cluster.commit_cluster_id,"obligation_id":obligation})
     (_root / "frozen-obligation.v1.json").write_bytes(frozen)
-    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":[obligation], "subject_retained_obligation_ids":[obligation], "deferred_obligation_ids":[], "subject_remainders":[], "selected_obligation_id":obligation, "frozen_obligation_path":"frozen-obligation.v1.json", "frozen_obligation_sha256":sha256_bytes(frozen), "admitted_source_bytes":10, "whole_changed_production_files_bytes":20, "model_eligible":True, "enumeration_honest":True, "ingest_exclusion":None}
+    value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":[obligation], "subject_retained_obligation_ids":[obligation], "deferred_obligation_ids":[], "subject_remainders":[], "selected_obligation_id":obligation, "frozen_obligation_path":"frozen-obligation.v1.json", "frozen_obligation_sha256":sha256_bytes(frozen), "admitted_source_bytes":10, "whole_changed_production_files_bytes":20, "ignored_symlink_count":0, "model_eligible":True, "enumeration_honest":True, "ingest_exclusion":None}
     value["deterministic_payload_sha256"] = build_payload_hash(value)
     return value
 
@@ -61,7 +61,7 @@ class Stage0AdmissionTest(unittest.TestCase):
         excluded_id=enumerate_clusters(corpus(300))[0].commit_cluster_id
         def observed(cluster,root):
             if cluster.commit_cluster_id!=excluded_id: return pipeline(cluster,root)
-            value={"schema":"m20.stage0-cluster-build.v1","commit_cluster_id":cluster.commit_cluster_id,"repository_root":cluster.repository_root,"base_commit_oid":cluster.base_commit_oid,"head_commit_oid":cluster.head_commit_oid,"applicable_obligation_ids":[],"subject_retained_obligation_ids":[],"deferred_obligation_ids":[],"subject_remainders":[],"selected_obligation_id":"","frozen_obligation_path":"","frozen_obligation_sha256":"","admitted_source_bytes":0,"whole_changed_production_files_bytes":0,"model_eligible":False,"enumeration_honest":True,"ingest_exclusion":{"code":"stage0_ingest_admission_rejected","reason":"snapshot_bytes"}}
+            value={"schema":"m20.stage0-cluster-build.v1","commit_cluster_id":cluster.commit_cluster_id,"repository_root":cluster.repository_root,"base_commit_oid":cluster.base_commit_oid,"head_commit_oid":cluster.head_commit_oid,"applicable_obligation_ids":[],"subject_retained_obligation_ids":[],"deferred_obligation_ids":[],"subject_remainders":[],"selected_obligation_id":"","frozen_obligation_path":"","frozen_obligation_sha256":"","admitted_source_bytes":0,"whole_changed_production_files_bytes":0,"ignored_symlink_count":0,"model_eligible":False,"enumeration_honest":True,"ingest_exclusion":{"code":"stage0_ingest_admission_rejected","reason":"snapshot_bytes"}}
             value["deterministic_payload_sha256"]=build_payload_hash(value); return value
         with tempfile.TemporaryDirectory() as parent:
             root=Path(parent)/"stage0"; result=run_stage0(root,corpus(300),observed,jobs=1); summary=parse_json_bytes((root/"stage0-result.v1.json").read_bytes())
@@ -274,15 +274,16 @@ class Stage0DriverTest(unittest.TestCase):
 
     def test_product_cli_failure_is_external_and_identifies_cluster(self):
         repository = Path(os.environ.get("M20_TEST_SOURCE_WORKSPACE", Path(__file__).parents[4]))
-        cluster = Cluster("github.com/CAPHTECH/reviewgraphen", str(repository), "a8b6b24d5ed704f53f721b25db42d5d631f946c7", "0" * 40)
+        cluster = Cluster("github.com/CAPHTECH/reviewgraphen", str(repository), "a8b6b24d5ed704f53f721b25db42d5d631f946c7", "8569a2261e8a62145228872a2fde9f4c48093d00")
         with tempfile.TemporaryDirectory() as parent:
             stage_root = Path(parent) / "stage0"
             build_root = stage_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1"
             build_root.mkdir(parents=True)
             diagnostic_root = Path(tempfile.gettempdir()) / "m20-stage0-diagnostics" / hashlib.sha256(str(stage_root.resolve()).encode()).hexdigest()
             try:
-                with self.assertRaisesRegex(Stage0Error, "frozen_cluster_pipeline_failed") as raised:
-                    run_frozen_cluster_pipeline(cluster, build_root)
+                with patch("evaluator.stage0_production.PIPELINE", Path("/usr/bin/git")):
+                    with self.assertRaisesRegex(Stage0Error, "frozen_cluster_pipeline_failed") as raised:
+                        run_frozen_cluster_pipeline(cluster, build_root)
                 self.assertEqual(raised.exception.diagnostic["commit_cluster_id"], cluster.commit_cluster_id)
                 failure = parse_json_bytes((diagnostic_root / "clusters" / cluster.commit_cluster_id.rsplit(":", 1)[1] / "build-1" / "pipeline-failure.v1.json").read_bytes())
                 self.assertEqual(failure["commit_cluster_id"], cluster.commit_cluster_id)

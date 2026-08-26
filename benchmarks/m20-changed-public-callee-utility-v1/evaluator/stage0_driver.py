@@ -115,7 +115,7 @@ def build_payload_hash(value: dict) -> str:
 
 
 def _validate_build(value: dict, cluster_id: str) -> dict:
-    fields = {"schema", "commit_cluster_id", "repository_root", "base_commit_oid", "head_commit_oid", "applicable_obligation_ids", "subject_retained_obligation_ids", "deferred_obligation_ids", "subject_remainders", "selected_obligation_id", "frozen_obligation_path", "frozen_obligation_sha256", "admitted_source_bytes", "whole_changed_production_files_bytes", "model_eligible", "enumeration_honest", "ingest_exclusion", "deterministic_payload_sha256"}
+    fields = {"schema", "commit_cluster_id", "repository_root", "base_commit_oid", "head_commit_oid", "applicable_obligation_ids", "subject_retained_obligation_ids", "deferred_obligation_ids", "subject_remainders", "selected_obligation_id", "frozen_obligation_path", "frozen_obligation_sha256", "admitted_source_bytes", "whole_changed_production_files_bytes", "ignored_symlink_count", "model_eligible", "enumeration_honest", "ingest_exclusion", "deterministic_payload_sha256"}
     if not isinstance(value, dict) or set(value) != fields or value["schema"] != "m20.stage0-cluster-build.v1" or value["commit_cluster_id"] != cluster_id:
         raise Stage0Error("cluster_build_invalid")
     applicable = _ids(value["applicable_obligation_ids"], "applicable_set_invalid")
@@ -129,7 +129,7 @@ def _validate_build(value: dict, cluster_id: str) -> dict:
     for item in remainder:
         if not isinstance(item, dict) or set(item) != {"obligation_id", "kind", "source_id", "recovery_reference"} or item["kind"] not in {"subject_loss", "subject_unknown"} or not all(isinstance(item[key], str) and item[key] for key in ("obligation_id", "source_id", "recovery_reference")):
             raise Stage0Error("subject_remainder_invalid")
-    for field in ("admitted_source_bytes", "whole_changed_production_files_bytes"):
+    for field in ("admitted_source_bytes", "whole_changed_production_files_bytes", "ignored_symlink_count"):
         if isinstance(value[field], bool) or not isinstance(value[field], int) or value[field] < 0:
             raise Stage0Error("cluster_bytes_invalid")
     if not isinstance(value["model_eligible"], bool) or not isinstance(value["enumeration_honest"], bool):

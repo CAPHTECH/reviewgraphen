@@ -224,14 +224,14 @@
       "attack_artifact": "evaluator/generated/attacks.generated.json"
     },
     "freeze_hashes": {
-      "evaluator_bundle_sha256": "sha256:44dd55596430eddbccebc4e93ed8bc60129801e90a28e811c268658836d939bc",
-      "evaluator_execution_sha256": "sha256:598f25c5a34b4247df9f08234bf1a473828608f5ec4dd07a02775033c39d0b22",
+      "evaluator_bundle_sha256": "sha256:66cddeb69c95e5f9d132ed70827e9c2a3cc3c0051c68724a74036ac4b3bc1e12",
+      "evaluator_execution_sha256": "sha256:822a2a103ae3ad8bba445b7a9ab6c70621007b021dec9469b6c607ac0eac22df",
       "generated_fixture_inventory_sha256": "sha256:b6fce61e7701962593f18a128cefc16af571aff7fd65e651d939a9393ce3ec3d",
       "reference_vector_set_sha256": "sha256:d4014284f6b1f6053501131935441fea7849772db6ac47327b31b6108e3847c4",
       "mutation_manifest_sha256": "sha256:d571a9ac92f0fefbd520a2a914a5c68f05c3e0639bedaeb184e299ad811ab10f",
       "semantic_acceptance_reference_sha256": "sha256:41083a73826839415e8b5b283d2e9986b6d135b7350a44b5153f604a7513084f",
       "measurement_record_sha256": "sha256:7286d700f8684893477c8e6660986239cc52ffde35394160fc1ab844e642a7b8",
-      "freeze_manifest_sha256": "sha256:1884880788ac76997b9f6ba4efa484922b3d6e97fee5a60dcc550dbe5f3b2e23",
+      "freeze_manifest_sha256": "sha256:834cccf7144ebea76752b986dfaee4ec23a3744e75fba42e6098717b57d2b72d",
       "freeze_manifest_path": "freeze-manifest.json",
       "non_null_gate": "After the Stage 0 driver is implemented and atomically re-sealed, all eight hashes and the manifest path must be non-null; SHA-256 of the exact manifest bytes must equal freeze_manifest_sha256, its bundle/execution hashes must equal the active slots, its supersedes_freeze_manifest_sha256 must equal the last freeze_history manifest hash, and verify-frozen must pass before status may return to frozen-before-corpus-resolution."
     },
@@ -316,6 +316,18 @@
         "reference_vector_set_sha256": "sha256:39d76b5cd38bd9346df25260b04afca63b3433b566fc4a6b515cdba0da43611a",
         "mutation_manifest_sha256": "sha256:d571a9ac92f0fefbd520a2a914a5c68f05c3e0639bedaeb184e299ad811ab10f",
         "semantic_acceptance_reference_sha256": "sha256:7656b692ec2764026dca5dd468e798ba8ab41fcdaae39950501fee92a497c442",
+        "measurement_record_sha256": "sha256:7286d700f8684893477c8e6660986239cc52ffde35394160fc1ab844e642a7b8"
+      },
+      {
+        "freeze_manifest_sha256": "sha256:1884880788ac76997b9f6ba4efa484922b3d6e97fee5a60dcc550dbe5f3b2e23",
+        "status": "superseded_seal10_typed_symlink_ignore",
+        "reason": "Seal 10 makes verified Git symlink tree entries typed-ignored while preserving rejection of submodules and other unknown modes; seal 9 is retained as superseded history.",
+        "evaluator_bundle_sha256": "sha256:44dd55596430eddbccebc4e93ed8bc60129801e90a28e811c268658836d939bc",
+        "evaluator_execution_sha256": "sha256:598f25c5a34b4247df9f08234bf1a473828608f5ec4dd07a02775033c39d0b22",
+        "generated_fixture_inventory_sha256": "sha256:b6fce61e7701962593f18a128cefc16af571aff7fd65e651d939a9393ce3ec3d",
+        "reference_vector_set_sha256": "sha256:d4014284f6b1f6053501131935441fea7849772db6ac47327b31b6108e3847c4",
+        "mutation_manifest_sha256": "sha256:d571a9ac92f0fefbd520a2a914a5c68f05c3e0639bedaeb184e299ad811ab10f",
+        "semantic_acceptance_reference_sha256": "sha256:41083a73826839415e8b5b283d2e9986b6d135b7350a44b5153f604a7513084f",
         "measurement_record_sha256": "sha256:7286d700f8684893477c8e6660986239cc52ffde35394160fc1ab844e642a7b8"
       }
     ],
@@ -597,6 +609,12 @@
       "id": "seal9-product-and-stage0-ingest-exclusion",
       "reason": "release product commit 2930546 permits self-recursive callees and independently rebuilds D exclusion-ID validation; the real-corpus 10-cluster product check returned exit 20; Stage 0 now preserves max_files, snapshot_bytes, and blob_bytes admission overflows as typed ineligible exclusions, and the operational run uses --jobs 7 because product peak RSS is 3.8 GB and higher parallelism risks OOM",
       "impact": "the product executable pin and frozen Stage 0 exclusion handling are updated; the 300-cluster denominator, thresholds, budgets, and Stage 1/2A operational rectangles are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "seal10-typed-symlink-tree-ignore",
+      "reason": "mode 120000 symlink tree entries occurred 3400 times across the 600 Stage 0 trees and previously caused a fatal unsupported-mode refusal",
+      "impact": "each symlink entry is hash-verified, typed-ignored, and counted in ignored_symlink_count; submodules and every other unknown mode remain rejected, while the product pin, thresholds, budgets, denominators, and operational rectangles are unchanged"
     }
   ],
   "interpretation_limits": [

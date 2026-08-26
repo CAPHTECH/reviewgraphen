@@ -21,7 +21,7 @@ SPEC_CONTRACTS = {
         {"id":"text.distinct_ascii_tokens","surface":"distinct_tokens","minimum":3},
     ),
     "enums": (
-        {"id":"git.tree_mode","surface":"tree_mode","allowed":("40000","100644","100755"),"invalid":"120000"},
+        {"id":"git.tree_mode","surface":"tree_mode","allowed":("40000","100644","100755","120000"),"invalid":"160000"},
         {"id":"source.role","surface":"source_role","allowed":("changed","context","support"),"invalid":"caller"},
         {"id":"source.snapshot_side","surface":"snapshot_side","allowed":("base","head"),"invalid":"working"},
         {"id":"disposition.kind","surface":"disposition_kind","allowed":("claim","abstention"),"invalid":"unknown"},

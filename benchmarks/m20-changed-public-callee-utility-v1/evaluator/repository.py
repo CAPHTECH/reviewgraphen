@@ -7,6 +7,9 @@ def production_rust(path: str) -> bool:
     parts, base = path.split("/"), path.split("/")[-1]
     if any(part in {"third_party", "vendor", "vendored", "generated", "target", "benches", "tests", "example", "examples", "doc", "docs"} for part in parts): return False
     return not base.endswith((".generated.rs", "_test.rs", "_tests.rs")) and base not in {"test.rs", "tests.rs"}
+class TreeSnapshot(dict[str, tuple[str, str]]):
+    def __init__(self, entries: dict[str, tuple[str, str]], ignored_symlink_count: int):
+        super().__init__(entries); self.ignored_symlink_count = ignored_symlink_count
 class GitRepository:
     GIT = Path("/usr/bin/git")
     def __init__(self, root: str, allow_list: list[str]):
@@ -50,9 +53,10 @@ class GitRepository:
         for value in [tree, *parents]:
             if len(value) != self.oid_bytes * 2 or any(c not in "0123456789abcdef" for c in value): raise PreflightError("commit_invalid")
         return tree, parents
-    def tree(self, oid: str) -> dict[str, tuple[str, str]]:
-        output: dict[str, tuple[str, str]] = {}
+    def tree(self, oid: str) -> TreeSnapshot:
+        output: dict[str, tuple[str, str]] = {}; ignored_symlink_count = 0
         def visit(tree_oid: str, prefix: str) -> None:
+            nonlocal ignored_symlink_count
             content, index = self.object(tree_oid, "tree")[1], 0; local = set()
             while index < len(content):
                 space, nul = content.find(b" ", index), content.find(b"\0", index)
@@ -60,15 +64,17 @@ class GitRepository:
                 mode_raw, name_raw = content[index:space], content[space + 1:nul]
                 try: mode, name = mode_raw.decode("ascii"), name_raw.decode("utf-8", "strict")
                 except UnicodeError as error: raise PreflightError("tree_edge_invalid") from error
-                if mode not in {"40000", "100644", "100755"} or not name or "/" in name or name in {".", ".."} or name in local: raise PreflightError("tree_edge_invalid")
+                if mode not in {"40000", "100644", "100755", "120000"} or not name or "/" in name or name in {".", ".."} or name in local: raise PreflightError("tree_edge_invalid")
                 local.add(name); child = content[nul + 1:nul + 1 + self.oid_bytes].hex(); path = prefix + name
                 if not valid_path(path): raise PreflightError("tree_path_invalid")
                 if mode == "40000": visit(child, path + "/")
                 else:
                     if path in output: raise PreflightError("tree_duplicate_path")
-                    self.object(child, "blob"); output[path] = (mode, child)
+                    self.object(child, "blob")
+                    if mode == "120000": ignored_symlink_count += 1
+                    else: output[path] = (mode, child)
                 index = nul + 1 + self.oid_bytes
-        visit(oid, ""); return output
+        visit(oid, ""); return TreeSnapshot(output, ignored_symlink_count)
     def snapshots(self, base_oid: str, head_oid: str) -> tuple[dict, dict, str, str]:
         base_tree_oid, _ = self.commit(base_oid); head_tree_oid, parents = self.commit(head_oid)
         if not parents or parents[0] != base_oid: raise PreflightError("first_parent_mismatch")

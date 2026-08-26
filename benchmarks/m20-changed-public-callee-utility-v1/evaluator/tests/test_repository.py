@@ -56,5 +56,22 @@ class RepositoryBoundaryTest(unittest.TestCase):
     def test_invalid_tree_mode(self):
         child=oid("blob",b"x"); self.tree_error(b"100600 x\0"+bytes.fromhex(child),"tree_edge_invalid")
 
+    def test_symlink_is_hash_verified_counted_and_ignored(self):
+        target=b"../outside"; child=oid("blob",target); tree=b"120000 link\0"+bytes.fromhex(child); tree_id=oid("tree",tree)
+        repo,mock=self.repository({tree_id:frame(tree_id,"tree",tree),child:frame(child,"blob",target)})
+        with mock:
+            snapshot=repo.tree(tree_id)
+        self.assertEqual(snapshot,{})
+        self.assertEqual(snapshot.ignored_symlink_count,1)
+        self.assertIn(child,repo._cache)
+
+    def test_symlink_blob_hash_mismatch_is_rejected(self):
+        child="0"*40; tree=b"120000 link\0"+bytes.fromhex(child); tree_id=oid("tree",tree)
+        repo,mock=self.repository({tree_id:frame(tree_id,"tree",tree),child:frame(child,"blob",b"../outside")})
+        with mock:self.assert_code("object_hash_mismatch",lambda:repo.tree(tree_id))
+
+    def test_submodule_mode_remains_rejected(self):
+        child=oid("commit",b"tree "+b"0"*40+b"\n"); self.tree_error(b"160000 module\0"+bytes.fromhex(child),"tree_edge_invalid")
+
     def test_duplicate_tree_path(self):
         child=oid("blob",b"x"); edge=b"100644 x\0"+bytes.fromhex(child); self.tree_error(edge+edge,"tree_edge_invalid",child)

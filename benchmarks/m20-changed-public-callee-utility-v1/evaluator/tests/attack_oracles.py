@@ -31,7 +31,7 @@ MUTATIONS = {
     "H3C01": ("cli.py", 'COMMANDS = ("stage0", "seal-controls"', 'COMMANDS = ("stage0", "run", "seal-controls"'),
     "X01": ("model_boundary.py", 'not 1 <= len(disposition["claims"]) <= 3', 'not 0 <= len(disposition["claims"]) <= 3'),
     "X02": ("model_boundary.py", 'not 1 <= len(value) <= 8', 'not 0 <= len(value) <= 8'),
-    "X03": ("repository.py", '{"40000", "100644", "100755"}', '{"40000", "100644", "100755", "120000"}'),
+    "X03": ("repository.py", '{"40000", "100644", "100755", "120000"}', '{"40000", "100644", "100755", "120000", "160000"}'),
     "X04": ("repository.py", 'if not parents or parents[0] != base_oid: raise PreflightError("first_parent_mismatch")', 'if False: raise PreflightError("first_parent_mismatch")'),
     "X05": ("repository.py", 'max(0, lo - 3) + 1', 'max(0, lo - 2) + 1'),
     "X06": ("pipeline.py", ' and score["verdict"] == "usable"', ''),

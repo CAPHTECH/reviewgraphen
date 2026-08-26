@@ -1316,7 +1316,7 @@ These are applied source mutations, not manifest-only rows:
 | STG16 | accept a sealed adapter response whose effective max-output value differs from 12,000 | mutation fails; effective budget attestation is mandatory |
 
 For this launch-v2/stage-driver contract, the reviewed AST score-surface
-literal is `sha256:bc1b8493c84c13b80e5eb2139e54837fbe928fd78232f0c96405e03ec35d6933`.
+literal is `sha256:af947687f1ac5206b860bbead61b69407f3760e6574b96f9d3fe39d6507be02d`.
 The exhaustive operator inventory is exactly 4,539 `SCORE_AFFECTING`, 189
 `NON_SCORE`, and 6 `EQUIVALENT` mutants; these are drift sentinels, not evidence
 that a mutant was behaviorally detected.
@@ -1541,6 +1541,11 @@ the three exact counts in `stage0-result.v1.json`, and retains the cluster in
 the 300-commit denominator. It never truncates or creates an obligation from
 the rejected ingest. Any other product error, including synthesis, core, or
 context validation failure, remains fatal `frozen_cluster_pipeline_failed`.
+Before that invocation, the evaluator hash-verifies both commit trees. A mode
+`120000` entry must resolve to its declared blob hash, is never dereferenced or
+included in the source map, and contributes one to the cluster build's sealed
+`ignored_symlink_count` (summed across base and head); every other unsupported
+mode, including `160000` submodules, remains a fatal tree-edge rejection.
 The separate materialized-source candidate bound remains 4,096. On success that
 directory moves to the canonical
 `clusters/<digest>/build-N/pipeline-artifacts` location and the repository copy
