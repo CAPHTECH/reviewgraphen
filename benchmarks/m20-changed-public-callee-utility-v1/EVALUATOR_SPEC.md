@@ -1114,11 +1114,12 @@ write. It has no read method. Production uses these fixed relative paths:
 
 ```text
 launch.json  repository.json  obligation.json  pair.json  budget.json
-slots/0/packet.json  slots/0/request.json  slots/0/raw.bin
+slots/0/packet.json  slots/0/request.json  slots/0/response.json  slots/0/raw.bin
 slots/0/execution.json  slots/0/parsed.json  slots/0/mechanical.json
-slots/1/packet.json  slots/1/request.json  slots/1/raw.bin
+slots/1/packet.json  slots/1/request.json  slots/1/response.json  slots/1/raw.bin
 slots/1/execution.json  slots/1/parsed.json  slots/1/mechanical.json
-judge/permutation.json  judge/request.json  judge/raw.bin
+judge/permutation.json  judge/batch.json  judge/request.json
+judge/response.json  judge/raw.bin
 judge/execution.json  judge/parsed.json  judge/utility.json
 primary.json  ledger.json  seal.json
 ```
@@ -1131,7 +1132,28 @@ and primary paths are forbidden. The two packet artifacts are required so
 `verify-run` can independently recompute `budget.json` without trusting
 `pair.json` or caller-supplied counts.
 
-`parsed.json` is omitted on decode failure and that omission is declared in the
+Each slot `request.json` is the closed `m20.fixed-backend-request.v1`
+envelope, not a packet copy: it contains the exact packet or judge batch,
+instruction, immutable max-output/timeout values, and a seal over the complete
+envelope. Each `response.json` is the closed
+`m20.sealed-backend-response.v1` wrapper. It contains the exact canonical bytes
+of `m20.fixed-backend-response.v1`, encoded as base64 without parsing, plus an
+HMAC-SHA-256 made by the transport layer before parsing. At executor startup a
+cryptographically random key is created outside the bundle at
+`/run/secrets/m20-evaluator-response-hmac-key` with mode 0600; production has
+no default or caller-selectable key. Its SHA-256 alone is pinned in
+preregistration and the stage manifest, and the key is never sent to a backend
+or written into a run. Empty keys, the known test-fixture key identity, wrong
+ownership/mode, symlinks, and a key whose SHA-256 differs from the pin are typed
+refusals. The authenticated inner response
+records the echoed request seal, effective max-output/timeout, finish reason, usage
+`{input_tokens,output_tokens,cache_tokens}`, and exact base64 raw response.
+`verify-run` first verifies the response HMAC, then derives usage and finish
+reason from the authenticated bytes; changing either and recomputing the public
+ledger cannot recreate the HMAC. It recomputes the request seal, requires
+reviewer 12,000/900 and judge 12,000/90, checks the effective values, decodes the raw bytes, and compares
+them with `raw.bin`. Both envelopes and the distinct judge `batch.json` are in
+the artifact ledger/hash chain. `parsed.json` is omitted on decode failure and that omission is declared in the
 execution record. Each execution record also contains the section 3.3.1
 observation-only token record. Every other launched raw response is retained
 even on failure. `ledger.json` contains sorted closed entries
@@ -1288,10 +1310,14 @@ These are applied source mutations, not manifest-only rows:
 | STG10 | move the Stage 1 `advance` check after Stage 2A root creation | source-order oracle fails |
 | STG11 | remove predecessor verification or byte copy | predecessor-closure oracle fails |
 | STG12 | change any 6h/18,900s/24h/75,600s envelope | literal budget oracle fails |
+| STG13 | present a self-consistent 40-cluster Stage 0 root with seven stored pass values | ingress recomputes the frozen 300-cluster corpus and refuses it |
+| STG14 | make the stage decision ignore any one registered conjunct | exhaustive single-false gate mutation remains `stop`/`failure` |
+| STG15 | bind executable bytes whose SHA-256 differs from the preregistered reviewer/judge pin | fixed transport preflight refuses before listing/health or a model call |
+| STG16 | accept a sealed adapter response whose effective max-output value differs from 12,000 | mutation fails; effective budget attestation is mandatory |
 
 For this launch-v2/stage-driver contract, the reviewed AST score-surface
-literal is `sha256:807245c74a034ba76fdfe28125042292ddd216e790865a3c26888f1b486910c7`.
-The exhaustive operator inventory is exactly 4,224 `SCORE_AFFECTING`, 141
+literal is `sha256:bc1b8493c84c13b80e5eb2139e54837fbe928fd78232f0c96405e03ec35d6933`.
+The exhaustive operator inventory is exactly 4,539 `SCORE_AFFECTING`, 189
 `NON_SCORE`, and 6 `EQUIVALENT` mutants; these are drift sentinels, not evidence
 that a mutant was behaviorally detected.
 
@@ -1346,7 +1372,8 @@ The closed semantic requirement record is exactly:
 
 `runtime_requirements = {schema:"m20.evaluator_runtime_requirements.v1",
 implementation:"cpython",python_version:[3,13,5],
-unicodedata_version:"15.1.0",stdlib_only:true}`.
+unicodedata_version:"15.1.0",stdlib_only:false,
+dependencies:{cryptography:"43.0.0"}}`.
 
 Compute `runtime_requirements_sha256 = H(runtime_requirements)` and:
 
@@ -1365,7 +1392,7 @@ bundle, runtime contract, and Option C semantic-acceptance reference, not the
 machine that happened to freeze it.
 The manifest separately records observed provenance exactly as
 `{python_version,executable_sha256,implementation,unicodedata_version,platform,
-stdlib_only}`. Observed provenance is disclosed but is in neither hash
+stdlib_only,dependencies:{cryptography}}`. Observed provenance is disclosed but is in neither hash
 preimage. A different executable hash or platform is permitted only when all
 semantic requirement fields match and the complete generated-fixture,
 reference-vector, and named attack checks pass.
@@ -1388,7 +1415,7 @@ Verification order is normative:
    hashes; any mismatch exits 3.
 3. Compare the observed implementation, Python major/minor/micro,
    `unicodedata.unidata_version`, and stdlib assertion with
-   `runtime_requirements`. Any mismatch is a hard pre-execution incompatibility:
+   `runtime_requirements`, including exact `cryptography==43.0.0`. Any mismatch is a hard pre-execution incompatibility:
    exit 3 before fixture generation, packet construction, or scoring. It is not
    a warning, arm zero, or launched stage.
 4. On a compatible runtime, run fixture regeneration and every reference and
@@ -1446,7 +1473,7 @@ The CLI surface is fixed:
 - `python3 -m evaluator seal-controls STAGE0_SELECTION LABELER_1 LABELER_2 NEW_CONTROL_ROOT`
 - `python3 -m evaluator stage1 STAGE0_SELECTION NEW_OUTPUT_ROOT --controls CONTROL_MANIFEST`
 - `python3 -m evaluator stage2a STAGE1_ROOT NEW_OUTPUT_ROOT`
-- `python3 -m evaluator verify-stage STAGE_ROOT`
+- `python3 -m evaluator verify-stage STAGE_ROOT [--reexecute-all]`
 - `python3 -m evaluator verify-run RUN_ROOT`
 - `python3 -m evaluator generate-fixtures --check`
 - `python3 -m evaluator verify-reference-vectors`
@@ -1553,6 +1580,33 @@ manifest lists every file; its own row is an explicit self-description marker,
 not a circular self-hash. Missing, duplicate, foreign, reordered, unlisted, or
 nondeterministic material is a typed refusal.
 
+Immediately after the closed Stage 0 artifact manifest is written, `stage0`
+emits its exact SHA-256. The executor gives that value and the absolute Stage 0
+root to the custodian, which alone creates the preregistered bundle-external
+0600 `m20.custodian-stage0-anchor.v2` file. Its signed canonical body binds
+experiment ID, literal `stage0`, absolute root, artifact-manifest SHA-256,
+UTC signing timestamp, the active preregistration freeze-manifest SHA-256, and
+the SHA-256 of the exact `preregistration.json` file bytes.
+The custodian signs with an Ed25519 private key that never enters the bundle or
+evaluator process. Preregistration pins the raw Ed25519 public key and its
+SHA-256; the evaluator verifies with `cryptography` and has no signing command.
+The only signer is the evaluator-external
+`scripts/custodian_sign_anchor.py`, whose private-key path is an explicit
+custodian argument. No model-stage entrance may proceed while the signature is
+missing or invalid, the public key differs from its pin, or signed content
+disagrees with the current root/freeze.
+
+The two independent trust roots are explicit. `preregistration.json` is trusted
+only as the byte-identical blob at the externally pinned Git commit: every
+Stage 0/controls/model-stage entrance reads the worktree file and requires it
+to equal `git show HEAD:<preregistration-path>` before using its public-key pin.
+The custodian anchor is trusted only through the Ed25519 signature. The signed
+preregistration SHA-256 must equal those same Git-pinned runtime bytes. Replacing
+the preregistered public key, committing no trusted revision, and coherently
+re-signing with the replacement private key is therefore a typed
+`preregistration_git_pin_mismatch`, even though the evaluator/SPEC freeze hash
+itself does not contain preregistration bytes.
+
 `m20.stage0-selection.v1` is a distinct launch-authorization type. It contains
 only eligible IDs, frozen hash order, cumulative 10/40 memberships, and its
 seal. The primary scorer rejects that type before inspecting score fields, so
@@ -1564,7 +1618,43 @@ Stage 0 cannot contribute to `n`, `b`, `c`, `n00`, or a primary cell.
 `STAGE0_SELECTION` as the exact `stage0-selection.v1.json` member of a closed
 Stage 0 root and runs the same hostile full-root verification used by
 `verify-stage`; a detached copy, failed gate, foreign active freeze tuple, or
-artifact-manifest mismatch is rejected. Each labeler input is a closed raw
+artifact-manifest mismatch is rejected. Verification re-enumerates exactly 300
+unique cluster records from exactly three repository identities, recomputes
+every commit-cluster ID, closed-validates and byte-compares both complete build
+trees, recomputes all seven gates from validated build records, and derives the
+eligible/hash-ranked 10/40 selection anew. Stored gate booleans are never
+authority. It also matches the three canonical repository URLs and pinned HEAD
+commits against preregistration, hashes the exact sorted 300-row
+`{commit_cluster_id,repository_id,base_commit_oid,head_commit_oid}` manifest,
+and requires each build to contain a canonical product request, product run,
+product artifact manifest, and `m20.stage0-product-execution.v2`. For every
+build, the driver records the executable SHA-256 and an invocation hash binding
+the executable, exact review argv/cwd scope, and request hash. The hostile
+verifier rehashes the non-symlink executable at the preregistered path, invokes
+that pinned executable's `schema validate` on the canonical
+`reviewgraphen.generic_review_run.v3`, recomputes v3 request/run IDs, checks
+repository/base/head/snapshot/universe request-to-run edges, requires
+`audit.run.v3.json` to equal the run bytes, and recomputes every listed artifact
+hash. A false schema, false hash, synthetic self-report, or self-consistent
+40-cluster root is a typed refusal. Hash/schema closure alone is not product
+provenance: after verifying all 600 build chains, ingress orders the 600
+`(commit_cluster_id,build_number)` keys by SHA-256 of the preregistered
+`m20-stage0-product-replay-v1` seed and key, selects exactly the first 12, and
+re-executes each saved canonical request with the currently rehashed pinned
+product binary in a fresh shared-clone repository. Canonical stdout and every
+artifact byte, including the product manifest, must equal the saved tree; a
+timeout, changed `authority.incomplete_reasons`, or any other replay difference
+is a typed refusal. The sample size, seed, and 1,800-second per-replay ceiling
+are preregistered and cannot be selected by an operator. Complete Stage 0
+authenticity is the conjunction of the external custodian anchor, hash closure
+of all 600 saved builds, and deterministic product replay. Normal
+`seal-controls`, `stage1`, and `verify-stage` use the fixed 12-build replay
+sample. `verify-stage --reexecute-all` replaces that sample with deterministic
+replay of all 600 builds and skips no other check. A coherent re-sign outside
+the sample changes the root manifest and is rejected by the external anchor.
+Test corpora use a separate test-local preregistration fixture
+with their own explicit corpus and product-executable identities; they never
+impersonate the production pins. Each labeler input is a closed raw
 record bound to that exact selection hash and contains one source-cited
 `clean_refactor_control | not_control | unable` value for every model-eligible
 cluster, the labeler identity, and an explicit declaration that the labeler did
@@ -1609,9 +1699,19 @@ artifact manifest lists every file including the two exact imported manifests.
 The evaluator alone reduces the ten validated unit seals into the four paired
 cells, `n`, `b = count(A=0,B=1)`, `c = count(A=1,B=0)`, repository and
 leave-one-repository-out cells, judge-batch completeness, backend/leakage
-integrity, control adequacy, safety, and the exact `b>=8 && c<=1` decision. The
-closed result is `advance | stop` with typed reasons; operator arithmetic is
-never an input.
+integrity, control adequacy, safety, and the exact `b>=8 && c<=1` decision. Each
+of exactly three repository cells is nonempty and independently partitions its
+rows into A0/A1, B0/B1, and n00/b/c/n11; the three cells and three
+leave-one-out cells close over exactly 10 (or cumulatively 40) unique units.
+The closed result is `advance | stop` with typed reasons; operator arithmetic is
+never an input. The decision is the conjunction of recomputed Stage 0 gates,
+the rectangle, complete repository and leave-one-out tables, successful fixed
+backend executions, absence of `reviewer_lens_leak`, one complete primary judge
+batch per pair, at least two agreed clean controls, and the safety predicate.
+For safety, a judge-positive cell is a completed primary cell whose decoded
+reviewer disposition contains `issue_present`; among agreed clean controls it
+requires `J_B_clean <= J_A_clean + 1`. Stage 2A applies the same gates
+cumulatively with at least eight agreed controls.
 
 The reviewer and judge adapters are fixed respectively at
 `/usr/local/bin/m20-reviewer-backend` and
@@ -1621,7 +1721,26 @@ private mount namespace and read-only bind-mounts the intended executables at
 those exact paths before invoking the stage. The evaluator uses `shell=false`,
 an empty workspace-scoped cwd, and its closed environment allow-list, and
 rechecks the pinned backend identity/health before the stage and each reviewer
-call. Stage 1 enforces 20 reviewer calls at 12,000 requested output tokens and
+call. Before `--gate`, it hashes the bytes at both fixed paths and compares
+them with the preregistered executable SHA-256 pins. `--gate` must return the closed
+`m20.backend_identity_health.v1 {listing,health}` record; the evaluator itself
+canonicalizes both documents and compares their SHA-256 values with the two
+preregistration pins. Reviewer execution is requested with the literal adapter
+arguments `--max-output-tokens 12000 --timeout-seconds 900`; the adapter must
+refuse a different request. The canonical request JSON seals the packet,
+12,000-token cap, 900-second timeout, and request seal; the closed response must
+echo that seal and the effective cap/timeout and record finish reason and usage
+before exposing base64 raw model bytes. The evaluator HMAC-seals the exact
+canonical adapter response bytes before deriving finish/usage, saves both
+envelopes in the canonical slot, and re-audits them from the run seal. Missing or changed
+effective values are a typed failure. Contract-fixture executables used by
+tests implement this same process protocol, derive reviewer claims from the
+packet's admitted source body, and independently derive the four judge
+dimensions from citation exactness, task/obligation binding, mechanism text,
+and actionable line-range/content correspondence. A claim mutation changes its
+score. An instruction change with a recomputed seal
+must change the fixture's raw response. They carry test-local executable pins
+and are explicitly not an in-process transport stub. Stage 1 enforces 20 reviewer calls at 12,000 requested output tokens and
 900 seconds each, ten judge calls at 90 seconds each, the 18,900-second model
 ceiling, and the 21,600-second active-command wall envelope. Reserve never
 authorizes another call or retry.
@@ -1645,7 +1764,10 @@ manifest, predecessor result, selection, controls, exact added membership, and
 active tuple. The evaluator validates the ten predecessor primary records and
 the thirty new records, then exclusively computes all cumulative 40-pair cells,
 repository/leave-one-out tables, control/safety/backend/leakage/judge gates,
-`b>=18 && c<=7`, and terminal `success | failure`. It charges the recorded
+`b>=18 && c<=7`, and terminal `success | failure`. The Stage 0 gate in every
+model-stage result is derived from the fully reverified seven-gate Stage 0
+result and the result records its canonical SHA-256; it is never a reducer
+constant or caller-supplied boolean. It charges the recorded
 Stage 1 model seconds plus at most 60 new reviewer and 30 new judge calls
 against 75,600 seconds, and the two active command durations against 86,400
 seconds; idle operator delay between commands is not authorized execution and
@@ -1655,7 +1777,9 @@ entrance, caller-authored launch, or caller-supplied aggregate are absent.
 `verify-stage` is hostile read-only verification for Stage 0, control, Stage 1,
 or Stage 2A closed roots. It recomputes layouts, manifest edges, membership,
 per-unit `verify-run`, reductions, budgets, and seals, but never resumes or
-changes a result. Acceptance must cover selection-hash/membership mutations,
+changes a result. Optional `--reexecute-all` propagates through controls and
+nested model stages to the source Stage 0 root and replays all 600 product
+builds. Acceptance must cover selection-hash/membership mutations,
 rank omission/duplication/reordering, launch-v1 injection, swapped obligations,
 foreign controls/transports, predecessor tampering, operator aggregates, and
 Stage 2A-before-advance. These stage drivers, schemas, fixtures, attacks, and
@@ -1696,3 +1820,18 @@ Closure summary:
 - D5-B1/B2/B3/B5/B6 close as production boundary classes because intermediate
   states have no public input representation; B4/B7/B8 remain explicit
   decoder/acceptance/freeze responsibilities in sections 2, 8, 11, and 12.
+
+## 15. Declared evaluator-integrity limitations
+
+`preregistration.json` has a top-level `declared_limitations` array. Each item
+is a closed record with exactly this shape:
+
+```text
+{id, wave, summary, affected_claim, status: "open" | "closed"}
+```
+
+The array records findings about evaluator tamper resistance, including every
+finding that remains unclosed at sealing time. These findings do not affect the
+interpretation of measured values, but explicitly declare that the bundle by
+itself does not prove authenticity. `open` identifies an unclosed finding;
+`closed` preserves a finding whose stated concern has been closed.

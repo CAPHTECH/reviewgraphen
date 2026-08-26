@@ -1,8 +1,10 @@
 """Execute every section 11 named attack, including real source mutants."""
+import base64
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from evaluator.artifacts import verify_run
@@ -47,6 +49,8 @@ MUTATIONS = {
     "PKT01": ("pipeline.py", "return core, _union_specs(core, window_specs, union_byte_length)", "return core, _union_specs([], window_specs, union_byte_length)"),
     "SC01": ("spec_contract.py", '        "semantic_acceptance_reference_sha256": semantic_acceptance_reference_sha256,', '        "semantic_acceptance_reference_sha256": runtime_requirements_sha256,'),
     "SC02": ("spec_contract.py", '    "measurement_record_sha256",\n', ''),
+    "STG14": ("stage_driver.py", "    passed = not reasons\n", "    passed = True\n"),
+    "STG16": ("cli.py", 'response["effective_max_output_tokens"] != contract["max_output_tokens"]', 'False and response["effective_max_output_tokens"] != contract["max_output_tokens"]'),
 }
 
 INDEPENDENT_MUTATIONS = {
@@ -66,8 +70,7 @@ AUDIT_IDS = {"M07","M08","P01","P02","P03","P05","N08","N09","N10","N11","N12","
 
 
 def _copy(root: Path, identifier: str, generated=False) -> Path:
-    target = Path("/tmp") / ("m20-evaluator-attack-" + identifier.lower() + os.environ.get("M20_SWEEP_WORKER", ""))
-    if target.exists(): shutil.rmtree(target)
+    target = Path(tempfile.mkdtemp(prefix="m20-evaluator-attack-" + identifier.lower() + "-" + os.environ.get("M20_SWEEP_WORKER", "")))
     ignore = None if generated else shutil.ignore_patterns("generated", "__pycache__", "*.pyc")
     shutil.copytree(root, target / "evaluator", ignore=ignore)
     shutil.copy2(root.parent / "EVALUATOR_SPEC.md", target / "EVALUATOR_SPEC.md")
@@ -121,7 +124,10 @@ def _audit(identifier: str) -> bool:
         path=output/"pair.json"; value=parse_json_bytes(path.read_bytes()); value["arms"][0]["extra"]="forged"; path.write_bytes(canonical_bytes(value))
     elif identifier == "A05":
         path=output/"pair.json"; value=parse_json_bytes(path.read_bytes()); value["slot_map"][0]["extra"]="forged"; path.write_bytes(canonical_bytes(value))
-    elif identifier == "A06": (output/"slots/0/request.json").write_bytes((output/"slots/0/request.json").read_bytes()+b" ")
+    elif identifier == "A06":
+        path=output/"slots/0/response.json"; value=parse_json_bytes(path.read_bytes()); response=parse_json_bytes(base64.b64decode(value["response_bytes_base64"])); response["usage"]["output_tokens"]+=777; value["response_bytes_base64"]=base64.b64encode(canonical_bytes(response)).decode("ascii"); path.write_bytes(canonical_bytes(value))
+    elif identifier == "A13":
+        path=output/"slots/0/response.json"; value=parse_json_bytes(path.read_bytes()); response=parse_json_bytes(base64.b64decode(value["response_bytes_base64"])); response["finish_reason"]="length"; value["response_bytes_base64"]=base64.b64encode(canonical_bytes(response)).decode("ascii"); path.write_bytes(canonical_bytes(value))
     elif identifier == "A07":
         path=output/"pair.json"; value=parse_json_bytes(path.read_bytes()); value["pair_opportunity"]["eligible_question_ids"]=[["forged"],["forged"]]; path.write_bytes(canonical_bytes(value))
     elif identifier == "A08":
@@ -136,12 +142,14 @@ def _audit(identifier: str) -> bool:
     elif identifier in {"N08","N09","N10"}:
         path=output/"slots/0/packet.json"; value=parse_json_bytes(path.read_bytes()); target=value["payloads"][0] if identifier=="N08" else value["source_inventory"]["admitted_sources"][0] if identifier=="N09" else value["source_inventory"]["declared_losses"][0]; target["extra"]="forged"; path.write_bytes(canonical_bytes(value))
     elif identifier == "N11":
-        path=output/"judge/request.json"; value=parse_json_bytes(path.read_bytes()); value["candidates"][0]["packet"]["instruction"]="stale hash alpha beta gamma"; path.write_bytes(canonical_bytes(value))
+        path=output/"judge/batch.json"; value=parse_json_bytes(path.read_bytes()); value["candidates"][0]["packet"]["instruction"]="stale hash alpha beta gamma"; path.write_bytes(canonical_bytes(value))
     elif identifier == "N12":
-        path=output/"judge/request.json"; value=parse_json_bytes(path.read_bytes()); value["candidates"][0]["binding_view"]["extra"]="forged"; path.write_bytes(canonical_bytes(value))
+        path=output/"judge/batch.json"; value=parse_json_bytes(path.read_bytes()); value["candidates"][0]["binding_view"]["extra"]="forged"; path.write_bytes(canonical_bytes(value))
     else:
         path=output/"slots/0/mechanical.json"; value=parse_json_bytes(path.read_bytes()); value["process_and_schema_valid"]=not value["process_and_schema_valid"]; path.write_bytes(canonical_bytes(value))
-    _rehash(output); passed = not verify_run(output)["ok"]
+    _rehash(output)
+    from evaluator.tests.support import fixture_hmac_key
+    with fixture_hmac_key(): passed = not verify_run(output)["ok"]
     if FIXTURE_ROOT.exists(): shutil.rmtree(FIXTURE_ROOT)
     return passed
 

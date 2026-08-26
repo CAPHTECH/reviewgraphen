@@ -1,4 +1,4 @@
-"""Sole end-to-end constructor and scorer for one paired m20 unit."""; import hashlib; import unicodedata; from pathlib import Path; from .artifacts import ArtifactSink; from .canonical import canonical_bytes, hash_json, parse_json_bytes, sha256_bytes, stable_id; from .model_boundary import DIMENSIONS, DecodedModel, ModelResult, TypedError, decode_model; from .repository import GitRepository, PreflightError, production_rust, valid_path; from .source_payload import extract, payload_record, source_record, validate_payload_closure; from .stage0_contract import CONTEXT_POLICY_ID, CONTEXT_V2_HASH, CONTEXT_V3_HASH, PROFILE_HASH, Stage0ContractError, validate_context_projection_public, validate_occurrence_public; from .textnorm import normalize; MAX_SOURCE_BYTES = 65_536; MAX_WINDOW_LINES = 400; MAX_WINDOW_BYTES = 262_144; CONTEXT_HASH = CONTEXT_V3_HASH; RULE_ID = "relation.changed_public_callee@1"; PROPERTY_ID = "rust.callee_contract_review@1"; PACKET_V2 = "arm-neutral.source-grounded-packet@2"; PACKET_V3 = "arm-neutral.source-grounded-packet@3"; _FIXTURE_EXECUTION_IDENTITY: str | None = None; _PACKET_V3_ACCOUNT_CALLS = 0
+"""Sole end-to-end constructor and scorer for one paired m20 unit."""; import base64; import hashlib; import hmac; import os; import stat; import unicodedata; from pathlib import Path; from .artifacts import ArtifactSink; from .canonical import canonical_bytes, hash_json, parse_json_bytes, sha256_bytes, stable_id; from .model_boundary import DIMENSIONS, DecodedModel, ModelResult, TypedError, decode_model; from .repository import GitRepository, PreflightError, production_rust, valid_path; from .source_payload import extract, payload_record, source_record, validate_payload_closure; from .stage0_contract import CONTEXT_POLICY_ID, CONTEXT_V2_HASH, CONTEXT_V3_HASH, PROFILE_HASH, Stage0ContractError, validate_context_projection_public, validate_occurrence_public; from .textnorm import normalize; MAX_SOURCE_BYTES = 65_536; MAX_WINDOW_LINES = 400; MAX_WINDOW_BYTES = 262_144; CONTEXT_HASH = CONTEXT_V3_HASH; RULE_ID = "relation.changed_public_callee@1"; PROPERTY_ID = "rust.callee_contract_review@1"; PACKET_V2 = "arm-neutral.source-grounded-packet@2"; PACKET_V3 = "arm-neutral.source-grounded-packet@3"; _FIXTURE_EXECUTION_IDENTITY: str | None = None; _PACKET_V3_ACCOUNT_CALLS = 0; _FORBIDDEN_FIXTURE_HMAC_KEY_SHA256 = "sha256:979b33628b7affdb743edd5d5dd5531cc891f7bf2576a3dd40ca4b5fda7d13be"
 class PipelineError(ValueError):
     def __init__(self, code: str, exit_code: int = 4): self.code, self.exit_code = code, exit_code; super().__init__(code)
 def _data(name: str): return parse_json_bytes((Path(__file__).with_name("data") / name).read_bytes())
@@ -6,6 +6,64 @@ def _schema(name: str): return parse_json_bytes((Path(__file__).with_name("schem
 def _closed(value, fields, code="authenticated_input_invalid"):
     if not isinstance(value, dict) or set(value) != set(fields): raise PipelineError(code, 2)
     return value
+def _backend_request(kind: str, payload: dict, instruction: str | None, max_output_tokens: int, timeout_seconds: int) -> dict:
+    body = {"schema":"m20.fixed-backend-request.v1","kind":kind,"payload":payload,"instruction":instruction,"max_output_tokens":max_output_tokens,"timeout_seconds":timeout_seconds}
+    body["request_seal_sha256"] = sha256_bytes(canonical_bytes(body))
+    return body
+def _read_pinned_response_hmac_key(path: Path, expected: str) -> bytes:
+    try:
+        status=path.lstat(); key=path.read_bytes()
+    except (OSError,ValueError,TypeError) as error: raise PipelineError("backend_response_hmac_key_unavailable",3) from error
+    observed=sha256_bytes(key)
+    if path.is_symlink() or not stat.S_ISREG(status.st_mode) or stat.S_IMODE(status.st_mode)!=0o600 or status.st_uid!=os.geteuid() or not isinstance(expected,str) or not expected.startswith("sha256:") or len(expected)!=71 or len(key)<32 or len(key)>4096 or observed!=expected or observed==_FORBIDDEN_FIXTURE_HMAC_KEY_SHA256: raise PipelineError("backend_response_hmac_key_identity_mismatch",3)
+    return key
+def _response_hmac_key() -> bytes:
+    try:
+        registration=parse_json_bytes(Path(__file__).resolve().parent.parent.joinpath("preregistration.json").read_bytes()); gate=registration.get("backend_gate",{}); path=Path(gate.get("response_hmac_key_path","")); expected=gate.get("response_hmac_key_sha256")
+    except (OSError,ValueError,TypeError) as error: raise PipelineError("backend_response_hmac_key_unavailable",3) from error
+    if str(path)!="/run/secrets/m20-evaluator-response-hmac-key": raise PipelineError("backend_response_hmac_key_identity_mismatch",3)
+    return _read_pinned_response_hmac_key(path,expected)
+def _seal_backend_response(response_raw: bytes) -> str: return "hmac-sha256:"+hmac.new(_response_hmac_key(),response_raw,hashlib.sha256).hexdigest()
+def _sealed_backend_response(response: dict, response_hmac: str) -> dict:
+    raw=canonical_bytes(response)
+    if not isinstance(response_hmac,str) or not hmac.compare_digest(response_hmac,_seal_backend_response(raw)): raise PipelineError("backend_response_hmac_mismatch",4)
+    return {"schema":"m20.sealed-backend-response.v1","transport_response_hmac_sha256":response_hmac,"response_bytes_base64":base64.b64encode(raw).decode("ascii")}
+def _verify_backend_response_hmac_bytes(raw: bytes, response_hmac: str) -> None:
+    if not isinstance(response_hmac,str) or not hmac.compare_digest(response_hmac,_seal_backend_response(raw)): raise PipelineError("backend_response_hmac_mismatch",4)
+def _parse_backend_response_bytes(raw: bytes) -> dict:
+    try: response=parse_json_bytes(raw)
+    except (ValueError,UnicodeError,TypeError) as error: raise PipelineError("backend_response_envelope_invalid",4) from error
+    if canonical_bytes(response)!=raw: raise PipelineError("backend_response_envelope_invalid",4)
+    return response
+def _open_backend_response(sealed: dict) -> dict:
+    sealed=_closed(sealed,{"schema","transport_response_hmac_sha256","response_bytes_base64"},"backend_response_envelope_invalid")
+    if sealed["schema"]!="m20.sealed-backend-response.v1": raise PipelineError("backend_response_envelope_invalid",4)
+    try: raw=base64.b64decode(sealed["response_bytes_base64"],validate=True)
+    except (ValueError,TypeError) as error: raise PipelineError("backend_response_envelope_invalid",4) from error
+    _verify_backend_response_hmac_bytes(raw,sealed["transport_response_hmac_sha256"])
+    return _parse_backend_response_bytes(raw)
+def _backend_artifacts(result: ModelResult, expected_request: dict) -> tuple[dict, dict]:
+    if result.backend_request != expected_request: raise PipelineError("backend_request_envelope_mismatch",4)
+    sealed=_sealed_backend_response(result.backend_response,result.backend_response_hmac)
+    response = _closed(result.backend_response,{"schema","request_seal_sha256","effective_max_output_tokens","effective_timeout_seconds","finish_reason","usage","raw_response_base64"},"backend_response_envelope_invalid")
+    usage = _closed(response["usage"],{"input_tokens","output_tokens","cache_tokens"},"backend_response_envelope_invalid")
+    if response["schema"]!="m20.fixed-backend-response.v1" or response["request_seal_sha256"]!=expected_request["request_seal_sha256"] or response["effective_max_output_tokens"]!=expected_request["max_output_tokens"] or response["effective_timeout_seconds"]!=expected_request["timeout_seconds"] or response["finish_reason"] not in {"stop","length","tool_calls","error","unknown","process_error","transport_timeout"} or any(value is not None and (isinstance(value,bool) or not isinstance(value,int) or value<0) for value in usage.values()): raise PipelineError("backend_response_envelope_invalid",4)
+    import base64
+    try: raw=base64.b64decode(response["raw_response_base64"],validate=True)
+    except (ValueError,TypeError) as error: raise PipelineError("backend_response_envelope_invalid",4) from error
+    if raw!=result.raw_bytes or tuple((name,usage[name]) for name in ("input_tokens","output_tokens","cache_tokens") if usage[name] is not None)!=result.usage or (response["finish_reason"]=="length")!=result.provider_truncation: raise PipelineError("backend_response_envelope_mismatch",4)
+    if result.process_exit==0 and not result.timeout and response["finish_reason"] in {"process_error","transport_timeout"}: raise PipelineError("backend_response_envelope_mismatch",4)
+    return expected_request,sealed
+def _audit_backend_artifacts(request: dict, sealed: dict, kind: str, payload: dict, instruction: str | None, max_output_tokens: int, timeout_seconds: int, raw: bytes, execution: dict) -> None:
+    expected=_backend_request(kind,payload,instruction,max_output_tokens,timeout_seconds)
+    if request!=expected: raise PipelineError("backend_request_envelope_mismatch",4)
+    response=_open_backend_response(sealed); response=_closed(response,{"schema","request_seal_sha256","effective_max_output_tokens","effective_timeout_seconds","finish_reason","usage","raw_response_base64"},"backend_response_envelope_invalid"); usage=_closed(response["usage"],{"input_tokens","output_tokens","cache_tokens"},"backend_response_envelope_invalid")
+    import base64
+    try: response_raw=base64.b64decode(response["raw_response_base64"],validate=True)
+    except (ValueError,TypeError) as error: raise PipelineError("backend_response_envelope_invalid",4) from error
+    if response["schema"]!="m20.fixed-backend-response.v1" or response["request_seal_sha256"]!=expected["request_seal_sha256"] or response["effective_max_output_tokens"]!=max_output_tokens or response["effective_timeout_seconds"]!=timeout_seconds or response["finish_reason"] not in {"stop","length","tool_calls","error","unknown","process_error","transport_timeout"} or response_raw!=raw or any(value is not None and (isinstance(value,bool) or not isinstance(value,int) or value<0) for value in usage.values()): raise PipelineError("backend_response_envelope_mismatch",4)
+    observed=tuple((name,usage[name]) for name in ("input_tokens","output_tokens","cache_tokens") if usage[name] is not None); derived=ModelResult(raw,process_exit=execution["process_exit"],timeout=execution["timeout"],provider_truncation=response["finish_reason"]=="length",usage=observed)
+    if execution["provider_truncation"]!=(response["finish_reason"]=="length") or execution["token_observation"]!=_token_observation(derived) or execution["raw_sha256"]!=sha256_bytes(raw): raise PipelineError("backend_response_execution_mismatch",4)
 def _unique(values, key=lambda x: x): return isinstance(values, list) and len(values) == len({key(item) for item in values})
 def _bit(seed: str, identity: str) -> int: return hashlib.sha256(seed.encode() + b"\0" + identity.encode()).digest()[-1] & 1
 def _launch(value: dict) -> dict:
@@ -28,6 +86,10 @@ def _stage(value: dict, launch: dict) -> dict:
     if value["schema"] != "m20.model_stage_manifest.v1" or value["experiment_id"] != launch["experiment_id"] or value["stage"] != launch["selection_membership"]["stage"] or value["selection_manifest_sha256"] != launch["selection_manifest_sha256"]: raise PipelineError("stage_contract_invalid", 2)
     _closed(value["public_seeds"], {"arm_order", "judge_permutation"}); _closed(value["fixed_transports"], {"reviewer", "judge"})
     if value["public_seeds"] != {"arm_order":"m20-arm-order-v1","judge_permutation":"m20-judge-permutation-v1"}: raise PipelineError("stage_seed_invalid",2)
+    reviewer_transport = _closed(value["fixed_transports"]["reviewer"], {"adapter_id", "path", "sha256", "pinned_listing_sha256", "pinned_health_sha256", "response_hmac_key_path", "response_hmac_key_sha256"}, "backend_adapter_mismatch")
+    _closed(value["fixed_transports"]["judge"], {"adapter_id", "path", "sha256"}, "backend_adapter_mismatch")
+    if any(not isinstance(reviewer_transport[field], str) or len(reviewer_transport[field]) != 64 for field in ("pinned_listing_sha256", "pinned_health_sha256")): raise PipelineError("backend_pin_contract_invalid",2)
+    if reviewer_transport["response_hmac_key_path"]!="/run/secrets/m20-evaluator-response-hmac-key" or not isinstance(reviewer_transport["response_hmac_key_sha256"],str) or len(reviewer_transport["response_hmac_key_sha256"])!=71 or not reviewer_transport["response_hmac_key_sha256"].startswith("sha256:"): raise PipelineError("backend_response_hmac_key_identity_mismatch",2)
     adapters={name:item.get("adapter_id") if isinstance(item,dict) else None for name,item in value["fixed_transports"].items()}
     if adapters != {"reviewer":"m20.fixed-reviewer-process.v1","judge":"m20.fixed-judge-process.v1"}: raise PipelineError("backend_adapter_mismatch",2)
     rank=launch["selection_membership"]["cumulative_rank"]
@@ -267,7 +329,7 @@ def _primary(mechanicals: list[dict], utility: dict) -> dict:
 def _result(value) -> ModelResult:
     valid_usage=isinstance(value,ModelResult) and all(isinstance(item,tuple) and len(item)==2 and isinstance(item[0],str) and not isinstance(item[1],bool) and isinstance(item[1],int) and item[1]>=0 for item in value.usage)
     valid_flags=isinstance(value,ModelResult) and all(isinstance(item,bool) for item in (value.timeout,value.client_truncation,value.provider_truncation))
-    if not isinstance(value, ModelResult) or not isinstance(value.raw_bytes, bytes) or isinstance(value.process_exit, bool) or not isinstance(value.process_exit, int) or not valid_flags or not valid_usage or not all(isinstance(item,str) for item in value.tool_calls): raise PipelineError("model_transport_result_invalid")
+    if not isinstance(value, ModelResult) or not isinstance(value.raw_bytes, bytes) or isinstance(value.process_exit, bool) or not isinstance(value.process_exit, int) or not valid_flags or not valid_usage or not all(isinstance(item,str) for item in value.tool_calls) or not isinstance(value.backend_response_hmac,str): raise PipelineError("model_transport_result_invalid")
     return value
 def _decode(result: ModelResult, kind: str, expected: dict) -> tuple[DecodedModel | None, list[str]]:
     if result.timeout or result.process_exit or not result.raw_bytes: return None, []
@@ -311,10 +373,10 @@ def RUN(frozen_launch: dict, model_transport, new_output_root: str | Path) -> di
         return {"schema":"m20.pipeline_result.v1","unit_id":launch["unit_id"],"pipeline_terminal_state":"model_ineligible","model_ineligible_reason":"admitted_source_byte_ceiling_exceeded","arm_results":{"A":None,"B":None},"model_call_count":0,"run_seal_id":seal["run_seal_id"]}
     mechanicals, decoded_by_arm = [], {}
     for slot, arm in enumerate(slot_arms):
-        packet, view = arm_packet[arm["hidden_arm_id"]], views[arm["hidden_arm_id"]]; request = canonical_bytes(packet); sink.bytes(f"slots/{slot}/request.json", request, "reviewer_request"); result = _result(model_transport.review(request, slot, 900)); decoded, decode_codes = _decode(result, "reviewer", {"task_id": task_id, "source_inventory_id": packet["source_inventory"]["source_inventory_id"]}); mechanical = _mechanical(packet, arm, opportunity, result, decoded, decode_codes, launch["unit_id"], view["binding_view_sha256"]); sink.bytes(f"slots/{slot}/raw.bin", result.raw_bytes, "reviewer_raw"); sink.json(f"slots/{slot}/execution.json", _execution(result, decoded, expected_descriptor["reviewer"]), "reviewer_execution")
+        packet, view = arm_packet[arm["hidden_arm_id"]], views[arm["hidden_arm_id"]]; packet_bytes = canonical_bytes(packet); expected_request=_backend_request("reviewer",packet,None,12_000,900); result = _result(model_transport.review(packet_bytes, slot, 900)); request,response=_backend_artifacts(result,expected_request); sink.json(f"slots/{slot}/request.json",request,"reviewer_request_envelope"); sink.json(f"slots/{slot}/response.json",response,"reviewer_response_envelope"); decoded, decode_codes = _decode(result, "reviewer", {"task_id": task_id, "source_inventory_id": packet["source_inventory"]["source_inventory_id"]}); mechanical = _mechanical(packet, arm, opportunity, result, decoded, decode_codes, launch["unit_id"], view["binding_view_sha256"]); sink.bytes(f"slots/{slot}/raw.bin", result.raw_bytes, "reviewer_raw"); sink.json(f"slots/{slot}/execution.json", _execution(result, decoded, expected_descriptor["reviewer"]), "reviewer_execution")
         if decoded: sink.json(f"slots/{slot}/parsed.json", decoded.value, "reviewer_parsed")
         sink.json(f"slots/{slot}/mechanical.json", mechanical, "mechanical"); mechanicals.append(mechanical); decoded_by_arm[arm["hidden_arm_id"]] = decoded
-    mech_by_arm = {item["hidden_arm_id"]: item for item in mechanicals}; candidates = [_candidate(arm_packet[arm["hidden_arm_id"]], views[arm["hidden_arm_id"]], mech_by_arm[arm["hidden_arm_id"]], decoded_by_arm[arm["hidden_arm_id"]], arm["hidden_arm_id"]) for arm in arms]; batch, reverse = _batch(candidates, task_id, stage["public_seeds"]["judge_permutation"]); sink.json("judge/permutation.json", reverse, "permutation"); sink.json("judge/request.json", batch, "judge_request"); rubric_instruction = _data("utility_rubric.v1.json")["instruction"].encode("utf-8"); judge_result = _result(model_transport.judge(canonical_bytes(batch), rubric_instruction, 90)); judge_decoded, _ = _decode(judge_result, "judge", {"batch": batch}); utility = _utility(batch, reverse, judge_decoded, judge_result.timeout or judge_result.process_exit != 0 or not judge_result.raw_bytes); sink.bytes("judge/raw.bin", judge_result.raw_bytes, "judge_raw"); sink.json("judge/execution.json", _execution(judge_result, judge_decoded, expected_descriptor["judge"]), "judge_execution")
+    mech_by_arm = {item["hidden_arm_id"]: item for item in mechanicals}; candidates = [_candidate(arm_packet[arm["hidden_arm_id"]], views[arm["hidden_arm_id"]], mech_by_arm[arm["hidden_arm_id"]], decoded_by_arm[arm["hidden_arm_id"]], arm["hidden_arm_id"]) for arm in arms]; batch, reverse = _batch(candidates, task_id, stage["public_seeds"]["judge_permutation"]); sink.json("judge/permutation.json", reverse, "permutation"); sink.json("judge/batch.json",batch,"judge_batch"); rubric_instruction = _data("utility_rubric.v1.json")["instruction"]; expected_judge_request=_backend_request("judge",batch,rubric_instruction,12_000,90); judge_result = _result(model_transport.judge(canonical_bytes(batch), rubric_instruction.encode("utf-8"), 90)); judge_request,judge_response=_backend_artifacts(judge_result,expected_judge_request); sink.json("judge/request.json",judge_request,"judge_request_envelope"); sink.json("judge/response.json",judge_response,"judge_response_envelope"); judge_decoded, _ = _decode(judge_result, "judge", {"batch": batch}); utility = _utility(batch, reverse, judge_decoded, judge_result.timeout or judge_result.process_exit != 0 or not judge_result.raw_bytes); sink.bytes("judge/raw.bin", judge_result.raw_bytes, "judge_raw"); sink.json("judge/execution.json", _execution(judge_result, judge_decoded, expected_descriptor["judge"]), "judge_execution")
     if judge_decoded: sink.json("judge/parsed.json", judge_decoded.value, "judge_parsed")
     sink.json("judge/utility.json", utility, "utility"); primary = _primary(mechanicals, utility); sink.json("primary.json", primary, "primary"); seal = sink.finalize(execution_sha, launch["stage_manifest_sha256"], run_id, "sealed"); return {"schema": "m20.run-result.v1", "run_id": run_id, "pipeline_terminal_state": "sealed", "primary": primary, "seal": seal}
 def _packet_audit(packet: dict) -> None:
@@ -342,7 +404,7 @@ def _token_observation_audit(value) -> None:
         if tokenizer is not None or any(item is not None for item in counts) or value["counting_scope"] is not None or value["unavailable_reason"] not in {"backend_usage_absent","backend_usage_invalid"}: raise PipelineError("token_observation_invalid")
     elif value["unavailable_reason"] is not None or tokenizer is None and all(item is None for item in counts) and value["counting_scope"] is None: raise PipelineError("token_observation_invalid")
 def audit_records(records: dict[str, dict], raws: dict[str, bytes], seal: dict) -> None:
-    required = {"launch.json", "repository.json", "obligation.json", "pair.json", "budget.json", "slots/0/packet.json", "slots/0/request.json", "slots/0/execution.json", "slots/0/mechanical.json", "slots/1/packet.json", "slots/1/request.json", "slots/1/execution.json", "slots/1/mechanical.json", "judge/permutation.json", "judge/request.json", "judge/execution.json", "judge/utility.json", "primary.json"}
+    required = {"launch.json", "repository.json", "obligation.json", "pair.json", "budget.json", "slots/0/packet.json", "slots/0/request.json", "slots/0/response.json", "slots/0/execution.json", "slots/0/mechanical.json", "slots/1/packet.json", "slots/1/request.json", "slots/1/response.json", "slots/1/execution.json", "slots/1/mechanical.json", "judge/permutation.json", "judge/batch.json", "judge/request.json", "judge/response.json", "judge/execution.json", "judge/utility.json", "primary.json"}
     ineligible = {"launch.json", "repository.json", "obligation.json", "pair.json", "budget.json", "slots/0/packet.json", "slots/1/packet.json"}
     optional={"slots/0/parsed.json","slots/1/parsed.json","judge/parsed.json"}
     if seal["pipeline_terminal_state"]=="model_ineligible":
@@ -372,8 +434,8 @@ def audit_records(records: dict[str, dict], raws: dict[str, bytes], seal: dict) 
     mechanicals = []
     for slot in range(2):
         packet, execution, mechanical = records[f"slots/{slot}/packet.json"], records[f"slots/{slot}/execution.json"], records[f"slots/{slot}/mechanical.json"]; _closed(execution,{"schema","adapter_id","process_exit","timeout","client_truncation","provider_truncation","token_observation","tool_calls","raw_sha256","parsed_sha256","parsed_present"},"execution_invalid"); _token_observation_audit(execution["token_observation"]); _closed(mechanical,{"schema","task_id","unit_id","hidden_arm_id","packet_sha256","raw_sha256","parsed_sha256","binding_view_sha256","pair_opportunity_sha256","process_and_schema_valid","closure_valid","mechanical_usefulness_valid","policy_valid","hashes_retained","failure_codes","normalization_trace_ids"},"mechanical_invalid")
-        if records[f"slots/{slot}/request.json"] != packet: raise PipelineError("request_packet_mismatch")
         raw = raws[f"slots/{slot}/raw.bin"]
+        _audit_backend_artifacts(records[f"slots/{slot}/request.json"],records[f"slots/{slot}/response.json"],"reviewer",packet,None,12_000,900,raw,execution)
         if execution["raw_sha256"] != sha256_bytes(raw) or mechanical["raw_sha256"] != sha256_bytes(raw) or mechanical["packet_sha256"] != hash_json(packet) or mechanical["hidden_arm_id"]!=pair["slot_map"][slot]["hidden_arm_id"] or mechanical["binding_view_sha256"]!=pair_views[mechanical["hidden_arm_id"]]["binding_view_sha256"]: raise PipelineError("raw_hash_mismatch")
         parsed_path = f"slots/{slot}/parsed.json"; decoded = None
         if execution["parsed_present"]:
@@ -386,7 +448,7 @@ def audit_records(records: dict[str, dict], raws: dict[str, bytes], seal: dict) 
     for slot in range(2): losses=records[f"slots/{slot}/packet.json"]["source_inventory"]["declared_losses"]; signatures.append(sorted([[loss["reason"],loss["undecidable_question_id"]] for loss in losses if loss["reason"]!="routine_scope_omission"],key=lambda x:(x[0].encode(),x[1].encode())))
     opportunity=_closed(pair["pair_opportunity"],{"schema","comparable","signatures","eligible_question_ids"},"pair_opportunity_invalid"); comparable=opportunity["signatures"][0]==opportunity["signatures"][1]; eligible=[[item[1] for item in signature] for signature in opportunity["signatures"]] if comparable else [[],[]]
     if opportunity["schema"]!="m20.pair-opportunity.v1" or opportunity["comparable"] != comparable or sorted(opportunity["signatures"]) != sorted(signatures) or opportunity["eligible_question_ids"]!=eligible: raise PipelineError("pair_opportunity_invalid")
-    batch, reverse = records["judge/request.json"], records["judge/permutation.json"]; _closed(batch,{"schema","task_id","rubric_id","batch_id","candidates"},"judge_batch_invalid"); _closed(reverse,{"batch_id","entries"},"permutation_invalid")
+    batch, reverse = records["judge/batch.json"], records["judge/permutation.json"]; _closed(batch,{"schema","task_id","rubric_id","batch_id","candidates"},"judge_batch_invalid"); _closed(reverse,{"batch_id","entries"},"permutation_invalid")
     for entry in reverse["entries"]: _closed(entry,{"candidate_id","hidden_arm_id"},"permutation_invalid")
     if reverse["batch_id"] != batch["batch_id"] or [entry["candidate_id"] for entry in reverse["entries"]] != [candidate["candidate_id"] for candidate in batch["candidates"]] or {entry["hidden_arm_id"] for entry in reverse["entries"]}!=set(pair_views): raise PipelineError("permutation_invalid")
     mech_hashes = {hash_json(item): item for item in mechanicals}
@@ -399,6 +461,7 @@ def audit_records(records: dict[str, dict], raws: dict[str, bytes], seal: dict) 
         if candidate["candidate_id"] != stable_id("judge-candidate", preimage): raise PipelineError("candidate_id_invalid")
     judge_execution, judge_raw = records["judge/execution.json"], raws["judge/raw.bin"]
     _closed(judge_execution,{"schema","adapter_id","process_exit","timeout","client_truncation","provider_truncation","token_observation","tool_calls","raw_sha256","parsed_sha256","parsed_present"},"execution_invalid"); _token_observation_audit(judge_execution["token_observation"])
+    _audit_backend_artifacts(records["judge/request.json"],records["judge/response.json"],"judge",batch,_data("utility_rubric.v1.json")["instruction"],12_000,90,judge_raw,judge_execution)
     if judge_execution["raw_sha256"] != sha256_bytes(judge_raw): raise PipelineError("judge_raw_hash_invalid")
     decoded = None
     if judge_execution["parsed_present"]:

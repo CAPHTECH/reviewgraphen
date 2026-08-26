@@ -253,7 +253,7 @@ def run_stage0(output_root: str | Path, repositories: Iterable[dict], cluster_pi
     records = [{"path": path, "sha256": sha256_bytes((root / path).read_bytes())} for path in paths]
     records.append({"path":"artifact-manifest.v1.json", "sha256":"self-described-by-manifest-bytes"})
     _write(root / "artifact-manifest.v1.json", {"schema": "m20.stage0-artifact-manifest.v1", "files": records})
-    return {"schema": "m20.stage0-driver-result.v1", "selection": Stage0Selection(selection), "output_root": str(root)}
+    return {"schema": "m20.stage0-driver-result.v1", "selection": Stage0Selection(selection), "output_root": str(root), "stage0_artifact_manifest_sha256": sha256_bytes((root / "artifact-manifest.v1.json").read_bytes())}
 
 
 def _production_freeze_gate(benchmark_root: Path | None = None) -> None:

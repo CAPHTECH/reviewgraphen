@@ -19,7 +19,7 @@ class ArtifactAuditTest(unittest.TestCase):
             os.environ["M20_SWEEP_WORKER"] = suffix
             support.FIXTURE_ROOT = Path(directory) / "pipeline-fixture"
             try:
-                for identifier in ("P01","N08","N09","N10","N11","N12","A01","A02","A04","A05","A06","A07","A08"):
+                for identifier in ("P01","N08","N09","N10","N11","N12","A01","A02","A04","A05","A06","A13","A07","A08"):
                     self.assertTrue(_audit(identifier),identifier)
             finally:
                 support.FIXTURE_ROOT = previous_root

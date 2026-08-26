@@ -39,6 +39,7 @@ OPERATORS = (
 )
 COMPARES = (ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Eq, ast.NotEq)
 ORACLE_NAMES = ("vectors", "unit", "attacks", "fixtures")
+ORACLE_CHILD_MARKER = ".m20-mutation-oracle-child.v1"
 CALIBRATIONS = (
     ("E01", "canonical.py", (("decoded = base64.b64decode", "decoded_bytes = base64.b64decode"), ("base64.b64encode(decoded)", "base64.b64encode(decoded_bytes)"), ("return decoded", "return decoded_bytes"))),
     ("E02", "source_payload.py", (("text = excerpt.decode(\"utf-8\", \"strict\")\n    digest = sha256_bytes(excerpt)", "digest = sha256_bytes(excerpt)\n    text = excerpt.decode(\"utf-8\", \"strict\")"),)),
@@ -139,6 +140,7 @@ def _commands() -> dict[str, list[str]]:
 
 
 def _oracle_run(work: Path, worker: str, timeouts: dict[str,int], source_workspace: Path, stop_on_detection: bool = False) -> dict:
+    (work/ORACLE_CHILD_MARKER).write_bytes(canonical_bytes({"schema":"m20.mutation-oracle-child.v1"}))
     exits, elapsed = {}, {}
     for name, command in _commands().items():
         # Physical fixture state is oracle-local.  Its logical identity, and

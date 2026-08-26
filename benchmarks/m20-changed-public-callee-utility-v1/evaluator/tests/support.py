@@ -3,6 +3,7 @@ import base64
 import hashlib
 import os
 import shutil
+import tempfile
 import zlib
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,7 +14,9 @@ from evaluator.pipeline import CONTEXT_HASH, PROFILE_HASH
 from evaluator.repository import GitRepository
 from evaluator.stage0_contract import CONTEXT_POLICY_ID, build_context_projection_v3, build_occurrence_closure
 
-FIXTURE_ROOT = Path("/tmp") / ("m20-evaluator-pipeline-fixture-v1" + os.environ.get("M20_SWEEP_WORKER", ""))
+FIXTURE_RESPONSE_HMAC_KEY = b"m20-contract-fixture-response-hmac-key-v1"
+
+FIXTURE_ROOT = Path(tempfile.mkdtemp(prefix="m20-evaluator-pipeline-fixture-v1-" + os.environ.get("M20_SWEEP_WORKER", "")))
 LOGICAL_ROOT = "/m20-fixture-v1"
 
 
@@ -108,7 +111,7 @@ def launch(case: str = "claim", source_bytes: int | None = None, subject_bytes: 
     membership = {"stage":"stage1","cumulative_rank":1}
     unit_record = {"unit_id":unit,"repository_root":LOGICAL_ROOT+"/repository","base_commit_oid":objects["base"],"head_commit_oid":objects["head"],"obligation_id":"obligation:fixture","frozen_obligation_path":LOGICAL_ROOT+"/obligation.json","frozen_obligation_sha256":sha256_bytes(obligation_path.read_bytes())}
     launch_preimage = {"schema":"m20.pipeline_launch.v2","experiment_id":"m20-changed-public-callee-utility-v1","unit_id":unit,"repository_root":unit_record["repository_root"],"base_commit_oid":objects["base"],"head_commit_oid":objects["head"],"frozen_obligation_path":unit_record["frozen_obligation_path"],"frozen_obligation_sha256":unit_record["frozen_obligation_sha256"],"selection_manifest_sha256":selection_sha256,"selection_membership":membership,"context_policy_id":CONTEXT_POLICY_ID,"context_policy_sha256":CONTEXT_HASH,"stage_manifest_path":None}
-    stage = {"schema":"m20.model_stage_manifest.v1","experiment_id":"m20-changed-public-callee-utility-v1","stage":"stage1","active_freeze":{"freeze_manifest_sha256":"sha256:"+"1"*64,"evaluator_bundle_sha256":"sha256:"+"2"*64,"evaluator_execution_sha256":"sha256:"+"3"*64},"source_stage0_root":LOGICAL_ROOT,"stage0_artifact_manifest_sha256":"sha256:"+"4"*64,"selection_manifest_sha256":selection_sha256,"control_manifest_path":LOGICAL_ROOT+"/controls.json","control_manifest_sha256":"sha256:"+"5"*64,"ordered_membership":[{"unit_id":unit,"cumulative_rank":1}],"units":[unit_record],"packet_contract":{"schema":"arm-neutral.source-grounded-packet@3","context_policy_id":CONTEXT_POLICY_ID,"context_policy_sha256":CONTEXT_HASH,"admitted_source_byte_ceiling":65536},"budget_contract":{"reviewer_output_tokens":12000,"reviewer_timeout_seconds":900,"judge_timeout_seconds":90},"public_seeds":{"arm_order":"m20-arm-order-v1","judge_permutation":"m20-judge-permutation-v1"},"fixed_transports":{"reviewer":{"adapter_id":"m20.fixed-reviewer-process.v1","path":"/usr/local/bin/m20-reviewer-backend","sha256":"sha256:"+"6"*64},"judge":{"adapter_id":"m20.fixed-judge-process.v1","path":"/usr/local/bin/m20-judge-backend","sha256":"sha256:"+"7"*64}},"launch_preimages":[launch_preimage],"predecessor":None}
+    stage = {"schema":"m20.model_stage_manifest.v1","experiment_id":"m20-changed-public-callee-utility-v1","stage":"stage1","active_freeze":{"freeze_manifest_sha256":"sha256:"+"1"*64,"evaluator_bundle_sha256":"sha256:"+"2"*64,"evaluator_execution_sha256":"sha256:"+"3"*64},"source_stage0_root":LOGICAL_ROOT,"stage0_artifact_manifest_sha256":"sha256:"+"4"*64,"selection_manifest_sha256":selection_sha256,"control_manifest_path":LOGICAL_ROOT+"/controls.json","control_manifest_sha256":"sha256:"+"5"*64,"ordered_membership":[{"unit_id":unit,"cumulative_rank":1}],"units":[unit_record],"packet_contract":{"schema":"arm-neutral.source-grounded-packet@3","context_policy_id":CONTEXT_POLICY_ID,"context_policy_sha256":CONTEXT_HASH,"admitted_source_byte_ceiling":65536},"budget_contract":{"reviewer_output_tokens":12000,"reviewer_timeout_seconds":900,"judge_timeout_seconds":90},"public_seeds":{"arm_order":"m20-arm-order-v1","judge_permutation":"m20-judge-permutation-v1"},"fixed_transports":{"reviewer":{"adapter_id":"m20.fixed-reviewer-process.v1","path":"/usr/local/bin/m20-reviewer-backend","sha256":"sha256:"+"6"*64,"pinned_listing_sha256":"99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab","pinned_health_sha256":"29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74","response_hmac_key_path":"/run/secrets/m20-evaluator-response-hmac-key","response_hmac_key_sha256":sha256_bytes(FIXTURE_RESPONSE_HMAC_KEY)},"judge":{"adapter_id":"m20.fixed-judge-process.v1","path":"/usr/local/bin/m20-judge-backend","sha256":"sha256:"+"7"*64}},"launch_preimages":[launch_preimage],"predecessor":None}
     stage_path = FIXTURE_ROOT / "stage.json"
     stage_path.write_bytes(canonical_bytes(stage))
     value = {**{key:item for key,item in launch_preimage.items() if key!="stage_manifest_path"},"stage_manifest_path":LOGICAL_ROOT+"/stage.json","stage_manifest_sha256":sha256_bytes(stage_path.read_bytes())}
@@ -153,10 +156,21 @@ def fixture_adapters():
         pipeline.GitRepository, pipeline._read_authenticated = original_repository, original_read
 
 
+@contextmanager
+def fixture_hmac_key():
+    from evaluator import pipeline
+    previous=pipeline._response_hmac_key; pipeline._response_hmac_key=lambda: FIXTURE_RESPONSE_HMAC_KEY
+    try:
+        yield
+    finally:
+        pipeline._response_hmac_key=previous
+
+
 def fixture_run(selected, transport, output):
     from evaluator import pipeline
-    with fixture_adapters():
-        return pipeline.RUN(selected, transport, output)
+    with fixture_hmac_key():
+        with fixture_adapters():
+            return pipeline.RUN(selected, transport, output)
 
 
 class Transport:
@@ -166,10 +180,18 @@ class Transport:
     def descriptor(self):
         return {"reviewer": "m20.fixed-reviewer-process.v1", "judge": "m20.fixed-judge-process.v1"}
 
+    @staticmethod
+    def _result(kind, payload, instruction, max_output_tokens, timeout_seconds, raw):
+        from evaluator.pipeline import _backend_request, _seal_backend_response
+        request=_backend_request(kind,parse_json_bytes(payload),instruction,max_output_tokens,timeout_seconds)
+        usage={"input_tokens":len(payload),"output_tokens":len(raw),"cache_tokens":0}
+        response={"schema":"m20.fixed-backend-response.v1","request_seal_sha256":request["request_seal_sha256"],"effective_max_output_tokens":max_output_tokens,"effective_timeout_seconds":timeout_seconds,"finish_reason":"stop","usage":usage,"raw_response_base64":base64.b64encode(raw).decode("ascii")}
+        return ModelResult(raw,usage=tuple(usage.items()),backend_request=request,backend_response=response,backend_response_hmac=_seal_backend_response(canonical_bytes(response)))
+
     def review(self, request: bytes, slot: int, timeout: int):
         packet = parse_json_bytes(request)
-        if self.reviewer_mode == "empty": return ModelResult(b"")
-        if self.reviewer_mode == "malformed": return ModelResult(b"{")
+        if self.reviewer_mode == "empty": return self._result("reviewer",request,None,12_000,900,b"")
+        if self.reviewer_mode == "malformed": return self._result("reviewer",request,None,12_000,900,b"{")
         source = packet["source_inventory"]["admitted_sources"][0]
         observation = {"source_id": source["source_id"], "start_line": source["range"]["start_line"], "end_line": source["range"]["end_line"]}
         if self.reviewer_mode in {"abstention", "routine"}:
@@ -179,17 +201,41 @@ class Transport:
             summary = source["source_id"] if self.reviewer_mode == "echo" else "Changed behavior affects callers through a concrete return value"
             conclusion = "inconclusive" if self.reviewer_mode == "inconclusive" else "issue_present"
             disposition = {"kind": "claim", "claims": [{"conclusion": conclusion, "summary": summary, "observations": [observation], "mechanism": {"trigger": "Calling the changed function selects the modified branch", "observed_behavior": "The returned integer changes for the same direct invocation", "consequence": "Existing callers can observe a different contract result"}}], "abstention": None}
-        return ModelResult(canonical_bytes({"schema": "arm-neutral.source-grounded-disposition@1", "task_id": packet["task_id"], "source_inventory_id": packet["source_inventory"]["source_inventory_id"], "disposition": disposition}))
+        raw=canonical_bytes({"schema": "arm-neutral.source-grounded-disposition@1", "task_id": packet["task_id"], "source_inventory_id": packet["source_inventory"]["source_inventory_id"], "disposition": disposition})
+        return self._result("reviewer",request,None,12_000,900,raw)
 
     def judge(self, request: bytes, instruction: bytes, timeout: int):
-        if self.judge_mode == "malformed": return ModelResult(b"{")
+        if self.judge_mode == "malformed": return self._result("judge",request,instruction.decode("utf-8"),12_000,90,b"{")
         batch = parse_json_bytes(request)
         scores = []
         for candidate in batch["candidates"]:
             forced = candidate["mechanical_state"]["kind"] == "mechanical_forced_zero"
-            dimensions = {name: 0 if forced else (2 if name in {"mechanism_or_blocker_specificity", "audit_actionability"} else 1) for name in DIMENSIONS}
+            if forced:
+                dimensions = {name:0 for name in DIMENSIONS}
+            else:
+                packet=candidate["packet"]; parsed=candidate["mechanical_state"]["parsed_output"]; disposition=parsed["disposition"]
+                claims=disposition["claims"] if disposition["kind"]=="claim" else []
+                observations=[observation for claim in claims for observation in claim["observations"]]
+                admitted={(source["source_id"],source["range"]["start_line"],source["range"]["end_line"]) for source in packet["source_inventory"]["admitted_sources"]}
+                exact=sum((observation["source_id"],observation["start_line"],observation["end_line"]) in admitted for observation in observations)
+                cited=len({observation["source_id"] for observation in observations} & {item[0] for item in admitted})
+                mechanisms=[claim["mechanism"] for claim in claims]
+                mechanism_text=[value for mechanism in mechanisms for value in mechanism.values()]
+                content_tokens={token for payload in packet["payloads"] for token in payload["text"].lower().replace("("," ").replace(")"," ").replace("{"," ").replace("}"," ").split() if len(token)>=2}
+                mechanism_tokens={token.strip(".,:;`").lower() for value in mechanism_text for token in value.split() if len(token)>=2}
+                content_overlap=len(content_tokens & mechanism_tokens)
+                binding=candidate["binding_view"]
+                relevant=parsed["task_id"]==packet["task_id"] and bool(binding["obligation_ids"]) and bool(binding["relation_ids"])
+                actionable=bool(claims) and exact==len(observations) and all(len(claim["summary"].split())>=3 and len(claim["mechanism"]["consequence"].split())>=3 for claim in claims)
+                dimensions={
+                    "source_specificity":2 if observations and exact==len(observations) else (1 if cited else 0),
+                    "hidden_task_relevance":2 if relevant and claims else (1 if relevant else 0),
+                    "mechanism_or_blocker_specificity":2 if len(mechanism_text)>=3 and len(set(mechanism_text))==len(mechanism_text) and content_overlap else (1 if mechanism_text else 0),
+                    "audit_actionability":2 if actionable else (1 if claims else 0),
+                }
             scores.append({"candidate_id": candidate["candidate_id"], "packet_sha256": candidate["packet_sha256"], "output_artifact_sha256": candidate["output_artifact_sha256"], "binding_view_sha256": candidate["binding_view_sha256"], "mechanical_score_sha256": candidate["mechanical_score_sha256"], "score_source": "mechanical_forced_zero" if forced else "judge", "dimensions": dimensions, "total": sum(dimensions.values()), "verdict": "not_usable" if forced else "usable"})
-        return ModelResult(canonical_bytes({"schema": "m20.utility_judge_batch_output.v1", "batch_id": batch["batch_id"], "scores": scores}))
+        raw=canonical_bytes({"schema": "m20.utility_judge_batch_output.v1", "batch_id": batch["batch_id"], "scores": scores})
+        return self._result("judge",request,instruction.decode("utf-8"),12_000,90,raw)
 
 
 def artifact_set(root: Path) -> list[dict]:

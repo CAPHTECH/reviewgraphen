@@ -1,6 +1,8 @@
 """Named behavioral oracles used against current and mutated evaluator copies."""
 import copy
 import hashlib
+import inspect
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -345,6 +347,44 @@ def probe(identifier: str) -> bool:
     if identifier=="STG12":
         from evaluator.stage_driver import STAGE1_MODEL_SECONDS,STAGE1_WALL_SECONDS,STAGE2A_MODEL_SECONDS,STAGE2A_WALL_SECONDS
         return (STAGE1_MODEL_SECONDS,STAGE1_WALL_SECONDS,STAGE2A_MODEL_SECONDS,STAGE2A_WALL_SECONDS)==(18900,21600,75600,86400)
+    if identifier=="STG13":
+        from evaluator.stage0_driver import run_stage0
+        from evaluator.stage_driver import _stage0_root
+        from evaluator.tests.test_stage0_driver import corpus,pipeline
+        with tempfile.TemporaryDirectory() as value:
+            root=Path(value)/"stage0"; run_stage0(root,corpus(40),pipeline,40,jobs=1)
+            try:_stage0_root((root/"stage0-selection.v1.json").resolve());return False
+            except PipelineError as error:return error.code=="stage0_cluster_count_invalid"
+    if identifier=="STG14":
+        from evaluator.stage_driver import _reduce
+        ids=[f"u{index}" for index in range(10)]; controls={"labels":[{"commit_cluster_id":unit_id,"resolution":"clean_refactor_control"} for unit_id in ids]}; cells=[{"unit_id":unit_id,"repository_root":f"/repo/{index%3}","A":0,"B":1,"run_seal_id":f"seal-{index}","backend_integrity":True,"leakage_integrity":True,"judge_complete":True,"judge_positive_A":False,"judge_positive_B":False} for index,unit_id in enumerate(ids)]; stage0={"schema":"m20.stage0-result.v1","experiment_id":"m20-changed-public-callee-utility-v1","cluster_count":300,"model_calls":0,"gates":[{"id":name,"passed":True} for name in ("prevalence","subject_retention","bounded_context","determinism","enumeration_honesty","fan_out","deferred_fraction")]}
+        variants=[]; broken=copy.deepcopy(stage0); broken["gates"][0]["passed"]=False; variants.append((cells,controls,broken)); primary=copy.deepcopy(cells); [primary[index].update(A=1,B=0) for index in range(2)]; variants.append((primary,controls,stage0)); sensitivity=copy.deepcopy(cells); [row.update(repository_root="/repo/0") for row in sensitivity]; variants.append((sensitivity,controls,stage0))
+        for field in ("backend_integrity","leakage_integrity","judge_complete"):
+            rows=copy.deepcopy(cells); rows[0][field]=False; variants.append((rows,controls,stage0))
+        variants.append((cells,{"labels":[{**row,"resolution":"not_control"} for row in controls["labels"]]},stage0)); safety=copy.deepcopy(cells); safety[0]["judge_positive_B"]=safety[1]["judge_positive_B"]=True; variants.append((safety,controls,stage0))
+        return all(_reduce("stage1",rows,label_set,{"reviewer":20,"judge":10},"1.000000",verification)["decision"]=="stop" for rows,label_set,verification in variants)
+    if identifier=="STG15":
+        from evaluator.cli import FixedProcessTransport
+        with tempfile.TemporaryDirectory() as value:
+            reviewer=Path(value)/"reviewer";judge=Path(value)/"judge";reviewer.write_bytes(b"fixture");judge.write_bytes(b"fixture");reviewer.chmod(0o500);judge.chmod(0o500)
+            response=subprocess.CompletedProcess([],0,canonical_bytes({"schema":"m20.backend_identity_health.v1","listing":[],"health":{}}),b"")
+            with patch.object(FixedProcessTransport,"REVIEWER",reviewer),patch.object(FixedProcessTransport,"JUDGE",judge),patch("evaluator.cli.subprocess.run",return_value=response):
+                try:FixedProcessTransport();return False
+                except PipelineError as error:return error.code=="backend_executable_identity_mismatch"
+    if identifier=="STG16":
+        from evaluator.cli import FixedProcessTransport
+        from evaluator import pipeline
+        from evaluator.tests.support import FIXTURE_RESPONSE_HMAC_KEY
+        with tempfile.TemporaryDirectory() as value:
+            path=Path(value)/"backend";path.write_bytes(b"fixture");path.chmod(0o500)
+            transport=FixedProcessTransport.__new__(FixedProcessTransport);transport._pins={"reviewer":sha256_bytes(path.read_bytes())};transport._workspace=tempfile.TemporaryDirectory(dir=value)
+            request=FixedProcessTransport._sealed("reviewer",canonical_bytes({"packet":"value"}),None,12000,900)
+            bad={"schema":"m20.fixed-backend-response.v1","request_seal_sha256":request["request_seal_sha256"],"effective_max_output_tokens":12001,"effective_timeout_seconds":900,"finish_reason":"stop","usage":{"input_tokens":1,"output_tokens":1,"cache_tokens":0},"raw_response_base64":"e30="}
+            with patch.object(pipeline,"_response_hmac_key",return_value=FIXTURE_RESPONSE_HMAC_KEY):
+                with patch("evaluator.cli.subprocess.run",return_value=subprocess.CompletedProcess([],0,canonical_bytes(bad),b"")):
+                    try:transport._invoke("reviewer",path,[],request,900,{"max_output_tokens":12000,"timeout_seconds":900});passed=False
+                    except PipelineError as error:passed=error.code=="backend_effective_contract_mismatch"
+            transport._workspace.cleanup();return passed
     if identifier == "SC02":
         from evaluator.spec_contract import verify_spec_contract
         verify_spec_contract(Path(__file__).parents[2]/"EVALUATOR_SPEC.md")

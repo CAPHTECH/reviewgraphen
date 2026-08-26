@@ -1,4 +1,3 @@
-import os
 import shutil
 import tempfile
 import unittest
@@ -14,6 +13,7 @@ from .mutation_sweep import (
     _apply_mutant,
     _classify,
     _isolated_copy,
+    ORACLE_CHILD_MARKER,
     generate_mutants,
     sweep,
 )
@@ -31,7 +31,7 @@ class MutationSweepTest(unittest.TestCase):
         finally:
             shutil.rmtree(work)
 
-    @unittest.skipIf(bool(os.environ.get("M20_SWEEP_WORKER")), "the parent sweep already generated the complete mutant set")
+    @unittest.skipIf((Path.cwd()/ORACLE_CHILD_MARKER).is_file(), "the explicit parent-sweep child marker already generated the complete mutant set")
     def test_scoring_boundary_and_operator_space_are_explicit_and_exhaustive(self):
         root = Path(__file__).parents[1]
         before = {path:(root / path).read_bytes() for path in MODULES}
@@ -42,12 +42,12 @@ class MutationSweepTest(unittest.TestCase):
         self.assertEqual(before, {path:(root / path).read_bytes() for path in MODULES})
         self.assertEqual({path for path,(category,_) in MODULES.items() if category == "scoring-relevant"}, {"canonical.py","source_payload.py","textnorm.py","repository.py","model_boundary.py","stage0_contract.py","pipeline.py"})
         self.assertEqual(Counter(classify_mutant(row)[0] for row in mutants), {
-            "SCORE_AFFECTING": 4224,
-            "NON_SCORE": 141,
+            "SCORE_AFFECTING": 4584,
+            "NON_SCORE": 204,
             "EQUIVALENT": 6,
         })
 
-    @unittest.skipIf(bool(os.environ.get("M20_SWEEP_WORKER")), "parent harness already verifies mutation selection")
+    @unittest.skipIf((Path.cwd()/ORACLE_CHILD_MARKER).is_file(), "the explicit parent-sweep child marker verifies mutation selection")
     def test_mutant_selection_failure_is_a_typed_abort_not_a_kill(self):
         root = Path(__file__).parents[1]
         mutant = generate_mutants(root)[0]

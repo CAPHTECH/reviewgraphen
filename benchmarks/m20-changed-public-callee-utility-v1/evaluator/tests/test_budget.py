@@ -5,7 +5,7 @@ from evaluator import pipeline
 from evaluator.artifacts import verify_run
 from evaluator.model_boundary import ModelResult
 from evaluator.pipeline import _execution
-from .support import FIXTURE_ROOT, Transport, fixture_run, launch
+from .support import FIXTURE_ROOT, Transport, fixture_hmac_key, fixture_run, launch
 
 
 class CountingTransport(Transport):
@@ -42,7 +42,7 @@ class InputBudgetTest(unittest.TestCase):
         result, root, transport = self._run(65_536)
         self.assertEqual(result["pipeline_terminal_state"], "sealed")
         self.assertEqual(transport.calls, 3)
-        audit = verify_run(root)
+        with fixture_hmac_key(): audit = verify_run(root)
         self.assertTrue(audit["ok"], audit)
         self.assertFalse(audit["token_observation_recomputable"])
 
@@ -62,7 +62,7 @@ class InputBudgetTest(unittest.TestCase):
             "launch.json", "repository.json", "obligation.json", "pair.json", "budget.json",
             "slots/0/packet.json", "slots/1/packet.json", "ledger.json", "seal.json",
         })
-        self.assertTrue(verify_run(root)["ok"])
+        with fixture_hmac_key(): self.assertTrue(verify_run(root)["ok"])
 
     def test_token_observation_is_closed_and_observation_only(self):
         absent = _execution(ModelResult(b"x"), None, "adapter")["token_observation"]

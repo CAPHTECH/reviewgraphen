@@ -8,7 +8,17 @@ class TypedError(ValueError):
 @dataclass(frozen=True)
 class DecodedModel: value: dict; raw_sha256: str; parsed_sha256: str
 @dataclass(frozen=True)
-class ModelResult: raw_bytes: bytes; process_exit: int = 0; timeout: bool = False; client_truncation: bool = False; provider_truncation: bool = False; usage: tuple[tuple[str, int], ...] = (); tool_calls: tuple[str, ...] = ()
+class ModelResult:
+    raw_bytes: bytes
+    process_exit: int = 0
+    timeout: bool = False
+    client_truncation: bool = False
+    provider_truncation: bool = False
+    usage: tuple[tuple[str, int], ...] = ()
+    tool_calls: tuple[str, ...] = ()
+    backend_request: dict | None = None
+    backend_response: dict | None = None
+    backend_response_hmac: str | None = None
 def reject(code: str, pointer: str = "", detail: str = "invalid") -> None: raise TypedError((ValidationError(code, pointer, detail),))
 def _closed(value: Any, fields: set[str], pointer: str) -> dict:
     if not isinstance(value, dict) or set(value) != fields: reject("schema_invalid", pointer, "closed_object")

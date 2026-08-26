@@ -8,7 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .canonical import canonical_bytes, parse_json_bytes, sha256_bytes, stable_id
+from .canonical import canonical_bytes, hash_json, parse_json_bytes, sha256_bytes, stable_id
 from .pipeline import packet_v3_account
 from .repository import GitRepository, production_rust
 from .stage0_contract import PROFILE_HASH, build_context_projection_v3
@@ -163,6 +163,23 @@ def run_frozen_cluster_pipeline(cluster, build_root: Path, *, _pipeline_timeout:
         if execution_root.exists(): shutil.rmtree(execution_root)
     try: run = parse_json_bytes(result.stdout)
     except ValueError as error: raise Stage0Error("frozen_cluster_pipeline_output_invalid") from error
+    run_raw = canonical_bytes(run)
+    (build_root / "product-run.v1.json").write_bytes(run_raw)
+    product_manifest = artifact_root / "artifact-manifest.v1.json"
+    if not product_manifest.is_file(): raise Stage0Error("frozen_cluster_artifact_manifest_missing")
+    invocation={"product_executable_sha256":sha256_bytes(PIPELINE.read_bytes()),"argv":["review","--request","pipeline-request.v3.json","--artifacts","pipeline-artifacts","--diagnostics","generic-review-diagnostics.v1.json"],"cwd_scope":"isolated-repository-copy","request_sha256":sha256_bytes(request_path.read_bytes())}
+    execution = {
+        "schema":"m20.stage0-product-execution.v2",
+        "product_executable_path":str(PIPELINE),
+        "product_executable_sha256":sha256_bytes(PIPELINE.read_bytes()),
+        "invocation_sha256":hash_json(invocation),
+        "request_sha256":sha256_bytes(request_path.read_bytes()),
+        "run_sha256":sha256_bytes(run_raw),
+        "artifact_manifest_sha256":sha256_bytes(product_manifest.read_bytes()),
+        "request_id":run.get("request_id"),
+        "run_id":run.get("run_id"),
+    }
+    (build_root / "product-execution.v1.json").write_bytes(canonical_bytes(execution))
     obligations = sorted(item["id"] for item in run.get("obligation_contract", []) if item.get("rule_id") == "relation.changed_public_callee@1" and item.get("applicability_status") == "applicable")
     contexts = {row["context"]["obligation_id"]:row["context"] for row in run.get("contexts", [])}
     retained, remainders = [], []

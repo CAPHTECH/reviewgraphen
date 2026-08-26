@@ -4,6 +4,15 @@
   "status": "frozen-before-corpus-resolution",
   "question": "Over the frozen open-development commit sample, does one relation.changed_public_callee@1 obligation's context.subject_windows@3 inventory increase usable source-grounded disposition completion beyond a byte-identical shared change-evidence core containing the complete profile-defined base/head production diff and selected changed callee implementation, for the same model under the same 65536-byte admitted-source ceiling and common requested backend settings?",
   "authority_ceiling": "descriptive frozen-corpus evaluation only; no claim, judge result, or completion is verified, human-accepted, or defect truth",
+  "declared_limitations": [
+    {
+      "id": "wave32-external-custodian-authenticity-anchor",
+      "wave": 32,
+      "summary": "The frozen evaluator bundle cannot by itself prove Stage 0 root authenticity; authenticity depends on verification of the bundle-external custodian Ed25519 signature anchor.",
+      "affected_claim": "Stage 0 root authenticity",
+      "status": "open"
+    }
+  ],
   "frozen_identities": {
     "rule_id": "relation.changed_public_callee@1",
     "property_id": "rust.callee_contract_review@1",
@@ -36,6 +45,27 @@
     "commit_cluster_count": 300,
     "zero_obligation_clusters_retained": true,
     "open_development": true
+  },
+  "corpus_identity": {
+    "schema": "m20.corpus-identity.v1",
+    "repositories": [
+      {"url": "https://github.com/CAPHTECH/casegraphen", "repository_id": "github.com/CAPHTECH/casegraphen", "pinned_commit": "20af165fe0d95866c5eb0739b3a20f0193486232"},
+      {"url": "https://github.com/CAPHTECH/reviewgraphen", "repository_id": "github.com/CAPHTECH/reviewgraphen", "pinned_commit": "f8d45feb153e03706a4dcf06f5cfa1c0601c9c3c"},
+      {"url": "https://github.com/ymm-oss/fsl", "repository_id": "github.com/ymm-oss/fsl", "pinned_commit": "e589014d1655b1224f5b83a7f2de99532a0dcdba"}
+    ],
+    "cluster_count": 300,
+    "cluster_manifest_sha256": "sha256:bcc91196863aad70287324b27def3b044e75430a8e9e0ae34c7a72f28bbdb5ea",
+    "product_cli_path": "/home/rizumita/workspace/reviewgraphen/target/release/reviewgraphen",
+    "product_cli_sha256": "sha256:4cbdd04f4b90f8867024fd67df5223c4f308b08b5d82b0b3633556b95ec61623",
+    "replay_verification": {
+      "schema": "m20.stage0-product-replay-sample.v1",
+      "seed": "m20-stage0-product-replay-v1",
+      "sampled_build_count": 12,
+      "timeout_seconds": 1800
+    },
+    "custodian_anchor_path": "/run/secrets/m20-stage0-custodian-anchor.v2.json",
+    "custodian_ed25519_public_key_base64": "azc2Z3wpFkt6fJGh3CTsr/NpgsNIMMUxCgwLoBaoIr4=",
+    "custodian_ed25519_public_key_sha256": "sha256:2bd52a4a7f682083660c6bb4691e644742e83c33086c458081027411454ad3c5"
   },
   "analysis": {
     "unit": "commit_cluster",
@@ -110,6 +140,8 @@
       "m20.control_labels.v1",
       "m20.model_stage_manifest.v1",
       "m20.model_stage_result.v1",
+      "m20.fixed-backend-request.v1",
+      "m20.fixed-backend-response.v1",
       "arm-neutral.source-grounded-packet@3",
       "arm-neutral.source-grounded-disposition@1",
       "m20.source-inventory.v3",
@@ -185,14 +217,14 @@
       "attack_artifact": "evaluator/generated/attacks.generated.json"
     },
     "freeze_hashes": {
-      "evaluator_bundle_sha256": "sha256:2133480e76487abded2ff5bcc7dab7ae01d07f6525bea99ca946797ad14d02ba",
-      "evaluator_execution_sha256": "sha256:159871d6fd8e5ea38434ef544fb0d4b3c1eb2a39822e7fd322b9bf7fd8a209d0",
-      "generated_fixture_inventory_sha256": "sha256:ef6ef899d70d5ca941fcd74eb9330dd9781eaf37089a567132998b64a9f08c33",
-      "reference_vector_set_sha256": "sha256:8c9fb64ea8f1c89b9bf791dd1f35a60a7a442999280a7860eca0c1b1aea57c7d",
-      "mutation_manifest_sha256": "sha256:db9b3a1c2c68479bafc0b117f780f4dfdda32981f2e4c99cff7916fa3363ff57",
-      "semantic_acceptance_reference_sha256": "sha256:ee7e670ede21ee4c74bd1e50ddff215049c5187c51212e2094056b17b2dd4d43",
-      "measurement_record_sha256": "sha256:9acf4adcdbe588b198eb7d6bcf553a2e13519b614d641c1fe211a0e18f479ad7",
-      "freeze_manifest_sha256": "sha256:0ea5b16d8690b3e3b017aeeae7e29ca46501a83dec0c4d98b3920693aab6c921",
+      "evaluator_bundle_sha256": "sha256:21d1d666093741cf42096dba0adbec6abd40d02ba5bb98a2a9448e4ef21bfa21",
+      "evaluator_execution_sha256": "sha256:3d7572a476cf3cdaf1ee55b47de03681adf2f8c3373cf2c2b6eeccbe4a5c7150",
+      "generated_fixture_inventory_sha256": "sha256:bdd24a00af4ff968e4c4c3d0ce5e769fb5286afb821f05211f1565633e942daa",
+      "reference_vector_set_sha256": "sha256:39d76b5cd38bd9346df25260b04afca63b3433b566fc4a6b515cdba0da43611a",
+      "mutation_manifest_sha256": "sha256:d571a9ac92f0fefbd520a2a914a5c68f05c3e0639bedaeb184e299ad811ab10f",
+      "semantic_acceptance_reference_sha256": "sha256:7656b692ec2764026dca5dd468e798ba8ab41fcdaae39950501fee92a497c442",
+      "measurement_record_sha256": "sha256:7286d700f8684893477c8e6660986239cc52ffde35394160fc1ab844e642a7b8",
+      "freeze_manifest_sha256": "sha256:2feb89b7b89398666900f2dc071be3af2cf3c6d5dde31309cc437ab24d990f1d",
       "freeze_manifest_path": "freeze-manifest.json",
       "non_null_gate": "After the Stage 0 driver is implemented and atomically re-sealed, all eight hashes and the manifest path must be non-null; SHA-256 of the exact manifest bytes must equal freeze_manifest_sha256, its bundle/execution hashes must equal the active slots, its supersedes_freeze_manifest_sha256 must equal the last freeze_history manifest hash, and verify-frozen must pass before status may return to frozen-before-corpus-resolution."
     },
@@ -398,7 +430,7 @@
     "input_gate": "hostile-verify the complete Stage 0 and control roots under the active seal before root creation; bind the exact selection hash and ranks 1..10; launch v1, detached manifests, caller-authored launches/stages/aggregates, and nonmembers are refused",
     "launch_contract": "the evaluator privately derives m20.pipeline_launch.v2 per rank with selection_manifest_sha256, selection_membership={stage:stage1,cumulative_rank:1..10}, selected obligation path/hash, and evaluator-generated stage-manifest hash; it alone constructs both packet@3 arms and judge batch",
     "closed_layout": "selection/stage0-selection.v1.json, controls/control-labels.v1.json, stage-manifest.v1.json, units/0001-<digest>/ through units/0010-<digest>/ using the closed paired-run layout, stage-result.v1.json, artifact-manifest.v1.json",
-    "aggregation_authority": "frozen evaluator only: validate ten run seals and compute four cells, n, b=count(A=0,B=1), c=count(A=1,B=0), repository/leave-one-out tables, judge/backend/leakage/control/safety gates, and advance|stop with typed reasons",
+    "aggregation_authority": "frozen evaluator only: validate ten run seals and compute four cells, n, b=count(A=0,B=1), c=count(A=1,B=0), exactly three nonempty repository cells each partitioned by both arms and the four paired outcomes, three leave-one-out cells, judge/backend/leakage/control/safety gates, and advance|stop with typed reasons",
     "pairs": 10,
     "reviewer_invocations": 20,
     "reviewer_model_ceiling_seconds": 18000,
@@ -446,12 +478,16 @@
     "reviewer_endpoint": "http://192.168.68.71:11999",
     "reviewer_transport_path": "/usr/local/bin/m20-reviewer-backend",
     "judge_transport_path": "/usr/local/bin/m20-judge-backend",
-    "transport_mount_contract": "before a model stage the operator creates a private mount namespace and read-only bind-mounts the intended executables at the two exact paths; the evaluator accepts no path/URL/command argument and no PATH, environment, symlink, or fallback selection",
+    "reviewer_transport_sha256": "sha256:aaf9a161864c4e95a65413d05b8a3d17a4faa711daef3d689e390c5a852901ef",
+    "judge_transport_sha256": "sha256:cd885a8aeede185c14fc6378ac0f0229c9fd2b57661231122363639fad31cf9b",
+    "response_hmac_key_path": "/run/secrets/m20-evaluator-response-hmac-key",
+    "response_hmac_key_sha256": null,
+    "transport_mount_contract": "before a model stage the operator creates a private mount namespace and read-only bind-mounts the intended executables at the two exact paths; the evaluator hashes both regular executable files against reviewer_transport_sha256/judge_transport_sha256 and accepts no path/URL/command argument and no PATH, environment, symlink, or fallback selection",
     "pinned_listing_sha256": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
     "pinned_health_sha256": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74",
     "concurrency": 1,
     "network_during_authoring": "none",
-    "rule": "invoke both transports only with shell=false, an empty workspace-scoped cwd, and the closed environment allow-list; reacquire identity/health before each stage and reviewer invocation; prelaunch failure stops without imputation, postlaunch failure is 0"
+    "rule": "invoke both transports only with shell=false, an empty workspace-scoped cwd, and the closed environment allow-list; reacquire executable identity and reviewer identity/health before each stage and reviewer invocation; reviewer request JSON seals packet plus max_output_tokens=12000 and timeout_seconds=900; the evaluator HMAC-seals the exact canonical adapter response bytes with the separately mounted pinned key before parsing; sealed request and response envelopes are retained in each slot and hash chain; usage and finish_reason are derived only after HMAC verification; prelaunch failure stops without imputation, postlaunch failure is 0"
   },
   "realized_cost_audit": {
     "deterministic_budget": "seal budget.json with each packet hash, admitted-source byte count, <=65536 result, pair eligibility, and content-derived audit ID; verify-run recomputes it from the two sealed packets",
@@ -470,6 +506,68 @@
     "repair": "any repair creates a new versioned study and cannot replace a frozen result",
     "pre_stage1_packet_amendment": "Before registered Stage 1, one atomic seal must include shared change-evidence packet@3, pipeline launch v2, control-label sealing, Stage 1/2A drivers, fixed transports, closed stage layouts/aggregation, schemas, vectors, and attacks, then Stage 0 must be rerun; this changes neither the frozen primary endpoint/thresholds nor the retained 12000-token/900-second model budget and cannot reinterpret any earlier observation as a registered result"
   },
+  "amendment_changelog": [
+    {
+      "date": "2026-08-26",
+      "id": "wave28-corpus-identity-and-three-repository-closure",
+      "reason": "the former Stage 0 ingress could accept self-described cluster provenance without binding the three repository URLs, pinned commits, 300-row cluster manifest, and product-run schema",
+      "impact": "corpus_identity became a closed versioned contract and full-root verification now recomputes three-repository membership and the 300-row manifest; the 300-cluster denominator, 10/40 memberships, thresholds, and budgets are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "wave28-fixed-transport-executable-and-effective-envelope",
+      "reason": "listing and health self-report did not bind executable bytes or prove that the requested max-output and timeout values were effective",
+      "impact": "fixed-path executable SHA-256 pins and sealed request/response envelopes were added; model identities, numeric thresholds, 40-pair denominator, 12000-token cap, and 900-second timeout are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "wave29-stage0-product-replay",
+      "reason": "schema-valid saved provenance remained author-controlled after its hash chain was recomputed",
+      "impact": "all 600 saved build chains remain fully verified and a seed-fixed 12-build sample is re-executed with the pinned product binary; primary thresholds, 300-cluster denominator, 40-pair denominator, and model budgets are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "wave29-transport-response-hmac",
+      "reason": "usage and finish metadata could previously authenticate themselves through the parsed response envelope",
+      "impact": "exact received response bytes are evaluator-HMAC-sealed with a separately mounted pinned key and usage/finish are derived only after seal verification; thresholds, denominators, 12000-token reviewer cap, and 900-second reviewer timeout are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "wave29-fixture-judge-content-derivation",
+      "reason": "the contract fixture judge assigned the same constant to every rubric dimension",
+      "impact": "fixture-only scores now derive independently from citation, task binding, mechanism, and actionable-range content; production rubric, thresholds, denominators, and budgets are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "wave30-external-stage0-custodian-anchor",
+      "reason": "an evaluator-authored hash chain cannot authenticate a coherently re-signed Stage 0 tree outside the fixed replay sample",
+      "impact": "the executor now emits the Stage 0 root-manifest hash, the external custodian pins a sealed anchor file, and verify-stage can replay either the fixed 12-build sample or all 600 builds; thresholds, the 300-cluster and 40-pair denominators, and budgets are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "wave30-external-response-hmac-key",
+      "reason": "a production default or caller-selectable HMAC key would let bundle-local code re-sign modified transport metadata",
+      "impact": "the executor generates a bundle-external 0600 key, preregistration pins only its SHA-256 after custodian sealing, and inner response bytes are authenticated before parsing; thresholds, denominators, 12000-token reviewer cap, and 900-second reviewer timeout are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "wave31-ed25519-custodian-anchor",
+      "reason": "a same-UID process could replace the former unkeyed anchor and recompute its public stable ID",
+      "impact": "the anchor body is now Ed25519-signed by the external custodian and evaluator verification is bound to a preregistered public-key pin and active freeze hash; private-key custody and signing remain outside evaluator, while thresholds, denominators, and budgets are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "wave31-mutation-worker-marker",
+      "reason": "a residual M20_SWEEP_WORKER environment value could skip two parent-run tests and conceal stale mutation-universe expectations",
+      "impact": "only an explicit isolated-oracle child marker can skip recursive sweep tests and the reviewed universe is 4584 SCORE_AFFECTING, 204 NON_SCORE, and 6 EQUIVALENT; measurement thresholds, denominators, and budgets are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "wave32-git-pinned-preregistration-anchor-binding",
+      "reason": "the evaluator/SPEC freeze excludes preregistration bytes, so replacing the public-key pin and coherently re-signing an anchor could otherwise preserve the active freeze hash",
+      "impact": "the anchor now signs the exact preregistration SHA-256 and every entrance requires those bytes to equal the preregistration blob at the externally pinned Git revision; thresholds, denominators, and budgets are unchanged"
+    }
+  ],
   "interpretation_limits": [
     "Open development on one machine/Unix identity; commitments are procedural, not access separation or organizational blindness.",
     "Adjacent commits and findings are dependent; rectangles are frozen-corpus descriptive gates only.",
