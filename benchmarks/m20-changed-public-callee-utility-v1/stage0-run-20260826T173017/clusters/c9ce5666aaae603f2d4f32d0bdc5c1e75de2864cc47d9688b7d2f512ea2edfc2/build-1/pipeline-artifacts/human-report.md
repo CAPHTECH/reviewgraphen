@@ -1,0 +1,385 @@
+# Generic review projection
+
+This is a non-authority projection of canonical run-v3 audit JSON.
+
+- Audit: `sha256:12fecc6c681e6568a5a1d7769bb8f306a4e5d259bfa35b38313913bb1b8a9c38`
+- Run: `run:sha256:137a11f15f5b9d3713741afc907d9d39c5655a2aff4813ba95254101962c93c0`
+- Snapshot: `snapshot:sha256:c48df9140e9b95bed3f24ca3c0bdc3147507ae3cf92da694a9c5619f602beb9f`
+- Universe: `universe:sha256:a6891d678a057ab74a109480cbc1abc36b0a77d734605ac2a9d83cc3b2212306`
+- trusted_pass = `false`
+
+## Coverage
+
+Resolved-target obligations are listed below; candidate-space enumeration remains partial and no global call coverage claim is made.
+
+- `obligation:sha256:06ac195d35d3b3f4ac4b15e34a83d716c36dfb5840da2f051456bf8e95f5f5c4`
+- `obligation:sha256:08e34dd114ba3398f51c3aa50d18d9af0eaf98be681857330e715c942a19d82d`
+- `obligation:sha256:1af81442ab609cb3171bc84d933c37556d5f99e5db7b280c5da7c3689409c446`
+- `obligation:sha256:1ef415a88ddac3a9c748aeaa3f68106ec8da99cfaf22f5a8b40acee7a67c30f6`
+- `obligation:sha256:209bb18ac969bbb7214deb367cb57fbb7286a188baf7d917efcd0488a177b73c`
+- `obligation:sha256:6aae183cb7ce0f589be310b42253651da634b9a9d66b959a4f2a3b2dc3714a66`
+- `obligation:sha256:80aa8c87bc11859438598adfe589a55516f6340c45052d90bd4de10c4d207f7c`
+- `obligation:sha256:8d96d190d96b7e88e08c5951af766ed3ec925d6d1f12c021e41f1172c33c46f0`
+- `obligation:sha256:9dc22debcd0ed0c1f415ea83a5fc5943cedfae1d9a0ec0eeec9e05d9c98bb3b7`
+- `obligation:sha256:cb4158efb9e5d423a90f74a77f3373965a9cd586deda4b3010da51c668b0be5e`
+- `obligation:sha256:ccf9a5fe0b03bffb032039b05244b081e71c0b4631f23a159fc94584b43b419e`
+- `obligation:sha256:da0b8402f4ee0ba8d94d1ce4c98117ccde980f7c5b9c730e93bfeb7244ec4640`
+- `obligation:sha256:e62c1df9ddc36b0e108c7ced19a7fa15c36872ffcbce923e3baf44adaaae3049`
+- `obligation:sha256:f19c5f2e89ccf0ae5fcf04d3909182d02a0c70a8bd5e13a2eea3613609c20040`
+- `obligation:sha256:f4c1e0df12bb6f681c5aaab0692fd0d8d89554a41ee723d8fabbc5f552d8b6b5`
+- `obligation:sha256:ffffcbc88386456c6f22abd316ea084361c63c836c6137eb8383472df087b4c4`
+
+## Context commitments
+
+- `context-envelope-v3:sha256:4d4b871819f39e8b4a7465b318258b6afe5bce9f280338ad7bafb900bc0056ff`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - materialized-source denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - support-anchor denominator: `1071` (`sha256:0df6bc93d5a19291015eab9e5ee430cb6ec9424e2593e4e356c3d5e1d48d4dbb`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `2` (`sha256:8d895f12d7cca1fcf03e3397a99a9c75064e9a1cdc5f8df7cab3b9a5caaac51a`)
+  - Support loss `per_file_window_cap`: `87` (`sha256:f4b077fc7e5a457476335099cf78e0bcfaf8a7dfdbe5bd0c4c0e634d31ab3ac9`)
+  - Support loss `path_cap`: `943` (`sha256:1d9262e649eb920a1f3d6b644e8b16ff37140f3d515fe9c637d5b50ce194c295`)
+  - Support loss `test_cap`: `29` (`sha256:d20f93bb7f39377ad201813a96c7765ff87e8f0eb419a605ccf56d2f0942a5f6`)
+- `context-envelope-v3:sha256:b398646fd23ed527ace55eb85e243c60c3cbe2b2b62498558ce909f0ed9496ff`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `1` (`sha256:cc29361407cc5eb7afdf4db0f1f28b9ee43fea64ff929518280ea4898467a389`)
+  - materialized-source denominator: `1` (`sha256:cc29361407cc5eb7afdf4db0f1f28b9ee43fea64ff929518280ea4898467a389`)
+  - support-anchor denominator: `32` (`sha256:15c0bf1507e406b25c0ce70d510d29cd0182a24c561620af33727d2fbd6b8a7f`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:4e1bdafccbbe4f928ad7eabd02f2b93416206ace8d74dc46d56adde9c07d7e45`)
+  - Support loss `per_file_window_cap`: `27` (`sha256:d2877544da2d2133a1b5f5614a9b0a0f4e1f6760567ecad73996e3cbfc96e281`)
+- `context-envelope-v3:sha256:ac357b6d43489356121b78d83cfb959122408cb5f2442e463aca3e92cc4a5f2b`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - materialized-source denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - support-anchor denominator: `1071` (`sha256:0df6bc93d5a19291015eab9e5ee430cb6ec9424e2593e4e356c3d5e1d48d4dbb`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:e632bf5aa9c4520c9b8eaefb1448783bb77d6bcc2ffab9137c742ecb30025098`)
+  - Support loss `per_file_window_cap`: `24` (`sha256:986ccd26027fbedacbefabd212873aa7a0ae188ba69ffa2de1af0cd7e7836596`)
+  - Support loss `path_cap`: `1042` (`sha256:6d39bec9b7512e0b91e159032323dc9b22058cdfc6d86149ecf9d139397dabe9`)
+- `context-envelope-v3:sha256:59836eef12bd2a4ab0c9e98e20cd671f35335926fce558a6e52bdceaebc6ab21`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `1` (`sha256:92a08d5550eb14f358ad73f8d60963b42d8940436883423fe169a083f0f4ad4e`)
+  - materialized-source denominator: `1` (`sha256:92a08d5550eb14f358ad73f8d60963b42d8940436883423fe169a083f0f4ad4e`)
+  - support-anchor denominator: `23` (`sha256:dbe59a11ea2ca78fab9ec9839eba4a621487d739ffc88b4d07ec925facce52af`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:633aa6439c04a44aae2dfce00c8cd08e9f3fe1b1b1d111501bb2acfe3497a112`)
+  - Support loss `per_file_window_cap`: `18` (`sha256:8d24cef52086d27d0266f331be4d1e106651f875b64f33f252ef3ffb926b4899`)
+- `context-envelope-v3:sha256:3860af85e161cfe4af7e786063a3ec73cf0e9fa45c93756bbdd949df0201c5fa`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `1` (`sha256:cc29361407cc5eb7afdf4db0f1f28b9ee43fea64ff929518280ea4898467a389`)
+  - materialized-source denominator: `1` (`sha256:cc29361407cc5eb7afdf4db0f1f28b9ee43fea64ff929518280ea4898467a389`)
+  - support-anchor denominator: `32` (`sha256:15c0bf1507e406b25c0ce70d510d29cd0182a24c561620af33727d2fbd6b8a7f`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:4e1bdafccbbe4f928ad7eabd02f2b93416206ace8d74dc46d56adde9c07d7e45`)
+  - Support loss `per_file_window_cap`: `27` (`sha256:5bcf8adbec2ae65c9b4675bf188f7e4413b2b09c8603285e95f17ff5194ca365`)
+- `context-envelope-v3:sha256:4a693c7b15cf1062412bbf595786a89b7c65e380859caa07018d18e7db541e84`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `1` (`sha256:cc29361407cc5eb7afdf4db0f1f28b9ee43fea64ff929518280ea4898467a389`)
+  - materialized-source denominator: `1` (`sha256:cc29361407cc5eb7afdf4db0f1f28b9ee43fea64ff929518280ea4898467a389`)
+  - support-anchor denominator: `32` (`sha256:15c0bf1507e406b25c0ce70d510d29cd0182a24c561620af33727d2fbd6b8a7f`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:4e1bdafccbbe4f928ad7eabd02f2b93416206ace8d74dc46d56adde9c07d7e45`)
+  - Support loss `per_file_window_cap`: `27` (`sha256:8c778370ca8da459a2a31b615df45695d0c8146a37294dc85a18aecac50cccfd`)
+- `context-envelope-v3:sha256:60249d2b43f177f1b276edd813e9d7ce22fb2271a32d5ab666df9e18243ebab2`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - materialized-source denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - support-anchor denominator: `1071` (`sha256:0df6bc93d5a19291015eab9e5ee430cb6ec9424e2593e4e356c3d5e1d48d4dbb`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:058f0b2165d9d7c84829cd67995211c40ca0921d45413d32515643ea4fcc8cf5`)
+  - Support loss `per_file_window_cap`: `27` (`sha256:b4748b25163c8279e3e569e91b7649f810a6757a6ad2b48b0a3df5aa3cf58968`)
+  - Support loss `path_cap`: `1039` (`sha256:7228b4a0d32b9402886176e77ec6ea1c68922328ed7fb3a051f129e7fd5f9e3b`)
+- `context-envelope-v3:sha256:472b0c4cd01311bf0cfe4a174f61453ec49148dd7cf2c6b3e3b5d95688ab42f1`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `1` (`sha256:8c61caa04f5c8873258c4278f94bc6d9f95ef1e192474966be2a185dd8a2ab3e`)
+  - materialized-source denominator: `1` (`sha256:8c61caa04f5c8873258c4278f94bc6d9f95ef1e192474966be2a185dd8a2ab3e`)
+  - support-anchor denominator: `20` (`sha256:a006ae91562a22a043ebc07de0fb6acd550a4a243e70abbeff3953d5b8b1b71b`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:f7d5ac899dc17dfd6ced55083c983b944d35917ed40665f6d5f66d9bb8f4baa6`)
+  - Support loss `per_file_window_cap`: `15` (`sha256:76b509b26fb195629bc7dbf8f568151739c4b4faf2cd96a6f7e096e09cac0781`)
+- `context-envelope-v3:sha256:5966652643f0277faf03ea83b3dde80848aa816165c441a20c25b1f3ae688696`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `1` (`sha256:cc29361407cc5eb7afdf4db0f1f28b9ee43fea64ff929518280ea4898467a389`)
+  - materialized-source denominator: `1` (`sha256:cc29361407cc5eb7afdf4db0f1f28b9ee43fea64ff929518280ea4898467a389`)
+  - support-anchor denominator: `32` (`sha256:15c0bf1507e406b25c0ce70d510d29cd0182a24c561620af33727d2fbd6b8a7f`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:4e1bdafccbbe4f928ad7eabd02f2b93416206ace8d74dc46d56adde9c07d7e45`)
+  - Support loss `per_file_window_cap`: `27` (`sha256:6f9a09c477446c325ae23f6f14e5dfc2eeb9e4f3dc381a39204aa47f3e055c53`)
+- `context-envelope-v3:sha256:ad3b38b85db1a6aab0d881a3892fc6dae2a4e6bd9e5997a021b66feee624b66b`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - materialized-source denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - support-anchor denominator: `1071` (`sha256:0df6bc93d5a19291015eab9e5ee430cb6ec9424e2593e4e356c3d5e1d48d4dbb`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:a8b6f8739603558d60d19983838d5dd96c6001a67d7c3fb0d4d6170e62aef6fa`)
+  - Support loss `per_file_window_cap`: `32` (`sha256:64ff8acbc0516553e184d2f4eced589eddaae8a34ac9be85a25809f44f6e57a2`)
+  - Support loss `path_cap`: `1004` (`sha256:65873bb2471809b9bc5a23c577c9141bcad04a3fa4d634d1280c594c30e1d781`)
+  - Support loss `test_cap`: `29` (`sha256:d20f93bb7f39377ad201813a96c7765ff87e8f0eb419a605ccf56d2f0942a5f6`)
+- `context-envelope-v3:sha256:6173b79c3e074dc545679c098ed16753961a3cb8d099dae575ac3966e83f9bad`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - materialized-source denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - support-anchor denominator: `1071` (`sha256:0df6bc93d5a19291015eab9e5ee430cb6ec9424e2593e4e356c3d5e1d48d4dbb`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `2` (`sha256:7415a7a5567a18bded307bee655b4d26b6c2beb27103eb0feb96dd68941539bd`)
+  - Support loss `per_file_window_cap`: `84` (`sha256:e2077b81178f1337730983ac4a2f57ca1045ca2fe4587089e7e67bf11654b73a`)
+  - Support loss `path_cap`: `975` (`sha256:5ac7aafa064c4db7263348fea02aa01d7660095ef6b7e8df4062aa2b0efd228b`)
+- `context-envelope-v3:sha256:308f80f08747529ae4d337247e527d983c73c0d1504599d535a67aa5471c6a9a`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - materialized-source denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - support-anchor denominator: `1071` (`sha256:0df6bc93d5a19291015eab9e5ee430cb6ec9424e2593e4e356c3d5e1d48d4dbb`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `2` (`sha256:7415a7a5567a18bded307bee655b4d26b6c2beb27103eb0feb96dd68941539bd`)
+  - Support loss `per_file_window_cap`: `83` (`sha256:21e49654755b340664ba217eda6a93c28ebf05cacb6dbfa2988d5f6562c50452`)
+  - Support loss `path_cap`: `975` (`sha256:5ac7aafa064c4db7263348fea02aa01d7660095ef6b7e8df4062aa2b0efd228b`)
+- `context-envelope-v3:sha256:f7eb3e9f368c43b6e6c4e6c8a8ae898ca6e8ac8b057ed11001b2565567b76368`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - materialized-source denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - support-anchor denominator: `1071` (`sha256:0df6bc93d5a19291015eab9e5ee430cb6ec9424e2593e4e356c3d5e1d48d4dbb`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:2cc1ee7ec8e71164bf791f3be12f8ba6baf1b033114ae56dccc16a5690e9438e`)
+  - Support loss `per_file_window_cap`: `35` (`sha256:a174f72afbba1eabc2d186bb863e271b6e9c016bc5397de2e43673012175e683`)
+  - Support loss `path_cap`: `1030` (`sha256:3f794184a4007c9be206689f016485f441b489d5d17b44f87ac64dc819eceabb`)
+- `context-envelope-v3:sha256:f5127373dc81eb7290bc649249efd08d6f8963b2c68a6c1551490fcbc02198df`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - materialized-source denominator: `26` (`sha256:c550673bad5fb2eb64a513059e07e674c9b3968c5e8e3625c82308336138e7f6`)
+  - support-anchor denominator: `1071` (`sha256:0df6bc93d5a19291015eab9e5ee430cb6ec9424e2593e4e356c3d5e1d48d4dbb`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:2cc1ee7ec8e71164bf791f3be12f8ba6baf1b033114ae56dccc16a5690e9438e`)
+  - Support loss `per_file_window_cap`: `35` (`sha256:8266a8d15c4e2d796a714d19ac1918f3287db757790b247ce8df562ecae052ce`)
+  - Support loss `path_cap`: `972` (`sha256:0a574c0dc6da3cfe838639d40aa453ba3a65c47929598ce189def8260964dbf0`)
+  - Support loss `test_cap`: `58` (`sha256:b7725376a06b6e24873860678cb10dd2b9b661ec832e84f7227bc7fa22ec590e`)
+- `context-envelope-v3:sha256:c50309ade1e5d60cbfa2fd90698d184810f86917e0a957e769557f77606ee343`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `1` (`sha256:9eed56842274a60dc8567fca450a0f668d2e3283da68679a387d468c8e6d4029`)
+  - materialized-source denominator: `1` (`sha256:9eed56842274a60dc8567fca450a0f668d2e3283da68679a387d468c8e6d4029`)
+  - support-anchor denominator: `47` (`sha256:665131c97ffeba777bca401d9c084c0604c1bcef2ed59b9b0bea6d7b21f3eb32`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:5ba1a4c8e54230977c673675d0b6de1a5858572c8cd67acde3369a96719ff231`)
+  - Support loss `per_file_window_cap`: `41` (`sha256:9b0547adbec4eeac663c39f959593e342ab7a5bc554024dc1cb15929de7cf203`)
+- `context-envelope-v3:sha256:0b3bc8f01d8a21369f09e5d364497863aaf51b0c3bbfb099f7ab1eb4d4b6b4b4`: policy `context.subject_windows@3` (`sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8`)
+  - accepted-file denominator: `305` (`sha256:8578b57842b5de8c63a609b15101309f149ae93e597eaf96b024ceeb677519c4`)
+  - reached-file denominator: `1` (`sha256:9eed56842274a60dc8567fca450a0f668d2e3283da68679a387d468c8e6d4029`)
+  - materialized-source denominator: `1` (`sha256:9eed56842274a60dc8567fca450a0f668d2e3283da68679a387d468c8e6d4029`)
+  - support-anchor denominator: `47` (`sha256:665131c97ffeba777bca401d9c084c0604c1bcef2ed59b9b0bea6d7b21f3eb32`)
+  - Latent cardinality: `unknown`
+  - Support loss `per_window_lines`: `1` (`sha256:5ba1a4c8e54230977c673675d0b6de1a5858572c8cd67acde3369a96719ff231`)
+  - Support loss `per_file_window_cap`: `41` (`sha256:2716158cb76dd6370eeefc1aa0a8af1cdee27135b3e344192caadebde2975783`)
+
+## Proposed claims
+
+- None
+
+## Abstentions
+
+- `obligation:sha256:06ac195d35d3b3f4ac4b15e34a83d716c36dfb5840da2f051456bf8e95f5f5c4` / `execution:sha256:5d6a8348ad813a2a488392e761305bbc4af98aec54cdaab37a5cc9ba931434c1`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:08e34dd114ba3398f51c3aa50d18d9af0eaf98be681857330e715c942a19d82d` / `execution:sha256:39e55b654cd72bc182474c1f880f36d8aa8cab29d3b8f1bf48b5724383bf5ff9`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:1af81442ab609cb3171bc84d933c37556d5f99e5db7b280c5da7c3689409c446` / `execution:sha256:6e1881a981205ff27e35fbfda65d68b6d93bd917e799b0e17b7d5693be2f0584`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:1ef415a88ddac3a9c748aeaa3f68106ec8da99cfaf22f5a8b40acee7a67c30f6` / `execution:sha256:b7fd7ffd33b9546963c40fd74634f4922d83051bf3cf8a236866d2251f951a94`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:209bb18ac969bbb7214deb367cb57fbb7286a188baf7d917efcd0488a177b73c` / `execution:sha256:a024675668f36c59d1d4335b7bb7ffe5753e620191bfda54e3bee9c2c9f46025`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:6aae183cb7ce0f589be310b42253651da634b9a9d66b959a4f2a3b2dc3714a66` / `execution:sha256:3697a014bbc28556ceb937af43e900d34c73ae8e0195971c162838128036755d`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:80aa8c87bc11859438598adfe589a55516f6340c45052d90bd4de10c4d207f7c` / `execution:sha256:82dfa21ad426a2bd0eab48a184b080671cc240f7156a5f0ca5b58f1ab88908b5`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:8d96d190d96b7e88e08c5951af766ed3ec925d6d1f12c021e41f1172c33c46f0` / `execution:sha256:0446816c800caa0678124b97d1b27917138f944f25a8ad3f4f48eb28431be4d6`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:9dc22debcd0ed0c1f415ea83a5fc5943cedfae1d9a0ec0eeec9e05d9c98bb3b7` / `execution:sha256:78ee09d0734139e211b36682cf6dace38d5b69b2d4eff6deb51c89c51c1ee8fe`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:cb4158efb9e5d423a90f74a77f3373965a9cd586deda4b3010da51c668b0be5e` / `execution:sha256:c8cae826e078080e9b7ca030c168e9982942fe0f384e029ca7415af2ff23b7bd`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:ccf9a5fe0b03bffb032039b05244b081e71c0b4631f23a159fc94584b43b419e` / `execution:sha256:ca661e8fdb6691787d11f34b02d46e708d580f86d28019b71384f71c001c6507`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:da0b8402f4ee0ba8d94d1ce4c98117ccde980f7c5b9c730e93bfeb7244ec4640` / `execution:sha256:2d26dfcf0a33c5915be5d5a0f0448bb13c4a3bd70ac6866a0ed45beacbe712d8`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:e62c1df9ddc36b0e108c7ced19a7fa15c36872ffcbce923e3baf44adaaae3049` / `execution:sha256:69b5522a05d419ab9259337f446af2e78613550934278cd2ed8763eb40437ae8`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:f19c5f2e89ccf0ae5fcf04d3909182d02a0c70a8bd5e13a2eea3613609c20040` / `execution:sha256:a3700e6a5198180fdda0092b73ddead1578015be84950ea82aa4e8530478ac32`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:f4c1e0df12bb6f681c5aaab0692fd0d8d89554a41ee723d8fabbc5f552d8b6b5` / `execution:sha256:13df90446d3815c0b0bd0c510371f46cc4f1dd078f3d5c5068722ab598cdb808`: "deterministic.abstain@1 does not evaluate semantic properties"
+- `obligation:sha256:ffffcbc88386456c6f22abd316ea084361c63c836c6137eb8383472df087b4c4` / `execution:sha256:e61b04bc429d0347716f1677133bbe5850e9dec6d10bf23969da2ef759d83152`: "deterministic.abstain@1 does not evaluate semantic properties"
+
+## Malformed outputs
+
+- None
+
+## Provider failures
+
+- None
+
+## Verifier
+
+- Status: `unsupported`
+- No verifier observation was run.
+
+## Source and window trace
+
+Sources:
+- `file:sha256:00706df11115ccb2a020af85d30295842e0f078e53c01ba0525a672bb5a39bbd`
+- `file:sha256:00e69df7bd23c4ed500fbbe5ebe4d1c62651fd4926e315013845725ddef9a37b`
+- `file:sha256:0343710592264a06dadce132896caeec0ecd043ca0f7056db4cd1e2561fbae42`
+- `file:sha256:06a5321e3bda3f633e3ab54ddde8749c0faf04f550b995b383ea5c4ee5743aeb`
+- `file:sha256:11c9d6b472bfd037c06dc325c883d8e569f283d7f00e288a3cc3780704317395`
+- `file:sha256:133616c35da4536a07a5b0805033e6d05e57d597401dd92e26a87a8dfe68234b`
+- `file:sha256:13bf44ffabccae08e6690dff3e80621143ae55e2d9a19998054a83fddd15b2a7`
+- `file:sha256:15b2ed43b15d949af1d83074c6b655acad89d97ea2e0b2c5e36b47bfad304ffd`
+- `file:sha256:1bfeae834465bb05e6b99ecdcfec4f32faf81237d847bc906875a4780ec9e80c`
+- `file:sha256:2521e7852bc232630ceb8ccf6c84b414e149e0995f858dc084044d90ab11eddc`
+- `file:sha256:2a5f11693f7287a5dc7dfa9d12ced21aa2c40eee5f64bd8d5c83c2f41f994438`
+- `file:sha256:2b54b2f06d6e69f95dd2152bdd1da6fabb6728b75d24a18cec0d47e181fc2bdb`
+- `file:sha256:2b65f48505c4dfbdce375f780e9f38a069e23bd60cc24962e1c083a387f40c0d`
+- `file:sha256:2b7a210a78aef58a1540fc95ea3d8302bc48ea28354ef2c0fbde7ce738e48494`
+- `file:sha256:2cfd61b25d2764ca2d2fe934d543570eb851fc3ba6207854229a9e991ef66f31`
+- `file:sha256:3105768cfc4533816e94994402e8f5b17b48a7ef4ac449acb30984b7afd5ed0c`
+- `file:sha256:318cee7caa5ee86b71a897ecd4e01b10c75309162bc8ca662af1cdf3c38b8ef6`
+- `file:sha256:32a62811ebe6f05163788f511d63960e8f430ec2debaf2c8f009a1772ece9eaf`
+- `file:sha256:3339e2babfe239ec2a9768ac6d2a7729d8a9941b126cacaeb15256557d7d1c00`
+- `file:sha256:399cb1129bcd068515a9b7efce9bd1c2ba9016e8943cfb2936cb4aebdef4984b`
+- `file:sha256:3ae840049c53cf59e75b1320a248ff52690651bfb0975178010365f36d9ed2d6`
+- `file:sha256:3d17f1cdfdaf37827fac9a20ad1872cce635f2c9f4c2952f495fca6f091d61a5`
+- `file:sha256:3ddb3e01cfde1d3e950ddbd6e2b7107a18587b547ca1e24d7c26c06b41474d9a`
+- `file:sha256:3dff4039f7785f208afb51711a5129a6b7c2a63168ef5011cedad6ff81e731b3`
+- `file:sha256:41a1400086cce3aa56b6934d67f6a5956722fc6f5f8a50e641331962e02dfe80`
+- `file:sha256:42cb2009847084cc8485e95eabdd7d47e2c532934d75f72e2b83e51f4359ab7f`
+- `file:sha256:458809574474a2aa266bb89dcefa4e600767f6edb4dc3f7087c5c3b6cb7c4169`
+- `file:sha256:4672825b2f9a0b1ea0f8607d2eebec1c1e2c17468c0cff419008161bfb5e4f42`
+- `file:sha256:4c0f10eca0455f1741374f66d127f64253ba28d7b631a6ee6e5810a5f6b269cd`
+- `file:sha256:5019e80882823e55a155bc6c93192493bb202f40af3da2b58d841b1e3dbd95e6`
+- `file:sha256:50c3df8b94cd79ea3861bc89a75fb8c2ae4894b9a2fb71946c5db947ff565603`
+- `file:sha256:54561667e3b82d8056d2afb6c4d5a8ebac5642dec1baffd607da414689b33dfd`
+- `file:sha256:55daf31d37f5d7ba9d6b0365cfe69d13d2092000e59ded2e426178cdd6cda839`
+- `file:sha256:594149a4cd95bf19738ccef74a75a8bec209fa422f2509526d629bd122906d4c`
+- `file:sha256:5e26e1266f398b0a5dfd1a4ce6a72f37e837cd6bd34bf1bd7fb1b6cb022f0343`
+- `file:sha256:62c7f2b858525afe4e3da1e6d7da84945d4ee1ad3ddaed2f43fd11cc08e73fe4`
+- `file:sha256:664150beff7b21251f7c0347684b2a84c23851f304e1d9995f2b6550fd8c8337`
+- `file:sha256:69af211997595f86f902f22643aeaa2b924eee2b1f695745d18e27f8e14ce09d`
+- `file:sha256:6a88a9d634baea43f676258cb67b0f3553e5729d1aacf37e7c9d6406be280214`
+- `file:sha256:6ae4576aed284bcd1f300a6afeacc39f9112d6df223afad03eebe1b0aa58fd7a`
+- `file:sha256:6b99b94cdd4ee9102bb955e4b7477f4ca17847bda64669d9fdb03bed13e5653a`
+- `file:sha256:6da288128cac90c413eec13922fb8d398bc694f47e9dda677c2a7a91666ddc7a`
+- `file:sha256:704fda2d9a9781a4e207be290a3ef3470bde4a6736515eb625365677b18a23b2`
+- `file:sha256:708dec03daa4155d3d2c1c9a85163068a1e56ee95f374e8b3b8b81cfb36e0f86`
+- `file:sha256:754aa37fb3fd868a6d9f568868481b1fa504bfca4e668ed8c99ecf387781cfdc`
+- `file:sha256:75f0d02b9a071778930ca7f0a46c13c86cdac143778eaeefbaf656425dcb2acc`
+- `file:sha256:7c7fbaac1d5df7a8451a9566db53d6a46b32e914aadd30d87b9e1ecd6add4057`
+- `file:sha256:7d70269e0e01daaeaa03b41e8c11a67f70939505743b552bd1c3a6ac8ddc2b6c`
+- `file:sha256:7f5e262fcf884f3f1fbeb0ef187f76247a8142fdc3de90f43a39d4db88913e77`
+- `file:sha256:80c75fdeee9f22d17898c6039d861e7e5f98b83fda55de2b85a4c50ba5857379`
+- `file:sha256:82d353dbcea270c59a281b3613a9334129abe2fe60a7951d57d81d1021f9304c`
+- `file:sha256:8885e06f7bb850a01364284acb4eb3b6c9044155c2a6f9edd90fe20a86e835ba`
+- `file:sha256:8f7d59beccf9803b07cf2cb1d82241863c849b4e16b7c779e8a08ee6bc0a6e4a`
+- `file:sha256:903a3574c8e3fdf6fc706828c4e6d9da02a6f997a1a7d3b343048cd090e7dd9c`
+- `file:sha256:92aa8e25052c3002d6edb920bb87eacf0c01cb0b9096059c1cffbb585a260f1f`
+- `file:sha256:94e225e359a106b33fc15e505870c701a2edb99611d046879e09e283fefc4e14`
+- `file:sha256:956ca20c9f464f85cd671c81ec9f0d83826b9e8a1586d50fdaa9ac36cd676736`
+- `file:sha256:9ca5b1e6f200f9bd3d9456f701e43fbf010ff853c13494a544c8e3930dd7c205`
+- `file:sha256:9deccbd5f1abd38abe855c484a6071012a2a581795e3e244bd4f56255baa6189`
+- `file:sha256:9f5073beaee2e4cf222e048c2e1fdd623286dae03e0f6948fff4e4b9d18fa7e7`
+- `file:sha256:a0e866d36043be306c39f1f5c16a31793f1aa9e01ef7d48e736bb158012c2c20`
+- `file:sha256:a4cdad5b85b42b60816930dd61d72a4fafc52a251cf33c971411cbf82d6b5464`
+- `file:sha256:a8957985fd6a4fc680d946dc21793644b7f5477d0254856c519bd660e41f84b2`
+- `file:sha256:a90055b8edf7b231d6dcd549f733fb73a477991735bcdb6609f49fbeac3358cd`
+- `file:sha256:a93fb9c94df09cfaf36b74bb859c6984cff569d7f7df5ce7eaf9be067ede0fca`
+- `file:sha256:ab5e549aee8d82c7349b709dd3e7fc5a3adecce5126db727dfeec91da597b39f`
+- `file:sha256:ad27a8561dcd1dd221f439c57419499859b82d96999ed0711df7f65b5d7e98e0`
+- `file:sha256:af2a857720c6f0522855d3d42d2f15596b640d64f70cbe8c7ada37707feb41e9`
+- `file:sha256:b4f4c96bc4ca342ba62fac1eb8c98488e311b3dcd94081cbbdad524713770b4b`
+- `file:sha256:bd740e68e78ec73a2c169030b93d814590aca964bf2dfcda19d91b3fb308ca25`
+- `file:sha256:bfae121fb9074c30e8156bff34e01b513305540e4d121b7b5dfb0ca5392a93f5`
+- `file:sha256:c5ae516f487ec9799e272edab631061c1e0fae0072ee7616f50c9fd186a62f4c`
+- `file:sha256:ca6f239bd9a96d58a459a3c84b9b4835be2ea4ec1d4a61b312f95e4076f6fb38`
+- `file:sha256:ceb0c74cf137a994f39d51fbc9718e13b31cab2590d914809095e91c68c91cd6`
+- `file:sha256:cee615c4e37c85a52db09f5f7e2f6ca9ceceb2e4c642de5ea71135e76e09fffa`
+- `file:sha256:ceede517979b772ff442a505b0a20b0eb2df6061ed49b871da5d6c738b584766`
+- `file:sha256:d35e0bccc47763976e4e5400cb145c87434bd071f2bbe38a9cb129b19d4c0a81`
+- `file:sha256:d4d0537fdfe74cd855521a23a9f106970b93c7f7c68a5eefbb65525256036407`
+- `file:sha256:d61717b7e1696dbe60f7b7a1af1fe7b2ae533480deb58537a5f88e44d56e94e2`
+- `file:sha256:dc445b83bcb44abac9dbba98b29606d75441a12cf34d972e93e30ce321e9d124`
+- `file:sha256:e01d06d80b603e7286824b9936ce226a75d7ad948cb93e64d5a45967014d9e53`
+- `file:sha256:e3324d46c2e457970cf2f17bb4def5e22ea4127dbcf4d24e545d66f3d12a9862`
+- `file:sha256:e5b036bba09235938e71f88196bfbfc8314b4006b8d85c6309b12e9e1cfbbffa`
+- `file:sha256:e610d2c04aae099dd8c6646647bae1255bc1e76f01f080cd2f269d06cf32efbe`
+- `file:sha256:e75a732f4d9bc9e9d56ab887f5443e5fe9123523bfd417e1fa5c8bfb5a182dab`
+- `file:sha256:ed96e171f5840c2cb6b6c3f18fca4681d2e100cc4ea2801fc0db49144872cb27`
+- `file:sha256:f0059465b1c76f4c6c86fec40a48fdf33e22f93ecba7aeb3af4146acf376202d`
+- `file:sha256:f03b23d6a1506c95ddfc9455f4f27bf7df784b3747003c1a79c0db529bd3baae`
+- `file:sha256:f28734780af9ad73e611897a2dc97fd0dc9bd3e29b1dd1670e97d7638f206856`
+- `file:sha256:f343bf20cb6700bc9578a0ddcee734d8b16888a9a9379039bb0742f3de1058cf`
+- `file:sha256:f3770cadc4dade7f029b318ad79c24d26923136098f0a159bd29459a8fd0317e`
+- `file:sha256:f3bc0d1571bef46e98885858ad42a0667a2880d6507c514f5168574bcf0754d5`
+- `file:sha256:f78c1e2808a712df082cc1b83e55e837c523f90a059b59d62e48230b7db4d73a`
+- `repository:sha256:43b1ff4b7c682c4908180ac478f381ee59d32efc05fae358e33add4c39e5602e`
+- `snapshot:sha256:c48df9140e9b95bed3f24ca3c0bdc3147507ae3cf92da694a9c5619f602beb9f`
+
+Windows:
+- `context-window:sha256:0271d23ecc540109dc16f7f695bf5a3c98656ea2fdf893e93afd815a01376502`
+- `context-window:sha256:0313d4c492ff8e5252f1ca5b53d65d7e500cbe506b0b096e3c7e14bcdbcbee77`
+- `context-window:sha256:0386b5180f3aa7942b6b8347381247f424049b307ae966a4a6cea736cebc4ed1`
+- `context-window:sha256:04d5e7bfeab0f01aab0c52c994e539745f7f834055390e043dc8f552ba6a5f07`
+- `context-window:sha256:06b640ae8f864ab1bcbcc51b9aae4d73810addf334b23382ef4990f1c46c3398`
+- `context-window:sha256:07230ddd1884ffdb013a131fb3ba52ac437bcc8ff035b06f00a90b0701df95af`
+- `context-window:sha256:097608e74d0b8a9897b060d51f3198935c2b60303121d465698d70cf9bef0607`
+- `context-window:sha256:0bc28cd09bec2846efdb5b86c23fa1977ac5029c5de48f6e3a359db7f925ce03`
+- `context-window:sha256:0c124d68588adb9a4a7273bd88de5fb7cacceb9227abdcf372b9db610837ead4`
+- `context-window:sha256:0e786eecb2ffbe406e7f31d7eb7cb215a40d70c3d8881568711fed21429ec378`
+- `context-window:sha256:15249aa58da13d1aa2a8cd1048d605e0ea941bc88c5b074b5da5566335305a39`
+- `context-window:sha256:17bab4a64589a6d76d2cd3c5af3d0993bf31d94106a656c76d7c79ad1e851e29`
+- `context-window:sha256:1ba8c68a6fee42fb5f70679caf1e31dd9d87c9e54f156dc18c5696b5b80b3a69`
+- `context-window:sha256:23536e6995f9f6844edce3933608bc96b9356632ea86f307041410d18fe81e2d`
+- `context-window:sha256:257cd677050ac33c210e02e4155e67348292a5a4d9c02a19a12872aa7dbc8f34`
+- `context-window:sha256:27e10edb9a812f22528aa94294fc47cb46e6b0ef65ae6bbc6a76e05f4ac8c38c`
+- `context-window:sha256:309ab0365a4f19c186b9c063b5d5600c57eb3d7991279b385edb02c2598deeb2`
+- `context-window:sha256:3a191db76ca7ae4f2dbab022a9e2cd78f72a5a9b669190bd00fde3b0d7b3b530`
+- `context-window:sha256:3ad6cb784809893d8fe1be054460ce922725c14e5c30222f26660f57077fd283`
+- `context-window:sha256:3b5550346a4314324192c07ca690e0eda28399f9ab51e46558ef6349405af8a7`
+- `context-window:sha256:40d7b09bee63b8fc880f6edb00aecefdb0e81f6c8115ff0b2e84b6ce52812e9a`
+- `context-window:sha256:450b984c0b1e609c3e02e55942dfa28594bd61c3f0afdc055934037e92906513`
+- `context-window:sha256:45ea44f303de7727a060beb72373fb2262221406b166fa945d01555ac25c6570`
+- `context-window:sha256:477c2b9729a133139e3f3c524e1daee01ab4c25b0977720056e22b470f2e64b1`
+- `context-window:sha256:477c362aad8fda426e82c7eeb7155b8e7cae84b9a1614fc4fb11265c593b2bd6`
+- `context-window:sha256:4e0cdc06b89f897eb62eec50ec9a6a3fce6b48ae491c6930f1bd72853f413d80`
+- `context-window:sha256:4e2aef79b1ca4b6203036baf435c961df8b7cc78580007ebe6fb71a86af4dcfd`
+- `context-window:sha256:4f4a8b7d696c71455d223e950d1553979c5914a9657e83cfe8d6c057e0590034`
+- `context-window:sha256:5379f8bae17498c68855757512a4b5fde4fb730a0ed057bf521c51e44f467c56`
+- `context-window:sha256:55844c33e2d3b7c8dc1470deef6dd56a4cbfe7ec61ed9aa5f147f67db6dad0b8`
+- `context-window:sha256:6aca425bed6467cbe65ebcc21caea55614c559440d541c2a7b45b6a681b5d786`
+- `context-window:sha256:6cf7dc3e6fca17f854ec4158d09f079447ca927e36a24096a7d724b74df09176`
+- `context-window:sha256:7091b97a88b3ee290b8439aba8576b1d4da145339da500eba275154e50721dd1`
+- `context-window:sha256:70cb984e3d101f1205cb977a93c225bdf14485269a0a4564e4ff10af54cbaf8b`
+- `context-window:sha256:78f2c02f1b2e36f0bbceb7c71c581f9866382410e29fce458e7c1849bfb16b2e`
+- `context-window:sha256:7f1ee31513b51c6ca10835ce0eb6d58cb1d84d80eba1c593f644310249606d23`
+- `context-window:sha256:81d1c56e21d3c2e799d9bf74ce9a9c94e9a3f2669975e9fac348b8755b27f2aa`
+- `context-window:sha256:821db8a4017b66337cb37a145d301029ac14c5c1393a9769fe0b0a0d681c06b2`
+- `context-window:sha256:84905d9001de9c420eb771c55b20e3e09054609cf28ac669370111fa48ea4c5a`
+- `context-window:sha256:875a1b7f534014cddfa72ce135eef5d19ee0da4ab3ae6b8c5a92e3a984788f62`
+- `context-window:sha256:87babbdc13aa0ef3f42dfa049ea865500a0277933ce0309b2f0f10dbba0a4598`
+- `context-window:sha256:87d5f09116e0bae6555938364bc62d271e7176530389ae660c86c2a786250d5a`
+- `context-window:sha256:880ce45c213ffbb49af2ed51016f196733cd1e8654c54874fd6b440420f545e6`
+- `context-window:sha256:8a8f4ff5b5dc40a299385a7515a592c6bf49ef1315d398b3f2eac725ad827560`
+- `context-window:sha256:92b194fb16eaeacbcae0cd6a8d12f2a660796ef1be43d5dabf23ac59c7b698e4`
+- `context-window:sha256:951106c67b326f77175bd707923341d2ba397755bd0e70064c49a77469909daa`
+- `context-window:sha256:96a1541f35a8046a7479f81e7d6621e3a1e9761d288d9fe02a6c549a8f2aa41e`
+- `context-window:sha256:9de60c854df7c3a0d28f0a140f1d8a9bb370870eb6d83c6233e0f2e58530e2ec`
+- `context-window:sha256:9f6d5c2daff8e1141b1c245a25d4bc10f79d3d910fca913a52e284420a7c6e5f`
+- `context-window:sha256:a00ebf223e59f50dfcb90e521b79a035215d8c64aaaea6dad5fa58e5972bf74b`
+- `context-window:sha256:a1398311918875c05d203828eea9b26f2a9c7e6c2d1f3bd18ba90f4c2e2f3e83`
+- `context-window:sha256:a339b451068719e3978420fcdc9d8fd5b8bbe26bf1eb36079390a4bfca4370a5`
+- `context-window:sha256:b1eb76ac571b1099971e0843c34a4c8d39f27143c6996b5c98083d68e692ff4b`
+- `context-window:sha256:b502dd7430ebf040f0e4a08aa160c4194ed9fbcfde6f6afb30f2e3cce295955a`
+- `context-window:sha256:ba0382da4af2fa2985df20a0a6408a2beb96c7648333dc1af70a2b7298ed4bfe`
+- `context-window:sha256:c29db341827c15ac17cee1f359c819665aa08197ddd779289ea6dbb806584384`
+- `context-window:sha256:c471d14093dc685b0bdffa5671140f3242db890f901304fa77241ce604857a30`
+- `context-window:sha256:c77156bec0eb7cc5b4c30524e48ff1109eb04a738bb6109895c1b0e89f06ce5f`
+- `context-window:sha256:ca13ea53914cc0b9e7f222ca11428782e23eb70933485ee3586617a86b7c1c94`
+- `context-window:sha256:ca4ef4864aa72ba5db46f147a4d103d56dbbab82dea96cb049fdca89728630de`
+- `context-window:sha256:ca8a44d474ec0be76c9e398afa99d72e35eea02ccdb7e8d288b4052d60d90b76`
+- `context-window:sha256:ccc98a5ad8a12084c2d0df9b2003df1455524a045d6ffcddd6c5047c69903189`
+- `context-window:sha256:cd3c92b22b656c8de3e9063ac53e0f7049da51548e18a962371dda7e21e02b3d`
+- `context-window:sha256:d1bdcba1518b60822a444b5e2d4acaafcdc5a008d9d00e5664a5b4e1b5c5861b`
+- `context-window:sha256:d2e11804c44c8339953cc952c44a8ceb5392134d40863cb8dca8700aa7aaf09b`
+- `context-window:sha256:d9edb7347e6a04fce3b62024d8703ad21d126e86e7ec254ed5e0be54c883729d`
+- `context-window:sha256:dcf33d735a07c8e8563ad915cbfe4730f24facdc41c810db0dbb60b70bafc57f`
+- `context-window:sha256:e013c5b1aa5e49da3cd89244064afa20ef1461d3ca8a18eb7a24970e0ea1a4c9`
+- `context-window:sha256:e0821f197f1b1eab3bc130f1ed2516f0129aab86d9912fb562ca58fc79a425f6`
+- `context-window:sha256:e2626ff9bac5e4b34c0a780aeffbac40aac323c9ffbbebc4a1e841c426201a76`
+- `context-window:sha256:e638d09dd6ff7696aedaa6faae8da9fccdb7bf731c3975f8b105618740160716`
+- `context-window:sha256:eb17f114afd9951c3ee23f456f56aa6451dfe5f1554241c0ee82593d07e421f4`
+- `context-window:sha256:f284b27852787ebbe96c5a8cb387a05080017f1404377516619635aaaad8a27f`
+- `context-window:sha256:fc6ccdc4f12e31ff6a9fc45aa08458ec6f2d4f7c645ddac49497c1df6f2e9e57`
+- `context-window:sha256:fcc4a6939510c052f9ed7ce7005bf535d38433d8f413cf9dc90168996fc13d49`
+- `context-window:sha256:ff081f7280180a1a94edf0b97c53f95868e1d883f044c92d305d26ccb0ecfb09`

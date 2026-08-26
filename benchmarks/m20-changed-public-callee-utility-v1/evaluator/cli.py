@@ -188,9 +188,6 @@ def main(argv=None):
         _emit({"schema":"m20.cli-error.v1", "code":error.code})
         if isinstance(error, Stage0Error) and error.diagnostic is not None: sys.stderr.buffer.write(canonical_bytes(error.diagnostic) + b"\n")
         return error.exit_code
-    except OSError:
-        _emit({"schema":"m20.cli-error.v1", "code":"invalid_input_io"}); return 2
-    except KeyError:
-        _emit({"schema":"m20.cli-error.v1", "code":"invalid_input_missing_field"}); return 2
-    except ValueError:
-        _emit({"schema":"m20.cli-error.v1", "code":"invalid_input_value"}); return 2
+    except (OSError, KeyError, ValueError) as error:
+        sys.stderr.buffer.write(canonical_bytes({"schema":"m20.cli-unhandled-error-diagnostic.v1", "exception_type":type(error).__name__, "message":str(error)}) + b"\n")
+        code = "invalid_input_io" if isinstance(error, OSError) else "invalid_input_missing_field" if isinstance(error, KeyError) else "invalid_input_value"; _emit({"schema":"m20.cli-error.v1", "code":code}); return 2

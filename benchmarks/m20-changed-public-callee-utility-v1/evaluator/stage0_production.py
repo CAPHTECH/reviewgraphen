@@ -12,7 +12,7 @@ from pathlib import Path
 from .canonical import canonical_bytes, hash_json, parse_json_bytes, sha256_bytes, stable_id
 from .pipeline import packet_v3_account
 from .repository import GitRepository, production_rust
-from .stage0_contract import PROFILE_HASH, build_context_projection_v3
+from .stage0_contract import PROFILE_HASH, Stage0ContractError, build_context_projection_v3
 from .stage0_driver import Stage0Error, build_payload_hash
 
 GIT = Path("/usr/bin/git")
@@ -141,25 +141,33 @@ def _frozen_obligation(cluster, run: dict, context: dict, repository, trees: tup
     subjects = context["subject_outcomes"]
     by_artifact = {item["artifact_id"]: item for item in context["materialized_sources"]}
     endpoint_pairs = [{"caller_endpoint_id": next(item["endpoint_id"] for item in subjects if item["role"] == "caller"), "callee_endpoint_id": next(item["endpoint_id"] for item in subjects if item["role"] == "callee")}]
-    sources = []; windows = []; projection_subjects = []; materialized = {}
+    sources = []; windows = []; projection_subjects = []; materialized = {}; window_groups = {}
     for subject in subjects:
         source = by_artifact[subject["source_artifact_id"]]; path = source["path"]; entry = trees[1].get(path)
         if entry is None: raise Stage0Error("frozen_obligation_source_missing")
         span = subject["requested_range"]
-        body = {"role":"changed" if subject["role"] == "callee" else "context", "snapshot_side":"head", "path":path, "start_line":span["start_line"], "end_line":span["end_line"], "blob_oid":entry[1]}
-        required_id = stable_id("source-request", body)
-        sources.append({"required_id":required_id, **body})
-        windows.append({"window_id":subject["window_id"], "source_artifact_id":subject["source_artifact_id"], "start_line":span["start_line"], "end_line":span["end_line"], "role":subject["role"], "source_required_id":required_id, "support_anchor_ids":[]})
+        window_id = subject["window_id"]; group = window_groups.get(window_id)
+        identity = (subject["source_artifact_id"], path, entry[1])
+        if group is not None and group["identity"] != identity: raise Stage0Error("frozen_obligation_window_conflict")
+        if group is None: group = window_groups[window_id] = {"identity":identity, "start_line":span["start_line"], "end_line":span["end_line"], "has_callee":False}
+        group["start_line"] = min(group["start_line"], span["start_line"]); group["end_line"] = max(group["end_line"], span["end_line"]); group["has_callee"] |= subject["role"] == "callee"
         projection_subjects.append({"role":subject["role"], "status":"admitted", "endpoint_id":subject["endpoint_id"], "source_artifact_id":subject["source_artifact_id"], "start_line":span["start_line"], "end_line":span["end_line"], "window_id":subject["window_id"]})
         materialized[subject["source_artifact_id"]] = {"source_artifact_id":subject["source_artifact_id"], "snapshot_side":"head", "path":path, "blob_oid":entry[1]}
+    for window_id in sorted(window_groups, key=str.encode):
+        group = window_groups[window_id]; source_artifact_id, path, blob_oid = group["identity"]; role = "callee" if group["has_callee"] else "caller"
+        body = {"role":"changed" if group["has_callee"] else "context", "snapshot_side":"head", "path":path, "start_line":group["start_line"], "end_line":group["end_line"], "blob_oid":blob_oid}
+        required_id = stable_id("source-request", body); sources.append({"required_id":required_id, **body})
+        windows.append({"window_id":window_id, "source_artifact_id":source_artifact_id, "start_line":group["start_line"], "end_line":group["end_line"], "role":role, "source_required_id":required_id, "support_anchor_ids":[]})
     file_ids = sorted(materialized, key=str.encode)
     unknown_ids = sorted((stable_id("context-unknown", item) for item in context.get("unknowns", [])), key=str.encode)
-    projection = build_context_projection_v3(
-        {"projection_id":context["context_id"], "snapshot_id":context["snapshot_id"], "request_id":run["request_id"], "obligation_ids":[obligation_id], "relation_ids":contract["target_refs"], "endpoint_pairs":endpoint_pairs},
-        file_ids, file_ids, projection_subjects, list(materialized.values()), [], windows, [],
-        {"state":context["latent_cardinality"]["state"], "capability_states":{key:value for key,value in context["latent_cardinality"]["capability_states"].items() if value in {"partial","unknown"}}, "qualification_ids":context["latent_cardinality"]["qualification_ids"]},
-        unknown_ids, [], [],
-    )
+    try:
+        projection = build_context_projection_v3(
+            {"projection_id":context["context_id"], "snapshot_id":context["snapshot_id"], "request_id":run["request_id"], "obligation_ids":[obligation_id], "relation_ids":contract["target_refs"], "endpoint_pairs":endpoint_pairs},
+            file_ids, file_ids, projection_subjects, list(materialized.values()), [], windows, [],
+            {"state":context["latent_cardinality"]["state"], "capability_states":{key:value for key,value in context["latent_cardinality"]["capability_states"].items() if value in {"partial","unknown"}}, "qualification_ids":context["latent_cardinality"]["qualification_ids"]},
+            unknown_ids, [], [],
+        )
+    except Stage0ContractError as error: raise Stage0Error(error.code) from error
     subject_windows = sorted(({"subject_id":item["endpoint_id"], "window_id":item["window_id"], "role":item["role"]} for item in subjects), key=lambda item:(item["subject_id"].encode(),item["window_id"].encode(),item["role"].encode()))
     return {"schema":"m20.frozen_obligation.v1", "unit_id":cluster.commit_cluster_id, "rule_id":"relation.changed_public_callee@1", "property_id":"rust.callee_contract_review@1", "obligation_ids":[obligation_id], "relation_ids":contract["target_refs"], "endpoint_pairs":endpoint_pairs, "subject_windows":subject_windows, "sources":sorted(sources,key=lambda item:(item["path"].encode(),item["snapshot_side"]!="base",item["start_line"],item["end_line"],item["role"].encode())), "required_references":[], "projection":projection, "bounded_scope_manifest_id":context["context_id"]}
 
@@ -246,7 +254,9 @@ def run_frozen_cluster_pipeline(cluster, build_root: Path, *, _pipeline_timeout:
     eligible = bool(obligations and retained and len(packet_budgets) == len(retained) and all(item[2] for item in packet_budgets))
     selected = retained[0] if eligible else ""; obligation_relative = "frozen-obligation.v1.json" if eligible else ""; obligation_hash = ""
     if eligible:
-        frozen = _frozen_obligation(cluster, run, contexts[selected], repository, trees)
+        try: frozen = _frozen_obligation(cluster, run, contexts[selected], repository, trees)
+        except Stage0Error: raise
+        except (KeyError, TypeError, ValueError) as error: raise Stage0Error("frozen_obligation_contract_invalid") from error
         frozen_raw = canonical_bytes(frozen); (build_root / obligation_relative).write_bytes(frozen_raw); obligation_hash = sha256_bytes(frozen_raw)
     value = {"schema":"m20.stage0-cluster-build.v1", "commit_cluster_id":cluster.commit_cluster_id, "repository_root":cluster.repository_root, "base_commit_oid":cluster.base_commit_oid, "head_commit_oid":cluster.head_commit_oid, "applicable_obligation_ids":obligations, "subject_retained_obligation_ids":retained, "deferred_obligation_ids":sorted(set(coverage.get("deferred_obligation_ids", [])) & set(obligations)), "subject_remainders":sorted(remainders, key=lambda item:item["obligation_id"]), "selected_obligation_id":selected, "frozen_obligation_path":obligation_relative, "frozen_obligation_sha256":obligation_hash, "admitted_source_bytes":admitted, "whole_changed_production_files_bytes":whole, "ignored_symlink_count":ignored_symlink_count, "model_eligible":eligible, "enumeration_honest":honest, "ingest_exclusion":None}
     value["deterministic_payload_sha256"] = build_payload_hash(value); return value

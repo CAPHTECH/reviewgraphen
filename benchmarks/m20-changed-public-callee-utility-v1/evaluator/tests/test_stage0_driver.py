@@ -17,7 +17,7 @@ from evaluator.pipeline import PipelineError, _primary
 from evaluator.freeze import freeze_manifest, write_generated
 from evaluator.semantic_acceptance import ALGORITHM_SOURCE_SHA256, reference_body
 from evaluator.stage0_driver import Cluster, Stage0Error, _ordered_terminal_builds, build_payload_hash, commit_cluster_id, enumerate_clusters, run_stage0, worker_ceiling
-from evaluator.stage0_production import _ingest_admission_reason, _ingest_exclusion_or_fatal, _packet_v3_context_budget, run_frozen_cluster_pipeline
+from evaluator.stage0_production import _frozen_obligation, _ingest_admission_reason, _ingest_exclusion_or_fatal, _packet_v3_context_budget, run_frozen_cluster_pipeline
 from evaluator.tests import support
 
 
@@ -43,6 +43,17 @@ def output_tree(root):
 
 
 class Stage0AdmissionTest(unittest.TestCase):
+    def test_shared_callee_caller_window_is_coalesced_without_losing_subject_bindings(self):
+        cluster=Cluster("synthetic.invalid/repository","/synthetic/repository","b"*40,"h"*40); blob="a"*40
+        run={"request_id":"request:test","obligation_contract":[{"id":"obligation:test","target_refs":["relation:test"]}]}
+        context={"obligation_id":"obligation:test","context_id":"context:test","snapshot_id":"snapshot:test","materialized_sources":[{"artifact_id":"file:test","path":"src/lib.rs"}],"subject_outcomes":[{"role":"callee","state":"admitted","endpoint_id":"endpoint:callee","source_artifact_id":"file:test","window_id":"window:shared","requested_range":{"start_line":3,"end_line":5}},{"role":"caller","state":"admitted","endpoint_id":"endpoint:caller","source_artifact_id":"file:test","window_id":"window:shared","requested_range":{"start_line":8,"end_line":9}}],"latent_cardinality":{"state":"unknown","capability_states":{"direct_calls":"partial"},"qualification_ids":["qualification:test"]},"unknowns":[]}
+        frozen=_frozen_obligation(cluster,run,context,None,({}, {"src/lib.rs":("100644",blob)}))
+        self.assertEqual(len(frozen["sources"]),1)
+        self.assertEqual(frozen["projection"]["admitted_windows"],[{"window_id":"window:shared","source_artifact_id":"file:test","start_line":3,"end_line":9,"role":"callee","source_required_id":frozen["sources"][0]["required_id"],"support_anchor_ids":[]}])
+        self.assertEqual({(item["role"],item["window_id"]) for item in frozen["subject_windows"]},{("callee","window:shared"),("caller","window:shared")})
+        from evaluator.pipeline import _obligation
+        self.assertEqual(_obligation(frozen,cluster.commit_cluster_id)["projection"]["canonical_sha256"],frozen["projection"]["canonical_sha256"])
+
     def test_all_ingest_admission_bounds_are_typed_but_core_failure_is_fatal(self):
         ingest_failed={"schema":"reviewgraphen.generic_review_diagnostics.v1","stages":[{"stage":"ingest","status":"failed"}]}
         cases=(
