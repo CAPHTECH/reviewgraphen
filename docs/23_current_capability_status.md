@@ -343,3 +343,49 @@ Report 87, and CLI 7, all with exit 0; workspace clippy and formatting also
 exited 0. The product-binary v3 run exited 0 in 209s, `verify.py` exited 0, and
 the audit was byte-identical to the first run; a second invocation exited 20.
 The two-clone quickstart check remains pending a commit.
+
+### 6.5 2026-08-26 addendum — first real-corpus Stage 0 (seals 8–11)
+
+Seal 8 (`2feb89b7…`) closed evaluator review Waves 26–32; further tamper-resistance
+findings were moved to `preregistration.declared_limitations` rather than iterated
+(the goal is non-authoritative evidence, not an audit platform). Operational
+backend pins were amended (`125e04b`), a custodian Ed25519 key signs the Stage 0
+anchor, and the executor HMAC key lives outside the bundle (bwrap-bound).
+
+The first real Stage 0 (300 clusters: fsl 100 / casegraphen 100 / reviewgraphen 100)
+aborted on cluster 1-of-300 because the driver is fatal on any product error. A
+prescreen of the 86 unreached clusters with the pinned binary found 56 failures:
+45 ingestion admission bounds (all reviewgraphen commits carrying the 6 MB m20
+fixture blob or >64 MiB snapshots), 8 `universe exclusion ID must bind its candidate
+and snapshot`, 2 `invalid context.subject_windows@3 subject outcomes`, 1 OOM kill
+under 8-way parallelism (product peak RSS ≈ 3.8 GB).
+
+Product fixes (`2930546`, release sha256 `56baf5b1…`): self-recursive callee subjects
+(caller and callee in one artifact) are accepted as typed outcomes; D exclusion ID
+validation rebuilds the profile/relation/snapshot/source binding. Core 601 /
+Runtime 51 / CLI 7 tests; DTO hashes unchanged; 15 corpus clusters exit 0,
+byte-identical across runs. Evaluator seals 9–11 (`18848807…`, `834cccf7…`, seal 11
+pending) made ingestion-bound failures typed non-eligible clusters retained in the
+300 denominator, ignored git symlink entries (3,400 across 600 trees) after hash
+verification, and unioned shared caller/callee windows; Stage 0 parallelism is 7.
+
+**Offline aggregation of the 300-cluster root (`stage0-run-20260826T173017`)** —
+this is a result, not an evaluator defect:
+
+- exclusions 49 (snapshot_bytes 27, blob_bytes 22; all reviewgraphen);
+- non-eligible 228: no D obligation 214 (fsl 80 / casegraphen 84 / reviewgraphen 50),
+  packet ceiling 14 (4 / 10 / 0);
+- model-eligible 23 (fsl 16 / casegraphen 6 / reviewgraphen 1);
+- gates 5/7: **prevalence fails** (clusters with a D obligation 37 < 45; obligations
+  225 ≥ 60) and **bounded_context fails** (admitted-context median 910,618 B vs
+  whole-changed-files median 565,939 B; p90 5,405,834 B ≫ 65,536 B). Among eligible
+  obligations, admitted < whole holds for only 40/102 (39 %); the dominant cause is
+  per-obligation repetition of the cluster's window union in the admitted accounting.
+
+Consequence under the frozen protocol: Stage 1 does not run (`stage0_gate_failed`,
+typed). Registered model-evaluation count remains 0; practical usefulness remains
+**fail**. To answer the underlying question ("does adding ReviewGraphen windows
+help the local Qwen review?") a **non-registered exploratory 10-pair run** over the
+hash-ranked eligible clusters (same arm-neutral packet contract, low-32k, blind
+judge) is being prepared; its result will be appended here and is not evidence
+under the preregistration.
