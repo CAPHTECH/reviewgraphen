@@ -478,12 +478,12 @@
     "reviewer_endpoint": "http://192.168.68.71:11999",
     "reviewer_transport_path": "/usr/local/bin/m20-reviewer-backend",
     "judge_transport_path": "/usr/local/bin/m20-judge-backend",
-    "reviewer_transport_sha256": "sha256:aaf9a161864c4e95a65413d05b8a3d17a4faa711daef3d689e390c5a852901ef",
-    "judge_transport_sha256": "sha256:cd885a8aeede185c14fc6378ac0f0229c9fd2b57661231122363639fad31cf9b",
+    "reviewer_transport_sha256": "sha256:8f3d98916be1b6b2bbe041734a6cb9d51a1d90b4fafaf21d07f43a85cebdd93b",
+    "judge_transport_sha256": "sha256:67a07c32739bef85e798e433382b6ee5e911d263b17678d36169980c60fdb41f",
     "response_hmac_key_path": "/run/secrets/m20-evaluator-response-hmac-key",
-    "response_hmac_key_sha256": null,
+    "response_hmac_key_sha256": "sha256:c513472f3f2ccbfe7943b035bbc24974278dab9109e23ae663de1a645f5b6dc0",
     "transport_mount_contract": "before a model stage the operator creates a private mount namespace and read-only bind-mounts the intended executables at the two exact paths; the evaluator hashes both regular executable files against reviewer_transport_sha256/judge_transport_sha256 and accepts no path/URL/command argument and no PATH, environment, symlink, or fallback selection",
-    "pinned_listing_sha256": "99f80c57621fbb0956d17a74916ecc6480c146f1c8a5f0e111c28c4736eeb7ab",
+    "pinned_listing_sha256": "508e8e48da870032138ef1cd6658754ad289ef6e718e48e1faef41bb0f849b4a",
     "pinned_health_sha256": "29aa6e9b732b131a25395f367448132d6b8185c3771e01c6285635b347930f74",
     "concurrency": 1,
     "network_during_authoring": "none",
@@ -566,6 +566,12 @@
       "id": "wave32-git-pinned-preregistration-anchor-binding",
       "reason": "the evaluator/SPEC freeze excludes preregistration bytes, so replacing the public-key pin and coherently re-signing an anchor could otherwise preserve the active freeze hash",
       "impact": "the anchor now signs the exact preregistration SHA-256 and every entrance requires those bytes to equal the preregistration blob at the externally pinned Git revision; thresholds, denominators, and budgets are unchanged"
+    },
+    {
+      "date": "2026-08-26",
+      "id": "seal8-operational-backend-pin-refresh",
+      "reason": "seal-8 shim-envelope compatibility, bundle-external HMAC-key generation, and a changed server listing required an operational pin refresh",
+      "impact": "operational pins only; the experimental contract, thresholds, budgets, denominators, and Stage 1/2A operational rectangles are unchanged"
     }
   ],
   "interpretation_limits": [
