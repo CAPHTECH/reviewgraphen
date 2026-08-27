@@ -1,12 +1,33 @@
 ---
-name: obligation-review
-description: Run an obligation-driven code review — the ReviewGraphen methodology — when asked to review source code the ReviewGraphen way, or when told you are the reviewer in a ReviewGraphen review process. Enumerate a finite set of review obligations before forming any opinion, then keep claims, evidence, and verification separate, instead of an unstructured "find bugs" pass.
+name: reviewgraphen
+description: Review source code the ReviewGraphen way — an obligation-driven review that enumerates a finite set of things to check before forming any opinion, then keeps claims, evidence, and verification separate, instead of an unstructured "find bugs" pass. Covers both the methodology you execute yourself and the narrow ReviewGraphen CLI surface that can produce obligations for you. Use when repository- or application-wide review is asked for and missing areas matter, when a review must be auditable rather than a single free-form answer, when relation/path/invariant/boundary review is required, or when asked what has and has not been reviewed.
 ---
 
-# Obligation-driven review — the ReviewGraphen methodology
+# ReviewGraphen review
 
-This is a methodology, not a piece of software. You may have no ReviewGraphen
-tool available; follow the stages below regardless.
+An obligation-driven review methodology, plus the narrow CLI surface that
+implements part of it. The methodology stands on its own — follow it even when
+no ReviewGraphen binary is available.
+
+## Do not use this for
+
+- A compiler, parser, symbol resolver, or static analyzer.
+- A security certification or proof that no defect exists.
+- A one-file review where an explicit obligation universe adds nothing.
+- Autonomous merge approval.
+- Arbitrary command execution inside an untrusted repository.
+- Spawning reviewer personas without distinct obligations or evidence roles.
+
+## Never collapse these
+
+- Program fact vs review claim.
+- Review target recommendation vs review obligation.
+- Visited vs completed.
+- Completed vs evidence-supported.
+- Evidence-supported vs verified.
+- Verified vs human-accepted.
+- High confidence vs high severity.
+- Local validity vs global gluing.
 
 ## Why this exists
 
@@ -19,6 +40,9 @@ separate from whatever evidence does or doesn't support it. A finding is not the
 center of this process — it is one projection that falls out at the end, after
 an obligation has been executed, a claim proposed, evidence bound, and
 verification attempted.
+
+Do not begin with "review the whole repository." Begin with a bounded snapshot
+and construct a review universe.
 
 ## The pipeline, and who produces each stage
 
@@ -46,8 +70,8 @@ is the only option, never the target state.
 ### Mode A — obligations supplied (preferred; use whenever possible)
 
 You are given, per unit of work, a set of obligations produced outside your
-context: by a rule pack, by deterministic tooling, or by a separate enumeration
-pass. **Skip Stages 1 and 2 entirely.** Go to Stage 3.
+context: by the ReviewGraphen CLI below, by other deterministic tooling, or by a
+separate enumeration pass. **Skip Stages 1 and 2 entirely.** Go to Stage 3.
 
 Building the inputs for Mode A does not require any ReviewGraphen binary. The
 tiers below are ordinary tooling output:
@@ -74,6 +98,79 @@ substitution for a deterministic engine, that the resulting set is not
 ID-stable, and that it is the single largest consumer of your budget. Say so in
 your output.
 
+## The ReviewGraphen CLI
+
+Build it first; `$RG` below is the resulting binary.
+
+```bash
+cargo build --release --locked -p reviewgraphen-cli   # from the repository root
+RG="$PWD/target/release/reviewgraphen"
+```
+
+The implemented command surface is exactly:
+
+```text
+reviewgraphen review --request <request.json> --artifacts <fresh-dir> [--diagnostics <fresh-file>]
+reviewgraphen schema list
+reviewgraphen schema print <schema-id>
+reviewgraphen schema validate <json-file>
+```
+
+There are no `snapshot`, `ingest`, `obligations`, `plan`, `run`, `verify`,
+`glue`, `coverage`, `report`, `gate`, or `context` subcommands. **Do not invent
+or claim execution of them**, and never translate a stage of the pipeline above
+into a command that is not on this list. `--help` prints the single usage line
+and exits 2; there are no per-subcommand help pages.
+
+`review` accepts the closed generic-review request v2 or v3 contracts. The
+implemented slice is narrow: `rust.production.v1`, the
+`relation.changed_public_callee@1` rule over an accepted direct `calls`
+relation, and `rust.callee_contract_review@1`. V3 selects
+`context.subject_windows@3`, recording caller/callee subjects, relation IDs,
+bounded source windows, denominator commitments, unknowns, and declared loss.
+This is not a repository-wide call graph, proof that a contract changed, or
+proof that a bug exists.
+
+Run from the admitted repository root. The request binds immutable base and
+target revisions, profile/rule identity, ingest bounds, plan bounds, observer,
+verifier descriptor, and context policy. Both the artifact directory and the
+optional diagnostics file must be fresh, workspace-scoped, relative paths; an
+absolute artifact directory is rejected as path traversal.
+
+```bash
+cd /path/to/admitted/repository
+"$RG" review \
+  --request /absolute/path/to/reviewgraphen.generic_review_request.v3.json \
+  --artifacts artifacts \
+  --diagnostics diagnostics.json
+```
+
+A successful v3 run writes:
+
+```text
+artifacts/artifact-manifest.v1.json
+artifacts/audit.run.v3.json
+artifacts/human-report.manifest.v2.json
+artifacts/human-report.md
+artifacts/records/<execution>.deterministic-observer-output.v1.json
+artifacts/records/<execution>.provider-free-reviewer-packet.v1.json
+diagnostics.json
+```
+
+The reviewer packet is the Mode A input. The audit
+(`reviewgraphen.generic_review_run.v3`) is non-authority: its claims,
+observations, coverage, and limitations never become accepted facts, Evidence,
+Verification, or human acceptance. Validate it with
+`"$RG" schema validate artifacts/audit.run.v3.json`; use `schema list` before
+`schema print` or `schema validate`.
+
+A `context` subcommand exists only on the unmerged m21 branch (commit
+`2c972dbb`), producing `reviewgraphen.context_packet.v1` from
+`reviewgraphen.context_request.v1` via `context.task_subject_windows@1`. To use
+it, check that commit out into a separate worktree and build its own binary —
+never substitute it for the main one, never present it as a main capability, and
+never cross-decode its request or packet as generic-review v3.
+
 ## Stage 1 — ProgramSpace (Mode B only)
 
 ProgramSpace ingestion does not mean "I understood the repository." It means
@@ -81,6 +178,11 @@ building **accepted structural facts** plus **explicit unknowns** — a
 before-you-form-any-opinion inventory, layered so a lower tier still counts even
 if a higher one is unavailable to you. Use the same Tier 0 / Tier 1 / higher-tier
 split listed under Mode A.
+
+Prefer compiler, LSP, parser, or analyzer facts. An LLM-inferred relation may be
+proposed as a candidate but is never an accepted fact. Always inspect the
+extraction report: a missing call-graph capability is not evidence that no risky
+path exists.
 
 Anything you cannot establish is an explicit unknown, not a fact. Do not
 silently treat "I didn't check this" as "this is fine."
@@ -251,6 +353,7 @@ different voice over the same information.
    confident) as evidence.
 7. Never present a Mode B reviewer-enumerated obligation set as if it were an
    engine-generated, ID-stable universe.
+8. Never claim a CLI subcommand that is not on the list above.
 
 ## Output
 
@@ -279,6 +382,24 @@ source citations as `locations`, a `rationale` stating the claim **and** its
 evidence status (e.g. "unverified — would need a reproduction test showing X"),
 and a `severity` reflecting your risk estimate. `issue_absent`, `inconclusive`,
 and `not_applicable` are recorded only via `obligation_results`.
+
+A summarizing response should state: snapshot/profile/universe; extraction
+limitations; which target and property layers were reviewed; critical and high
+claims with their disposition; evidence and verification outcome; abstentions
+and unverifiable claims; gluing obstructions; coverage; projection loss; and the
+next required decision or observation.
+
+## Safety rules
+
+- Never allow arbitrary shell by default.
+- Never write to the reviewed repository during review.
+- Never upload full source unless policy explicitly allows it.
+- Redact secrets before model invocation and declare the resulting loss.
+- Restrict filesystem access to the workspace root.
+- Treat generated code, vendored code, and documentation through explicit
+  profile rules rather than silent exclusion.
+- Preserve rejected claims and decisions for audit.
+- Do not expose raw proprietary source in a research export.
 
 ## Local-inference execution notes
 

@@ -185,4 +185,4 @@ free-form reviewとの優劣や実運用上の効用を主張しません。
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — Rust toolchain、test、lint、coverage、CIの入口。
 - [`schemas/README.md`](schemas/README.md) — stable JSON contract。
 - [`examples/double-submit-payment/README.md`](examples/double-submit-payment/README.md) — reference scenario。
-- [`skills/reviewgraphen/SKILL.md`](skills/reviewgraphen/SKILL.md) — agent-facing workflow contract。
+- [`.claude/skills/reviewgraphen/SKILL.md`](.claude/skills/reviewgraphen/SKILL.md) — agent-facing workflow contract。
