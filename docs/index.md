@@ -92,7 +92,7 @@
 
 - [`../schemas/README.md`](../schemas/README.md)
 - [`../examples/double-submit-payment/README.md`](../examples/double-submit-payment/README.md)
-- [`../.claude/skills/reviewgraphen/SKILL.md`](../.claude/skills/reviewgraphen/SKILL.md)
+- [`../skills/reviewgraphen/SKILL.md`](../skills/reviewgraphen/SKILL.md)
 
 ## 5. 文書の規範性
 

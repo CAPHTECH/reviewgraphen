@@ -70,7 +70,7 @@ Eleven accepted-for-v0.1 ADRs live under [`docs/adr/`](docs/adr/):
 
 ## Agent integration
 
-[`.claude/skills/reviewgraphen/SKILL.md`](.claude/skills/reviewgraphen/SKILL.md) defines when and how an agent should use ReviewGraphen, including safety and epistemic boundaries. It is the single agent-facing skill: it carries both the review methodology and the narrow implemented CLI surface, and it states which subcommands do not exist so that a pipeline stage is never mistaken for a command.
+[`skills/reviewgraphen/SKILL.md`](skills/reviewgraphen/SKILL.md) defines when and how an agent should use ReviewGraphen, including safety and epistemic boundaries. It is the single agent-facing skill: it carries both the review methodology and the narrow implemented CLI surface, and it states which subcommands do not exist so that a pipeline stage is never mistaken for a command.
 
 ## Validation
 
