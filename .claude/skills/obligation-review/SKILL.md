@@ -1,9 +1,9 @@
 ---
-name: reviewgraphen-methodology-v2
-description: Apply the ReviewGraphen review methodology when asked to review source code the ReviewGraphen way, or when told you are the reviewer in a ReviewGraphen review process. Run an obligation-driven review that keeps claims and evidence separate, instead of an unstructured "find bugs" pass. Supersedes reviewgraphen-methodology, which is retained unmodified as a frozen benchmark artifact and should not be used for new work.
+name: obligation-review
+description: Run an obligation-driven code review — the ReviewGraphen methodology — when asked to review source code the ReviewGraphen way, or when told you are the reviewer in a ReviewGraphen review process. Enumerate a finite set of review obligations before forming any opinion, then keep claims, evidence, and verification separate, instead of an unstructured "find bugs" pass. This is the current methodology skill; `reviewgraphen-methodology` is a frozen experiment artifact and must not be used for new work.
 ---
 
-# ReviewGraphen review methodology (v2)
+# Obligation-driven review — the ReviewGraphen methodology
 
 This describes a **methodology**, not a piece of software. Every structural
 claim below is drawn from this repository's own design documents and is
@@ -15,22 +15,26 @@ cited to its source; nothing here is invented procedure. Sources:
 `docs/10_evidence_and_verification.md`,
 `docs/adr/0011-program-space-v2-capability-trace.md`.
 
-## Relationship to v1 — read this before choosing a skill
+## Relationship to the frozen `reviewgraphen-methodology` skill
 
-`.claude/skills/reviewgraphen-methodology/SKILL.md` (v1, frozen at commit
-`a092c32`, body sha256 `a43d6984…`) is a **frozen experiment artifact**. It is
-the declared treatment of `m7-head-local-v1`'s `qwen_skill` arm
-(`benchmarks/m7-head-local-v1/preregistration.json`), and
+`.claude/skills/reviewgraphen-methodology/SKILL.md` is a **frozen experiment
+artifact**, not a skill to invoke. It is the declared treatment of
+`m7-head-local-v1`'s `qwen_skill` arm
+(`benchmarks/m7-head-local-v1/preregistration.json`), it is the only surviving
+committed copy of that treatment text, and it is pinned three ways:
 `benchmarks/m7-head-local-v1/scripts/build_skill_packets.sh` hard-fails on any
-drift in its body. It is never edited. Use v1 only to reproduce that
-experiment; use **this document for all new review work**.
+drift in its body (`a43d6984…`), and m9's and m10's pre/post-loop tree
+manifests record its whole-file hash (`1ddb0ed1…`) **at that exact path**. It is
+therefore never edited, never moved, and never deleted. Use it only to
+reproduce those experiments; use **this document for all review work**.
 
-v2 differs from v1 in exactly one structural respect, for a measured reason:
-**v1 made the reviewer perform the obligation-enumeration step itself, and that
-is the step that exhausts a local model's budget.** v1 said so in its own
-opening line ("in this instance also as the obligation-enumeration step
-ReviewGraphen's own engine would normally perform for you") and then treated
-that substitution as the normal case. v2 treats it as the fallback it is.
+This skill differs from that frozen text in exactly one structural respect,
+for a measured reason: **the frozen text made the reviewer perform the
+obligation-enumeration step itself, and that is the step that exhausts a local
+model's budget.** It said so in its own opening line ("in this instance also as
+the obligation-enumeration step ReviewGraphen's own engine would normally
+perform for you") and then treated that substitution as the normal case. This
+skill treats it as the fallback it is.
 
 Measured in this repository's own benchmark program, same model
 (`qwen3.8:27b-mlx`), same 65,536-token output cap:
@@ -38,7 +42,7 @@ Measured in this repository's own benchmark program, same model
 | Configuration | Output tokens | Elapsed | Result |
 | --- | --- | --- | --- |
 | Free-form review, no obligation structure | 65,535 / 65,536 | 5,146 s | **0 bytes**, `reasoning_runaway` |
-| Reviewer enumerates its own obligations (v1 skill) | 64,421 / 65,536 | 3,051 s | valid (reasoning 60,128 / final 1,802) |
+| Reviewer enumerates its own obligations | 64,421 / 65,536 | 3,051 s | valid (reasoning 60,128 / final 1,802) |
 | Same, second unit | 65,535 / 65,536 | 3,070 s | **0 bytes**, `empty_final_after_process_completion` |
 | **Obligations supplied; reviewer only processes them** | **15,159 / 65,536** | **806 s** | valid |
 
