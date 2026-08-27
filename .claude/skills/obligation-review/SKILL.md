@@ -15,18 +15,25 @@ cited to its source; nothing here is invented procedure. Sources:
 `docs/10_evidence_and_verification.md`,
 `docs/adr/0011-program-space-v2-capability-trace.md`.
 
-## Relationship to the frozen `reviewgraphen-methodology` skill
+## Relationship to the retired `reviewgraphen-methodology` skill
 
-`.claude/skills/reviewgraphen-methodology/SKILL.md` is a **frozen experiment
-artifact**, not a skill to invoke. It is the declared treatment of
-`m7-head-local-v1`'s `qwen_skill` arm
-(`benchmarks/m7-head-local-v1/preregistration.json`), it is the only surviving
-committed copy of that treatment text, and it is pinned three ways:
-`benchmarks/m7-head-local-v1/scripts/build_skill_packets.sh` hard-fails on any
-drift in its body (`a43d6984…`), and m9's and m10's pre/post-loop tree
-manifests record its whole-file hash (`1ddb0ed1…`) **at that exact path**. It is
-therefore never edited, never moved, and never deleted. Use it only to
-reproduce those experiments; use **this document for all review work**.
+There used to be a second methodology skill at
+`.claude/skills/reviewgraphen-methodology/SKILL.md`. It was the declared
+treatment of `m7-head-local-v1`'s `qwen_skill` arm
+(`benchmarks/m7-head-local-v1/preregistration.json`) and was frozen for that
+purpose. It has been **removed from the working tree** so that only one
+methodology skill is offered to agents; its text survives unchanged in git
+history and reproduces both pinned hashes exactly:
+
+```bash
+git show a092c32:.claude/skills/reviewgraphen-methodology/SKILL.md
+# whole file 1ddb0ed1… / body a43d6984…
+```
+
+Full provenance, and what the removal does and does not affect for m7, m9, and
+m10: `benchmarks/m7-head-local-v1/TREATMENT_TEXT_LOCATION.md`. Recover that
+text only to reproduce those experiments; use **this document for all review
+work**, and never substitute this document for that treatment in a replay.
 
 This skill differs from that frozen text in exactly one structural respect,
 for a measured reason: **the frozen text made the reviewer perform the
