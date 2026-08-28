@@ -14,6 +14,10 @@ Python validator dependency once:
 python3 -m pip install --requirement requirements/ci.txt
 ```
 
+The shell entry points require Bash **4.3 or newer** (`local -n` is used by
+the deterministic source selector). macOS's system Bash 3.2 is insufficient;
+install a newer Bash and invoke `bash scripts/ci.sh …` explicitly.
+
 The fast gate also needs nextest:
 
 ```bash
@@ -31,7 +35,7 @@ rustup component add llvm-tools-preview
 ## Verification modes
 
 ```bash
-scripts/ci.sh fast       # Python bundle validator, rustfmt, Clippy, nextest, doc tests
+scripts/ci.sh fast       # Python validator, CI-admission/formatter-scope checks, rustfmt, Clippy, nextest, doc tests
 scripts/ci.sh coverage   # LLVM lcov at target/llvm-cov/lcov.info
 scripts/ci.sh deny       # dependency advisories, licenses, bans, and sources
 scripts/ci.sh heavy      # deny + coverage; used after the fast CI job
@@ -47,7 +51,15 @@ counterexample, not that payment processing is safe.
 
 The checked-in fixture is source evidence and is deliberately excluded from the
 formatter because this harness must not rewrite existing evidence artifacts.
-Every future product source is formatted with Rust 2024 before linting.
+The formatter selects tracked Rust sources under `crates/` and excludes the
+entire `crates/**/tests/fixtures/**` external-source-evidence class; it does
+not inspect untracked worktree content or benchmark sources. Product workspace
+members must live under `crates/`; the only permitted external member is the
+byte-preserved `examples/double-submit-payment/fixture` counterexample evidence.
+The gate validates that layout before selecting source, so a new member outside
+those roots fails rather than being silently omitted. The same selection decides
+whether the coverage mode has product source to measure. Every future product
+source is formatted with Rust 2024 before linting.
 The M0/M1 `reviewgraphen-core` crate is formatted and checked by the workspace
 gate. The counterexample fixture is not used to manufacture a coverage score.
 
@@ -56,10 +68,12 @@ gate. The counterexample fixture is not used to manufacture a coverage score.
 Do not add a crate until its domain contract and acceptance tests exist. Then:
 
 1. Add it to `workspace.members`.
-2. Set `lints.workspace = true` in its package manifest.
-3. Use `proptest.workspace = true` and `insta.workspace = true` from
+2. Place its manifest under `crates/`; the only workspace member outside that
+   root is the documented double-submit evidence fixture.
+3. Set `lints.workspace = true` in its package manifest.
+4. Use `proptest.workspace = true` and `insta.workspace = true` from
    `dev-dependencies` when the contract requires property or snapshot tests.
-4. Add only tests that exercise a stated invariant, schema boundary, or report
+5. Add only tests that exercise a stated invariant, schema boundary, or report
    projection; do not add harness-only smoke tests.
 
 `proptest` stores minimized failure cases under `proptest-regressions/` beside
