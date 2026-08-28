@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.dev/schemas/reviewgraphen.generic_review_request.v4.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "workspace_admission_root", "repository_admission_root", "repository_identity", "base_revision", "target_revision", "ingest", "plan", "observer", "verifier_descriptor_id", "context_policies"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.generic_review_request.v4"},
+    "workspace_admission_root": {"type": "string", "minLength": 1},
+    "repository_admission_root": {"type": "string", "minLength": 1},
+    "repository_identity": {"type": "string", "minLength": 1},
+    "base_revision": {"type": "string", "minLength": 1},
+    "target_revision": {"type": "string", "minLength": 1},
+    "ingest": {"$ref": "#/$defs/ingest"},
+    "plan": {"$ref": "#/$defs/plan"},
+    "observer": {"$ref": "#/$defs/observer"},
+    "verifier_descriptor_id": {"oneOf": [{"type": "null"}, {"const": "workspace.cargo_test@1"}]},
+    "context_policies": {"const": {"relation.changed_public_callee@1": {"property_id": "rust.callee_contract_review@1", "target_kind": "relation", "policy_id": "context.subject_windows@3", "policy_hash": "sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8"}, "node.public_function_contract@1": {"property_id": "rust.public_function_contract_review@1", "target_kind": "node", "policy_id": "context.subject_windows@4", "policy_hash": "sha256:9f15006986a73853ff3be7b9a158e8c79f69b9a8099c9d0a1991d8c7da170aed"}}}
+  },
+  "$defs": {
+    "ingest": {"type": "object", "additionalProperties": false, "required": ["profile_id", "profile_version", "rule_set_hash", "max_files", "max_file_bytes", "max_total_source_bytes"], "properties": {"profile_id": {"const": "rust.production.v1"}, "profile_version": {"const": "1"}, "rule_set_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "max_files": {"type": "integer", "minimum": 1, "maximum": 20000}, "max_file_bytes": {"type": "integer", "minimum": 1, "maximum": 4194304}, "max_total_source_bytes": {"type": "integer", "minimum": 1, "maximum": 17179869184}}},
+    "plan": {"type": "object", "additionalProperties": false, "required": ["max_waves", "max_obligations_per_wave"], "properties": {"max_waves": {"type": "integer", "minimum": 1, "maximum": 1024}, "max_obligations_per_wave": {"type": "integer", "minimum": 1, "maximum": 2048}}},
+    "observer": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "deterministic_abstain"}}}
+  }
+}

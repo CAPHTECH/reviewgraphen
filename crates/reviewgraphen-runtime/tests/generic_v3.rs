@@ -5,9 +5,10 @@ use reviewgraphen_runtime::generic::{
     GenericObserverRequestV2, GenericPlanRequest, GenericReviewBasisLifecycleEvent,
     GenericReviewBasisLifecycleTrace, GenericReviewRequestV2, GenericReviewRequestV3,
     decode_and_validate_generic_review_request_v2, decode_and_validate_generic_review_request_v3,
-    decode_and_validate_generic_review_run_v2, decode_and_validate_generic_review_run_v3,
-    run_generic_review_v2, run_generic_review_v3, run_generic_review_v3_with_probe,
-    run_generic_review_v3_with_probes, validate_generic_review_run_v3_wire_structure,
+    decode_and_validate_generic_review_request_v4, decode_and_validate_generic_review_run_v2,
+    decode_and_validate_generic_review_run_v3, run_generic_review_v2, run_generic_review_v3,
+    run_generic_review_v3_with_probe, run_generic_review_v3_with_probes,
+    validate_generic_review_run_v3_wire_structure,
 };
 use serde_json::{Value, json};
 use std::{
@@ -37,6 +38,21 @@ fn git(root: &Path, arguments: &[&str]) {
         .status()
         .expect("git is available for integration test");
     assert!(status.success());
+}
+
+#[test]
+fn v4_request_has_a_closed_d_and_node_policy_registry() {
+    let bytes =
+        include_bytes!("../../../schemas/reviewgraphen.generic_review_request.v4.example.json");
+    let request = decode_and_validate_generic_review_request_v4(bytes).expect("v4 request");
+    let mut wrong = serde_json::to_value(request).expect("v4 request JSON");
+    wrong["context_policies"]["node.public_function_contract@1"]["policy_id"] = json!(V3_POLICY);
+    assert!(
+        decode_and_validate_generic_review_request_v4(
+            &canonical_json(&wrong).expect("canonical wrong v4 request")
+        )
+        .is_err()
+    );
 }
 
 #[test]

@@ -1620,6 +1620,8 @@ pub const GENERIC_REVIEW_REQUEST_V2_SCHEMA: &str = "reviewgraphen.generic_review
 pub const GENERIC_REVIEW_RUN_V2_SCHEMA: &str = "reviewgraphen.generic_review_run.v2";
 pub const GENERIC_REVIEW_REQUEST_V3_SCHEMA: &str = "reviewgraphen.generic_review_request.v3";
 pub const GENERIC_REVIEW_RUN_V3_SCHEMA: &str = "reviewgraphen.generic_review_run.v3";
+pub const GENERIC_REVIEW_REQUEST_V4_SCHEMA: &str = "reviewgraphen.generic_review_request.v4";
+pub const GENERIC_REVIEW_RUN_V4_SCHEMA: &str = "reviewgraphen.generic_review_run.v4";
 const D_RULE: &str = "relation.changed_public_callee@1";
 const D_PROPERTY: &str = "rust.callee_contract_review@1";
 const DETERMINISTIC_ABSTAIN: &str = "deterministic.abstain@1";
@@ -1669,6 +1671,24 @@ pub struct GenericReviewRequestV3 {
     pub observer: GenericObserverRequestV2,
     pub verifier_descriptor_id: Option<String>,
     pub context_policy_id: String,
+}
+
+/// Closed request for the mixed D/Node production-v4 rule set.  Policy
+/// bindings are a fixed registry, not caller-selectable configuration.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenericReviewRequestV4 {
+    pub schema: String,
+    pub workspace_admission_root: PathBuf,
+    pub repository_admission_root: PathBuf,
+    pub repository_identity: String,
+    pub base_revision: String,
+    pub target_revision: String,
+    pub ingest: GenericIngestRequestV2,
+    pub plan: GenericPlanRequest,
+    pub observer: GenericObserverRequestV2,
+    pub verifier_descriptor_id: Option<String>,
+    pub context_policies: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -2953,6 +2973,88 @@ impl GenericReviewRequestV3 {
     }
 }
 
+fn fixed_context_policies_v4() -> Value {
+    json!({
+        "relation.changed_public_callee@1": {
+            "property_id": D_PROPERTY,
+            "target_kind": "relation",
+            "policy_id": ContextSubjectWindowsPolicyV3::ID,
+            "policy_hash": ContextSubjectWindowsPolicyV3::GOLDEN_HASH,
+        },
+        "node.public_function_contract@1": {
+            "property_id": "rust.public_function_contract_review@1",
+            "target_kind": "node",
+            "policy_id": reviewgraphen_core::ContextSubjectWindowsPolicyV4::ID,
+            "policy_hash": reviewgraphen_core::ContextSubjectWindowsPolicyV4::GOLDEN_HASH,
+        }
+    })
+}
+
+impl GenericReviewRequestV4 {
+    fn validate_v4(&self) -> GenericReviewResult<()> {
+        if self.schema != GENERIC_REVIEW_REQUEST_V4_SCHEMA
+            || self.context_policies != fixed_context_policies_v4()
+            || !self.workspace_admission_root.is_absolute()
+            || !self.repository_admission_root.is_absolute()
+            || self.repository_identity.is_empty()
+            || self.base_revision.is_empty()
+            || self.target_revision.is_empty()
+            || self.ingest.profile_id != "rust.production.v1"
+            || self.ingest.profile_version != "1"
+            || self.ingest.max_files == 0
+            || self.ingest.max_file_bytes == 0
+            || self.ingest.max_total_source_bytes == 0
+            || self
+                .verifier_descriptor_id
+                .as_deref()
+                .is_some_and(|id| id != DEFERRED_WORKSPACE_CARGO_TEST_DESCRIPTOR_ID)
+        {
+            return Err(GenericReviewError::Request("generic v4 request fields"));
+        }
+        if matches!(
+            self.observer,
+            GenericObserverRequestV2::CodexCli
+                | GenericObserverRequestV2::ClaudeCli
+                | GenericObserverRequestV2::CodexAppServer
+        ) {
+            return Err(GenericReviewError::Request(
+                "generic v4 observer unsupported",
+            ));
+        }
+        if let GenericObserverRequestV2::Replay { records } = &self.observer
+            && records.iter().any(|path| !path.is_absolute())
+        {
+            return Err(GenericReviewError::Request("generic v4 replay path"));
+        }
+        PlanBudget::new(self.plan.max_waves, self.plan.max_obligations_per_wave)?;
+        Ok(())
+    }
+
+    fn id_v4(&self) -> GenericReviewResult<StableId> {
+        let canonical = canonical_json(&json!({
+            "schema": self.schema,
+            "repository_identity": self.repository_identity,
+            "base_revision": self.base_revision,
+            "target_revision": self.target_revision,
+            "ingest": self.ingest,
+            "plan": self.plan,
+            "observer": observer_identity_v2(&self.observer),
+            "verifier_descriptor_id": self.verifier_descriptor_id,
+            "context_policies": self.context_policies,
+        }))?;
+        Ok(StableId::derived(
+            "request",
+            &BTreeMap::from([
+                ("schema".to_owned(), Value::String(self.schema.clone())),
+                (
+                    "request_sha256".to_owned(),
+                    Value::String(ContentHash::sha256(&canonical).to_string()),
+                ),
+            ]),
+        )?)
+    }
+}
+
 /// Decodes the closed v3 request family and returns a typed request-boundary
 /// rejection for missing selectors, inline policy material, unknown fields,
 /// and every non-v3 schema tag.
@@ -2962,6 +3064,17 @@ pub fn decode_and_validate_generic_review_request_v3(
     let request: GenericReviewRequestV3 = serde_json::from_slice(bytes)
         .map_err(|_| GenericReviewError::Request("generic v3 request decode"))?;
     request.validate_v3()?;
+    Ok(request)
+}
+
+/// Decodes only the closed v4 request family; callers cannot fall back to v3.
+pub fn decode_and_validate_generic_review_request_v4(
+    bytes: &[u8],
+) -> GenericReviewResult<GenericReviewRequestV4> {
+    let request: GenericReviewRequestV4 = serde_json::from_slice(bytes)
+        .map_err(|_| GenericReviewError::Request("generic v4 request decode"))?;
+    request.validate_v4()?;
+    let _ = request.id_v4()?;
     Ok(request)
 }
 

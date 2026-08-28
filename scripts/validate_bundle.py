@@ -94,6 +94,10 @@ def validate_schemas() -> list[str]:
             "reviewgraphen.obligation.v2.schema.json",
             "reviewgraphen.obligation.v2.example.json",
         ),
+        (
+            "reviewgraphen.generic_review_request.v4.schema.json",
+            "reviewgraphen.generic_review_request.v4.example.json",
+        ),
         ("reviewgraphen.report.schema.json", "reviewgraphen.report.example.json"),
         ("reviewgraphen.report.v2.schema.json", "reviewgraphen.report.v2.example.json"),
         ("reviewgraphen.report.v3.schema.json", "reviewgraphen.report.v3.example.json"),
