@@ -544,7 +544,7 @@ impl UniverseDescriptor {
 ///
 /// It intentionally contains no internal aggregate-only fields. Exclusions are
 /// retained because they qualify the public coverage denominator. Its JSON
-/// shape validates against `schemas/reviewgraphen.obligation.schema.json`.
+/// shape validates against `schemas/reviewgraphen.obligation.v2.schema.json`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ObligationContract {
     schema: &'static str,

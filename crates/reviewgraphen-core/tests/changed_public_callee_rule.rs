@@ -614,7 +614,7 @@ fn every_target_support_capability_state_is_unknown_with_its_exact_limitation_tr
 fn d_contract_schema_rejects_capability_split_mutations_and_accepts_the_bundle() {
     let bundle = MvpRulePack::synthesize_changed_public_callee(&program(fixture())).unwrap();
     let schema: Value = serde_json::from_slice(include_bytes!(
-        "../../../schemas/reviewgraphen.obligation.schema.json"
+        "../../../schemas/reviewgraphen.obligation.v2.schema.json"
     ))
     .unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
