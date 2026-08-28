@@ -22,6 +22,7 @@ use tempfile::tempdir;
 const POSITIVE_BASE: &str = "a8b6b24d5ed704f53f721b25db42d5d631f946c7";
 const POSITIVE_TARGET: &str = "8569a2261e8a62145228872a2fde9f4c48093d00";
 const V3_POLICY: &str = "context.subject_windows@3";
+const V4_POLICY: &str = "context.subject_windows@4";
 
 fn git(root: &Path, arguments: &[&str]) {
     let status = Command::new("git")
@@ -489,9 +490,17 @@ fn v3_request_boundary_typed_rejects_every_non_fixed_selector_form() {
                 .remove("context_policy_id");
             value
         }),
-        ("other", {
+        // @4 is a real Node-only policy family. v3 must reject it rather than
+        // silently accepting a selector that belongs to another major family.
+        ("other family (@4)", {
             let mut value = good.clone();
-            value["context_policy_id"] = json!("context.subject_windows@4");
+            value["context_policy_id"] = json!(V4_POLICY);
+            value
+        }),
+        // Preserve the pre-@4 assertion that a truly unknown selector fails.
+        ("unknown policy (@99)", {
+            let mut value = good.clone();
+            value["context_policy_id"] = json!("context.subject_windows@99");
             value
         }),
         ("inline parameters", {
