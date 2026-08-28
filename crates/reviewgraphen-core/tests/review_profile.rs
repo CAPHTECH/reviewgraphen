@@ -12,6 +12,9 @@ use std::collections::BTreeSet;
 // constant must not make this golden assertion pass circularly.
 const PROFILE_HASH_GOLDEN: &str =
     "sha256:4b6cca93794ab03b1576e17d2e395ec43f731d316685247a89363ae2e840dd96";
+const D_EXCLUSION_CANONICAL_GOLDEN: &[u8] = br#"{"candidate_key":"relation.changed_public_callee@1|relation:call","excluded_weight":"4.0","id":"exclusion:sha256:3bffacce427f6c28eb87ee964b14fed7de6a75526668897eac4855e7cbf0b461","matcher_id":"path.generated_component@1","profile_hash":"sha256:4b6cca93794ab03b1576e17d2e395ec43f731d316685247a89363ae2e840dd96","profile_id":"rust.production.v1","reason_id":"profile.exclude.generated@1","rule":"relation.changed_public_callee@1","snapshot_id":"snapshot:target","source_ids":["artifact:change","artifact:containment","relation:call","symbol:callee","symbol:caller"]}"#;
+const D_EXCLUSION_CANONICAL_HASH_GOLDEN: &str =
+    "sha256:8e42f5ec003873a589fc192c216d67078f09cf837b8965611e4765edc673063a";
 
 fn id(value: &str) -> StableId {
     StableId::parse(value).unwrap()
@@ -205,6 +208,12 @@ fn candidate_tie_breaks_callee_before_caller_and_invalid_paths_are_typed() {
 #[test]
 fn exclusion_identity_binds_every_required_field() {
     let original = record();
+    let canonical = reviewgraphen_core::canonical_json(&original).unwrap();
+    assert_eq!(canonical, D_EXCLUSION_CANONICAL_GOLDEN);
+    assert_eq!(
+        ContentHash::sha256(&canonical).as_str(),
+        D_EXCLUSION_CANONICAL_HASH_GOLDEN
+    );
     original.validate().unwrap();
 
     let bindings = DExclusionBindings {
