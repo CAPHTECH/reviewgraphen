@@ -1,0 +1,55 @@
+{
+  "schema": "reviewgraphen.benchmark.m17_blind_findings.v1",
+  "unit_id": "m18-debate-r1",
+  "findings": [
+    {
+      "finding_id": "finding:586b797389f0e84407da0fd73bae4f9b",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 585,
+          "end_line": 740
+        },
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 741,
+          "end_line": 855
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "medium",
+      "rationale": "Let arm in rewrite_action_items does not extend bound, unlike all other binder forms. rewrite_action_items (609-631) processes each ActionItem independently via .map with the same immutable bound reference; the Let arm (623-625) rewrites only the initializer expression and never inserts the bound name into bound. This contrasts with rewrite_binder (844-855), Expr::Quantified (796-802), and Expr::Aggregate (810-816), which all clone bound and insert the binder name before rewriting the body. The .map structure makes per-item bound extension impossible without restructuring the function, and Let is an ActionItem rather than a Statement, so there is no other path that would add its name to bound. Effect: if a let-bound name matches a component state or const name, a subsequent item's rvalue reference to that name is still rewritten by rewrite_expr's Var arm (711-717) to alias.name (the state/const) because !bound.contains(&name) still holds, rather than resolving to the local binding. Reachability and intent caveats: whether the surface grammar permits a let name to shadow a state/const name is not established in the projections; whether the intended scoping semantics is local-binding-wins is an interpretation rather than a projected fact; and the encoding of the subsequent reference as Expr::Var is assumed from the description rather than shown in a projection."
+    },
+    {
+      "finding_id": "finding:8532e50a62439b9b955d6d619a6f3947",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 585,
+          "end_line": 740
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "high",
+      "rationale": "Lvalue rewrite ignores the bound set, creating asymmetric qualification between lvalue and rvalue for shadowed names. rewrite_lvalue (687-698) routes LValue::Var and LValue::Index names through rewrite_state_name (700-706), which prefixes any name in component.names.state without consulting bound; bound is applied only to the Index sub-expression via rewrite_expr, never to the variable name itself. This is asymmetric with rewrite_statement's ForAll arm (670-683), which clones bound and inserts the binder before rewriting the body, and with rewrite_expr's Var arm (711-717), which guards qualification on !bound.contains(&name). Effect: within a ForAll (or Quantified/Aggregate) body whose binder name matches a component state name, an assignment or index target to that name is still prefixed to alias.x by rewrite_state_name while the identical name in the rvalue is left bare by rewrite_expr, producing alias.x := f(x) instead of the intended x := f(x). Reachability caveat: whether the surface grammar permits a binder to shadow a component state name is not established in the available projections; if shadowing is illegal, this asymmetry is latent rather than triggerable. The downstream kernel behavior for the mixed qualification is not in the projections, so the kernel-corruption consequence is inferred from the immediate qualification split rather than observed."
+    },
+    {
+      "finding_id": "finding:878e86268579d0be179f2ace00ff4c35",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 585,
+          "end_line": 740
+        },
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 741,
+          "end_line": 855
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "medium",
+      "rationale": "Non-exhaustive rewrite_expr/rewrite_type catch-alls (other => other) silently pass unhandled variants through without qualification. rewrite_expr ends in `other => other` (840) and rewrite_type ends in `other => other` (589): any Expr/TypeExpr variant not explicitly enumerated is returned unchanged, with no qualification of embedded identifiers and no compile-time exhaustiveness error. Trigger: any fall-through variant carrying unqualified state/const/type names (including variants added later) yields unresolvable references in the lowered kernel; the catch-all makes the omission silent. Expr::Call likewise leaves its name unqualified (742-749), which is sound only if call names are always global."
+    }
+  ]
+}

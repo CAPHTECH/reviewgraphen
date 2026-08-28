@@ -1,0 +1,31 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_post_timeout_recovery.v1",
+  "status": "frozen_before_generation",
+  "date": "2026-08-23",
+  "reason": "Measure 8bit/medium finding precision after the comparable 600-second run timed out in final review.",
+  "trial": "8bit-medium-final1200-r1",
+  "model": "Qwen3.8-27B-MLX-8bit",
+  "requested_effort": "medium",
+  "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+  "predecessor": {
+    "result": "diagnostics/resident-8bit-medium-timeout600-r1/run/result.json",
+    "outcome": "incomplete",
+    "runtime_report_sha256": "4d8fd6b16afbc34323567d7c927d172ea5c7f12f7bd3375d36de4ef6b5134429",
+    "final_prompt_sha256": "94fb0aa9cc444458a9ca41785272166241c66eb599e8cf10ba5272eb1d8ef219"
+  },
+  "contract": {
+    "reuse_selector_outputs": true,
+    "rerun_selectors": false,
+    "selected_cards": [
+      "target-body",
+      "statement-rewrite",
+      "compose-rewrite"
+    ],
+    "exact_predecessor_final_prompt": true,
+    "final_review_timeout_seconds": 1200,
+    "additional_final_attempts": 1,
+    "resident_backend_declared_by_operator": true
+  },
+  "measurement": "Produce and validate one final review, then apply the same blind Codex judge used for 4bit/low and 8bit/low.",
+  "authority": "post-timeout diagnostic observation; not accepted evidence and not a continuation of the timed-out model session"
+}

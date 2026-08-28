@@ -1,0 +1,828 @@
+{
+  "budget_policy_ids": [
+    "budget:m18-deterministic",
+    "budget:m18-selection",
+    "budget:m18-final-review",
+    "budget:m18-judge"
+  ],
+  "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+  "completeness_policy": "all_expected_nodes_reported",
+  "edges": [
+    {
+      "blocking_predicate": "the latest ReviewGraphen context state is absent",
+      "dependency_witness": "the selector input binds the immediately preceding projection state",
+      "edge_id": "edge:8bit-low-r1:project-overview-select-1",
+      "from": "node:8bit-low-r1:project-overview",
+      "input": "review_context",
+      "kind": "data",
+      "output": "review_context",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge Qwen could select from a stale or unobserved state",
+      "resource_scope": [],
+      "schema_id": "schema:m18-review-context-state",
+      "to": "node:8bit-low-r1:select-1"
+    },
+    {
+      "blocking_predicate": "the Qwen expansion request is absent",
+      "dependency_witness": "the projector validates the request produced for this exact round",
+      "edge_id": "edge:8bit-low-r1:select-1-expand-1",
+      "from": "node:8bit-low-r1:select-1",
+      "input": "expansion_request",
+      "kind": "data",
+      "output": "expansion_request",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge the projector could expand a card not selected by Qwen",
+      "resource_scope": [],
+      "schema_id": "schema:m18-expansion-request",
+      "to": "node:8bit-low-r1:expand-1"
+    },
+    {
+      "blocking_predicate": "the prior context and consumed-card ledger are absent",
+      "dependency_witness": "the projector needs the prior state to reject duplicates and enforce the round budget",
+      "edge_id": "edge:8bit-low-r1:project-overview-expand-1",
+      "from": "node:8bit-low-r1:project-overview",
+      "input": "review_context",
+      "kind": "data",
+      "output": "review_context",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge duplicate or out-of-budget projections could be accepted",
+      "resource_scope": [],
+      "schema_id": "schema:m18-review-context-state",
+      "to": "node:8bit-low-r1:expand-1"
+    },
+    {
+      "blocking_predicate": "the latest ReviewGraphen context state is absent",
+      "dependency_witness": "the selector input binds the immediately preceding projection state",
+      "edge_id": "edge:8bit-low-r1:expand-1-select-2",
+      "from": "node:8bit-low-r1:expand-1",
+      "input": "review_context",
+      "kind": "data",
+      "output": "review_context",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge Qwen could select from a stale or unobserved state",
+      "resource_scope": [],
+      "schema_id": "schema:m18-review-context-state",
+      "to": "node:8bit-low-r1:select-2"
+    },
+    {
+      "blocking_predicate": "the Qwen expansion request is absent",
+      "dependency_witness": "the projector validates the request produced for this exact round",
+      "edge_id": "edge:8bit-low-r1:select-2-expand-2",
+      "from": "node:8bit-low-r1:select-2",
+      "input": "expansion_request",
+      "kind": "data",
+      "output": "expansion_request",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge the projector could expand a card not selected by Qwen",
+      "resource_scope": [],
+      "schema_id": "schema:m18-expansion-request",
+      "to": "node:8bit-low-r1:expand-2"
+    },
+    {
+      "blocking_predicate": "the prior context and consumed-card ledger are absent",
+      "dependency_witness": "the projector needs the prior state to reject duplicates and enforce the round budget",
+      "edge_id": "edge:8bit-low-r1:expand-1-expand-2",
+      "from": "node:8bit-low-r1:expand-1",
+      "input": "review_context",
+      "kind": "data",
+      "output": "review_context",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge duplicate or out-of-budget projections could be accepted",
+      "resource_scope": [],
+      "schema_id": "schema:m18-review-context-state",
+      "to": "node:8bit-low-r1:expand-2"
+    },
+    {
+      "blocking_predicate": "the latest ReviewGraphen context state is absent",
+      "dependency_witness": "the selector input binds the immediately preceding projection state",
+      "edge_id": "edge:8bit-low-r1:expand-2-select-3",
+      "from": "node:8bit-low-r1:expand-2",
+      "input": "review_context",
+      "kind": "data",
+      "output": "review_context",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge Qwen could select from a stale or unobserved state",
+      "resource_scope": [],
+      "schema_id": "schema:m18-review-context-state",
+      "to": "node:8bit-low-r1:select-3"
+    },
+    {
+      "blocking_predicate": "the Qwen expansion request is absent",
+      "dependency_witness": "the projector validates the request produced for this exact round",
+      "edge_id": "edge:8bit-low-r1:select-3-expand-3",
+      "from": "node:8bit-low-r1:select-3",
+      "input": "expansion_request",
+      "kind": "data",
+      "output": "expansion_request",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge the projector could expand a card not selected by Qwen",
+      "resource_scope": [],
+      "schema_id": "schema:m18-expansion-request",
+      "to": "node:8bit-low-r1:expand-3"
+    },
+    {
+      "blocking_predicate": "the prior context and consumed-card ledger are absent",
+      "dependency_witness": "the projector needs the prior state to reject duplicates and enforce the round budget",
+      "edge_id": "edge:8bit-low-r1:expand-2-expand-3",
+      "from": "node:8bit-low-r1:expand-2",
+      "input": "review_context",
+      "kind": "data",
+      "output": "review_context",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge duplicate or out-of-budget projections could be accepted",
+      "resource_scope": [],
+      "schema_id": "schema:m18-review-context-state",
+      "to": "node:8bit-low-r1:expand-3"
+    },
+    {
+      "blocking_predicate": "the complete bounded context is absent",
+      "dependency_witness": "the final reviewer consumes the state after exactly three expansions",
+      "edge_id": "edge:8bit-low-r1:expand-3-final-review",
+      "from": "node:8bit-low-r1:expand-3",
+      "input": "review_context",
+      "kind": "data",
+      "output": "review_context",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge the review could omit or invent received projections",
+      "resource_scope": [],
+      "schema_id": "schema:m18-review-context-state",
+      "to": "node:8bit-low-r1:final-review"
+    },
+    {
+      "blocking_predicate": "the raw structured review is absent",
+      "dependency_witness": "the deterministic validator checks the exact emitted review artifact",
+      "edge_id": "edge:8bit-low-r1:final-review-validate",
+      "from": "node:8bit-low-r1:final-review",
+      "input": "review",
+      "kind": "data",
+      "output": "review",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge protocol compliance could be inferred without validating the output",
+      "resource_scope": [],
+      "schema_id": "schema:m16-review-report",
+      "to": "node:8bit-low-r1:validate"
+    },
+    {
+      "blocking_predicate": "the authoritative projection trace is absent",
+      "dependency_witness": "grounding validation compares review citations with the exact received source IDs",
+      "edge_id": "edge:8bit-low-r1:expand-3-validate",
+      "from": "node:8bit-low-r1:expand-3",
+      "input": "review_context",
+      "kind": "data",
+      "output": "review_context",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge invented or unreceived source IDs could pass validation",
+      "resource_scope": [],
+      "schema_id": "schema:m18-review-context-state",
+      "to": "node:8bit-low-r1:validate"
+    },
+    {
+      "blocking_predicate": "the candidate findings are absent",
+      "dependency_witness": "the blind judge evaluates normalized findings from the emitted review",
+      "edge_id": "edge:8bit-low-r1:final-review-judge",
+      "from": "node:8bit-low-r1:final-review",
+      "input": "review",
+      "kind": "data",
+      "output": "review",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge the judge could evaluate a different finding set",
+      "resource_scope": [],
+      "schema_id": "schema:m16-review-report",
+      "to": "node:8bit-low-r1:judge"
+    },
+    {
+      "blocking_predicate": "the candidate findings have not crossed the independent judgment seam",
+      "dependency_witness": "verification:m18-independent-codex-judge requires a distinct judge actor and session",
+      "edge_id": "edge:8bit-low-r1:final-review-judge-authority",
+      "from": "node:8bit-low-r1:final-review",
+      "input": null,
+      "kind": "review_or_authority",
+      "output": null,
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge Qwen output could be presented as independently judged",
+      "resource_scope": [],
+      "schema_id": null,
+      "to": "node:8bit-low-r1:judge"
+    },
+    {
+      "blocking_predicate": "the deterministic protocol result is absent",
+      "dependency_witness": "the arm outcome reports completion only from the validator artifact",
+      "edge_id": "edge:8bit-low-r1:validate-outcome",
+      "from": "node:8bit-low-r1:validate",
+      "input": "validation",
+      "kind": "data",
+      "output": "validation",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge a schema-invalid run could be counted as completed",
+      "resource_scope": [],
+      "schema_id": "schema:m18-validation-report",
+      "to": "node:8bit-low-r1:outcome"
+    },
+    {
+      "blocking_predicate": "the independent quality judgment is absent",
+      "dependency_witness": "the arm outcome keeps quality separate from protocol completion",
+      "edge_id": "edge:8bit-low-r1:judge-outcome",
+      "from": "node:8bit-low-r1:judge",
+      "input": "judgment",
+      "kind": "data",
+      "output": "judgment",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge the experiment could report completion without review-quality evidence",
+      "resource_scope": [],
+      "schema_id": "schema:m18-codex-judgment",
+      "to": "node:8bit-low-r1:outcome"
+    },
+    {
+      "blocking_predicate": "the m18 8bit/low arm result is absent",
+      "dependency_witness": "the comparison requires the validated m18 arm result",
+      "edge_id": "edge:8bit-low-r1:outcome-compare",
+      "from": "node:8bit-low-r1:outcome",
+      "input": "8bit_low",
+      "kind": "data",
+      "output": "arm_result",
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "removal_counterexample": "without this edge the comparison could omit the new intervention result",
+      "resource_scope": [],
+      "schema_id": "schema:m18-arm-result",
+      "to": "node:compare"
+    }
+  ],
+  "expansion_policy_ids": [],
+  "nodes": [
+    {
+      "budget_policy_id": "budget:m18-deterministic",
+      "delivery": "barrier",
+      "estimated_duration_ms": 30000,
+      "executor_class": "reviewgraphen-projector",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:project-overview:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "benchmark:m15#cards",
+          "name": "frozen_cards",
+          "schema_id": "schema:m18-frozen-card-inventory"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:project-overview",
+      "outputs": [
+        {
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Create the frozen ReviewGraphen overview Projection for 8bit-low-r1",
+      "resource_claims": [
+        {
+          "mode": "read",
+          "network_scope": [],
+          "rate_limit_group": null,
+          "resource": "artifact:m15-frozen-cards",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "none",
+      "verification_policy_id": null,
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-selection",
+      "delivery": "barrier",
+      "estimated_duration_ms": 240000,
+      "executor_class": "qwen-route-selector",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:select-1:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:project-overview#review_context",
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:select-1",
+      "outputs": [
+        {
+          "name": "expansion_request",
+          "schema_id": "schema:m18-expansion-request"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Ask Qwen to select exactly one next ReviewGraphen Projection for 8bit-low-r1, round 1",
+      "resource_claims": [
+        {
+          "mode": "exclusive",
+          "network_scope": [
+            "endpoint:192.168.68.71:11999"
+          ],
+          "rate_limit_group": "rate:qwen-local-backend",
+          "resource": "api:qwen-local-backend",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "external",
+      "verification_policy_id": null,
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-deterministic",
+      "delivery": "barrier",
+      "estimated_duration_ms": 30000,
+      "executor_class": "reviewgraphen-projector",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:expand-1:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:project-overview#review_context",
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        },
+        {
+          "artifact_selector": "node:8bit-low-r1:select-1#expansion_request",
+          "name": "expansion_request",
+          "schema_id": "schema:m18-expansion-request"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:expand-1",
+      "outputs": [
+        {
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Validate the single request and append exactly one frozen ReviewGraphen Projection for 8bit-low-r1, round 1",
+      "resource_claims": [
+        {
+          "mode": "read",
+          "network_scope": [],
+          "rate_limit_group": null,
+          "resource": "artifact:m15-frozen-cards",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "none",
+      "verification_policy_id": null,
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-selection",
+      "delivery": "barrier",
+      "estimated_duration_ms": 240000,
+      "executor_class": "qwen-route-selector",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:select-2:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:expand-1#review_context",
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:select-2",
+      "outputs": [
+        {
+          "name": "expansion_request",
+          "schema_id": "schema:m18-expansion-request"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Ask Qwen to select exactly one next ReviewGraphen Projection for 8bit-low-r1, round 2",
+      "resource_claims": [
+        {
+          "mode": "exclusive",
+          "network_scope": [
+            "endpoint:192.168.68.71:11999"
+          ],
+          "rate_limit_group": "rate:qwen-local-backend",
+          "resource": "api:qwen-local-backend",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "external",
+      "verification_policy_id": null,
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-deterministic",
+      "delivery": "barrier",
+      "estimated_duration_ms": 30000,
+      "executor_class": "reviewgraphen-projector",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:expand-2:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:expand-1#review_context",
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        },
+        {
+          "artifact_selector": "node:8bit-low-r1:select-2#expansion_request",
+          "name": "expansion_request",
+          "schema_id": "schema:m18-expansion-request"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:expand-2",
+      "outputs": [
+        {
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Validate the single request and append exactly one frozen ReviewGraphen Projection for 8bit-low-r1, round 2",
+      "resource_claims": [
+        {
+          "mode": "read",
+          "network_scope": [],
+          "rate_limit_group": null,
+          "resource": "artifact:m15-frozen-cards",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "none",
+      "verification_policy_id": null,
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-selection",
+      "delivery": "barrier",
+      "estimated_duration_ms": 240000,
+      "executor_class": "qwen-route-selector",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:select-3:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:expand-2#review_context",
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:select-3",
+      "outputs": [
+        {
+          "name": "expansion_request",
+          "schema_id": "schema:m18-expansion-request"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Ask Qwen to select exactly one next ReviewGraphen Projection for 8bit-low-r1, round 3",
+      "resource_claims": [
+        {
+          "mode": "exclusive",
+          "network_scope": [
+            "endpoint:192.168.68.71:11999"
+          ],
+          "rate_limit_group": "rate:qwen-local-backend",
+          "resource": "api:qwen-local-backend",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "external",
+      "verification_policy_id": null,
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-deterministic",
+      "delivery": "barrier",
+      "estimated_duration_ms": 30000,
+      "executor_class": "reviewgraphen-projector",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:expand-3:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:expand-2#review_context",
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        },
+        {
+          "artifact_selector": "node:8bit-low-r1:select-3#expansion_request",
+          "name": "expansion_request",
+          "schema_id": "schema:m18-expansion-request"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:expand-3",
+      "outputs": [
+        {
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Validate the single request and append exactly one frozen ReviewGraphen Projection for 8bit-low-r1, round 3",
+      "resource_claims": [
+        {
+          "mode": "read",
+          "network_scope": [],
+          "rate_limit_group": null,
+          "resource": "artifact:m15-frozen-cards",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "none",
+      "verification_policy_id": null,
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-final-review",
+      "delivery": "barrier",
+      "estimated_duration_ms": 420000,
+      "executor_class": "qwen-reviewer",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:final-review:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:expand-3#review_context",
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:final-review",
+      "outputs": [
+        {
+          "name": "review",
+          "schema_id": "schema:m16-review-report"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Generate the final structured review from only the received ReviewGraphen source IDs for 8bit-low-r1",
+      "resource_claims": [
+        {
+          "mode": "exclusive",
+          "network_scope": [
+            "endpoint:192.168.68.71:11999"
+          ],
+          "rate_limit_group": "rate:qwen-local-backend",
+          "resource": "api:qwen-local-backend",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "external",
+      "verification_policy_id": "verification:m18-independent-codex-judge",
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-deterministic",
+      "delivery": "barrier",
+      "estimated_duration_ms": 30000,
+      "executor_class": "deterministic-review-validator",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:validate:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:expand-3#review_context",
+          "name": "review_context",
+          "schema_id": "schema:m18-review-context-state"
+        },
+        {
+          "artifact_selector": "node:8bit-low-r1:final-review#review",
+          "name": "review",
+          "schema_id": "schema:m16-review-report"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:validate",
+      "outputs": [
+        {
+          "name": "validation",
+          "schema_id": "schema:m18-validation-report"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Validate schema, budgets, uniqueness, source trace, and grounding for 8bit-low-r1",
+      "resource_claims": [
+        {
+          "mode": "read",
+          "network_scope": [],
+          "rate_limit_group": null,
+          "resource": "artifact:m15-frozen-cards",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "none",
+      "verification_policy_id": null,
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-judge",
+      "delivery": "barrier",
+      "estimated_duration_ms": 420000,
+      "executor_class": "independent-codex-judge",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:judge:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:final-review#review",
+          "name": "review",
+          "schema_id": "schema:m16-review-report"
+        },
+        {
+          "artifact_selector": "benchmark:m16#judge-source",
+          "name": "frozen_source",
+          "schema_id": "schema:m18-frozen-source"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:judge",
+      "outputs": [
+        {
+          "name": "judgment",
+          "schema_id": "schema:m18-codex-judgment"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Blindly judge normalized findings against the frozen full source for 8bit-low-r1",
+      "resource_claims": [
+        {
+          "mode": "read",
+          "network_scope": [],
+          "rate_limit_group": null,
+          "resource": "artifact:frozen-compose-source",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "external",
+      "verification_policy_id": "verification:m18-independent-codex-judge",
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-deterministic",
+      "delivery": "barrier",
+      "estimated_duration_ms": 30000,
+      "executor_class": "deterministic-reducer",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:8bit-low-r1:outcome:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:validate#validation",
+          "name": "validation",
+          "schema_id": "schema:m18-validation-report"
+        },
+        {
+          "artifact_selector": "node:8bit-low-r1:judge#judgment",
+          "name": "judgment",
+          "schema_id": "schema:m18-codex-judgment"
+        }
+      ],
+      "node_id": "node:8bit-low-r1:outcome",
+      "outputs": [
+        {
+          "name": "arm_result",
+          "schema_id": "schema:m18-arm-result"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Combine protocol validation and blind quality judgment without promoting either to accepted review state for 8bit-low-r1",
+      "resource_claims": [],
+      "side_effects": "none",
+      "verification_policy_id": null,
+      "work_cell_id": "work:8bit-low-r1"
+    },
+    {
+      "budget_policy_id": "budget:m18-deterministic",
+      "delivery": "barrier",
+      "estimated_duration_ms": 30000,
+      "executor_class": "deterministic-reducer",
+      "expansion_policy_id": null,
+      "idempotency_key": "node:compare:<bound-input-hash>",
+      "inputs": [
+        {
+          "artifact_selector": "node:8bit-low-r1:outcome#arm_result",
+          "name": "8bit_low",
+          "schema_id": "schema:m18-arm-result"
+        },
+        {
+          "artifact_selector": "benchmark:m17#aggregate",
+          "name": "m17_observations",
+          "schema_id": "schema:m17-experiment-result"
+        }
+      ],
+      "node_id": "node:compare",
+      "outputs": [
+        {
+          "name": "experiment_result",
+          "schema_id": "schema:m18-experiment-result"
+        }
+      ],
+      "provenance": {
+        "created_by": "actor:codex-experiment-designer",
+        "source": "benchmark:m18-preregistration"
+      },
+      "purpose": "Compare the m18 8bit/low observation with the frozen m17 8bit/high and 4bit/low observations without causal promotion",
+      "resource_claims": [
+        {
+          "mode": "read",
+          "network_scope": [],
+          "rate_limit_group": null,
+          "resource": "artifact:m16-baseline",
+          "secret_scope": [],
+          "workspace_strategy": "ephemeral"
+        }
+      ],
+      "side_effects": "none",
+      "verification_policy_id": null,
+      "work_cell_id": "work:compare"
+    }
+  ],
+  "provenance": {
+    "created_by": "actor:codex-experiment-designer",
+    "source": "benchmark:m18-preregistration"
+  },
+  "schema": "casegraphen.experimental.execution.topology.v0",
+  "schema_version": 0,
+  "topology_id": "topology:m18-8bit-low-checkpoint-review-v1",
+  "verification_policy_ids": [
+    "verification:m18-independent-codex-judge"
+  ]
+}

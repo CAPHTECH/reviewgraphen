@@ -1,0 +1,65 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_effort_comparison.v1",
+  "authority": "runtime observations and derived diagnostics; unreviewed and not accepted evidence",
+  "configuration": {
+    "model": "Qwen3.8-27B-MLX-8bit",
+    "requested_effort": "medium",
+    "operator_declared_resident": true,
+    "selection_timeout_seconds": 600,
+    "final_review_timeout_seconds": 600,
+    "retries": 0
+  },
+  "medium_result": {
+    "outcome": "incomplete",
+    "selected_cards": [
+      "target-body",
+      "statement-rewrite",
+      "compose-rewrite"
+    ],
+    "node_elapsed_seconds": {
+      "select_1": 71.949,
+      "select_2": 406.744,
+      "select_3": 254.178,
+      "final_review": 600.001
+    },
+    "selector_elapsed_seconds": 732.871,
+    "observed_model_elapsed_seconds": 1332.872,
+    "raw_model_stream_bytes": 1215064,
+    "estimated_thinking_tokens": {
+      "select_1": 527,
+      "select_2": 6650,
+      "select_3": 3614,
+      "final_review_before_timeout": 9817,
+      "observed_total": 20608
+    },
+    "final_review_status": 124,
+    "final_review_result_event_produced": false,
+    "finding_count": 0,
+    "review_sha256": null,
+    "runtime_report_sha256": "4d8fd6b16afbc34323567d7c927d172ea5c7f12f7bd3375d36de4ef6b5134429"
+  },
+  "low_reference": {
+    "source": "benchmarks/m18-8bit-low-checkpoint-review-v1/diagnostics/resident-timeout600-r1/comparison.json",
+    "outcome": "completed",
+    "selected_cards": [
+      "target-body",
+      "statement-rewrite",
+      "sync-alias-boundary"
+    ],
+    "selector_elapsed_seconds": 887.036,
+    "known_model_elapsed_seconds": 1380.020,
+    "estimated_thinking_tokens": 19689,
+    "finding_count": 3,
+    "blind_judge_issue_should_be_created": 0
+  },
+  "derived_comparison": {
+    "medium_selector_time_reduction_seconds": 154.165,
+    "medium_selector_time_reduction_percent": 17.38,
+    "medium_observed_time_before_failure_seconds": 1332.872,
+    "medium_observed_thinking_token_excess_over_completed_low": 919,
+    "completion_speed_winner": "undetermined",
+    "accuracy_winner": "undetermined because medium produced no review"
+  },
+  "observed_result": "8bit/medium completed all three evidence-responsive projection selections but timed out in final review after 600.001 seconds without an assistant or result event. It therefore did not produce a valid review or judgeable findings.",
+  "interpretation_ceiling": "One stochastic replicate establishes failure under this 600-second final-node policy only. The selector route diverged at the third projection, and no final report exists, so neither end-to-end latency nor finding precision can be compared with low. Estimated thinking tokens are a runtime proxy, not canonical token accounting."
+}

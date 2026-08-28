@@ -1,0 +1,45 @@
+{
+  "schema": "reviewgraphen.benchmark.m17_blind_findings.v1",
+  "unit_id": "m18-8bit-low-r1",
+  "findings": [
+    {
+      "finding_id": "finding:5d46fc169827ad1266d1774f76c6baff",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 585,
+          "end_line": 740
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "medium",
+      "rationale": "rewrite_lvalue ignores the bound set, mis-qualifying shadowed state names. rewrite_expr guards Expr::Var with `!bound.contains(&name)` before prefixing (lines 711-717), but rewrite_lvalue (687-698) threads `bound` into the recursion yet rewrite_state_name (700-706) never consults it. Trigger: inside a ForAll whose binder name shadows a component state name, an lvalue (LValue::Var or LValue::Index) on that name is prefixed to `alias.<name>` on the assignment target while the same name in an expression stays unqualified, producing inconsistent/corrupted rewrites (e.g. `x[i] = x` where `x` is the binder). The presence of `bound` as a parameter to rewrite_lvalue suggests the check was intended but dropped."
+    },
+    {
+      "finding_id": "finding:d4b7e4632ae1abfe0ef29140c05217a8",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 1009,
+          "end_line": 1120
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "medium",
+      "rationale": "sync_action uses unreachable!() which can abort instead of returning CoreError. At lines 1051-1058, sync_action pattern-matches rewrite_component_item's result on SpecItem::Action with an `else { unreachable!() }`. The input is selected as an Action (line 1034), so this is safe only if rewrite_component_item preserves the Action variant — a behavior outside this projection. If it ever maps an Action to a non-Action, the process panics/aborts, violating the documented contract that lower_compose returns CoreError for invalid inputs rather than aborting."
+    },
+    {
+      "finding_id": "finding:e7d56d6b21180dc61fcb9e8a9c872008",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 249,
+          "end_line": 372
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "low",
+      "rationale": "init metadata uses first-wins, silently discarding later components' init meta. init_meta is set only while `init_meta.is_none()` (lines 320-322 for component inits, 346-348 for compose-level inits). When several components each declare init metadata, only the first component's meta survives in the merged SpecItem::Init (360-364); later meta is silently dropped without error or warning, which can lose per-component init provenance in the composed kernel."
+    }
+  ]
+}

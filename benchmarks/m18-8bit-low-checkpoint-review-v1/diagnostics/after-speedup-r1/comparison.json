@@ -1,0 +1,27 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_post_change_comparison.v1",
+  "baseline": {
+    "select_1_elapsed_seconds": 97.393,
+    "select_1_output_tokens": 1044,
+    "select_1_thinking_events": 262,
+    "select_2_elapsed_seconds": 240.001,
+    "select_2_status": 124,
+    "select_2_thinking_events": 996
+  },
+  "after_speedup": {
+    "select_1_elapsed_seconds": 157.107,
+    "select_1_output_tokens": 1348,
+    "select_1_thinking_events": 351,
+    "select_2_elapsed_seconds": 240.001,
+    "select_2_status": 124,
+    "select_2_thinking_events": 1088
+  },
+  "invariants": {
+    "select_1_prompt_sha256": "25728f72b45033a08409e3aef04d2b6a9c2bc0e1648edf69e56e6b7d6ada4ff2",
+    "select_2_prompt_sha256": "2f15d8cc2040d82e5e2c01aa1f888f4199dbf54a8b54f388ee238f71d8d73f08",
+    "backend_identity_unchanged": true,
+    "backend_health_identity_unchanged": true
+  },
+  "observed_result": "No end-to-end or node-latency speedup was observed. The post-change run generated more output and thinking events and again timed out at select-2.",
+  "interpretation_ceiling": "One stochastic replicate cannot show that backend throughput did not improve; a longer generated reasoning path can mask a throughput improvement. The available runtime counters do not provide a reliable thinking-token throughput measurement."
+}

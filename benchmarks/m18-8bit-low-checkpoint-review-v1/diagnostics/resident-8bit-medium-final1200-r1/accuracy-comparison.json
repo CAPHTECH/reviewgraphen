@@ -1,0 +1,63 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_effort_accuracy_comparison.v1",
+  "authority": "non-authoritative blind-judge evidence; not verified or human-accepted defect truth",
+  "comparison": {
+    "four_bit_low": {
+      "model": "Qwen3.8-27B-MLX-4bit",
+      "requested_effort": "low",
+      "finding_count": 3,
+      "issue_should_be_created": 1,
+      "should_not_be_created": 2,
+      "unable_to_determine": 0,
+      "judge_actionability_rate": 0.3333333333333333,
+      "completed_model_elapsed_seconds": 772.629
+    },
+    "eight_bit_low": {
+      "model": "Qwen3.8-27B-MLX-8bit",
+      "requested_effort": "low",
+      "finding_count": 3,
+      "issue_should_be_created": 0,
+      "should_not_be_created": 3,
+      "unable_to_determine": 0,
+      "judge_actionability_rate": 0.0,
+      "completed_model_elapsed_seconds": 1380.020
+    },
+    "eight_bit_medium": {
+      "model": "Qwen3.8-27B-MLX-8bit",
+      "requested_effort": "medium",
+      "finding_count": 1,
+      "issue_should_be_created": 1,
+      "should_not_be_created": 0,
+      "unable_to_determine": 0,
+      "judge_actionability_rate": 1.0,
+      "selector_elapsed_seconds": 732.871,
+      "successful_final_elapsed_seconds": 684.943,
+      "counterfactual_single_extended_run_elapsed_seconds": 1417.814,
+      "actual_diagnostic_compute_seconds_including_failed_final": 2017.815,
+      "selected_cards": [
+        "target-body",
+        "statement-rewrite",
+        "compose-rewrite"
+      ],
+      "review_sha256": "e9513135497fd828057237efb0f6273b08a641b1ed5d15852906c0c771056858",
+      "judgment_sha256": "e626cb21aa634fac72ac3ef09b96b097176ec5c786b9724ff23e1b45c60add7e"
+    }
+  },
+  "medium_judgment": {
+    "disposition": "issue_should_be_created",
+    "finding": "Compose-level Init aliases panic via .expect() instead of returning the documented CoreError",
+    "mechanism_confirmed": "An alias-resolution Err can reach rewrite_compose_statements and be unwrapped by expect at line 960.",
+    "judge_narrowing": "The model's ordinary unknown-alias expression trigger was too broad. The judge identified typed ForAll or quantified typed-binder QualifiedName paths as concrete reachable triggers.",
+    "false_positive_suspected": false,
+    "design_intent_confusion_suspected": false
+  },
+  "judge_configuration": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "blind_to_candidate_model": true,
+    "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+    "disposition_policy": "issue_should_be_created / should_not_be_created / unable_to_determine"
+  },
+  "observed_result": "In these single checkpoint-controlled observations, 8bit/medium was the most selective and had the highest blind-judge actionability rate: one accepted finding out of one, versus one of three for 4bit/low and zero of three for 8bit/low.",
+  "interpretation_ceiling": "The actionability rate is a blind-judge proxy, not ground-truth precision. Medium required a separate extended final attempt after the preregistered 600-second final timed out. One accepted finding cannot estimate stable precision, and no gold defect universe exists for recall. The arms selected different third projections, so the result reflects both reasoning effort and evidence-responsive route selection."
+}

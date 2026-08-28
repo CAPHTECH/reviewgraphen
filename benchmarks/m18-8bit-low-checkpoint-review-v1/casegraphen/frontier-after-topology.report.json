@@ -1,0 +1,36 @@
+{
+  "input": {
+    "command": "casegraphen space frontier"
+  },
+  "metadata": {
+    "command": "casegraphen space frontier",
+    "core_packages": [
+      "higher-graphen-core"
+    ],
+    "tool_package": "casegraphen"
+  },
+  "projection": {
+    "ai_view": {
+      "native_boundary": "CaseSpace plus MorphismLog state is replayed before derived reports are emitted.",
+      "operation": "casegraphen space frontier"
+    },
+    "audit_trace": {
+      "information_loss": [
+        "Native CLI operation reports include the operation result but not a full command-line argv transcript."
+      ],
+      "source_ids": []
+    },
+    "human_review": {
+      "summary": "Native CaseGraphen CLI operation completed."
+    }
+  },
+  "report_type": "native_cli_operation",
+  "report_version": 1,
+  "result": {
+    "frontier_cell_ids": [
+      "goal:m18-governed-followup",
+      "work:8bit-low-r1"
+    ]
+  },
+  "schema": "highergraphen.case.native_cli.report.v1"
+}

@@ -1,0 +1,27 @@
+{
+  "cell_type": "evidence",
+  "id": "evidence:execution-topology",
+  "lifecycle": "proposed",
+  "metadata": {
+    "artifact_id": "artifact:sha256-e08454b62d48e62e18065236ec230931a2ff099cb2ed43f80563238e09f1ece7",
+    "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+    "execution_topology_content_hash": "99a8a26c4ff655f91e04117d0fa3e52b569297ea257db02b2f25da429a820c9e",
+    "policy_manifest_content_hash": "522ea492574250e91dd2a8509c2dc4c2dfb1458ca6967bf0a9fdaaeb2e0548a5",
+    "topology_id": "topology:m18-8bit-low-checkpoint-review-v1"
+  },
+  "provenance": {
+    "confidence": 1.0,
+    "review_status": "unreviewed",
+    "source": {
+      "kind": "human",
+      "title": "User-approved m18 experiment intent"
+    }
+  },
+  "source_ids": [
+    "source:m18-approved-intent"
+  ],
+  "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+  "structure_ids": [],
+  "summary": "The exact topology bytes remain unreviewed until topology-review records the user's decision.",
+  "title": "Exact m18 execution topology and policy manifest approved for execution"
+}

@@ -1,0 +1,97 @@
+{
+  "accepted_state_changed": false,
+  "artifacts": [
+    {
+      "content_hash": "sha256:e08454b62d48e62e18065236ec230931a2ff099cb2ed43f80563238e09f1ece7",
+      "path": "design/execution.topology.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:62ad806e74b0a2b6cb2d6e32c7dcd0f7081375805faf9a6662d99f960f44f3ba",
+      "path": "design/graph.analysis.report.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:7ae37612c08c6a48e3f80724c4180210be2e992b0c2024601de0a407ece4bf91",
+      "path": "design/deployment-policy-manifest.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:37afc2fce1fc3dcb6918431151a03cf40c1d7a9afa7c8412004cfedc3e2b3e5f",
+      "path": "design/verification.policy.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:e3289ac654baff8508ad888ee8fdb8604c02b089e5a2c224be270f4c472ddfc5",
+      "path": "design/runtime.deployment.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:c4118554854e1e16403afef234ced2b05f87861df2b41a953e5fafa6754a990b",
+      "path": "design/genesis.mapping.proposal.md",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:6c52beda50c0c4566a34bb5c51c403d3da1831bb4245520154578fb4b7cbc589",
+      "path": "design/execution-plan.mapping.proposal.md",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:0b4d4b0f87e4e6eede4f1456357a74230d0c98bcfa19ac3748eb3be86bbb1c5e",
+      "path": "design/TOPOLOGY_REVIEW.md",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:d2e023966feceaa74987781754be8e7a5138095ee73f97fea7bbbe660f507494",
+      "path": "preregistration.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:df1f66e86b7499ed2d891ad8fa5278857e0dc813e2f4ec8dbe5e078c5bfd26a6",
+      "path": "design/budget-m18-deterministic.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:821049e8bd06b226cfda396f1b630351967b421e1b7bf84ffbf177ef621e4290",
+      "path": "design/budget-m18-selection.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:a646f0761451dd324262e1042c0fa2a8d5266b9e9f4fc8ade6a763ea76470b1d",
+      "path": "design/budget-m18-final-review.json",
+      "role": "proposal"
+    },
+    {
+      "content_hash": "sha256:4b2dcf323433d4462f9c31c1022e3fe825f5a6a24d95b23049d0870cd886776f",
+      "path": "design/budget-m18-judge.json",
+      "role": "proposal"
+    }
+  ],
+  "handoff_id": "handoff:m18:topology-review",
+  "mutation_performed": false,
+  "next_action": {
+    "kind": "return_for_review",
+    "task_skill": null
+  },
+  "observed": {
+    "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+    "report_ids": [
+      "graph-lint:99a8a26c4ff655f9"
+    ],
+    "revision_id": null,
+    "topology_content_hash": "sha256:99a8a26c4ff655f91e04117d0fa3e52b569297ea257db02b2f25da429a820c9e"
+  },
+  "phase": "topology_proposed",
+  "return_required": true,
+  "schema": "casegraphen.experimental.skill.orchestration_handoff.v0",
+  "seams": [
+    {
+      "kind": "topology_review",
+      "required_actor_or_policy": "independent reviewer of the exact m18 topology and deployment policy manifest",
+      "status": "open"
+    }
+  ],
+  "selected_task_skill": "casegraphen-design",
+  "selection_reason": "The phase produced an unreviewed single-arm 8bit/low follow-up topology.",
+  "unresolved_evidence": []
+}

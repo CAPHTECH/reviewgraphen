@@ -1,0 +1,29 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_timeout_extension_comparison.v1",
+  "configuration": {
+    "model": "Qwen3.8-27B-MLX-8bit",
+    "requested_effort": "low",
+    "operator_declared_resident": true,
+    "selection_timeout_seconds": 360,
+    "final_review_timeout_seconds": 420
+  },
+  "result": {
+    "outcome": "incomplete",
+    "selected_cards": ["target-body", "sync-alias-boundary"],
+    "select_1_elapsed_seconds": 104.559,
+    "select_2_elapsed_seconds": 349.308,
+    "select_2_status": 0,
+    "select_3_elapsed_seconds": 360.001,
+    "select_3_status": 124,
+    "final_review_produced": false,
+    "finding_count": 0,
+    "raw_model_stream_bytes": 719611
+  },
+  "comparison": {
+    "240_second_limit": "select-2 timed out before producing a result",
+    "360_second_limit": "select-2 completed 10.692 seconds before the extended limit; select-3 then timed out",
+    "additional_progress": "one additional valid projection, sync-alias-boundary, was selected and appended"
+  },
+  "observed_result": "Extending the selector timeout from 240 to 360 seconds recovered a valid select-2 result but was insufficient for end-to-end completion.",
+  "interpretation_ceiling": "The select-3 prompt differs because select-2 chose sync-alias-boundary. Its required completion time is unknown beyond being greater than 360 seconds in this replicate."
+}

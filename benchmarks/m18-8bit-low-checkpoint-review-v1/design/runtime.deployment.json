@@ -1,0 +1,41 @@
+{
+  "casegraphen": {
+    "accepted_state_is_not_review_state": true,
+    "governed_work_cells": [
+      "work:8bit-low-r1",
+      "work:compare"
+    ],
+    "model_worker": null,
+    "role": "acceptance_ledger_not_runtime",
+    "version": "0.9.1 (acb4a50)"
+  },
+  "external_runtime": {
+    "max_parallel": 1,
+    "micro_nodes_remain_runtime_trace": true,
+    "role": "model_node_scheduler_and_typed_handoff_owner",
+    "runtime_reports_enter_casegraphen_as_unreviewed_evidence": true,
+    "workspace_strategy": "ephemeral"
+  },
+  "judge": {
+    "candidate_arm_hidden": true,
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "separate_session_required": true
+  },
+  "qwen": {
+    "endpoint": "http://192.168.68.71:11999",
+    "filesystem": "read-only inputs plus one declared output artifact",
+    "final_reviewer_tools": [],
+    "network_scope": "endpoint:192.168.68.71:11999",
+    "reported_identity_is_runtime_declared": true,
+    "selector_tools": []
+  },
+  "reviewgraphen": {
+    "cards_source": "benchmarks/m15-qwen-intelligent-reviewgraphen-v1/cards",
+    "information_loss_declaration_required": true,
+    "maximum_expansions": 3,
+    "source_trace_required": true
+  },
+  "schema": "reviewgraphen.benchmark.m18_runtime_deployment.v1",
+  "status": "runtime_owned_unreviewed"
+}

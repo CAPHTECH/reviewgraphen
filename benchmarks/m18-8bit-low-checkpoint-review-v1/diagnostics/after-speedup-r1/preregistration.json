@@ -1,0 +1,20 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_post_change_diagnostic.v1",
+  "status": "frozen_before_generation",
+  "date": "2026-08-22",
+  "reason": "Operator reported that the 8bit backend was accelerated after the original m18 run.",
+  "trial": "8bit-low-after-speedup-r1",
+  "model": "Qwen3.8-27B-MLX-8bit",
+  "requested_effort": "low",
+  "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+  "contract": {
+    "fresh_result_directory": true,
+    "selection_rounds": 3,
+    "selection_timeout_seconds": 240,
+    "final_review_timeout_seconds": 420,
+    "retries": 0,
+    "runtime_implementation": "m17 frozen external checkpoint runtime via m18 wrapper"
+  },
+  "comparison": "Compare node-level prompt hashes, completion, and elapsed time with the original m18 8bit-low-r1 run.",
+  "authority": "post-change diagnostic observation; not part of the preregistered m18 primary result"
+}
