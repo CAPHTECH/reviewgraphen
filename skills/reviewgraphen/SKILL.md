@@ -122,7 +122,7 @@ or claim execution of them**, and never translate a stage of the pipeline above
 into a command that is not on this list. `--help` prints the single usage line
 and exits 2; there are no per-subcommand help pages.
 
-`review` accepts the closed generic-review request v2 or v3 contracts. The
+`review` accepts the closed generic-review request v2, v3, or v4 contracts. The
 implemented slice is narrow: `rust.production.v1`, the
 `relation.changed_public_callee@1` rule over an accepted direct `calls`
 relation, and `rust.callee_contract_review@1`. V3 selects
@@ -130,6 +130,12 @@ relation, and `rust.callee_contract_review@1`. V3 selects
 bounded source windows, denominator commitments, unknowns, and declared loss.
 This is not a repository-wide call graph, proof that a contract changed, or
 proof that a bug exists.
+
+V4 is a separate mixed production family: D remains bound to
+`context.subject_windows@3`, while `node.public_function_contract@1` is bound
+only to `context.subject_windows@4`. Its Node arm covers accepted exact public
+free functions with a module `contains` witness, never `direct_calls`, and its
+single-layer coverage must not be described as a call-enumeration gap.
 
 Run from the admitted repository root. The request binds immutable base and
 target revisions, profile/rule identity, ingest bounds, plan bounds, observer,

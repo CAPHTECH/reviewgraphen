@@ -32,6 +32,14 @@ provider-free経路がある（`crates/reviewgraphen-cli/src/lib.rs:58-64`,
 deterministic abstentionまたは検証済みreplayだけである
 （`generic.rs:2054-2062`）。
 
+v4 はこれらとcross-decodeしない別familyである。固定 registry は D
+(`relation.changed_public_callee@1` → `context.subject_windows@3`) と Node
+(`node.public_function_contract@1` → `context.subject_windows@4`) の二組だけを
+許す。v4 artifact は `audit.run.v4.json` と
+`human-report.manifest.v3.json` であり、Node は accepted exact `pub` free
+function と module `contains` witness に限る。Node coverage に candidate gap や
+`direct_calls` を投影してはならない。
+
 v3の製品経路とartifact layoutは実装済みだが、exact command sequence、exit code、
 expected hashを伴うclone quickstartは`expected-hashes.json`と独立した2 cloneでの
 検証が完了してから確定する。それまでは、

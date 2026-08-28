@@ -1,0 +1,12 @@
+{
+  "schema":"reviewgraphen.generic_review_run.v4",
+  "run_id":"run:generic-v4-example","request_id":"request:generic-v4-example",
+  "legacy_ingestion":{},"ingestion_report_v2":{},
+  "obligation_contract":[
+    {"id":"obligation:d-example","rule_id":"relation.changed_public_callee@1","property_id":"rust.callee_contract_review@1","target_kind":"relation","target_refs":["relation:example"],"target_support_capabilities":["ast","changed_structure","containment"],"enumeration_capabilities":["direct_calls"],"applicability_status":"applicable"},
+    {"id":"obligation:n-example","rule_id":"node.public_function_contract@1","property_id":"rust.public_function_contract_review@1","target_kind":"node","target_refs":["artifact:function-example"],"target_support_capabilities":["ast","containment"],"enumeration_capabilities":[],"applicability_status":"applicable"}
+  ],
+  "plan":{},"contexts":[],"observations":[],"provider_free_packet_bindings":[],
+  "coverage":{"rule_order":["relation.changed_public_callee@1","node.public_function_contract@1"],"rule_coverages":[{"kind":"resolved_target_with_candidate_gap"},{"kind":"resolved_target_only"}]},
+  "verifier":null,"authority":{"classification":"non_authority","trusted_pass":false,"result_status":"incomplete","incomplete_reasons":[]}
+}
