@@ -222,6 +222,6 @@ pub use review::{
 pub use source::{SnapshotSourceBundle, SnapshotSourceEntry};
 pub use synthesize::{
     DTwoLayerCoverage, ExclusionRecord, MvpRulePack, ObligationBundle, ObligationBundleV3,
-    ObligationContract, RuleCoverageV3, RuleDescriptor, SingleLayerCoverage, UniverseDescriptor,
-    UniverseDescriptorV3, plan_resolved_target_obligations,
+    ObligationContract, ObligationContractV3, RuleCoverageV3, RuleDescriptor, SingleLayerCoverage,
+    UniverseDescriptor, UniverseDescriptorV3, plan_resolved_target_obligations,
 };

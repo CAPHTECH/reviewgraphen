@@ -49,6 +49,35 @@ fn wire_rebuilds_the_closed_mixed_plan_and_coverage_example() {
 }
 
 #[test]
+fn node_context_rejects_relation_fields_and_relation_context_rejects_node_fields() {
+    let bytes = include_bytes!("../../../schemas/reviewgraphen.generic_review_run.v4.example.json");
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).expect("example JSON");
+    value["contexts"] = json!([{
+        "wave_id":"plan-wave:example",
+        "context":{"obligation_id":"obligation:n-example","context_policy":{"policy_id":"context.subject_windows@4"},"caller_artifact_id":"artifact:forged"}
+    }]);
+    assert!(
+        decode_and_validate_generic_review_run_v4_wire(
+            &canonical_json(&value).expect("canonical forged run")
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn rule_property_policy_tuple_is_exact() {
+    let bytes = include_bytes!("../../../schemas/reviewgraphen.generic_review_run.v4.example.json");
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).expect("example JSON");
+    value["obligation_contract"][2]["property_id"] = json!("rust.forged@1");
+    assert!(
+        decode_and_validate_generic_review_run_v4_wire(
+            &canonical_json(&value).expect("canonical forged run")
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn real_rust_snapshot_defers_d_capability_gap_and_plans_node_contexts() {
     let temporary = tempdir().expect("temporary repository");
     let repository = temporary.path().join("repository");

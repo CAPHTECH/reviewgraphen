@@ -246,6 +246,16 @@ pub struct ObligationBundleV3 {
     obligations: Vec<Obligation>,
 }
 
+/// Closed wire contract for the mixed production-v4 synthesis universe.
+/// This is separate from the durable legacy obligation bundle contract.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObligationContractV3 {
+    schema: &'static str,
+    universe: UniverseDescriptorV3,
+    obligations: Vec<Obligation>,
+}
+
 impl ObligationBundleV3 {
     #[must_use]
     pub fn universe(&self) -> &UniverseDescriptorV3 {
@@ -254,6 +264,15 @@ impl ObligationBundleV3 {
     #[must_use]
     pub fn obligations(&self) -> &[Obligation] {
         &self.obligations
+    }
+
+    #[must_use]
+    pub fn contract(&self) -> ObligationContractV3 {
+        ObligationContractV3 {
+            schema: "reviewgraphen.review_obligations.v3",
+            universe: self.universe.clone(),
+            obligations: self.obligations.clone(),
+        }
     }
 }
 
