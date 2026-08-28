@@ -3153,7 +3153,6 @@ impl GenericReviewRequestV2 {
             || self.target_revision.is_empty()
             || self.ingest.profile_id != "rust.production.v1"
             || self.ingest.profile_version != "1"
-            || self.ingest.rule_set_hash.as_str() != RUST_PRODUCTION_V4_RULE_SET_HASH
             || self.ingest.max_files == 0
             || self.ingest.max_file_bytes == 0
             || self.ingest.max_total_source_bytes == 0
@@ -3363,6 +3362,7 @@ impl GenericReviewRequestV4 {
             || self.target_revision.is_empty()
             || self.ingest.profile_id != "rust.production.v1"
             || self.ingest.profile_version != "1"
+            || self.ingest.rule_set_hash.as_str() != RUST_PRODUCTION_V4_RULE_SET_HASH
             || self.ingest.max_files == 0
             || self.ingest.max_file_bytes == 0
             || self.ingest.max_total_source_bytes == 0
