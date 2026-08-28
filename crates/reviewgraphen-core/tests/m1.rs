@@ -17,9 +17,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const FIXTURE: &[u8] = include_bytes!("../../../examples/double-submit-payment/program-space.json");
 const OBLIGATION_SCHEMA: &[u8] =
-    include_bytes!("../../../schemas/reviewgraphen.obligation.schema.json");
+    include_bytes!("../../../schemas/reviewgraphen.obligation.v2.schema.json");
 const OBLIGATION_EXAMPLE: &[u8] =
-    include_bytes!("../../../schemas/reviewgraphen.obligation.example.json");
+    include_bytes!("../../../schemas/reviewgraphen.obligation.v2.example.json");
 const LEGACY_OBLIGATION_SCHEMA: &[u8] =
     include_bytes!("../../../schemas/reviewgraphen.obligation.v1.schema.json");
 const LEGACY_OBLIGATION_EXAMPLE: &[u8] =
