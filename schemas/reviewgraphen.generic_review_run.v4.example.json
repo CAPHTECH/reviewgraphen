@@ -1,1 +1,153 @@
-{"schema":"reviewgraphen.generic_review_run.v4","run_id":"run:generic-v4-example","request_id":"request:generic-v4-example","legacy_ingestion":{},"ingestion_report_v2":{},"obligation_contract":[{"id":"obligation:d-example","rule_id":"relation.changed_public_callee@1","property_id":"rust.callee_contract_review@1","target_kind":"relation","target_refs":["relation:example"],"target_support_capabilities":["ast","changed_structure","containment"],"enumeration_capabilities":["direct_calls"],"applicability_status":"unknown"},{"id":"obligation:g-example","rule_id":"capability_gap.origin_rule@1","property_id":"reviewgraphen.capability_gap","target_kind":"subgraph","target_refs":["snapshot:example"],"target_support_capabilities":["direct_calls"],"enumeration_capabilities":[],"applicability_status":"unknown"},{"id":"obligation:n-example","rule_id":"node.public_function_contract@1","property_id":"rust.public_function_contract_review@1","target_kind":"node","target_refs":["artifact:function-example"],"target_support_capabilities":["ast","containment"],"enumeration_capabilities":[],"applicability_status":"unknown"}],"exclusions":[],"plan":{"id":"plan:generic-v4-example","universe_id":"universe:generic-v4-example","waves":[],"deferred_obligation_ids":["obligation:d-example","obligation:g-example","obligation:n-example"]},"contexts":[],"observations":[],"provider_free_packet_bindings":[],"coverage":{"rule_order":["relation.changed_public_callee@1","node.public_function_contract@1"],"rule_coverages":[{"kind":"resolved_target_with_candidate_gap","coverage":{"rule":"relation.changed_public_callee@1","resolved_target_obligation_ids":["obligation:d-example"],"candidate_space_gap_obligation_ids":["obligation:g-example"],"target_support_capability_gaps":{},"enumeration_capability_gaps":{"direct_calls":"partial"},"enumeration_capability_states":{"direct_calls":"partial"},"enumeration_limitation_ids":[],"planned_obligation_ids":[],"deferred_obligation_ids":["obligation:d-example"],"executed_obligation_ids":[],"structured_obligation_ids":[],"abstained_obligation_ids":[],"malformed_obligation_ids":[],"provider_failed_obligation_ids":[],"verifier_observed_obligation_ids":[],"call_graph_complete":false,"global_call_coverage_claim":"prohibited"}},{"kind":"resolved_target_only","coverage":{"rule":"node.public_function_contract@1","eligible_target_obligation_ids":["obligation:n-example"],"target_support_capability_gaps":{"ast":"partial","containment":"partial"},"planned_obligation_ids":[],"deferred_obligation_ids":["obligation:n-example"],"executed_obligation_ids":[],"structured_obligation_ids":[],"abstained_obligation_ids":[],"malformed_obligation_ids":[],"provider_failed_obligation_ids":[],"verifier_observed_obligation_ids":[]}}]},"verifier":null,"authority":{"classification":"non_authority","trusted_pass":false,"result_status":"incomplete","incomplete_reasons":["candidate_space_enumeration_incomplete","human_decision_not_recorded","model_observer_non_authority","obligations_deferred"]}}
+{
+  "schema": "reviewgraphen.generic_review_run.v4",
+  "run_id": "run:generic-v4-example",
+  "request_id": "request:generic-v4-example",
+  "legacy_ingestion": {
+    "repository_identity": "example/repository",
+    "program_space_id": "snapshot:example",
+    "snapshot_id": "snapshot:example",
+    "base_commit_oid": "0000000000000000000000000000000000000000",
+    "base_tree_hash": "git:0000000000000000000000000000000000000000",
+    "target_commit_oid": "0000000000000000000000000000000000000000",
+    "target_tree_hash": "git:0000000000000000000000000000000000000000"
+  },
+  "ingestion_report_v2": {},
+  "obligation_contract": [
+    {
+      "id": "obligation:d-example",
+      "rule_id": "relation.changed_public_callee@1",
+      "property_id": "rust.callee_contract_review@1",
+      "target_kind": "relation",
+      "target_refs": [
+        "relation:example"
+      ],
+      "target_support_capabilities": [
+        "ast",
+        "changed_structure",
+        "containment"
+      ],
+      "enumeration_capabilities": [
+        "direct_calls"
+      ],
+      "applicability_status": "unknown"
+    },
+    {
+      "id": "obligation:g-example",
+      "rule_id": "capability_gap.origin_rule@1",
+      "property_id": "reviewgraphen.capability_gap",
+      "target_kind": "subgraph",
+      "target_refs": [
+        "snapshot:example"
+      ],
+      "target_support_capabilities": [
+        "direct_calls"
+      ],
+      "enumeration_capabilities": [],
+      "applicability_status": "unknown"
+    },
+    {
+      "id": "obligation:n-example",
+      "rule_id": "node.public_function_contract@1",
+      "property_id": "rust.public_function_contract_review@1",
+      "target_kind": "node",
+      "target_refs": [
+        "artifact:function-example"
+      ],
+      "target_support_capabilities": [
+        "ast",
+        "containment"
+      ],
+      "enumeration_capabilities": [],
+      "applicability_status": "unknown"
+    }
+  ],
+  "exclusions": [],
+  "plan": {
+    "id": "plan:generic-v4-example",
+    "universe_id": "universe:generic-v4-example",
+    "waves": [],
+    "deferred_obligation_ids": [
+      "obligation:d-example",
+      "obligation:g-example",
+      "obligation:n-example"
+    ]
+  },
+  "contexts": [],
+  "observations": [],
+  "provider_free_packet_bindings": [],
+  "coverage": {
+    "rule_order": [
+      "relation.changed_public_callee@1",
+      "node.public_function_contract@1"
+    ],
+    "rule_coverages": [
+      {
+        "kind": "resolved_target_with_candidate_gap",
+        "coverage": {
+          "rule": "relation.changed_public_callee@1",
+          "resolved_target_obligation_ids": [
+            "obligation:d-example"
+          ],
+          "candidate_space_gap_obligation_ids": [
+            "obligation:g-example"
+          ],
+          "target_support_capability_gaps": {},
+          "enumeration_capability_gaps": {
+            "direct_calls": "partial"
+          },
+          "enumeration_capability_states": {
+            "direct_calls": "partial"
+          },
+          "enumeration_limitation_ids": [],
+          "planned_obligation_ids": [],
+          "deferred_obligation_ids": [
+            "obligation:d-example"
+          ],
+          "executed_obligation_ids": [],
+          "structured_obligation_ids": [],
+          "abstained_obligation_ids": [],
+          "malformed_obligation_ids": [],
+          "provider_failed_obligation_ids": [],
+          "verifier_observed_obligation_ids": [],
+          "call_graph_complete": false,
+          "global_call_coverage_claim": "prohibited"
+        }
+      },
+      {
+        "kind": "resolved_target_only",
+        "coverage": {
+          "rule": "node.public_function_contract@1",
+          "eligible_target_obligation_ids": [
+            "obligation:n-example"
+          ],
+          "target_support_capability_gaps": {
+            "ast": "partial",
+            "containment": "partial"
+          },
+          "planned_obligation_ids": [],
+          "deferred_obligation_ids": [
+            "obligation:n-example"
+          ],
+          "executed_obligation_ids": [],
+          "structured_obligation_ids": [],
+          "abstained_obligation_ids": [],
+          "malformed_obligation_ids": [],
+          "provider_failed_obligation_ids": [],
+          "verifier_observed_obligation_ids": []
+        }
+      }
+    ]
+  },
+  "verifier": null,
+  "authority": {
+    "classification": "non_authority",
+    "trusted_pass": false,
+    "result_status": "incomplete",
+    "incomplete_reasons": [
+      "candidate_space_enumeration_incomplete",
+      "human_decision_not_recorded",
+      "model_observer_non_authority",
+      "obligations_deferred"
+    ]
+  }
+}
