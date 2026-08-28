@@ -19,10 +19,14 @@ pub const RUST_PRODUCTION_PROFILE_HASH: &str =
     "sha256:4b6cca93794ab03b1576e17d2e395ec43f731d316685247a89363ae2e840dd96";
 /// The D rule that is bound into a profile exclusion record.
 pub const CHANGED_PUBLIC_CALLEE_RULE: &str = "relation.changed_public_callee@1";
+/// The Node rule admitted only by the production-v4 mixed rule set.
+pub const PUBLIC_FUNCTION_NODE_RULE: &str = "node.public_function_contract@1";
 /// The retained exclusion weight, represented as an exact decimal string.
 pub const D_EXCLUDED_WEIGHT: &str = "4.0";
 /// The exact substantive D-obligation weight retained through planning.
 pub const D_OBLIGATION_WEIGHT: &str = "4.0";
+/// The exact substantive Node-obligation weight retained through planning.
+pub const NODE_OBLIGATION_WEIGHT: &str = "3.0";
 
 const CANONICAL_PROFILE_JSON: &str = r#"{"category_precedence":["vendor","generated","test","example","docs"],"exclusion_matchers":[{"category":"vendor","id":"path.vendor_component@1","operator":"component_equals_any","values":["third_party","vendor","vendored"]},{"category":"generated","id":"path.generated_component@1","operator":"component_equals_any","values":["generated","target"]},{"category":"generated","id":"path.generated_suffix@1","operator":"basename_suffix_any","values":[".generated.rs"]},{"category":"test","id":"path.test_component@1","operator":"component_equals_any","values":["benches","tests"]},{"category":"test","id":"path.test_basename@1","operator":"basename_equals_any","values":["test.rs","tests.rs"]},{"category":"test","id":"path.test_suffix@1","operator":"basename_suffix_any","values":["_test.rs","_tests.rs"]},{"category":"example","id":"path.example_component@1","operator":"component_equals_any","values":["example","examples"]},{"category":"docs","id":"path.docs_component@1","operator":"component_equals_any","values":["doc","docs"]}],"id":"rust.production.v1","path_normalization":{"absolute":"reject","backslash":"reject","case_fold":false,"dot":"reject","dot_dot":"reject","empty_component":"reject","encoding":"utf-8","nul":"reject","separator":"/","unicode_normalization":"none"},"reason_ids":{"docs":"profile.exclude.docs@1","example":"profile.exclude.example@1","generated":"profile.exclude.generated@1","test":"profile.exclude.test@1","vendor":"profile.exclude.vendor@1"},"rust_source":{"basename_suffix":".rs","case_sensitive":true},"schema":"reviewgraphen.review_profile.v1"}"#;
 
@@ -343,6 +347,243 @@ impl ReviewProfile {
             source_ids,
         })
     }
+
+    /// Builds a rule-neutral profile exclusion record for one closed candidate
+    /// family.  The legacy D wrapper remains byte-identical; this API is used
+    /// by production-v4 Node synthesis without changing the profile bytes.
+    pub fn exclusion_record_for_candidate(
+        self,
+        candidate: ProfileExclusionCandidate,
+        profile_match: &ProfileMatch,
+    ) -> ProfileResult<ProfileExclusionRecord> {
+        let snapshot_id = match &candidate {
+            ProfileExclusionCandidate::ChangedPublicCallee { snapshot_id, .. }
+            | ProfileExclusionCandidate::PublicFunctionNode { snapshot_id, .. } => {
+                snapshot_id.clone()
+            }
+        };
+        let (rule, target_id, excluded_weight, source_ids) = match candidate {
+            ProfileExclusionCandidate::ChangedPublicCallee {
+                snapshot_id: _,
+                relation_id,
+                caller_id,
+                callee_id,
+                change_artifact_ids,
+                containment_witness_ids,
+            } => {
+                let mut source_ids = BTreeSet::from([relation_id.clone(), caller_id, callee_id]);
+                source_ids.extend(change_artifact_ids);
+                source_ids.extend(containment_witness_ids);
+                (
+                    CHANGED_PUBLIC_CALLEE_RULE,
+                    relation_id,
+                    D_EXCLUDED_WEIGHT.to_owned(),
+                    source_ids,
+                )
+            }
+            ProfileExclusionCandidate::PublicFunctionNode {
+                snapshot_id: _,
+                function_id,
+                owning_module_ids,
+                containment_witness_ids,
+            } => {
+                let mut source_ids = BTreeSet::from([function_id.clone()]);
+                source_ids.extend(owning_module_ids);
+                source_ids.extend(containment_witness_ids);
+                (
+                    PUBLIC_FUNCTION_NODE_RULE,
+                    function_id,
+                    NODE_OBLIGATION_WEIGHT.to_owned(),
+                    source_ids,
+                )
+            }
+        };
+        ProfileExclusionRecord::new(ProfileExclusionBindings {
+            snapshot_id,
+            candidate_key: format!("{rule}|{target_id}"),
+            rule: rule.to_owned(),
+            profile_id: self.id().to_owned(),
+            profile_hash: self.hash(),
+            reason_id: profile_match.reason_id().to_owned(),
+            matcher_id: profile_match.matcher_id().to_owned(),
+            excluded_weight,
+            source_ids,
+        })
+    }
+
+    /// Builds a rule-neutral exclusion record from a single-path profile
+    /// match.  Node candidates have no caller/callee tie-breaker.
+    pub fn exclusion_record_for_path_candidate(
+        self,
+        candidate: ProfileExclusionCandidate,
+        profile_match: PathMatch,
+    ) -> ProfileResult<ProfileExclusionRecord> {
+        self.exclusion_record_for_candidate(
+            candidate,
+            &ProfileMatch {
+                category: profile_match.category,
+                matcher_id: profile_match.matcher_id,
+                endpoint: CandidateEndpoint::Callee,
+            },
+        )
+    }
+}
+
+/// Closed candidate input for profile exclusions in versioned rule families.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProfileExclusionCandidate {
+    /// Legacy changed-public-callee relation candidate.
+    ChangedPublicCallee {
+        snapshot_id: StableId,
+        relation_id: StableId,
+        caller_id: StableId,
+        callee_id: StableId,
+        change_artifact_ids: BTreeSet<StableId>,
+        containment_witness_ids: BTreeSet<StableId>,
+    },
+    /// Production-v4 public free-function candidate.
+    PublicFunctionNode {
+        snapshot_id: StableId,
+        function_id: StableId,
+        owning_module_ids: BTreeSet<StableId>,
+        containment_witness_ids: BTreeSet<StableId>,
+    },
+}
+
+/// Rule-neutral identity bindings.  Their canonical preimage intentionally
+/// remains the legacy D preimage field set.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileExclusionBindings {
+    pub snapshot_id: StableId,
+    pub candidate_key: String,
+    pub rule: String,
+    pub profile_id: String,
+    pub profile_hash: ContentHash,
+    pub reason_id: String,
+    pub matcher_id: String,
+    pub excluded_weight: String,
+    pub source_ids: BTreeSet<StableId>,
+}
+
+/// Source-traceable exclusion record for a versioned rule family.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProfileExclusionRecord {
+    pub id: StableId,
+    pub snapshot_id: StableId,
+    pub candidate_key: String,
+    pub rule: String,
+    pub profile_id: String,
+    pub profile_hash: ContentHash,
+    pub reason_id: String,
+    pub matcher_id: String,
+    pub excluded_weight: String,
+    pub source_ids: BTreeSet<StableId>,
+}
+
+impl ProfileExclusionRecord {
+    pub fn new(bindings: ProfileExclusionBindings) -> ProfileResult<Self> {
+        validate_profile_exclusion_bindings(&bindings)?;
+        let id = profile_exclusion_id(&bindings)?;
+        Ok(Self {
+            id,
+            snapshot_id: bindings.snapshot_id,
+            candidate_key: bindings.candidate_key,
+            rule: bindings.rule,
+            profile_id: bindings.profile_id,
+            profile_hash: bindings.profile_hash,
+            reason_id: bindings.reason_id,
+            matcher_id: bindings.matcher_id,
+            excluded_weight: bindings.excluded_weight,
+            source_ids: bindings.source_ids,
+        })
+    }
+}
+
+fn validate_profile_exclusion_bindings(bindings: &ProfileExclusionBindings) -> ProfileResult<()> {
+    if bindings.snapshot_id.kind() != "snapshot"
+        || bindings.profile_id != RUST_PRODUCTION_PROFILE_ID
+        || bindings.profile_hash.as_str() != RUST_PRODUCTION_PROFILE_HASH
+        || bindings.source_ids.is_empty()
+    {
+        return Err(ProfileError::InvalidExclusion(
+            "fixed profile exclusion bindings are not exact".to_owned(),
+        ));
+    }
+    let (prefix, weight) = match bindings.rule.as_str() {
+        CHANGED_PUBLIC_CALLEE_RULE => ("relation:", D_EXCLUDED_WEIGHT),
+        PUBLIC_FUNCTION_NODE_RULE => ("function:", NODE_OBLIGATION_WEIGHT),
+        _ => {
+            return Err(ProfileError::InvalidExclusion(
+                "exclusion rule is outside the closed production registry".to_owned(),
+            ));
+        }
+    };
+    if !bindings
+        .candidate_key
+        .starts_with(&format!("{}|{prefix}", bindings.rule))
+        || bindings.excluded_weight != weight
+        || !MATCHERS
+            .iter()
+            .any(|matcher| matcher.id == bindings.matcher_id)
+    {
+        return Err(ProfileError::InvalidExclusion(
+            "profile exclusion candidate or matcher is not exact".to_owned(),
+        ));
+    }
+    let matcher = MATCHERS
+        .iter()
+        .find(|matcher| matcher.id == bindings.matcher_id)
+        .expect("matcher was checked above");
+    if bindings.reason_id != matcher.category.reason_id() {
+        return Err(ProfileError::InvalidExclusion(
+            "reason_id does not match matcher category".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn profile_exclusion_id(bindings: &ProfileExclusionBindings) -> ProfileResult<StableId> {
+    let source_ids = Value::Array(
+        bindings
+            .source_ids
+            .iter()
+            .map(|id| Value::String(id.to_string()))
+            .collect(),
+    );
+    let map = BTreeMap::from([
+        (
+            "candidate_key".to_owned(),
+            Value::String(bindings.candidate_key.clone()),
+        ),
+        (
+            "excluded_weight".to_owned(),
+            Value::String(bindings.excluded_weight.clone()),
+        ),
+        (
+            "matcher_id".to_owned(),
+            Value::String(bindings.matcher_id.clone()),
+        ),
+        (
+            "profile_hash".to_owned(),
+            Value::String(bindings.profile_hash.to_string()),
+        ),
+        (
+            "profile_id".to_owned(),
+            Value::String(bindings.profile_id.clone()),
+        ),
+        (
+            "reason_id".to_owned(),
+            Value::String(bindings.reason_id.clone()),
+        ),
+        ("rule".to_owned(), Value::String(bindings.rule.clone())),
+        (
+            "snapshot_id".to_owned(),
+            Value::String(bindings.snapshot_id.to_string()),
+        ),
+        ("source_ids".to_owned(), source_ids),
+    ]);
+    StableId::derived("exclusion", &map)
+        .map_err(|error| ProfileError::InvalidExclusion(error.to_string()))
 }
 
 fn endpoint_path<'a>(path: Option<&'a [u8]>, endpoint: &'static str) -> ProfileResult<&'a str> {

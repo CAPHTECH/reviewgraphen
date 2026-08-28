@@ -44,7 +44,7 @@ pub use context::{
     ContextLatentCardinalityV3, ContextMaterializedSourceV3, ContextPolicyV1, ContextSourceRequest,
     ContextSubjectBindingErrorV2, ContextSubjectLossV2, ContextSubjectLossV3,
     ContextSubjectOutcomeV3, ContextSubjectWindowsPolicyV2, ContextSubjectWindowsPolicyV3,
-    ContextSubjectWindowsSessionV2, ContextSubjectWindowsSessionV3,
+    ContextSubjectWindowsPolicyV4, ContextSubjectWindowsSessionV2, ContextSubjectWindowsSessionV3,
     ContextSubjectWindowsV3ValidationError, ContextSupportLossSummaryV3, ContextValidationBasisV3,
     ContextWindowCandidateV2, ContextWindowInputV2, ContextWindowLossReasonV2, ContextWindowRoleV2,
     ContextWindowV2, ContextWindowV3, EnvelopeLoss, EnvelopeUnknown, ExcerptRange,
@@ -216,6 +216,7 @@ pub use review::{
 };
 pub use source::{SnapshotSourceBundle, SnapshotSourceEntry};
 pub use synthesize::{
-    ExclusionRecord, MvpRulePack, ObligationBundle, ObligationContract, RuleDescriptor,
-    UniverseDescriptor, plan_resolved_target_obligations,
+    DTwoLayerCoverage, ExclusionRecord, MvpRulePack, ObligationBundle, ObligationBundleV3,
+    ObligationContract, RuleCoverageV3, RuleDescriptor, SingleLayerCoverage, UniverseDescriptor,
+    UniverseDescriptorV3, plan_resolved_target_obligations,
 };

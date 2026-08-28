@@ -474,6 +474,84 @@ impl<'de> Deserialize<'de> for ContextSubjectWindowsPolicyV3 {
     }
 }
 
+/// Fixed Node-only subject-window policy for production-v4.  It is a separate
+/// wire family: v2/v3 roles and policy bytes cannot decode as this value.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ContextSubjectWindowsPolicyV4;
+
+impl ContextSubjectWindowsPolicyV4 {
+    pub const ID: &'static str = "context.subject_windows@4";
+    pub const GOLDEN_HASH: &'static str =
+        "sha256:9f15006986a73853ff3be7b9a158e8c79f69b9a8099c9d0a1991d8c7da170aed";
+
+    #[must_use]
+    pub const fn fixed() -> Self {
+        Self
+    }
+
+    pub fn canonical_bytes(&self) -> ContextResult<Vec<u8>> {
+        Ok(br#"{"accepted_file_denominator_bound":"request.ingest.max_files","anchors_per_file":1024,"assumptions":"empty","candidate_order":["subject_priority","containment_distance","path_rank","artifact_id"],"canonical_envelope_bytes":786432,"containment_depth":1,"contains_edges":1000000,"edge_kind_direction_order":["contains:reverse"],"excerpt_lines":400,"final_window_order":["source_artifact_id","start_line","end_line","window_id"],"included_files":64,"latent_cardinality":"known_zero_under_complete_ast_containment","loss_reason_precedence":["missing_location","missing_source","giant_line","per_window_lines","per_window_bytes","per_file_window_cap","total_window_cap","total_excerpt_bytes","overlap_unmergeable","not_reached","included_file_cap","artifact_bytes_cap","total_resolved_bytes_cap"],"materialized_source_denominator":"subject_file_ids_union_reached_file_ids","max_assumptions":64,"max_discovered_structural_ids":4096,"max_excerpt_bytes":262144,"max_materialized_source_candidates":4096,"max_resolved_artifact_bytes":1048576,"max_resolved_bytes":8388608,"max_string_bytes":16384,"max_subject_losses":1,"max_support_loss_summaries":13,"max_total_excerpt_bytes":1048576,"max_unknowns":64,"obligations_per_envelope":1,"policy_id":"context.subject_windows@4","relation_scan":1000000,"seed_fields":["source_ids","target_refs","context_ids"],"source_candidate_denominator":"all_accepted_file_ids_known_count_and_sorted_id_set_sha256","subject_endpoints":1,"subject_order":["subject"],"subject_window_slots":1,"support_anchor_denominator":"reached_range_bearing_exact_path_anchor_ids_known_count_and_sorted_id_set_sha256","support_loss_summary":"reason_known_count_and_sorted_anchor_id_set_sha256","support_window_slots":7,"unknown_reason_ids":["unresolved_review_context_member","unresolved_seed_reference"],"window_candidate_order":["priority","role","source_artifact_id","start_line","end_line","owner_id"],"window_merge":"same_source_overlap_or_adjacent_if_union_within_per_window_bounds","windows_per_envelope":8,"windows_per_file":4}"#.to_vec())
+    }
+
+    #[must_use]
+    pub fn hash(&self) -> ContentHash {
+        ContentHash::sha256(&self.canonical_bytes().expect("fixed v4 policy bytes"))
+    }
+}
+
+impl Serialize for ContextSubjectWindowsPolicyV4 {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value: serde_json::Value =
+            serde_json::from_slice(&self.canonical_bytes().map_err(serde::ser::Error::custom)?)
+                .map_err(serde::ser::Error::custom)?;
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ContextSubjectWindowsPolicyV4 {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct FixedPolicyVisitor;
+        impl<'de> serde::de::Visitor<'de> for FixedPolicyVisitor {
+            type Value = ContextSubjectWindowsPolicyV4;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("the exact context.subject_windows@4 policy object")
+            }
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut object = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if object.contains_key(&key) {
+                        return Err(serde::de::Error::custom(format!(
+                            "duplicate context policy field {key}"
+                        )));
+                    }
+                    object.insert(key, map.next_value()?);
+                }
+                let policy = ContextSubjectWindowsPolicyV4::fixed();
+                let expected: serde_json::Value = serde_json::from_slice(
+                    &policy.canonical_bytes().map_err(serde::de::Error::custom)?,
+                )
+                .map_err(serde::de::Error::custom)?;
+                if serde_json::Value::Object(object) != expected {
+                    return Err(serde::de::Error::custom(
+                        "context policy is not the fixed subject-window v4 DTO",
+                    ));
+                }
+                Ok(policy)
+            }
+        }
+        deserializer.deserialize_map(FixedPolicyVisitor)
+    }
+}
+
 /// Typed failure emitted by the context protocol. Constructors are private so
 /// callers cannot manufacture an apparently policy-derived failure.
 #[derive(Debug, Error, PartialEq, Eq)]
