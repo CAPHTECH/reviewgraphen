@@ -90,6 +90,26 @@ def validate_schemas() -> list[str]:
     pairs = [
         ("reviewgraphen.input.schema.json", "reviewgraphen.input.example.json"),
         ("reviewgraphen.obligation.schema.json", "reviewgraphen.obligation.example.json"),
+        (
+            "reviewgraphen.obligation.v2.schema.json",
+            "reviewgraphen.obligation.v2.example.json",
+        ),
+        (
+            "reviewgraphen.obligation.v3.schema.json",
+            "reviewgraphen.obligation.v3.example.json",
+        ),
+        (
+            "reviewgraphen.generic_review_request.v4.schema.json",
+            "reviewgraphen.generic_review_request.v4.example.json",
+        ),
+        (
+            "reviewgraphen.generic_review_run.v4.schema.json",
+            "reviewgraphen.generic_review_run.v4.example.json",
+        ),
+        (
+            "reviewgraphen.generic_review_human_report.v3.schema.json",
+            "reviewgraphen.generic_review_human_report.v3.example.json",
+        ),
         ("reviewgraphen.report.schema.json", "reviewgraphen.report.example.json"),
         ("reviewgraphen.report.v2.schema.json", "reviewgraphen.report.v2.example.json"),
         ("reviewgraphen.report.v3.schema.json", "reviewgraphen.report.v3.example.json"),

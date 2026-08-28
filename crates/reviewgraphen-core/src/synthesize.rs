@@ -3,6 +3,7 @@ use crate::planning::{
 };
 use crate::profile::{
     CHANGED_PUBLIC_CALLEE_RULE, CandidateClassification, D_OBLIGATION_WEIGHT, DExclusionCandidate,
+    NODE_OBLIGATION_WEIGHT, PUBLIC_FUNCTION_NODE_RULE, ProfileExclusionCandidate,
     RUST_PRODUCTION_PROFILE_ID, rust_production_v1,
 };
 use crate::program::{attribute_bool, attribute_string};
@@ -76,7 +77,7 @@ pub struct UniverseDescriptor {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-struct DTwoLayerCoverage {
+pub struct DTwoLayerCoverage {
     rule: String,
     resolved_target_obligation_ids: BTreeSet<StableId>,
     candidate_space_gap_obligation_ids: BTreeSet<StableId>,
@@ -94,6 +95,185 @@ struct DTwoLayerCoverage {
     verifier_observed_obligation_ids: BTreeSet<StableId>,
     call_graph_complete: bool,
     global_call_coverage_claim: String,
+}
+
+/// Node coverage has one concrete eligible-target denominator.  It must not
+/// fabricate D's incomplete call-enumeration layer.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SingleLayerCoverage {
+    rule: String,
+    eligible_target_obligation_ids: BTreeSet<StableId>,
+    target_support_capability_gaps: BTreeMap<String, String>,
+    planned_obligation_ids: BTreeSet<StableId>,
+    deferred_obligation_ids: BTreeSet<StableId>,
+    executed_obligation_ids: BTreeSet<StableId>,
+    structured_obligation_ids: BTreeSet<StableId>,
+    abstained_obligation_ids: BTreeSet<StableId>,
+    malformed_obligation_ids: BTreeSet<StableId>,
+    provider_failed_obligation_ids: BTreeSet<StableId>,
+    verifier_observed_obligation_ids: BTreeSet<StableId>,
+}
+
+/// Closed per-rule coverage for the production-v4 mixed universe.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "coverage", rename_all = "snake_case")]
+pub enum RuleCoverageV3 {
+    /// D retains its resolved-target/candidate-gap split.
+    ResolvedTargetWithCandidateGap(DTwoLayerCoverage),
+    /// Node has no candidate-space gap.
+    ResolvedTargetOnly(SingleLayerCoverage),
+}
+
+impl RuleCoverageV3 {
+    /// Closed rule identity for this coverage arm.
+    #[must_use]
+    pub fn rule_id(&self) -> &str {
+        match self {
+            Self::ResolvedTargetWithCandidateGap(coverage) => &coverage.rule,
+            Self::ResolvedTargetOnly(coverage) => &coverage.rule,
+        }
+    }
+
+    /// Node's exact eligible-target denominator, if this is the Node arm.
+    #[must_use]
+    pub fn eligible_target_obligation_ids(&self) -> Option<&BTreeSet<StableId>> {
+        match self {
+            Self::ResolvedTargetOnly(coverage) => Some(&coverage.eligible_target_obligation_ids),
+            Self::ResolvedTargetWithCandidateGap(_) => None,
+        }
+    }
+
+    /// Exact schedulable denominator for this rule. For D this deliberately
+    /// excludes the separate candidate-space gap obligations.
+    #[must_use]
+    pub fn resolved_target_obligation_ids(&self) -> &BTreeSet<StableId> {
+        match self {
+            Self::ResolvedTargetWithCandidateGap(coverage) => {
+                &coverage.resolved_target_obligation_ids
+            }
+            Self::ResolvedTargetOnly(coverage) => &coverage.eligible_target_obligation_ids,
+        }
+    }
+
+    /// Returns this rule's coverage after recording the exact v4 plan
+    /// partition.  Candidate-space gaps remain D coverage metadata: they are
+    /// not schedulable resolved targets and must never be copied into Node.
+    pub fn with_plan_partition(
+        &self,
+        planned: BTreeSet<StableId>,
+        deferred: BTreeSet<StableId>,
+    ) -> Result<Self> {
+        match self {
+            Self::ResolvedTargetWithCandidateGap(coverage) => {
+                let resolved = &coverage.resolved_target_obligation_ids;
+                if planned.union(&deferred).cloned().collect::<BTreeSet<_>>() != *resolved
+                    || !planned.is_disjoint(&deferred)
+                {
+                    return Err(DomainError::Validation(
+                        "D plan partition must close exactly over resolved targets".to_owned(),
+                    ));
+                }
+                let mut updated = coverage.clone();
+                updated.planned_obligation_ids = planned;
+                updated.deferred_obligation_ids = deferred;
+                Ok(Self::ResolvedTargetWithCandidateGap(updated))
+            }
+            Self::ResolvedTargetOnly(coverage) => {
+                let eligible = &coverage.eligible_target_obligation_ids;
+                if planned.union(&deferred).cloned().collect::<BTreeSet<_>>() != *eligible
+                    || !planned.is_disjoint(&deferred)
+                {
+                    return Err(DomainError::Validation(
+                        "Node plan partition must close exactly over eligible targets".to_owned(),
+                    ));
+                }
+                let mut updated = coverage.clone();
+                updated.planned_obligation_ids = planned;
+                updated.deferred_obligation_ids = deferred;
+                Ok(Self::ResolvedTargetOnly(updated))
+            }
+        }
+    }
+}
+
+/// Versioned mixed-universe descriptor.  It deliberately sits beside the
+/// durable legacy universe rather than extending its serialized shape.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UniverseDescriptorV3 {
+    id: StableId,
+    snapshot_id: StableId,
+    profile_id: String,
+    rule_set_hash: ContentHash,
+    extractor_set_hash: ContentHash,
+    policy_version: String,
+    rule_pack_version: String,
+    obligation_ids: BTreeSet<StableId>,
+    exclusions: Vec<ExclusionRecord>,
+    limitation_ids: BTreeSet<StableId>,
+    rule_coverages: Vec<RuleCoverageV3>,
+}
+
+impl UniverseDescriptorV3 {
+    #[must_use]
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    #[must_use]
+    pub fn snapshot_id(&self) -> &StableId {
+        &self.snapshot_id
+    }
+    #[must_use]
+    pub fn obligation_ids(&self) -> &BTreeSet<StableId> {
+        &self.obligation_ids
+    }
+    #[must_use]
+    pub fn exclusions(&self) -> &[ExclusionRecord] {
+        &self.exclusions
+    }
+    #[must_use]
+    pub fn rule_coverages(&self) -> &[RuleCoverageV3] {
+        &self.rule_coverages
+    }
+}
+
+/// In-memory production-v4 bundle.  It is intentionally not accepted by the
+/// event-sourced legacy aggregate.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObligationBundleV3 {
+    universe: UniverseDescriptorV3,
+    obligations: Vec<Obligation>,
+}
+
+/// Closed wire contract for the mixed production-v4 synthesis universe.
+/// This is separate from the durable legacy obligation bundle contract.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObligationContractV3 {
+    schema: &'static str,
+    universe: UniverseDescriptorV3,
+    obligations: Vec<Obligation>,
+}
+
+impl ObligationBundleV3 {
+    #[must_use]
+    pub fn universe(&self) -> &UniverseDescriptorV3 {
+        &self.universe
+    }
+    #[must_use]
+    pub fn obligations(&self) -> &[Obligation] {
+        &self.obligations
+    }
+
+    #[must_use]
+    pub fn contract(&self) -> ObligationContractV3 {
+        ObligationContractV3 {
+            schema: "reviewgraphen.review_obligations.v3",
+            universe: self.universe.clone(),
+            obligations: self.obligations.clone(),
+        }
+    }
 }
 
 impl UniverseDescriptor {
@@ -435,7 +615,7 @@ impl UniverseDescriptor {
 ///
 /// It intentionally contains no internal aggregate-only fields. Exclusions are
 /// retained because they qualify the public coverage denominator. Its JSON
-/// shape validates against `schemas/reviewgraphen.obligation.schema.json`.
+/// shape validates against `schemas/reviewgraphen.obligation.v2.schema.json`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ObligationContract {
     schema: &'static str,
@@ -1425,6 +1605,315 @@ impl MvpRulePack {
             contract,
         })
     }
+
+    /// Synthesizes the explicit production-v4 mixed universe.  This entry is
+    /// intentionally separate from [`Self::synthesize`] and every v1-v3
+    /// runtime caller, so legacy production bytes remain D-only.
+    pub fn synthesize_rust_production_v2(program: &ProgramSpace) -> Result<ObligationBundleV3> {
+        if program.profile_id() != RUST_PRODUCTION_PROFILE_ID {
+            return Err(DomainError::Validation(format!(
+                "{PUBLIC_FUNCTION_NODE_RULE} requires profile `{RUST_PRODUCTION_PROFILE_ID}`"
+            )));
+        }
+
+        let d_bundle = Self::synthesize_changed_public_callee(program)?;
+        let d_coverage = d_bundle
+            .universe
+            .d_two_layer_coverage
+            .clone()
+            .expect("D-only production synthesis always constructs D coverage");
+        let node_capabilities = SplitCapabilitySpec::node_rule()?;
+        let profile = rust_production_v1();
+        let mut exclusions = d_bundle.universe.exclusions.clone();
+        let mut obligations = d_bundle.obligations.clone();
+        let mut node_ids = BTreeSet::new();
+        let mut node_target_support_gaps = BTreeMap::new();
+
+        for function in program.artifacts() {
+            if function.kind != "function" || !attribute_bool(&function.attributes, "public") {
+                continue;
+            }
+            let (owning_module_ids, containment_witness_ids) =
+                public_function_node_witnesses(program, &function.id)?;
+            if owning_module_ids.is_empty() {
+                exclusions.push(missing_node_containment_exclusion(program, function)?);
+                continue;
+            }
+            let path = function.location.as_ref().ok_or_else(|| {
+                DomainError::Validation(
+                    "public function Node candidate must retain an accepted source path".to_owned(),
+                )
+            })?;
+            let classification = profile
+                .classify_path(&path.path)
+                .map_err(|error| DomainError::Validation(error.to_string()))?;
+            if let Some(profile_match) = classification.matched() {
+                let record = profile
+                    .exclusion_record_for_path_candidate(
+                        ProfileExclusionCandidate::PublicFunctionNode {
+                            snapshot_id: program.snapshot_id().clone(),
+                            function_id: function.id.clone(),
+                            owning_module_ids,
+                            containment_witness_ids,
+                        },
+                        profile_match,
+                    )
+                    .map_err(|error| DomainError::Validation(error.to_string()))?;
+                exclusions.push(ExclusionRecord {
+                    id: record.id,
+                    candidate_key: record.candidate_key,
+                    reason: record.reason_id,
+                    source_ids: record.source_ids,
+                    excluded_weight: NODE_OBLIGATION_WEIGHT.parse().map_err(|_| {
+                        DomainError::Validation("invalid fixed Node weight".to_owned())
+                    })?,
+                });
+                continue;
+            }
+
+            let mut generator_ids = BTreeSet::from([function.id.clone()]);
+            generator_ids.extend(owning_module_ids.iter().cloned());
+            generator_ids.extend(containment_witness_ids.iter().cloned());
+            let mut context_ids = BTreeSet::new();
+            for source_id in &generator_ids {
+                context_ids.extend(contexts_containing_id(program, source_id));
+            }
+            let mut additional_source_ids = generator_ids.iter().cloned().collect::<Vec<_>>();
+            additional_source_ids.push(program.repository_id().clone());
+            additional_source_ids.push(program.snapshot_id().clone());
+            let obligation = materialize_split(
+                program,
+                ObligationSpec {
+                    rule: PUBLIC_FUNCTION_NODE_RULE,
+                    origin_rule: None,
+                    target_kind: "node",
+                    target_refs: vec![function.id.clone()],
+                    property_id: "rust.public_function_contract_review@1",
+                    context_ids: context_ids.into_iter().collect(),
+                    required_capabilities: BTreeSet::new(),
+                    weight: NODE_OBLIGATION_WEIGHT.parse().map_err(|_| {
+                        DomainError::Validation("invalid fixed Node weight".to_owned())
+                    })?,
+                    depends_on: Vec::new(),
+                    generator_ids,
+                    additional_source_ids,
+                },
+                &node_capabilities,
+            )?;
+            if obligation.applicability_status() != "applicable" {
+                for capability in &node_capabilities.target_support_capabilities {
+                    if !capability_fully_available(program, capability) {
+                        node_target_support_gaps.insert(
+                            capability.to_owned(),
+                            capability_gap_reason(program, capability),
+                        );
+                    }
+                }
+            }
+            node_ids.insert(obligation.id().clone());
+            obligations.push(obligation);
+        }
+
+        obligations.sort_by(|left, right| {
+            mixed_rule_order(left.version().rule())
+                .cmp(&mixed_rule_order(right.version().rule()))
+                .then_with(|| left.id().cmp(right.id()))
+        });
+        exclusions.sort_by(|left, right| left.id.cmp(&right.id));
+        let obligation_ids = obligations
+            .iter()
+            .map(|obligation| obligation.id().clone())
+            .collect();
+        let mut limitation_ids = program
+            .extraction()
+            .limitations
+            .iter()
+            .map(|limitation| limitation.id.clone())
+            .collect::<BTreeSet<_>>();
+        limitation_ids.extend(
+            obligations
+                .iter()
+                .flat_map(|obligation| obligation.qualification_ids().iter().cloned()),
+        );
+        let rule_coverages = vec![
+            RuleCoverageV3::ResolvedTargetWithCandidateGap(*d_coverage),
+            RuleCoverageV3::ResolvedTargetOnly(SingleLayerCoverage {
+                rule: PUBLIC_FUNCTION_NODE_RULE.to_owned(),
+                eligible_target_obligation_ids: node_ids,
+                target_support_capability_gaps: node_target_support_gaps,
+                planned_obligation_ids: BTreeSet::new(),
+                deferred_obligation_ids: BTreeSet::new(),
+                executed_obligation_ids: BTreeSet::new(),
+                structured_obligation_ids: BTreeSet::new(),
+                abstained_obligation_ids: BTreeSet::new(),
+                malformed_obligation_ids: BTreeSet::new(),
+                provider_failed_obligation_ids: BTreeSet::new(),
+                verifier_observed_obligation_ids: BTreeSet::new(),
+            }),
+        ];
+        let universe = UniverseDescriptorV3 {
+            id: mixed_universe_id(
+                program,
+                &obligation_ids,
+                &exclusions,
+                &limitation_ids,
+                &rule_coverages,
+            )?,
+            snapshot_id: program.snapshot_id().clone(),
+            profile_id: program.profile_key(),
+            rule_set_hash: program.rule_set_hash().clone(),
+            extractor_set_hash: program.extractor_set_hash().clone(),
+            policy_version: program.policy_version().to_owned(),
+            rule_pack_version: "rust-production-v2@1".to_owned(),
+            obligation_ids,
+            exclusions,
+            limitation_ids,
+            rule_coverages,
+        };
+        Ok(ObligationBundleV3 {
+            universe,
+            obligations,
+        })
+    }
+}
+
+fn public_function_node_witnesses(
+    program: &ProgramSpace,
+    function_id: &StableId,
+) -> Result<(BTreeSet<StableId>, BTreeSet<StableId>)> {
+    let mut modules = BTreeSet::new();
+    let mut witnesses = BTreeSet::new();
+    for relation in program
+        .relations()
+        .iter()
+        .filter(|relation| relation.kind == "contains" && relation.target_ids.contains(function_id))
+    {
+        if relation.target_ids.len() != 1 {
+            return Err(DomainError::Incomplete {
+                operation: "Node contains relation accepted function target arity",
+                limit: 1,
+                observed: relation.target_ids.len(),
+            });
+        }
+        let source = program.artifact(&relation.source_id).ok_or_else(|| {
+            DomainError::DanglingReference {
+                owner: "Node contains relation",
+                owner_id: relation.id.clone(),
+                reference: relation.source_id.clone(),
+            }
+        })?;
+        if source.kind == "module" {
+            modules.insert(source.id.clone());
+            witnesses.insert(relation.id.clone());
+        }
+    }
+    Ok((modules, witnesses))
+}
+
+fn missing_node_containment_exclusion(
+    program: &ProgramSpace,
+    function: &crate::Artifact,
+) -> Result<ExclusionRecord> {
+    let source_ids = BTreeSet::from([function.id.clone(), program.snapshot_id().clone()]);
+    let candidate_key = format!("{PUBLIC_FUNCTION_NODE_RULE}|{}", function.id);
+    let id = StableId::derived(
+        "exclusion",
+        &BTreeMap::from([
+            (
+                "candidate_key".to_owned(),
+                Value::String(candidate_key.clone()),
+            ),
+            (
+                "reason".to_owned(),
+                Value::String("node.public_function_missing_containment@1".to_owned()),
+            ),
+            (
+                "snapshot_id".to_owned(),
+                Value::String(program.snapshot_id().to_string()),
+            ),
+            (
+                "source_ids".to_owned(),
+                serde_json::to_value(&source_ids)
+                    .map_err(|error| DomainError::Json(error.to_string()))?,
+            ),
+        ]),
+    )?;
+    Ok(ExclusionRecord {
+        id,
+        candidate_key,
+        reason: "node.public_function_missing_containment@1".to_owned(),
+        source_ids,
+        excluded_weight: NODE_OBLIGATION_WEIGHT
+            .parse()
+            .map_err(|_| DomainError::Validation("invalid fixed Node weight".to_owned()))?,
+    })
+}
+
+fn mixed_rule_order(rule: &str) -> usize {
+    match rule {
+        CHANGED_PUBLIC_CALLEE_RULE => 0,
+        CAPABILITY_GAP_RULE => 1,
+        PUBLIC_FUNCTION_NODE_RULE => 2,
+        _ => usize::MAX,
+    }
+}
+
+fn mixed_universe_id(
+    program: &ProgramSpace,
+    obligation_ids: &BTreeSet<StableId>,
+    exclusions: &[ExclusionRecord],
+    limitation_ids: &BTreeSet<StableId>,
+    rule_coverages: &[RuleCoverageV3],
+) -> Result<StableId> {
+    StableId::derived(
+        "universe",
+        &BTreeMap::from([
+            (
+                "snapshot_id".to_owned(),
+                Value::String(program.snapshot_id().to_string()),
+            ),
+            (
+                "profile_id".to_owned(),
+                Value::String(program.profile_key()),
+            ),
+            (
+                "rule_set_hash".to_owned(),
+                Value::String(program.rule_set_hash().to_string()),
+            ),
+            (
+                "extractor_set_hash".to_owned(),
+                Value::String(program.extractor_set_hash().to_string()),
+            ),
+            (
+                "policy_version".to_owned(),
+                Value::String(program.policy_version().to_owned()),
+            ),
+            (
+                "rule_pack_version".to_owned(),
+                Value::String("rust-production-v2@1".to_owned()),
+            ),
+            (
+                "obligation_ids".to_owned(),
+                serde_json::to_value(obligation_ids)
+                    .map_err(|error| DomainError::Json(error.to_string()))?,
+            ),
+            (
+                "exclusions".to_owned(),
+                serde_json::to_value(exclusions)
+                    .map_err(|error| DomainError::Json(error.to_string()))?,
+            ),
+            (
+                "limitation_ids".to_owned(),
+                serde_json::to_value(limitation_ids)
+                    .map_err(|error| DomainError::Json(error.to_string()))?,
+            ),
+            (
+                "rule_coverages".to_owned(),
+                serde_json::to_value(rule_coverages)
+                    .map_err(|error| DomainError::Json(error.to_string()))?,
+            ),
+        ]),
+    )
 }
 
 fn exact_accepted_callee_id(
@@ -1833,6 +2322,19 @@ impl SplitCapabilitySpec {
         {
             return Err(DomainError::Validation(
                 "D capability split must use its exact target-support and enumeration sets"
+                    .to_owned(),
+            ));
+        }
+        Ok(value)
+    }
+
+    fn node_rule() -> Result<Self> {
+        let value = Self::new(vec!["ast".to_owned(), "containment".to_owned()], Vec::new())?;
+        if value.target_support_capabilities != ["ast", "containment"]
+            || !value.enumeration_capabilities.is_empty()
+        {
+            return Err(DomainError::Validation(
+                "Node capability split must use exact ast/containment support and no enumeration"
                     .to_owned(),
             ));
         }
@@ -2309,6 +2811,19 @@ fn rule_contract(rule: &str) -> Result<RuleContract> {
             structural_reach: 1.0,
             rationale: "A syntactically unique local caller reaches a changed public callee, \
                         so callers' assumptions about its contract require review.",
+        },
+        PUBLIC_FUNCTION_NODE_RULE => RuleContract {
+            required_capabilities: &["ast", "containment"],
+            include_relation_kinds: &["contains"],
+            max_relation_depth: 1,
+            accepted_modes: &["source_inspection", "test"],
+            evidence_policy: "default-evidence@1",
+            impact: "high",
+            exposure: 1.0,
+            uncertainty: 0.4,
+            structural_reach: 0.0,
+            rationale: "A profile-included public free function requires a review of its own \
+                        precondition, postcondition, return/error, and side-effect contract.",
         },
         CAPABILITY_GAP_RULE => RuleContract {
             required_capabilities: &[],

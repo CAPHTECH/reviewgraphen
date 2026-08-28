@@ -21,8 +21,8 @@ pub use bounds::{
 };
 pub use generic_non_authority::{
     GenericHumanReport, GenericHumanReportError, generate_generic_human_report,
-    generate_generic_human_report_v3, validate_generic_human_report,
-    validate_generic_human_report_v3,
+    generate_generic_human_report_v3, generate_generic_human_report_v4,
+    validate_generic_human_report, validate_generic_human_report_v3,
 };
 pub use report_v3::{ReportRequestV3, generate_v3, generate_v3_with_limits};
 pub use report_v4::{

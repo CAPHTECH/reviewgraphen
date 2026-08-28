@@ -754,7 +754,7 @@
       }
     }
   ],
-  "schema": "reviewgraphen.review_obligations.v3",
+  "schema": "reviewgraphen.review_obligations.v2",
   "source": {
     "content_hash": "sha256:8888888888888888",
     "kind": "tool",
@@ -783,51 +783,6 @@
     "policy_version": "default@1",
     "profile_id": "code-review@1",
     "rule_set_hash": "sha256:3333333333333333",
-    "snapshot_id": "snapshot:double-submit-v1",
-    "rule_pack_version": "rust.production.mixed.v3@1",
-    "rule_coverages": [
-      {
-        "kind": "resolved_target_with_candidate_gap",
-        "coverage": {
-          "rule": "relation.changed_public_callee@1",
-          "resolved_target_obligation_ids": [],
-          "candidate_space_gap_obligation_ids": [],
-          "target_support_capability_gaps": {},
-          "enumeration_capability_gaps": {
-            "direct_calls": "capability_partial:direct_calls"
-          },
-          "enumeration_capability_states": {
-            "direct_calls": "partial"
-          },
-          "enumeration_limitation_ids": [],
-          "planned_obligation_ids": [],
-          "deferred_obligation_ids": [],
-          "executed_obligation_ids": [],
-          "structured_obligation_ids": [],
-          "abstained_obligation_ids": [],
-          "malformed_obligation_ids": [],
-          "provider_failed_obligation_ids": [],
-          "verifier_observed_obligation_ids": [],
-          "call_graph_complete": false,
-          "global_call_coverage_claim": "prohibited"
-        }
-      },
-      {
-        "kind": "resolved_target_only",
-        "coverage": {
-          "rule": "node.public_function_contract@1",
-          "eligible_target_obligation_ids": [],
-          "target_support_capability_gaps": {},
-          "planned_obligation_ids": [],
-          "deferred_obligation_ids": [],
-          "executed_obligation_ids": [],
-          "structured_obligation_ids": [],
-          "abstained_obligation_ids": [],
-          "malformed_obligation_ids": [],
-          "provider_failed_obligation_ids": [],
-          "verifier_observed_obligation_ids": []
-        }
-      }
-    ]
+    "snapshot_id": "snapshot:double-submit-v1"
   }
 }

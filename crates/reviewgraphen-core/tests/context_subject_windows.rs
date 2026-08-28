@@ -1,7 +1,7 @@
 use reviewgraphen_core::{
     ContentHash, ContextSubjectWindowsPolicyV2, ContextSubjectWindowsPolicyV3,
-    ContextWindowInputV2, ContextWindowLossReasonV2, ContextWindowRoleV2, Severity, StableId,
-    resolve_subject_windows_v2,
+    ContextSubjectWindowsPolicyV4, ContextWindowInputV2, ContextWindowLossReasonV2,
+    ContextWindowRoleV2, Severity, StableId, resolve_subject_windows_v2,
 };
 
 const ADR0038_SUBJECT_WINDOWS_V2_HASH: &str =
@@ -71,6 +71,31 @@ fn subject_windows_policy_v3_is_golden_and_cross_decode_is_forbidden() {
         serde_json::from_slice::<ContextSubjectWindowsPolicyV3>(ADR0038_SUBJECT_WINDOWS_V2_BYTES)
             .is_err()
     );
+}
+
+#[test]
+fn subject_windows_policy_v4_has_pinned_bytes_hash_and_rejects_older_families() {
+    let policy = ContextSubjectWindowsPolicyV4::fixed();
+    let bytes = policy.canonical_bytes().expect("fixed v4 policy");
+    assert_eq!(bytes.len(), 2040);
+    assert_eq!(
+        ContentHash::sha256(&bytes).as_str(),
+        "sha256:9f15006986a73853ff3be7b9a158e8c79f69b9a8099c9d0a1991d8c7da170aed"
+    );
+    assert_eq!(
+        policy.hash().as_str(),
+        ContextSubjectWindowsPolicyV4::GOLDEN_HASH
+    );
+    assert_eq!(
+        serde_json::from_slice::<ContextSubjectWindowsPolicyV4>(&bytes).expect("v4 decodes"),
+        policy
+    );
+    assert!(
+        serde_json::from_slice::<ContextSubjectWindowsPolicyV4>(ADR0038_SUBJECT_WINDOWS_V3_BYTES)
+            .is_err()
+    );
+    assert!(serde_json::from_slice::<ContextSubjectWindowsPolicyV3>(&bytes).is_err());
+    assert!(serde_json::from_slice::<ContextSubjectWindowsPolicyV2>(&bytes).is_err());
 }
 
 fn id(value: &str) -> StableId {

@@ -11,7 +11,8 @@
 | `reviewgraphen.input.v1.schema.json` | Preserved `reviewgraphen.program_space.input.v1` legacy contract。 |
 | `reviewgraphen.input.v3.schema.json` | Additive M6 ProgramSpace carrier requiring a resolved Git commit/tree closure, complete version-pinned Rust symbol anchors, and ordered relation endpoints; v1/v2 remain frozen。 |
 | `reviewgraphen.input.v3.example.json` | Strict v3 double-submit ProgramSpace fixture validated by both JSON Schema and the Core runtime boundary。 |
-| `reviewgraphen.obligation.schema.json` | `reviewgraphen.review_obligations.v2` — current versioned obligation universe and obligations; this stable generic path is used by the validation script。 |
+| `reviewgraphen.obligation.schema.json` | Current obligation alias. It will advance only through an explicit major schema/version pair; the former v2 bytes are retained below. |
+| `reviewgraphen.obligation.v2.schema.json` | Preserved exact `reviewgraphen.review_obligations.v2` schema formerly served by the current alias. |
 | `reviewgraphen.obligation.v1.schema.json` | Preserved `reviewgraphen.review_obligations.v1` legacy contract。 |
 | `reviewgraphen.report.schema.json` | `reviewgraphen.review.report.v1` — end-to-end review report。 |
 | `reviewgraphen.report.v2.schema.json` | Accepted authority-free `reviewgraphen.review.report.v2` D2 design contract (ADR 0018); it requires declared tail metadata, fixed proposed/unreviewed claims, and zero verified/accepted coverage, while source confirmation remains outside JSON Schema and v1 stays frozen。 |
@@ -25,7 +26,8 @@
 | `reviewgraphen.migration.schema.json` | `reviewgraphen.program_space.migration.v1` — explicit v1→v2 `MigrationRecord` output of `migrate_program_space_v1_to_v2`。 |
 | `reviewgraphen.input.example.json` | Current v2 double-submit ProgramSpace fixture, with source-traced `CapabilityDeclaration` capabilities。 |
 | `reviewgraphen.input.v1.example.json` | Preserved `reviewgraphen.program_space.input.v1` double-submit ProgramSpace fixture。 |
-| `reviewgraphen.obligation.example.json` | Current v2 nine obligations: five concrete Node/Relation/Path/Invariant obligations plus four `capability_gap.origin_rule@1` obligations (one per rule requiring the fixture's `partial` `concurrency_model`)。 |
+| `reviewgraphen.obligation.example.json` | Current obligation-alias example; its version is fixed by the matching current schema. |
+| `reviewgraphen.obligation.v2.example.json` | Preserved exact former current-alias v2 example: five concrete Node/Relation/Path/Invariant obligations plus four `capability_gap.origin_rule@1` obligations. |
 | `reviewgraphen.obligation.v1.example.json` | Preserved reviewed v1 obligation fixture。 |
 | `reviewgraphen.report.example.json` | Claim、evidence binding、verification、decision、finding、gluing、coverageの参照report。 |
 | `reviewgraphen.migration.example.json` | The exact canonical `migrate_program_space_v1_to_v2` output for `reviewgraphen.input.v1.example.json`: 5 `capability_source_backfill` losses, 2 `synthesized_limitation` losses (the fixture's two `partial` capabilities), and 1 `carried_limitation_trace` loss for its one nonempty-source v1 limitation。 |
@@ -54,7 +56,10 @@
 | `reviewgraphen.reviewer_output.v2.schema.json` | Provider-facing non-authority output with a root object and a nested closed `anyOf` between structured claims and abstention; new generic packets emit v2 and deterministically lower it through the strict v1 parser. |
 | `reviewgraphen.generic_review_run.v1.schema.json` | Denominator-preserving generic run projection with raw process records, parsed proposal outcomes, and a fixed non-authority/incomplete ceiling. |
 | `reviewgraphen.generic_review_run.v2.schema.json` | ADR 0038 canonical non-authority audit projection. It records the D two-layer obligation denominator, `context.subject_windows@2`, observation/coverage partitions, partial direct-call enumeration trace, a closed deferred verifier result, and a fixed incomplete authority ceiling. |
+| `reviewgraphen.generic_review_request.v4.schema.json` | Closed mixed production-v4 request with the exact D→`@3` and Node→`@4` policy registry. |
+| `reviewgraphen.generic_review_run.v4.schema.json` | Closed non-authority mixed audit with ordered D two-layer and Node single-layer coverage; Node has no candidate-gap or `direct_calls` fields. |
 | `reviewgraphen.generic_review_human_report.v1.schema.json` | Closed non-authority manifest derived only from a validated run-v2 audit; it binds audit and Markdown hashes, source/window trace, meaningful loss, proposal/abstention state, and verifier status. |
+| `reviewgraphen.generic_review_human_report.v3.schema.json` | Closed non-authority projection of a basis-bound run-v4, retaining separate D limitation and Node public-function scope. |
 | `reviewgraphen.generic_review_diagnostics.v1.schema.json` | Closed non-authority operational diagnostic with nullable request/run bindings and exactly six ordered stage observations; the adjacent `.example.json` uses real v3 run bindings, while elapsed microseconds remain non-canonical operational observations. |
 | `provider-free.source-grounded-packet.v1.schema.json` | Closed provider-free reviewer packet containing only admitted source payloads and a fixed abstention response schema; it is not an authority artifact. |
 | `provider-free.source-grounded-abstention.v1.schema.json` | The sole fixed output for `deterministic.abstain@1`: an explicit abstention, never a semantic finding. |

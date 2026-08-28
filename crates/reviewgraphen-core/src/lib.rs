@@ -39,22 +39,27 @@ mod m1_tests;
 pub use canonical::{CanonicalJson, canonical_hash, canonical_json, canonical_json_value};
 pub use context::{
     BuiltContextProjection, BuiltContextSubjectWindowsV2, BuiltContextSubjectWindowsV3,
-    ContextBuildEffect, ContextBuildProbe, ContextBuildSession, ContextBuildTrace,
-    ContextDenominatorCommitmentV3, ContextError, ContextKnownCardinalityV3,
+    BuiltContextSubjectWindowsV4, ContextBuildEffect, ContextBuildProbe, ContextBuildSession,
+    ContextBuildTrace, ContextDenominatorCommitmentV3, ContextError, ContextKnownCardinalityV3,
     ContextLatentCardinalityV3, ContextMaterializedSourceV3, ContextPolicyV1, ContextSourceRequest,
     ContextSubjectBindingErrorV2, ContextSubjectLossV2, ContextSubjectLossV3,
-    ContextSubjectOutcomeV3, ContextSubjectWindowsPolicyV2, ContextSubjectWindowsPolicyV3,
-    ContextSubjectWindowsSessionV2, ContextSubjectWindowsSessionV3,
+    ContextSubjectOutcomeV3, ContextSubjectOutcomeV4, ContextSubjectWindowsPolicyV2,
+    ContextSubjectWindowsPolicyV3, ContextSubjectWindowsPolicyV4, ContextSubjectWindowsSessionV2,
+    ContextSubjectWindowsSessionV3, ContextSubjectWindowsSessionV4,
     ContextSubjectWindowsV3ValidationError, ContextSupportLossSummaryV3, ContextValidationBasisV3,
-    ContextWindowCandidateV2, ContextWindowInputV2, ContextWindowLossReasonV2, ContextWindowRoleV2,
-    ContextWindowV2, ContextWindowV3, EnvelopeLoss, EnvelopeUnknown, ExcerptRange,
+    ContextValidationBasisV4, ContextWindowCandidateV2, ContextWindowInputV2,
+    ContextWindowLossReasonV2, ContextWindowRoleV2, ContextWindowRoleV4, ContextWindowV2,
+    ContextWindowV3, ContextWindowV4, EnvelopeLoss, EnvelopeUnknown, ExcerptRange,
     ExcludedSourceRef, ExclusionReason, ReviewContextEnvelope,
-    SemanticallyValidatedContextSubjectWindowsV3, SourceArtifactRef,
-    ValidatedContextSubjectWindowsV3, WireValidatedContextSubjectWindowsV3, prepare_context,
-    prepare_subject_windows_v2, prepare_subject_windows_v2_with_probe, prepare_subject_windows_v3,
-    prepare_subject_windows_v3_with_probe, resolve_subject_windows_v2,
+    SemanticallyValidatedContextSubjectWindowsV3, SemanticallyValidatedContextSubjectWindowsV4,
+    SourceArtifactRef, ValidatedContextSubjectWindowsV3, WireValidatedContextSubjectWindowsV3,
+    WireValidatedContextSubjectWindowsV4, prepare_context, prepare_subject_windows_v2,
+    prepare_subject_windows_v2_with_probe, prepare_subject_windows_v3,
+    prepare_subject_windows_v3_with_probe, prepare_subject_windows_v4,
+    prepare_subject_windows_v4_for_obligation, resolve_subject_windows_v2,
     validate_subject_windows_v3_against_basis, validate_subject_windows_v3_read_only,
-    validate_subject_windows_v3_wire_read_only,
+    validate_subject_windows_v3_wire_read_only, validate_subject_windows_v4_against_basis,
+    validate_subject_windows_v4_wire_read_only,
 };
 pub use coverage::{Coverage, CoverageMeasure, Ratio};
 pub use error::{DomainError, PlanningError, Result};
@@ -216,6 +221,7 @@ pub use review::{
 };
 pub use source::{SnapshotSourceBundle, SnapshotSourceEntry};
 pub use synthesize::{
-    ExclusionRecord, MvpRulePack, ObligationBundle, ObligationContract, RuleDescriptor,
-    UniverseDescriptor, plan_resolved_target_obligations,
+    DTwoLayerCoverage, ExclusionRecord, MvpRulePack, ObligationBundle, ObligationBundleV3,
+    ObligationContract, ObligationContractV3, RuleCoverageV3, RuleDescriptor, SingleLayerCoverage,
+    UniverseDescriptor, UniverseDescriptorV3, plan_resolved_target_obligations,
 };

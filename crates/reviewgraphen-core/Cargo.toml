@@ -34,5 +34,9 @@ name = "changed_public_callee_rule"
 path = "tests/changed_public_callee_rule.rs"
 
 [[test]]
+name = "public_function_node_rule"
+path = "tests/public_function_node_rule.rs"
+
+[[test]]
 name = "context_effect_contract"
 path = "tests/context_effect_contract.rs"

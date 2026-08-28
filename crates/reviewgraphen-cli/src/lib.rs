@@ -11,9 +11,11 @@ use reviewgraphen_runtime::diagnostics::{
     GenericReviewStageObserver, MonotonicMicrosecondClock,
 };
 use reviewgraphen_runtime::generic::{
-    GENERIC_REVIEW_REQUEST_V2_SCHEMA, GENERIC_REVIEW_REQUEST_V3_SCHEMA, GenericReviewRequest,
-    GenericReviewRequestV2, GenericReviewRequestV3, admit_fresh_generic_review_artifact_root_v2,
+    GENERIC_REVIEW_REQUEST_V2_SCHEMA, GENERIC_REVIEW_REQUEST_V3_SCHEMA,
+    GENERIC_REVIEW_REQUEST_V4_SCHEMA, GenericReviewRequest, GenericReviewRequestV2,
+    GenericReviewRequestV3, GenericReviewRequestV4, admit_fresh_generic_review_artifact_root_v2,
     run_generic_review, run_generic_review_v2_with_observer, run_generic_review_v3_with_observer,
+    run_generic_review_v4,
 };
 #[cfg(target_os = "linux")]
 use rustix::fs::{self, FileType, Mode, OFlags};
@@ -347,6 +349,9 @@ fn generic_review_with_observer(
         Some(GENERIC_REVIEW_REQUEST_V3_SCHEMA) => {
             generic_review_v3(&bytes, value, artifact_root, observer)
         }
+        Some(GENERIC_REVIEW_REQUEST_V4_SCHEMA) => {
+            generic_review_v4(&bytes, value, artifact_root, observer)
+        }
         _ => {
             let request: GenericReviewRequest = match serde_json::from_value(value) {
                 Ok(request) => request,
@@ -361,6 +366,128 @@ fn generic_review_with_observer(
             }
         }
     }
+}
+
+fn generic_review_v4(
+    request_bytes: &[u8],
+    mut request_value: Value,
+    artifact_argument: &Path,
+    observer: &mut dyn GenericReviewStageObserver,
+) -> CommandOutcome {
+    let cwd = match canonical_invocation_root() {
+        Ok(path) => path,
+        Err(error) => return CommandOutcome::failure(3, error),
+    };
+    if !v4_request_is_valid(&request_value) || !uses_dot_admission_roots(&request_value) {
+        return CommandOutcome::failure(3, "invalid generic review v4 request");
+    }
+    let artifact_root = match resolve_artifact_root(&cwd, artifact_argument) {
+        Ok(path) => path,
+        Err(error) => return CommandOutcome::failure(20, error),
+    };
+    if let Err(error) = require_absent_artifact_root(&artifact_root) {
+        return CommandOutcome::failure(20, error);
+    }
+    let root = match cwd.to_str() {
+        Some(root) => root,
+        None => return CommandOutcome::failure(3, "canonical invocation cwd is not UTF-8"),
+    };
+    let Some(request) = request_value.as_object_mut() else {
+        return CommandOutcome::failure(3, "invalid generic review v4 request");
+    };
+    request.insert(
+        "workspace_admission_root".to_owned(),
+        Value::String(root.to_owned()),
+    );
+    request.insert(
+        "repository_admission_root".to_owned(),
+        Value::String(root.to_owned()),
+    );
+    let request: GenericReviewRequestV4 = match serde_json::from_value(request_value) {
+        Ok(request) => request,
+        Err(_) => return CommandOutcome::failure(3, "invalid generic review v4 request"),
+    };
+    let run = match run_generic_review_v4(&request) {
+        Ok(run) => run,
+        Err(error) => return CommandOutcome::failure(20, error.to_string()),
+    };
+    if let Err(error) = admit_fresh_generic_review_artifact_root_v2(&artifact_root) {
+        return CommandOutcome::failure(20, error.to_string());
+    }
+    observer.observe(GenericReviewStageEvent::Begin(GenericReviewStage::Report));
+    let audit_bytes = match run.canonical_bytes() {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            observer.observe(GenericReviewStageEvent::Failed(GenericReviewStage::Report));
+            return CommandOutcome::failure(20, error.to_string());
+        }
+    };
+    let human_report = match reviewgraphen_report::generate_generic_human_report_v4(&run) {
+        Ok(report) => report,
+        Err(error) => {
+            observer.observe(GenericReviewStageEvent::Failed(GenericReviewStage::Report));
+            return CommandOutcome::failure(20, error.to_string());
+        }
+    };
+    observer.observe(GenericReviewStageEvent::Completed(
+        GenericReviewStage::Report,
+    ));
+    let mut artifacts = BTreeMap::new();
+    artifacts.insert(
+        "audit.run.v4.json".to_owned(),
+        ("audit".to_owned(), audit_bytes.clone()),
+    );
+    artifacts.insert(
+        "human-report.manifest.v3.json".to_owned(),
+        (
+            "human_report_manifest".to_owned(),
+            human_report.manifest_bytes,
+        ),
+    );
+    artifacts.insert(
+        "human-report.md".to_owned(),
+        (
+            "human_report_markdown".to_owned(),
+            human_report.markdown_bytes,
+        ),
+    );
+    let Some(request_id) = run.value()["request_id"].as_str() else {
+        return CommandOutcome::failure(20, "validated v4 run is missing request_id");
+    };
+    let Some(run_id) = run.value()["run_id"].as_str() else {
+        return CommandOutcome::failure(20, "validated v4 run is missing run_id");
+    };
+    let Some(snapshot_id) = run.value()["legacy_ingestion"]["snapshot_id"].as_str() else {
+        return CommandOutcome::failure(20, "validated v4 run is missing snapshot_id");
+    };
+    let Some(universe_id) = run.value()["plan"]["universe_id"].as_str() else {
+        return CommandOutcome::failure(20, "validated v4 run is missing universe_id");
+    };
+    let manifest = artifact_manifest(
+        request_bytes,
+        request_id,
+        run_id,
+        snapshot_id,
+        universe_id,
+        &artifacts,
+    );
+    let manifest_bytes = match canonical_json(&manifest) {
+        Ok(bytes) => bytes,
+        Err(error) => return CommandOutcome::failure(20, error.to_string()),
+    };
+    observer.observe(GenericReviewStageEvent::Begin(
+        GenericReviewStage::ArtifactWrite,
+    ));
+    if let Err(error) = write_artifacts(&artifact_root, &artifacts, &manifest_bytes) {
+        observer.observe(GenericReviewStageEvent::Failed(
+            GenericReviewStage::ArtifactWrite,
+        ));
+        return CommandOutcome::failure(20, error);
+    }
+    observer.observe(GenericReviewStageEvent::Completed(
+        GenericReviewStage::ArtifactWrite,
+    ));
+    CommandOutcome::success(audit_bytes, String::new())
 }
 
 fn generic_review_v3(
@@ -686,6 +813,15 @@ fn v3_request_is_valid(value: &Value) -> bool {
     jsonschema::validator_for(&schema).is_ok_and(|validator| validator.is_valid(value))
 }
 
+fn v4_request_is_valid(value: &Value) -> bool {
+    let Ok(schema) = serde_json::from_str::<Value>(include_str!(
+        "../../../schemas/reviewgraphen.generic_review_request.v4.schema.json"
+    )) else {
+        return false;
+    };
+    jsonschema::validator_for(&schema).is_ok_and(|validator| validator.is_valid(value))
+}
+
 fn uses_dot_admission_roots(value: &Value) -> bool {
     matches!(
         value
@@ -763,6 +899,9 @@ fn schema_list() -> CommandOutcome {
         "reviewgraphen.generic_review_request.v3",
         "reviewgraphen.generic_review_run.v3",
         "reviewgraphen.generic_review_human_report.v2",
+        "reviewgraphen.generic_review_request.v4",
+        "reviewgraphen.generic_review_run.v4",
+        "reviewgraphen.generic_review_human_report.v3",
         "reviewgraphen.generic_review_diagnostics.v1"
     ]);
     CommandOutcome::success(canonical_json(&values).unwrap_or_default(), String::new())
@@ -844,6 +983,10 @@ fn semantic_validation(name: &str, report: &Value) -> Result<(), ()> {
         }
         "reviewgraphen.generic_review_run.v3" => {
             reviewgraphen_runtime::generic::validate_generic_review_run_v3_wire_structure(report)
+                .map_err(|_| ())
+        }
+        "reviewgraphen.generic_review_run.v4" => {
+            reviewgraphen_runtime::generic::validate_generic_review_run_v4_wire_structure(report)
                 .map_err(|_| ())
         }
         _ => Ok(()),
@@ -945,6 +1088,15 @@ fn schema_source(name: &str) -> Option<&'static str> {
         "reviewgraphen.generic_review_human_report.v2" => Some(include_str!(
             "../../../schemas/reviewgraphen.generic_review_human_report.v2.schema.json"
         )),
+        "reviewgraphen.generic_review_request.v4" => Some(include_str!(
+            "../../../schemas/reviewgraphen.generic_review_request.v4.schema.json"
+        )),
+        "reviewgraphen.generic_review_run.v4" => Some(include_str!(
+            "../../../schemas/reviewgraphen.generic_review_run.v4.schema.json"
+        )),
+        "reviewgraphen.generic_review_human_report.v3" => Some(include_str!(
+            "../../../schemas/reviewgraphen.generic_review_human_report.v3.schema.json"
+        )),
         "reviewgraphen.generic_review_diagnostics.v1" => Some(include_str!(
             "../../../schemas/reviewgraphen.generic_review_diagnostics.v1.schema.json"
         )),
@@ -979,6 +1131,9 @@ mod tests {
                 "reviewgraphen.generic_review_request.v3",
                 "reviewgraphen.generic_review_run.v3",
                 "reviewgraphen.generic_review_human_report.v2",
+                "reviewgraphen.generic_review_request.v4",
+                "reviewgraphen.generic_review_run.v4",
+                "reviewgraphen.generic_review_human_report.v3",
                 "reviewgraphen.generic_review_diagnostics.v1"
             ])
         );

@@ -3,12 +3,14 @@
 use reviewgraphen_core::{
     AbstentionReason, ArtifactRegistered, ArtifactSensitivity, ArtifactSource, ClaimPolarity,
     ContentHash, ContextBuildProbe, ContextSubjectWindowsPolicyV3, ContextValidationBasisV3,
-    ContextWindowV3, EventCommand, EventLog, ExecutionClaimInputV2, MalformedOutputReason,
-    MvpRulePack, Obligation, ObligationBundle, PlanBudget, ProgramSpace, ReviewAggregate,
-    ReviewContextEnvelope, ReviewPlan, SnapshotSourceBundle, SnapshotSourceRecordEntry,
-    SnapshotSourcesRecorded, StableId, canonical_json, plan, plan_resolved_target_obligations,
-    prepare_context, prepare_subject_windows_v2, prepare_subject_windows_v3_with_probe,
+    ContextValidationBasisV4, ContextWindowV3, EventCommand, EventLog, ExecutionClaimInputV2,
+    MalformedOutputReason, MvpRulePack, Obligation, ObligationBundle, PlanBudget, ProgramSpace,
+    ReviewAggregate, ReviewContextEnvelope, ReviewPlan, SnapshotSourceBundle,
+    SnapshotSourceRecordEntry, SnapshotSourcesRecorded, StableId, canonical_json, plan,
+    plan_resolved_target_obligations, prepare_context, prepare_subject_windows_v2,
+    prepare_subject_windows_v3_with_probe, prepare_subject_windows_v4_for_obligation,
     validate_subject_windows_v3_against_basis, validate_subject_windows_v3_wire_read_only,
+    validate_subject_windows_v4_against_basis, validate_subject_windows_v4_wire_read_only,
 };
 use reviewgraphen_ingest::{
     CallKind, CallObstructionReason, CargoToolAdmission, ExtractionReport, IngestConfig,
@@ -209,6 +211,10 @@ mod basis_inputs {
             }
         }
 
+        pub(super) fn inner(&self) -> Arc<ReviewAggregate> {
+            Arc::clone(&self.inner)
+        }
+
         pub(super) fn prepare_session(
             &self,
             obligation_id: StableId,
@@ -298,6 +304,10 @@ mod basis_inputs {
                 #[cfg(debug_assertions)]
                 clone_count: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        pub(super) fn inner(&self) -> Arc<BTreeMap<StableId, Vec<u8>>> {
+            Arc::clone(&self.inner)
         }
 
         pub(super) fn identity(&self) -> usize {
@@ -1620,6 +1630,10 @@ pub const GENERIC_REVIEW_REQUEST_V2_SCHEMA: &str = "reviewgraphen.generic_review
 pub const GENERIC_REVIEW_RUN_V2_SCHEMA: &str = "reviewgraphen.generic_review_run.v2";
 pub const GENERIC_REVIEW_REQUEST_V3_SCHEMA: &str = "reviewgraphen.generic_review_request.v3";
 pub const GENERIC_REVIEW_RUN_V3_SCHEMA: &str = "reviewgraphen.generic_review_run.v3";
+pub const GENERIC_REVIEW_REQUEST_V4_SCHEMA: &str = "reviewgraphen.generic_review_request.v4";
+pub const GENERIC_REVIEW_RUN_V4_SCHEMA: &str = "reviewgraphen.generic_review_run.v4";
+const RUST_PRODUCTION_V4_RULE_SET_HASH: &str =
+    "sha256:8f6bfbfb2dbf2f0eaf916b152ddba1e422db8b6de95f931c0c78c9ee4d050b47";
 const D_RULE: &str = "relation.changed_public_callee@1";
 const D_PROPERTY: &str = "rust.callee_contract_review@1";
 const DETERMINISTIC_ABSTAIN: &str = "deterministic.abstain@1";
@@ -1669,6 +1683,24 @@ pub struct GenericReviewRequestV3 {
     pub observer: GenericObserverRequestV2,
     pub verifier_descriptor_id: Option<String>,
     pub context_policy_id: String,
+}
+
+/// Closed request for the mixed D/Node production-v4 rule set.  Policy
+/// bindings are a fixed registry, not caller-selectable configuration.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenericReviewRequestV4 {
+    pub schema: String,
+    pub workspace_admission_root: PathBuf,
+    pub repository_admission_root: PathBuf,
+    pub repository_identity: String,
+    pub base_revision: String,
+    pub target_revision: String,
+    pub ingest: GenericIngestRequestV2,
+    pub plan: GenericPlanRequest,
+    pub observer: GenericObserverRequestV2,
+    pub verifier_descriptor_id: Option<String>,
+    pub context_policies: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1735,6 +1767,29 @@ pub struct GenericReviewRunV3 {
     provider_free_record_artifacts: Vec<GenericProviderFreeRecordArtifactV1>,
 }
 
+/// Closed production-v4 run.  Its mixed rule contract and per-rule coverage
+/// are intentionally values owned only by this major; v1-v3 remain D-only.
+#[derive(Clone, Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenericReviewRunV4 {
+    pub schema: &'static str,
+    pub run_id: StableId,
+    pub request_id: StableId,
+    pub legacy_ingestion: GenericLegacyIngestionV2,
+    pub ingestion_report_v2: GenericIngestionReportV2,
+    pub obligation_contract: Vec<GenericObligationV2>,
+    pub exclusions: Vec<reviewgraphen_core::ExclusionRecord>,
+    pub plan: GenericPlanV2,
+    pub contexts: Vec<GenericContextV3>,
+    pub observations: Vec<GenericObservationV2>,
+    pub provider_free_packet_bindings: Vec<GenericProviderFreePacketBindingV1>,
+    pub coverage: Value,
+    pub verifier: Option<GenericVerifierUnsupportedV2>,
+    pub authority: GenericAuthorityCeilingV2,
+    #[serde(skip)]
+    provider_free_record_artifacts: Vec<GenericProviderFreeRecordArtifactV1>,
+}
+
 impl GenericReviewRunV2 {
     pub fn canonical_bytes(&self) -> GenericReviewResult<Vec<u8>> {
         Ok(canonical_json(self)?)
@@ -1751,6 +1806,16 @@ impl GenericReviewRunV3 {
         Ok(canonical_json(self)?)
     }
 
+    #[must_use]
+    pub fn provider_free_record_artifacts(&self) -> &[GenericProviderFreeRecordArtifactV1] {
+        &self.provider_free_record_artifacts
+    }
+}
+
+impl GenericReviewRunV4 {
+    pub fn canonical_bytes(&self) -> GenericReviewResult<Vec<u8>> {
+        Ok(canonical_json(self)?)
+    }
     #[must_use]
     pub fn provider_free_record_artifacts(&self) -> &[GenericProviderFreeRecordArtifactV1] {
         &self.provider_free_record_artifacts
@@ -1799,6 +1864,52 @@ impl Serialize for ValidatedGenericReviewRunV3 {
     {
         self.canonical_value.serialize(serializer)
     }
+}
+
+/// A run-v4 capability is created only after every D context is reconstructed
+/// with its v3 basis and every Node context with the separate v4 basis.
+#[derive(Clone, Debug)]
+pub struct ValidatedGenericReviewRunV4 {
+    canonical_value: Value,
+}
+impl ValidatedGenericReviewRunV4 {
+    fn new(canonical_value: Value) -> Self {
+        Self { canonical_value }
+    }
+    pub fn canonical_bytes(&self) -> GenericReviewResult<Vec<u8>> {
+        Ok(canonical_json(&self.canonical_value)?)
+    }
+    #[must_use]
+    pub const fn value(&self) -> &Value {
+        &self.canonical_value
+    }
+}
+impl Serialize for ValidatedGenericReviewRunV4 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.canonical_value.serialize(serializer)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UnvalidatedGenericReviewRunV4 {
+    canonical_value: Value,
+}
+impl UnvalidatedGenericReviewRunV4 {
+    #[must_use]
+    pub const fn value(&self) -> &Value {
+        &self.canonical_value
+    }
+}
+
+/// Trusted reconstruction inputs are separate for the frozen D family and
+/// the Node-only v4 context family.
+#[derive(Clone)]
+pub struct GenericReviewRunV4Basis {
+    pub d_context_bases: BTreeMap<StableId, ContextValidationBasisV3>,
+    pub node_context_bases: BTreeMap<StableId, ContextValidationBasisV4>,
 }
 
 /// Closed-schema, canonical run-v3 wire bytes without semantic denominator
@@ -2762,6 +2873,276 @@ pub fn run_generic_review_v3_with_observer_and_basis_probe(
     ))
 }
 
+/// Executes the explicit mixed production-v4 family.  Legacy v1-v3 dispatch
+/// never reaches this entry point; the D aggregate is used solely as a
+/// read-only source registration closure while Node obligations remain in the
+/// separate V3 synthesis universe.
+pub fn run_generic_review_v4(
+    request: &GenericReviewRequestV4,
+) -> GenericReviewResult<ValidatedGenericReviewRunV4> {
+    request.validate_v4()?;
+    let request_id = request.id_v4()?;
+    let ingested = ingest_with_sources_v2(
+        &request.ingest_request_v4(),
+        request.ingest.max_total_source_bytes,
+    )?;
+    let program = &ingested.legacy.program_space;
+    let d_bundle = MvpRulePack::synthesize_changed_public_callee(program)?;
+    let mixed_bundle = MvpRulePack::synthesize_rust_production_v2(program)?;
+    let ids = mixed_bundle
+        .obligations()
+        .iter()
+        .map(|obligation| obligation.id().clone())
+        .collect::<BTreeSet<_>>();
+    let planned_ids = mixed_bundle
+        .obligations()
+        .iter()
+        .filter(|obligation| obligation.applicability_status() == "applicable")
+        .map(|obligation| obligation.id().clone())
+        .collect::<BTreeSet<_>>();
+    let deferred_ids = ids
+        .difference(&planned_ids)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if planned_ids.len()
+        > usize::try_from(request.plan.max_obligations_per_wave).unwrap_or(usize::MAX)
+        || request.plan.max_waves == 0
+    {
+        return Err(GenericReviewError::Request(
+            "v4 plan budget cannot admit mixed obligation universe",
+        ));
+    }
+    let wave_id = StableId::derived(
+        "plan-wave",
+        &BTreeMap::from([
+            (
+                "kind".to_owned(),
+                Value::String("generic-review-v4".to_owned()),
+            ),
+            (
+                "obligation_ids".to_owned(),
+                serde_json::to_value(&planned_ids)?,
+            ),
+        ]),
+    )?;
+    let plan_id = StableId::derived(
+        "plan",
+        &BTreeMap::from([
+            (
+                "kind".to_owned(),
+                Value::String("generic-review-v4".to_owned()),
+            ),
+            (
+                "universe_id".to_owned(),
+                Value::String(mixed_bundle.universe().id().to_string()),
+            ),
+            ("wave_id".to_owned(), Value::String(wave_id.to_string())),
+        ]),
+    )?;
+    let plan = GenericPlanV2 {
+        id: plan_id.clone(),
+        universe_id: mixed_bundle.universe().id().clone(),
+        waves: vec![GenericWaveV2 {
+            id: wave_id.clone(),
+            obligation_ids: planned_ids.clone(),
+        }],
+        deferred_obligation_ids: deferred_ids.clone(),
+    };
+    let run_id = StableId::derived(
+        "run",
+        &BTreeMap::from([
+            (
+                "kind".to_owned(),
+                Value::String("generic-review-v4".to_owned()),
+            ),
+            ("plan_id".to_owned(), Value::String(plan_id.to_string())),
+            (
+                "request_schema".to_owned(),
+                Value::String(GENERIC_REVIEW_REQUEST_V4_SCHEMA.to_owned()),
+            ),
+        ]),
+    )?;
+    let d_aggregate = register_read_only_d_snapshot_sources(
+        ReviewAggregate::read_only_from_d_two_layer_bundle(program.clone(), &d_bundle)?,
+        &run_id,
+        &ingested.legacy.source_bundle,
+    )?;
+    let aggregate = basis_inputs::SharedAggregate::new(d_aggregate);
+    let source_map = basis_inputs::SharedSourceMap::new(
+        ingested
+            .legacy
+            .source_bundle
+            .entries()
+            .iter()
+            .map(|source| (source.artifact_id().clone(), source.bytes().to_vec()))
+            .collect(),
+    );
+    let d_by_id = d_bundle
+        .obligations()
+        .iter()
+        .map(|obligation| (obligation.id().clone(), obligation))
+        .collect::<BTreeMap<_, _>>();
+    let mut contexts = Vec::new();
+    for obligation in mixed_bundle
+        .obligations()
+        .iter()
+        .filter(|obligation| planned_ids.contains(obligation.id()))
+    {
+        if obligation.version().rule() == D_RULE {
+            let d_obligation = d_by_id
+                .get(obligation.id())
+                .ok_or(GenericReviewError::Request(
+                    "v4 D obligation diverged from frozen D universe",
+                ))?;
+            let relation = program
+                .relation(
+                    d_obligation
+                        .target_refs()
+                        .first()
+                        .ok_or(GenericReviewError::Request("v4 D target"))?,
+                )
+                .ok_or(GenericReviewError::Request("v4 D relation"))?;
+            let (caller, callee) =
+                MvpRulePack::validate_changed_public_callee_endpoints(program, relation)?;
+            let mut session = aggregate.prepare_session(
+                d_obligation.id().clone(),
+                caller.clone(),
+                callee.clone(),
+                request.ingest.max_files,
+                None,
+            )?;
+            while let Some(source_request) = session.next_source_request()? {
+                session.submit_source(
+                    &source_request,
+                    source_entry(&ingested.legacy.source_bundle, source_request.artifact_id())?
+                        .bytes(),
+                )?;
+            }
+            let basis = aggregate.build_basis(
+                &source_map,
+                d_obligation.id().clone(),
+                caller,
+                callee,
+                request.ingest.max_files,
+            )?;
+            let built = session.finish()?;
+            let value = built.canonical_value()?;
+            validate_subject_windows_v3_against_basis(&value, &basis)?;
+            contexts.push(GenericContextV3 {
+                wave_id: wave_id.clone(),
+                context: value,
+            });
+        } else if obligation.version().rule() == "node.public_function_contract@1" {
+            let subject = obligation
+                .target_refs()
+                .first()
+                .cloned()
+                .ok_or(GenericReviewError::Request("v4 Node target"))?;
+            let aggregate_arc = aggregate.inner();
+            let mut session = prepare_subject_windows_v4_for_obligation(
+                &aggregate_arc,
+                obligation.clone(),
+                subject.clone(),
+                request.ingest.max_files,
+            )?;
+            while let Some(source_request) = session.next_source_request()? {
+                session.submit_source(
+                    &source_request,
+                    source_entry(&ingested.legacy.source_bundle, source_request.artifact_id())?
+                        .bytes(),
+                )?;
+            }
+            let basis = ContextValidationBasisV4::from_accepted_snapshot_for_obligation(
+                aggregate_arc,
+                obligation.clone(),
+                subject,
+                request.ingest.max_files,
+                source_map.inner(),
+            )?;
+            let built = session.finish()?;
+            let value = built.canonical_value()?;
+            validate_subject_windows_v4_against_basis(&value, &basis)?;
+            contexts.push(GenericContextV3 {
+                wave_id: wave_id.clone(),
+                context: value,
+            });
+        } else {
+            return Err(GenericReviewError::Request("v4 mixed rule registry"));
+        }
+    }
+    let verifier = v2_verifier(
+        request.verifier_descriptor_id.as_deref(),
+        &request_id,
+        program.snapshot_id(),
+        mixed_bundle.universe().id(),
+    )?;
+    let legacy_ingestion = legacy_ingestion_v2(program, &request.repository_identity)?;
+    let ingestion_report_v2 =
+        generic_ingestion_projection_v2(&legacy_ingestion, program, &ingested.ingestion_report_v2)?;
+    let coverage = json!({
+        "rule_order": [D_RULE, "node.public_function_contract@1"],
+        "rule_coverages": mixed_bundle.universe().rule_coverages().iter().map(|coverage| {
+            let denominator = coverage.resolved_target_obligation_ids();
+            let planned = denominator.intersection(&planned_ids).cloned().collect();
+            let deferred = denominator.intersection(&deferred_ids).cloned().collect();
+            coverage.with_plan_partition(planned, deferred)
+        }).collect::<Result<Vec<_>, _>>()?,
+    });
+    let authority = GenericAuthorityCeilingV2 {
+        classification: "non_authority",
+        trusted_pass: false,
+        result_status: "incomplete",
+        incomplete_reasons: BTreeSet::from([
+            "candidate_space_enumeration_incomplete".to_owned(),
+            "obligations_deferred".to_owned(),
+            "human_decision_not_recorded".to_owned(),
+            "model_observer_non_authority".to_owned(),
+        ]),
+    };
+    let run = GenericReviewRunV4 {
+        schema: GENERIC_REVIEW_RUN_V4_SCHEMA,
+        run_id,
+        request_id,
+        legacy_ingestion,
+        ingestion_report_v2,
+        obligation_contract: v4_obligation_contract(mixed_bundle.obligations()),
+        exclusions: mixed_bundle.universe().exclusions().to_vec(),
+        plan,
+        contexts,
+        observations: Vec::new(),
+        provider_free_packet_bindings: Vec::new(),
+        coverage,
+        verifier,
+        authority,
+        provider_free_record_artifacts: Vec::new(),
+    };
+    Ok(ValidatedGenericReviewRunV4::new(serde_json::to_value(run)?))
+}
+
+fn v4_obligation_contract(obligations: &[Obligation]) -> Vec<GenericObligationV2> {
+    obligations
+        .iter()
+        .map(|obligation| GenericObligationV2 {
+            id: obligation.id().clone(),
+            rule_id: obligation.version().rule().to_owned(),
+            property_id: obligation.property_id().to_owned(),
+            target_kind: obligation.target_kind().to_owned(),
+            target_refs: obligation.target_refs().to_vec(),
+            target_support_capabilities: obligation
+                .required_capabilities()
+                .iter()
+                .cloned()
+                .collect(),
+            enumeration_capabilities: if obligation.version().rule() == D_RULE {
+                vec!["direct_calls".to_owned()]
+            } else {
+                Vec::new()
+            },
+            applicability_status: obligation.applicability_status().to_owned(),
+        })
+        .collect()
+}
+
 impl GenericReviewRequestV2 {
     fn validate_v2(&self) -> GenericReviewResult<()> {
         if self.schema != GENERIC_REVIEW_REQUEST_V2_SCHEMA
@@ -2953,6 +3334,113 @@ impl GenericReviewRequestV3 {
     }
 }
 
+fn fixed_context_policies_v4() -> Value {
+    json!({
+        "relation.changed_public_callee@1": {
+            "property_id": D_PROPERTY,
+            "target_kind": "relation",
+            "policy_id": ContextSubjectWindowsPolicyV3::ID,
+            "policy_hash": ContextSubjectWindowsPolicyV3::GOLDEN_HASH,
+        },
+        "node.public_function_contract@1": {
+            "property_id": "rust.public_function_contract_review@1",
+            "target_kind": "node",
+            "policy_id": reviewgraphen_core::ContextSubjectWindowsPolicyV4::ID,
+            "policy_hash": reviewgraphen_core::ContextSubjectWindowsPolicyV4::GOLDEN_HASH,
+        }
+    })
+}
+
+impl GenericReviewRequestV4 {
+    fn validate_v4(&self) -> GenericReviewResult<()> {
+        if self.schema != GENERIC_REVIEW_REQUEST_V4_SCHEMA
+            || self.context_policies != fixed_context_policies_v4()
+            || !self.workspace_admission_root.is_absolute()
+            || !self.repository_admission_root.is_absolute()
+            || self.repository_identity.is_empty()
+            || self.base_revision.is_empty()
+            || self.target_revision.is_empty()
+            || self.ingest.profile_id != "rust.production.v1"
+            || self.ingest.profile_version != "1"
+            || self.ingest.rule_set_hash.as_str() != RUST_PRODUCTION_V4_RULE_SET_HASH
+            || self.ingest.max_files == 0
+            || self.ingest.max_file_bytes == 0
+            || self.ingest.max_total_source_bytes == 0
+            || self
+                .verifier_descriptor_id
+                .as_deref()
+                .is_some_and(|id| id != DEFERRED_WORKSPACE_CARGO_TEST_DESCRIPTOR_ID)
+        {
+            return Err(GenericReviewError::Request("generic v4 request fields"));
+        }
+        if matches!(
+            self.observer,
+            GenericObserverRequestV2::CodexCli
+                | GenericObserverRequestV2::ClaudeCli
+                | GenericObserverRequestV2::CodexAppServer
+        ) {
+            return Err(GenericReviewError::Request(
+                "generic v4 observer unsupported",
+            ));
+        }
+        if let GenericObserverRequestV2::Replay { records } = &self.observer
+            && records.iter().any(|path| !path.is_absolute())
+        {
+            return Err(GenericReviewError::Request("generic v4 replay path"));
+        }
+        PlanBudget::new(self.plan.max_waves, self.plan.max_obligations_per_wave)?;
+        Ok(())
+    }
+
+    fn id_v4(&self) -> GenericReviewResult<StableId> {
+        let canonical = canonical_json(&json!({
+            "schema": self.schema,
+            "repository_identity": self.repository_identity,
+            "base_revision": self.base_revision,
+            "target_revision": self.target_revision,
+            "ingest": self.ingest,
+            "plan": self.plan,
+            "observer": observer_identity_v2(&self.observer),
+            "verifier_descriptor_id": self.verifier_descriptor_id,
+            "context_policies": self.context_policies,
+        }))?;
+        Ok(StableId::derived(
+            "request",
+            &BTreeMap::from([
+                ("schema".to_owned(), Value::String(self.schema.clone())),
+                (
+                    "request_sha256".to_owned(),
+                    Value::String(ContentHash::sha256(&canonical).to_string()),
+                ),
+            ]),
+        )?)
+    }
+
+    fn ingest_request_v4(&self) -> IngestRequest {
+        let mut request = IngestRequest::new(
+            &self.workspace_admission_root,
+            &self.repository_admission_root,
+            &self.repository_identity,
+            &self.base_revision,
+            &self.target_revision,
+        );
+        request.config = IngestConfig {
+            limits: IngestLimits {
+                max_files: self.ingest.max_files,
+                max_file_bytes: self.ingest.max_file_bytes,
+            },
+            profile_id: self.ingest.profile_id.clone(),
+            profile_version: self.ingest.profile_version.clone(),
+            rule_set_hash: self.ingest.rule_set_hash.clone(),
+            // Ingest remains pinned to the frozen v2 ProgramSpace policy; @3/@4
+            // are downstream context policy families, not admission selectors.
+            policy_version: reviewgraphen_core::ContextSubjectWindowsPolicyV2::ID.to_owned(),
+            cargo_admission: CargoToolAdmission::Disabled,
+        };
+        request
+    }
+}
+
 /// Decodes the closed v3 request family and returns a typed request-boundary
 /// rejection for missing selectors, inline policy material, unknown fields,
 /// and every non-v3 schema tag.
@@ -2962,6 +3450,17 @@ pub fn decode_and_validate_generic_review_request_v3(
     let request: GenericReviewRequestV3 = serde_json::from_slice(bytes)
         .map_err(|_| GenericReviewError::Request("generic v3 request decode"))?;
     request.validate_v3()?;
+    Ok(request)
+}
+
+/// Decodes only the closed v4 request family; callers cannot fall back to v3.
+pub fn decode_and_validate_generic_review_request_v4(
+    bytes: &[u8],
+) -> GenericReviewResult<GenericReviewRequestV4> {
+    let request: GenericReviewRequestV4 = serde_json::from_slice(bytes)
+        .map_err(|_| GenericReviewError::Request("generic v4 request decode"))?;
+    request.validate_v4()?;
+    let _ = request.id_v4()?;
     Ok(request)
 }
 
@@ -4648,6 +5147,273 @@ pub fn decode_and_validate_generic_review_run_v3(
 )]
 pub fn validate_generic_review_run_v3_semantics(value: &Value) -> GenericReviewResult<()> {
     validate_generic_review_run_v3_wire_structure(value)
+}
+
+/// Validates only closed canonical v4 bytes.  This intentionally returns no
+/// semantic capability: the trusted basis is a separate argument below.
+pub fn decode_and_validate_generic_review_run_v4_wire(
+    bytes: &[u8],
+) -> GenericReviewResult<UnvalidatedGenericReviewRunV4> {
+    let value: Value = serde_json::from_slice(bytes)?;
+    if canonical_json(&value)? != bytes {
+        return Err(GenericReviewError::Request("v4 run canonical bytes"));
+    }
+    let schema: Value = serde_json::from_str(include_str!(
+        "../../../schemas/reviewgraphen.generic_review_run.v4.schema.json"
+    ))?;
+    let validator = jsonschema::validator_for(&schema)
+        .map_err(|_| GenericReviewError::Request("v4 run schema compile"))?;
+    if !validator.is_valid(&value) {
+        return Err(GenericReviewError::Request("v4 run schema validation"));
+    }
+    validate_generic_review_run_v4_wire_structure(&value)?;
+    Ok(UnvalidatedGenericReviewRunV4 {
+        canonical_value: value,
+    })
+}
+
+pub fn validate_generic_review_run_v4_wire_structure(value: &Value) -> GenericReviewResult<()> {
+    let object = value
+        .as_object()
+        .ok_or(GenericReviewError::Request("v4 run object"))?;
+    if object.get("schema").and_then(Value::as_str) != Some(GENERIC_REVIEW_RUN_V4_SCHEMA) {
+        return Err(GenericReviewError::Request("v4 run schema"));
+    }
+    let contract = object
+        .get("obligation_contract")
+        .and_then(Value::as_array)
+        .ok_or(GenericReviewError::Request("v4 obligation contract"))?;
+    let mut contract_by_id = BTreeMap::new();
+    let mut applicable = BTreeSet::new();
+    let mut deferred_expected = BTreeSet::new();
+    let mut d_resolved = BTreeSet::new();
+    let mut d_gaps = BTreeSet::new();
+    let mut node_resolved = BTreeSet::new();
+    for row in contract {
+        let id = row
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(GenericReviewError::Request("v4 contract id"))?;
+        if contract_by_id.insert(id, row).is_some() {
+            return Err(GenericReviewError::Request("v4 duplicate contract id"));
+        }
+        let status = row
+            .get("applicability_status")
+            .and_then(Value::as_str)
+            .ok_or(GenericReviewError::Request("v4 applicability"))?;
+        match row.get("rule_id").and_then(Value::as_str) {
+            Some(D_RULE) => {
+                d_resolved.insert(id.to_owned());
+            }
+            Some("capability_gap.origin_rule@1") => {
+                d_gaps.insert(id.to_owned());
+            }
+            Some("node.public_function_contract@1") => {
+                node_resolved.insert(id.to_owned());
+            }
+            _ => return Err(GenericReviewError::Request("v4 rule registry")),
+        }
+        if status == "applicable" {
+            applicable.insert(id.to_owned());
+        } else {
+            deferred_expected.insert(id.to_owned());
+        }
+    }
+    let plan = object
+        .get("plan")
+        .and_then(Value::as_object)
+        .ok_or(GenericReviewError::Request("v4 plan"))?;
+    let mut planned = BTreeSet::new();
+    for wave in array_field(plan, "waves", "v4 plan waves")? {
+        let wave = wave
+            .as_object()
+            .ok_or(GenericReviewError::Request("v4 wave"))?;
+        for id in array_field(wave, "obligation_ids", "v4 wave ids")? {
+            let id = id
+                .as_str()
+                .ok_or(GenericReviewError::Request("v4 wave id"))?;
+            if !planned.insert(id.to_owned()) {
+                return Err(GenericReviewError::Request("v4 duplicate planned id"));
+            }
+        }
+    }
+    let deferred = array_id_set_v4(array_field(plan, "deferred_obligation_ids", "v4 deferred")?)?;
+    if planned != applicable || deferred != deferred_expected || !planned.is_disjoint(&deferred) {
+        return Err(GenericReviewError::Request("v4 plan contract closure"));
+    }
+    let mut context_ids = BTreeSet::new();
+    for row in object
+        .get("contexts")
+        .and_then(Value::as_array)
+        .ok_or(GenericReviewError::Request("v4 contexts"))?
+    {
+        let context = row
+            .get("context")
+            .ok_or(GenericReviewError::Request("v4 context"))?;
+        let obligation_id = context
+            .get("obligation_id")
+            .and_then(Value::as_str)
+            .ok_or(GenericReviewError::Request("v4 context obligation"))?;
+        let descriptor = contract_by_id
+            .get(obligation_id)
+            .ok_or(GenericReviewError::Request("v4 context contract closure"))?;
+        match descriptor.get("rule_id").and_then(Value::as_str) {
+            Some(D_RULE) => {
+                if context
+                    .pointer("/context_policy/policy_id")
+                    .and_then(Value::as_str)
+                    != Some(ContextSubjectWindowsPolicyV3::ID)
+                {
+                    return Err(GenericReviewError::Request("v4 D context policy"));
+                }
+                validate_subject_windows_v3_wire_read_only(context)?;
+            }
+            Some("node.public_function_contract@1") => {
+                if context
+                    .pointer("/context_policy/policy_id")
+                    .and_then(Value::as_str)
+                    != Some(reviewgraphen_core::ContextSubjectWindowsPolicyV4::ID)
+                {
+                    return Err(GenericReviewError::Request("v4 Node context policy"));
+                }
+                validate_subject_windows_v4_wire_read_only(context)?;
+            }
+            _ => return Err(GenericReviewError::Request("v4 rule registry")),
+        }
+        if !context_ids.insert(obligation_id.to_owned()) || !planned.contains(obligation_id) {
+            return Err(GenericReviewError::Request("v4 context plan closure"));
+        }
+    }
+    let coverage = object
+        .get("coverage")
+        .and_then(Value::as_object)
+        .ok_or(GenericReviewError::Request("v4 coverage"))?;
+    let rows = coverage
+        .get("rule_coverages")
+        .and_then(Value::as_array)
+        .ok_or(GenericReviewError::Request("v4 per-rule coverage"))?;
+    if rows.len() != 2
+        || rows[0].get("kind").and_then(Value::as_str) != Some("resolved_target_with_candidate_gap")
+        || rows[1].get("kind").and_then(Value::as_str) != Some("resolved_target_only")
+    {
+        return Err(GenericReviewError::Request("v4 closed per-rule coverage"));
+    }
+    let d = rows[0]
+        .get("coverage")
+        .and_then(Value::as_object)
+        .ok_or(GenericReviewError::Request("v4 D coverage"))?;
+    let node = rows[1]
+        .get("coverage")
+        .and_then(Value::as_object)
+        .ok_or(GenericReviewError::Request("v4 Node coverage"))?;
+    if array_id_set_v4(array_field(
+        d,
+        "resolved_target_obligation_ids",
+        "v4 D resolved",
+    )?)? != d_resolved
+        || array_id_set_v4(array_field(
+            d,
+            "candidate_space_gap_obligation_ids",
+            "v4 D gaps",
+        )?)? != d_gaps
+        || array_id_set_v4(array_field(
+            node,
+            "eligible_target_obligation_ids",
+            "v4 Node eligible",
+        )?)? != node_resolved
+        || array_id_set_v4(array_field(d, "planned_obligation_ids", "v4 D planned")?)?
+            != planned.intersection(&d_resolved).cloned().collect()
+        || array_id_set_v4(array_field(d, "deferred_obligation_ids", "v4 D deferred")?)?
+            != deferred.intersection(&d_resolved).cloned().collect()
+        || array_id_set_v4(array_field(
+            node,
+            "planned_obligation_ids",
+            "v4 Node planned",
+        )?)? != planned.intersection(&node_resolved).cloned().collect()
+        || array_id_set_v4(array_field(
+            node,
+            "deferred_obligation_ids",
+            "v4 Node deferred",
+        )?)? != deferred.intersection(&node_resolved).cloned().collect()
+        || context_ids != planned
+    {
+        return Err(GenericReviewError::Request("v4 coverage/context closure"));
+    }
+    Ok(())
+}
+
+fn array_field<'a>(
+    value: &'a serde_json::Map<String, Value>,
+    name: &'static str,
+    error: &'static str,
+) -> GenericReviewResult<&'a Vec<Value>> {
+    value
+        .get(name)
+        .and_then(Value::as_array)
+        .ok_or(GenericReviewError::Request(error))
+}
+
+fn array_id_set_v4(values: &[Value]) -> GenericReviewResult<BTreeSet<String>> {
+    let mut ids = BTreeSet::new();
+    for value in values {
+        let id = value
+            .as_str()
+            .ok_or(GenericReviewError::Request("v4 id set member"))?;
+        if !ids.insert(id.to_owned()) {
+            return Err(GenericReviewError::Request("v4 duplicate id set member"));
+        }
+    }
+    Ok(ids)
+}
+
+/// Reconstructs each context using the policy-family-specific trusted basis.
+pub fn decode_generic_review_run_v4_with_basis(
+    bytes: &[u8],
+    basis: &GenericReviewRunV4Basis,
+) -> GenericReviewResult<ValidatedGenericReviewRunV4> {
+    let wire = decode_and_validate_generic_review_run_v4_wire(bytes)?;
+    for row in wire
+        .value()
+        .get("contexts")
+        .and_then(Value::as_array)
+        .ok_or(GenericReviewError::Request("v4 contexts"))?
+    {
+        let context = row
+            .get("context")
+            .ok_or(GenericReviewError::Request("v4 context"))?;
+        let context_id = StableId::parse(
+            context
+                .get("context_id")
+                .and_then(Value::as_str)
+                .ok_or(GenericReviewError::Request("v4 context id"))?
+                .to_owned(),
+        )?;
+        match context
+            .pointer("/context_policy/policy_id")
+            .and_then(Value::as_str)
+        {
+            Some(id) if id == ContextSubjectWindowsPolicyV3::ID => {
+                validate_subject_windows_v3_against_basis(
+                    context,
+                    basis
+                        .d_context_bases
+                        .get(&context_id)
+                        .ok_or(GenericReviewError::Request("v4 D basis"))?,
+                )?;
+            }
+            Some(id) if id == reviewgraphen_core::ContextSubjectWindowsPolicyV4::ID => {
+                validate_subject_windows_v4_against_basis(
+                    context,
+                    basis
+                        .node_context_bases
+                        .get(&context_id)
+                        .ok_or(GenericReviewError::Request("v4 Node basis"))?,
+                )?;
+            }
+            _ => return Err(GenericReviewError::Request("v4 context family")),
+        }
+    }
+    Ok(ValidatedGenericReviewRunV4::new(wire.canonical_value))
 }
 
 #[cfg(test)]

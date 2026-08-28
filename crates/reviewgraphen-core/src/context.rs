@@ -474,6 +474,84 @@ impl<'de> Deserialize<'de> for ContextSubjectWindowsPolicyV3 {
     }
 }
 
+/// Fixed Node-only subject-window policy for production-v4.  It is a separate
+/// wire family: v2/v3 roles and policy bytes cannot decode as this value.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ContextSubjectWindowsPolicyV4;
+
+impl ContextSubjectWindowsPolicyV4 {
+    pub const ID: &'static str = "context.subject_windows@4";
+    pub const GOLDEN_HASH: &'static str =
+        "sha256:9f15006986a73853ff3be7b9a158e8c79f69b9a8099c9d0a1991d8c7da170aed";
+
+    #[must_use]
+    pub const fn fixed() -> Self {
+        Self
+    }
+
+    pub fn canonical_bytes(&self) -> ContextResult<Vec<u8>> {
+        Ok(br#"{"accepted_file_denominator_bound":"request.ingest.max_files","anchors_per_file":1024,"assumptions":"empty","candidate_order":["subject_priority","containment_distance","path_rank","artifact_id"],"canonical_envelope_bytes":786432,"containment_depth":1,"contains_edges":1000000,"edge_kind_direction_order":["contains:reverse"],"excerpt_lines":400,"final_window_order":["source_artifact_id","start_line","end_line","window_id"],"included_files":64,"latent_cardinality":"known_zero_under_complete_ast_containment","loss_reason_precedence":["missing_location","missing_source","giant_line","per_window_lines","per_window_bytes","per_file_window_cap","total_window_cap","total_excerpt_bytes","overlap_unmergeable","not_reached","included_file_cap","artifact_bytes_cap","total_resolved_bytes_cap"],"materialized_source_denominator":"subject_file_ids_union_reached_file_ids","max_assumptions":64,"max_discovered_structural_ids":4096,"max_excerpt_bytes":262144,"max_materialized_source_candidates":4096,"max_resolved_artifact_bytes":1048576,"max_resolved_bytes":8388608,"max_string_bytes":16384,"max_subject_losses":1,"max_support_loss_summaries":13,"max_total_excerpt_bytes":1048576,"max_unknowns":64,"obligations_per_envelope":1,"policy_id":"context.subject_windows@4","relation_scan":1000000,"seed_fields":["source_ids","target_refs","context_ids"],"source_candidate_denominator":"all_accepted_file_ids_known_count_and_sorted_id_set_sha256","subject_endpoints":1,"subject_order":["subject"],"subject_window_slots":1,"support_anchor_denominator":"reached_range_bearing_exact_path_anchor_ids_known_count_and_sorted_id_set_sha256","support_loss_summary":"reason_known_count_and_sorted_anchor_id_set_sha256","support_window_slots":7,"unknown_reason_ids":["unresolved_review_context_member","unresolved_seed_reference"],"window_candidate_order":["priority","role","source_artifact_id","start_line","end_line","owner_id"],"window_merge":"same_source_overlap_or_adjacent_if_union_within_per_window_bounds","windows_per_envelope":8,"windows_per_file":4}"#.to_vec())
+    }
+
+    #[must_use]
+    pub fn hash(&self) -> ContentHash {
+        ContentHash::sha256(&self.canonical_bytes().expect("fixed v4 policy bytes"))
+    }
+}
+
+impl Serialize for ContextSubjectWindowsPolicyV4 {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value: serde_json::Value =
+            serde_json::from_slice(&self.canonical_bytes().map_err(serde::ser::Error::custom)?)
+                .map_err(serde::ser::Error::custom)?;
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ContextSubjectWindowsPolicyV4 {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct FixedPolicyVisitor;
+        impl<'de> serde::de::Visitor<'de> for FixedPolicyVisitor {
+            type Value = ContextSubjectWindowsPolicyV4;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("the exact context.subject_windows@4 policy object")
+            }
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut object = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if object.contains_key(&key) {
+                        return Err(serde::de::Error::custom(format!(
+                            "duplicate context policy field {key}"
+                        )));
+                    }
+                    object.insert(key, map.next_value()?);
+                }
+                let policy = ContextSubjectWindowsPolicyV4::fixed();
+                let expected: serde_json::Value = serde_json::from_slice(
+                    &policy.canonical_bytes().map_err(serde::de::Error::custom)?,
+                )
+                .map_err(serde::de::Error::custom)?;
+                if serde_json::Value::Object(object) != expected {
+                    return Err(serde::de::Error::custom(
+                        "context policy is not the fixed subject-window v4 DTO",
+                    ));
+                }
+                Ok(policy)
+            }
+        }
+        deserializer.deserialize_map(FixedPolicyVisitor)
+    }
+}
+
 /// Typed failure emitted by the context protocol. Constructors are private so
 /// callers cannot manufacture an apparently policy-derived failure.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -7964,6 +8042,949 @@ impl ContextSubjectWindowsSessionV3 {
             });
         }
     }
+}
+
+// V4 is deliberately a separate projection family.  In particular it does
+// not share the v3 relation/call discovery or its wire roles: a node context
+// has one subject and bounded containment-only support.
+const SUBJECT_WINDOWS_NODE_RULE: &str = "node.public_function_contract@1";
+const SUBJECT_WINDOWS_NODE_PROPERTY: &str = "rust.public_function_contract_review@1";
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextWindowRoleV4 {
+    Subject,
+    Support,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextWindowV4 {
+    id: StableId,
+    source_artifact_id: StableId,
+    registration_id: StableId,
+    content_hash: ContentHash,
+    cas_hash: ContentHash,
+    range: ExcerptRange,
+    owner_ids: BTreeSet<StableId>,
+    roles: BTreeSet<ContextWindowRoleV4>,
+    excerpt_byte_length: u64,
+    excerpt_hash: ContentHash,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, tag = "state", rename_all = "snake_case")]
+pub enum ContextSubjectOutcomeV4 {
+    Admitted {
+        subject_artifact_id: StableId,
+        role: ContextWindowRoleV4,
+        source_artifact_id: StableId,
+        requested_range: ExcerptRange,
+        window_id: StableId,
+    },
+    Lost {
+        subject_artifact_id: StableId,
+        role: ContextWindowRoleV4,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BuiltContextSubjectWindowsV4 {
+    #[serde(rename = "context_id")]
+    id: StableId,
+    projection_hash: ContentHash,
+    #[serde(rename = "context_policy")]
+    policy: ContextSubjectWindowsPolicyV4,
+    #[serde(rename = "context_policy_hash")]
+    policy_hash: ContentHash,
+    snapshot_id: StableId,
+    obligation_id: StableId,
+    property_id: String,
+    target_refs: Vec<StableId>,
+    subject_artifact_id: StableId,
+    accepted_file_denominator: ContextDenominatorCommitmentV3,
+    materialized_source_denominator: ContextDenominatorCommitmentV3,
+    support_anchor_denominator: ContextDenominatorCommitmentV3,
+    support_loss_summaries: Vec<ContextSupportLossSummaryV3>,
+    materialized_sources: Vec<ContextMaterializedSourceV3>,
+    subject_outcomes: Vec<ContextSubjectOutcomeV4>,
+    windows: Vec<ContextWindowV4>,
+    unknowns: Vec<EnvelopeUnknown>,
+}
+
+impl BuiltContextSubjectWindowsV4 {
+    pub fn id(&self) -> &StableId {
+        &self.id
+    }
+    pub fn projection_hash(&self) -> &ContentHash {
+        &self.projection_hash
+    }
+    pub const fn policy(&self) -> ContextSubjectWindowsPolicyV4 {
+        self.policy
+    }
+    pub fn policy_hash(&self) -> &ContentHash {
+        &self.policy_hash
+    }
+    pub fn subject_artifact_id(&self) -> &StableId {
+        &self.subject_artifact_id
+    }
+    pub fn canonical_value(&self) -> ContextResult<serde_json::Value> {
+        serde_json::to_value(self).map_err(|error| DomainError::Json(error.to_string()).into())
+    }
+
+    fn identity_hash(&self) -> ContextResult<ContentHash> {
+        let value = serde_json::json!({
+            "context_policy": self.policy,
+            "context_policy_hash": self.policy_hash,
+            "snapshot_id": self.snapshot_id,
+            "obligation_id": self.obligation_id,
+            "property_id": self.property_id,
+            "target_refs": self.target_refs,
+            "subject_artifact_id": self.subject_artifact_id,
+            "accepted_file_denominator": self.accepted_file_denominator,
+            "materialized_source_denominator": self.materialized_source_denominator,
+            "support_anchor_denominator": self.support_anchor_denominator,
+            "support_loss_summaries": self.support_loss_summaries,
+            "materialized_sources": self.materialized_sources,
+            "subject_outcomes": self.subject_outcomes,
+            "windows": self.windows,
+            "unknowns": self.unknowns,
+        });
+        Ok(ContentHash::sha256(&crate::canonical_json(&value)?))
+    }
+
+    fn validate_read_only_semantics(&self) -> ContextResult<()> {
+        let fixed_tuple = self.policy == ContextSubjectWindowsPolicyV4::fixed()
+            && self.policy_hash == self.policy.hash()
+            && self.policy_hash.as_str() == ContextSubjectWindowsPolicyV4::GOLDEN_HASH
+            && self.snapshot_id.kind() == "snapshot"
+            && self.obligation_id.kind() == "obligation"
+            && self.property_id == SUBJECT_WINDOWS_NODE_PROPERTY
+            && self.target_refs.len() == 1
+            && self.target_refs[0] == self.subject_artifact_id;
+        let bounded_shape = self.subject_outcomes.len() == 1
+            && self.windows.len() <= 8
+            && self.support_loss_summaries.len() <= 13
+            && self.windows.iter().all(|window| {
+                window
+                    .range
+                    .end_line
+                    .saturating_sub(window.range.start_line)
+                    < 400
+                    && window.excerpt_byte_length <= 262_144
+                    && !window.roles.is_empty()
+                    && window.roles.iter().all(|role| {
+                        matches!(
+                            role,
+                            ContextWindowRoleV4::Subject | ContextWindowRoleV4::Support
+                        )
+                    })
+                    && !window.owner_ids.is_empty()
+                    && window.range.start_line != 0
+                    && window.range.end_line >= window.range.start_line
+            });
+        if !fixed_tuple || !bounded_shape {
+            return Err(DomainError::Validation(
+                "invalid closed v4 subject-window context".to_owned(),
+            )
+            .into());
+        }
+        let subject_windows = self
+            .windows
+            .iter()
+            .filter(|window| window.roles.contains(&ContextWindowRoleV4::Subject))
+            .count();
+        if subject_windows > 1
+            || self
+                .windows
+                .iter()
+                .filter(|window| window.roles.contains(&ContextWindowRoleV4::Support))
+                .count()
+                > 7
+        {
+            return Err(DomainError::Validation(
+                "v4 context must contain one subject slot and at most seven support slots"
+                    .to_owned(),
+            )
+            .into());
+        }
+        let materialized_ids = self
+            .materialized_sources
+            .iter()
+            .map(|source| source.artifact_id.clone())
+            .collect::<BTreeSet<_>>();
+        let admitted_support_anchor_ids = self
+            .windows
+            .iter()
+            .filter(|window| window.roles.contains(&ContextWindowRoleV4::Support))
+            .flat_map(|window| window.owner_ids.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let admitted_support_commitment = denominator_commitment_v3(
+            "v4 admitted support anchor closure",
+            &admitted_support_anchor_ids,
+        )?;
+        let lost_support_count =
+            self.support_loss_summaries
+                .iter()
+                .try_fold(0_u64, |count, summary| {
+                    count.checked_add(summary.observed_count).ok_or_else(|| {
+                        DomainError::Validation("v4 support loss count overflow".to_owned())
+                    })
+                })?;
+        if self.materialized_source_denominator
+            != denominator_commitment_v3("v4 materialized source closure", &materialized_ids)?
+            || self.support_anchor_denominator.cardinality != ContextKnownCardinalityV3::Known
+            || self.support_anchor_denominator.observed_count
+                != admitted_support_commitment
+                    .observed_count
+                    .checked_add(lost_support_count)
+                    .ok_or_else(|| {
+                        DomainError::Validation("v4 support partition overflow".to_owned())
+                    })?
+            || self
+                .support_loss_summaries
+                .windows(2)
+                .any(|pair| pair[0].reason >= pair[1].reason)
+            || self.support_loss_summaries.iter().any(|summary| {
+                summary.cardinality != ContextKnownCardinalityV3::Known
+                    || summary.observed_count == 0
+                    || !is_sha256(&summary.sorted_anchor_id_set_sha256)
+            })
+            || self
+                .windows
+                .iter()
+                .map(|window| window.excerpt_byte_length)
+                .sum::<u64>()
+                > 1_048_576
+        {
+            return Err(
+                DomainError::Validation("invalid v4 bounded source closure".to_owned()).into(),
+            );
+        }
+        match &self.subject_outcomes[0] {
+            ContextSubjectOutcomeV4::Admitted {
+                subject_artifact_id,
+                role,
+                source_artifact_id,
+                requested_range,
+                window_id,
+            } => {
+                if subject_artifact_id != &self.subject_artifact_id
+                    || *role != ContextWindowRoleV4::Subject
+                    || !self.windows.iter().any(|window| {
+                        &window.id == window_id
+                            && &window.source_artifact_id == source_artifact_id
+                            && window.roles.contains(&ContextWindowRoleV4::Subject)
+                            && window.owner_ids.contains(subject_artifact_id)
+                            && window.range.start_line <= requested_range.start_line
+                            && window.range.end_line >= requested_range.end_line
+                    })
+                {
+                    return Err(DomainError::Validation(
+                        "v4 subject outcome is not admitted by its subject window".to_owned(),
+                    )
+                    .into());
+                }
+            }
+            ContextSubjectOutcomeV4::Lost {
+                subject_artifact_id,
+                role,
+                reason,
+            } => {
+                if subject_artifact_id != &self.subject_artifact_id
+                    || *role != ContextWindowRoleV4::Subject
+                    || reason.is_empty()
+                {
+                    return Err(
+                        DomainError::Validation("invalid v4 subject loss".to_owned()).into(),
+                    );
+                }
+            }
+        }
+        if self.projection_hash != self.identity_hash()?
+            || self.id != StableId::parse(format!("context-envelope-v4:{}", self.projection_hash))?
+        {
+            return Err(DomainError::Validation(
+                "v4 context identity does not match canonical body".to_owned(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawContextSubjectWindowsV4 {
+    context_id: StableId,
+    projection_hash: ContentHash,
+    context_policy: ContextSubjectWindowsPolicyV4,
+    context_policy_hash: ContentHash,
+    snapshot_id: StableId,
+    obligation_id: StableId,
+    property_id: String,
+    target_refs: Vec<StableId>,
+    subject_artifact_id: StableId,
+    accepted_file_denominator: ContextDenominatorCommitmentV3,
+    materialized_source_denominator: ContextDenominatorCommitmentV3,
+    support_anchor_denominator: ContextDenominatorCommitmentV3,
+    support_loss_summaries: Vec<ContextSupportLossSummaryV3>,
+    materialized_sources: Vec<ContextMaterializedSourceV3>,
+    subject_outcomes: Vec<ContextSubjectOutcomeV4>,
+    windows: Vec<ContextWindowV4>,
+    unknowns: Vec<EnvelopeUnknown>,
+}
+
+impl RawContextSubjectWindowsV4 {
+    fn into_context(self) -> BuiltContextSubjectWindowsV4 {
+        BuiltContextSubjectWindowsV4 {
+            id: self.context_id,
+            projection_hash: self.projection_hash,
+            policy: self.context_policy,
+            policy_hash: self.context_policy_hash,
+            snapshot_id: self.snapshot_id,
+            obligation_id: self.obligation_id,
+            property_id: self.property_id,
+            target_refs: self.target_refs,
+            subject_artifact_id: self.subject_artifact_id,
+            accepted_file_denominator: self.accepted_file_denominator,
+            materialized_source_denominator: self.materialized_source_denominator,
+            support_anchor_denominator: self.support_anchor_denominator,
+            support_loss_summaries: self.support_loss_summaries,
+            materialized_sources: self.materialized_sources,
+            subject_outcomes: self.subject_outcomes,
+            windows: self.windows,
+            unknowns: self.unknowns,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WireValidatedContextSubjectWindowsV4 {
+    context: BuiltContextSubjectWindowsV4,
+}
+impl WireValidatedContextSubjectWindowsV4 {
+    pub fn context(&self) -> &BuiltContextSubjectWindowsV4 {
+        &self.context
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SemanticallyValidatedContextSubjectWindowsV4 {
+    context: BuiltContextSubjectWindowsV4,
+}
+impl SemanticallyValidatedContextSubjectWindowsV4 {
+    pub fn context(&self) -> &BuiltContextSubjectWindowsV4 {
+        &self.context
+    }
+}
+
+#[derive(Debug)]
+pub struct ContextSubjectWindowsSessionV4 {
+    snapshot_id: StableId,
+    obligation: Obligation,
+    subject_artifact_id: StableId,
+    accepted_file_ids: BTreeSet<StableId>,
+    support_anchor_ids: BTreeSet<StableId>,
+    support_losses: BTreeMap<ContextWindowLossReasonV2, BTreeSet<StableId>>,
+    candidates: Vec<V4Candidate>,
+    pending: Option<ContextSourceRequest>,
+    resolved: BTreeMap<usize, Vec<u8>>,
+    next_candidate: usize,
+}
+
+#[derive(Debug)]
+struct V4Candidate {
+    candidate: Candidate,
+    role: ContextWindowRoleV4,
+    owner_id: StableId,
+    requested_range: ExcerptRange,
+}
+
+fn validate_subject_binding_v4(
+    program: &ProgramSpace,
+    obligation: &Obligation,
+    subject: &StableId,
+) -> ContextResult<()> {
+    if obligation.version().rule() != SUBJECT_WINDOWS_NODE_RULE
+        || obligation.property_id() != SUBJECT_WINDOWS_NODE_PROPERTY
+        || obligation.target_kind() != "node"
+        || obligation.target_refs() != [subject.clone()]
+    {
+        return Err(DomainError::Validation(
+            "v4 context requires the exact public-function Node tuple".to_owned(),
+        )
+        .into());
+    }
+    let function = program
+        .artifact(subject)
+        .ok_or_else(|| DomainError::Validation("v4 subject function is not accepted".to_owned()))?;
+    if function.kind != "function"
+        || function
+            .attributes
+            .get("public")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+    {
+        return Err(DomainError::Validation(
+            "v4 subject must be an exact public free function".to_owned(),
+        )
+        .into());
+    }
+    let witnessed = program.relations().iter().any(|relation| {
+        relation.kind == "contains"
+            && relation.target_ids.contains(subject)
+            && program
+                .artifact(&relation.source_id)
+                .is_some_and(|source| source.kind == "module")
+    });
+    if !witnessed {
+        return Err(DomainError::Validation(
+            "v4 subject lacks an accepted module contains witness".to_owned(),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+pub fn prepare_subject_windows_v4(
+    aggregate: &ReviewAggregate,
+    obligation_id: StableId,
+    subject_artifact_id: StableId,
+    accepted_file_bound: usize,
+) -> ContextResult<ContextSubjectWindowsSessionV4> {
+    let obligation = aggregate
+        .obligation(&obligation_id)
+        .ok_or_else(|| DomainError::DanglingReference {
+            owner: "v4 context builder",
+            owner_id: obligation_id.clone(),
+            reference: obligation_id.clone(),
+        })?
+        .clone();
+    prepare_subject_windows_v4_for_obligation(
+        aggregate,
+        obligation,
+        subject_artifact_id,
+        accepted_file_bound,
+    )
+}
+
+/// V4 accepts the newly synthesized Node obligation as an explicit immutable
+/// input.  This avoids widening the frozen D-only aggregate/event family.
+pub fn prepare_subject_windows_v4_for_obligation(
+    aggregate: &ReviewAggregate,
+    obligation: Obligation,
+    subject_artifact_id: StableId,
+    accepted_file_bound: usize,
+) -> ContextResult<ContextSubjectWindowsSessionV4> {
+    let program = aggregate.program();
+    validate_subject_binding_v4(program, &obligation, &subject_artifact_id)?;
+    let snapshot_id = program.snapshot_id().clone();
+    let sources = aggregate
+        .snapshot_sources_for(&snapshot_id)
+        .ok_or_else(|| {
+            DomainError::Validation("missing exact v4 snapshot source closure".to_owned())
+        })?;
+    let accepted = program
+        .artifacts()
+        .iter()
+        .filter(|artifact| artifact.kind == "file")
+        .collect::<Vec<_>>();
+    if accepted.len() > accepted_file_bound || sources.entries().len() != accepted.len() {
+        return Err(
+            DomainError::Validation("v4 accepted source closure is incomplete".to_owned()).into(),
+        );
+    }
+    let function = program
+        .artifact(&subject_artifact_id)
+        .expect("binding checked");
+    let location = function
+        .location
+        .as_ref()
+        .ok_or_else(|| DomainError::Validation("v4 subject has no source location".to_owned()))?;
+    let file = accepted
+        .into_iter()
+        .find(|file| {
+            file.location
+                .as_ref()
+                .is_some_and(|file_location| file_location.path == location.path)
+        })
+        .ok_or_else(|| {
+            DomainError::Validation("v4 subject source file is not accepted".to_owned())
+        })?;
+    let accepted_file_ids = program
+        .artifacts()
+        .iter()
+        .filter(|artifact| artifact.kind == "file")
+        .map(|artifact| artifact.id.clone())
+        .collect();
+    let subject_candidate = candidate_for_v3(aggregate, program, sources, &file.id)?;
+    let subject_range = bounded_v4_range(
+        function.location.as_ref(),
+        subject_candidate.source.line_count(),
+    )?;
+    let mut candidates = vec![V4Candidate {
+        candidate: subject_candidate,
+        role: ContextWindowRoleV4::Subject,
+        owner_id: subject_artifact_id.clone(),
+        requested_range: subject_range,
+    }];
+    let mut support_file_slots = BTreeMap::<StableId, usize>::new();
+    support_file_slots.insert(file.id.clone(), 1);
+    let mut support_ids = BTreeSet::new();
+    let mut support_losses = BTreeMap::<ContextWindowLossReasonV2, BTreeSet<StableId>>::new();
+    for relation in program.relations().iter().filter(|relation| {
+        relation.kind == "contains" && relation.target_ids.contains(&subject_artifact_id)
+    }) {
+        if relation.target_ids.len() != 1 {
+            return Err(DomainError::Incomplete {
+                operation: "v4 context contains relation subject arity",
+                limit: 1,
+                observed: relation.target_ids.len(),
+            }
+            .into());
+        }
+        let Some(module) = program.artifact(&relation.source_id) else {
+            return Err(DomainError::DanglingReference {
+                owner: "v4 context contains relation",
+                owner_id: relation.id.clone(),
+                reference: relation.source_id.clone(),
+            }
+            .into());
+        };
+        if module.kind != "module" || !support_ids.insert(module.id.clone()) {
+            continue;
+        }
+        let location = module.location.as_ref().ok_or_else(|| {
+            DomainError::Validation("v4 reverse-contains support lacks source location".to_owned())
+        })?;
+        let support_file = program.artifacts().iter().find(|artifact| {
+            artifact.kind == "file"
+                && artifact
+                    .location
+                    .as_ref()
+                    .is_some_and(|file_location| file_location.path == location.path)
+        });
+        let support_file = support_file.ok_or_else(|| {
+            DomainError::Validation(
+                "v4 reverse-contains support is not an accepted source file".to_owned(),
+            )
+        })?;
+        let used = support_file_slots
+            .entry(support_file.id.clone())
+            .or_default();
+        if candidates.len() >= 8 || *used >= 4 {
+            let reason = if candidates.len() >= 8 {
+                ContextWindowLossReasonV2::TotalWindowCap
+            } else {
+                ContextWindowLossReasonV2::PerFileWindowCap
+            };
+            support_losses
+                .entry(reason)
+                .or_default()
+                .insert(module.id.clone());
+            continue;
+        }
+        let candidate = candidate_for_v3(aggregate, program, sources, &support_file.id)?;
+        let requested_range =
+            bounded_v4_range(module.location.as_ref(), candidate.source.line_count())?;
+        candidates.push(V4Candidate {
+            candidate,
+            role: ContextWindowRoleV4::Support,
+            owner_id: module.id.clone(),
+            requested_range,
+        });
+        *used += 1;
+    }
+    candidates.sort_by(|left, right| {
+        (
+            left.role,
+            &left.candidate.source.path(),
+            &left.requested_range,
+            &left.owner_id,
+        )
+            .cmp(&(
+                right.role,
+                &right.candidate.source.path(),
+                &right.requested_range,
+                &right.owner_id,
+            ))
+    });
+    Ok(ContextSubjectWindowsSessionV4 {
+        snapshot_id,
+        obligation,
+        subject_artifact_id,
+        accepted_file_ids,
+        support_anchor_ids: support_ids,
+        support_losses,
+        candidates,
+        pending: None,
+        resolved: BTreeMap::new(),
+        next_candidate: 0,
+    })
+}
+
+fn bounded_v4_range(
+    location: Option<&crate::Location>,
+    line_count: u64,
+) -> ContextResult<ExcerptRange> {
+    let start = location
+        .and_then(|location| location.start_line)
+        .unwrap_or(1);
+    let end = location
+        .and_then(|location| location.end_line)
+        .unwrap_or(line_count)
+        .min(start.saturating_add(399))
+        .min(line_count);
+    if start == 0 || end < start {
+        return Err(DomainError::Validation("invalid bounded v4 source range".to_owned()).into());
+    }
+    Ok(ExcerptRange {
+        start_line: u32::try_from(start)
+            .map_err(|_| DomainError::Validation("v4 start line exceeds u32".to_owned()))?,
+        end_line: u32::try_from(end)
+            .map_err(|_| DomainError::Validation("v4 end line exceeds u32".to_owned()))?,
+    })
+}
+
+impl ContextSubjectWindowsSessionV4 {
+    pub fn next_source_request(&mut self) -> ContextResult<Option<ContextSourceRequest>> {
+        if self.pending.is_some() {
+            return Err(ContextError::Protocol(
+                "a v4 source request is still pending",
+            ));
+        }
+        if self.next_candidate == self.candidates.len() {
+            return Ok(None);
+        }
+        let candidate = &self.candidates[self.next_candidate];
+        let request = ContextSourceRequest {
+            artifact_id: candidate.candidate.artifact.id.clone(),
+            registration_id: candidate.candidate.source.registration_id().clone(),
+            content_hash: candidate.candidate.source.content_hash().clone(),
+            cas_hash: candidate.candidate.source.cas_hash().clone(),
+            expected_length: candidate.candidate.registration_size,
+            line_count: candidate.candidate.source.line_count(),
+            ordinal: self.next_candidate,
+            digest: ContentHash::sha256(
+                format!("{}:{}", self.obligation.id(), self.next_candidate).as_bytes(),
+            ),
+        };
+        self.pending = Some(request.clone());
+        Ok(Some(request))
+    }
+    pub fn submit_source(
+        &mut self,
+        request: &ContextSourceRequest,
+        bytes: &[u8],
+    ) -> ContextResult<()> {
+        if self.pending.as_ref() != Some(request) {
+            return Err(ContextError::Protocol(
+                "stale or out-of-order v4 source request",
+            ));
+        }
+        if u64::try_from(bytes.len()).ok() != Some(request.expected_length)
+            || ContentHash::sha256(bytes) != request.content_hash
+            || ContentHash::sha256(bytes) != request.cas_hash
+            || bytes.iter().filter(|byte| **byte == b'\n').count() as u64 + 1 != request.line_count
+        {
+            return Err(DomainError::Validation(
+                "v4 source bytes do not match registered metadata".to_owned(),
+            )
+            .into());
+        }
+        self.resolved.insert(request.ordinal, bytes.to_vec());
+        self.pending = None;
+        self.next_candidate += 1;
+        Ok(())
+    }
+    pub fn finish(self) -> ContextResult<BuiltContextSubjectWindowsV4> {
+        if self.pending.is_some() || self.next_candidate != self.candidates.len() {
+            return Err(ContextError::Protocol(
+                "all v4 source candidates must be processed before finish",
+            ));
+        }
+        let mut windows = Vec::new();
+        let mut materialized_by_id = BTreeMap::new();
+        let mut materialized_ids = BTreeSet::new();
+        let mut subject_outcomes = Vec::new();
+        for (ordinal, candidate) in self.candidates.iter().enumerate() {
+            let bytes = self
+                .resolved
+                .get(&ordinal)
+                .expect("all candidates resolved");
+            let excerpt = excerpt_bytes_v4(bytes, &candidate.requested_range)?;
+            let source_artifact_id = candidate.candidate.artifact.id.clone();
+            let roles = BTreeSet::from([candidate.role]);
+            let window_id = StableId::derived(
+                "context-window",
+                &BTreeMap::from([
+                    (
+                        "policy_id".to_owned(),
+                        serde_json::json!(ContextSubjectWindowsPolicyV4::ID),
+                    ),
+                    (
+                        "snapshot_id".to_owned(),
+                        serde_json::json!(self.snapshot_id),
+                    ),
+                    (
+                        "obligation_id".to_owned(),
+                        serde_json::json!(self.obligation.id()),
+                    ),
+                    (
+                        "source_artifact_id".to_owned(),
+                        serde_json::json!(source_artifact_id),
+                    ),
+                    (
+                        "range".to_owned(),
+                        serde_json::to_value(&candidate.requested_range)
+                            .map_err(|error| DomainError::Json(error.to_string()))?,
+                    ),
+                    ("roles".to_owned(), serde_json::json!(roles)),
+                    ("owner_id".to_owned(), serde_json::json!(candidate.owner_id)),
+                ]),
+            )?;
+            windows.push(ContextWindowV4 {
+                id: window_id.clone(),
+                source_artifact_id: source_artifact_id.clone(),
+                registration_id: candidate.candidate.source.registration_id().clone(),
+                content_hash: candidate.candidate.source.content_hash().clone(),
+                cas_hash: candidate.candidate.source.cas_hash().clone(),
+                range: candidate.requested_range.clone(),
+                owner_ids: BTreeSet::from([candidate.owner_id.clone()]),
+                roles,
+                excerpt_byte_length: u64::try_from(excerpt.len())
+                    .map_err(|_| DomainError::Validation("v4 excerpt is too large".to_owned()))?,
+                excerpt_hash: ContentHash::sha256(excerpt),
+            });
+            materialized_ids.insert(source_artifact_id.clone());
+            materialized_by_id
+                .entry(source_artifact_id.clone())
+                .or_insert(ContextMaterializedSourceV3 {
+                    artifact_id: source_artifact_id.clone(),
+                    registration_id: candidate.candidate.source.registration_id().clone(),
+                    content_hash: candidate.candidate.source.content_hash().clone(),
+                    cas_hash: candidate.candidate.source.cas_hash().clone(),
+                    path: candidate.candidate.source.path().to_owned(),
+                    size: candidate.candidate.registration_size,
+                    line_count: candidate.candidate.source.line_count(),
+                    exclusion: None,
+                });
+            if candidate.role == ContextWindowRoleV4::Subject {
+                subject_outcomes.push(ContextSubjectOutcomeV4::Admitted {
+                    subject_artifact_id: self.subject_artifact_id.clone(),
+                    role: ContextWindowRoleV4::Subject,
+                    source_artifact_id,
+                    requested_range: candidate.requested_range.clone(),
+                    window_id,
+                });
+            }
+        }
+        windows.sort_by(|left, right| {
+            (
+                &left.source_artifact_id,
+                left.range.start_line,
+                left.range.end_line,
+                &left.id,
+            )
+                .cmp(&(
+                    &right.source_artifact_id,
+                    right.range.start_line,
+                    right.range.end_line,
+                    &right.id,
+                ))
+        });
+        let mut built = BuiltContextSubjectWindowsV4 {
+            id: StableId::parse("context-envelope-v4:pending")?,
+            projection_hash: ContentHash::sha256(b"pending"),
+            policy: ContextSubjectWindowsPolicyV4::fixed(),
+            policy_hash: ContextSubjectWindowsPolicyV4::fixed().hash(),
+            snapshot_id: self.snapshot_id,
+            obligation_id: self.obligation.id().clone(),
+            property_id: self.obligation.property_id().to_owned(),
+            target_refs: self.obligation.target_refs().to_vec(),
+            subject_artifact_id: self.subject_artifact_id.clone(),
+            accepted_file_denominator: denominator_commitment_v3(
+                "context v4 accepted files",
+                &self.accepted_file_ids,
+            )?,
+            materialized_source_denominator: denominator_commitment_v3(
+                "context v4 materialized sources",
+                &materialized_ids,
+            )?,
+            support_anchor_denominator: denominator_commitment_v3(
+                "context v4 support anchors",
+                &self.support_anchor_ids,
+            )?,
+            support_loss_summaries: support_loss_summaries_v3(&self.support_losses)?,
+            materialized_sources: materialized_by_id.into_values().collect(),
+            subject_outcomes,
+            windows,
+            unknowns: Vec::new(),
+        };
+        built.projection_hash = built.identity_hash()?;
+        built.id = StableId::parse(format!("context-envelope-v4:{}", built.projection_hash))?;
+        built.validate_read_only_semantics()?;
+        Ok(built)
+    }
+}
+
+fn excerpt_bytes_v4<'a>(bytes: &'a [u8], range: &ExcerptRange) -> ContextResult<&'a [u8]> {
+    let starts = bytes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, byte)| (*byte == b'\n').then_some(index + 1))
+        .chain(std::iter::once(0))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let start = starts
+        .get(usize::try_from(range.start_line.saturating_sub(1)).unwrap_or(usize::MAX))
+        .copied()
+        .ok_or_else(|| DomainError::Validation("v4 excerpt start is outside source".to_owned()))?;
+    let end = starts
+        .get(usize::try_from(range.end_line).unwrap_or(usize::MAX))
+        .copied()
+        .unwrap_or(bytes.len());
+    if end < start || end.saturating_sub(start) > 262_144 {
+        return Err(DomainError::Validation("v4 excerpt violates fixed bounds".to_owned()).into());
+    }
+    Ok(&bytes[start..end])
+}
+
+pub fn validate_subject_windows_v4_wire_read_only(
+    value: &serde_json::Value,
+) -> ContextResult<WireValidatedContextSubjectWindowsV4> {
+    if value
+        .pointer("/context_policy/policy_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(ContextSubjectWindowsPolicyV4::ID)
+    {
+        return Err(DomainError::Validation("wrong v4 context policy family".to_owned()).into());
+    }
+    let context = serde_json::from_value::<RawContextSubjectWindowsV4>(value.clone())
+        .map_err(|error| DomainError::Validation(format!("malformed v4 context: {error}")))?
+        .into_context();
+    context.validate_read_only_semantics()?;
+    Ok(WireValidatedContextSubjectWindowsV4 { context })
+}
+
+#[derive(Clone)]
+pub struct ContextValidationBasisV4 {
+    snapshot_id: StableId,
+    obligation_id: StableId,
+    obligation: Obligation,
+    subject_artifact_id: StableId,
+    accepted_file_bound: usize,
+    aggregate: Arc<ReviewAggregate>,
+    source_bytes_by_artifact_id: Arc<BTreeMap<StableId, Vec<u8>>>,
+}
+impl ContextValidationBasisV4 {
+    pub fn from_accepted_snapshot(
+        aggregate: Arc<ReviewAggregate>,
+        obligation_id: StableId,
+        subject_artifact_id: StableId,
+        accepted_file_bound: usize,
+        source_bytes_by_artifact_id: Arc<BTreeMap<StableId, Vec<u8>>>,
+    ) -> ContextResult<Self> {
+        let obligation = aggregate
+            .obligation(&obligation_id)
+            .ok_or_else(|| DomainError::DanglingReference {
+                owner: "v4 context validation basis",
+                owner_id: obligation_id.clone(),
+                reference: obligation_id.clone(),
+            })?
+            .clone();
+        Self::from_accepted_snapshot_for_obligation(
+            aggregate,
+            obligation,
+            subject_artifact_id,
+            accepted_file_bound,
+            source_bytes_by_artifact_id,
+        )
+    }
+
+    pub fn from_accepted_snapshot_for_obligation(
+        aggregate: Arc<ReviewAggregate>,
+        obligation: Obligation,
+        subject_artifact_id: StableId,
+        accepted_file_bound: usize,
+        source_bytes_by_artifact_id: Arc<BTreeMap<StableId, Vec<u8>>>,
+    ) -> ContextResult<Self> {
+        let obligation_id = obligation.id().clone();
+        let session = prepare_subject_windows_v4_for_obligation(
+            &aggregate,
+            obligation,
+            subject_artifact_id.clone(),
+            accepted_file_bound,
+        )?;
+        let program = aggregate.program();
+        let accepted = program
+            .artifacts()
+            .iter()
+            .filter(|artifact| artifact.kind == "file")
+            .map(|artifact| artifact.id.clone())
+            .collect::<BTreeSet<_>>();
+        if source_bytes_by_artifact_id
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != accepted
+        {
+            return Err(DomainError::Validation(
+                "v4 basis source index must exactly cover accepted snapshot files".to_owned(),
+            )
+            .into());
+        }
+        let session_obligation = session.obligation.clone();
+        drop(session);
+        Ok(Self {
+            snapshot_id: program.snapshot_id().clone(),
+            obligation_id,
+            obligation: session_obligation,
+            subject_artifact_id,
+            accepted_file_bound,
+            aggregate,
+            source_bytes_by_artifact_id,
+        })
+    }
+}
+pub fn validate_subject_windows_v4_against_basis(
+    value: &serde_json::Value,
+    basis: &ContextValidationBasisV4,
+) -> ContextResult<SemanticallyValidatedContextSubjectWindowsV4> {
+    let wire = validate_subject_windows_v4_wire_read_only(value)?;
+    if wire.context.snapshot_id != basis.snapshot_id
+        || wire.context.obligation_id != basis.obligation_id
+        || wire.context.subject_artifact_id != basis.subject_artifact_id
+    {
+        return Err(DomainError::Validation("v4 context basis mismatch".to_owned()).into());
+    }
+    let mut session = prepare_subject_windows_v4_for_obligation(
+        &basis.aggregate,
+        basis.obligation.clone(),
+        basis.subject_artifact_id.clone(),
+        basis.accepted_file_bound,
+    )?;
+    while let Some(request) = session.next_source_request()? {
+        let bytes = basis
+            .source_bytes_by_artifact_id
+            .get(request.artifact_id())
+            .ok_or_else(|| {
+                DomainError::Validation("v4 basis source index became incomplete".to_owned())
+            })?;
+        session.submit_source(&request, bytes)?;
+    }
+    let rebuilt = session.finish()?;
+    if rebuilt != wire.context {
+        return Err(DomainError::Validation(
+            "v4 context does not reconstruct from trusted basis".to_owned(),
+        )
+        .into());
+    }
+    Ok(SemanticallyValidatedContextSubjectWindowsV4 {
+        context: wire.context,
+    })
 }
 
 #[cfg(test)]

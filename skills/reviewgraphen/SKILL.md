@@ -122,14 +122,23 @@ or claim execution of them**, and never translate a stage of the pipeline above
 into a command that is not on this list. `--help` prints the single usage line
 and exits 2; there are no per-subcommand help pages.
 
-`review` accepts the closed generic-review request v2 or v3 contracts. The
-implemented slice is narrow: `rust.production.v1`, the
-`relation.changed_public_callee@1` rule over an accepted direct `calls`
-relation, and `rust.callee_contract_review@1`. V3 selects
+`review` accepts the closed generic-review request v2, v3, or v4 contracts. The
+implemented slice is narrow. Under `rust.production.v1` there are two
+rules: `relation.changed_public_callee@1` over an accepted direct `calls`
+relation (`rust.callee_contract_review@1`), and `node.public_function_contract@1`
+over an accepted public free function with a module `contains` witness
+(`rust.public_function_contract_review@1`). V2 and v3 carry only the first;
+v4 carries both. V3 selects
 `context.subject_windows@3`, recording caller/callee subjects, relation IDs,
 bounded source windows, denominator commitments, unknowns, and declared loss.
 This is not a repository-wide call graph, proof that a contract changed, or
 proof that a bug exists.
+
+V4 is a separate mixed production family: D remains bound to
+`context.subject_windows@3`, while `node.public_function_contract@1` is bound
+only to `context.subject_windows@4`. Its Node arm covers accepted exact public
+free functions with a module `contains` witness, never `direct_calls`, and its
+single-layer coverage must not be described as a call-enumeration gap.
 
 Run from the admitted repository root. The request binds immutable base and
 target revisions, profile/rule identity, ingest bounds, plan bounds, observer,
@@ -157,11 +166,29 @@ artifacts/records/<execution>.provider-free-reviewer-packet.v1.json
 diagnostics.json
 ```
 
+A v4 run writes the same layout with the v4/v3 run and report names:
+
+```text
+artifacts/artifact-manifest.v1.json
+artifacts/audit.run.v4.json
+artifacts/human-report.manifest.v3.json
+artifacts/human-report.md
+artifacts/records/<execution>.deterministic-observer-output.v1.json
+artifacts/records/<execution>.provider-free-reviewer-packet.v1.json
+```
+
+`examples/public-function-node-quickstart/request.v4.json` is the checked-in v4
+request fixture; its README states the invocation. The artifact directory must
+be a fresh relative path inside the admitted repository -- an absolute path is
+rejected as path traversal.
+
 The reviewer packet is the Mode A input. The audit
 (`reviewgraphen.generic_review_run.v3`) is non-authority: its claims,
 observations, coverage, and limitations never become accepted facts, Evidence,
 Verification, or human acceptance. Validate it with
-`"$RG" schema validate artifacts/audit.run.v3.json`; use `schema list` before
+`"$RG" schema validate artifacts/audit.run.v3.json` (v4 runs:
+`reviewgraphen.generic_review_run.v4`, validated as
+`"$RG" schema validate artifacts/audit.run.v4.json`); use `schema list` before
 `schema print` or `schema validate`.
 
 A `context` subcommand exists only on the unmerged m21 branch (commit

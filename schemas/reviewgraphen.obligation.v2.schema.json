@@ -1,17 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://capht.tech/schemas/reviewgraphen/review-obligations.v3.schema.json",
-  "title": "ReviewGraphen Review Obligation Bundle v3",
+  "$id": "https://capht.tech/schemas/reviewgraphen/review-obligations.v2.schema.json",
+  "title": "ReviewGraphen Review Obligation Bundle v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema",
+    "source",
     "universe",
     "obligations"
   ],
   "properties": {
     "schema": {
-      "const": "reviewgraphen.review_obligations.v3"
+      "const": "reviewgraphen.review_obligations.v2"
     },
     "source": {
       "$ref": "#/$defs/sourceRef"
@@ -277,9 +278,7 @@
         "policy_version",
         "obligation_ids",
         "limitation_ids",
-        "exclusions",
-        "rule_pack_version",
-        "rule_coverages"
+        "exclusions"
       ],
       "properties": {
         "id": {
@@ -357,49 +356,6 @@
         },
         "d_two_layer_coverage": {
           "$ref": "#/$defs/dTwoLayerCoverage"
-        },
-        "rule_pack_version": {
-          "type": "string",
-          "minLength": 1
-        },
-        "rule_coverages": {
-          "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
-          "prefixItems": [
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "kind",
-                "coverage"
-              ],
-              "properties": {
-                "kind": {
-                  "const": "resolved_target_with_candidate_gap"
-                },
-                "coverage": {
-                  "$ref": "#/$defs/dTwoLayerCoverage"
-                }
-              }
-            },
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "kind",
-                "coverage"
-              ],
-              "properties": {
-                "kind": {
-                  "const": "resolved_target_only"
-                },
-                "coverage": {
-                  "$ref": "#/$defs/singleLayerCoverage"
-                }
-              }
-            }
-          ]
         }
       }
     },
@@ -426,76 +382,35 @@
         "global_call_coverage_claim"
       ],
       "properties": {
-        "rule": {
-          "const": "relation.changed_public_callee@1"
-        },
-        "resolved_target_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "candidate_space_gap_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "target_support_capability_gaps": {
-          "$ref": "#/$defs/capabilityGapMap"
-        },
-        "enumeration_capability_gaps": {
-          "$ref": "#/$defs/capabilityGapMap"
-        },
+        "rule": { "const": "relation.changed_public_callee@1" },
+        "resolved_target_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "candidate_space_gap_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "target_support_capability_gaps": { "$ref": "#/$defs/capabilityGapMap" },
+        "enumeration_capability_gaps": { "$ref": "#/$defs/capabilityGapMap" },
         "enumeration_capability_states": {
           "type": "object",
           "additionalProperties": {
             "type": "string",
-            "enum": [
-              "complete",
-              "partial",
-              "missing",
-              "unknown"
-            ]
+            "enum": ["complete", "partial", "missing", "unknown"]
           },
-          "required": [
-            "direct_calls"
-          ]
+          "required": ["direct_calls"]
         },
-        "enumeration_limitation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "planned_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "deferred_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "executed_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "structured_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "abstained_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "malformed_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "provider_failed_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "verifier_observed_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "call_graph_complete": {
-          "const": false
-        },
-        "global_call_coverage_claim": {
-          "const": "prohibited"
-        }
+        "enumeration_limitation_ids": { "$ref": "#/$defs/identifierSet" },
+        "planned_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "deferred_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "executed_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "structured_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "abstained_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "malformed_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "provider_failed_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "verifier_observed_obligation_ids": { "$ref": "#/$defs/identifierSet" },
+        "call_graph_complete": { "const": false },
+        "global_call_coverage_claim": { "const": "prohibited" }
       }
     },
     "identifierSet": {
       "type": "array",
-      "items": {
-        "$ref": "#/$defs/identifier"
-      },
+      "items": { "$ref": "#/$defs/identifier" },
       "uniqueItems": true
     },
     "capabilityGapMap": {
@@ -912,58 +827,6 @@
             "$ref": "#/$defs/identifier"
           },
           "uniqueItems": true
-        }
-      }
-    },
-    "singleLayerCoverage": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "rule",
-        "eligible_target_obligation_ids",
-        "target_support_capability_gaps",
-        "planned_obligation_ids",
-        "deferred_obligation_ids",
-        "executed_obligation_ids",
-        "structured_obligation_ids",
-        "abstained_obligation_ids",
-        "malformed_obligation_ids",
-        "provider_failed_obligation_ids",
-        "verifier_observed_obligation_ids"
-      ],
-      "properties": {
-        "rule": {
-          "const": "node.public_function_contract@1"
-        },
-        "eligible_target_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "target_support_capability_gaps": {
-          "$ref": "#/$defs/capabilityGapMap"
-        },
-        "planned_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "deferred_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "executed_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "structured_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "abstained_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "malformed_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "provider_failed_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
-        },
-        "verifier_observed_obligation_ids": {
-          "$ref": "#/$defs/identifierSet"
         }
       }
     }
