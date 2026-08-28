@@ -1,0 +1,295 @@
+{
+  "findings": [
+    {
+      "classification": "deterministic",
+      "code": "redundant_reachability",
+      "detail": "node:8bit-low-r1:expand-3 still reaches node:8bit-low-r1:validate when edge:8bit-low-r1:expand-3-validate is removed",
+      "location": "$.edges[11]",
+      "severity": "info",
+      "suggested_next_operation": {
+        "operation": "review_edge_removal",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "deterministic",
+      "code": "redundant_reachability",
+      "detail": "node:8bit-low-r1:project-overview still reaches node:8bit-low-r1:expand-1 when edge:8bit-low-r1:project-overview-expand-1 is removed",
+      "location": "$.edges[2]",
+      "severity": "info",
+      "suggested_next_operation": {
+        "operation": "review_edge_removal",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "deterministic",
+      "code": "redundant_reachability",
+      "detail": "node:8bit-low-r1:expand-1 still reaches node:8bit-low-r1:expand-2 when edge:8bit-low-r1:expand-1-expand-2 is removed",
+      "location": "$.edges[5]",
+      "severity": "info",
+      "suggested_next_operation": {
+        "operation": "review_edge_removal",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "deterministic",
+      "code": "redundant_reachability",
+      "detail": "node:8bit-low-r1:expand-2 still reaches node:8bit-low-r1:expand-3 when edge:8bit-low-r1:expand-2-expand-3 is removed",
+      "location": "$.edges[8]",
+      "severity": "info",
+      "suggested_next_operation": {
+        "operation": "review_edge_removal",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "authority_concentration_candidate",
+      "detail": "all verification-governed nodes were proposed by the same actor; this does not prove verifier correlation",
+      "location": "$.nodes",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_finding",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "barrier_on_pipeline_path",
+      "detail": "a barrier node lies between upstream and downstream work",
+      "location": "$.nodes[10].delivery",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_barrier_necessity",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "barrier_on_pipeline_path",
+      "detail": "a barrier node lies between upstream and downstream work",
+      "location": "$.nodes[1].delivery",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_barrier_necessity",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "barrier_on_pipeline_path",
+      "detail": "a barrier node lies between upstream and downstream work",
+      "location": "$.nodes[2].delivery",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_barrier_necessity",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "barrier_on_pipeline_path",
+      "detail": "a barrier node lies between upstream and downstream work",
+      "location": "$.nodes[3].delivery",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_barrier_necessity",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "barrier_on_pipeline_path",
+      "detail": "a barrier node lies between upstream and downstream work",
+      "location": "$.nodes[4].delivery",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_barrier_necessity",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "barrier_on_pipeline_path",
+      "detail": "a barrier node lies between upstream and downstream work",
+      "location": "$.nodes[5].delivery",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_barrier_necessity",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "barrier_on_pipeline_path",
+      "detail": "a barrier node lies between upstream and downstream work",
+      "location": "$.nodes[6].delivery",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_barrier_necessity",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "barrier_on_pipeline_path",
+      "detail": "a barrier node lies between upstream and downstream work",
+      "location": "$.nodes[7].delivery",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_barrier_necessity",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "barrier_on_pipeline_path",
+      "detail": "a barrier node lies between upstream and downstream work",
+      "location": "$.nodes[8].delivery",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_barrier_necessity",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "barrier_on_pipeline_path",
+      "detail": "a barrier node lies between upstream and downstream work",
+      "location": "$.nodes[9].delivery",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_barrier_necessity",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "false_edge_candidate",
+      "detail": "the direct edge may be unnecessary; review its witness and removal counterexample",
+      "location": "$.edges[11]",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_edge_removal",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "false_edge_candidate",
+      "detail": "the direct edge may be unnecessary; review its witness and removal counterexample",
+      "location": "$.edges[2]",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_edge_removal",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "false_edge_candidate",
+      "detail": "the direct edge may be unnecessary; review its witness and removal counterexample",
+      "location": "$.edges[5]",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_edge_removal",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "false_edge_candidate",
+      "detail": "the direct edge may be unnecessary; review its witness and removal counterexample",
+      "location": "$.edges[8]",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_edge_removal",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "side_effect_without_verification_policy",
+      "detail": "a side-effecting node has no declared verification policy",
+      "location": "$.nodes[1].verification_policy_id",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_finding",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "side_effect_without_verification_policy",
+      "detail": "a side-effecting node has no declared verification policy",
+      "location": "$.nodes[3].verification_policy_id",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_finding",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "side_effect_without_verification_policy",
+      "detail": "a side-effecting node has no declared verification policy",
+      "location": "$.nodes[5].verification_policy_id",
+      "severity": "warning",
+      "suggested_next_operation": {
+        "operation": "review_finding",
+        "parameters": {},
+        "target_id": null
+      }
+    },
+    {
+      "classification": "heuristic",
+      "code": "verification_independence_uninspectable",
+      "detail": "policy verification:m18-independent-codex-judge governs 2 node(s), but v0 does not embed verifier or world-anchor constraints",
+      "location": "$.verification_policy_ids",
+      "severity": "info",
+      "suggested_next_operation": {
+        "operation": "review_finding",
+        "parameters": {},
+        "target_id": null
+      }
+    }
+  ],
+  "metrics": {
+    "critical_path_ms": 1740000,
+    "edge_count": 17,
+    "longest_path_nodes": 11,
+    "maximum_fan_in": 2,
+    "maximum_fan_out": 3,
+    "node_count": 12,
+    "sink_count": 1,
+    "source_count": 1,
+    "theoretical_parallel_width": 2
+  },
+  "report_version": 0,
+  "schema": "casegraphen.experimental.graph_lint.report.v0",
+  "topology_content_hash": "99a8a26c4ff655f91e04117d0fa3e52b569297ea257db02b2f25da429a820c9e",
+  "topology_id": "topology:m18-8bit-low-checkpoint-review-v1"
+}

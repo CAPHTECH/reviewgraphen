@@ -1,0 +1,55 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_timeout_extension_comparison.v1",
+  "authority": "runtime observations and derived diagnostics; unreviewed and not accepted evidence",
+  "configuration": {
+    "model": "Qwen3.8-27B-MLX-8bit",
+    "requested_effort": "low",
+    "operator_declared_resident": true,
+    "selection_timeout_seconds": 600,
+    "final_review_timeout_seconds": 600,
+    "retries": 0
+  },
+  "result": {
+    "outcome": "completed",
+    "selected_cards": [
+      "target-body",
+      "statement-rewrite",
+      "sync-alias-boundary"
+    ],
+    "node_elapsed_seconds": {
+      "select_1": 117.581,
+      "select_2": 267.156,
+      "select_3": 502.299,
+      "final_review": 492.984
+    },
+    "known_model_elapsed_seconds": 1380.020,
+    "raw_model_stream_bytes": 1241666,
+    "estimated_thinking_tokens": {
+      "select_1": 1463,
+      "select_2": 3719,
+      "select_3": 7700,
+      "final_review": 6807,
+      "total": 19689
+    },
+    "finding_count": 3,
+    "review_sha256": "0e665bce15f5e697caa31fc5c987397ad730632bf1a7b82cd0bf7cea0d65ed16",
+    "runtime_report_sha256": "97e3ca885cdfb19144aa34261a7a7e53abeb4898201eeb7dfa361a925bde6ee7"
+  },
+  "timeout_extension_comparison": {
+    "240_second_limit": "select-2 timed out before producing a result in the resident diagnostic",
+    "360_second_limit": "select-2 completed, then select-3 timed out at 360.001 seconds",
+    "600_second_limit": "all three selectors and the final reviewer completed and validated",
+    "minimum_observed_sufficient_limit_seconds": 502.299
+  },
+  "four_bit_low_reference": {
+    "source": "benchmarks/m17-casegraphen-controlled-review-v1/aggregate.json",
+    "known_model_elapsed_seconds": 772.629,
+    "estimated_thinking_tokens": 15574,
+    "eight_bit_to_four_bit_elapsed_ratio": 1.786135389688971,
+    "eight_bit_elapsed_increase_percent": 78.61353896889709,
+    "eight_bit_estimated_tokens_per_second": 14.267184533557485,
+    "four_bit_estimated_tokens_per_second": 20.157151750710884
+  },
+  "observed_result": "With the resident backend and 600-second per-node limits, 8bit/low completed the checkpoint-controlled review. It was materially slower than the 4bit/low reference in this single replicate.",
+  "interpretation_ceiling": "This is one stochastic replicate. The 8bit/low and 4bit/low runs selected different projection routes and emitted different estimated thinking-token totals, so the elapsed ratio is an end-to-end observed comparison, not an isolated quantization throughput benchmark. Estimated thinking tokens are a transport/runtime proxy rather than canonical token accounting."
+}

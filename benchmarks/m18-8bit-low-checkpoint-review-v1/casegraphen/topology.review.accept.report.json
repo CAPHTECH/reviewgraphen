@@ -1,0 +1,387 @@
+{
+  "input": {
+    "command": "casegraphen topology-review accept"
+  },
+  "metadata": {
+    "command": "casegraphen topology-review accept",
+    "core_packages": [
+      "higher-graphen-core"
+    ],
+    "tool_package": "casegraphen"
+  },
+  "projection": {
+    "ai_view": {
+      "native_boundary": "CaseSpace plus MorphismLog state is replayed before derived reports are emitted.",
+      "operation": "casegraphen topology-review accept"
+    },
+    "audit_trace": {
+      "information_loss": [
+        "Native CLI operation reports include the operation result but not a full command-line argv transcript."
+      ],
+      "source_ids": []
+    },
+    "human_review": {
+      "summary": "Native CaseGraphen CLI operation completed."
+    }
+  },
+  "report_type": "native_cli_operation",
+  "report_version": 1,
+  "result": {
+    "entry": {
+      "actor_id": "actor:human-user",
+      "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+      "entry_id": "morphism_log_entry:morphism~3areview~3aexecution-topology~3aevidence-execution-topology~3aaccept~3arevision-execution-topology-review-evidence-3aexecution-topology-3:3",
+      "morphism": {
+        "added_ids": [],
+        "evidence_ids": [],
+        "metadata": {
+          "action": "accept",
+          "execution_topology_binding": {
+            "artifact_id": "artifact:sha256-e08454b62d48e62e18065236ec230931a2ff099cb2ed43f80563238e09f1ece7",
+            "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+            "claim_cell_id": "evidence:execution-topology",
+            "compiler_contract_versions_content_hash": "d9b0b30cf4c5da8ac73033ec28a9298e919f42c74f156fa77c49b08611526a05",
+            "compiler_inputs_schema": "casegraphen.experimental.graph_compiler.inputs.v1",
+            "compiler_semantic_profile": "casegraphen.experimental.graph_compiler.semantic_profile.v1",
+            "compiler_version": "casegraphen-graph-compiler/1",
+            "observed_base_revision_id": "revision:evidence-attach:evidence~3aexecution-topology:2",
+            "policy_manifest_content_hash": "522ea492574250e91dd2a8509c2dc4c2dfb1458ca6967bf0a9fdaaeb2e0548a5",
+            "topology_content_hash": "99a8a26c4ff655f91e04117d0fa3e52b569297ea257db02b2f25da429a820c9e",
+            "topology_id": "topology:m18-8bit-low-checkpoint-review-v1"
+          },
+          "execution_topology_review_advisories": [
+            {
+              "classification": "heuristic",
+              "code": "authority_concentration_candidate",
+              "detail": "all verification-governed nodes were proposed by the same actor; this does not prove verifier correlation",
+              "location": "$.nodes",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_finding",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "barrier_on_pipeline_path",
+              "detail": "a barrier node lies between upstream and downstream work",
+              "location": "$.nodes[10].delivery",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_barrier_necessity",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "barrier_on_pipeline_path",
+              "detail": "a barrier node lies between upstream and downstream work",
+              "location": "$.nodes[1].delivery",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_barrier_necessity",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "barrier_on_pipeline_path",
+              "detail": "a barrier node lies between upstream and downstream work",
+              "location": "$.nodes[2].delivery",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_barrier_necessity",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "barrier_on_pipeline_path",
+              "detail": "a barrier node lies between upstream and downstream work",
+              "location": "$.nodes[3].delivery",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_barrier_necessity",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "barrier_on_pipeline_path",
+              "detail": "a barrier node lies between upstream and downstream work",
+              "location": "$.nodes[4].delivery",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_barrier_necessity",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "barrier_on_pipeline_path",
+              "detail": "a barrier node lies between upstream and downstream work",
+              "location": "$.nodes[5].delivery",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_barrier_necessity",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "barrier_on_pipeline_path",
+              "detail": "a barrier node lies between upstream and downstream work",
+              "location": "$.nodes[6].delivery",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_barrier_necessity",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "barrier_on_pipeline_path",
+              "detail": "a barrier node lies between upstream and downstream work",
+              "location": "$.nodes[7].delivery",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_barrier_necessity",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "barrier_on_pipeline_path",
+              "detail": "a barrier node lies between upstream and downstream work",
+              "location": "$.nodes[8].delivery",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_barrier_necessity",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "barrier_on_pipeline_path",
+              "detail": "a barrier node lies between upstream and downstream work",
+              "location": "$.nodes[9].delivery",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_barrier_necessity",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "false_edge_candidate",
+              "detail": "the direct edge may be unnecessary; review its witness and removal counterexample",
+              "location": "$.edges[11]",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_edge_removal",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "false_edge_candidate",
+              "detail": "the direct edge may be unnecessary; review its witness and removal counterexample",
+              "location": "$.edges[2]",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_edge_removal",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "false_edge_candidate",
+              "detail": "the direct edge may be unnecessary; review its witness and removal counterexample",
+              "location": "$.edges[5]",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_edge_removal",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "false_edge_candidate",
+              "detail": "the direct edge may be unnecessary; review its witness and removal counterexample",
+              "location": "$.edges[8]",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_edge_removal",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "side_effect_without_verification_policy",
+              "detail": "a side-effecting node has no declared verification policy",
+              "location": "$.nodes[1].verification_policy_id",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_finding",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "side_effect_without_verification_policy",
+              "detail": "a side-effecting node has no declared verification policy",
+              "location": "$.nodes[3].verification_policy_id",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_finding",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "side_effect_without_verification_policy",
+              "detail": "a side-effecting node has no declared verification policy",
+              "location": "$.nodes[5].verification_policy_id",
+              "severity": "warning",
+              "suggested_next_operation": {
+                "operation": "review_finding",
+                "parameters": {},
+                "target_id": null
+              }
+            },
+            {
+              "classification": "heuristic",
+              "code": "verification_independence_uninspectable",
+              "detail": "policy verification:m18-independent-codex-judge governs 2 node(s), but v0 does not embed verifier or world-anchor constraints",
+              "location": "$.verification_policy_ids",
+              "severity": "info",
+              "suggested_next_operation": {
+                "operation": "review_finding",
+                "parameters": {},
+                "target_id": null
+              }
+            }
+          ],
+          "execution_topology_review_schema": "casegraphen.experimental.execution_topology_review.v0",
+          "execution_topology_review_schema_version": 0,
+          "native_review_schema_version": 1,
+          "operation_gate": {
+            "actor_id": "actor:human-user",
+            "audience": "audit",
+            "capability_ids": [
+              "capability:m18-human-review"
+            ],
+            "operation": "review",
+            "operation_scope_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+            "source_boundary_id": "source-boundary:m18-8bit-low-checkpoint-review-v1"
+          },
+          "outcome_review_status": "accepted",
+          "reason": "User approved exact m18 topology canonical hash 99a8a26c4ff655f91e04117d0fa3e52b569297ea257db02b2f25da429a820c9e and requested execution.",
+          "review_id": "review:morphism-review-execution-topology-evidence-execution-topology-accept-revision-execution-topology-review-evidence-3aexecution-topology-3",
+          "reviewed_at": "unix:1787400448",
+          "reviewer_id": "reviewer:human-user",
+          "target_id": "evidence:execution-topology",
+          "target_kind": "execution_topology"
+        },
+        "morphism_id": "morphism:review:execution-topology:evidence-execution-topology:accept:revision-execution-topology-review-evidence-3aexecution-topology-3",
+        "morphism_type": "review",
+        "preserved_ids": [
+          "evidence:execution-topology"
+        ],
+        "retired_ids": [],
+        "review_status": "accepted",
+        "source_ids": [
+          "evidence:execution-topology"
+        ],
+        "source_revision_id": "revision:evidence-attach:evidence~3aexecution-topology:2",
+        "target_revision_id": "revision:execution-topology-review:evidence~3aexecution-topology:3",
+        "updated_ids": [],
+        "violated_invariant_ids": []
+      },
+      "morphism_id": "morphism:review:execution-topology:evidence-execution-topology:accept:revision-execution-topology-review-evidence-3aexecution-topology-3",
+      "previous_entry_hash": "5deb8e1211721efea8327191304768aa1eced89090c2e9bad48313b402f3f8b5",
+      "provenance": {
+        "confidence": 1.0,
+        "review_status": "accepted",
+        "source": {
+          "kind": "human"
+        }
+      },
+      "recorded_at": "unix:1787400448",
+      "replay_checksum": "sha256:3a750bcca11d7c25ac2fbbfd7b749e925bb371c2c42bfd11b7c894df95576bd3",
+      "schema": "highergraphen.case.morphism_log_entry.v1",
+      "schema_version": 1,
+      "sequence": 3,
+      "source_ids": [
+        "evidence:execution-topology"
+      ],
+      "source_revision_id": "revision:evidence-attach:evidence~3aexecution-topology:2",
+      "target_revision_id": "revision:execution-topology-review:evidence~3aexecution-topology:3"
+    },
+    "record": {
+      "case_space_directory": "native_case_spaces/case-space~3am18-8bit-low-checkpoint-review-v1",
+      "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+      "current_revision_id": "revision:execution-topology-review:evidence~3aexecution-topology:3",
+      "history_entry_count": 3,
+      "log_path": "native_case_spaces/case-space~3am18-8bit-low-checkpoint-review-v1/morphism_log.jsonl",
+      "nearest_snapshot_path": "native_case_spaces/case-space~3am18-8bit-low-checkpoint-review-v1/snapshots/revision~3am18-genesis.case.space.json",
+      "revision_count": 3,
+      "revisions": [
+        {
+          "entry_id": "morphism-log-entry:m18-genesis",
+          "morphism_id": "morphism:m18-genesis",
+          "replay_checksum": "sha256:7ecfacf50dcb77d46ce8e966b3548819d39693397676e4677186a584ce8710ae",
+          "revision_id": "revision:m18-genesis",
+          "sequence": 1,
+          "snapshot_path": "native_case_spaces/case-space~3am18-8bit-low-checkpoint-review-v1/snapshots/revision~3am18-genesis.case.space.json",
+          "source_ids": [
+            "source:m18-approved-intent"
+          ]
+        },
+        {
+          "entry_id": "morphism_log_entry:morphism~3aevidence-attach~3aevidence~7e3aexecution-topology~3a2:2",
+          "morphism_id": "morphism:evidence-attach:evidence~3aexecution-topology:2",
+          "parent_revision_id": "revision:m18-genesis",
+          "replay_checksum": "sha256:6d8f2800a47af7c25498c155221880c59c1cf0f4b422951458704ebb0a0e7cec",
+          "revision_id": "revision:evidence-attach:evidence~3aexecution-topology:2",
+          "sequence": 2,
+          "source_ids": [
+            "source:m18-approved-intent"
+          ]
+        },
+        {
+          "entry_id": "morphism_log_entry:morphism~3areview~3aexecution-topology~3aevidence-execution-topology~3aaccept~3arevision-execution-topology-review-evidence-3aexecution-topology-3:3",
+          "morphism_id": "morphism:review:execution-topology:evidence-execution-topology:accept:revision-execution-topology-review-evidence-3aexecution-topology-3",
+          "parent_revision_id": "revision:evidence-attach:evidence~3aexecution-topology:2",
+          "replay_checksum": "sha256:3a750bcca11d7c25ac2fbbfd7b749e925bb371c2c42bfd11b7c894df95576bd3",
+          "revision_id": "revision:execution-topology-review:evidence~3aexecution-topology:3",
+          "sequence": 3,
+          "source_ids": [
+            "evidence:execution-topology"
+          ]
+        }
+      ],
+      "schema": "highergraphen.case.native_store.record.v2",
+      "schema_version": 1,
+      "space_id": "space:m18-8bit-low-checkpoint-review-v1"
+    }
+  },
+  "schema": "highergraphen.case.native_cli.report.v1"
+}

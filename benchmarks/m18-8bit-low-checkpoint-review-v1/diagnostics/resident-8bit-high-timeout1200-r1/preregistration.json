@@ -1,0 +1,22 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_post_change_diagnostic.v1",
+  "status": "frozen_before_generation",
+  "date": "2026-08-23",
+  "reason": "Operator requested a checkpoint-controlled resident 8bit/high validation after low and medium measurements.",
+  "trial": "8bit-high-resident-timeout1200-r1",
+  "model": "Qwen3.8-27B-MLX-8bit",
+  "requested_effort": "high",
+  "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+  "contract": {
+    "fresh_result_directory": true,
+    "selection_rounds": 3,
+    "selection_timeout_seconds": 1200,
+    "final_review_timeout_seconds": 1200,
+    "retries": 0,
+    "resident_backend_declared_by_operator": true,
+    "runtime_implementation": "m17 frozen external checkpoint runtime with arm and timeouts overridden"
+  },
+  "measurement": "Record end-to-end completion, per-node elapsed time, selected projections, report validity, findings, raw stream size, and apply the same blind Codex judge if a valid report is produced.",
+  "comparison_basis": "4bit/low m17 checkpoint, 8bit/low resident-timeout600-r1, and 8bit/medium final1200 recovery",
+  "authority": "post-change diagnostic observation; not part of the preregistered m18 primary result"
+}

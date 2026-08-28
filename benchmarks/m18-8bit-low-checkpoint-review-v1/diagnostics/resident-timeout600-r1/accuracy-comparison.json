@@ -1,0 +1,47 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_accuracy_comparison.v1",
+  "authority": "non-authoritative blind-judge evidence; not verified or human-accepted defect truth",
+  "comparison": {
+    "four_bit_low": {
+      "model": "Qwen3.8-27B-MLX-4bit",
+      "requested_effort": "low",
+      "finding_count": 3,
+      "issue_should_be_created": 1,
+      "should_not_be_created": 2,
+      "unable_to_determine": 0,
+      "judge_actionability_rate": 0.3333333333333333,
+      "grounded_finding_rate": 1.0,
+      "selected_cards": [
+        "target-body",
+        "statement-rewrite",
+        "expression-rewrite"
+      ],
+      "judgment_sha256": "c63046f08e800662bbddf2c137eec7dc3cc01f78360dc26437f5de361e9b4b5f"
+    },
+    "eight_bit_low": {
+      "model": "Qwen3.8-27B-MLX-8bit",
+      "requested_effort": "low",
+      "finding_count": 3,
+      "issue_should_be_created": 0,
+      "should_not_be_created": 3,
+      "unable_to_determine": 0,
+      "judge_actionability_rate": 0.0,
+      "grounded_finding_rate": 1.0,
+      "selected_cards": [
+        "target-body",
+        "statement-rewrite",
+        "sync-alias-boundary"
+      ],
+      "judgment_sha256": "9f73618126ad2795ca655787811e8c4f7b2180e42b77f80302a2b248c6615867"
+    }
+  },
+  "judge_configuration": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "blind_to_candidate_model": true,
+    "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+    "disposition_policy": "issue_should_be_created / should_not_be_created / unable_to_determine"
+  },
+  "observed_result": "In these single low-effort checkpoint-controlled replicates, 4bit/low produced one actionable finding out of three while 8bit/low produced none. Both produced schema-valid, source-grounded reports.",
+  "interpretation_ceiling": "The actionability rate is a blind-judge proxy, not ground-truth precision. One stochastic replicate with three findings per arm cannot estimate stable precision or recall. The arms selected different third projections, so the result jointly reflects quantization-sensitive reasoning and route selection rather than isolated decoder accuracy."
+}

@@ -1,0 +1,34 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_preregistration.v1",
+  "status": "frozen_before_first_generation_request",
+  "date": "2026-08-22",
+  "question": "Does 8bit/low complete the same fresh-session ReviewGraphen checkpoint workflow, and how does it compare observationally with m17 8bit/high and 4bit/low?",
+  "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+  "cards_inventory_sha256": "a39c7135e5d811562bdf15f7fd5ea90da9f8ae703318f48c32654d8509b3e035",
+  "arm": {
+    "trial": "8bit-low-r1",
+    "model": "Qwen3.8-27B-MLX-8bit",
+    "requested_effort": "low"
+  },
+  "contract": {
+    "selection_rounds": 3,
+    "maximum_findings": 3,
+    "selection_timeout_seconds": 240,
+    "final_review_timeout_seconds": 420,
+    "retries": 0,
+    "fresh_model_session_per_selection_and_final_review": true,
+    "independent_codex_judge": true
+  },
+  "comparisons": [
+    {
+      "cells": ["m18:8bit-low-r1", "m17:8bit-high-r1"],
+      "interpretation": "requested effort contrast at fixed declared model quantization"
+    },
+    {
+      "cells": ["m18:8bit-low-r1", "m17:4bit-low-r1"],
+      "interpretation": "declared quantization contrast at fixed requested effort"
+    }
+  ],
+  "primary_success": "The arm selects three unique valid cards, emits a grounded valid final report, completes every expected runtime node, and enters CaseGraphen as unreviewed evidence before any separate review action.",
+  "interpretation_ceiling": "This is a post-m17, one-replicate follow-up. Cross-experiment contrasts remain observational and runtime-reported model, effort, and fresh-session properties are declarations unless independently anchored. Candidate findings and judge dispositions are not verified truth."
+}

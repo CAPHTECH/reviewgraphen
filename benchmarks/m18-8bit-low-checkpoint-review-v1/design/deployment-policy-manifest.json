@@ -1,0 +1,31 @@
+{
+  "budget_policies": [
+    {
+      "content_hash": "df1f66e86b7499ed2d891ad8fa5278857e0dc813e2f4ec8dbe5e078c5bfd26a6",
+      "policy_id": "budget:m18-deterministic"
+    },
+    {
+      "content_hash": "821049e8bd06b226cfda396f1b630351967b421e1b7bf84ffbf177ef621e4290",
+      "policy_id": "budget:m18-selection"
+    },
+    {
+      "content_hash": "a646f0761451dd324262e1042c0fa2a8d5266b9e9f4fc8ade6a763ea76470b1d",
+      "policy_id": "budget:m18-final-review"
+    },
+    {
+      "content_hash": "4b2dcf323433d4462f9c31c1022e3fe825f5a6a24d95b23049d0870cd886776f",
+      "policy_id": "budget:m18-judge"
+    }
+  ],
+  "expansion_policies": [],
+  "schema": "casegraphen.experimental.deployment_policy_manifest.v0",
+  "schema_version": 0,
+  "topology_content_hash": "99a8a26c4ff655f91e04117d0fa3e52b569297ea257db02b2f25da429a820c9e",
+  "topology_id": "topology:m18-8bit-low-checkpoint-review-v1",
+  "verification_policies": [
+    {
+      "content_hash": "37afc2fce1fc3dcb6918431151a03cf40c1d7a9afa7c8412004cfedc3e2b3e5f",
+      "policy_id": "verification:m18-independent-codex-judge"
+    }
+  ]
+}

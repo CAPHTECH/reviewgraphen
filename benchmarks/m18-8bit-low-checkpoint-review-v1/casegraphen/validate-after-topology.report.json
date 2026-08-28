@@ -1,0 +1,40 @@
+{
+  "input": {
+    "command": "casegraphen space validate"
+  },
+  "metadata": {
+    "command": "casegraphen space validate",
+    "core_packages": [
+      "higher-graphen-core"
+    ],
+    "tool_package": "casegraphen"
+  },
+  "projection": {
+    "ai_view": {
+      "native_boundary": "CaseSpace plus MorphismLog state is replayed before derived reports are emitted.",
+      "operation": "casegraphen space validate"
+    },
+    "audit_trace": {
+      "information_loss": [
+        "Native CLI operation reports include the operation result but not a full command-line argv transcript."
+      ],
+      "source_ids": []
+    },
+    "human_review": {
+      "summary": "Native CaseGraphen CLI operation completed."
+    }
+  },
+  "report_type": "native_cli_operation",
+  "report_version": 1,
+  "result": {
+    "validation": {
+      "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+      "current_revision_id": "revision:execution-topology-review:evidence~3aexecution-topology:3",
+      "history_entry_count": 3,
+      "schema": "highergraphen.case.native_store.validation.v1",
+      "schema_version": 1,
+      "valid": true
+    }
+  },
+  "schema": "highergraphen.case.native_cli.report.v1"
+}

@@ -1,0 +1,49 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_structured_debate_diagnostic.v1",
+  "status": "frozen_before_generation",
+  "date": "2026-08-23",
+  "reason": "Test one bounded proposer-critic-reviser exchange over ReviewGraphen projections.",
+  "trial": "debate-4bit-proposer-8bit-medium-critic-r1",
+  "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+  "proposal_predecessor": {
+    "model": "Qwen3.8-27B-MLX-4bit",
+    "requested_effort": "low",
+    "review_sha256": "2c9cc3c7733bf09c1d8fd32e85abbddb4f877acccc2c7a9cd8deb46809a23d9e",
+    "runtime_report_sha256": "03e549390dcd5030340d178aad9884ca5979db350b9e33923255d4fe523c1286",
+    "elapsed_seconds": 772.629,
+    "selected_cards": [
+      "target-body",
+      "statement-rewrite",
+      "expression-rewrite"
+    ]
+  },
+  "critic": {
+    "model": "Qwen3.8-27B-MLX-8bit",
+    "requested_effort": "medium",
+    "timeout_seconds": 1200,
+    "max_additional_projection_requests": 1
+  },
+  "reviser": {
+    "model": "Qwen3.8-27B-MLX-4bit",
+    "requested_effort": "low",
+    "timeout_seconds": 600,
+    "allowed_dispositions": [
+      "retain",
+      "revise",
+      "withdraw"
+    ]
+  },
+  "contract": {
+    "rounds": 1,
+    "reuse_proposal": true,
+    "rerun_proposer": false,
+    "critic_reviews_every_claim_exactly_once": true,
+    "reviser_decides_every_claim_exactly_once": true,
+    "new_unrelated_findings_forbidden": true,
+    "retries": 0,
+    "resident_backend_declared_by_operator": true,
+    "blind_codex_judge_on_valid_report": true
+  },
+  "measurement": "Measure claim retention, withdrawal, additional projection choice, final blind-judge actionability, and effective elapsed time including the frozen proposal.",
+  "authority": "structured-debate diagnostic observation; not accepted evidence and agreement is not verification"
+}

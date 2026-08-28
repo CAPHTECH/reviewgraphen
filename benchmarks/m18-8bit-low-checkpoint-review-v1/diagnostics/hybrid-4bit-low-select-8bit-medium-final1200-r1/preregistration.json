@@ -1,0 +1,35 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_hybrid_review_diagnostic.v1",
+  "status": "frozen_before_generation",
+  "date": "2026-08-23",
+  "reason": "Test the proposed hybrid: fast 4bit/low evidence-responsive projection selection followed by an 8bit/medium final reviewer.",
+  "trial": "hybrid-4bit-low-select-8bit-medium-final1200-r1",
+  "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+  "selector_predecessor": {
+    "model": "Qwen3.8-27B-MLX-4bit",
+    "requested_effort": "low",
+    "runtime_report_sha256": "03e549390dcd5030340d178aad9884ca5979db350b9e33923255d4fe523c1286",
+    "selected_cards": [
+      "target-body",
+      "statement-rewrite",
+      "expression-rewrite"
+    ],
+    "selector_elapsed_seconds": 392.463,
+    "final_prompt_sha256": "bac06a4c145ba00eb1e5f5ddd2e90400305d45f7930cdba6738742f1ecf1b0aa"
+  },
+  "final_reviewer": {
+    "model": "Qwen3.8-27B-MLX-8bit",
+    "requested_effort": "medium",
+    "timeout_seconds": 1200,
+    "attempts": 1
+  },
+  "contract": {
+    "reuse_selector_outputs": true,
+    "rerun_selectors": false,
+    "exact_predecessor_final_prompt": true,
+    "resident_backend_declared_by_operator": true,
+    "blind_codex_judge_on_valid_report": true
+  },
+  "measurement": "Measure final-review completion, effective hybrid latency as frozen selector time plus new final time, finding count, and blind-judge actionability rate.",
+  "authority": "hybrid diagnostic observation; not accepted evidence and not a continuation of an earlier model session"
+}

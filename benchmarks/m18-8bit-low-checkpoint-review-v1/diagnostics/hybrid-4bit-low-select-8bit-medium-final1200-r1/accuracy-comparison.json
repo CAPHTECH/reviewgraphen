@@ -1,0 +1,114 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_hybrid_accuracy_comparison.v1",
+  "authority": "non-authoritative blind-judge evidence and derived diagnostics; not verified or human-accepted defect truth",
+  "hybrid": {
+    "selector_model": "Qwen3.8-27B-MLX-4bit",
+    "selector_effort": "low",
+    "final_model": "Qwen3.8-27B-MLX-8bit",
+    "final_effort": "medium",
+    "selected_cards": [
+      "target-body",
+      "statement-rewrite",
+      "expression-rewrite"
+    ],
+    "selector_elapsed_seconds": 392.463,
+    "final_elapsed_seconds": 634.110,
+    "effective_hybrid_elapsed_seconds": 1026.573,
+    "finding_count": 3,
+    "issue_should_be_created": 2,
+    "should_not_be_created": 1,
+    "unable_to_determine": 0,
+    "judge_actionability_rate": 0.6666666666666666,
+    "accepted_findings_per_1000_model_seconds": 1.9482296923842726,
+    "review_sha256": "6b64c29af2f391bf6cb997c549169655c47b12a6a57589d5821d3a4f3465c5c6",
+    "runtime_report_sha256": "4df9b7f43976f1c81367922575b93dd0165006971b66abfdda4c1778373430d7",
+    "judgment_sha256": "96d011e1ceb74d85a453ed0bdd1a993fdebc12772a694f6213b0deed3cf960be"
+  },
+  "same_projection_four_bit_low_reference": {
+    "selector_model": "Qwen3.8-27B-MLX-4bit",
+    "selector_effort": "low",
+    "final_model": "Qwen3.8-27B-MLX-4bit",
+    "final_effort": "low",
+    "selected_cards": [
+      "target-body",
+      "statement-rewrite",
+      "expression-rewrite"
+    ],
+    "selector_elapsed_seconds": 392.463,
+    "final_elapsed_seconds": 380.166,
+    "completed_model_elapsed_seconds": 772.629,
+    "finding_count": 3,
+    "issue_should_be_created": 1,
+    "should_not_be_created": 2,
+    "judge_actionability_rate": 0.3333333333333333,
+    "accepted_findings_per_1000_model_seconds": 1.2942822493072352
+  },
+  "hybrid_delta_from_same_projection_four_bit": {
+    "additional_elapsed_seconds": 253.944,
+    "elapsed_increase_percent": 32.867521151807665,
+    "additional_accepted_findings": 1,
+    "actionability_rate_increase_percentage_points": 33.33333333333333,
+    "accepted_finding_productivity_ratio": 1.5052587589971682
+  },
+  "all_observed_configurations": [
+    {
+      "configuration": "4bit/low",
+      "finding_count": 3,
+      "issue_should_be_created": 1,
+      "judge_actionability_rate": 0.3333333333333333,
+      "elapsed_seconds": 772.629
+    },
+    {
+      "configuration": "8bit/low",
+      "finding_count": 3,
+      "issue_should_be_created": 0,
+      "judge_actionability_rate": 0.0,
+      "elapsed_seconds": 1380.020
+    },
+    {
+      "configuration": "8bit/medium",
+      "finding_count": 1,
+      "issue_should_be_created": 1,
+      "judge_actionability_rate": 1.0,
+      "elapsed_seconds": 1417.814,
+      "elapsed_note": "counterfactual single extended run; actual diagnostics included a failed final attempt"
+    },
+    {
+      "configuration": "8bit/high",
+      "finding_count": 2,
+      "issue_should_be_created": 1,
+      "judge_actionability_rate": 0.5,
+      "elapsed_seconds": 1531.303
+    },
+    {
+      "configuration": "4bit/low selectors + 8bit/medium final",
+      "finding_count": 3,
+      "issue_should_be_created": 2,
+      "judge_actionability_rate": 0.6666666666666666,
+      "elapsed_seconds": 1026.573
+    }
+  ],
+  "judgments": [
+    {
+      "finding": "Let-bound locals are not threaded into the bound set",
+      "disposition": "issue_should_be_created"
+    },
+    {
+      "finding": "Dangling Internal alias/action targets are silently accepted",
+      "disposition": "issue_should_be_created"
+    },
+    {
+      "finding": "Expr::Is pattern is passed through un-rewritten",
+      "disposition": "should_not_be_created",
+      "reason": "The snapshot provides no evidence that the opaque pattern carries a component-local identifier requiring qualification."
+    }
+  ],
+  "judge_configuration": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "blind_to_candidate_model": true,
+    "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567"
+  },
+  "observed_result": "The hybrid produced the highest accepted-finding count and the highest accepted-findings-per-time rate among the observed configurations. On the exact same projections, replacing the 4bit/low final reviewer with 8bit/medium doubled accepted findings from one to two while adding 253.944 seconds.",
+  "interpretation_ceiling": "This is one stochastic hybrid final generation over reused selector artifacts. Judge actionability is a proxy, not ground-truth precision; no gold defect universe exists for recall. The exact projection comparison isolates the final-review configuration more cleanly than the cross-route arms, but it still jointly changes quantization and effort and has only one replicate."
+}

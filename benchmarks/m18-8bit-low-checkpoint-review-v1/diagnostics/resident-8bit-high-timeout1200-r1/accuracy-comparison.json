@@ -1,0 +1,76 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_effort_accuracy_comparison.v1",
+  "authority": "non-authoritative blind-judge evidence; not verified or human-accepted defect truth",
+  "comparison": {
+    "four_bit_low": {
+      "finding_count": 3,
+      "issue_should_be_created": 1,
+      "should_not_be_created": 2,
+      "judge_actionability_rate": 0.3333333333333333,
+      "completed_model_elapsed_seconds": 772.629
+    },
+    "eight_bit_low": {
+      "finding_count": 3,
+      "issue_should_be_created": 0,
+      "should_not_be_created": 3,
+      "judge_actionability_rate": 0.0,
+      "completed_model_elapsed_seconds": 1380.020
+    },
+    "eight_bit_medium": {
+      "finding_count": 1,
+      "issue_should_be_created": 1,
+      "should_not_be_created": 0,
+      "judge_actionability_rate": 1.0,
+      "counterfactual_single_extended_run_elapsed_seconds": 1417.814,
+      "actual_diagnostic_compute_seconds_including_failed_final": 2017.815
+    },
+    "eight_bit_high": {
+      "finding_count": 2,
+      "issue_should_be_created": 1,
+      "should_not_be_created": 1,
+      "unable_to_determine": 0,
+      "judge_actionability_rate": 0.5,
+      "node_elapsed_seconds": {
+        "select_1": 133.926,
+        "select_2": 660.381,
+        "select_3": 256.449,
+        "final_review": 480.547
+      },
+      "selector_elapsed_seconds": 1050.756,
+      "completed_model_elapsed_seconds": 1531.303,
+      "estimated_thinking_tokens": 19640,
+      "raw_model_stream_bytes": 1235197,
+      "selected_cards": [
+        "target-body",
+        "alias-resolution",
+        "statement-rewrite"
+      ],
+      "review_sha256": "c3a57e5eb1f5d24b009be8663ddd1827b8b23d7148d4ab87f76f4e15221a67b5",
+      "runtime_report_sha256": "37c0cfab2a00daca3580290dc66d8f7cb619484751513b6fd33f756523e36c08",
+      "judgment_sha256": "b984441d228e0b0e48ec7177b67a9264ebb88b7cb1605331bf73d5ef959d027e"
+    }
+  },
+  "high_judgments": [
+    {
+      "finding": "ComposeItem::Internal with an unknown alias is a silent no-op, leaving the intended action public",
+      "disposition": "issue_should_be_created",
+      "false_positive_suspected": false,
+      "reason": "Unknown alias/action pairs are inserted without validation and only exact matches suppress actions, contradicting the documented error contract."
+    },
+    {
+      "finding": "Lvalue rewrite ignores bound when a binder shadows a component state",
+      "disposition": "should_not_be_created",
+      "false_positive_suspected": true,
+      "reason": "The claim assumes a forall binder is a mutable lvalue; the source instead treats lvalues as component-state assignment targets."
+    }
+  ],
+  "judge_configuration": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "blind_to_candidate_model": true,
+    "source_sha256": "00240296768317325e637b9d199815cc10a16cd6cb503f06a13c6c3487c51567",
+    "disposition_policy": "issue_should_be_created / should_not_be_created / unable_to_determine"
+  },
+  "observed_result": "8bit/high completed under the 1200-second policy and produced one actionable finding out of two. Its blind-judge actionability rate was higher than 8bit/low and 4bit/low in these replicates, but lower than the single-finding 8bit/medium result.",
+  "interpretation_ceiling": "Actionability rate is a blind-judge proxy, not ground-truth precision. Each arm has one stochastic run and only one to three findings. The arms chose different third projections, no gold defect universe exists for recall, and medium required a separate final retry. Stable accuracy or an intrinsic effort ordering cannot be inferred."
+}

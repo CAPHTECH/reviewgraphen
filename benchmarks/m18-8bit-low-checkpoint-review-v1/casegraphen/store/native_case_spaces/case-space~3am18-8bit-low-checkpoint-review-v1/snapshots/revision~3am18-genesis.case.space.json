@@ -1,0 +1,479 @@
+{
+  "schema": "highergraphen.case.space.v1",
+  "schema_version": 1,
+  "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+  "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+  "case_cells": [
+    {
+      "id": "goal:m18-governed-followup",
+      "cell_type": "goal",
+      "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+      "title": "Evaluate the 8bit/low ReviewGraphen checkpoint configuration",
+      "summary": "Separate effort and quantization contrasts observationally without causal promotion.",
+      "lifecycle": "active",
+      "source_ids": [
+        "source:m18-approved-intent"
+      ],
+      "structure_ids": [],
+      "provenance": {
+        "source": {
+          "kind": "human",
+          "title": "User-approved m18 experiment intent"
+        },
+        "confidence": 1.0,
+        "review_status": "accepted"
+      },
+      "metadata": {}
+    },
+    {
+      "id": "work:8bit-low-r1",
+      "cell_type": "work",
+      "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+      "title": "Run and evaluate the 8bit/low external-runtime arm",
+      "lifecycle": "active",
+      "source_ids": [
+        "source:m18-approved-intent"
+      ],
+      "structure_ids": [],
+      "provenance": {
+        "source": {
+          "kind": "human",
+          "title": "User-approved m18 experiment intent"
+        },
+        "confidence": 1.0,
+        "review_status": "unreviewed"
+      },
+      "metadata": {}
+    },
+    {
+      "id": "work:compare",
+      "cell_type": "work",
+      "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+      "title": "Compare m18 8bit/low with m17 observations",
+      "lifecycle": "active",
+      "source_ids": [
+        "source:m18-approved-intent"
+      ],
+      "structure_ids": [],
+      "provenance": {
+        "source": {
+          "kind": "human",
+          "title": "User-approved m18 experiment intent"
+        },
+        "confidence": 1.0,
+        "review_status": "unreviewed"
+      },
+      "metadata": {}
+    },
+    {
+      "id": "capability:m18-human-review",
+      "cell_type": "custom:capability",
+      "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+      "title": "Review topology and experiment evidence",
+      "lifecycle": "accepted",
+      "source_ids": [
+        "source:m18-approved-intent"
+      ],
+      "structure_ids": [],
+      "provenance": {
+        "source": {
+          "kind": "human",
+          "title": "User-approved m18 experiment intent"
+        },
+        "confidence": 1.0,
+        "review_status": "accepted"
+      },
+      "metadata": {
+        "actor_ids": [
+          "actor:human-user"
+        ],
+        "operations": [
+          "review"
+        ]
+      }
+    },
+    {
+      "id": "capability:m18-runtime-evidence",
+      "cell_type": "custom:capability",
+      "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+      "title": "Attach unreviewed runtime evidence",
+      "lifecycle": "accepted",
+      "source_ids": [
+        "source:m18-approved-intent"
+      ],
+      "structure_ids": [],
+      "provenance": {
+        "source": {
+          "kind": "human",
+          "title": "User-approved m18 experiment intent"
+        },
+        "confidence": 1.0,
+        "review_status": "accepted"
+      },
+      "metadata": {
+        "actor_ids": [
+          "actor:m18-runtime-adapter"
+        ],
+        "operations": [
+          "evidence-attach"
+        ]
+      }
+    },
+    {
+      "id": "capability:m18-transition",
+      "cell_type": "custom:capability",
+      "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+      "title": "Transition governed work after review",
+      "lifecycle": "accepted",
+      "source_ids": [
+        "source:m18-approved-intent"
+      ],
+      "structure_ids": [],
+      "provenance": {
+        "source": {
+          "kind": "human",
+          "title": "User-approved m18 experiment intent"
+        },
+        "confidence": 1.0,
+        "review_status": "accepted"
+      },
+      "metadata": {
+        "actor_ids": [
+          "actor:m18-case-operator"
+        ],
+        "operations": [
+          "cell-transition"
+        ]
+      }
+    }
+  ],
+  "case_relations": [
+    {
+      "id": "relation:compare-after-8bit-low",
+      "relation_type": "depends_on",
+      "relation_strength": "hard",
+      "from_id": "work:compare",
+      "to_id": "work:8bit-low-r1",
+      "evidence_ids": [],
+      "source_ids": [
+        "source:m18-approved-intent"
+      ],
+      "provenance": {
+        "source": {
+          "kind": "human",
+          "title": "User-approved m18 execution order"
+        },
+        "confidence": 1.0,
+        "review_status": "accepted"
+      },
+      "metadata": {}
+    }
+  ],
+  "morphism_log": [
+    {
+      "schema": "highergraphen.case.morphism_log_entry.v1",
+      "schema_version": 1,
+      "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+      "sequence": 1,
+      "entry_id": "morphism-log-entry:m18-genesis",
+      "morphism_id": "morphism:m18-genesis",
+      "target_revision_id": "revision:m18-genesis",
+      "morphism": {
+        "morphism_id": "morphism:m18-genesis",
+        "morphism_type": "create",
+        "target_revision_id": "revision:m18-genesis",
+        "added_ids": [
+          "goal:m18-governed-followup",
+          "work:8bit-low-r1",
+          "work:compare",
+          "capability:m18-human-review",
+          "capability:m18-runtime-evidence",
+          "capability:m18-transition",
+          "relation:compare-after-8bit-low"
+        ],
+        "updated_ids": [],
+        "retired_ids": [],
+        "preserved_ids": [],
+        "violated_invariant_ids": [],
+        "review_status": "accepted",
+        "evidence_ids": [],
+        "source_ids": [
+          "source:m18-approved-intent"
+        ],
+        "metadata": {
+          "genesis_case_space": {
+            "metadata": {
+              "approved_topology_content_hash": "99a8a26c4ff655f91e04117d0fa3e52b569297ea257db02b2f25da429a820c9e",
+              "source_boundary": {
+                "accepted_fact_policy": "Only user-approved intent, exact topology review, and later explicit review morphisms are accepted facts.",
+                "adapters": [
+                  "native_genesis.v1",
+                  "external_runtime_evidence.v1"
+                ],
+                "id": "source-boundary:m18-8bit-low-checkpoint-review-v1",
+                "included_sources": [
+                  "benchmarks/m18-8bit-low-checkpoint-review-v1/preregistration.json",
+                  "benchmarks/m18-8bit-low-checkpoint-review-v1/design/execution.topology.json",
+                  "benchmarks/m18-8bit-low-checkpoint-review-v1/design/deployment-policy-manifest.json",
+                  "user approval of topology hash 99a8a26c on 2026-08-22"
+                ],
+                "inference_policy": "All Qwen, ReviewGraphen runtime, validator, judge, latency, and model-identity reports enter as unreviewed inferred evidence.",
+                "information_loss": [
+                  "CaseGraphen cells represent one arm and one comparison; model calls and token streams remain runtime artifacts.",
+                  "A resolved work cell does not verify or human-accept any ReviewGraphen finding."
+                ]
+              }
+            },
+            "projections": [],
+            "revision_metadata": {},
+            "space_id": "space:m18-8bit-low-checkpoint-review-v1"
+          },
+          "lift_semantics": "native_genesis",
+          "payload": {
+            "added_cells": [
+              {
+                "cell_type": "goal",
+                "id": "goal:m18-governed-followup",
+                "lifecycle": "active",
+                "metadata": {},
+                "provenance": {
+                  "confidence": 1.0,
+                  "review_status": "accepted",
+                  "source": {
+                    "kind": "human",
+                    "title": "User-approved m18 experiment intent"
+                  }
+                },
+                "source_ids": [
+                  "source:m18-approved-intent"
+                ],
+                "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+                "structure_ids": [],
+                "summary": "Separate effort and quantization contrasts observationally without causal promotion.",
+                "title": "Evaluate the 8bit/low ReviewGraphen checkpoint configuration"
+              },
+              {
+                "cell_type": "work",
+                "id": "work:8bit-low-r1",
+                "lifecycle": "active",
+                "metadata": {},
+                "provenance": {
+                  "confidence": 1.0,
+                  "review_status": "unreviewed",
+                  "source": {
+                    "kind": "human",
+                    "title": "User-approved m18 experiment intent"
+                  }
+                },
+                "source_ids": [
+                  "source:m18-approved-intent"
+                ],
+                "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+                "structure_ids": [],
+                "title": "Run and evaluate the 8bit/low external-runtime arm"
+              },
+              {
+                "cell_type": "work",
+                "id": "work:compare",
+                "lifecycle": "active",
+                "metadata": {},
+                "provenance": {
+                  "confidence": 1.0,
+                  "review_status": "unreviewed",
+                  "source": {
+                    "kind": "human",
+                    "title": "User-approved m18 experiment intent"
+                  }
+                },
+                "source_ids": [
+                  "source:m18-approved-intent"
+                ],
+                "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+                "structure_ids": [],
+                "title": "Compare m18 8bit/low with m17 observations"
+              },
+              {
+                "cell_type": "custom:capability",
+                "id": "capability:m18-human-review",
+                "lifecycle": "accepted",
+                "metadata": {
+                  "actor_ids": [
+                    "actor:human-user"
+                  ],
+                  "operations": [
+                    "review"
+                  ]
+                },
+                "provenance": {
+                  "confidence": 1.0,
+                  "review_status": "accepted",
+                  "source": {
+                    "kind": "human",
+                    "title": "User-approved m18 experiment intent"
+                  }
+                },
+                "source_ids": [
+                  "source:m18-approved-intent"
+                ],
+                "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+                "structure_ids": [],
+                "title": "Review topology and experiment evidence"
+              },
+              {
+                "cell_type": "custom:capability",
+                "id": "capability:m18-runtime-evidence",
+                "lifecycle": "accepted",
+                "metadata": {
+                  "actor_ids": [
+                    "actor:m18-runtime-adapter"
+                  ],
+                  "operations": [
+                    "evidence-attach"
+                  ]
+                },
+                "provenance": {
+                  "confidence": 1.0,
+                  "review_status": "accepted",
+                  "source": {
+                    "kind": "human",
+                    "title": "User-approved m18 experiment intent"
+                  }
+                },
+                "source_ids": [
+                  "source:m18-approved-intent"
+                ],
+                "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+                "structure_ids": [],
+                "title": "Attach unreviewed runtime evidence"
+              },
+              {
+                "cell_type": "custom:capability",
+                "id": "capability:m18-transition",
+                "lifecycle": "accepted",
+                "metadata": {
+                  "actor_ids": [
+                    "actor:m18-case-operator"
+                  ],
+                  "operations": [
+                    "cell-transition"
+                  ]
+                },
+                "provenance": {
+                  "confidence": 1.0,
+                  "review_status": "accepted",
+                  "source": {
+                    "kind": "human",
+                    "title": "User-approved m18 experiment intent"
+                  }
+                },
+                "source_ids": [
+                  "source:m18-approved-intent"
+                ],
+                "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+                "structure_ids": [],
+                "title": "Transition governed work after review"
+              }
+            ],
+            "added_relations": [
+              {
+                "evidence_ids": [],
+                "from_id": "work:compare",
+                "id": "relation:compare-after-8bit-low",
+                "metadata": {},
+                "provenance": {
+                  "confidence": 1.0,
+                  "review_status": "accepted",
+                  "source": {
+                    "kind": "human",
+                    "title": "User-approved m18 execution order"
+                  }
+                },
+                "relation_strength": "hard",
+                "relation_type": "depends_on",
+                "source_ids": [
+                  "source:m18-approved-intent"
+                ],
+                "to_id": "work:8bit-low-r1"
+              }
+            ],
+            "updated_cells": [],
+            "updated_relations": []
+          },
+          "source_boundary": {
+            "accepted_fact_policy": "Only user-approved intent, exact topology review, and later explicit review morphisms are accepted facts.",
+            "adapters": [
+              "native_genesis.v1",
+              "external_runtime_evidence.v1"
+            ],
+            "id": "source-boundary:m18-8bit-low-checkpoint-review-v1",
+            "included_sources": [
+              "benchmarks/m18-8bit-low-checkpoint-review-v1/preregistration.json",
+              "benchmarks/m18-8bit-low-checkpoint-review-v1/design/execution.topology.json",
+              "benchmarks/m18-8bit-low-checkpoint-review-v1/design/deployment-policy-manifest.json",
+              "user approval of topology hash 99a8a26c on 2026-08-22"
+            ],
+            "inference_policy": "All Qwen, ReviewGraphen runtime, validator, judge, latency, and model-identity reports enter as unreviewed inferred evidence.",
+            "information_loss": [
+              "CaseGraphen cells represent one arm and one comparison; model calls and token streams remain runtime artifacts.",
+              "A resolved work cell does not verify or human-accept any ReviewGraphen finding."
+            ]
+          },
+          "source_boundary_id": "source-boundary:m18-8bit-low-checkpoint-review-v1"
+        }
+      },
+      "actor_id": "actor:human-user",
+      "recorded_at": "2026-08-22T00:00:00+09:00",
+      "provenance": {
+        "source": {
+          "kind": "human",
+          "title": "User-approved m18 governed experiment"
+        },
+        "confidence": 1.0,
+        "review_status": "accepted"
+      },
+      "source_ids": [
+        "source:m18-approved-intent"
+      ],
+      "replay_checksum": "sha256:7ecfacf50dcb77d46ce8e966b3548819d39693397676e4677186a584ce8710ae"
+    }
+  ],
+  "projections": [],
+  "revision": {
+    "revision_id": "revision:m18-genesis",
+    "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+    "applied_entry_ids": [
+      "morphism-log-entry:m18-genesis"
+    ],
+    "applied_morphism_ids": [
+      "morphism:m18-genesis"
+    ],
+    "checksum": "sha256:7ecfacf50dcb77d46ce8e966b3548819d39693397676e4677186a584ce8710ae",
+    "created_at": "2026-08-22T00:00:00+09:00",
+    "source_ids": [
+      "source:m18-approved-intent"
+    ],
+    "metadata": {}
+  },
+  "metadata": {
+    "approved_topology_content_hash": "99a8a26c4ff655f91e04117d0fa3e52b569297ea257db02b2f25da429a820c9e",
+    "source_boundary": {
+      "accepted_fact_policy": "Only user-approved intent, exact topology review, and later explicit review morphisms are accepted facts.",
+      "adapters": [
+        "native_genesis.v1",
+        "external_runtime_evidence.v1"
+      ],
+      "id": "source-boundary:m18-8bit-low-checkpoint-review-v1",
+      "included_sources": [
+        "benchmarks/m18-8bit-low-checkpoint-review-v1/preregistration.json",
+        "benchmarks/m18-8bit-low-checkpoint-review-v1/design/execution.topology.json",
+        "benchmarks/m18-8bit-low-checkpoint-review-v1/design/deployment-policy-manifest.json",
+        "user approval of topology hash 99a8a26c on 2026-08-22"
+      ],
+      "inference_policy": "All Qwen, ReviewGraphen runtime, validator, judge, latency, and model-identity reports enter as unreviewed inferred evidence.",
+      "information_loss": [
+        "CaseGraphen cells represent one arm and one comparison; model calls and token streams remain runtime artifacts.",
+        "A resolved work cell does not verify or human-accept any ReviewGraphen finding."
+      ]
+    }
+  }
+}

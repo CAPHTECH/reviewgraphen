@@ -1,0 +1,26 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_governed_arm_outcome.v1",
+  "arm": "8bit-low-r1",
+  "runtime_outcome": "incomplete",
+  "requested_model": "Qwen3.8-27B-MLX-8bit",
+  "requested_effort": "low",
+  "selected_cards": [
+    "target-body"
+  ],
+  "projection_ids": [
+    "m15:lower_compose:overview",
+    "m15:lower_compose:target-body"
+  ],
+  "completed_selector_count": 1,
+  "failed_node_id": "node:8bit-low-r1:select-2",
+  "failed_node_status": 124,
+  "failed_node_elapsed_seconds": 240.001,
+  "known_model_elapsed_seconds": 337.394,
+  "raw_model_stream_bytes": 256517,
+  "finding_count": 0,
+  "final_review_produced": false,
+  "judge_issued": false,
+  "runtime_result_sha256": "4c2b96806670e1ce9affacae9030fddfb52f9f824f56064bfcedff82bfbf1e70",
+  "runtime_report_sha256": "430f433e236e538c47802e1c4b1cc0f4b51939864eb3e57496624b4c5fab90e2",
+  "authority": "runtime observation; unreviewed and not accepted evidence"
+}

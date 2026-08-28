@@ -1,0 +1,24 @@
+{
+  "schema": "reviewgraphen.benchmark.m17_blind_findings.v1",
+  "unit_id": "m18-8bit-medium-r1",
+  "findings": [
+    {
+      "finding_id": "finding:bd412b561cfed7e1d06223ccb1f036e3",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 249,
+          "end_line": 372
+        },
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 856,
+          "end_line": 1008
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "high",
+      "rationale": "Compose-level Init aliases panic via .expect() instead of returning the documented CoreError. rewrite_compose_statements (line 952-961) maps resolve_alias_statement over the statements and calls .expect(\"compose alias validation occurs during lowering\") on the collected Result at line 960. It is invoked from the ComposeItem::Common(SpecItem::Init) arm at line 345 with no surrounding error propagation, so a Result::Err there panics instead of returning. The documented contract (line 253-254 and the overview documented_contract) states lower_compose returns CoreError for 'unknown aliases'. The same unknown-alias condition is handled divergently for sibling items: ComposeItem::Common(Invariant/Trans/Reachable) routes through rewrite_compose_item (line 904-950) whose resolve_alias_expr(...) calls propagate with `?` (line 352, and 917/930/943), returning CoreError. Consequence: a SurfaceCompose whose top-level Init statement references a component alias not declared by any Use item panics, while the identical reference inside a top-level Invariant returns CoreError. The inline comment's claim that 'compose alias validation occurs during lowering' is not backed by any pre-validation pass present in the supplied windows, so the panic path is unguarded here. Concrete trigger: a top-level `init` containing an assignment or expression that names an undeclared alias."
+    }
+  ]
+}

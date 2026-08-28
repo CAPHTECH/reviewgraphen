@@ -1,0 +1,42 @@
+{
+  "schema": "reviewgraphen.benchmark.m18_residency_comparison.v1",
+  "runs": {
+    "original": {
+      "select_1_elapsed_seconds": 97.393,
+      "select_1_output_tokens": 1044,
+      "select_1_thinking_events": 262,
+      "select_2_elapsed_seconds": 240.001,
+      "select_2_status": 124,
+      "select_2_thinking_events": 996
+    },
+    "after_speedup_nonresident_observation": {
+      "select_1_elapsed_seconds": 157.107,
+      "select_1_output_tokens": 1348,
+      "select_1_thinking_events": 351,
+      "select_2_elapsed_seconds": 240.001,
+      "select_2_status": 124,
+      "select_2_thinking_events": 1088
+    },
+    "resident": {
+      "select_1_elapsed_seconds": 86.773,
+      "select_1_output_tokens": 883,
+      "select_1_thinking_events": 207,
+      "select_2_elapsed_seconds": 240.001,
+      "select_2_status": 124,
+      "select_2_thinking_events": 1134
+    }
+  },
+  "same_prompt_hashes": {
+    "select_1": "25728f72b45033a08409e3aef04d2b6a9c2bc0e1648edf69e56e6b7d6ada4ff2",
+    "select_2": "2f15d8cc2040d82e5e2c01aa1f888f4199dbf54a8b54f388ee238f71d8d73f08"
+  },
+  "resident_select_1_change_from_original_percent": -10.904,
+  "select_2_thinking_event_rate_proxy": {
+    "original_events_per_second": 4.150,
+    "resident_events_per_second": 4.725,
+    "change_percent": 13.855,
+    "caveat": "thinking events are transport notifications, not an independently verified token count"
+  },
+  "observed_result": "Residency improved the completed short selector but did not prevent the longer second selector from reaching the unchanged 240 second timeout.",
+  "interpretation_ceiling": "Output length and thinking path vary stochastically. The shorter select-1 supports reduced startup latency but does not isolate steady-state token throughput. No final review was produced."
+}

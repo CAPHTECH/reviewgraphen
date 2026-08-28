@@ -1,0 +1,45 @@
+{
+  "schema": "reviewgraphen.benchmark.m17_blind_findings.v1",
+  "unit_id": "m18-hybrid-r1",
+  "findings": [
+    {
+      "finding_id": "finding:a5535f7ae2e7f7a551906500f044df9b",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 585,
+          "end_line": 740
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "high",
+      "rationale": "Let-bound locals are not threaded into the bound set, so shadowed state/const names are mis-prefixed. rewrite_action_items (609-631) maps over ActionItems with a single immutable `bound: &HashSet<String>`. For ActionItem::Let(name, expr, ..) it rewrites expr with the current bound but never inserts `name` for subsequent items, so a later reference to that local is still treated as free. This contrasts with rewrite_statement's ForAll arm (674-683) and rewrite_expr's Quantified/Aggregate arms (791-818), which clone bound and insert the binder before recursing. Trigger: a component c with state/const x and an action `let x = e1; <later use of x>`; the later `x` is Expr::Var(\"x\"), bound lacks x, component.names.state.contains(\"x\") is true, so it is rewritten to c.x, pointing at component state instead of the local binding and silently changing kernel semantics (or yielding an undefined symbol)."
+    },
+    {
+      "finding_id": "finding:b878d3261399316ac943c9770b73c1e1",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 741,
+          "end_line": 855
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "medium",
+      "rationale": "Expr::Is pattern is passed through un-rewritten while sibling arms rewrite type identifiers. In rewrite_expr, the Expr::Is { expr, pattern } arm (787-790) recurses only into expr and leaves `pattern` unchanged, whereas sibling arms rewrite component-local type identifiers (e.g. Expr::Struct at 731-740 prefixes name when it is in component.names.types). If pattern can carry a component-local type or state identifier, it survives lowering un-qualified. Trigger: an `x is <pattern>` expression whose pattern references a component-local type/identifier; the identifier reaches the kernel spec without the component prefix, risking a wrong or unresolved symbol. (The type and contents of `pattern` are unresolved in this projection, so the exposure is a claim rather than a confirmed defect.)"
+    },
+    {
+      "finding_id": "finding:ce9d744b8f5204db2cf55b857317455b",
+      "locations": [
+        {
+          "path": "rust/fsl-core/src/compose.rs",
+          "start_line": 249,
+          "end_line": 372
+        }
+      ],
+      "mechanism_tags": [],
+      "severity": "medium",
+      "rationale": "Internal { alias, action } references are never validated, so dangling internal targets are silently accepted. lower_compose builds the `internal` set from ComposeItem::Internal (291-298) and uses it only to suppress matching public actions (326). The full function body (249-372) performs no membership check that `alias` names a declared component or that `action` names one of that component's actions; the only alias check is the duplicate-Use-alias guard (273-275). The overview's documented contract states lower_compose returns CoreError for 'unknown aliases or actions'. Trigger: an Internal item with a misspelled alias or action is accepted without error and merely fails to suppress any action, so a typo is silent instead of producing a CoreError."
+    }
+  ]
+}

@@ -1,0 +1,236 @@
+{
+  "input": {
+    "command": "casegraphen evidence attach"
+  },
+  "metadata": {
+    "command": "casegraphen evidence attach",
+    "core_packages": [
+      "higher-graphen-core"
+    ],
+    "tool_package": "casegraphen"
+  },
+  "projection": {
+    "ai_view": {
+      "native_boundary": "CaseSpace plus MorphismLog state is replayed before derived reports are emitted.",
+      "operation": "casegraphen evidence attach"
+    },
+    "audit_trace": {
+      "information_loss": [
+        "Native CLI operation reports include the operation result but not a full command-line argv transcript."
+      ],
+      "source_ids": []
+    },
+    "human_review": {
+      "summary": "Native CaseGraphen CLI operation completed."
+    }
+  },
+  "report_type": "native_cli_operation",
+  "report_version": 1,
+  "result": {
+    "entry": {
+      "actor_id": "actor:m18-runtime-adapter",
+      "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+      "entry_id": "morphism_log_entry:morphism~3aevidence-attach~3aevidence~7e3am18-8bit-low-r1-runtime-result~3a4:4",
+      "morphism": {
+        "added_ids": [
+          "evidence:m18-8bit-low-r1-runtime-result",
+          "artifact:sha256-e7945d983efcef3fa5453799fd49a54b7c57e143656a831cd74ca646d0ebacc1",
+          "relation:derives-from:evidence~3am18-8bit-low-r1-runtime-result:1"
+        ],
+        "evidence_ids": [
+          "evidence:m18-8bit-low-r1-runtime-result"
+        ],
+        "metadata": {
+          "operation_gate": {
+            "actor_id": "actor:m18-runtime-adapter",
+            "audience": "audit",
+            "capability_ids": [
+              "capability:m18-runtime-evidence"
+            ],
+            "operation": "evidence-attach",
+            "operation_scope_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+            "source_boundary_id": "source-boundary:m18-8bit-low-checkpoint-review-v1"
+          },
+          "payload": {
+            "added_cells": [
+              {
+                "cell_type": "evidence",
+                "id": "evidence:m18-8bit-low-r1-runtime-result",
+                "lifecycle": "proposed",
+                "metadata": {
+                  "arm": "8bit-low-r1",
+                  "completed_selector_count": 1,
+                  "content_hash": "22f8460c32e8808b98ac28c2e35a527925198cc8669175fb18f4ecf0b5ed877c",
+                  "evidence_boundary": "inferred",
+                  "failed_node_elapsed_seconds": 240.001,
+                  "failed_node_id": "node:8bit-low-r1:select-2",
+                  "failed_node_status": 124,
+                  "outcome": "incomplete",
+                  "requested_effort": "low",
+                  "requested_model": "Qwen3.8-27B-MLX-8bit",
+                  "runtime_report_sha256": "430f433e236e538c47802e1c4b1cc0f4b51939864eb3e57496624b4c5fab90e2",
+                  "selected_cards": [
+                    "target-body"
+                  ]
+                },
+                "provenance": {
+                  "confidence": 1.0,
+                  "review_status": "unreviewed",
+                  "source": {
+                    "kind": "ai",
+                    "title": "M18 external checkpoint runtime"
+                  }
+                },
+                "source_ids": [
+                  "source:m18-8bit-low-r1-runtime"
+                ],
+                "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+                "structure_ids": [],
+                "summary": "The 8bit/low arm selected target-body in round one, then select-2 exceeded its 240 second budget. No final review or Codex judgment was produced.",
+                "title": "M18 8bit/low external runtime result"
+              },
+              {
+                "cell_type": "custom:artifact",
+                "id": "artifact:sha256-e7945d983efcef3fa5453799fd49a54b7c57e143656a831cd74ca646d0ebacc1",
+                "lifecycle": "resolved",
+                "metadata": {
+                  "artifact_uri": "/home/rizumita/workspace/reviewgraphen/benchmarks/m18-8bit-low-checkpoint-review-v1/runs/8bit-low-r1/outcome.json",
+                  "content_hash": "e7945d983efcef3fa5453799fd49a54b7c57e143656a831cd74ca646d0ebacc1"
+                },
+                "provenance": {
+                  "confidence": 1.0,
+                  "review_status": "unreviewed",
+                  "source": {
+                    "kind": "custom:tool_captured_artifact"
+                  }
+                },
+                "source_ids": [
+                  "source:m18-8bit-low-r1-runtime"
+                ],
+                "space_id": "space:m18-8bit-low-checkpoint-review-v1",
+                "structure_ids": [],
+                "title": "outcome.json"
+              }
+            ],
+            "added_relations": [
+              {
+                "evidence_ids": [
+                  "evidence:m18-8bit-low-r1-runtime-result"
+                ],
+                "from_id": "evidence:m18-8bit-low-r1-runtime-result",
+                "id": "relation:derives-from:evidence~3am18-8bit-low-r1-runtime-result:1",
+                "metadata": {},
+                "provenance": {
+                  "confidence": 1.0,
+                  "review_status": "unreviewed",
+                  "source": {
+                    "kind": "ai",
+                    "title": "M18 external checkpoint runtime"
+                  }
+                },
+                "relation_strength": "diagnostic",
+                "relation_type": "derives_from",
+                "source_ids": [
+                  "source:m18-8bit-low-r1-runtime"
+                ],
+                "to_id": "artifact:sha256-e7945d983efcef3fa5453799fd49a54b7c57e143656a831cd74ca646d0ebacc1"
+              }
+            ],
+            "updated_cells": [],
+            "updated_relations": []
+          }
+        },
+        "morphism_id": "morphism:evidence-attach:evidence~3am18-8bit-low-r1-runtime-result:4",
+        "morphism_type": "evidence_attach",
+        "preserved_ids": [],
+        "retired_ids": [],
+        "review_status": "accepted",
+        "source_ids": [
+          "source:m18-8bit-low-r1-runtime"
+        ],
+        "source_revision_id": "revision:execution-topology-review:evidence~3aexecution-topology:3",
+        "target_revision_id": "revision:evidence-attach:evidence~3am18-8bit-low-r1-runtime-result:4",
+        "updated_ids": [],
+        "violated_invariant_ids": []
+      },
+      "morphism_id": "morphism:evidence-attach:evidence~3am18-8bit-low-r1-runtime-result:4",
+      "previous_entry_hash": "0ac7c83b15b14bf10a881b7680b9b371e9ac431925cf0c1df3825de68ad09ebe",
+      "provenance": {
+        "confidence": 1.0,
+        "review_status": "accepted",
+        "source": {
+          "kind": "human"
+        }
+      },
+      "recorded_at": "unix:1787401606",
+      "replay_checksum": "sha256:cab111250529918683076b3bc324a7c13a67f9904cbb47d44ad1a8633b583798",
+      "schema": "highergraphen.case.morphism_log_entry.v1",
+      "schema_version": 1,
+      "sequence": 4,
+      "source_ids": [
+        "source:m18-8bit-low-r1-runtime"
+      ],
+      "source_revision_id": "revision:execution-topology-review:evidence~3aexecution-topology:3",
+      "target_revision_id": "revision:evidence-attach:evidence~3am18-8bit-low-r1-runtime-result:4"
+    },
+    "record": {
+      "case_space_directory": "native_case_spaces/case-space~3am18-8bit-low-checkpoint-review-v1",
+      "case_space_id": "case-space:m18-8bit-low-checkpoint-review-v1",
+      "current_revision_id": "revision:evidence-attach:evidence~3am18-8bit-low-r1-runtime-result:4",
+      "history_entry_count": 4,
+      "log_path": "native_case_spaces/case-space~3am18-8bit-low-checkpoint-review-v1/morphism_log.jsonl",
+      "nearest_snapshot_path": "native_case_spaces/case-space~3am18-8bit-low-checkpoint-review-v1/snapshots/revision~3am18-genesis.case.space.json",
+      "revision_count": 4,
+      "revisions": [
+        {
+          "entry_id": "morphism-log-entry:m18-genesis",
+          "morphism_id": "morphism:m18-genesis",
+          "replay_checksum": "sha256:7ecfacf50dcb77d46ce8e966b3548819d39693397676e4677186a584ce8710ae",
+          "revision_id": "revision:m18-genesis",
+          "sequence": 1,
+          "snapshot_path": "native_case_spaces/case-space~3am18-8bit-low-checkpoint-review-v1/snapshots/revision~3am18-genesis.case.space.json",
+          "source_ids": [
+            "source:m18-approved-intent"
+          ]
+        },
+        {
+          "entry_id": "morphism_log_entry:morphism~3aevidence-attach~3aevidence~7e3aexecution-topology~3a2:2",
+          "morphism_id": "morphism:evidence-attach:evidence~3aexecution-topology:2",
+          "parent_revision_id": "revision:m18-genesis",
+          "replay_checksum": "sha256:6d8f2800a47af7c25498c155221880c59c1cf0f4b422951458704ebb0a0e7cec",
+          "revision_id": "revision:evidence-attach:evidence~3aexecution-topology:2",
+          "sequence": 2,
+          "source_ids": [
+            "source:m18-approved-intent"
+          ]
+        },
+        {
+          "entry_id": "morphism_log_entry:morphism~3areview~3aexecution-topology~3aevidence-execution-topology~3aaccept~3arevision-execution-topology-review-evidence-3aexecution-topology-3:3",
+          "morphism_id": "morphism:review:execution-topology:evidence-execution-topology:accept:revision-execution-topology-review-evidence-3aexecution-topology-3",
+          "parent_revision_id": "revision:evidence-attach:evidence~3aexecution-topology:2",
+          "replay_checksum": "sha256:3a750bcca11d7c25ac2fbbfd7b749e925bb371c2c42bfd11b7c894df95576bd3",
+          "revision_id": "revision:execution-topology-review:evidence~3aexecution-topology:3",
+          "sequence": 3,
+          "source_ids": [
+            "evidence:execution-topology"
+          ]
+        },
+        {
+          "entry_id": "morphism_log_entry:morphism~3aevidence-attach~3aevidence~7e3am18-8bit-low-r1-runtime-result~3a4:4",
+          "morphism_id": "morphism:evidence-attach:evidence~3am18-8bit-low-r1-runtime-result:4",
+          "parent_revision_id": "revision:execution-topology-review:evidence~3aexecution-topology:3",
+          "replay_checksum": "sha256:cab111250529918683076b3bc324a7c13a67f9904cbb47d44ad1a8633b583798",
+          "revision_id": "revision:evidence-attach:evidence~3am18-8bit-low-r1-runtime-result:4",
+          "sequence": 4,
+          "source_ids": [
+            "source:m18-8bit-low-r1-runtime"
+          ]
+        }
+      ],
+      "schema": "highergraphen.case.native_store.record.v2",
+      "schema_version": 1,
+      "space_id": "space:m18-8bit-low-checkpoint-review-v1"
+    }
+  },
+  "schema": "highergraphen.case.native_cli.report.v1"
+}
