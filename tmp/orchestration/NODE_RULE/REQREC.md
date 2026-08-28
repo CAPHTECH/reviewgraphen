@@ -211,6 +211,30 @@ scripts/ci.sh fast
 18. `changed_public_callee_rule::legacy_production_selector_remains_d_only` — `MvpRulePack::synthesize` と `synthesize_changed_public_callee` のcanonical bundle equalityを固定し、new mixed entryの誤配線を最短で捕捉。
 19. `reviewgraphen-benchmark/tests/production_synthesis_compat.rs::public_prepare_api_remains_d_only_for_unchanged_public_function_snapshot` — base=headのproduction ingestでpublic free functionが存在してもbenchmark公開APIのobligation集合がD-only（Nodeを含まない）であることを固定し、consumer固有のsilent denominator driftを捕捉。
 
+### §8 実装状況（修正ラウンド最終）
+
+| # | 状態 | 根拠 |
+| --- | --- | --- |
+| 1 | 実装済み | `public_function_node_rule::snapshot_without_diff_or_calls_still_synthesizes_one_node_per_public_function` |
+| 2 | 未実装（宣言済み限界） | public visibility variant matrix は今回の blocker 範囲外 |
+| 3 | 実装済み | `public_function_without_containment_is_an_explicit_exclusion_not_a_silent_drop` |
+| 4 | 実装済み | #1 の exact capability assertions |
+| 5 | 未実装（宣言済み限界） | profile exclusion regression は今回の blocker 範囲外 |
+| 6 | 未実装（宣言済み限界） | D canonical exclusion regression は frozen v2 fixture oracle が保持 |
+| 7 | 実装済み | #1 と `real_rust_snapshot_defers_d_capability_gap_and_plans_node_contexts` |
+| 8 | 実装済み | `subject_windows_policy_v4_has_pinned_bytes_hash_and_rejects_older_families` |
+| 9 | 未実装（宣言済み限界） | dedicated v4 slot-order fixture は未追加 |
+| 10 | 未実装（宣言済み限界） | dedicated v4 projection-loss fixture は未追加 |
+| 11 | 実装済み | `real_rust_snapshot_defers_d_capability_gap_and_plans_node_contexts` |
+| 12 | 実装済み | `node_context_rejects_relation_fields_and_relation_context_rejects_node_fields` |
+| 13 | 実装済み | `rule_property_policy_tuple_is_exact` |
+| 14 | 未実装（宣言済み限界） | v2/v3 literal matrix は既存 compatibility tests に留める |
+| 15 | 未実装（宣言済み限界） | v4 human-report focused regression は未追加 |
+| 16 | 未実装（宣言済み限界） | CLI artifact-name focused regression は未追加 |
+| 17 | 実装済み | bundle validator and preserved v2 pair hash oracle |
+| 18 | 実装済み | `legacy_production_selector_remains_d_only` |
+| 19 | 未実装（宣言済み限界） | benchmark public API fixture is outside this correction scope |
+
 ### 目視/diff checks（validator列が保証しない範囲）
 
 - `git diff -- benchmarks/m20-changed-public-callee-utility-v1` が空であること。
