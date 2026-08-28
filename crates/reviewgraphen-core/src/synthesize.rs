@@ -143,6 +143,58 @@ impl RuleCoverageV3 {
             Self::ResolvedTargetWithCandidateGap(_) => None,
         }
     }
+
+    /// Exact schedulable denominator for this rule. For D this deliberately
+    /// excludes the separate candidate-space gap obligations.
+    #[must_use]
+    pub fn resolved_target_obligation_ids(&self) -> &BTreeSet<StableId> {
+        match self {
+            Self::ResolvedTargetWithCandidateGap(coverage) => {
+                &coverage.resolved_target_obligation_ids
+            }
+            Self::ResolvedTargetOnly(coverage) => &coverage.eligible_target_obligation_ids,
+        }
+    }
+
+    /// Returns this rule's coverage after recording the exact v4 plan
+    /// partition.  Candidate-space gaps remain D coverage metadata: they are
+    /// not schedulable resolved targets and must never be copied into Node.
+    pub fn with_plan_partition(
+        &self,
+        planned: BTreeSet<StableId>,
+        deferred: BTreeSet<StableId>,
+    ) -> Result<Self> {
+        match self {
+            Self::ResolvedTargetWithCandidateGap(coverage) => {
+                let resolved = &coverage.resolved_target_obligation_ids;
+                if planned.union(&deferred).cloned().collect::<BTreeSet<_>>() != *resolved
+                    || !planned.is_disjoint(&deferred)
+                {
+                    return Err(DomainError::Validation(
+                        "D plan partition must close exactly over resolved targets".to_owned(),
+                    ));
+                }
+                let mut updated = coverage.clone();
+                updated.planned_obligation_ids = planned;
+                updated.deferred_obligation_ids = deferred;
+                Ok(Self::ResolvedTargetWithCandidateGap(updated))
+            }
+            Self::ResolvedTargetOnly(coverage) => {
+                let eligible = &coverage.eligible_target_obligation_ids;
+                if planned.union(&deferred).cloned().collect::<BTreeSet<_>>() != *eligible
+                    || !planned.is_disjoint(&deferred)
+                {
+                    return Err(DomainError::Validation(
+                        "Node plan partition must close exactly over eligible targets".to_owned(),
+                    ));
+                }
+                let mut updated = coverage.clone();
+                updated.planned_obligation_ids = planned;
+                updated.deferred_obligation_ids = deferred;
+                Ok(Self::ResolvedTargetOnly(updated))
+            }
+        }
+    }
 }
 
 /// Versioned mixed-universe descriptor.  It deliberately sits beside the
@@ -1565,6 +1617,7 @@ impl MvpRulePack {
             let (owning_module_ids, containment_witness_ids) =
                 public_function_node_witnesses(program, &function.id)?;
             if owning_module_ids.is_empty() {
+                exclusions.push(missing_node_containment_exclusion(program, function)?);
                 continue;
             }
             let path = function.location.as_ref().ok_or_else(|| {
@@ -1599,8 +1652,6 @@ impl MvpRulePack {
                 continue;
             }
 
-            let (owning_module_ids, containment_witness_ids) =
-                public_function_node_witnesses(program, &function.id)?;
             let mut generator_ids = BTreeSet::from([function.id.clone()]);
             generator_ids.extend(owning_module_ids.iter().cloned());
             generator_ids.extend(containment_witness_ids.iter().cloned());
@@ -1718,6 +1769,13 @@ fn public_function_node_witnesses(
         .iter()
         .filter(|relation| relation.kind == "contains" && relation.target_ids.contains(function_id))
     {
+        if relation.target_ids.len() != 1 {
+            return Err(DomainError::Incomplete {
+                operation: "Node contains relation accepted function target arity",
+                limit: 1,
+                observed: relation.target_ids.len(),
+            });
+        }
         let source = program.artifact(&relation.source_id).ok_or_else(|| {
             DomainError::DanglingReference {
                 owner: "Node contains relation",
@@ -1731,6 +1789,45 @@ fn public_function_node_witnesses(
         }
     }
     Ok((modules, witnesses))
+}
+
+fn missing_node_containment_exclusion(
+    program: &ProgramSpace,
+    function: &crate::Artifact,
+) -> Result<ExclusionRecord> {
+    let source_ids = BTreeSet::from([function.id.clone(), program.snapshot_id().clone()]);
+    let candidate_key = format!("{PUBLIC_FUNCTION_NODE_RULE}|{}", function.id);
+    let id = StableId::derived(
+        "exclusion",
+        &BTreeMap::from([
+            (
+                "candidate_key".to_owned(),
+                Value::String(candidate_key.clone()),
+            ),
+            (
+                "reason".to_owned(),
+                Value::String("node.public_function_missing_containment@1".to_owned()),
+            ),
+            (
+                "snapshot_id".to_owned(),
+                Value::String(program.snapshot_id().to_string()),
+            ),
+            (
+                "source_ids".to_owned(),
+                serde_json::to_value(&source_ids)
+                    .map_err(|error| DomainError::Json(error.to_string()))?,
+            ),
+        ]),
+    )?;
+    Ok(ExclusionRecord {
+        id,
+        candidate_key,
+        reason: "node.public_function_missing_containment@1".to_owned(),
+        source_ids,
+        excluded_weight: NODE_OBLIGATION_WEIGHT
+            .parse()
+            .map_err(|_| DomainError::Validation("invalid fixed Node weight".to_owned()))?,
+    })
 }
 
 fn mixed_rule_order(rule: &str) -> usize {
@@ -1759,6 +1856,18 @@ fn mixed_universe_id(
             (
                 "profile_id".to_owned(),
                 Value::String(program.profile_key()),
+            ),
+            (
+                "rule_set_hash".to_owned(),
+                Value::String(program.rule_set_hash().to_string()),
+            ),
+            (
+                "extractor_set_hash".to_owned(),
+                Value::String(program.extractor_set_hash().to_string()),
+            ),
+            (
+                "policy_version".to_owned(),
+                Value::String(program.policy_version().to_owned()),
             ),
             (
                 "rule_pack_version".to_owned(),

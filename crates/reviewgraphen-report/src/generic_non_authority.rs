@@ -533,6 +533,14 @@ fn build_report_v4(
     let mut source_ids = vec![Value::String(string(legacy, "snapshot_id")?.to_owned())];
     let mut window_ids = Vec::new();
     let mut context_ids = Vec::new();
+    let (proposed_claims, abstentions, malformed_outputs, provider_failures) =
+        project_observations(root, &mut source_ids)?;
+    for exclusion in array(root, "exclusions")? {
+        extend_ids(
+            &mut source_ids,
+            array(object(exclusion, "v4 exclusion")?, "source_ids")?,
+        );
+    }
     for row in array(root, "contexts")? {
         let row = object(row, "v4 context row")?;
         let context = object(field(row, "context")?, "v4 context")?;
@@ -569,7 +577,15 @@ fn build_report_v4(
         "audit": {"schema": "reviewgraphen.generic_review_run.v4", "run_id": string(root, "run_id")?, "snapshot_id": string(legacy, "snapshot_id")?, "universe_id": string(plan, "universe_id")?, "canonical_sha256": ContentHash::sha256(audit_bytes).to_string()},
         "authority": {"classification": string(authority, "classification")?, "trusted_pass": boolean(authority, "trusted_pass")?, "result_status": string(authority, "result_status")?, "incomplete_reasons": array(authority, "incomplete_reasons")?},
         "coverage": {"per_rule": field(coverage, "rule_coverages")?, "d_relation_limitation": "D candidate-space enumeration remains incomplete; this qualification does not apply to the Node denominator.", "node_scope": "Profile-included accepted public free-function obligations only."},
-        "contexts": contexts, "proposed_claims": [], "abstentions": [], "malformed_outputs": [], "provider_failures": [], "provider_free_packet_bindings": [], "verifier": {"status":"unsupported"}, "exclusions": [], "deferrals": [],
+        "contexts": contexts,
+        "proposed_claims": proposed_claims,
+        "abstentions": abstentions,
+        "malformed_outputs": malformed_outputs,
+        "provider_failures": provider_failures,
+        "provider_free_packet_bindings": array(root, "provider_free_packet_bindings")?,
+        "verifier": field(root, "verifier")?,
+        "exclusions": array(root, "exclusions")?,
+        "deferrals": field(plan, "deferred_obligation_ids")?,
         "source_window_trace": {"source_ids": source_ids, "window_ids": window_ids, "context_ids": context_ids},
         "information_loss": [{"kind":"bounded_audit_reduction","meaningful":true,"reason":"Raw run details are omitted; per-rule coverage and context traces are retained.","recovery_ref":ContentHash::sha256(audit_bytes).to_string(),"source_ids":[string(root,"run_id")?]}]
     });

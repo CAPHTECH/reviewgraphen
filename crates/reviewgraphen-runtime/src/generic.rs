@@ -1632,6 +1632,8 @@ pub const GENERIC_REVIEW_REQUEST_V3_SCHEMA: &str = "reviewgraphen.generic_review
 pub const GENERIC_REVIEW_RUN_V3_SCHEMA: &str = "reviewgraphen.generic_review_run.v3";
 pub const GENERIC_REVIEW_REQUEST_V4_SCHEMA: &str = "reviewgraphen.generic_review_request.v4";
 pub const GENERIC_REVIEW_RUN_V4_SCHEMA: &str = "reviewgraphen.generic_review_run.v4";
+const RUST_PRODUCTION_V4_RULE_SET_HASH: &str =
+    "sha256:8f6bfbfb2dbf2f0eaf916b152ddba1e422db8b6de95f931c0c78c9ee4d050b47";
 const D_RULE: &str = "relation.changed_public_callee@1";
 const D_PROPERTY: &str = "rust.callee_contract_review@1";
 const DETERMINISTIC_ABSTAIN: &str = "deterministic.abstain@1";
@@ -1776,6 +1778,7 @@ pub struct GenericReviewRunV4 {
     pub legacy_ingestion: GenericLegacyIngestionV2,
     pub ingestion_report_v2: GenericIngestionReportV2,
     pub obligation_contract: Vec<GenericObligationV2>,
+    pub exclusions: Vec<reviewgraphen_core::ExclusionRecord>,
     pub plan: GenericPlanV2,
     pub contexts: Vec<GenericContextV3>,
     pub observations: Vec<GenericObservationV2>,
@@ -2891,7 +2894,18 @@ pub fn run_generic_review_v4(
         .iter()
         .map(|obligation| obligation.id().clone())
         .collect::<BTreeSet<_>>();
-    if ids.len() > usize::try_from(request.plan.max_obligations_per_wave).unwrap_or(usize::MAX)
+    let planned_ids = mixed_bundle
+        .obligations()
+        .iter()
+        .filter(|obligation| obligation.applicability_status() == "applicable")
+        .map(|obligation| obligation.id().clone())
+        .collect::<BTreeSet<_>>();
+    let deferred_ids = ids
+        .difference(&planned_ids)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if planned_ids.len()
+        > usize::try_from(request.plan.max_obligations_per_wave).unwrap_or(usize::MAX)
         || request.plan.max_waves == 0
     {
         return Err(GenericReviewError::Request(
@@ -2905,7 +2919,10 @@ pub fn run_generic_review_v4(
                 "kind".to_owned(),
                 Value::String("generic-review-v4".to_owned()),
             ),
-            ("obligation_ids".to_owned(), serde_json::to_value(&ids)?),
+            (
+                "obligation_ids".to_owned(),
+                serde_json::to_value(&planned_ids)?,
+            ),
         ]),
     )?;
     let plan_id = StableId::derived(
@@ -2927,9 +2944,9 @@ pub fn run_generic_review_v4(
         universe_id: mixed_bundle.universe().id().clone(),
         waves: vec![GenericWaveV2 {
             id: wave_id.clone(),
-            obligation_ids: ids,
+            obligation_ids: planned_ids.clone(),
         }],
-        deferred_obligation_ids: BTreeSet::new(),
+        deferred_obligation_ids: deferred_ids.clone(),
     };
     let run_id = StableId::derived(
         "run",
@@ -2966,7 +2983,11 @@ pub fn run_generic_review_v4(
         .map(|obligation| (obligation.id().clone(), obligation))
         .collect::<BTreeMap<_, _>>();
     let mut contexts = Vec::new();
-    for obligation in mixed_bundle.obligations() {
+    for obligation in mixed_bundle
+        .obligations()
+        .iter()
+        .filter(|obligation| planned_ids.contains(obligation.id()))
+    {
         if obligation.version().rule() == D_RULE {
             let d_obligation = d_by_id
                 .get(obligation.id())
@@ -3060,7 +3081,12 @@ pub fn run_generic_review_v4(
         generic_ingestion_projection_v2(&legacy_ingestion, program, &ingested.ingestion_report_v2)?;
     let coverage = json!({
         "rule_order": [D_RULE, "node.public_function_contract@1"],
-        "rule_coverages": mixed_bundle.universe().rule_coverages(),
+        "rule_coverages": mixed_bundle.universe().rule_coverages().iter().map(|coverage| {
+            let denominator = coverage.resolved_target_obligation_ids();
+            let planned = denominator.intersection(&planned_ids).cloned().collect();
+            let deferred = denominator.intersection(&deferred_ids).cloned().collect();
+            coverage.with_plan_partition(planned, deferred)
+        }).collect::<Result<Vec<_>, _>>()?,
     });
     let authority = GenericAuthorityCeilingV2 {
         classification: "non_authority",
@@ -3068,6 +3094,7 @@ pub fn run_generic_review_v4(
         result_status: "incomplete",
         incomplete_reasons: BTreeSet::from([
             "candidate_space_enumeration_incomplete".to_owned(),
+            "obligations_deferred".to_owned(),
             "human_decision_not_recorded".to_owned(),
             "model_observer_non_authority".to_owned(),
         ]),
@@ -3079,6 +3106,7 @@ pub fn run_generic_review_v4(
         legacy_ingestion,
         ingestion_report_v2,
         obligation_contract: v4_obligation_contract(mixed_bundle.obligations()),
+        exclusions: mixed_bundle.universe().exclusions().to_vec(),
         plan,
         contexts,
         observations: Vec::new(),
@@ -3125,6 +3153,7 @@ impl GenericReviewRequestV2 {
             || self.target_revision.is_empty()
             || self.ingest.profile_id != "rust.production.v1"
             || self.ingest.profile_version != "1"
+            || self.ingest.rule_set_hash.as_str() != RUST_PRODUCTION_V4_RULE_SET_HASH
             || self.ingest.max_files == 0
             || self.ingest.max_file_bytes == 0
             || self.ingest.max_total_source_bytes == 0
@@ -5154,12 +5183,65 @@ pub fn validate_generic_review_run_v4_wire_structure(value: &Value) -> GenericRe
         .get("obligation_contract")
         .and_then(Value::as_array)
         .ok_or(GenericReviewError::Request("v4 obligation contract"))?;
-    let contract_by_id = contract
-        .iter()
-        .filter_map(|row| row.get("id").and_then(Value::as_str).map(|id| (id, row)))
-        .collect::<BTreeMap<_, _>>();
-    let mut saw_d = false;
-    let mut saw_node = false;
+    let mut contract_by_id = BTreeMap::new();
+    let mut applicable = BTreeSet::new();
+    let mut deferred_expected = BTreeSet::new();
+    let mut d_resolved = BTreeSet::new();
+    let mut d_gaps = BTreeSet::new();
+    let mut node_resolved = BTreeSet::new();
+    for row in contract {
+        let id = row
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(GenericReviewError::Request("v4 contract id"))?;
+        if contract_by_id.insert(id, row).is_some() {
+            return Err(GenericReviewError::Request("v4 duplicate contract id"));
+        }
+        let status = row
+            .get("applicability_status")
+            .and_then(Value::as_str)
+            .ok_or(GenericReviewError::Request("v4 applicability"))?;
+        match row.get("rule_id").and_then(Value::as_str) {
+            Some(D_RULE) => {
+                d_resolved.insert(id.to_owned());
+            }
+            Some("capability_gap.origin_rule@1") => {
+                d_gaps.insert(id.to_owned());
+            }
+            Some("node.public_function_contract@1") => {
+                node_resolved.insert(id.to_owned());
+            }
+            _ => return Err(GenericReviewError::Request("v4 rule registry")),
+        }
+        if status == "applicable" {
+            applicable.insert(id.to_owned());
+        } else {
+            deferred_expected.insert(id.to_owned());
+        }
+    }
+    let plan = object
+        .get("plan")
+        .and_then(Value::as_object)
+        .ok_or(GenericReviewError::Request("v4 plan"))?;
+    let mut planned = BTreeSet::new();
+    for wave in array_field(plan, "waves", "v4 plan waves")? {
+        let wave = wave
+            .as_object()
+            .ok_or(GenericReviewError::Request("v4 wave"))?;
+        for id in array_field(wave, "obligation_ids", "v4 wave ids")? {
+            let id = id
+                .as_str()
+                .ok_or(GenericReviewError::Request("v4 wave id"))?;
+            if !planned.insert(id.to_owned()) {
+                return Err(GenericReviewError::Request("v4 duplicate planned id"));
+            }
+        }
+    }
+    let deferred = array_id_set_v4(array_field(plan, "deferred_obligation_ids", "v4 deferred")?)?;
+    if planned != applicable || deferred != deferred_expected || !planned.is_disjoint(&deferred) {
+        return Err(GenericReviewError::Request("v4 plan contract closure"));
+    }
+    let mut context_ids = BTreeSet::new();
     for row in object
         .get("contexts")
         .and_then(Value::as_array)
@@ -5185,7 +5267,6 @@ pub fn validate_generic_review_run_v4_wire_structure(value: &Value) -> GenericRe
                     return Err(GenericReviewError::Request("v4 D context policy"));
                 }
                 validate_subject_windows_v3_wire_read_only(context)?;
-                saw_d = true;
             }
             Some("node.public_function_contract@1") => {
                 if context
@@ -5196,9 +5277,11 @@ pub fn validate_generic_review_run_v4_wire_structure(value: &Value) -> GenericRe
                     return Err(GenericReviewError::Request("v4 Node context policy"));
                 }
                 validate_subject_windows_v4_wire_read_only(context)?;
-                saw_node = true;
             }
             _ => return Err(GenericReviewError::Request("v4 rule registry")),
+        }
+        if !context_ids.insert(obligation_id.to_owned()) || !planned.contains(obligation_id) {
+            return Err(GenericReviewError::Request("v4 context plan closure"));
         }
     }
     let coverage = object
@@ -5212,19 +5295,75 @@ pub fn validate_generic_review_run_v4_wire_structure(value: &Value) -> GenericRe
     if rows.len() != 2
         || rows[0].get("kind").and_then(Value::as_str) != Some("resolved_target_with_candidate_gap")
         || rows[1].get("kind").and_then(Value::as_str) != Some("resolved_target_only")
-        || !saw_d
-            && contract
-                .iter()
-                .any(|row| row.get("rule_id").and_then(Value::as_str) == Some(D_RULE))
-        || !saw_node
-            && contract.iter().any(|row| {
-                row.get("rule_id").and_then(Value::as_str)
-                    == Some("node.public_function_contract@1")
-            })
     {
         return Err(GenericReviewError::Request("v4 closed per-rule coverage"));
     }
+    let d = rows[0]
+        .get("coverage")
+        .and_then(Value::as_object)
+        .ok_or(GenericReviewError::Request("v4 D coverage"))?;
+    let node = rows[1]
+        .get("coverage")
+        .and_then(Value::as_object)
+        .ok_or(GenericReviewError::Request("v4 Node coverage"))?;
+    if array_id_set_v4(array_field(
+        d,
+        "resolved_target_obligation_ids",
+        "v4 D resolved",
+    )?)? != d_resolved
+        || array_id_set_v4(array_field(
+            d,
+            "candidate_space_gap_obligation_ids",
+            "v4 D gaps",
+        )?)? != d_gaps
+        || array_id_set_v4(array_field(
+            node,
+            "eligible_target_obligation_ids",
+            "v4 Node eligible",
+        )?)? != node_resolved
+        || array_id_set_v4(array_field(d, "planned_obligation_ids", "v4 D planned")?)?
+            != planned.intersection(&d_resolved).cloned().collect()
+        || array_id_set_v4(array_field(d, "deferred_obligation_ids", "v4 D deferred")?)?
+            != deferred.intersection(&d_resolved).cloned().collect()
+        || array_id_set_v4(array_field(
+            node,
+            "planned_obligation_ids",
+            "v4 Node planned",
+        )?)? != planned.intersection(&node_resolved).cloned().collect()
+        || array_id_set_v4(array_field(
+            node,
+            "deferred_obligation_ids",
+            "v4 Node deferred",
+        )?)? != deferred.intersection(&node_resolved).cloned().collect()
+        || context_ids != planned
+    {
+        return Err(GenericReviewError::Request("v4 coverage/context closure"));
+    }
     Ok(())
+}
+
+fn array_field<'a>(
+    value: &'a serde_json::Map<String, Value>,
+    name: &'static str,
+    error: &'static str,
+) -> GenericReviewResult<&'a Vec<Value>> {
+    value
+        .get(name)
+        .and_then(Value::as_array)
+        .ok_or(GenericReviewError::Request(error))
+}
+
+fn array_id_set_v4(values: &[Value]) -> GenericReviewResult<BTreeSet<String>> {
+    let mut ids = BTreeSet::new();
+    for value in values {
+        let id = value
+            .as_str()
+            .ok_or(GenericReviewError::Request("v4 id set member"))?;
+        if !ids.insert(id.to_owned()) {
+            return Err(GenericReviewError::Request("v4 duplicate id set member"));
+        }
+    }
+    Ok(ids)
 }
 
 /// Reconstructs each context using the policy-family-specific trusted basis.

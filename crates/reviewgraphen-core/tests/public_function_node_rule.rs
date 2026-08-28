@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 const NODE_RULE: &str = "node.public_function_contract@1";
 const NODE_PROPERTY: &str = "rust.public_function_contract_review@1";
 
-fn production_program() -> ProgramSpace {
+fn production_program(with_diff_or_calls: bool) -> ProgramSpace {
     let mut value: Value = serde_json::from_slice(include_bytes!(
         "../../../examples/double-submit-payment/program-space.json"
     ))
@@ -41,13 +41,39 @@ fn production_program() -> ProgramSpace {
             "relation:payment-module-contains-charge"
         ]
     });
+    if !with_diff_or_calls {
+        value["artifacts"]
+            .as_array_mut()
+            .expect("artifacts")
+            .iter_mut()
+            .filter(|artifact| artifact["kind"] == "file")
+            .for_each(|artifact| artifact["attributes"]["changed"] = json!(false));
+        value["relations"]
+            .as_array_mut()
+            .expect("relations")
+            .retain(|relation| relation["kind"] != "calls" && relation["kind"] != "covers");
+        value["contexts"] = json!([]);
+        value["invariants"] = json!([]);
+        value["extraction"]["limitations"] = json!([]);
+        for capability in value["extraction"]["capabilities"]
+            .as_object_mut()
+            .expect("capabilities")
+            .values_mut()
+        {
+            capability["state"] = json!("complete");
+        }
+        for capability in ["direct_calls", "interprocedural_data_flow", "test_mapping"] {
+            value["extraction"]["capabilities"][capability]["source_ids"] =
+                json!(["relation:file-contains-submit"]);
+        }
+    }
     ProgramSpace::from_json_slice(&serde_json::to_vec(&value).expect("JSON bytes"))
         .expect("valid production ProgramSpace")
 }
 
 #[test]
 fn snapshot_without_diff_or_calls_still_synthesizes_one_node_per_public_function() {
-    let program = production_program();
+    let program = production_program(false);
     let bundle = MvpRulePack::synthesize_rust_production_v2(&program).expect("mixed synthesis");
     let nodes = bundle
         .obligations()
@@ -81,7 +107,7 @@ fn snapshot_without_diff_or_calls_still_synthesizes_one_node_per_public_function
 
 #[test]
 fn legacy_production_selector_remains_d_only() {
-    let program = production_program();
+    let program = production_program(true);
     let legacy = MvpRulePack::synthesize(&program).expect("legacy synthesis");
     let d_only = MvpRulePack::synthesize_changed_public_callee(&program).expect("D synthesis");
     assert_eq!(legacy.contract().canonical(), d_only.contract().canonical());
@@ -91,4 +117,46 @@ fn legacy_production_selector_remains_d_only() {
             .iter()
             .all(|obligation| obligation.version().rule() != NODE_RULE)
     );
+}
+
+#[test]
+fn public_function_without_containment_is_an_explicit_exclusion_not_a_silent_drop() {
+    let mut value: Value = serde_json::from_slice(include_bytes!(
+        "../../../examples/double-submit-payment/program-space.json"
+    ))
+    .expect("reference ProgramSpace JSON");
+    value["profile"]["id"] = json!("rust.production.v1");
+    value["profile"]["version"] = json!("1");
+    value["artifacts"]
+        .as_array_mut()
+        .expect("artifacts")
+        .iter_mut()
+        .find(|artifact| artifact["id"] == "function:payment-charge")
+        .expect("function artifact")["attributes"]["public"] = json!(true);
+    value["relations"]
+        .as_array_mut()
+        .expect("relations")
+        .retain(|relation| {
+            relation["kind"] != "contains"
+                || !relation["target_ids"]
+                    .as_array()
+                    .is_some_and(|targets| targets.iter().any(|id| id == "function:payment-charge"))
+        });
+    let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&value).expect("JSON bytes"))
+        .expect("valid production ProgramSpace");
+    let bundle = MvpRulePack::synthesize_rust_production_v2(&program).expect("mixed synthesis");
+    assert!(bundle.obligations().iter().all(|obligation| {
+        obligation.version().rule() != NODE_RULE
+            || obligation
+                .target_refs()
+                .first()
+                .is_none_or(|target| target.as_str() != "function:payment-charge")
+    }));
+    assert!(bundle.universe().exclusions().iter().any(|exclusion| {
+        exclusion.reason == "node.public_function_missing_containment@1"
+            && exclusion
+                .source_ids
+                .iter()
+                .any(|source_id| source_id.as_str() == "function:payment-charge")
+    }));
 }

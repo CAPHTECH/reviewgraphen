@@ -5,10 +5,9 @@ use reviewgraphen_runtime::generic::{
     GenericObserverRequestV2, GenericPlanRequest, GenericReviewBasisLifecycleEvent,
     GenericReviewBasisLifecycleTrace, GenericReviewRequestV2, GenericReviewRequestV3,
     decode_and_validate_generic_review_request_v2, decode_and_validate_generic_review_request_v3,
-    decode_and_validate_generic_review_request_v4, decode_and_validate_generic_review_run_v2,
-    decode_and_validate_generic_review_run_v3, run_generic_review_v2, run_generic_review_v3,
-    run_generic_review_v3_with_probe, run_generic_review_v3_with_probes,
-    validate_generic_review_run_v3_wire_structure,
+    decode_and_validate_generic_review_run_v2, decode_and_validate_generic_review_run_v3,
+    run_generic_review_v2, run_generic_review_v3, run_generic_review_v3_with_probe,
+    run_generic_review_v3_with_probes, validate_generic_review_run_v3_wire_structure,
 };
 use serde_json::{Value, json};
 use std::{
@@ -23,7 +22,6 @@ use tempfile::tempdir;
 const POSITIVE_BASE: &str = "a8b6b24d5ed704f53f721b25db42d5d631f946c7";
 const POSITIVE_TARGET: &str = "8569a2261e8a62145228872a2fde9f4c48093d00";
 const V3_POLICY: &str = "context.subject_windows@3";
-const V4_POLICY: &str = "context.subject_windows@4";
 
 fn git(root: &Path, arguments: &[&str]) {
     let status = Command::new("git")
@@ -38,21 +36,6 @@ fn git(root: &Path, arguments: &[&str]) {
         .status()
         .expect("git is available for integration test");
     assert!(status.success());
-}
-
-#[test]
-fn v4_request_has_a_closed_d_and_node_policy_registry() {
-    let bytes =
-        include_bytes!("../../../schemas/reviewgraphen.generic_review_request.v4.example.json");
-    let request = decode_and_validate_generic_review_request_v4(bytes).expect("v4 request");
-    let mut wrong = serde_json::to_value(request).expect("v4 request JSON");
-    wrong["context_policies"]["node.public_function_contract@1"]["policy_id"] = json!(V3_POLICY);
-    assert!(
-        decode_and_validate_generic_review_request_v4(
-            &canonical_json(&wrong).expect("canonical wrong v4 request")
-        )
-        .is_err()
-    );
 }
 
 #[test]
@@ -506,17 +489,9 @@ fn v3_request_boundary_typed_rejects_every_non_fixed_selector_form() {
                 .remove("context_policy_id");
             value
         }),
-        // @4 is a real Node-only policy family. v3 must reject it rather than
-        // silently accepting a selector that belongs to another major family.
-        ("other family (@4)", {
+        ("other", {
             let mut value = good.clone();
-            value["context_policy_id"] = json!(V4_POLICY);
-            value
-        }),
-        // Preserve the pre-@4 assertion that a truly unknown selector fails.
-        ("unknown policy (@99)", {
-            let mut value = good.clone();
-            value["context_policy_id"] = json!("context.subject_windows@99");
+            value["context_policy_id"] = json!("context.subject_windows@4");
             value
         }),
         ("inline parameters", {

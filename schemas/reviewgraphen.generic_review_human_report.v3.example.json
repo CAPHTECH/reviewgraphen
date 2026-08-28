@@ -1,7 +1,8 @@
 {
   "schema":"reviewgraphen.generic_review_human_report.v3",
+  "rendered_markdown_sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "audit":{"schema":"reviewgraphen.generic_review_run.v4","run_id":"run:generic-v4-example","snapshot_id":"snapshot:example","universe_id":"universe:example","canonical_sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},
   "authority":{"classification":"non_authority","trusted_pass":false,"result_status":"incomplete","incomplete_reasons":[]},
-  "coverage":{"per_rule":[{"kind":"resolved_target_with_candidate_gap"},{"kind":"resolved_target_only"}],"d_relation_limitation":"D candidate-space enumeration remains incomplete; this qualification does not apply to the Node denominator.","node_scope":"Profile-included accepted public free-function obligations only."},
-  "contexts":[],"proposed_claims":[],"abstentions":[],"malformed_outputs":[],"provider_failures":[],"provider_free_packet_bindings":[],"verifier":{"status":"unsupported"},"exclusions":[],"deferrals":[],"source_window_trace":{"source_ids":[],"window_ids":[],"context_ids":[]},"information_loss":[]
+  "coverage":{"per_rule":[{"kind":"resolved_target_with_candidate_gap","coverage":{}},{"kind":"resolved_target_only","coverage":{}}],"d_relation_limitation":"D candidate-space enumeration remains incomplete; this qualification does not apply to the Node denominator.","node_scope":"Profile-included accepted public free-function obligations only."},
+  "contexts":[],"proposed_claims":[],"abstentions":[],"malformed_outputs":[],"provider_failures":[],"provider_free_packet_bindings":[],"verifier":{"status":"unsupported"},"exclusions":[],"deferrals":[],"source_window_trace":{"source_ids":[],"window_ids":[],"context_ids":[]},"information_loss":[{"kind":"bounded_audit_reduction","meaningful":true,"reason":"Example report intentionally omits packet-level detail.","recovery_ref":"sha256:0000000000000000000000000000000000000000000000000000000000000000","source_ids":[]}]
 }
