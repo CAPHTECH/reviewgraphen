@@ -8501,11 +8501,6 @@ impl ContextSubjectWindowsSessionV4 {
             ));
         }
         let bytes = self.resolved.as_ref().expect("complete has bytes");
-        let location = self.obligation.target_refs().first().and_then(|id| {
-            // The target's location is represented by the sole source candidate's matching path.
-            Some(id)
-        });
-        let _ = location;
         let source_artifact_id = self.candidate.artifact.id.clone();
         let range = ExcerptRange {
             start_line: 1,
