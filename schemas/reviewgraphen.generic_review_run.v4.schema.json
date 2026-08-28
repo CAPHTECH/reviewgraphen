@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.dev/schemas/reviewgraphen.generic_review_run.v4.schema.json",
+  "title": "ReviewGraphen generic non-authority review run v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run_id", "request_id", "legacy_ingestion", "ingestion_report_v2", "obligation_contract", "plan", "contexts", "observations", "provider_free_packet_bindings", "coverage", "verifier", "authority"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.generic_review_run.v4"},
+    "run_id": {"type": "string"}, "request_id": {"type": "string"},
+    "legacy_ingestion": {"type": "object"}, "ingestion_report_v2": {"type": "object"},
+    "obligation_contract": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["id", "rule_id", "property_id", "target_kind", "target_refs", "target_support_capabilities", "enumeration_capabilities", "applicability_status"], "properties": {"id":{"type":"string"},"rule_id":{"enum":["relation.changed_public_callee@1","node.public_function_contract@1"]},"property_id":{"type":"string"},"target_kind":{"enum":["relation","node"]},"target_refs":{"type":"array","items":{"type":"string"}},"target_support_capabilities":{"type":"array","items":{"type":"string"}},"enumeration_capabilities":{"type":"array","items":{"type":"string"}},"applicability_status":{"type":"string"}}}},
+    "plan": {"type": "object"},
+    "contexts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["wave_id", "context"], "properties": {"wave_id":{"type":"string"},"context":{"oneOf":[{"type":"object","required":["caller_artifact_id","callee_artifact_id","context_policy"],"properties":{"context_policy":{"type":"object","required":["policy_id"],"properties":{"policy_id":{"const":"context.subject_windows@3"}}}}},{"type":"object","required":["subject_artifact_id","context_policy"],"properties":{"context_policy":{"type":"object","required":["policy_id"],"properties":{"policy_id":{"const":"context.subject_windows@4"}}}}}]}}}},
+    "observations": {"type": "array"}, "provider_free_packet_bindings": {"type": "array"},
+    "coverage": {"type": "object", "additionalProperties": false, "required":["rule_order","rule_coverages"], "properties":{"rule_order":{"const":["relation.changed_public_callee@1","node.public_function_contract@1"]},"rule_coverages":{"type":"array","minItems":2,"maxItems":2,"prefixItems":[{"type":"object","required":["kind"],"properties":{"kind":{"const":"resolved_target_with_candidate_gap"}}},{"type":"object","required":["kind"],"properties":{"kind":{"const":"resolved_target_only"}}}]}}},
+    "verifier": {"type":["object","null"]},
+    "authority": {"type":"object", "required":["classification","trusted_pass","result_status","incomplete_reasons"], "properties":{"classification":{"const":"non_authority"},"trusted_pass":{"const":false},"result_status":{"const":"incomplete"},"incomplete_reasons":{"type":"array"}}}
+  }
+}

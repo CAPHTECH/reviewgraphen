@@ -6,13 +6,15 @@
 
 use reviewgraphen_core::{ContentHash, canonical_json};
 use reviewgraphen_runtime::generic::{
-    ValidatedGenericReviewRunV3, decode_and_validate_generic_review_run_v2,
+    ValidatedGenericReviewRunV3, ValidatedGenericReviewRunV4,
+    decode_and_validate_generic_review_run_v2,
 };
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 const HUMAN_REPORT_SCHEMA: &str = "reviewgraphen.generic_review_human_report.v1";
 const HUMAN_REPORT_V2_SCHEMA: &str = "reviewgraphen.generic_review_human_report.v2";
+const HUMAN_REPORT_V3_SCHEMA: &str = "reviewgraphen.generic_review_human_report.v3";
 const MAX_RENDERED_MARKDOWN_BYTES: usize = 1_048_576;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -81,6 +83,17 @@ pub fn generate_generic_human_report_v3(
     build_report_v3(&audit_bytes, audit)
 }
 
+/// Projects only a basis-bound mixed run-v4 into the closed human-report-v3
+/// family.  It preserves the D limitation as D-only and never promotes either
+/// per-rule coverage arm into repository-wide authority.
+pub fn generate_generic_human_report_v4(
+    run: &ValidatedGenericReviewRunV4,
+) -> Result<GenericHumanReport, GenericHumanReportError> {
+    let audit_bytes = run.canonical_bytes()?;
+    validate_run_v4_schema(run.value())?;
+    build_report_v4(&audit_bytes, run.value())
+}
+
 fn validate_run_schema(audit: &Value) -> Result<(), GenericHumanReportError> {
     validate_schema(
         audit,
@@ -97,6 +110,14 @@ fn validate_run_v3_schema(audit: &Value) -> Result<(), GenericHumanReportError> 
     )
 }
 
+fn validate_run_v4_schema(audit: &Value) -> Result<(), GenericHumanReportError> {
+    validate_schema(
+        audit,
+        include_str!("../../../schemas/reviewgraphen.generic_review_run.v4.schema.json"),
+        "run v4 schema",
+    )
+}
+
 fn validate_human_report_schema(manifest: &Value) -> Result<(), GenericHumanReportError> {
     validate_schema(
         manifest,
@@ -110,6 +131,14 @@ fn validate_human_report_v2_schema(manifest: &Value) -> Result<(), GenericHumanR
         manifest,
         include_str!("../../../schemas/reviewgraphen.generic_review_human_report.v2.schema.json"),
         "human report v2 schema",
+    )
+}
+
+fn validate_human_report_v3_schema(manifest: &Value) -> Result<(), GenericHumanReportError> {
+    validate_schema(
+        manifest,
+        include_str!("../../../schemas/reviewgraphen.generic_review_human_report.v3.schema.json"),
+        "human report v3 schema",
     )
 }
 
@@ -489,6 +518,102 @@ fn build_report_v3(
         manifest_bytes: canonical_json(&manifest)?,
         markdown_bytes,
     })
+}
+
+fn build_report_v4(
+    audit_bytes: &[u8],
+    audit: &Value,
+) -> Result<GenericHumanReport, GenericHumanReportError> {
+    let root = object(audit, "v4 audit")?;
+    let plan = object(field(root, "plan")?, "v4 plan")?;
+    let legacy = object(field(root, "legacy_ingestion")?, "v4 legacy ingestion")?;
+    let authority = object(field(root, "authority")?, "v4 authority")?;
+    let coverage = object(field(root, "coverage")?, "v4 coverage")?;
+    let mut contexts = Vec::new();
+    let mut source_ids = vec![Value::String(string(legacy, "snapshot_id")?.to_owned())];
+    let mut window_ids = Vec::new();
+    let mut context_ids = Vec::new();
+    for row in array(root, "contexts")? {
+        let row = object(row, "v4 context row")?;
+        let context = object(field(row, "context")?, "v4 context")?;
+        let policy = object(field(context, "context_policy")?, "v4 policy")?;
+        let rule_coverage = if string(policy, "policy_id")? == "context.subject_windows@3" {
+            "d_relation"
+        } else {
+            "node_public_function"
+        };
+        for source in array(context, "materialized_sources")? {
+            source_ids.push(Value::String(
+                string(object(source, "v4 source")?, "artifact_id")?.to_owned(),
+            ));
+        }
+        for window in array(context, "windows")? {
+            let window = object(window, "v4 window")?;
+            source_ids.push(Value::String(
+                string(window, "source_artifact_id")?.to_owned(),
+            ));
+            window_ids.push(Value::String(string(window, "id")?.to_owned()));
+        }
+        let context_id = string(context, "context_id")?;
+        context_ids.push(Value::String(context_id.to_owned()));
+        contexts.push(json!({"wave_id": string(row, "wave_id")?, "context_id": context_id, "rule_coverage": rule_coverage, "context_policy_id": string(policy, "policy_id")?, "context_policy_hash": string(context, "context_policy_hash")?, "subject_outcomes": array(context, "subject_outcomes")?, "admitted_windows": array(context, "windows")?, "unknowns": array(context, "unknowns")?}));
+    }
+    source_ids.sort_by(value_string_order);
+    source_ids.dedup();
+    window_ids.sort_by(value_string_order);
+    window_ids.dedup();
+    context_ids.sort_by(value_string_order);
+    context_ids.dedup();
+    let mut manifest = json!({
+        "schema": HUMAN_REPORT_V3_SCHEMA,
+        "audit": {"schema": "reviewgraphen.generic_review_run.v4", "run_id": string(root, "run_id")?, "snapshot_id": string(legacy, "snapshot_id")?, "universe_id": string(plan, "universe_id")?, "canonical_sha256": ContentHash::sha256(audit_bytes).to_string()},
+        "authority": {"classification": string(authority, "classification")?, "trusted_pass": boolean(authority, "trusted_pass")?, "result_status": string(authority, "result_status")?, "incomplete_reasons": array(authority, "incomplete_reasons")?},
+        "coverage": {"per_rule": field(coverage, "rule_coverages")?, "d_relation_limitation": "D candidate-space enumeration remains incomplete; this qualification does not apply to the Node denominator.", "node_scope": "Profile-included accepted public free-function obligations only."},
+        "contexts": contexts, "proposed_claims": [], "abstentions": [], "malformed_outputs": [], "provider_failures": [], "provider_free_packet_bindings": [], "verifier": {"status":"unsupported"}, "exclusions": [], "deferrals": [],
+        "source_window_trace": {"source_ids": source_ids, "window_ids": window_ids, "context_ids": context_ids},
+        "information_loss": [{"kind":"bounded_audit_reduction","meaningful":true,"reason":"Raw run details are omitted; per-rule coverage and context traces are retained.","recovery_ref":ContentHash::sha256(audit_bytes).to_string(),"source_ids":[string(root,"run_id")?]}]
+    });
+    let markdown_bytes = render_markdown_v4(&manifest)?;
+    object_mut(&mut manifest, "manifest")?.insert(
+        "rendered_markdown_sha256".to_owned(),
+        Value::String(ContentHash::sha256(&markdown_bytes).to_string()),
+    );
+    validate_human_report_v3_schema(&manifest)?;
+    Ok(GenericHumanReport {
+        manifest_bytes: canonical_json(&manifest)?,
+        markdown_bytes,
+    })
+}
+
+fn render_markdown_v4(manifest: &Value) -> Result<Vec<u8>, GenericHumanReportError> {
+    let root = object(manifest, "v4 manifest")?;
+    let audit = object(field(root, "audit")?, "v4 audit")?;
+    let authority = object(field(root, "authority")?, "v4 authority")?;
+    let coverage = object(field(root, "coverage")?, "v4 coverage")?;
+    let mut rendered = String::from(
+        "# Generic review projection\n\nThis is a non-authority projection of canonical run-v4 audit JSON.\n\n",
+    );
+    rendered.push_str(&format!(
+        "- Run: `{}`\n- Snapshot: `{}`\n- trusted_pass = `{}`\n",
+        cell(string(audit, "run_id")?),
+        cell(string(audit, "snapshot_id")?),
+        boolean(authority, "trusted_pass")?
+    ));
+    rendered.push_str("\n## Per-rule coverage\n\n");
+    rendered.push_str("D retains its candidate-space limitation; Node covers only profile-included accepted public free functions. Neither is a global safety conclusion.\n\n");
+    for row in array(coverage, "per_rule")? {
+        rendered.push_str(&format!(
+            "- `{}`\n",
+            cell(string(object(row, "coverage row")?, "kind")?)
+        ));
+    }
+    if rendered.len() > MAX_RENDERED_MARKDOWN_BYTES {
+        return Err(GenericHumanReportError::RenderBound {
+            limit: MAX_RENDERED_MARKDOWN_BYTES,
+            observed: rendered.len(),
+        });
+    }
+    Ok(rendered.into_bytes())
 }
 
 type ProjectedOutcomes = (Vec<Value>, Vec<Value>, Vec<Value>, Vec<Value>);

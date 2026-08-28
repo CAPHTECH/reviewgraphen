@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://reviewgraphen.dev/schemas/reviewgraphen.generic_review_human_report.v3.schema.json",
+  "title":"ReviewGraphen non-authority human report v3",
+  "type":"object", "additionalProperties":false,
+  "required":["schema","audit","authority","coverage","contexts","proposed_claims","abstentions","malformed_outputs","provider_failures","provider_free_packet_bindings","verifier","exclusions","deferrals","source_window_trace","information_loss"],
+  "properties":{
+    "schema":{"const":"reviewgraphen.generic_review_human_report.v3"},
+    "audit":{"type":"object","required":["schema","run_id","snapshot_id","universe_id","canonical_sha256"],"properties":{"schema":{"const":"reviewgraphen.generic_review_run.v4"},"run_id":{"type":"string"},"snapshot_id":{"type":"string"},"universe_id":{"type":"string"},"canonical_sha256":{"type":"string"}}},
+    "authority":{"type":"object","required":["classification","trusted_pass","result_status","incomplete_reasons"],"properties":{"classification":{"const":"non_authority"},"trusted_pass":{"const":false},"result_status":{"const":"incomplete"},"incomplete_reasons":{"type":"array"}}},
+    "coverage":{"type":"object","required":["per_rule","d_relation_limitation","node_scope"],"properties":{"per_rule":{"type":"array","minItems":2,"maxItems":2},"d_relation_limitation":{"type":"string"},"node_scope":{"type":"string"}}},
+    "contexts":{"type":"array"},"proposed_claims":{"type":"array"},"abstentions":{"type":"array"},"malformed_outputs":{"type":"array"},"provider_failures":{"type":"array"},"provider_free_packet_bindings":{"type":"array"},"verifier":{"type":"object"},"exclusions":{"type":"array"},"deferrals":{"type":"array"},"source_window_trace":{"type":"object"},"information_loss":{"type":"array"}
+  }
+}
