@@ -14,9 +14,12 @@ Python validator dependency once:
 python3 -m pip install --requirement requirements/ci.txt
 ```
 
-The shell entry points require Bash **4.3 or newer** (`local -n` is used by
-the deterministic source selector). macOS's system Bash 3.2 is insufficient;
-install a newer Bash and invoke `bash scripts/ci.sh …` explicitly.
+The full-repository shell entry points require Bash **4.3 or newer** (`local
+-n` is used by the deterministic source selector). macOS's system Bash 3.2 is
+insufficient; install a newer Bash and invoke `bash scripts/ci.sh …`
+explicitly. Native macOS CLI verification does not use this shell harness; it
+runs `cargo test --locked -p reviewgraphen-cli` and a release-binary smoke test
+on the pinned GitHub Actions Apple Silicon runner.
 
 The fast gate also needs nextest:
 

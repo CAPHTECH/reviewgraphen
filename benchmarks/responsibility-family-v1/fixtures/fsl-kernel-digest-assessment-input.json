@@ -1,0 +1,87 @@
+{
+  "schema": "reviewgraphen.benchmark.responsibility_family_assessment_input.v1",
+  "candidate_hash": "sha256:4cf395c44adca5028da9f0025e0f2f8745dc34ec281daff7132cdfa04284d7d4",
+  "entries": [
+    {
+      "property": "common_change_reason",
+      "member_ids": [],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:fsl-kernel-digest-contract-source"],
+      "verification_ids": ["verification:fsl-kernel-digest-source-reading"]
+    },
+    {
+      "property": "separation_rationale",
+      "member_ids": [],
+      "disposition": "opposes",
+      "evidence_ids": ["evidence:fsl-kernel-digest-contract-source"],
+      "verification_ids": ["verification:fsl-kernel-digest-source-reading"]
+    },
+    {
+      "property": "shared_conformance_feasibility",
+      "member_ids": [],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:fsl-kernel-digest-framing-mutation"],
+      "verification_ids": ["verification:fsl-kernel-digest-mutation-run"]
+    },
+    {
+      "property": "common_contract_applies",
+      "member_ids": [
+        "responsibility-member:fsl-tools-normalized-kernel-ast",
+        "responsibility-member:fslc-approval-normalized-ast"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:fsl-kernel-digest-contract-source"],
+      "verification_ids": ["verification:fsl-kernel-digest-source-reading"]
+    },
+    {
+      "property": "purpose_constraints_preserved",
+      "member_ids": [
+        "responsibility-member:fsl-tools-normalized-kernel-ast",
+        "responsibility-member:fslc-approval-normalized-ast"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:fsl-kernel-digest-conformance-test"],
+      "verification_ids": ["verification:fsl-kernel-digest-two-run"]
+    },
+    {
+      "property": "typed_error_preservation",
+      "member_ids": [
+        "responsibility-member:fsl-tools-normalized-kernel-ast",
+        "responsibility-member:fslc-approval-normalized-ast"
+      ],
+      "disposition": "not_applicable",
+      "evidence_ids": [],
+      "verification_ids": []
+    },
+    {
+      "property": "compatibility_preservation",
+      "member_ids": [
+        "responsibility-member:fsl-tools-normalized-kernel-ast",
+        "responsibility-member:fslc-approval-normalized-ast"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:fsl-kernel-digest-conformance-test"],
+      "verification_ids": ["verification:fsl-kernel-digest-two-run"]
+    },
+    {
+      "property": "performance_preservation",
+      "member_ids": [
+        "responsibility-member:fsl-tools-normalized-kernel-ast",
+        "responsibility-member:fslc-approval-normalized-ast"
+      ],
+      "disposition": "not_applicable",
+      "evidence_ids": [],
+      "verification_ids": []
+    },
+    {
+      "property": "shared_validator_feasibility",
+      "member_ids": [
+        "responsibility-member:fsl-tools-normalized-kernel-ast",
+        "responsibility-member:fslc-approval-normalized-ast"
+      ],
+      "disposition": "opposes",
+      "evidence_ids": ["evidence:fsl-kernel-digest-independent-producers"],
+      "verification_ids": ["verification:fsl-kernel-digest-source-reading"]
+    }
+  ]
+}

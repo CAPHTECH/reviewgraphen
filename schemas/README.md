@@ -49,6 +49,8 @@
 | `reviewgraphen.benchmark.real_trial_inventory.v1.schema.json` | Private four-cell inventory for positive/control by B1/G3, without leaking roles to reviewers. |
 | `reviewgraphen.benchmark.real_run_summary.v1.schema.json` | Real-fix paired recall and separately named unlabeled-control/target-anchor allegation counts; no false-positive claim. |
 | `reviewgraphen.benchmark.real_full_run_summary.v1.schema.json` | Additive full-ReviewGraphen-only real-fix summary; the frozen B1/G3 paired summary remains unchanged. |
+| `benchmarks/structural-sloppiness-v1/schema/structural-sloppiness-report-v1.schema.json` | Closed experimental v1 report for the fixed `changed_input_consumer_bridge_mismatch@1` benchmark classifier; it is not a product or authority schema. |
+| `benchmarks/structural-sloppiness-v1/example-missing-bridge-report.json` | Generated synthetic missing-bridge report, validated against the adjacent experimental schema. |
 | `reviewgraphen.process_reviewer_record.v1.schema.json` | Hash-bound raw Codex/Claude process observation for deterministic replay; explicitly non-authority. |
 | `reviewgraphen.generic_review_request.v1.schema.json` | Ordinary Git generic orchestration request with explicit ingest/plan bounds and a swappable local-process or replay backend. |
 | `reviewgraphen.generic_review_request.v2.schema.json` | ADR 0038 closed generic request: admitted local Git roots, `rust.production.v1` ingest bounds, the D relation review profile, bounded plan, provider-free/replay observer selection, and the deferred workspace verifier selection. |
@@ -61,6 +63,8 @@
 | `reviewgraphen.generic_review_human_report.v1.schema.json` | Closed non-authority manifest derived only from a validated run-v2 audit; it binds audit and Markdown hashes, source/window trace, meaningful loss, proposal/abstention state, and verifier status. |
 | `reviewgraphen.generic_review_human_report.v3.schema.json` | Closed non-authority projection of a basis-bound run-v4, retaining separate D limitation and Node public-function scope. |
 | `reviewgraphen.generic_review_diagnostics.v1.schema.json` | Closed non-authority operational diagnostic with nullable request/run bindings and exactly six ordered stage observations; the adjacent `.example.json` uses real v3 run bindings, while elapsed microseconds remain non-canonical operational observations. |
+| `reviewgraphen.responsibility_family_state.v1.schema.json` | Accepted responsibility-family product state, kept separate from ProgramSpace and requiring a human decision, Evidence, Verification, distinct implementation/endpoint denominators, purpose constraints, unknowns, and a fixed non-sign-off authority ceiling. |
+| `reviewgraphen.responsibility_family_state.v1.example.json` | Canonical example of an externally accepted shared-conformance-test family; it is not evidence that the illustrated FSL family was actually accepted. |
 | `provider-free.source-grounded-packet.v1.schema.json` | Closed provider-free reviewer packet containing only admitted source payloads and a fixed abstention response schema; it is not an authority artifact. |
 | `provider-free.source-grounded-abstention.v1.schema.json` | The sole fixed output for `deterministic.abstain@1`: an explicit abstention, never a semantic finding. |
 | `provider-free.source-inventory.v1.schema.json` | Canonical admitted-source inventory bound into the provider-free packet and abstention. |

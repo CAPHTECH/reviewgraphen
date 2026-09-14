@@ -1188,3 +1188,30 @@ pub fn evaluate_stage0_gates(
         deferred_fraction_passes,
     })
 }
+
+#[cfg(test)]
+mod shared_path_contract_tests {
+    use super::validate_path;
+
+    #[test]
+    fn profile_path_obeys_shared_snapshot_relative_contract() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/snapshot-relative-path-contract.v1.json"
+        )))
+        .expect("shared path contract fixture");
+        assert_eq!(
+            fixture["schema"],
+            "reviewgraphen.snapshot_relative_path_contract_cases.v1"
+        );
+        for case in fixture["common_cases"].as_array().expect("common cases") {
+            let path = case["path"].as_str().expect("case path");
+            let valid = case["valid"].as_bool().expect("case validity");
+            assert_eq!(
+                validate_path(path, "shared-contract").is_ok(),
+                valid,
+                "shared path contract case {path:?}"
+            );
+        }
+    }
+}

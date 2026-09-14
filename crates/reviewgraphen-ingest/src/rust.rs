@@ -5,7 +5,7 @@ use crate::{
     LatentOccurrenceCount, LocationDraft, ObstructionSeverity, RelationDraft,
     V2IngestionObstructionDraft,
 };
-use proc_macro2::Span;
+use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::ToTokens;
 use reviewgraphen_core::{ContentHash, RustSymbolAnchorV1, RustSymbolKindV1, StableId};
 use serde_json::{Map, Value};
@@ -15,7 +15,7 @@ use syn::visit::{self, Visit};
 use syn::{
     Arm, Attribute, Block, Expr, ExprAssign, ExprAwait, ExprBinary, ExprCall, ExprClosure,
     ExprForLoop, ExprIf, ExprMethodCall, ExprWhile, Fields, File, FnArg, ImplItem, Item, ItemFn,
-    ItemImpl, ItemMacro, ItemMod, Local, Macro, Pat, Signature, Type, UseTree, Visibility,
+    ItemImpl, ItemMacro, ItemMod, Local, Macro, Meta, Pat, Signature, Type, UseTree, Visibility,
 };
 
 /// Extracts only the M2 Rust AST subset from immutable Git file bytes.
@@ -687,10 +687,11 @@ fn collect_function(
     let logical_name = format!("{}::{}", context.module_label, function.sig.ident);
     let location = location(&file.path, function.span());
     let function_key = symbol_key(&file.path, "function", &logical_name, &location);
-    let is_test = context.test_scope || is_test(&function.attrs);
+    let is_test = context.test_scope || is_test(&function.attrs) || is_cfg_test(&function.attrs);
     let markers = ConcurrencyMarkers::scan(&function.sig, &function.block);
     let mut attributes = function_attributes(&function.vis, &markers);
     attributes.insert("test_function".to_owned(), Value::Bool(is_test));
+    insert_responsibility_candidate_facts(&mut attributes, is_test, &function.sig, &function.block);
     artifacts.push(ArtifactDraft {
         key: function_key.clone(),
         id_kind: "function",
@@ -771,6 +772,13 @@ fn collect_impl(
         let location = location(&file.path, method.span());
         let key = symbol_key(&file.path, "method", &logical_name, &location);
         let markers = ConcurrencyMarkers::scan(&method.sig, &method.block);
+        let is_test = context.test_scope
+            || is_cfg_test(&implementation.attrs)
+            || is_test(&method.attrs)
+            || is_cfg_test(&method.attrs);
+        let mut attributes = function_attributes(&method.vis, &markers);
+        attributes.insert("test_function".to_owned(), Value::Bool(is_test));
+        insert_responsibility_candidate_facts(&mut attributes, is_test, &method.sig, &method.block);
         artifacts.push(ArtifactDraft {
             key: key.clone(),
             id_kind: "method",
@@ -779,7 +787,7 @@ fn collect_impl(
             language: Some("rust"),
             location: Some(location.clone()),
             content_hash: Some(file.content_hash.clone()),
-            attributes: function_attributes(&method.vis, &markers),
+            attributes,
             source_path: Some(file.path.clone()),
             extraction_method: "reviewgraphen.ingest.rust_syn.v1",
         });
@@ -1225,11 +1233,225 @@ fn is_test(attributes: &[Attribute]) -> bool {
 fn is_cfg_test(attributes: &[Attribute]) -> bool {
     attributes.iter().any(|attribute| {
         attribute.path().is_ident("cfg")
-            && attribute
-                .meta
-                .require_list()
-                .is_ok_and(|list| list.tokens.to_string().contains("test"))
+            && attribute.meta.require_list().is_ok_and(|list| {
+                list.parse_args::<Meta>()
+                    .is_ok_and(|condition| cfg_condition_implies_test(&condition))
+            })
     })
+}
+
+fn cfg_condition_implies_test(condition: &Meta) -> bool {
+    match condition {
+        Meta::Path(path) => path.is_ident("test"),
+        Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+            .is_ok_and(|conditions| conditions.iter().any(cfg_condition_implies_test)),
+        Meta::List(list) if list.path.is_ident("any") => list
+            .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+            .is_ok_and(|conditions| {
+                !conditions.is_empty() && conditions.iter().all(cfg_condition_implies_test)
+            }),
+        Meta::List(_) | Meta::NameValue(_) => false,
+    }
+}
+
+const TEST_SCOPE_EXTRACTOR_V1: &str = "reviewgraphen.ingest.rust-test-scope@1";
+const RESPONSIBILITY_SHAPE_EXTRACTOR_V1: &str = "reviewgraphen.ingest.rust-responsibility-shape@1";
+const RESPONSIBILITY_SIGNALS_EXTRACTOR_V1: &str =
+    "reviewgraphen.ingest.rust-responsibility-signals@1";
+
+fn insert_responsibility_candidate_facts(
+    attributes: &mut Map<String, Value>,
+    is_test: bool,
+    signature: &Signature,
+    block: &Block,
+) {
+    attributes.insert(
+        "test_scope".to_owned(),
+        Value::String(if is_test { "test" } else { "production" }.to_owned()),
+    );
+    attributes.insert(
+        "test_scope_extractor".to_owned(),
+        Value::String(TEST_SCOPE_EXTRACTOR_V1.to_owned()),
+    );
+    attributes.insert(
+        "responsibility_shape_hash".to_owned(),
+        Value::String(
+            ContentHash::sha256(structural_token_shape(block.to_token_stream()).as_bytes())
+                .to_string(),
+        ),
+    );
+    attributes.insert(
+        "responsibility_shape_extractor".to_owned(),
+        Value::String(RESPONSIBILITY_SHAPE_EXTRACTOR_V1.to_owned()),
+    );
+    let signals = ResponsibilitySignalVisitor::extract(signature, block);
+    attributes.insert(
+        "responsibility_signals".to_owned(),
+        serde_json::json!({
+            "callable": identifier_words(&signature.ident.to_string()),
+            "signature": signals.signature,
+            "operation": signals.operation,
+        }),
+    );
+    attributes.insert(
+        "responsibility_signals_extractor".to_owned(),
+        Value::String(RESPONSIBILITY_SIGNALS_EXTRACTOR_V1.to_owned()),
+    );
+}
+
+#[derive(Default)]
+struct ResponsibilitySignalVisitor {
+    signature: BTreeSet<String>,
+    operation: BTreeSet<String>,
+}
+
+impl ResponsibilitySignalVisitor {
+    fn extract(signature: &Signature, block: &Block) -> Self {
+        let mut signature_signals = Self::default();
+        signature_signals.visit_signature(signature);
+        let mut operation_signals = Self::default();
+        operation_signals.visit_block(block);
+        Self {
+            signature: signature_signals.signature,
+            operation: operation_signals.operation,
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ResponsibilitySignalVisitor {
+    fn visit_receiver(&mut self, _receiver: &'ast syn::Receiver) {}
+
+    fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
+        if let Some(segment) = path.path.segments.last() {
+            self.signature.insert(segment.ident.to_string());
+        }
+        visit::visit_type_path(self, path);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Expr::Path(path) = call.func.as_ref()
+            && let Some(segment) = path.path.segments.last()
+        {
+            self.operation.insert(segment.ident.to_string());
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+        self.operation.insert(call.method.to_string());
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+fn identifier_words(identifier: &str) -> Vec<String> {
+    let mut words = BTreeSet::new();
+    for underscore_part in identifier.split('_').filter(|part| !part.is_empty()) {
+        let chars = underscore_part.chars().collect::<Vec<_>>();
+        let mut start = 0;
+        for index in 1..chars.len() {
+            let boundary = (chars[index].is_uppercase() && chars[index - 1].is_lowercase())
+                || (chars[index].is_uppercase()
+                    && chars[index - 1].is_uppercase()
+                    && chars.get(index + 1).is_some_and(|next| next.is_lowercase()));
+            if boundary {
+                words.insert(
+                    chars[start..index]
+                        .iter()
+                        .collect::<String>()
+                        .to_lowercase(),
+                );
+                start = index;
+            }
+        }
+        if start < chars.len() {
+            words.insert(chars[start..].iter().collect::<String>().to_lowercase());
+        }
+    }
+    words.into_iter().collect()
+}
+
+fn structural_token_shape(tokens: TokenStream) -> String {
+    fn append(tokens: TokenStream, output: &mut String) {
+        for token in tokens {
+            match token {
+                TokenTree::Group(group) => {
+                    let delimiter = match group.delimiter() {
+                        Delimiter::Parenthesis => "()",
+                        Delimiter::Brace => "{}",
+                        Delimiter::Bracket => "[]",
+                        Delimiter::None => "--",
+                    };
+                    output.push_str(delimiter);
+                    output.push('<');
+                    append(group.stream(), output);
+                    output.push('>');
+                }
+                TokenTree::Ident(ident) => {
+                    let value = ident.to_string();
+                    if rust_keyword(&value) {
+                        output.push_str("k:");
+                        output.push_str(&value);
+                    } else {
+                        output.push_str("id");
+                    }
+                    output.push(';');
+                }
+                TokenTree::Punct(punct) => {
+                    output.push_str("p:");
+                    output.push(punct.as_char());
+                    output.push(';');
+                }
+                TokenTree::Literal(_) => output.push_str("lit;"),
+            }
+        }
+    }
+    let mut output = String::new();
+    append(tokens, &mut output);
+    output
+}
+
+fn rust_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "as" | "async"
+            | "await"
+            | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "dyn"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+    )
 }
 
 fn impl_owner(value: &Type) -> String {
@@ -2218,5 +2440,32 @@ mod anchor_tests {
         assert_ne!(baseline, renamed);
         assert_ne!(baseline, signature);
         assert_ne!(baseline, body);
+    }
+
+    #[test]
+    fn responsibility_shape_erases_names_and_literals_but_preserves_control_structure() {
+        let first: Block = syn::parse_quote!({
+            let alpha = input + 1;
+            if alpha > 4 { Ok(alpha) } else { Err("low") }
+        });
+        let renamed: Block = syn::parse_quote!({
+            let beta = value + 9;
+            if beta > 12 { Ok(beta) } else { Err("small") }
+        });
+        let different: Block = syn::parse_quote!({
+            let beta = value + 9;
+            match beta > 12 {
+                true => Ok(beta),
+                false => Err("small"),
+            }
+        });
+        assert_eq!(
+            structural_token_shape(first.to_token_stream()),
+            structural_token_shape(renamed.to_token_stream())
+        );
+        assert_ne!(
+            structural_token_shape(renamed.to_token_stream()),
+            structural_token_shape(different.to_token_stream())
+        );
     }
 }

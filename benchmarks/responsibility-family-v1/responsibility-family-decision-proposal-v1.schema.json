@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capht.tech/schemas/reviewgraphen/benchmark/responsibility-family-decision-proposal.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "candidate_id",
+    "proposed_family_id",
+    "snapshot_id",
+    "candidate_hash",
+    "obligation_universe_hash",
+    "assessment_hash",
+    "authority",
+    "denominator",
+    "counts",
+    "proposed_option",
+    "unresolved_obligation_ids",
+    "unknowns"
+  ],
+  "properties": {
+    "schema": {"const": "reviewgraphen.benchmark.responsibility_family_decision_proposal.v1"},
+    "candidate_id": {"$ref": "#/$defs/stable_id"},
+    "proposed_family_id": {"$ref": "#/$defs/stable_id"},
+    "snapshot_id": {"$ref": "#/$defs/stable_id"},
+    "candidate_hash": {"$ref": "#/$defs/content_hash"},
+    "obligation_universe_hash": {"$ref": "#/$defs/content_hash"},
+    "assessment_hash": {"$ref": "#/$defs/content_hash"},
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "accepted", "verified", "human_accepted", "sign_off"],
+      "properties": {
+        "classification": {"const": "non_authority"},
+        "accepted": {"const": false},
+        "verified": {"const": false},
+        "human_accepted": {"const": false},
+        "sign_off": {"const": false}
+      }
+    },
+    "denominator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["members", "obligations"],
+      "properties": {
+        "members": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "obligations": {"type": "integer", "minimum": 1, "maximum": 24579}
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supports", "opposes", "unresolved"],
+      "properties": {
+        "supports": {"type": "integer", "minimum": 0, "maximum": 24579},
+        "opposes": {"type": "integer", "minimum": 0, "maximum": 24579},
+        "unresolved": {"type": "integer", "minimum": 0, "maximum": 24579}
+      }
+    },
+    "proposed_option": {
+      "enum": [
+        "shared_validator",
+        "shared_conformance_test",
+        "intentional_separation",
+        "inconclusive"
+      ]
+    },
+    "unresolved_obligation_ids": {
+      "type": "array",
+      "maxItems": 24579,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stable_id"}
+    },
+    "unknowns": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+    }
+  },
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*:.+$", "maxLength": 4096},
+    "content_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{8,}$", "maxLength": 4096}
+  }
+}

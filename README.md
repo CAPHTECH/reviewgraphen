@@ -2,8 +2,8 @@
 
 **ReviewGraphen** は、AIレビューを「一回の賢いプロンプト」から、**構造化されたレビュー義務を計画・実行・検証・追跡する工程**へ変える、HigherGraphen上のグラフ駆動レビュー基盤です。
 
-> Status: Draft v0.1  
-> Baseline: 2026-08-07 / HigherGraphen 0.7.1 / `CAPHTECH/higher-graphen@0f1e1cfe`  
+> Status: Public alpha v0.1.0
+> Baseline: 2026-09-15 / HigherGraphen 0.7.1 / `CAPHTECH/higher-graphen@0f1e1cfe`
 > Methodology: Graph-Driven Review  
 > Primary artifact: Review Graph  
 > Initial profile: Code Review
@@ -121,6 +121,57 @@ repository / diff / tests / policies
 - 実装アーキテクチャ: [`docs/05_system_architecture.md`](docs/05_system_architecture.md)
 - MVP: [`docs/18_mvp_roadmap.md`](docs/18_mvp_roadmap.md)
 - 実装バックログ: [`docs/19_implementation_backlog.md`](docs/19_implementation_backlog.md)
+
+## 対応プラットフォーム
+
+- Linux: CLIとLinux固有のdurable Store経路。
+- macOS 15以降（Apple Silicon）: 単独CLIの`review`、`schema`と、埋め込みschemaを
+  使うprovider-free/replay経路。Gitは実行時依存。
+
+macOSでは、Linuxの`openat2`、`O_TMPFILE`、create-only publication契約に依存する
+durable Storeと、bubblewrapによる外部LLM隔離は未対応です。対応していない境界を
+弱いpath-based処理へfallbackしません。macOS CLIはGitHub Actionsの
+`macos-15` Apple Silicon runnerで継続検査します。
+
+## インストール
+
+### Release installer
+
+Linux x86-64とmacOS Apple Siliconでは、GitHub Releaseからchecksum検証済みの
+CLIとReviewGraphen skillを導入できます。既定ではCLIを`~/.local/bin`へ、同じ
+skillをCodexの`~/.codex/skills`とClaude Codeの`~/.claude/skills`へ入れます。
+
+```bash
+curl -fsSLO https://github.com/CAPHTECH/reviewgraphen/releases/latest/download/install.sh
+curl -fsSLO https://github.com/CAPHTECH/reviewgraphen/releases/latest/download/install.sh.sha256
+shasum -a 256 -c install.sh.sha256  # Linux: sha256sum -c install.sh.sha256
+sh install.sh
+```
+
+対象とversionは限定できます。
+
+```bash
+sh install.sh --version 0.1.0 --targets cli,codex
+sh install.sh --targets claude --claude-home "$HOME/.claude"
+```
+
+installer管理外の既存skillは上書きしません。`--force`を指定した場合も既存directoryを
+backupとして残します。全optionは`sh install.sh --help`で確認できます。
+
+### Source build
+
+sourceからは、固定されたRust toolchainとlockfileを使います。
+
+```bash
+cargo build --locked --release -p reviewgraphen-cli
+./target/release/reviewgraphen --version
+./target/release/reviewgraphen schema list
+```
+
+provider keyなしの再現手順は
+[`examples/changed-public-callee-quickstart/README.md`](examples/changed-public-callee-quickstart/README.md)
+を参照してください。その実行はobligation、projection、abstentionを再現しますが、
+欠陥検出やsign-offを主張しません。
 
 ## 最初の参照シナリオ
 

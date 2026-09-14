@@ -24,6 +24,7 @@ mod planning;
 pub mod profile;
 mod program;
 mod projection;
+mod responsibility_family;
 mod review;
 mod source;
 mod synthesize;
@@ -212,6 +213,11 @@ pub use program::{
     SnapshotDescriptor, SourceRef, migrate_program_space_v1_to_v2,
 };
 pub use projection::{AuditProjection, HumanProjection, Projection, ProjectionKind, ReviewReport};
+pub use responsibility_family::{
+    AcceptedResponsibilityFamilyStateV1, FamilyAcceptanceV1, FamilyAuthorityV1, FamilyContractV1,
+    FamilyExtractorV1, FamilyMaintenanceDecisionV1, FamilyMemberV1,
+    RESPONSIBILITY_FAMILY_STATE_V1_SCHEMA,
+};
 pub use review::{
     ClaimAuthorKind, ClaimDisposition, ClaimPolarity, ContextSourceRegistration, Decision,
     DecisionAdmission, DecisionAuthority, DecisionOutcome, EvidenceBinding, EvidenceRelation,

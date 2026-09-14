@@ -1,0 +1,1 @@
+{"algorithm":"fsl-kernel-ast-v1+sha256","canonical_json":"compact recursively key-sorted JSON","framing":"sha256(algorithm UTF-8 || 0x00 || canonical JSON)","location_rule":"remove only objects with exactly line and column numeric keys","output":"sha256:<64 lowercase hex>","schema":"reviewgraphen.benchmark.shared_contract.v1"}

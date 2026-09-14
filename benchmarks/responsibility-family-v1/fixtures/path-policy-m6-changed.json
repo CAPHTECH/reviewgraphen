@@ -1,0 +1,81 @@
+{
+  "schema": "reviewgraphen.benchmark.responsibility_family_state.v1",
+  "family_id": "responsibility-family:path-policy",
+  "snapshot_id": "snapshot:c0747614-m6-mutant",
+  "decision_basis_id": "decision:path-policy-v1",
+  "common_contract": {
+    "id": "snapshot-relative-path@1",
+    "hash": "sha256:a27292ed308fd8aa6440365dcb87e649b1b4da5661a2b248e5a012ff0c9cf3b6"
+  },
+  "extractor": {
+    "id": "syn-item-fn-tokens",
+    "version": "1"
+  },
+  "members": [
+    {
+      "member_id": "responsibility-member:benchmark-artifact-path",
+      "path": "crates/reviewgraphen-benchmark/src/lib.rs",
+      "symbol": "safe_relative_path",
+      "anchor": "sha256:9c34622af0894282ddabf23ce75c7a4f7a7a27225a61d4c9f01fa1d60d1f7861",
+      "purpose_constraints": [
+        "maximum-4096-bytes",
+        "preserve-benchmark-validation-contract"
+      ],
+      "source_ids": ["artifact:path-policy-benchmark"]
+    },
+    {
+      "member_id": "responsibility-member:ingest-obstruction-path",
+      "path": "crates/reviewgraphen-ingest/src/lib.rs",
+      "symbol": "normalized_repository_path",
+      "anchor": "sha256:7ffff2d4e63dc9cee70b815463edacdc5a245d6f852cb98713348ddea4cce588",
+      "purpose_constraints": [
+        "preserve-adapter-output-contract",
+        "reject-backslash",
+        "reject-nul"
+      ],
+      "source_ids": ["artifact:path-policy-ingest"]
+    },
+    {
+      "member_id": "responsibility-member:m6-mapping-path",
+      "path": "crates/reviewgraphen-core/src/m6.rs",
+      "symbol": "normalized_mapping_path",
+      "anchor": "sha256:20a81092e968bb1d87a0d4b1c4942d1fd2b4298151f68fc44aa45fecf08aaf15",
+      "purpose_constraints": [
+        "preserve-m6-invalid-mapping-contract",
+        "reject-backslash",
+        "reject-drive-prefix",
+        "reject-nul"
+      ],
+      "source_ids": ["artifact:path-policy-m6"]
+    },
+    {
+      "member_id": "responsibility-member:profile-git-path",
+      "path": "crates/reviewgraphen-core/src/profile.rs",
+      "symbol": "validate_path",
+      "anchor": "sha256:3b8fb179a83ff891a3b431bdf86d009bdb16e1c63827cc51a51794ce64b245b7",
+      "purpose_constraints": [
+        "preserve-invalid-path-reason-order",
+        "reject-backslash",
+        "reject-nul"
+      ],
+      "source_ids": ["artifact:path-policy-profile"]
+    },
+    {
+      "member_id": "responsibility-member:program-location-path",
+      "path": "crates/reviewgraphen-core/src/program.rs",
+      "symbol": "validate_snapshot_relative_path",
+      "anchor": "sha256:be33fe61f56a8e3ee36a326ae1730c5a14e55b53bcda418508b052965b09c025",
+      "purpose_constraints": [
+        "preserve-domain-error-contract",
+        "reject-backslash",
+        "reject-drive-prefix",
+        "reject-nul"
+      ],
+      "source_ids": ["artifact:path-policy-program"]
+    }
+  ],
+  "unknowns": [
+    "macro-expanded functions are not observed",
+    "token equality is not semantic equivalence"
+  ]
+}

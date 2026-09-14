@@ -1,0 +1,43 @@
+{
+  "schema": "reviewgraphen.benchmark.responsibility_family_candidate.v1",
+  "candidate_id": "responsibility-family-candidate:severity-wire-text",
+  "proposed_family_id": "responsibility-family:severity-wire-text",
+  "snapshot_id": "snapshot:c0747614",
+  "proposed_common_contract": {
+    "id": "severity-wire-text@1",
+    "hash": "sha256:509fe9382d2fe060d1a18d5fa5cb46e61cfedacbcf1ba079f9be31624f0b8575"
+  },
+  "extractor": {
+    "id": "source-window-sha256",
+    "version": "1"
+  },
+  "members": [
+    {
+      "member_id": "responsibility-member:core-planner-severity-text",
+      "path": "crates/reviewgraphen-core/src/planning.rs",
+      "symbol": "severity",
+      "anchor": "sha256:a21390c532e0f74737beab103dcefa3d314ea9a93a0cc2843266eeaf4d46ae82",
+      "purpose_constraints": [
+        "bounded-json-writer-remains-allocation-bounded",
+        "preserve-planner-canonical-json"
+      ],
+      "source_ids": ["artifact:severity-wire-core-planning"]
+    },
+    {
+      "member_id": "responsibility-member:store-projection-severity-text",
+      "path": "crates/reviewgraphen-store/src/index_v5.rs",
+      "symbol": "severity_text",
+      "anchor": "sha256:64da176d673f03b059b2d97a42618cb93ecd0d19c04582931e1bea39fc35eae3",
+      "purpose_constraints": [
+        "preserve-index-v5-projection-json",
+        "serialization-remains-allocation-free"
+      ],
+      "source_ids": ["artifact:severity-wire-store-index-v5"]
+    }
+  ],
+  "unknowns": [
+    "downstream users of the public Severity type are not enumerated",
+    "no performance benchmark was run before candidate registration",
+    "serde rename behavior is a related contract but not a candidate member"
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.dev/schema/benchmark/structural-sloppiness-report-v1.schema.json",
+  "title": "ReviewGraphen experimental structural-sloppiness report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "analyzer", "contract", "input", "authority", "scope",
+    "observed_facts", "candidate_claims", "obstructions"
+  ],
+  "properties": {
+    "schema": { "const": "reviewgraphen.benchmark.structural_sloppiness_report.v1" },
+    "analyzer": {
+      "type": "object", "additionalProperties": false, "required": ["id", "version"],
+      "properties": {
+        "id": { "const": "reviewgraphen.benchmark.structural_sloppiness" },
+        "version": { "const": "1" }
+      }
+    },
+    "contract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "hash", "producer_provenance"],
+      "properties": {
+        "id": { "const": "changed_input_consumer_bridge_mismatch@1" },
+        "hash": { "$ref": "#/$defs/hash" },
+        "producer_provenance": { "const": "reviewgraphen.ingest.git.changed_structure.v1" }
+      }
+    },
+    "input": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "program_space_hash", "snapshot_id", "base_revision", "target_revision",
+        "profile", "rule_set_hash", "extractor_set_hash"
+      ],
+      "properties": {
+        "program_space_hash": { "$ref": "#/$defs/hash" },
+        "snapshot_id": { "$ref": "#/$defs/id" },
+        "base_revision": { "$ref": "#/$defs/text" },
+        "target_revision": { "$ref": "#/$defs/text" },
+        "profile": { "$ref": "#/$defs/text" },
+        "rule_set_hash": { "$ref": "#/$defs/hash" },
+        "extractor_set_hash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["classification", "accepted", "verified", "human_accepted", "sign_off"],
+      "properties": {
+        "classification": { "const": "non_authority" },
+        "accepted": { "const": false },
+        "verified": { "const": false },
+        "human_accepted": { "const": false },
+        "sign_off": { "const": false }
+      }
+    },
+    "scope": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "status", "eligible_count", "excluded_count", "excluded_by_reason",
+        "capabilities", "limitation_ids", "information_loss"
+      ],
+      "properties": {
+        "status": { "enum": ["exercised", "not_exercised"] },
+        "eligible_count": { "type": "integer", "minimum": 0 },
+        "excluded_count": { "type": "integer", "minimum": 0 },
+        "excluded_by_reason": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "non_public_function": { "type": "integer", "minimum": 1 },
+            "not_free_function": { "type": "integer", "minimum": 1 },
+            "producer_provenance_mismatch": { "type": "integer", "minimum": 1 },
+            "change_provenance_mismatch": { "type": "integer", "minimum": 1 },
+            "change_shape_invalid": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "capabilities": {
+          "type": "array", "items": { "$ref": "#/$defs/capability" }
+        },
+        "limitation_ids": { "$ref": "#/$defs/id_array" },
+        "information_loss": { "type": "array", "items": { "$ref": "#/$defs/text" } }
+      }
+    },
+    "observed_facts": {
+      "type": "array", "items": { "$ref": "#/$defs/observation" }
+    },
+    "candidate_claims": {
+      "type": "array", "items": { "$ref": "#/$defs/claim" }
+    },
+    "obstructions": {
+      "type": "array", "items": { "$ref": "#/$defs/obstruction" }
+    }
+  },
+  "$defs": {
+    "text": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "minLength": 3, "pattern": "^[^:]+:.+$" },
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{16,64}$" },
+    "id_array": { "type": "array", "items": { "$ref": "#/$defs/id" }, "uniqueItems": true },
+    "capability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capability", "state", "source_ids"],
+      "properties": {
+        "capability": { "$ref": "#/$defs/text" },
+        "state": { "enum": ["complete", "partial", "missing", "unknown"] },
+        "source_ids": { "$ref": "#/$defs/id_array" }
+      }
+    },
+    "location": {
+      "type": "object", "additionalProperties": false, "required": ["path"],
+      "properties": {
+        "path": { "$ref": "#/$defs/text" },
+        "start_line": { "type": ["integer", "null"], "minimum": 1 },
+        "end_line": { "type": ["integer", "null"], "minimum": 1 },
+        "start_column": { "type": ["integer", "null"], "minimum": 1 },
+        "end_column": { "type": ["integer", "null"], "minimum": 1 },
+        "symbol_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] }
+      }
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "id", "symbol_id", "symbol_location", "change_id", "changed_by_relation_id",
+        "producer_source_ids", "own_changed", "marked_container_ids",
+        "matching_contains_relation_ids", "consumer_observed_changed"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "symbol_id": { "$ref": "#/$defs/id" },
+        "symbol_location": { "anyOf": [{ "$ref": "#/$defs/location" }, { "type": "null" }] },
+        "change_id": { "$ref": "#/$defs/id" },
+        "changed_by_relation_id": { "$ref": "#/$defs/id" },
+        "producer_source_ids": { "$ref": "#/$defs/id_array" },
+        "own_changed": { "type": "boolean" },
+        "marked_container_ids": { "$ref": "#/$defs/id_array" },
+        "matching_contains_relation_ids": { "$ref": "#/$defs/id_array" },
+        "consumer_observed_changed": { "type": "boolean" }
+      }
+    },
+    "claim": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "observation_ids", "source_ids", "statement", "disposition"],
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "kind": { "const": "consumer_bridge_mismatch" },
+        "observation_ids": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/text" }
+        },
+        "source_ids": { "$ref": "#/$defs/id_array" },
+        "statement": { "$ref": "#/$defs/text" },
+        "disposition": { "const": "candidate" }
+      }
+    },
+    "obstruction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "source_ids", "limitation_ids", "statement"],
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "kind": { "$ref": "#/$defs/text" },
+        "source_ids": { "$ref": "#/$defs/id_array" },
+        "limitation_ids": { "$ref": "#/$defs/id_array" },
+        "statement": { "$ref": "#/$defs/text" }
+      }
+    }
+  }
+}

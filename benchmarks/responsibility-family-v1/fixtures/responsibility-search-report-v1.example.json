@@ -1,0 +1,108 @@
+{
+  "schema": "reviewgraphen.benchmark.responsibility_search_report.v1",
+  "search_id": "responsibility-search:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "snapshot_id": "snapshot:responsibility-search-fixture",
+  "contract": {
+    "contract_id": "planned-responsibility-contract:parse-and-store",
+    "canonical_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "clause_count": 3
+  },
+  "program_space": {
+    "profile_id": "code-review",
+    "profile_version": "1",
+    "rule_set_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "extractor_set_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "policy_version": "rust.production.v1@1"
+  },
+  "rule": "reviewgraphen.benchmark.planned-responsibility-search@1",
+  "signal_extractor": "reviewgraphen.ingest.rust-responsibility-signals@1",
+  "selection": {
+    "frequency_denominator": "eligible_functions",
+    "max_selective_term_frequency": 32,
+    "minimum_callable_or_signature_matches": 1,
+    "minimum_selective_operation_matches": 2,
+    "minimum_query_operation_coverage_ppm": 600000,
+    "candidate_selection": "all_eligible_matching_candidates"
+  },
+  "contract_clause_handling": {
+    "semantic_content_retained_by": "contract_hash_only",
+    "semantic_content_evaluated": false
+  },
+  "authority": {
+    "classification": "non_authority",
+    "accepted": false,
+    "verified": false,
+    "human_accepted": false,
+    "sign_off": false
+  },
+  "denominator": {
+    "accepted_rust_symbols": 4,
+    "eligible_functions": 3,
+    "excluded_non_function_symbols": 1,
+    "excluded_profile_paths": 0,
+    "excluded_test_functions": 0,
+    "excluded_unknown_test_scope": 0,
+    "excluded_unknown_signal_fact": 0,
+    "evaluated_functions": 3,
+    "candidate_count": 1,
+    "candidate_clause_obligations": 3
+  },
+  "query_signals": {
+    "selective": {
+      "callable": ["parse"],
+      "signature": ["Input", "Output"],
+      "operation": ["convert", "normalize", "write"]
+    },
+    "absent": {
+      "callable": [],
+      "signature": [],
+      "operation": ["missing"]
+    },
+    "high_frequency": {
+      "callable": [],
+      "signature": [],
+      "operation": ["generic"]
+    }
+  },
+  "candidates": [
+    {
+      "candidate_id": "responsibility-search-candidate:sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rank": 1,
+      "artifact_id": "function:parse-alpha",
+      "path": "crates/search_fixture/src/lib.rs",
+      "symbol": "crate::parse_alpha",
+      "source_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "member_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "matched_signals": {
+        "callable": ["parse"],
+        "signature": ["Input", "Output"],
+        "operation": ["convert", "normalize", "write"]
+      },
+      "unmatched_signals": {
+        "callable": [],
+        "signature": [],
+        "operation": ["generic", "missing"]
+      },
+      "coverage": {
+        "selective_callable_or_signature_matches": 3,
+        "selective_operation_matches": 3,
+        "query_operation_terms": 5,
+        "query_operation_coverage_ppm": 600000
+      },
+      "unverified_clause_ids": [
+        "clause:nonempty-input",
+        "clause:parse-error",
+        "clause:purpose-separation"
+      ],
+      "unknowns": [
+        "semantic clauses are not evaluated"
+      ]
+    }
+  ],
+  "information_loss": [
+    "semantic clauses and purpose constraints are retained only by the canonical contract hash"
+  ],
+  "unknowns": [
+    "candidate membership is not responsibility-family acceptance"
+  ]
+}

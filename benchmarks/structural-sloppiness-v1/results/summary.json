@@ -1,0 +1,920 @@
+{
+  "format": "structural-sloppiness-trial-summary@1",
+  "cases": [
+    {
+      "format": "structural-sloppiness-trial-projection@1",
+      "case": "old-not-exercised",
+      "raw_input_sha256": "3fae1e041d1d871ba0a1ede48714352fe77d1f9225e58ac49e8354b66bf4c79f",
+      "source_report": {
+        "sha256": "15f16455a05b3e66eb8607d212b46984496c7ae3f6ad379a211e066764c20ce7",
+        "retained_in_repository": false
+      },
+      "input": {
+        "base_revision": "5990679bda201e377d1275a3d2a59bf69f9debcf",
+        "extractor_set_hash": "sha256:6ee26b27669d2458dd0d2a02182ab65153b4bc4c0b86c80419d46c36f3235616",
+        "profile": "code-review@1",
+        "program_space_hash": "sha256:3fae1e041d1d871ba0a1ede48714352fe77d1f9225e58ac49e8354b66bf4c79f",
+        "rule_set_hash": "sha256:3333333333333333",
+        "snapshot_id": "snapshot:sha256:5e2c2ebcf7f25b13ca924c86b5e21fce38addde044391ac9e89fc0360e140395",
+        "target_revision": "852af1ed281871e3f27cf1aa997a4b7a450ddc79"
+      },
+      "contract": {
+        "hash": "sha256:e634baafbdab6395d53b9cac0a03d40927633575621f8de78834fd3221d0bfbd",
+        "id": "changed_input_consumer_bridge_mismatch@1",
+        "producer_provenance": "reviewgraphen.ingest.git.changed_structure.v1"
+      },
+      "authority": {
+        "accepted": false,
+        "classification": "non_authority",
+        "human_accepted": false,
+        "sign_off": false,
+        "verified": false
+      },
+      "scope": {
+        "status": "not_exercised",
+        "eligible_count": 0,
+        "excluded_count": 40,
+        "excluded_by_reason": {
+          "non_public_function": 15,
+          "not_free_function": 25
+        },
+        "capabilities": [
+          {
+            "capability": "ast",
+            "state": "partial",
+            "source_id_count": 271
+          },
+          {
+            "capability": "cargo_metadata",
+            "state": "missing",
+            "source_id_count": 1
+          },
+          {
+            "capability": "changed_structure",
+            "state": "complete",
+            "source_id_count": 6
+          },
+          {
+            "capability": "containment",
+            "state": "partial",
+            "source_id_count": 271
+          },
+          {
+            "capability": "direct_calls",
+            "state": "partial",
+            "source_id_count": 271
+          },
+          {
+            "capability": "git_snapshot",
+            "state": "complete",
+            "source_id_count": 565
+          },
+          {
+            "capability": "imports",
+            "state": "partial",
+            "source_id_count": 271
+          },
+          {
+            "capability": "module_dependencies",
+            "state": "partial",
+            "source_id_count": 271
+          },
+          {
+            "capability": "state_writes",
+            "state": "partial",
+            "source_id_count": 271
+          },
+          {
+            "capability": "test_mapping",
+            "state": "partial",
+            "source_id_count": 271
+          }
+        ],
+        "limitation_count": 30016
+      },
+      "observed_facts": [],
+      "candidate_claims": [],
+      "obstructions": [
+        {
+          "id": "obstruction:sha256:cd4d8c7a821bde45f8521ac484a30b4bf4e99d945275a1d8fb44291ec5e1039f",
+          "kind": "partial_extraction",
+          "statement": "Extraction completeness limits this benchmark observation; it does not suppress accepted-fact predicate results or grant authority.",
+          "source_id_count": 4410,
+          "limitation_count": 30016
+        }
+      ],
+      "projection_loss": [
+        "Not an AnalysisReport; validate the full source report instead.",
+        "Capability and obstruction source-ID lists and limitation-ID lists are omitted; their counts and the full report hash remain.",
+        "Unrelated ProgramSpace facts, source code, and limitation details are not reproduced."
+      ]
+    },
+    {
+      "format": "structural-sloppiness-trial-projection@1",
+      "case": "old-positive",
+      "raw_input_sha256": "0915bef45baa1fcde4c1292549db318c8adb56a80d98f95621ac770246e7d342",
+      "source_report": {
+        "sha256": "382530d7bc90ec7224dd1f1164fe91c18c42e555f053dddd45572bbed19b3281",
+        "retained_in_repository": false
+      },
+      "input": {
+        "base_revision": "ac45c9e8e1bf090fcfdcafc0926cfe41c1ab2412",
+        "extractor_set_hash": "sha256:6ee26b27669d2458dd0d2a02182ab65153b4bc4c0b86c80419d46c36f3235616",
+        "profile": "code-review@1",
+        "program_space_hash": "sha256:0915bef45baa1fcde4c1292549db318c8adb56a80d98f95621ac770246e7d342",
+        "rule_set_hash": "sha256:3333333333333333",
+        "snapshot_id": "snapshot:sha256:06be9c1b75768021dadf0d864a8332e264eee7ad17d713ebec1108bc6717c7f1",
+        "target_revision": "a992243a18700d2ed32e6057ddf22090fb855970"
+      },
+      "contract": {
+        "hash": "sha256:e634baafbdab6395d53b9cac0a03d40927633575621f8de78834fd3221d0bfbd",
+        "id": "changed_input_consumer_bridge_mismatch@1",
+        "producer_provenance": "reviewgraphen.ingest.git.changed_structure.v1"
+      },
+      "authority": {
+        "accepted": false,
+        "classification": "non_authority",
+        "human_accepted": false,
+        "sign_off": false,
+        "verified": false
+      },
+      "scope": {
+        "status": "exercised",
+        "eligible_count": 3,
+        "excluded_count": 181,
+        "excluded_by_reason": {
+          "non_public_function": 62,
+          "not_free_function": 119
+        },
+        "capabilities": [
+          {
+            "capability": "ast",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "cargo_metadata",
+            "state": "missing",
+            "source_id_count": 1
+          },
+          {
+            "capability": "changed_structure",
+            "state": "complete",
+            "source_id_count": 10
+          },
+          {
+            "capability": "containment",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "direct_calls",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "git_snapshot",
+            "state": "complete",
+            "source_id_count": 559
+          },
+          {
+            "capability": "imports",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "module_dependencies",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "state_writes",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "test_mapping",
+            "state": "partial",
+            "source_id_count": 268
+          }
+        ],
+        "limitation_count": 29440
+      },
+      "observed_facts": [
+        {
+          "change_id": "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+          "changed_by_relation_id": "relation:sha256:2aca847d0f64f8ad46c66300de7fec1e9fc3436351536f987909f7577c6c86f7",
+          "consumer_observed_changed": false,
+          "id": "observation:sha256:59e3fab30a872dc9d6b5a20c4cff1444f43f4626208dbcca2924581ffed4a98d",
+          "marked_container_ids": [],
+          "matching_contains_relation_ids": [],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+            "relation:sha256:2aca847d0f64f8ad46c66300de7fec1e9fc3436351536f987909f7577c6c86f7"
+          ],
+          "symbol_id": "function:sha256:d6b816a081c01d71910c60e443b05af2fb6dbc5a0610eb987552e87b346dd31d",
+          "symbol_location": {
+            "end_column": 2,
+            "end_line": 94,
+            "path": "crates/higher-graphen-reasoning/src/gluing/structural_gluing.rs",
+            "start_column": 1,
+            "start_line": 22,
+            "symbol_id": null
+          }
+        },
+        {
+          "change_id": "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4",
+          "changed_by_relation_id": "relation:sha256:93e320a9dca9857b181252c71c5c48feed13d9fad0f73ae339678ab7797f6292",
+          "consumer_observed_changed": false,
+          "id": "observation:sha256:cff487e405bfe93aa3bcebf38b44c8452d73149c42dd8971947bb83cecf17ac6",
+          "marked_container_ids": [],
+          "matching_contains_relation_ids": [],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4",
+            "relation:sha256:93e320a9dca9857b181252c71c5c48feed13d9fad0f73ae339678ab7797f6292"
+          ],
+          "symbol_id": "function:sha256:a72563e99a6f03e2979bc81a7867f1ff9f1e0d7f713c4fcf83b4d1d5dff0e0ac",
+          "symbol_location": {
+            "end_column": 2,
+            "end_line": 108,
+            "path": "crates/higher-graphen-reasoning/src/abstract_interpretation/fixpoint/solver.rs",
+            "start_column": 1,
+            "start_line": 18,
+            "symbol_id": null
+          }
+        },
+        {
+          "change_id": "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373",
+          "changed_by_relation_id": "relation:sha256:2b2ad608fbbcfbafae8b360cdc63434b6648f52b7ac9c078338132baa6e616e1",
+          "consumer_observed_changed": false,
+          "id": "observation:sha256:f46fcb4862b6686b1d0c129661bc5124602190562ada1ef86250f9ad13a7bae1",
+          "marked_container_ids": [],
+          "matching_contains_relation_ids": [],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373",
+            "relation:sha256:2b2ad608fbbcfbafae8b360cdc63434b6648f52b7ac9c078338132baa6e616e1"
+          ],
+          "symbol_id": "function:sha256:b673d09e25e2eeca5ff3c303b8059b2db1766ab583bdc996cfcac9ceae452728",
+          "symbol_location": {
+            "end_column": 2,
+            "end_line": 64,
+            "path": "crates/higher-graphen-reasoning/src/gluing/abstract_gluing.rs",
+            "start_column": 1,
+            "start_line": 10,
+            "symbol_id": null
+          }
+        }
+      ],
+      "candidate_claims": [
+        {
+          "disposition": "candidate",
+          "id": "candidate:sha256:3e0677b6c6edb2ec1ea02f08b08bc8b89eb504928f90fea473f1869638a9086f",
+          "kind": "consumer_bridge_mismatch",
+          "observation_ids": [
+            "observation:sha256:f46fcb4862b6686b1d0c129661bc5124602190562ada1ef86250f9ad13a7bae1"
+          ],
+          "source_ids": [
+            "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373",
+            "function:sha256:b673d09e25e2eeca5ff3c303b8059b2db1766ab583bdc996cfcac9ceae452728",
+            "relation:sha256:2b2ad608fbbcfbafae8b360cdc63434b6648f52b7ac9c078338132baa6e616e1"
+          ],
+          "statement": "The fixed changed-input consumer predicate did not observe this eligible public function in the supplied ProgramSpace."
+        },
+        {
+          "disposition": "candidate",
+          "id": "candidate:sha256:8bac1208e0d14574b60961bf24d590fe774752f1fd4bd915492d64f453e766f7",
+          "kind": "consumer_bridge_mismatch",
+          "observation_ids": [
+            "observation:sha256:59e3fab30a872dc9d6b5a20c4cff1444f43f4626208dbcca2924581ffed4a98d"
+          ],
+          "source_ids": [
+            "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+            "function:sha256:d6b816a081c01d71910c60e443b05af2fb6dbc5a0610eb987552e87b346dd31d",
+            "relation:sha256:2aca847d0f64f8ad46c66300de7fec1e9fc3436351536f987909f7577c6c86f7"
+          ],
+          "statement": "The fixed changed-input consumer predicate did not observe this eligible public function in the supplied ProgramSpace."
+        },
+        {
+          "disposition": "candidate",
+          "id": "candidate:sha256:d8a2594de816932a83ce1c7e888fe0b99dc66f0977e93e129e826adfc00efd93",
+          "kind": "consumer_bridge_mismatch",
+          "observation_ids": [
+            "observation:sha256:cff487e405bfe93aa3bcebf38b44c8452d73149c42dd8971947bb83cecf17ac6"
+          ],
+          "source_ids": [
+            "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4",
+            "function:sha256:a72563e99a6f03e2979bc81a7867f1ff9f1e0d7f713c4fcf83b4d1d5dff0e0ac",
+            "relation:sha256:93e320a9dca9857b181252c71c5c48feed13d9fad0f73ae339678ab7797f6292"
+          ],
+          "statement": "The fixed changed-input consumer predicate did not observe this eligible public function in the supplied ProgramSpace."
+        }
+      ],
+      "obstructions": [
+        {
+          "id": "obstruction:sha256:cd4d8c7a821bde45f8521ac484a30b4bf4e99d945275a1d8fb44291ec5e1039f",
+          "kind": "partial_extraction",
+          "statement": "Extraction completeness limits this benchmark observation; it does not suppress accepted-fact predicate results or grant authority.",
+          "source_id_count": 4332,
+          "limitation_count": 29440
+        }
+      ],
+      "projection_loss": [
+        "Not an AnalysisReport; validate the full source report instead.",
+        "Capability and obstruction source-ID lists and limitation-ID lists are omitted; their counts and the full report hash remain.",
+        "Unrelated ProgramSpace facts, source code, and limitation details are not reproduced."
+      ]
+    },
+    {
+      "format": "structural-sloppiness-trial-projection@1",
+      "case": "fixed",
+      "raw_input_sha256": "ef9e59e0f4b56da5423aba38b979bea59082ecbf8eb6d4db2518efd6ed9435bb",
+      "source_report": {
+        "sha256": "835f4965d5f518ad41d3c61277d5916f4b9bca3cee29faa711fb48a451c5d93e",
+        "retained_in_repository": false
+      },
+      "input": {
+        "base_revision": "ac45c9e8e1bf090fcfdcafc0926cfe41c1ab2412",
+        "extractor_set_hash": "sha256:6ee26b27669d2458dd0d2a02182ab65153b4bc4c0b86c80419d46c36f3235616",
+        "profile": "code-review@1",
+        "program_space_hash": "sha256:ef9e59e0f4b56da5423aba38b979bea59082ecbf8eb6d4db2518efd6ed9435bb",
+        "rule_set_hash": "sha256:3333333333333333",
+        "snapshot_id": "snapshot:sha256:06be9c1b75768021dadf0d864a8332e264eee7ad17d713ebec1108bc6717c7f1",
+        "target_revision": "a992243a18700d2ed32e6057ddf22090fb855970"
+      },
+      "contract": {
+        "hash": "sha256:e634baafbdab6395d53b9cac0a03d40927633575621f8de78834fd3221d0bfbd",
+        "id": "changed_input_consumer_bridge_mismatch@1",
+        "producer_provenance": "reviewgraphen.ingest.git.changed_structure.v1"
+      },
+      "authority": {
+        "accepted": false,
+        "classification": "non_authority",
+        "human_accepted": false,
+        "sign_off": false,
+        "verified": false
+      },
+      "scope": {
+        "status": "exercised",
+        "eligible_count": 3,
+        "excluded_count": 181,
+        "excluded_by_reason": {
+          "non_public_function": 62,
+          "not_free_function": 119
+        },
+        "capabilities": [
+          {
+            "capability": "ast",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "cargo_metadata",
+            "state": "missing",
+            "source_id_count": 1
+          },
+          {
+            "capability": "changed_structure",
+            "state": "complete",
+            "source_id_count": 10
+          },
+          {
+            "capability": "concurrency_model",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "containment",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "direct_calls",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "git_snapshot",
+            "state": "complete",
+            "source_id_count": 559
+          },
+          {
+            "capability": "imports",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "module_dependencies",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "state_writes",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "test_mapping",
+            "state": "partial",
+            "source_id_count": 268
+          }
+        ],
+        "limitation_count": 29440
+      },
+      "observed_facts": [
+        {
+          "change_id": "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+          "changed_by_relation_id": "relation:sha256:2aca847d0f64f8ad46c66300de7fec1e9fc3436351536f987909f7577c6c86f7",
+          "consumer_observed_changed": true,
+          "id": "observation:sha256:59e3fab30a872dc9d6b5a20c4cff1444f43f4626208dbcca2924581ffed4a98d",
+          "marked_container_ids": [
+            "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5"
+          ],
+          "matching_contains_relation_ids": [
+            "relation:sha256:a7e3d17676045b71c04cc91d8c0512ce6daf0fbf807324e5ec1a99e9977e0be6"
+          ],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+            "relation:sha256:2aca847d0f64f8ad46c66300de7fec1e9fc3436351536f987909f7577c6c86f7"
+          ],
+          "symbol_id": "function:sha256:d6b816a081c01d71910c60e443b05af2fb6dbc5a0610eb987552e87b346dd31d",
+          "symbol_location": {
+            "end_column": 2,
+            "end_line": 94,
+            "path": "crates/higher-graphen-reasoning/src/gluing/structural_gluing.rs",
+            "start_column": 1,
+            "start_line": 22,
+            "symbol_id": null
+          }
+        },
+        {
+          "change_id": "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4",
+          "changed_by_relation_id": "relation:sha256:93e320a9dca9857b181252c71c5c48feed13d9fad0f73ae339678ab7797f6292",
+          "consumer_observed_changed": true,
+          "id": "observation:sha256:cff487e405bfe93aa3bcebf38b44c8452d73149c42dd8971947bb83cecf17ac6",
+          "marked_container_ids": [
+            "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4"
+          ],
+          "matching_contains_relation_ids": [
+            "relation:sha256:0e578c5b5c8c1f212032c82c5debf54f8579fb1f74daac9fe505824e11636bae"
+          ],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4",
+            "relation:sha256:93e320a9dca9857b181252c71c5c48feed13d9fad0f73ae339678ab7797f6292"
+          ],
+          "symbol_id": "function:sha256:a72563e99a6f03e2979bc81a7867f1ff9f1e0d7f713c4fcf83b4d1d5dff0e0ac",
+          "symbol_location": {
+            "end_column": 2,
+            "end_line": 108,
+            "path": "crates/higher-graphen-reasoning/src/abstract_interpretation/fixpoint/solver.rs",
+            "start_column": 1,
+            "start_line": 18,
+            "symbol_id": null
+          }
+        },
+        {
+          "change_id": "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373",
+          "changed_by_relation_id": "relation:sha256:2b2ad608fbbcfbafae8b360cdc63434b6648f52b7ac9c078338132baa6e616e1",
+          "consumer_observed_changed": true,
+          "id": "observation:sha256:f46fcb4862b6686b1d0c129661bc5124602190562ada1ef86250f9ad13a7bae1",
+          "marked_container_ids": [
+            "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373"
+          ],
+          "matching_contains_relation_ids": [
+            "relation:sha256:0f2f8bea44862c20dd87ed88b545364dd44393208f43d3ac7f45f8ea22eb352d"
+          ],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373",
+            "relation:sha256:2b2ad608fbbcfbafae8b360cdc63434b6648f52b7ac9c078338132baa6e616e1"
+          ],
+          "symbol_id": "function:sha256:b673d09e25e2eeca5ff3c303b8059b2db1766ab583bdc996cfcac9ceae452728",
+          "symbol_location": {
+            "end_column": 2,
+            "end_line": 64,
+            "path": "crates/higher-graphen-reasoning/src/gluing/abstract_gluing.rs",
+            "start_column": 1,
+            "start_line": 10,
+            "symbol_id": null
+          }
+        }
+      ],
+      "candidate_claims": [],
+      "obstructions": [
+        {
+          "id": "obstruction:sha256:cd4d8c7a821bde45f8521ac484a30b4bf4e99d945275a1d8fb44291ec5e1039f",
+          "kind": "partial_extraction",
+          "statement": "Extraction completeness limits this benchmark observation; it does not suppress accepted-fact predicate results or grant authority.",
+          "source_id_count": 4332,
+          "limitation_count": 29440
+        }
+      ],
+      "projection_loss": [
+        "Not an AnalysisReport; validate the full source report instead.",
+        "Capability and obstruction source-ID lists and limitation-ID lists are omitted; their counts and the full report hash remain.",
+        "Unrelated ProgramSpace facts, source code, and limitation details are not reproduced."
+      ]
+    },
+    {
+      "format": "structural-sloppiness-trial-projection@1",
+      "case": "current",
+      "raw_input_sha256": "b3a66f5ae76eb6f3b584c8b0d1550498dcb75866bc73beb01ee2513e68784c52",
+      "source_report": {
+        "sha256": "f36363ad20e07ea5105984aca6848b5308af83440f6e624c564332f55adb0398",
+        "retained_in_repository": false
+      },
+      "input": {
+        "base_revision": "ac45c9e8e1bf090fcfdcafc0926cfe41c1ab2412",
+        "extractor_set_hash": "sha256:6ee26b27669d2458dd0d2a02182ab65153b4bc4c0b86c80419d46c36f3235616",
+        "profile": "code-review@1",
+        "program_space_hash": "sha256:b3a66f5ae76eb6f3b584c8b0d1550498dcb75866bc73beb01ee2513e68784c52",
+        "rule_set_hash": "sha256:3333333333333333",
+        "snapshot_id": "snapshot:sha256:06be9c1b75768021dadf0d864a8332e264eee7ad17d713ebec1108bc6717c7f1",
+        "target_revision": "a992243a18700d2ed32e6057ddf22090fb855970"
+      },
+      "contract": {
+        "hash": "sha256:e634baafbdab6395d53b9cac0a03d40927633575621f8de78834fd3221d0bfbd",
+        "id": "changed_input_consumer_bridge_mismatch@1",
+        "producer_provenance": "reviewgraphen.ingest.git.changed_structure.v1"
+      },
+      "authority": {
+        "accepted": false,
+        "classification": "non_authority",
+        "human_accepted": false,
+        "sign_off": false,
+        "verified": false
+      },
+      "scope": {
+        "status": "exercised",
+        "eligible_count": 3,
+        "excluded_count": 181,
+        "excluded_by_reason": {
+          "non_public_function": 62,
+          "not_free_function": 119
+        },
+        "capabilities": [
+          {
+            "capability": "ast",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "cargo_metadata",
+            "state": "missing",
+            "source_id_count": 1
+          },
+          {
+            "capability": "changed_structure",
+            "state": "complete",
+            "source_id_count": 10
+          },
+          {
+            "capability": "concurrency_model",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "containment",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "direct_calls",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "git_snapshot",
+            "state": "complete",
+            "source_id_count": 559
+          },
+          {
+            "capability": "imports",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "module_dependencies",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "state_writes",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "test_mapping",
+            "state": "partial",
+            "source_id_count": 268
+          }
+        ],
+        "limitation_count": 29440
+      },
+      "observed_facts": [
+        {
+          "change_id": "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+          "changed_by_relation_id": "relation:sha256:2aca847d0f64f8ad46c66300de7fec1e9fc3436351536f987909f7577c6c86f7",
+          "consumer_observed_changed": true,
+          "id": "observation:sha256:59e3fab30a872dc9d6b5a20c4cff1444f43f4626208dbcca2924581ffed4a98d",
+          "marked_container_ids": [
+            "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5"
+          ],
+          "matching_contains_relation_ids": [
+            "relation:sha256:a7e3d17676045b71c04cc91d8c0512ce6daf0fbf807324e5ec1a99e9977e0be6"
+          ],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+            "relation:sha256:2aca847d0f64f8ad46c66300de7fec1e9fc3436351536f987909f7577c6c86f7"
+          ],
+          "symbol_id": "function:sha256:d6b816a081c01d71910c60e443b05af2fb6dbc5a0610eb987552e87b346dd31d",
+          "symbol_location": {
+            "end_column": 1,
+            "end_line": 94,
+            "path": "crates/higher-graphen-reasoning/src/gluing/structural_gluing.rs",
+            "start_column": 1,
+            "start_line": 22,
+            "symbol_id": null
+          }
+        },
+        {
+          "change_id": "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4",
+          "changed_by_relation_id": "relation:sha256:93e320a9dca9857b181252c71c5c48feed13d9fad0f73ae339678ab7797f6292",
+          "consumer_observed_changed": true,
+          "id": "observation:sha256:cff487e405bfe93aa3bcebf38b44c8452d73149c42dd8971947bb83cecf17ac6",
+          "marked_container_ids": [
+            "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4"
+          ],
+          "matching_contains_relation_ids": [
+            "relation:sha256:0e578c5b5c8c1f212032c82c5debf54f8579fb1f74daac9fe505824e11636bae"
+          ],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4",
+            "relation:sha256:93e320a9dca9857b181252c71c5c48feed13d9fad0f73ae339678ab7797f6292"
+          ],
+          "symbol_id": "function:sha256:a72563e99a6f03e2979bc81a7867f1ff9f1e0d7f713c4fcf83b4d1d5dff0e0ac",
+          "symbol_location": {
+            "end_column": 1,
+            "end_line": 108,
+            "path": "crates/higher-graphen-reasoning/src/abstract_interpretation/fixpoint/solver.rs",
+            "start_column": 1,
+            "start_line": 18,
+            "symbol_id": null
+          }
+        },
+        {
+          "change_id": "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373",
+          "changed_by_relation_id": "relation:sha256:2b2ad608fbbcfbafae8b360cdc63434b6648f52b7ac9c078338132baa6e616e1",
+          "consumer_observed_changed": true,
+          "id": "observation:sha256:f46fcb4862b6686b1d0c129661bc5124602190562ada1ef86250f9ad13a7bae1",
+          "marked_container_ids": [
+            "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373"
+          ],
+          "matching_contains_relation_ids": [
+            "relation:sha256:0f2f8bea44862c20dd87ed88b545364dd44393208f43d3ac7f45f8ea22eb352d"
+          ],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373",
+            "relation:sha256:2b2ad608fbbcfbafae8b360cdc63434b6648f52b7ac9c078338132baa6e616e1"
+          ],
+          "symbol_id": "function:sha256:b673d09e25e2eeca5ff3c303b8059b2db1766ab583bdc996cfcac9ceae452728",
+          "symbol_location": {
+            "end_column": 1,
+            "end_line": 64,
+            "path": "crates/higher-graphen-reasoning/src/gluing/abstract_gluing.rs",
+            "start_column": 1,
+            "start_line": 10,
+            "symbol_id": null
+          }
+        }
+      ],
+      "candidate_claims": [],
+      "obstructions": [
+        {
+          "id": "obstruction:sha256:cd4d8c7a821bde45f8521ac484a30b4bf4e99d945275a1d8fb44291ec5e1039f",
+          "kind": "partial_extraction",
+          "statement": "Extraction completeness limits this benchmark observation; it does not suppress accepted-fact predicate results or grant authority.",
+          "source_id_count": 4332,
+          "limitation_count": 29440
+        }
+      ],
+      "projection_loss": [
+        "Not an AnalysisReport; validate the full source report instead.",
+        "Capability and obstruction source-ID lists and limitation-ID lists are omitted; their counts and the full report hash remain.",
+        "Unrelated ProgramSpace facts, source code, and limitation details are not reproduced."
+      ]
+    },
+    {
+      "format": "structural-sloppiness-trial-projection@1",
+      "case": "current-rewired",
+      "raw_input_sha256": "995f36c4931e66873ab8f59acc61113782e91cf8819655e3d665f53346ac4141",
+      "source_report": {
+        "sha256": "e848b8e1565578395ee166866d6b1d34cbede0299b849f6f079634a7875fd17b",
+        "retained_in_repository": false
+      },
+      "input": {
+        "base_revision": "ac45c9e8e1bf090fcfdcafc0926cfe41c1ab2412",
+        "extractor_set_hash": "sha256:6ee26b27669d2458dd0d2a02182ab65153b4bc4c0b86c80419d46c36f3235616",
+        "profile": "code-review@1",
+        "program_space_hash": "sha256:6647c905f0b9835d3550cb84dd26bcb62dd23fe1ee637dd441984462bff4c3b5",
+        "rule_set_hash": "sha256:3333333333333333",
+        "snapshot_id": "snapshot:sha256:06be9c1b75768021dadf0d864a8332e264eee7ad17d713ebec1108bc6717c7f1",
+        "target_revision": "a992243a18700d2ed32e6057ddf22090fb855970"
+      },
+      "contract": {
+        "hash": "sha256:e634baafbdab6395d53b9cac0a03d40927633575621f8de78834fd3221d0bfbd",
+        "id": "changed_input_consumer_bridge_mismatch@1",
+        "producer_provenance": "reviewgraphen.ingest.git.changed_structure.v1"
+      },
+      "authority": {
+        "accepted": false,
+        "classification": "non_authority",
+        "human_accepted": false,
+        "sign_off": false,
+        "verified": false
+      },
+      "scope": {
+        "status": "exercised",
+        "eligible_count": 3,
+        "excluded_count": 181,
+        "excluded_by_reason": {
+          "non_public_function": 62,
+          "not_free_function": 119
+        },
+        "capabilities": [
+          {
+            "capability": "ast",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "cargo_metadata",
+            "state": "missing",
+            "source_id_count": 1
+          },
+          {
+            "capability": "changed_structure",
+            "state": "complete",
+            "source_id_count": 10
+          },
+          {
+            "capability": "concurrency_model",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "containment",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "direct_calls",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "git_snapshot",
+            "state": "complete",
+            "source_id_count": 559
+          },
+          {
+            "capability": "imports",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "module_dependencies",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "state_writes",
+            "state": "partial",
+            "source_id_count": 268
+          },
+          {
+            "capability": "test_mapping",
+            "state": "partial",
+            "source_id_count": 268
+          }
+        ],
+        "limitation_count": 29440
+      },
+      "observed_facts": [
+        {
+          "change_id": "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+          "changed_by_relation_id": "relation:sha256:2aca847d0f64f8ad46c66300de7fec1e9fc3436351536f987909f7577c6c86f7",
+          "consumer_observed_changed": false,
+          "id": "observation:sha256:59e3fab30a872dc9d6b5a20c4cff1444f43f4626208dbcca2924581ffed4a98d",
+          "marked_container_ids": [],
+          "matching_contains_relation_ids": [],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+            "relation:sha256:2aca847d0f64f8ad46c66300de7fec1e9fc3436351536f987909f7577c6c86f7"
+          ],
+          "symbol_id": "function:sha256:d6b816a081c01d71910c60e443b05af2fb6dbc5a0610eb987552e87b346dd31d",
+          "symbol_location": {
+            "end_column": 1,
+            "end_line": 94,
+            "path": "crates/higher-graphen-reasoning/src/gluing/structural_gluing.rs",
+            "start_column": 1,
+            "start_line": 22,
+            "symbol_id": null
+          }
+        },
+        {
+          "change_id": "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4",
+          "changed_by_relation_id": "relation:sha256:93e320a9dca9857b181252c71c5c48feed13d9fad0f73ae339678ab7797f6292",
+          "consumer_observed_changed": true,
+          "id": "observation:sha256:cff487e405bfe93aa3bcebf38b44c8452d73149c42dd8971947bb83cecf17ac6",
+          "marked_container_ids": [
+            "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+            "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4"
+          ],
+          "matching_contains_relation_ids": [
+            "relation:sha256:0e578c5b5c8c1f212032c82c5debf54f8579fb1f74daac9fe505824e11636bae",
+            "relation:sha256:a7e3d17676045b71c04cc91d8c0512ce6daf0fbf807324e5ec1a99e9977e0be6"
+          ],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:575d7812b5c8d7666a618ff9a64cf135ec1cd7839a2bcbb88776eb9769de9ba4",
+            "relation:sha256:93e320a9dca9857b181252c71c5c48feed13d9fad0f73ae339678ab7797f6292"
+          ],
+          "symbol_id": "function:sha256:a72563e99a6f03e2979bc81a7867f1ff9f1e0d7f713c4fcf83b4d1d5dff0e0ac",
+          "symbol_location": {
+            "end_column": 1,
+            "end_line": 108,
+            "path": "crates/higher-graphen-reasoning/src/abstract_interpretation/fixpoint/solver.rs",
+            "start_column": 1,
+            "start_line": 18,
+            "symbol_id": null
+          }
+        },
+        {
+          "change_id": "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373",
+          "changed_by_relation_id": "relation:sha256:2b2ad608fbbcfbafae8b360cdc63434b6648f52b7ac9c078338132baa6e616e1",
+          "consumer_observed_changed": true,
+          "id": "observation:sha256:f46fcb4862b6686b1d0c129661bc5124602190562ada1ef86250f9ad13a7bae1",
+          "marked_container_ids": [
+            "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373"
+          ],
+          "matching_contains_relation_ids": [
+            "relation:sha256:0f2f8bea44862c20dd87ed88b545364dd44393208f43d3ac7f45f8ea22eb352d"
+          ],
+          "own_changed": false,
+          "producer_source_ids": [
+            "change:sha256:c00a29575e99fe0905f20e9b50c5e0e6f0679976cc4c3863c84731c0639d5373",
+            "relation:sha256:2b2ad608fbbcfbafae8b360cdc63434b6648f52b7ac9c078338132baa6e616e1"
+          ],
+          "symbol_id": "function:sha256:b673d09e25e2eeca5ff3c303b8059b2db1766ab583bdc996cfcac9ceae452728",
+          "symbol_location": {
+            "end_column": 1,
+            "end_line": 64,
+            "path": "crates/higher-graphen-reasoning/src/gluing/abstract_gluing.rs",
+            "start_column": 1,
+            "start_line": 10,
+            "symbol_id": null
+          }
+        }
+      ],
+      "candidate_claims": [
+        {
+          "disposition": "candidate",
+          "id": "candidate:sha256:8bac1208e0d14574b60961bf24d590fe774752f1fd4bd915492d64f453e766f7",
+          "kind": "consumer_bridge_mismatch",
+          "observation_ids": [
+            "observation:sha256:59e3fab30a872dc9d6b5a20c4cff1444f43f4626208dbcca2924581ffed4a98d"
+          ],
+          "source_ids": [
+            "change:sha256:1b0f08e7d96820f9e7eb78a42407997b93b2789ae9440928d38a387c8170d6c5",
+            "function:sha256:d6b816a081c01d71910c60e443b05af2fb6dbc5a0610eb987552e87b346dd31d",
+            "relation:sha256:2aca847d0f64f8ad46c66300de7fec1e9fc3436351536f987909f7577c6c86f7"
+          ],
+          "statement": "The fixed changed-input consumer predicate did not observe this eligible public function in the supplied ProgramSpace."
+        }
+      ],
+      "obstructions": [
+        {
+          "id": "obstruction:sha256:cd4d8c7a821bde45f8521ac484a30b4bf4e99d945275a1d8fb44291ec5e1039f",
+          "kind": "partial_extraction",
+          "statement": "Extraction completeness limits this benchmark observation; it does not suppress accepted-fact predicate results or grant authority.",
+          "source_id_count": 4332,
+          "limitation_count": 29440
+        }
+      ],
+      "projection_loss": [
+        "Not an AnalysisReport; validate the full source report instead.",
+        "Capability and obstruction source-ID lists and limitation-ID lists are omitted; their counts and the full report hash remain.",
+        "Unrelated ProgramSpace facts, source code, and limitation details are not reproduced."
+      ]
+    }
+  ]
+}

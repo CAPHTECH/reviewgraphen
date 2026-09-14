@@ -54,6 +54,7 @@ pub use journal::{
     VerificationBundleDurableStageV3,
 };
 
+use reviewgraphen_core::AcceptedResponsibilityFamilyStateV1;
 #[cfg(target_os = "linux")]
 use rustix::{
     fd::OwnedFd,
@@ -171,6 +172,18 @@ pub enum StoreError {
     TempNameExhausted,
     #[error("test-only simulated crash after durable temporary write")]
     SimulatedCrash,
+    #[error("invalid responsibility-family product state: {0}")]
+    ResponsibilityFamily(String),
+}
+
+/// Content-addressed receipt for one accepted responsibility-family state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResponsibilityFamilyStateReceiptV1 {
+    pub family_id: reviewgraphen_core::StableId,
+    pub snapshot_id: reviewgraphen_core::StableId,
+    pub hash: CasHash,
+    pub size: u64,
+    pub existed: bool,
 }
 
 /// Strict SHA-256 identifier used as a CAS path component.
@@ -510,6 +523,61 @@ impl<'a> CasStore<'a> {
             return Err(StoreError::CorruptedArtifact);
         }
         Ok(bytes)
+    }
+
+    /// Persist an externally accepted family state as canonical immutable
+    /// product data. This does not accept a candidate or invent authority;
+    /// Core requires the human-decision, Evidence and Verification bindings.
+    pub fn put_responsibility_family_state(
+        &self,
+        state: &AcceptedResponsibilityFamilyStateV1,
+    ) -> Result<ResponsibilityFamilyStateReceiptV1, StoreError> {
+        let bytes = state
+            .canonical_bytes()
+            .map_err(|error| StoreError::ResponsibilityFamily(error.to_string()))?;
+        let hash = CasHash::parse(
+            state
+                .content_hash()
+                .map_err(|error| StoreError::ResponsibilityFamily(error.to_string()))?
+                .to_string(),
+        )?;
+        let receipt = self.put(
+            &hash,
+            Some(
+                u64::try_from(bytes.len()).map_err(|_| StoreError::ObjectTooLarge {
+                    limit: self.root.limits.max_object_bytes,
+                    observed: u64::MAX,
+                })?,
+            ),
+            bytes.as_slice(),
+        )?;
+        Ok(ResponsibilityFamilyStateReceiptV1 {
+            family_id: state.family_id.clone(),
+            snapshot_id: state.snapshot_id.clone(),
+            hash: receipt.hash,
+            size: receipt.size,
+            existed: receipt.existed,
+        })
+    }
+
+    /// Read, hash-check and semantically revalidate a persisted family state.
+    pub fn read_responsibility_family_state(
+        &self,
+        hash: &CasHash,
+    ) -> Result<AcceptedResponsibilityFamilyStateV1, StoreError> {
+        let bytes = self.read(hash)?;
+        let state = AcceptedResponsibilityFamilyStateV1::from_json_slice(&bytes)
+            .map_err(|error| StoreError::ResponsibilityFamily(error.to_string()))?;
+        let actual = CasHash::parse(
+            state
+                .content_hash()
+                .map_err(|error| StoreError::ResponsibilityFamily(error.to_string()))?
+                .to_string(),
+        )?;
+        if &actual != hash {
+            return Err(StoreError::CorruptedArtifact);
+        }
+        Ok(state)
     }
 
     /// Verify a CAS object against an already-retained byte slice without
@@ -913,6 +981,70 @@ fn verify_temp_stat(stat: &fs::Stat) -> Result<(), StoreError> {
         });
     }
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod responsibility_family_store_tests {
+    use super::*;
+    use reviewgraphen_core::{
+        ContentHash, FamilyAcceptanceV1, FamilyContractV1, FamilyExtractorV1,
+        FamilyMaintenanceDecisionV1, FamilyMemberV1, StableId,
+    };
+    use std::collections::BTreeSet;
+
+    fn id(kind: &str, value: &str) -> StableId {
+        StableId::parse(format!("{kind}:{value}")).unwrap()
+    }
+
+    fn state() -> AcceptedResponsibilityFamilyStateV1 {
+        AcceptedResponsibilityFamilyStateV1::new(
+            id("responsibility-family", "fsl-normalized-ast"),
+            id("snapshot", "fsl-head"),
+            FamilyMaintenanceDecisionV1::SharedConformanceTest,
+            FamilyContractV1 {
+                id: "fsl.normalized_ast@1".to_owned(),
+                hash: ContentHash::sha256(b"contract"),
+            },
+            FamilyExtractorV1 {
+                id: "reviewgraphen.ingest.rust-responsibility-shape".to_owned(),
+                version: "1".to_owned(),
+            },
+            vec![FamilyMemberV1 {
+                member_id: id("responsibility-member", "approval"),
+                path: "rust/fslc/src/approval.rs".to_owned(),
+                symbol: "normalized_ast".to_owned(),
+                anchor: ContentHash::sha256(b"anchor"),
+                purpose_constraints: BTreeSet::from(["approval compatibility".to_owned()]),
+                source_ids: vec![id("function", "normalized-ast")],
+            }],
+            2,
+            FamilyAcceptanceV1 {
+                human_decision_id: id("decision", "accepted"),
+                proposal_hash: ContentHash::sha256(b"proposal"),
+                evidence_ids: vec![id("evidence", "source")],
+                verification_ids: vec![id("verification", "mutation")],
+            },
+            vec!["cross-crate performance is unknown".to_owned()],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn accepted_family_state_round_trips_through_verified_cas() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let cas = CasStore::open(&root).unwrap();
+        let state = state();
+        let first = cas.put_responsibility_family_state(&state).unwrap();
+        let second = cas.put_responsibility_family_state(&state).unwrap();
+        assert!(!first.existed);
+        assert!(second.existed);
+        assert_eq!(first.hash, second.hash);
+        assert_eq!(
+            cas.read_responsibility_family_state(&first.hash).unwrap(),
+            state
+        );
+    }
 }
 
 /// An admitted `.reviewgraphen` directory anchored by a directory descriptor.

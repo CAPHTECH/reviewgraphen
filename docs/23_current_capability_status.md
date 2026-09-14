@@ -1,6 +1,6 @@
 # 23. Current Capability Status
 
-> Status: canonical, dated 2026-08-18. This is the single document a
+> Status: canonical, updated 2026-09-15. This is the single document a
 > reader should check for "what can ReviewGraphen do right now" — every
 > other document that discusses the obligation-synthesis capability gap
 > predates the fix described here and is being pointed at this document
@@ -408,3 +408,83 @@ The run required disabling the model's thinking channel (`enable_thinking=false`
 `response_format=json_object`); with thinking on, the model emitted 130 KB of prose into
 `content` and hit the 32k ceiling on every arm. Both arms used the identical setting.
 This is not evidence under the preregistration.
+
+## 7. 2026-09-14 addendum — responsibility-family discovery and state
+
+This working tree adds a benchmark-only repository snapshot command plus exact
+v2 and near v1 Rust candidate enumerators. On FSL snapshot
+`38f97bfdaf5a7d251de62dd43e37ab4b41e4ef73`, two runs were byte-identical and
+reported 65 exact groups and 116 Type-2-like near groups from 2,917 eligible
+production functions/methods; see
+`benchmarks/responsibility-family-v1/FSL-HELD-OUT.md`. This is candidate yield,
+not accepted responsibility or demonstrated maintenance improvement.
+
+Core now has the separate accepted
+`reviewgraphen.responsibility_family_state.v1` type, and Store can round-trip
+its canonical bytes through verified CAS. It requires an external human
+decision plus nonempty Evidence and Verification bindings and retains a fixed
+non-verified, non-sign-off authority ceiling. The production CLI can list,
+print, and validate the schema, but has no command that accepts or registers a
+family. No accepted FSL family was created in this measurement.
+
+### 7.1 Structurally different responsibility-signal pairs
+
+The benchmark CLI now also exposes `discover-signals`. Rust ingest records
+sorted, unique callable-name words, signature type terminals and syntactic
+call/method terminals under
+`reviewgraphen.ingest.rust-responsibility-signals@1`; that extractor identity
+is included in `adapter_set_hash`. The pair rule requires different accepted
+responsibility-shape hashes, a shared callable-or-signature term, at least two
+shared selective operation terms, and 600,000 ppm operation Jaccard. Its output
+is non-authoritative and does not create a responsibility family.
+
+The threshold was calibrated on the same FSL snapshot, so this is not held-out
+utility evidence. The unbounded initial rule emitted 65,965 pairs from 2,917
+eligible functions. The frozen 600,000 ppm rule emitted 596; two complete runs
+were byte-identical (`sha256:355af06c...393d4b58`). Source reading of rank 7
+found structurally different `load_approvals` and `load_approvals_for_check`:
+both read and decode versioned approval records, enforce the document target,
+and combine sorted digests, while only the generate path verifies signatures.
+This establishes one useful-looking candidate signal, not a family decision or
+maintenance improvement. Full details and exact hashes are in
+`benchmarks/responsibility-family-v1/FSL-SIGNAL-DISCOVERY.md`.
+
+### 7.2 Search before implementing a planned responsibility
+
+The benchmark CLI now exposes `search-responsibility`. A caller supplies a
+snapshot-bound, closed planned contract containing finite clause IDs and
+callable, signature and operation syntax terms. The command searches all
+eligible accepted Rust functions/methods, retains absent and high-frequency
+query terms in its denominator, applies no body-shape exclusion or top-N cut,
+and marks every semantic clause unverified for every candidate. It neither
+registers a family nor asserts that an existing implementation satisfies the
+contract.
+
+A real FSL wiring check evaluated 2,917 eligible functions from 6,453 accepted
+Rust symbols and returned four candidates for a three-clause approval-record
+loader contract, yielding 12 explicit unverified clause obligations. Two fresh
+runs were byte-identical at
+`sha256:ff5a3cc393b9ec8290acda72f92bac8010069cf03e72beb6b1c6f47cdd9185e4`,
+and the report passed its closed schema. Direct source reading confirmed the
+two intended loaders, one adjacent evidence loader and one incidental broad-
+operation match. This is deterministic retrieval and denominator evidence,
+not held-out recall/precision or proof that searching reduces implementation
+work. See `benchmarks/responsibility-family-v1/FSL-RESPONSIBILITY-SEARCH.md`.
+
+## 8. 2026-09-15 addendum — portable macOS CLI and release installation
+
+The production `reviewgraphen` binary now has a portable Unix boundary for its
+closed `review`, `schema` and `--version` surface. Linux keeps the complete
+durable Store and live-provider isolation implementation. Apple Silicon macOS
+builds the portable CLI without linking the Linux-only Store path; unsupported
+durable report validation returns a typed `unsupported_platform` diagnostic
+instead of silently performing schema-only validation. Intel macOS is not in
+the supported matrix.
+
+The release workflow builds `x86_64-unknown-linux-gnu` and
+`aarch64-apple-darwin` archives. `install.sh` resolves a pinned or latest
+GitHub Release, verifies each downloaded archive with its sibling SHA-256, and
+can install the binary plus the same checked-in ReviewGraphen skill for Codex
+and Claude Code. This changes distribution only; installing the skill does not
+expand the production CLI or promote benchmark-only responsibility-family
+claims to accepted product state.

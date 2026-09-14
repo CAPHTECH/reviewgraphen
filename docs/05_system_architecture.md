@@ -444,3 +444,20 @@ extensionはschemaとcapability descriptorを通じて発見し、core internal 
 8. incomplete extraction lowers completeness and blocks strict gate。
 9. provider failure preserves completed events。
 10. report round-trip preserves state axes。
+11. accepted responsibility-family state requires human decision, Evidence and Verification。
+12. responsibility-family CAS round-trip preserves canonical bytes and separate denominators。
+
+## 15. Responsibility-family boundary
+
+Rust ingest emits versioned `test_scope`, `responsibility_shape_hash`, and
+callable/signature/operation `responsibility_signals` syntax facts. The
+benchmark enumerator consumes them to create exact, near, and different-shape
+signal-pair candidate reports; it can also consume a snapshot-bound planned-
+responsibility contract and search all eligible functions without a shape
+restriction. Search retains absent/high-frequency query terms and the complete
+per-candidate unverified-clause denominator. These reports are never authority.
+Decision/reinspection remains benchmark logic. After an external human
+decision, Core validates the separate
+`reviewgraphen.responsibility_family_state.v1` product type and Store persists
+its canonical bytes in CAS. The production CLI exposes schema validation only:
+it cannot accept a candidate or mint the human decision.

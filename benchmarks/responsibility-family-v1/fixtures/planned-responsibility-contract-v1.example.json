@@ -1,0 +1,31 @@
+{
+  "schema": "reviewgraphen.benchmark.planned_responsibility_contract.v1",
+  "contract_id": "planned-responsibility-contract:parse-and-store",
+  "snapshot_id": "snapshot:responsibility-search-fixture",
+  "signal_extractor": "reviewgraphen.ingest.rust-responsibility-signals@1",
+  "clauses": [
+    {
+      "clause_id": "clause:nonempty-input",
+      "kind": "precondition",
+      "statement": "Input must be present before parsing."
+    },
+    {
+      "clause_id": "clause:parse-error",
+      "kind": "typed_error",
+      "statement": "Malformed input is returned as the declared parse error."
+    },
+    {
+      "clause_id": "clause:purpose-separation",
+      "kind": "purpose_constraint",
+      "statement": "Storage-specific retry behavior remains intentionally separate."
+    }
+  ],
+  "search_signals": {
+    "callable": ["parse"],
+    "signature": ["Input", "Output"],
+    "operation": ["convert", "generic", "missing", "normalize", "write"]
+  },
+  "unknowns": [
+    "dynamic dispatch is not resolved"
+  ]
+}

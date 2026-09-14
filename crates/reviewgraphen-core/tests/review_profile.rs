@@ -2,8 +2,8 @@ use reviewgraphen_core::profile::{
     CHANGED_PUBLIC_CALLEE_RULE, CandidateClassification, CandidateEndpoint, Category,
     D_EXCLUDED_WEIGHT, D_OBLIGATION_WEIGHT, DExclusionBindings, DExclusionCandidate,
     DExclusionRecord, FrozenStage0ClusterSet, InvalidPathReason, ProfileError,
-    Stage0ApplicableObligation, Stage0Cluster, Stage0DeferralReason, Stage0DeferredObligation,
-    deferred_fraction_gate, evaluate_stage0_gates, rust_production_v1,
+    ProfileExclusionCandidate, Stage0ApplicableObligation, Stage0Cluster, Stage0DeferralReason,
+    Stage0DeferredObligation, deferred_fraction_gate, evaluate_stage0_gates, rust_production_v1,
 };
 use reviewgraphen_core::{ContentHash, StableId};
 use std::collections::BTreeSet;
@@ -45,6 +45,55 @@ fn record() -> DExclusionRecord {
             &excluded_match(),
         )
         .unwrap()
+}
+
+#[test]
+fn rule_neutral_exclusion_preserves_the_legacy_d_identity_preimage() {
+    let profile = rust_production_v1();
+    let profile_match = excluded_match();
+    let snapshot_id = id("snapshot:target");
+    let relation_id = id("relation:call");
+    let caller_id = id("symbol:caller");
+    let callee_id = id("symbol:callee");
+    let change_artifact_ids = BTreeSet::from([id("artifact:change")]);
+    let containment_witness_ids = BTreeSet::from([id("artifact:containment")]);
+    let legacy = profile
+        .exclusion_record(
+            DExclusionCandidate {
+                snapshot_id: snapshot_id.clone(),
+                relation_id: relation_id.clone(),
+                caller_id: caller_id.clone(),
+                callee_id: callee_id.clone(),
+                change_artifact_ids: change_artifact_ids.clone(),
+                containment_witness_ids: containment_witness_ids.clone(),
+            },
+            &profile_match,
+        )
+        .unwrap();
+    let rule_neutral = profile
+        .exclusion_record_for_candidate(
+            ProfileExclusionCandidate::ChangedPublicCallee {
+                snapshot_id,
+                relation_id,
+                caller_id,
+                callee_id,
+                change_artifact_ids,
+                containment_witness_ids,
+            },
+            &profile_match,
+        )
+        .unwrap();
+
+    assert_eq!(rule_neutral.id, legacy.id);
+    assert_eq!(rule_neutral.snapshot_id, legacy.snapshot_id);
+    assert_eq!(rule_neutral.candidate_key, legacy.candidate_key);
+    assert_eq!(rule_neutral.rule, legacy.rule);
+    assert_eq!(rule_neutral.profile_id, legacy.profile_id);
+    assert_eq!(rule_neutral.profile_hash, legacy.profile_hash);
+    assert_eq!(rule_neutral.reason_id, legacy.reason_id);
+    assert_eq!(rule_neutral.matcher_id, legacy.matcher_id);
+    assert_eq!(rule_neutral.excluded_weight, legacy.excluded_weight);
+    assert_eq!(rule_neutral.source_ids, legacy.source_ids);
 }
 
 #[test]

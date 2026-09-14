@@ -618,7 +618,7 @@ impl Serialize for ReviewPlan {
             .iter()
             .map(|(id, value)| Risk {
                 id,
-                impact: severity(value.impact),
+                impact: value.impact.as_str(),
                 likelihood: "medium",
             })
             .collect::<Vec<_>>();
@@ -936,7 +936,7 @@ fn plan_bytes(plan: &ReviewPlan, max: usize) -> Result<Vec<u8>> {
         out.push("{\"id\":")?;
         out.string(&id.to_string())?;
         out.push(",\"impact\":")?;
-        out.string(severity(value.impact))?;
+        out.string(value.impact.as_str())?;
         out.push(",\"likelihood\":\"medium\"}")?;
     }
     out.push("],\"snapshot_id\":")?;
@@ -1007,15 +1007,6 @@ fn write_ids(out: &mut BoundedJson, ids: &[StableId]) -> Result<()> {
         out.string(&id.to_string())?;
     }
     Ok(())
-}
-fn severity(value: Severity) -> &'static str {
-    match value {
-        Severity::Info => "info",
-        Severity::Low => "low",
-        Severity::Medium => "medium",
-        Severity::High => "high",
-        Severity::Critical => "critical",
-    }
 }
 fn validate_text(value: &str) -> Result<()> {
     if value.len() > PlannerPolicyV1::MAX_STRING_BYTES {

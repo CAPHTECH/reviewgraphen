@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capht.tech/schemas/reviewgraphen/responsibility-family-state.v1.schema.json",
+  "title": "Accepted responsibility-family state v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "family_id", "snapshot_id", "decision", "common_contract", "extractor", "members", "implementation_denominator", "endpoint_denominator", "acceptance", "unknowns", "authority"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.responsibility_family_state.v1"},
+    "family_id": {"type": "string", "pattern": "^responsibility-family:.+$", "maxLength": 4096},
+    "snapshot_id": {"type": "string", "pattern": "^snapshot:.+$", "maxLength": 4096},
+    "decision": {"enum": ["shared_validator", "shared_conformance_test", "intentional_separation"]},
+    "common_contract": {"$ref": "#/$defs/contract"},
+    "extractor": {"$ref": "#/$defs/extractor"},
+    "members": {"type": "array", "minItems": 1, "maxItems": 4096, "items": {"$ref": "#/$defs/member"}},
+    "implementation_denominator": {"type": "integer", "minimum": 1, "maximum": 4096},
+    "endpoint_denominator": {"type": "integer", "minimum": 1},
+    "acceptance": {"$ref": "#/$defs/acceptance"},
+    "unknowns": {"$ref": "#/$defs/text_set"},
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "accepted", "verified", "human_accepted", "sign_off"],
+      "properties": {
+        "classification": {"const": "accepted_responsibility_family"},
+        "accepted": {"const": true},
+        "verified": {"const": false},
+        "human_accepted": {"const": true},
+        "sign_off": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "text_set": {"type": "array", "maxItems": 256, "uniqueItems": true, "items": {"$ref": "#/$defs/text"}},
+    "id_set": {"type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": {"$ref": "#/$defs/text"}},
+    "contract": {
+      "type": "object", "additionalProperties": false, "required": ["id", "hash"],
+      "properties": {"id": {"$ref": "#/$defs/text"}, "hash": {"$ref": "#/$defs/hash"}}
+    },
+    "extractor": {
+      "type": "object", "additionalProperties": false, "required": ["id", "version"],
+      "properties": {"id": {"$ref": "#/$defs/text"}, "version": {"$ref": "#/$defs/text"}}
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["member_id", "path", "symbol", "anchor", "purpose_constraints", "source_ids"],
+      "properties": {
+        "member_id": {"type": "string", "pattern": "^responsibility-member:.+$", "maxLength": 4096},
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^/\\\\](?:[^\\\\]*[^/\\\\])?$"},
+        "symbol": {"$ref": "#/$defs/text"},
+        "anchor": {"$ref": "#/$defs/hash"},
+        "purpose_constraints": {"$ref": "#/$defs/text_set"},
+        "source_ids": {"$ref": "#/$defs/id_set"}
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["human_decision_id", "proposal_hash", "evidence_ids", "verification_ids"],
+      "properties": {
+        "human_decision_id": {"type": "string", "pattern": "^decision:.+$", "maxLength": 4096},
+        "proposal_hash": {"$ref": "#/$defs/hash"},
+        "evidence_ids": {"type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": {"type": "string", "pattern": "^evidence:.+$", "maxLength": 4096}},
+        "verification_ids": {"type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": {"type": "string", "pattern": "^verification:.+$", "maxLength": 4096}}
+      }
+    }
+  }
+}

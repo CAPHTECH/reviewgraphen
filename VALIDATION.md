@@ -1,37 +1,46 @@
-# Bundle Validation
+# Release Validation
 
-> Validation date: 2026-08-07  
-> Validator: `scripts/validate_bundle.py` via `scripts/ci.sh fast`
-> Environment: Rust 1.95.0 development harness
+> Release candidate: 0.1.0
+> Validation date: 2026-09-15
 
-## Result
+## Verified locally
 
-```text
-ReviewGraphen bundle validation: PASS
-- parsed JSON: 9 files
-- parsed TOML: 7 files
-- validated JSON Schema examples: 3
-- checked Markdown: 42 files
-- checked relative links: 87
-- semantic fixture IDs: ProgramSpace=26, obligations=5
-- semantic report records: executions=5, claims=5, verifications=5
-- Rust fixture: cargo test passed
-```
+- `scripts/ci.sh fast`: bundle validation, CI admission checks, installer
+  tests, rustfmt, clippy with warnings denied, 1,204 nextest tests and all doc
+  tests passed; 2 nextest tests were explicitly skipped by profile.
+- `scripts/ci.sh deny`: advisories, dependency bans, licenses and sources
+  passed. Duplicate dependency versions remain warnings under the declared
+  policy.
+- `python3 scripts/validate_bundle.py`: schema, reference, Markdown and fixture
+  validation passed.
+- `cargo test --locked -p reviewgraphen-cli`: 10 tests passed (6 unit, 4
+  integration); doc tests passed.
+- `cargo check --locked --target aarch64-apple-darwin -p reviewgraphen-cli`:
+  Apple Silicon macOS CLI cross-check passed.
+- `cargo check --locked --tests --target aarch64-apple-darwin -p
+  reviewgraphen-cli`: macOS CLI test targets compiled.
+- `sh scripts/test-install.sh`: a synthetic Release installed the CLI and the
+  same skill for Codex and Claude Code; latest-version resolution, unmanaged
+  skill refusal, backup-preserving force update and checksum rejection passed.
+- A release-layout dry run packaged the release-built Linux binary and the
+  repository skill, then installed all three targets with `install.sh` into
+  temporary destinations. The installed CLI reported `reviewgraphen 0.1.0`,
+  and both installed skill files were byte-identical to the repository source.
+- `git diff --check`: passed.
 
-## Interpretation
+The CLI safe-input test was also fault-injected by removing `O_NOFOLLOW`; its
+symlink rejection test failed, and passed again after restoring the guard.
 
-- JSON、TOML、JSON Schema、Markdown relative link、reference ID、coverage denominator、claim/evidence/verification/finding traceをofflineで検査しました。
-- `reviewgraphen.input.example.json`、`reviewgraphen.obligation.example.json`、`reviewgraphen.report.example.json`はDraft 2020-12 schema validationを通過しています。
-- schema exampleと`examples/double-submit-payment/`のProgramSpace/reportが同一であることを検査しています。
-- Rust fixtureのsource pathとcounterexample test実行を検査済みです。
+## Required remote release evidence
 
-## Harness validation
+The release is not complete until GitHub Actions passes both the Linux fast job
+and the native `macos-15` Apple Silicon job on the release commit. The tag
+workflow must then build both archives, upload sibling SHA-256 files, the
+installer, version marker and skill archive, and publish no partial draft.
 
-fast gateではbundle validation、Clippy、nextest、doc testが通過しています。依存ポリシーは`cargo-deny`で検証済みです。
+## Claim boundary
 
-```bash
-scripts/ci.sh fast
-scripts/ci.sh deny
-```
-
-製品Rust sourceはまだ存在しないため、PBTとsnapshotのframeworkはworkspace契約として固定されていますが、製品propertyは未実行です。同じ理由でcoverage modeは明示的にskipします。fixture testのpassは二重課金counterexampleの再現を意味し、安全性のsign-offではありません。
+These results establish only the commands and snapshots stated above. They do
+not establish complete defect detection, reviewer superiority, Intel macOS
+support, or macOS support for the Linux-only durable Store and live-provider
+isolation boundaries.

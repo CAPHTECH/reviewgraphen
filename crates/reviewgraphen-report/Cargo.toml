@@ -4,23 +4,25 @@ description = "Source-bound ReviewGraphen report v2 projection"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 publish = false
 
 [lints]
 workspace = true
 
 [dependencies]
-reviewgraphen-core = { path = "../reviewgraphen-core" }
-reviewgraphen-runtime = { path = "../reviewgraphen-runtime" }
-reviewgraphen-store = { path = "../reviewgraphen-store" }
+reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.1.0" }
+reviewgraphen-runtime = { path = "../reviewgraphen-runtime", version = "0.1.0" }
 jsonschema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+reviewgraphen-store = { path = "../reviewgraphen-store", version = "0.1.0" }
+
 [dev-dependencies]
-reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer" }
-reviewgraphen-store = { path = "../reviewgraphen-store", features = ["test-support"] }
+reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer", version = "0.1.0" }
+reviewgraphen-store = { path = "../reviewgraphen-store", version = "0.1.0", features = ["test-support"] }
 serde_json.workspace = true
 tempfile.workspace = true

@@ -1,7 +1,7 @@
 # ReviewGraphen Documentation Index
 
-> Status: Draft v0.1  
-> Updated: 2026-08-10
+> Status: Public alpha v0.1.0
+> Updated: 2026-09-15
 
 ## 1. 目的別の読み順
 
@@ -39,6 +39,14 @@
 3. [`21_migration_from_highergraphen.md`](21_migration_from_highergraphen.md)
 4. [`../AGENTS.md`](../AGENTS.md)
 
+### 現在できることと配布境界を確認する
+
+1. [`23_current_capability_status.md`](23_current_capability_status.md)
+2. [`20_open_source_and_commercial_boundary.md`](20_open_source_and_commercial_boundary.md)
+3. [`22_publication_readiness_audit.md`](22_publication_readiness_audit.md)
+4. [`../RELEASE.md`](../RELEASE.md)
+5. [`../SECURITY.md`](../SECURITY.md)
+
 ## 2. 基本文書
 
 | 文書 | 役割 |
@@ -65,10 +73,15 @@
 | [`19_implementation_backlog.md`](19_implementation_backlog.md) | epic、task、acceptance criteria。 |
 | [`20_open_source_and_commercial_boundary.md`](20_open_source_and_commercial_boundary.md) | 公開coreと商用境界。 |
 | [`21_migration_from_highergraphen.md`](21_migration_from_highergraphen.md) | 現行 `pr-review` / `test-gap` からの移行。 |
+| [`22_publication_readiness_audit.md`](22_publication_readiness_audit.md) | 公開前の履歴、機密、帰属とscopeの監査。 |
+| [`23_current_capability_status.md`](23_current_capability_status.md) | 実装済み能力と未検証事項のdated canonical record。 |
+| [`24_context_projection_feasibility_for_implementation.md`](24_context_projection_feasibility_for_implementation.md) | 実装前探索へのcontext projectionの適用可能性。 |
 | [`glossary.md`](glossary.md) | 用語と状態の定義。 |
 | [`source_trace.md`](source_trace.md) | HigherGraphenおよび研究資料との対応。 |
 
 ## 3. ADR
+
+以下は中核ADRの抜粋です。完全な一覧と正本は[`adr/`](adr/)です。
 
 | ADR | 決定 |
 | --- | --- |

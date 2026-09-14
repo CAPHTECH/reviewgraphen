@@ -9,3 +9,14 @@ retries = 0
 fail-fast = false
 retries = 0
 slow-timeout = { period = "60s", terminate-after = 2 }
+
+# These two bounded integration tests exercise large canonical Store/runtime
+# paths and take about 205 seconds individually on the release Linux runner.
+# Keep the ordinary 120-second ceiling everywhere else; do not retry failures.
+[[profile.ci.overrides]]
+filter = 'test(v3_positive_d_pair_is_projected_from_basis_bound_run)'
+slow-timeout = { period = "120s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(v3_positive_pair_reaches_context_construction)'
+slow-timeout = { period = "120s", terminate-after = 3 }

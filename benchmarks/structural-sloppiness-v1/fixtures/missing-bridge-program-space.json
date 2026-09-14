@@ -1,0 +1,192 @@
+{
+  "schema": "reviewgraphen.program_space.input.v2",
+  "source": {
+    "kind": "fixture",
+    "locator": "benchmarks/structural-sloppiness-v1/fixtures",
+    "revision": "missing-bridge-v1",
+    "content_hash": "sha256:1111111111111111"
+  },
+  "repository": {
+    "id": "repository:structural-sloppiness-fixture",
+    "name": "structural-sloppiness-fixture"
+  },
+  "snapshot": {
+    "id": "snapshot:structural-sloppiness-missing-bridge",
+    "base_revision": "fixture-base",
+    "target_revision": "fixture-head",
+    "tree_hash": "sha256:2222222222222222",
+    "dirty": false,
+    "created_at": "2026-09-13T00:00:00Z"
+  },
+  "profile": {
+    "id": "code-review",
+    "version": "1",
+    "rule_set_hash": "sha256:3333333333333333",
+    "policy_version": "default@1"
+  },
+  "artifacts": [
+    {
+      "id": "change:lib",
+      "kind": "custom",
+      "label": "added src/lib.rs",
+      "location": { "path": "src/lib.rs" },
+      "attributes": {
+        "base_path": "",
+        "change_kind": "added",
+        "changed": true,
+        "target_path": "src/lib.rs"
+      },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "benchmarks/structural-sloppiness-v1/fixtures",
+          "revision": "missing-bridge-v1",
+          "content_hash": "sha256:1111111111111111",
+          "source_local_id": "src/lib.rs"
+        },
+        "extraction_method": "reviewgraphen.ingest.git.changed_structure.v1",
+        "tool_version": "fixture-v1",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "file:lib",
+      "kind": "file",
+      "label": "src/lib.rs",
+      "language": "rust",
+      "location": { "path": "src/lib.rs" },
+      "content_hash": "sha256:4444444444444444",
+      "attributes": { "changed": false },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "benchmarks/structural-sloppiness-v1/fixtures",
+          "revision": "missing-bridge-v1",
+          "content_hash": "sha256:1111111111111111",
+          "source_local_id": "src/lib.rs"
+        },
+        "extraction_method": "fixture.rust.v1",
+        "tool_version": "fixture-v1",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "function:other",
+      "kind": "function",
+      "label": "other",
+      "language": "rust",
+      "location": { "path": "src/lib.rs", "start_line": 20, "end_line": 22 },
+      "attributes": { "changed": false, "public": true },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "benchmarks/structural-sloppiness-v1/fixtures",
+          "revision": "missing-bridge-v1",
+          "content_hash": "sha256:1111111111111111",
+          "source_local_id": "src/lib.rs"
+        },
+        "extraction_method": "fixture.rust.v1",
+        "tool_version": "fixture-v1",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "function:target",
+      "kind": "function",
+      "label": "target",
+      "language": "rust",
+      "location": { "path": "src/lib.rs", "start_line": 10, "end_line": 12 },
+      "attributes": { "changed": false, "public": true },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "benchmarks/structural-sloppiness-v1/fixtures",
+          "revision": "missing-bridge-v1",
+          "content_hash": "sha256:1111111111111111",
+          "source_local_id": "src/lib.rs"
+        },
+        "extraction_method": "fixture.rust.v1",
+        "tool_version": "fixture-v1",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    },
+    {
+      "id": "method:target",
+      "kind": "method",
+      "label": "Container::target",
+      "language": "rust",
+      "location": { "path": "src/lib.rs", "start_line": 30, "end_line": 32 },
+      "attributes": { "changed": false, "public": true },
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "benchmarks/structural-sloppiness-v1/fixtures",
+          "revision": "missing-bridge-v1",
+          "content_hash": "sha256:1111111111111111",
+          "source_local_id": "src/lib.rs"
+        },
+        "extraction_method": "fixture.rust.v1",
+        "tool_version": "fixture-v1",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "id": "relation:target-changed-by-lib",
+      "kind": "changed_by",
+      "source_id": "function:target",
+      "target_ids": ["change:lib"],
+      "directed": true,
+      "attributes": {},
+      "provenance": {
+        "source": {
+          "kind": "fixture",
+          "locator": "benchmarks/structural-sloppiness-v1/fixtures",
+          "revision": "missing-bridge-v1",
+          "content_hash": "sha256:1111111111111111",
+          "source_local_id": "src/lib.rs"
+        },
+        "extraction_method": "reviewgraphen.ingest.git.changed_structure.v1",
+        "tool_version": "fixture-v1",
+        "confidence": 1.0,
+        "review_status": "accepted"
+      }
+    }
+  ],
+  "contexts": [],
+  "invariants": [],
+  "evidence": [],
+  "extraction": {
+    "adapter_set_hash": "sha256:7777777777777777",
+    "adapters": [
+      {
+        "id": "structural-sloppiness-fixture",
+        "version": "1",
+        "status": "complete",
+        "parsed": 1,
+        "total": 1
+      }
+    ],
+    "capabilities": {
+      "ast": {
+        "state": "complete",
+        "source_ids": ["file:lib", "function:other", "function:target", "method:target"]
+      },
+      "changed_structure": {
+        "state": "complete",
+        "source_ids": ["change:lib", "relation:target-changed-by-lib"]
+      },
+      "containment": {
+        "state": "complete",
+        "source_ids": ["file:lib"]
+      }
+    },
+    "limitations": []
+  }
+}

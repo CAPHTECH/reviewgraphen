@@ -1,0 +1,87 @@
+{
+  "schema": "reviewgraphen.benchmark.responsibility_family_assessment_input.v1",
+  "candidate_hash": "sha256:65d3b880e84b5f465bdab41d6eb888502b34cf4596684db603b44df55e728833",
+  "entries": [
+    {
+      "property": "common_change_reason",
+      "member_ids": [],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:exclusion-id-source-reading"],
+      "verification_ids": ["verification:exclusion-id-source-reading"]
+    },
+    {
+      "property": "separation_rationale",
+      "member_ids": [],
+      "disposition": "opposes",
+      "evidence_ids": ["evidence:exclusion-id-source-reading"],
+      "verification_ids": ["verification:exclusion-id-source-reading"]
+    },
+    {
+      "property": "shared_conformance_feasibility",
+      "member_ids": [],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:exclusion-id-source-reading"],
+      "verification_ids": ["verification:exclusion-id-source-reading"]
+    },
+    {
+      "property": "common_contract_applies",
+      "member_ids": [
+        "responsibility-member:core-profile-legacy-d-exclusion-id",
+        "responsibility-member:core-profile-rule-neutral-exclusion-id"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:exclusion-id-source-reading"],
+      "verification_ids": ["verification:exclusion-id-source-reading"]
+    },
+    {
+      "property": "compatibility_preservation",
+      "member_ids": [
+        "responsibility-member:core-profile-legacy-d-exclusion-id",
+        "responsibility-member:core-profile-rule-neutral-exclusion-id"
+      ],
+      "disposition": "inconclusive",
+      "evidence_ids": [],
+      "verification_ids": []
+    },
+    {
+      "property": "performance_preservation",
+      "member_ids": [
+        "responsibility-member:core-profile-legacy-d-exclusion-id",
+        "responsibility-member:core-profile-rule-neutral-exclusion-id"
+      ],
+      "disposition": "inconclusive",
+      "evidence_ids": [],
+      "verification_ids": []
+    },
+    {
+      "property": "purpose_constraints_preserved",
+      "member_ids": [
+        "responsibility-member:core-profile-legacy-d-exclusion-id",
+        "responsibility-member:core-profile-rule-neutral-exclusion-id"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:exclusion-id-source-reading"],
+      "verification_ids": ["verification:exclusion-id-source-reading"]
+    },
+    {
+      "property": "shared_validator_feasibility",
+      "member_ids": [
+        "responsibility-member:core-profile-legacy-d-exclusion-id",
+        "responsibility-member:core-profile-rule-neutral-exclusion-id"
+      ],
+      "disposition": "inconclusive",
+      "evidence_ids": [],
+      "verification_ids": []
+    },
+    {
+      "property": "typed_error_preservation",
+      "member_ids": [
+        "responsibility-member:core-profile-legacy-d-exclusion-id",
+        "responsibility-member:core-profile-rule-neutral-exclusion-id"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:exclusion-id-source-reading"],
+      "verification_ids": ["verification:exclusion-id-source-reading"]
+    }
+  ]
+}

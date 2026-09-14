@@ -592,12 +592,12 @@ fn v2_and_v3_runs_are_cross_decode_incompatible_and_preserve_v2_domains() {
     assert!(decode_and_validate_generic_review_run_v3(&v2_bytes).is_err());
     assert_eq!(
         ContentHash::sha256(&v2_bytes).as_str(),
-        "sha256:0055b2701b8c395417c3a6645f85fdfc50aa1e82c585f749de5b1f0f42fe722b",
+        "sha256:c148c90da6cd080a601e7129f4179d8cf5ed3dd0c33da786313a8ed4897a938c",
         "independent canonical v2 run golden"
     );
     assert_eq!(
         ContentHash::sha256(&v3_bytes).as_str(),
-        "sha256:f2ede4bd9387afe6edfc2eb4e797eb7d74b771f4c4fe677a6c16c720356eb69f",
+        "sha256:5d9f9e56879c1705900c2db2579ab666bb87d0999879a76d1f6bcb7ae9d4e884",
         "basis-bound live validation must preserve the independent canonical v3 run golden"
     );
 

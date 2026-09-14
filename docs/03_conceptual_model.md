@@ -50,6 +50,12 @@ Code Reviewにおける代表的なcell:
 
 ProgramSpaceの事実は、抽出器の出力としてacceptedになり得ます。ただしacceptedは「入力事実として利用可能」という意味であり、プログラムが正しいことを意味しません。
 
+予定している責務から既存実装を探す場合も、この境界は変わりません。
+planned-responsibility contractの語彙とacceptedなsyntax signalの一致は
+`candidate`を作るだけです。契約条項は候補ごとの未検証obligationとして
+残し、同じ責務、契約充足、再利用可能性、責務ファミリー所属へ自動昇格
+させません。
+
 ## 3. ReviewSpace
 
 ReviewSpaceはレビュー工程の認識状態を保持します。
@@ -372,3 +378,23 @@ ReviewObligation
 ```
 
 これにより、コメント一覧だけでは失われる「何を確認し、どう裏付けたか」が残ります。
+
+## 17. Responsibility Family
+
+Responsibility Familyは、同じ構文を持つ関数の集合ではなく、外部判断に
+よって「共通契約と共通の変更理由を持つ」と受理された実装集合です。
+syntax similarityはcandidate signalに留めます。
+
+受理状態はProgramSpaceから分離し、snapshot、共通契約、extractor version、
+member anchor、用途別制約、unknown、人間のdecision、Evidence、Verificationを
+束ねます。実装数と検証endpoint数は別の分母です。判断は
+`shared_validator`、`shared_conformance_test`、`intentional_separation`のいずれかで、
+状態の保存自体はverifiedやsign-offを意味しません。snapshot変更時はこの状態を
+基準にmemberごとの再検査義務を作ります。
+
+候補発見は受理状態より前の非権威な工程です。完全一致、識別子・literalを
+除いた同一shapeに加え、異なるshape間で宣言名・signature型末尾・呼び出し名の
+複数channelが重なるpairを列挙できます。これらはすべて構文factから得た
+candidate signalであり、意味的同値やfamily membershipではありません。
+candidateをfamilyへ移すには、共通契約と共通の変更理由をEvidenceおよび
+Verificationへ結ぶ外部判断が必要です。

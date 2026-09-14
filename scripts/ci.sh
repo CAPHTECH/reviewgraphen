@@ -193,6 +193,7 @@ run_fast() {
   python3 scripts/validate_bundle.py
   bash scripts/test-ci-admission.sh
   bash scripts/test-ci-rustfmt-scope.sh
+  sh scripts/test-install.sh
   admit_ingest_test_cargo
   run_rustfmt
   cargo clippy --workspace --all-targets --all-features -- \

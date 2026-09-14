@@ -65,6 +65,31 @@ jobs:
       - name: Run fast checks
         run: ./scripts/ci.sh fast
 
+  macos-cli:
+    name: macOS 15 Apple Silicon CLI
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal
+
+      - name: Test portable CLI boundary
+        run: cargo +1.95.0 test --locked -p reviewgraphen-cli
+
+      - name: Build release binary
+        run: cargo +1.95.0 build --locked --release -p reviewgraphen-cli
+
+      - name: Smoke-test embedded schemas
+        run: |
+          target/release/reviewgraphen schema list
+          target/release/reviewgraphen schema validate schemas/reviewgraphen.responsibility_family_state.v1.example.json
+
+      - name: Test release installer portability
+        run: sh scripts/test-install.sh
+
   scheduled:
     name: Scheduled coverage and dependency policy
     needs: fast

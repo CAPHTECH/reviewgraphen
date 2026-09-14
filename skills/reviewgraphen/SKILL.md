@@ -1,6 +1,6 @@
 ---
 name: reviewgraphen
-description: Review source code the ReviewGraphen way — an obligation-driven review that enumerates a finite set of things to check before forming any opinion, then keeps claims, evidence, and verification separate, instead of an unstructured "find bugs" pass. Covers both the methodology you execute yourself and the narrow ReviewGraphen CLI surface that can produce obligations for you. Use when repository- or application-wide review is asked for and missing areas matter, when a review must be auditable rather than a single free-form answer, when relation/path/invariant/boundary review is required, or when asked what has and has not been reviewed.
+description: Review source code the ReviewGraphen way — an obligation-driven review that enumerates a finite set of things to check before forming any opinion, then keeps claims, evidence, and verification separate. Covers the methodology, the narrow production CLI, and benchmark-only structural-sloppiness and responsibility-family trials. Use for auditable repository-wide review, relation/path/invariant/boundary coverage, or managing duplicate-responsibility candidates, abstraction decisions, and snapshot-bound reinspection.
 ---
 
 # ReviewGraphen review
@@ -98,7 +98,7 @@ substitution for a deterministic engine, that the resulting set is not
 ID-stable, and that it is the single largest consumer of your budget. Say so in
 your output.
 
-## The ReviewGraphen CLI
+## The production ReviewGraphen CLI
 
 Build it first; `$RG` below is the resulting binary.
 
@@ -107,20 +107,23 @@ cargo build --release --locked -p reviewgraphen-cli   # from the repository root
 RG="$PWD/target/release/reviewgraphen"
 ```
 
-The implemented command surface is exactly:
+The main `reviewgraphen` binary's implemented command surface is exactly:
 
 ```text
 reviewgraphen review --request <request.json> --artifacts <fresh-dir> [--diagnostics <fresh-file>]
 reviewgraphen schema list
 reviewgraphen schema print <schema-id>
 reviewgraphen schema validate <json-file>
+reviewgraphen --version
 ```
 
 There are no `snapshot`, `ingest`, `obligations`, `plan`, `run`, `verify`,
-`glue`, `coverage`, `report`, `gate`, or `context` subcommands. **Do not invent
-or claim execution of them**, and never translate a stage of the pipeline above
-into a command that is not on this list. `--help` prints the single usage line
-and exits 2; there are no per-subcommand help pages.
+`glue`, `coverage`, `report`, `gate`, or `context` subcommands on that main
+binary. **Do not invent or claim execution of them**, and never translate a
+stage of the pipeline above into a command that is not on this list. `--help`
+prints the single usage line and exits 2; `--version` and `-V` print the exact
+package version and exit 0; there are no per-subcommand help pages. The
+separate benchmark binaries below do not extend this main surface.
 
 `review` accepts the closed generic-review request v2, v3, or v4 contracts. The
 implemented slice is narrow. Under `rust.production.v1` there are two
@@ -197,6 +200,155 @@ A `context` subcommand exists only on the unmerged m21 branch (commit
 it, check that commit out into a separate worktree and build its own binary —
 never substitute it for the main one, never present it as a main capability, and
 never cross-decode its request or packet as generic-review v3.
+
+## Experimental benchmark binaries
+
+These binaries are local research surfaces in `reviewgraphen-benchmark`. They
+do not add commands to the production CLI, persist accepted product facts, run
+target code, verify claims, or grant sign-off.
+
+### Structural-sloppiness trial
+
+Build `reviewgraphen-structural-sloppiness` from the repository root:
+
+```bash
+cargo build --locked -p reviewgraphen-benchmark \
+  --bin reviewgraphen-structural-sloppiness
+```
+
+Its exact surface is:
+
+```text
+reviewgraphen-structural-sloppiness analyze --input FILE --output FRESH_FILE
+reviewgraphen-structural-sloppiness validate --input FILE --report FILE
+reviewgraphen-structural-sloppiness flat --input FILE --output FRESH_FILE
+```
+
+It accepts an already serialized `ProgramSpace` and evaluates only the fixed
+`changed_input_consumer_bridge_mismatch@1` predicate. It is not a general clone
+detector or semantic-responsibility detector. `flat` is an information-loss
+ablation. Read `benchmarks/structural-sloppiness-v1/README.md` before replaying
+the historical calibration.
+
+### Responsibility-family decision and reinspection trial
+
+Use it to enumerate deterministic syntax candidates, structure a family
+decision proposal and, after external acceptance, track reinspection. Syntax
+supplies candidates only: family membership must be based on responsibility
+and change reasons, not merely similarity.
+Build:
+
+```bash
+cargo build --locked -p reviewgraphen-benchmark \
+  --bin reviewgraphen-responsibility-family
+```
+
+Its exact surface is:
+
+```text
+reviewgraphen-responsibility-family snapshot --workspace DIR --repository DIR --identity TEXT --base COMMIT --target COMMIT --output FRESH_FILE
+reviewgraphen-responsibility-family discover-exact --program-space FILE --output FRESH_FILE
+reviewgraphen-responsibility-family discover-near --program-space FILE --output FRESH_FILE
+reviewgraphen-responsibility-family discover-signals --program-space FILE --output FRESH_FILE
+reviewgraphen-responsibility-family search-responsibility --program-space FILE --contract FILE --output FRESH_FILE
+reviewgraphen-responsibility-family decision-obligations --candidate FILE --output FRESH_FILE
+reviewgraphen-responsibility-family decision-assess --candidate FILE --input FILE --output FRESH_FILE
+reviewgraphen-responsibility-family decision-propose --candidate FILE --assessment FILE --output FRESH_FILE
+reviewgraphen-responsibility-family decision-validate --candidate FILE --assessment FILE --proposal FILE
+reviewgraphen-responsibility-family plan --before FILE --after FILE --output FRESH_FILE
+reviewgraphen-responsibility-family validate --before FILE --after FILE --plan FILE
+```
+
+The decision path enumerates common-contract, common-change-reason,
+shared-conformance, separation-rationale, purpose-constraint, typed-error,
+compatibility, performance and shared-validator obligations. Decisive
+assessment entries require source, Evidence and Verification IDs. The closed
+rule table proposes `shared_validator`, `shared_conformance_test`,
+`intentional_separation`, or `inconclusive`; every result remains
+non-authoritative and requires external acceptance.
+
+The v1 state records bind the family, snapshots, decision basis, common
+contract, extractor version, sorted members, member anchors, purpose-specific
+constraints, source IDs, and unknowns. `plan` emits deterministic,
+non-authoritative `test.shared_conformance` obligations for changed members. A
+common-contract, decision-basis, or extractor change reopens the member union;
+an anchor or purpose-constraint change reopens only that member; additions and
+removals remain explicit. Snapshot change alone preserves unchanged members.
+`validate` recomputes the complete plan and rejects stale or altered plans.
+
+For existing-code duplication work, keep the stages separate:
+
+1. Produce a snapshot-bound ProgramSpace with `snapshot`, or use an existing
+   accepted one. Enumerate exact bodies with `discover-exact` and Type-2-like
+   identifier/literal variants with `discover-near`. Use `discover-signals` for
+   different-shape pairs sharing versioned callable/signature and operation
+   syntax signals. It requires two signal channels and at least 600,000 ppm
+   selective-operation Jaccard, emits pairs without transitive clustering, and
+   exposes the matched terms. These outputs are candidate-only: shared syntax
+   vocabulary is not semantic equivalence, a common contract, a common change
+   reason, or responsibility-family membership.
+2. Run the decision commands to enumerate the finite checks, bind external
+   Evidence/Verification, and obtain a non-authoritative option proposal.
+3. Accept or reject the family externally, preserving intentional differences
+   as purpose constraints.
+4. Record an externally accepted decision as
+   `reviewgraphen.responsibility_family_state.v1`. Core requires a human
+   decision, Evidence and Verification IDs; Store can persist its canonical
+   bytes with `CasStore::put_responsibility_family_state`. This product state is
+   separate from ProgramSpace and CAS persistence does not itself grant
+   acceptance or sign-off. The production CLI exposes only schema
+   print/validation for it, not an acceptance command.
+5. Compare states to obtain a bounded reinspection denominator and member-level
+   obligations.
+6. Run conformance tests or mutations separately and attach their actual
+   results as Evidence; a generated obligation is not Verification.
+
+Before implementing a new responsibility, use `search-responsibility` when you
+can state a finite planned contract. Supply clause IDs and callable, signature
+and operation search terms in
+`reviewgraphen.benchmark.planned_responsibility_contract.v1`. Inspect all
+returned candidates and the absent/high-frequency term partitions. A result is
+only a snapshot-bound syntax-signal lead: clause prose is not evaluated, every
+clause remains in `unverified_clause_ids`, and the command does not establish
+that the feature exists, behaves correctly, or belongs to one accepted family.
+If a candidate is plausible, continue through the responsibility-family
+decision obligations and verify the contract against source/tests before
+reusing or abstracting it.
+
+To claim a maintenance improvement, use the same isolated cross-family
+mutation before and after. First show that it survives the declared existing
+local-test denominator; then show that the selected change kills it while the
+unmutated control passes twice. If the mutation was already killed before, the
+new control has not shown added protection. An intentionally independent
+implementation can be a purpose constraint while the pair still shares one
+responsibility and one conformance test. Compare the complete contract output,
+not a hand-picked field subset. See
+`benchmarks/responsibility-family-v1/FSL-MAINTENANCE-IMPROVEMENT.md` for the
+bounded kernel-digest example.
+
+If a shared-validator decision collapses multiple implementations into one,
+record the old implementations as removed and the shared implementation as
+added. The family-state denominator then counts implementations; keep endpoint
+or caller coverage as a separate test denominator so the collapse does not
+hide an untested consumer.
+
+Read `benchmarks/responsibility-family-v1/CONTRACT.md` and its README for the
+five-member path-policy fixture and the two-member severity-wire exact-clone
+follow-up. Read `FSL-SIGNAL-DISCOVERY.md` for the bounded calibration of
+different-shape signal pairs. These checks cover only those declared families,
+anchors, and retained syntax signals; they do not establish general duplicate
+discovery, semantic equivalence, moves/splits/merges, macros, cross-language
+anchors, or overlapping-family gluing. `discover-signals` reaches some
+Type-3-like pairs, but implementations with no shared retained vocabulary stay
+outside its denominator.
+
+All three discovery commands consume accepted, versioned ingest facts.
+`discover-exact` and `discover-near` consume the accepted
+`reviewgraphen.ingest.rust-test-scope@1` fact for functions and methods,
+including item and enclosing module/impl test attributes. Missing or unsupported
+scope, shape, or responsibility-signal facts remain explicit unknown
+exclusions. Read `information_loss` and the complete denominator before treating
+a ranked group or pair as production code.
 
 ## Stage 1 — ProgramSpace (Mode B only)
 
@@ -415,6 +567,31 @@ limitations; which target and property layers were reviewed; critical and high
 claims with their disposition; evidence and verification outcome; abstentions
 and unverifiable claims; gluing obstructions; coverage; projection loss; and the
 next required decision or observation.
+
+## When you build your own context
+
+The projection rules above assume the context arrives already bounded — the
+tool selects sources, commits to a denominator, and declares its loss. **An
+agent with file access builds its own projection instead, and the same
+obligations apply to it.**
+
+- **Read the obligation's target first, and nothing else.** Decide from it if
+  you can.
+- **Anything you fetch beyond the target is projection.** Record what you
+  fetched and why you could not decide without it. If you fetched nothing,
+  record that too — "I decided from the target alone" is a coverage statement,
+  not an absence of one.
+- **Never assert a break you have not read the code for.** A window that omits
+  a caller's guard makes an unreachable path look reachable; the fix is to
+  fetch the guard or to abstain, never to infer it.
+- **Say when the budget was not enough.** "I could not decide" is a usable
+  disposition. Continuing to fetch until something looks wrong is not.
+- **Declare a disagreement between what a tool served you and what the
+  repository holds**, and say which one your finding is about.
+
+Fetching is cheap and unbounded; that is the problem. Without a recorded
+projection there is no way to tell a finding grounded in the code from one
+grounded in whatever happened to scroll past.
 
 ## Safety rules
 

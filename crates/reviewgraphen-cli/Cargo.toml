@@ -4,7 +4,7 @@ description = "Command-line interface for ReviewGraphen"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 publish = false
 
 [[bin]]
@@ -16,9 +16,9 @@ workspace = true
 
 [dependencies]
 jsonschema.workspace = true
-reviewgraphen-core = { path = "../reviewgraphen-core" }
-reviewgraphen-report = { path = "../reviewgraphen-report" }
-reviewgraphen-runtime = { path = "../reviewgraphen-runtime" }
+reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.1.0" }
+reviewgraphen-report = { path = "../reviewgraphen-report", version = "0.1.0" }
+reviewgraphen-runtime = { path = "../reviewgraphen-runtime", version = "0.1.0" }
 rustix.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

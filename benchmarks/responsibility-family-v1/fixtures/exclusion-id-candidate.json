@@ -1,0 +1,43 @@
+{
+  "schema": "reviewgraphen.benchmark.responsibility_family_candidate.v1",
+  "candidate_id": "responsibility-family-candidate:exclusion-id-preimage",
+  "proposed_family_id": "responsibility-family:exclusion-id-preimage",
+  "snapshot_id": "snapshot:c0747614",
+  "proposed_common_contract": {
+    "id": "exclusion-stable-id-preimage@1",
+    "hash": "sha256:3e5cb9972d60a64620402d03354d52977e065b1b1ff1656b1948a0c4dd333023"
+  },
+  "extractor": {
+    "id": "reviewgraphen.rust-normalized-body-sha256",
+    "version": "syn-2.0.119"
+  },
+  "members": [
+    {
+      "member_id": "responsibility-member:core-profile-legacy-d-exclusion-id",
+      "path": "crates/reviewgraphen-core/src/profile.rs",
+      "symbol": "exclusion_id",
+      "anchor": "sha256:8771e2eb871ed90874c5ba69f99e8d994bbaf86a87e1749baec9d5a67471a1e4",
+      "purpose_constraints": [
+        "preserve-legacy-d-record-identity",
+        "preserve-profile-error-contract"
+      ],
+      "source_ids": ["function:sha256:a3ac4ae4f46d75ed6c4ac400fb87adadf934a9c7d9ef610245abf4576099e403"]
+    },
+    {
+      "member_id": "responsibility-member:core-profile-rule-neutral-exclusion-id",
+      "path": "crates/reviewgraphen-core/src/profile.rs",
+      "symbol": "profile_exclusion_id",
+      "anchor": "sha256:8771e2eb871ed90874c5ba69f99e8d994bbaf86a87e1749baec9d5a67471a1e4",
+      "purpose_constraints": [
+        "preserve-legacy-d-preimage-for-overlap",
+        "support-closed-rule-neutral-candidate-families"
+      ],
+      "source_ids": ["function:sha256:0ca63cd9d81aabfcaf2199e7bd60cd134ed9a56dc2d042c9e9f6ef9b4c809d09"]
+    }
+  ],
+  "unknowns": [
+    "legacy D and rule-neutral record equivalence is not yet tested",
+    "performance effect of a shared helper is not measured",
+    "rule-neutral bindings may evolve beyond the legacy D preimage"
+  ]
+}

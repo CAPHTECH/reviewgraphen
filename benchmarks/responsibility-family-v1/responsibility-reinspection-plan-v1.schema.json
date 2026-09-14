@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capht.tech/schemas/reviewgraphen/benchmark/responsibility-reinspection-plan.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "family_id",
+    "before_snapshot_id",
+    "after_snapshot_id",
+    "input",
+    "authority",
+    "denominator",
+    "obligations",
+    "preserved_member_ids",
+    "unknowns"
+  ],
+  "properties": {
+    "schema": {"const": "reviewgraphen.benchmark.responsibility_reinspection_plan.v1"},
+    "family_id": {"$ref": "#/$defs/stable_id"},
+    "before_snapshot_id": {"$ref": "#/$defs/stable_id"},
+    "after_snapshot_id": {"$ref": "#/$defs/stable_id"},
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before_state_hash", "after_state_hash"],
+      "properties": {
+        "before_state_hash": {"$ref": "#/$defs/content_hash"},
+        "after_state_hash": {"$ref": "#/$defs/content_hash"}
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "accepted", "verified", "human_accepted", "sign_off"],
+      "properties": {
+        "classification": {"const": "non_authority"},
+        "accepted": {"const": false},
+        "verified": {"const": false},
+        "human_accepted": {"const": false},
+        "sign_off": {"const": false}
+      }
+    },
+    "denominator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before", "after"],
+      "properties": {
+        "before": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "after": {"type": "integer", "minimum": 1, "maximum": 4096}
+      }
+    },
+    "obligations": {
+      "type": "array",
+      "maxItems": 8192,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "member_id", "property", "reasons", "before_anchor", "after_anchor", "source_ids"],
+        "properties": {
+          "id": {"$ref": "#/$defs/stable_id"},
+          "member_id": {"$ref": "#/$defs/stable_id"},
+          "property": {"const": "test.shared_conformance"},
+          "reasons": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "common_contract_changed",
+                "decision_basis_changed",
+                "extractor_changed",
+                "member_added",
+                "member_anchor_changed",
+                "member_removed",
+                "purpose_constraints_changed"
+              ]
+            }
+          },
+          "before_anchor": {"$ref": "#/$defs/nullable_content_hash"},
+          "after_anchor": {"$ref": "#/$defs/nullable_content_hash"},
+          "source_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"$ref": "#/$defs/stable_id"}
+          }
+        }
+      }
+    },
+    "preserved_member_ids": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stable_id"}
+    },
+    "unknowns": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+    }
+  },
+  "$defs": {
+    "stable_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*:.+$", "maxLength": 4096},
+    "content_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{8,}$", "maxLength": 4096},
+    "nullable_content_hash": {
+      "oneOf": [
+        {"$ref": "#/$defs/content_hash"},
+        {"type": "null"}
+      ]
+    }
+  }
+}

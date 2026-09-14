@@ -1,0 +1,123 @@
+{
+  "format": "structural-sloppiness-trial-capture-manifest@1",
+  "classification": "non_authority",
+  "date": "2026-09-13",
+  "analyzer_base_revision": "c0747614c2c20a51771f6f6495f196682e3912fd",
+  "analyzer_source_state": "uncommitted additive trial in isolated checkout; not a published release",
+  "target_repository": "HigherGraphen",
+  "positive_target_diff": {
+    "base": "ac45c9e8e1bf090fcfdcafc0926cfe41c1ab2412",
+    "target": "a992243a18700d2ed32e6057ddf22090fb855970"
+  },
+  "capture_harness": {
+    "path": "harness/slop_export.rs",
+    "sha256": "6530851e068f362e47aa75e83a47b7f32762613dc26c4688f571a9777bfda454",
+    "modification": "added only the exporter example to each producer checkout; no producer or consumer source changed",
+    "cargo_admission": "disabled; target code not executed"
+  },
+  "tool_versions": [
+    "rustc 1.95.0 (59807616e 2026-04-14)",
+    "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+    "git version 2.47.3"
+  ],
+  "captures": [
+    {
+      "case": "old-not-exercised",
+      "producer_revision": "271c93200ac96f8ca7335145e02105b1d2c1d86d",
+      "base_revision": "5990679bda201e377d1275a3d2a59bf69f9debcf",
+      "target_revision": "852af1ed281871e3f27cf1aa997a4b7a450ddc79",
+      "raw_program_space_sha256": "3fae1e041d1d871ba0a1ede48714352fe77d1f9225e58ac49e8354b66bf4c79f",
+      "export_exit": 0
+    },
+    {
+      "case": "old-positive",
+      "producer_revision": "271c93200ac96f8ca7335145e02105b1d2c1d86d",
+      "base_revision": "ac45c9e8e1bf090fcfdcafc0926cfe41c1ab2412",
+      "target_revision": "a992243a18700d2ed32e6057ddf22090fb855970",
+      "raw_program_space_sha256": "0915bef45baa1fcde4c1292549db318c8adb56a80d98f95621ac770246e7d342",
+      "export_exit": 0
+    },
+    {
+      "case": "fixed",
+      "producer_revision": "7b40d48fa49ed3a823609c98f9ac35405518059a",
+      "base_revision": "ac45c9e8e1bf090fcfdcafc0926cfe41c1ab2412",
+      "target_revision": "a992243a18700d2ed32e6057ddf22090fb855970",
+      "raw_program_space_sha256": "ef9e59e0f4b56da5423aba38b979bea59082ecbf8eb6d4db2518efd6ed9435bb",
+      "export_exit": 0
+    },
+    {
+      "case": "current",
+      "producer_revision": "c0747614c2c20a51771f6f6495f196682e3912fd",
+      "base_revision": "ac45c9e8e1bf090fcfdcafc0926cfe41c1ab2412",
+      "target_revision": "a992243a18700d2ed32e6057ddf22090fb855970",
+      "raw_program_space_sha256": "b3a66f5ae76eb6f3b584c8b0d1550498dcb75866bc73beb01ee2513e68784c52",
+      "export_exit": 0
+    }
+  ],
+  "synthetic_control": {
+    "case": "current-rewired",
+    "source_case": "current",
+    "mutation": "one contains endpoint rewired; both target_ids and ordered_target_ids updated, preserving the endpoint permutation invariant",
+    "raw_program_space_sha256": "995f36c4931e66873ab8f59acc61113782e91cf8819655e3d665f53346ac4141",
+    "flat_projection_sha256": "e684b5c1044557ca65d39ce6394aeac630dc8cb8741947c47448ed96ae3cdffd",
+    "flat_comparison_exit": 0
+  },
+  "verification": {
+    "replay_script_exit": 0,
+    "report_analysis_and_recomputation_validation": "all five cases exited 0",
+    "stale_input_report_exit": 4,
+    "authority_tamper_exit": 4,
+    "wrong_change_kind_probe": "validated input excluded as change_shape_invalid; zero eligible",
+    "detector_mutation": {
+      "change": "OR replaced by AND",
+      "selected_test": "structural_sloppiness_consumer_predicate_preserves_both_exact_or_branches",
+      "mutant_exit": 101,
+      "restored_focused_tests": 15,
+      "restored_exit": 0
+    },
+    "initial_invalid_endpoint_mutation": {
+      "reason": "changed target_ids without ordered_target_ids",
+      "rejection_exit": 3,
+      "disposition": "retained as a rejected mutation attempt; corrected control recorded separately"
+    },
+    "identity_collision": {
+      "red_exit": 101,
+      "restored_exit": 0
+    },
+    "candidate_ordering": {
+      "red_exit": 101,
+      "restored_exit": 0
+    },
+    "closed_report_deserialization": {
+      "attribute_removed_test_exit": 101,
+      "restored_test_exit": 0,
+      "unknown_top_level_field_cli_exit": 3
+    },
+    "current_focused_tests": 18,
+    "current_focused_exit": 0,
+    "final_fast_gate": {
+      "date": "2026-09-14",
+      "exit": 0,
+      "checkout": "isolated c074761 plus additive trial; task files matched root integration",
+      "command": "scripts/ci.sh fast",
+      "test_opt_level": 1,
+      "test_threads": 1,
+      "timeout_seconds": 120,
+      "selected_tests": 1139,
+      "passed_tests": 1139,
+      "existing_configuration_skips": 2,
+      "doc_tests_passed": 71,
+      "log_sha256": "9dfdebf936808565df12645abdf09fe126810ce39daa62c7f52173c37f75a2df"
+    }
+  },
+  "limitations": [
+    "Historical case selected after reading the known producer repair, not held-out new-bug discovery.",
+    "First selected source diff had zero eligible public free functions and is retained as not_exercised.",
+    "All three selected public free functions have async=false, awaits=false, spawns=false and empty concurrency_primitives; the captured HigherGraphen input has zero public free functions with those local concurrency hints. The experiment exercises the named changed-symbol predicate, not the full concurrency-obligation rule. No applicable-obligation omission or production incident was demonstrated.",
+    "Extractor partial/missing capabilities and limitation records are not counted as sloppiness findings.",
+    "Flat projection is an information-loss ablation, not a competitive static-analysis baseline.",
+    "No comparison demonstrates necessity or superiority of the HigherGraphen library or higher-order cells.",
+    "AI authorship and AI-versus-human defect rates were not established.",
+    "Full ~38 MB ProgramSpace captures and ~5.6 MB reports are local replay artifacts, not committed; compact projections retain hashes and declare omissions."
+  ]
+}

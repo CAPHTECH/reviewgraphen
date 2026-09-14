@@ -17,7 +17,7 @@ use reviewgraphen_runtime::generic::{
     run_generic_review, run_generic_review_v2_with_observer, run_generic_review_v3_with_observer,
     run_generic_review_v4,
 };
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use rustix::fs::{self, FileType, Mode, OFlags};
 use serde_json::{Value, json};
 use std::{
@@ -60,6 +60,10 @@ impl CommandOutcome {
 /// fixed-fixture form, are rejected before filesystem or report work starts.
 pub fn run(arguments: Vec<String>) -> CommandOutcome {
     match arguments.as_slice() {
+        [flag] if flag == "--version" || flag == "-V" => CommandOutcome::success(
+            format!("reviewgraphen {}\n", env!("CARGO_PKG_VERSION")).into_bytes(),
+            String::new(),
+        ),
         [
             command,
             request_flag,
@@ -321,7 +325,7 @@ fn next_stage(stage: GenericReviewStage) -> Option<GenericReviewStage> {
 }
 
 fn usage() -> &'static str {
-    "usage: reviewgraphen review --request <request.json> --artifacts <fresh-dir> [--diagnostics <fresh-file>] | schema list|print <schema-id>|validate <json-file>"
+    "usage: reviewgraphen [--version] | review --request <request.json> --artifacts <fresh-dir> [--diagnostics <fresh-file>] | schema list|print <schema-id>|validate <json-file>"
 }
 
 fn generic_review(request_path: &Path, artifact_root: &Path) -> CommandOutcome {
@@ -902,7 +906,8 @@ fn schema_list() -> CommandOutcome {
         "reviewgraphen.generic_review_request.v4",
         "reviewgraphen.generic_review_run.v4",
         "reviewgraphen.generic_review_human_report.v3",
-        "reviewgraphen.generic_review_diagnostics.v1"
+        "reviewgraphen.generic_review_diagnostics.v1",
+        "reviewgraphen.responsibility_family_state.v1"
     ]);
     CommandOutcome::success(canonical_json(&values).unwrap_or_default(), String::new())
 }
@@ -927,6 +932,9 @@ fn schema_validate(path: &Path) -> CommandOutcome {
         Some(name) => name,
         None => return validation_failure("missing_schema"),
     };
+    if !semantic_validation_available(schema_name) {
+        return validation_failure("unsupported_platform");
+    }
     let validator = match validator_for(schema_name) {
         Ok(validator) => validator,
         Err(_) => return validation_failure("unsupported_schema"),
@@ -968,10 +976,26 @@ fn validator_for(name: &str) -> Result<Validator, ()> {
 fn semantic_validation(name: &str, report: &Value) -> Result<(), ()> {
     match name {
         "reviewgraphen.review.report.v4" => {
-            reviewgraphen_report::validate_v4_semantics(report).map_err(|_| ())
+            #[cfg(target_os = "linux")]
+            {
+                reviewgraphen_report::validate_v4_semantics(report).map_err(|_| ())
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = report;
+                Err(())
+            }
         }
         "reviewgraphen.review.report.v5" => {
-            reviewgraphen_report::validate_v5_semantics(report).map_err(|_| ())
+            #[cfg(target_os = "linux")]
+            {
+                reviewgraphen_report::validate_v5_semantics(report).map_err(|_| ())
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = report;
+                Err(())
+            }
         }
         "reviewgraphen.generic_review_run.v1" => {
             reviewgraphen_runtime::generic::validate_generic_review_run_semantics(report)
@@ -989,11 +1013,24 @@ fn semantic_validation(name: &str, report: &Value) -> Result<(), ()> {
             reviewgraphen_runtime::generic::validate_generic_review_run_v4_wire_structure(report)
                 .map_err(|_| ())
         }
+        "reviewgraphen.responsibility_family_state.v1" => {
+            let state: reviewgraphen_core::AcceptedResponsibilityFamilyStateV1 =
+                serde_json::from_value(report.clone()).map_err(|_| ())?;
+            state.validate().map_err(|_| ())
+        }
         _ => Ok(()),
     }
 }
 
-#[cfg(target_os = "linux")]
+fn semantic_validation_available(name: &str) -> bool {
+    cfg!(target_os = "linux")
+        || !matches!(
+            name,
+            "reviewgraphen.review.report.v4" | "reviewgraphen.review.report.v5"
+        )
+}
+
+#[cfg(unix)]
 fn bounded_regular_file(path: &Path) -> Result<Vec<u8>, &'static str> {
     // The descriptor is opened with NOFOLLOW, then checked after opening. This
     // binds the file type and byte limit to the object actually read, rather
@@ -1032,7 +1069,7 @@ fn bounded_regular_file(path: &Path) -> Result<Vec<u8>, &'static str> {
     Ok(bytes)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 fn bounded_regular_file(_path: &Path) -> Result<Vec<u8>, &'static str> {
     // The documented CLI contract requires descriptor-safe path handling.
     Err("descriptor-safe file reads are unsupported on this platform")
@@ -1100,6 +1137,9 @@ fn schema_source(name: &str) -> Option<&'static str> {
         "reviewgraphen.generic_review_diagnostics.v1" => Some(include_str!(
             "../../../schemas/reviewgraphen.generic_review_diagnostics.v1.schema.json"
         )),
+        "reviewgraphen.responsibility_family_state.v1" => Some(include_str!(
+            "../../../schemas/reviewgraphen.responsibility_family_state.v1.schema.json"
+        )),
         _ => None,
     }
 }
@@ -1107,6 +1147,53 @@ fn schema_source(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_input_reader_accepts_regular_files_and_rejects_unsafe_types() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let regular = directory.path().join("input.json");
+        std::fs::write(&regular, b"{}\n").unwrap();
+        assert_eq!(bounded_regular_file(&regular).unwrap(), b"{}\n");
+
+        let link = directory.path().join("input-link.json");
+        symlink(&regular, &link).unwrap();
+        assert_eq!(
+            bounded_regular_file(&link),
+            Err("unable to read input file")
+        );
+        assert_eq!(
+            bounded_regular_file(directory.path()),
+            Err("input must be a bounded regular file")
+        );
+
+        let oversized = directory.path().join("oversized.json");
+        std::fs::File::create(&oversized)
+            .unwrap()
+            .set_len(MAX_INPUT_BYTES + 1)
+            .unwrap();
+        assert_eq!(
+            bounded_regular_file(&oversized),
+            Err("input must be a bounded regular file")
+        );
+    }
+
+    #[test]
+    fn durable_report_semantics_are_not_silently_skipped_off_linux() {
+        assert_eq!(
+            semantic_validation_available("reviewgraphen.review.report.v4"),
+            cfg!(target_os = "linux")
+        );
+        assert_eq!(
+            semantic_validation_available("reviewgraphen.review.report.v5"),
+            cfg!(target_os = "linux")
+        );
+        assert!(semantic_validation_available(
+            "reviewgraphen.generic_review_run.v4"
+        ));
+    }
 
     #[test]
     fn schema_surface_is_closed_and_canonical() {
@@ -1134,7 +1221,8 @@ mod tests {
                 "reviewgraphen.generic_review_request.v4",
                 "reviewgraphen.generic_review_run.v4",
                 "reviewgraphen.generic_review_human_report.v3",
-                "reviewgraphen.generic_review_diagnostics.v1"
+                "reviewgraphen.generic_review_diagnostics.v1",
+                "reviewgraphen.responsibility_family_state.v1"
             ])
         );
         let printed = run(vec![
@@ -1161,6 +1249,36 @@ mod tests {
                 .unwrap()
                 .is_valid(&diagnostic_example)
         );
+
+        let family_example: Value = serde_json::from_str(include_str!(
+            "../../../schemas/reviewgraphen.responsibility_family_state.v1.example.json"
+        ))
+        .unwrap();
+        assert!(
+            validator_for("reviewgraphen.responsibility_family_state.v1")
+                .unwrap()
+                .is_valid(&family_example)
+        );
+        assert!(
+            semantic_validation(
+                "reviewgraphen.responsibility_family_state.v1",
+                &family_example
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn version_is_the_package_version_and_has_no_diagnostics_side_effect() {
+        for flag in ["--version", "-V"] {
+            let outcome = run_binary(vec![flag.to_owned()]);
+            assert_eq!(outcome.exit_code, 0);
+            assert_eq!(
+                outcome.stdout,
+                format!("reviewgraphen {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
+            );
+            assert!(outcome.stderr.is_empty());
+        }
     }
 
     #[test]

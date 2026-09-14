@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.local/schemas/exact-body-candidate-report-v1.schema.json",
+  "title": "ReviewGraphen exact-body candidate report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "snapshot_id",
+    "extractor",
+    "profile",
+    "authority",
+    "denominator",
+    "candidates",
+    "information_loss",
+    "unknowns"
+  ],
+  "properties": {
+    "schema": {"const": "reviewgraphen.benchmark.exact_body_candidate_report.v1"},
+    "snapshot_id": {"type": "string", "pattern": "^snapshot:"},
+    "extractor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "rust_anchor_syn_version"],
+      "properties": {
+        "id": {"const": "reviewgraphen.benchmark.accepted-rust-exact-body@1"},
+        "rust_anchor_syn_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["included_path", "included_symbol_kinds", "test_exclusion_fact"],
+      "properties": {
+        "included_path": {"const": "crates/*/src/**/*.rs"},
+        "included_symbol_kinds": {
+          "const": ["function", "method"]
+        },
+        "test_exclusion_fact": {"const": "artifact.attributes.test_function=true"}
+      }
+    },
+    "authority": {"$ref": "#/$defs/non_authority"},
+    "denominator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepted_rust_symbols",
+        "eligible_functions",
+        "excluded_non_function_symbols",
+        "excluded_profile_paths",
+        "excluded_test_functions",
+        "excluded_unknown_test_scope",
+        "candidate_groups",
+        "candidate_members"
+      ],
+      "properties": {
+        "accepted_rust_symbols": {"$ref": "#/$defs/count"},
+        "eligible_functions": {"$ref": "#/$defs/count"},
+        "excluded_non_function_symbols": {"$ref": "#/$defs/count"},
+        "excluded_profile_paths": {"$ref": "#/$defs/count"},
+        "excluded_test_functions": {"$ref": "#/$defs/count"},
+        "excluded_unknown_test_scope": {"$ref": "#/$defs/count"},
+        "candidate_groups": {"$ref": "#/$defs/count"},
+        "candidate_members": {"$ref": "#/$defs/count"}
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/candidate"}
+    },
+    "information_loss": {"$ref": "#/$defs/text_array"},
+    "unknowns": {"$ref": "#/$defs/text_array"}
+  },
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0},
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "text_array": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "non_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "accepted", "verified", "human_accepted", "sign_off"],
+      "properties": {
+        "classification": {"const": "non_authority"},
+        "accepted": {"const": false},
+        "verified": {"const": false},
+        "human_accepted": {"const": false},
+        "sign_off": {"const": false}
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "path",
+        "symbol",
+        "start_line",
+        "end_line",
+        "symbol_kind",
+        "signature_shape_hash"
+      ],
+      "properties": {
+        "artifact_id": {"type": "string", "pattern": "^(function|method):"},
+        "path": {"type": "string", "pattern": "^crates/[^/]+/src/.+\\.rs$"},
+        "symbol": {"type": "string", "minLength": 1},
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "symbol_kind": {"enum": ["function", "method"]},
+        "signature_shape_hash": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "normalized_body_hash",
+        "minimum_member_span_lines",
+        "status",
+        "members",
+        "unknowns"
+      ],
+      "properties": {
+        "candidate_id": {
+          "type": "string",
+          "pattern": "^responsibility-family-candidate-signal:sha256:[0-9a-f]{64}$"
+        },
+        "normalized_body_hash": {"$ref": "#/$defs/hash"},
+        "minimum_member_span_lines": {"type": "integer", "minimum": 1},
+        "status": {"const": "candidate_only"},
+        "members": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"$ref": "#/$defs/member"}
+        },
+        "unknowns": {"$ref": "#/$defs/text_array"}
+      }
+    }
+  }
+}

@@ -4,6 +4,15 @@
 > Binary: `reviewgraphen`  
 > Design: CLI-first, JSON-contract-first, local-first
 
+Platform contract: Linux supports this CLI plus the durable Store-bound
+surfaces. macOS 15+ on Apple Silicon supports the generic provider-free/replay
+`review` path and `schema` operations. Its input reader uses the same
+descriptor-open, no-follow, post-open regular-file and byte-bound checks as
+Linux. Store-bound report-v4/v5 semantic validation refuses with
+`unsupported_platform` on macOS rather than silently performing schema-only
+validation. The durable Store and bubblewrap-backed external reviewer remain
+Linux-only.
+
 Implementation note: ADR 0029 withdraws ADR 0024's fixed offline
 `review --fixture double-submit` command because it was not a generic review
 path. The implemented surface contains `schema list|print|validate` and the

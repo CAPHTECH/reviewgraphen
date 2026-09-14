@@ -1,0 +1,13 @@
+{
+  "schema": "reviewgraphen.snapshot_relative_path_contract_cases.v1",
+  "common_cases": [
+    {"path": "src/lib.rs", "valid": true},
+    {"path": "", "valid": false},
+    {"path": "/src/lib.rs", "valid": false},
+    {"path": "src//lib.rs", "valid": false},
+    {"path": ".", "valid": false},
+    {"path": "src/./lib.rs", "valid": false},
+    {"path": "..", "valid": false},
+    {"path": "src/../lib.rs", "valid": false}
+  ]
+}

@@ -77,6 +77,33 @@ fn canonical_json_string_v6<T: Serialize>(value: &T) -> M6Result<String> {
         .map_err(|error| M6Error::InvalidWire(error.to_string()))
 }
 
+#[cfg(test)]
+mod shared_path_contract_tests {
+    use super::normalized_mapping_path;
+
+    #[test]
+    fn mapping_path_obeys_shared_snapshot_relative_contract() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/snapshot-relative-path-contract.v1.json"
+        )))
+        .expect("shared path contract fixture");
+        assert_eq!(
+            fixture["schema"],
+            "reviewgraphen.snapshot_relative_path_contract_cases.v1"
+        );
+        for case in fixture["common_cases"].as_array().expect("common cases") {
+            let path = case["path"].as_str().expect("case path");
+            let valid = case["valid"].as_bool().expect("case validity");
+            assert_eq!(
+                normalized_mapping_path(path),
+                valid,
+                "shared path contract case {path:?}"
+            );
+        }
+    }
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum M6Error {
     #[error("invalid M6 source/target closure: {0}")]

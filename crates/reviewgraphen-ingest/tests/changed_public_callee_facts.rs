@@ -15,9 +15,9 @@ use tempfile::TempDir;
 const IDENTITY: &str = "reviewgraphen.test/changed-public-callee-facts";
 const FIXTURE_GIT_DATE: &str = "2000-01-01T00:00:00Z";
 const PRE_SIDECAR_LEGACY_CANONICAL_SHA256: &str =
-    "sha256:84eb1b2bce991f2224d30e1e0a527f5046cf6876a49c30eedeac4f267f5b0363";
+    "sha256:74dc6343d37cd3714ff7092c13f441ac84539b81eeaaea23c725f807b6cbb28d";
 const PRE_SIDECAR_FIVE_RULES_CANONICAL_SHA256: &str =
-    "sha256:2532dc04e80b66df1b37839c7ca5bec1802cb4973fa38751c7a9d4eab3acfb64";
+    "sha256:2d1e6af76ef96eec57404263430fb6490460de9416bb3f80f4ec12e02bf627d7";
 const LIVE_ORACLE_WORKSPACE: &str = "/tmp/reviewgraphen-c1d-live-oracle";
 
 struct Repository {
@@ -214,6 +214,65 @@ fn assert_exact_occurrence_span(
         expected,
         "span uses exact one-based inclusive coordinates"
     );
+}
+
+#[test]
+fn accepted_test_scope_covers_cfg_test_functions_modules_and_methods() {
+    let repository = repository_with_source(
+        "pub fn production() {}\n\
+         pub struct Production;\n\
+         impl Production { pub fn method(&self) {} }\n\
+         #[cfg(test)] fn cfg_helper() {}\n\
+         #[cfg(test)] impl Production { fn cfg_method(&self) {} }\n\
+         #[cfg(test)] mod tests {\n\
+             fn helper() {}\n\
+             struct Fixture;\n\
+             impl Fixture { fn method(&self) {} }\n\
+         }\n",
+    );
+    let result = ingest_v2(&repository.request()).expect("v2 ingestion succeeds");
+    let scopes = result
+        .legacy
+        .program_space
+        .artifacts()
+        .iter()
+        .filter(|artifact| matches!(artifact.kind.as_str(), "function" | "method"))
+        .map(|artifact| {
+            (
+                artifact.label.as_str(),
+                artifact
+                    .attributes
+                    .get("test_scope")
+                    .and_then(serde_json::Value::as_str),
+                artifact
+                    .attributes
+                    .get("test_scope_extractor")
+                    .and_then(serde_json::Value::as_str),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert!(scopes.iter().any(|(name, scope, extractor)| {
+        name.ends_with("::production")
+            && *scope == Some("production")
+            && *extractor == Some("reviewgraphen.ingest.rust-test-scope@1")
+    }));
+    assert!(scopes.iter().any(|(name, scope, _)| {
+        name.ends_with("::method::Production") && *scope == Some("production")
+    }));
+    for expected in [
+        "cfg_helper",
+        "cfg_method::Production",
+        "helper",
+        "method::Fixture",
+    ] {
+        assert!(
+            scopes
+                .iter()
+                .any(|(name, scope, _)| name.ends_with(expected) && *scope == Some("test")),
+            "{expected} must be an accepted test-scope fact: {scopes:?}"
+        );
+    }
 }
 
 #[test]

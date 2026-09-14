@@ -234,6 +234,42 @@ pub enum Severity {
     Critical,
 }
 
+impl Severity {
+    /// Return the canonical lowercase text used by ReviewGraphen wire formats.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Critical => "critical",
+        }
+    }
+}
+
+#[cfg(test)]
+mod severity_wire_text_tests {
+    use super::Severity;
+
+    #[test]
+    fn shared_wire_text_matches_serde_contract() {
+        for (severity, expected) in [
+            (Severity::Info, "info"),
+            (Severity::Low, "low"),
+            (Severity::Medium, "medium"),
+            (Severity::High, "high"),
+            (Severity::Critical, "critical"),
+        ] {
+            assert_eq!(severity.as_str(), expected);
+            assert_eq!(
+                serde_json::to_string(&severity).expect("severity serializes"),
+                format!("\"{expected}\"")
+            );
+        }
+    }
+}
+
 /// Completeness state for one named extraction capability.
 ///
 /// `Complete` and `Partial` are deliberately distinct: only `Complete` fully
@@ -4899,4 +4935,31 @@ pub(crate) fn attribute_string<'a>(
     key: &str,
 ) -> Option<&'a str> {
     attributes.get(key).and_then(Value::as_str)
+}
+
+#[cfg(test)]
+mod shared_path_contract_tests {
+    use super::validate_snapshot_relative_path;
+
+    #[test]
+    fn location_path_obeys_shared_snapshot_relative_contract() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/snapshot-relative-path-contract.v1.json"
+        )))
+        .expect("shared path contract fixture");
+        assert_eq!(
+            fixture["schema"],
+            "reviewgraphen.snapshot_relative_path_contract_cases.v1"
+        );
+        for case in fixture["common_cases"].as_array().expect("common cases") {
+            let path = case["path"].as_str().expect("case path");
+            let valid = case["valid"].as_bool().expect("case validity");
+            assert_eq!(
+                validate_snapshot_relative_path(path).is_ok(),
+                valid,
+                "shared path contract case {path:?}"
+            );
+        }
+    }
 }

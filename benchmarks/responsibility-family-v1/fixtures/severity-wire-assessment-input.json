@@ -1,0 +1,87 @@
+{
+  "schema": "reviewgraphen.benchmark.responsibility_family_assessment_input.v1",
+  "candidate_hash": "sha256:fe374c080c0f346efb749965384db5543d4e7861d140331868d2a8f3e1bbb5c8",
+  "entries": [
+    {
+      "property": "common_change_reason",
+      "member_ids": [],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:severity-wire-exact-clone"],
+      "verification_ids": ["verification:severity-wire-source-reading"]
+    },
+    {
+      "property": "separation_rationale",
+      "member_ids": [],
+      "disposition": "opposes",
+      "evidence_ids": ["evidence:severity-wire-exact-clone"],
+      "verification_ids": ["verification:severity-wire-source-reading"]
+    },
+    {
+      "property": "shared_conformance_feasibility",
+      "member_ids": [],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:severity-wire-exact-clone"],
+      "verification_ids": ["verification:severity-wire-source-reading"]
+    },
+    {
+      "property": "common_contract_applies",
+      "member_ids": [
+        "responsibility-member:core-planner-severity-text",
+        "responsibility-member:store-projection-severity-text"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:severity-wire-exact-clone"],
+      "verification_ids": ["verification:severity-wire-source-reading"]
+    },
+    {
+      "property": "compatibility_preservation",
+      "member_ids": [
+        "responsibility-member:core-planner-severity-text",
+        "responsibility-member:store-projection-severity-text"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:severity-wire-exact-clone"],
+      "verification_ids": ["verification:severity-wire-source-reading"]
+    },
+    {
+      "property": "performance_preservation",
+      "member_ids": [
+        "responsibility-member:core-planner-severity-text",
+        "responsibility-member:store-projection-severity-text"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:severity-wire-exact-clone"],
+      "verification_ids": ["verification:severity-wire-source-reading"]
+    },
+    {
+      "property": "purpose_constraints_preserved",
+      "member_ids": [
+        "responsibility-member:core-planner-severity-text",
+        "responsibility-member:store-projection-severity-text"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:severity-wire-exact-clone"],
+      "verification_ids": ["verification:severity-wire-source-reading"]
+    },
+    {
+      "property": "shared_validator_feasibility",
+      "member_ids": [
+        "responsibility-member:core-planner-severity-text",
+        "responsibility-member:store-projection-severity-text"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:severity-wire-exact-clone"],
+      "verification_ids": ["verification:severity-wire-source-reading"]
+    },
+    {
+      "property": "typed_error_preservation",
+      "member_ids": [
+        "responsibility-member:core-planner-severity-text",
+        "responsibility-member:store-projection-severity-text"
+      ],
+      "disposition": "supports",
+      "evidence_ids": ["evidence:severity-wire-exact-clone"],
+      "verification_ids": ["verification:severity-wire-source-reading"]
+    }
+  ]
+}

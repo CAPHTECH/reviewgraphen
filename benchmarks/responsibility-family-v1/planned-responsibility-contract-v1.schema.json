@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.local/benchmarks/responsibility-family-v1/planned-responsibility-contract-v1.schema.json",
+  "title": "ReviewGraphen planned responsibility contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "contract_id", "snapshot_id", "signal_extractor", "clauses", "search_signals", "unknowns"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.benchmark.planned_responsibility_contract.v1"},
+    "contract_id": {"type": "string", "pattern": "^planned-responsibility-contract:"},
+    "snapshot_id": {"type": "string", "pattern": "^snapshot:"},
+    "signal_extractor": {"const": "reviewgraphen.ingest.rust-responsibility-signals@1"},
+    "clauses": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/clause"}
+    },
+    "search_signals": {"$ref": "#/$defs/search_signals"},
+    "unknowns": {"$ref": "#/$defs/text_array"}
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "text_array": {
+      "type": "array",
+      "maxItems": 62,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/text"}
+    },
+    "term_array": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/text"}
+    },
+    "clause": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clause_id", "kind", "statement"],
+      "properties": {
+        "clause_id": {"$ref": "#/$defs/text"},
+        "kind": {
+          "enum": [
+            "precondition",
+            "postcondition",
+            "invariant",
+            "typed_error",
+            "compatibility",
+            "performance",
+            "purpose_constraint"
+          ]
+        },
+        "statement": {"$ref": "#/$defs/text"}
+      }
+    },
+    "search_signals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["callable", "signature", "operation"],
+      "anyOf": [
+        {"properties": {"callable": {"minItems": 1}}},
+        {"properties": {"signature": {"minItems": 1}}}
+      ],
+      "properties": {
+        "callable": {"$ref": "#/$defs/term_array"},
+        "signature": {"$ref": "#/$defs/term_array"},
+        "operation": {"allOf": [{"$ref": "#/$defs/term_array"}], "minItems": 2}
+      }
+    }
+  }
+}

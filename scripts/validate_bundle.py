@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = ROOT / "schemas"
 EXAMPLE = ROOT / "examples" / "double-submit-payment"
 M20_BUNDLE = ROOT / "benchmarks" / "m20-changed-public-callee-utility-v1"
-VALIDATION_ROOTS = (SCHEMAS, M20_BUNDLE, ROOT / "docs")
+STRUCTURAL_SLOPPINESS_BUNDLE = ROOT / "benchmarks" / "structural-sloppiness-v1"
+VALIDATION_ROOTS = (SCHEMAS, M20_BUNDLE, STRUCTURAL_SLOPPINESS_BUNDLE, ROOT / "docs")
 IGNORED_PATH_PARTS = {
     ".git",
     ".reviewgraphen",
@@ -148,9 +149,30 @@ def validate_schemas() -> list[str]:
     ]
     for schema_name in benchmark_schemas:
         Draft202012Validator.check_schema(load_json(SCHEMAS / schema_name))
+    structural_schema_name = "structural-sloppiness-report-v1.schema.json"
+    structural_schema = load_json(
+        STRUCTURAL_SLOPPINESS_BUNDLE / "schema" / structural_schema_name
+    )
+    Draft202012Validator.check_schema(structural_schema)
+    structural_example_name = "example-missing-bridge-report.json"
+    structural_example = load_json(STRUCTURAL_SLOPPINESS_BUNDLE / structural_example_name)
+    structural_errors = sorted(
+        Draft202012Validator(
+            structural_schema, format_checker=FormatChecker()
+        ).iter_errors(structural_example),
+        key=lambda error: list(error.absolute_path),
+    )
+    if structural_errors:
+        rendered = "\n".join(
+            f"{structural_example_name}: /{'/'.join(map(str, error.absolute_path))}: "
+            f"{error.message}"
+            for error in structural_errors
+        )
+        fail(rendered)
     return [
         f"validated JSON Schema examples: {len(pairs)}",
         f"validated benchmark JSON Schemas: {len(benchmark_schemas)}",
+        "validated structural-sloppiness experimental schema/example: 1",
     ]
 
 

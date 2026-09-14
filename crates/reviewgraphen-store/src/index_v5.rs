@@ -17,8 +17,7 @@ use reviewgraphen_core::{
     BorrowedArtifactSourceProjectionV3,
     BorrowedProjectionPayloadRefV4 as BorrowedProjectionPayloadV4,
     BorrowedProjectionPayloadV4 as CoreBorrowedProjectionPayloadV4, BorrowedV4EventMetadata,
-    ContentHash, DecodedPayload, GluingBundleV4, RunGenesisSnapshot, Severity, StableId,
-    canonical_json,
+    ContentHash, DecodedPayload, GluingBundleV4, RunGenesisSnapshot, StableId, canonical_json,
 };
 use rusqlite::{Row, types::ValueRef};
 use rustix::{
@@ -4972,16 +4971,6 @@ impl Serialize for BorrowedDescriptorProjectionV4<'_, '_> {
     }
 }
 
-fn severity_text(value: Severity) -> &'static str {
-    match value {
-        Severity::Info => "info",
-        Severity::Low => "low",
-        Severity::Medium => "medium",
-        Severity::High => "high",
-        Severity::Critical => "critical",
-    }
-}
-
 fn phase0_plan_row(
     envelope: &impl ProjectionEventMetadataV5,
     plan: &reviewgraphen_core::BorrowedReviewPlanProjectionV4<'_>,
@@ -5034,8 +5023,8 @@ impl Serialize for BorrowedPlanRiskProjection<'_> {
                 fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
                     let mut st = s.serialize_struct("Risk", 3)?;
                     st.serialize_field("id", self.0.id())?;
-                    st.serialize_field("impact", &severity_text(self.0.impact()))?;
-                    st.serialize_field("likelihood", &severity_text(self.0.likelihood()))?;
+                    st.serialize_field("impact", &self.0.impact().as_str())?;
+                    st.serialize_field("likelihood", &self.0.likelihood().as_str())?;
                     st.end()
                 }
             }
@@ -5319,7 +5308,7 @@ impl Serialize for BorrowedContextLosses<'_> {
                     &BorrowedIteratorSequence(RefCell::new(self.0.affected_properties())),
                 )?;
                 map.serialize_entry("description", self.0.description())?;
-                map.serialize_entry("severity", severity_text(self.0.severity()))?;
+                map.serialize_entry("severity", self.0.severity().as_str())?;
                 map.serialize_entry(
                     "source_ids",
                     &BorrowedIteratorSequence(RefCell::new(self.0.source_ids())),

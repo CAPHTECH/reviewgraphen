@@ -59,6 +59,33 @@ pub struct IngestLimits {
     pub max_file_bytes: usize,
 }
 
+#[cfg(test)]
+mod shared_path_contract_tests {
+    use super::normalized_repository_path;
+
+    #[test]
+    fn ingest_path_obeys_shared_snapshot_relative_contract() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/snapshot-relative-path-contract.v1.json"
+        )))
+        .expect("shared path contract fixture");
+        assert_eq!(
+            fixture["schema"],
+            "reviewgraphen.snapshot_relative_path_contract_cases.v1"
+        );
+        for case in fixture["common_cases"].as_array().expect("common cases") {
+            let path = case["path"].as_str().expect("case path");
+            let valid = case["valid"].as_bool().expect("case validity");
+            assert_eq!(
+                normalized_repository_path(path),
+                valid,
+                "shared path contract case {path:?}"
+            );
+        }
+    }
+}
+
 impl Default for IngestLimits {
     fn default() -> Self {
         Self {
@@ -2092,6 +2119,7 @@ impl SnapshotIdentities {
             "contract": "reviewgraphen-ingest@1",
             "git_adapter": "reviewgraphen.ingest.git@1",
             "rust_adapter": "reviewgraphen.ingest.rust-syn@1",
+            "rust_responsibility_signals": "reviewgraphen.ingest.rust-responsibility-signals@1",
             "cargo_adapter": "reviewgraphen.ingest.cargo-metadata@1",
             "limits": config.limits,
             "tool_versions": {

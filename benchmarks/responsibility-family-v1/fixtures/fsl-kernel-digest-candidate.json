@@ -1,0 +1,46 @@
+{
+  "schema": "reviewgraphen.benchmark.responsibility_family_candidate.v1",
+  "candidate_id": "responsibility-family-candidate:fsl-kernel-digest",
+  "proposed_family_id": "responsibility-family:fsl-kernel-digest",
+  "snapshot_id": "snapshot:38f97bfdaf5a7d251de62dd43e37ab4b41e4ef73",
+  "proposed_common_contract": {
+    "id": "fsl-kernel-ast-v1+sha256",
+    "hash": "sha256:c650912192a1117b1594e7cfc4c9d2479d52fcab2d2f67fdd9013c84ca124e53"
+  },
+  "extractor": {
+    "id": "reviewgraphen.ingest.rust-responsibility-shape",
+    "version": "1"
+  },
+  "members": [
+    {
+      "member_id": "responsibility-member:fsl-tools-normalized-kernel-ast",
+      "path": "rust/fsl-tools/src/document_digest.rs",
+      "symbol": "normalized_kernel_ast",
+      "anchor": "sha256:f986a5db4e96d651c9cdcb5abd85d9c5785feb3e187eb4fa89ddfce01aa95d43",
+      "purpose_constraints": [
+        "document producer remains independently implemented",
+        "location-normalized kernel digest remains byte compatible"
+      ],
+      "source_ids": [
+        "function:sha256:52b0317ed8daf4488da0ccf036f1061a704fb9b60b9177e6d8da724433597a22"
+      ]
+    },
+    {
+      "member_id": "responsibility-member:fslc-approval-normalized-ast",
+      "path": "rust/fslc/src/approval.rs",
+      "symbol": "normalized_ast",
+      "anchor": "sha256:4903dff54075ef6480ddf55ba0da94002940734cff93d8a5adcbc439d0b030d7",
+      "purpose_constraints": [
+        "approval producer remains independently implemented",
+        "location-normalized kernel digest remains byte compatible"
+      ],
+      "source_ids": [
+        "function:sha256:675aab1aefc9e42188c9db0a0e1729e35781a14e38441a8894fb6a235c663da4"
+      ]
+    }
+  ],
+  "unknowns": [
+    "performance outside the focused digest test was not measured",
+    "the remaining FSL digest callers were not enumerated as family members"
+  ]
+}

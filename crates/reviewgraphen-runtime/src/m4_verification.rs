@@ -1115,6 +1115,185 @@ mod tests {
     }
 
     #[test]
+    fn tmp_probe_record_human_decision_edges() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, roots, claim_id) = public_v3_fixture_journal(&root, "run:tmp-probe-edges", 1);
+        let (mut session, mut basis) = journal.replayed_v3_session(&roots).unwrap();
+        verify_fixed_fixture(&mut session, &root, &claim_id, &mut basis).unwrap();
+
+        // 1. unknown claim id must fail with a typed error, session stays usable
+        let bogus = StableId::parse("claim:nonexistent-claim").unwrap();
+        let err = record_human_decision(
+            &mut session,
+            &bogus,
+            DecisionInputV3::new(
+                DecisionOutcomeV3::Accept,
+                "human:runtime-reviewer",
+                "runtime-review-board",
+                "should not apply",
+                "2026-08-10T00:00:00Z",
+                None,
+            ),
+            &mut basis,
+        )
+        .unwrap_err();
+        println!("EDGE1 unknown claim => {err:?}");
+
+        // 2. grant expired by issued_at must be refused
+        let err = record_human_decision(
+            &mut session,
+            &claim_id,
+            DecisionInputV3::new(
+                DecisionOutcomeV3::Accept,
+                "human:runtime-reviewer",
+                "runtime-review-board",
+                "expired window",
+                "2028-08-10T00:00:00Z",
+                None,
+            ),
+            &mut basis,
+        )
+        .unwrap_err();
+        println!("EDGE2 expired grant => {err:?}");
+
+        // 3. unknown actor must be refused
+        let err = record_human_decision(
+            &mut session,
+            &claim_id,
+            DecisionInputV3::new(
+                DecisionOutcomeV3::Accept,
+                "human:intruder",
+                "runtime-review-board",
+                "no grant",
+                "2026-08-10T00:00:00Z",
+                None,
+            ),
+            &mut basis,
+        )
+        .unwrap_err();
+        println!("EDGE3 unknown actor => {err:?}");
+
+        // 4. expires_at before issued_at
+        let r = record_human_decision(
+            &mut session,
+            &claim_id,
+            DecisionInputV3::new(
+                DecisionOutcomeV3::Accept,
+                "human:runtime-reviewer",
+                "runtime-review-board",
+                "backwards expiry",
+                "2026-08-10T00:00:00Z",
+                Some("2026-01-01T00:00:00Z".to_owned()),
+            ),
+            &mut basis,
+        );
+        println!(
+            "EDGE4 expires_at<issued_at => {:?}",
+            r.as_ref().map(|_| "ok").map_err(|e| format!("{e:?}"))
+        );
+        if r.is_ok() {
+            let a = session.claim_assessment(&claim_id).unwrap().unwrap();
+            println!(
+                "EDGE4 disposition={:?} active={:?} decisions={}",
+                a.disposition(),
+                a.active_decision_id(),
+                session.aggregate().unwrap().execution_claims().count()
+            );
+        }
+
+        // 5. second decision on the same claim
+        let r = record_human_decision(
+            &mut session,
+            &claim_id,
+            DecisionInputV3::new(
+                DecisionOutcomeV3::Reject,
+                "human:runtime-reviewer",
+                "runtime-review-board",
+                "second decision",
+                "2026-08-11T00:00:00Z",
+                None,
+            ),
+            &mut basis,
+        );
+        println!(
+            "EDGE5 second decision => {:?}",
+            r.as_ref().map(|_| "ok").map_err(|e| format!("{e:?}"))
+        );
+    }
+
+    #[test]
+    fn stale_decision_basis_is_rejected_without_poisoning_fresh_session() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();
+        let (journal, roots, claim_id) = public_v3_fixture_journal(&root, "run:tmp-probe-stale", 1);
+        // Capture and release a basis before opening the write session. A replay
+        // session holds the journal lock, so opening both at once deadlocks.
+        let (stale_session, mut stale) = journal.replayed_v3_session(&roots).unwrap();
+        drop(stale_session);
+        let (mut session, mut basis) = journal.replayed_v3_session(&roots).unwrap();
+
+        // capture basis BEFORE the fixture verification bundle advances it
+        verify_fixed_fixture(&mut session, &root, &claim_id, &mut basis).unwrap();
+
+        let stale_result = record_human_decision(
+            &mut session,
+            &claim_id,
+            DecisionInputV3::new(
+                DecisionOutcomeV3::Accept,
+                "human:runtime-reviewer",
+                "runtime-review-board",
+                "decision on stale basis",
+                "2026-08-10T00:00:00Z",
+                None,
+            ),
+            &mut stale,
+        );
+        assert!(matches!(
+            stale_result,
+            Err(M4RuntimeError::Journal(JournalError::Domain(
+                reviewgraphen_core::DomainError::AuthorityReplayBasisMismatch
+            )))
+        ));
+
+        // after refusal, a correct call must still work
+        let fresh_result = record_human_decision(
+            &mut session,
+            &claim_id,
+            DecisionInputV3::new(
+                DecisionOutcomeV3::Accept,
+                "human:runtime-reviewer",
+                "runtime-review-board",
+                "decision on fresh basis",
+                "2026-08-10T00:00:00Z",
+                None,
+            ),
+            &mut basis,
+        );
+        assert!(fresh_result.is_ok());
+
+        // second Accept with a valid grant after an active Accept decision
+        let second_result = record_human_decision(
+            &mut session,
+            &claim_id,
+            DecisionInputV3::new(
+                DecisionOutcomeV3::Accept,
+                "human:runtime-reviewer",
+                "runtime-review-board",
+                "second accept",
+                "2026-08-12T00:00:00Z",
+                None,
+            ),
+            &mut basis,
+        );
+        assert!(second_result.is_ok());
+        let a = session.claim_assessment(&claim_id).unwrap().unwrap();
+        assert_eq!(a.disposition(), AssessmentDispositionV3::Accepted);
+        assert_eq!(a.review_status(), AssessmentReviewStatusV3::Accepted);
+        assert!(a.active_decision_id().is_some());
+    }
+
+    #[test]
     fn static_verification_is_durable_but_remains_proposed_and_unreviewed() {
         let workspace = tempfile::tempdir().unwrap();
         let root = StoreRoot::open(workspace.path(), StoreLimits::default()).unwrap();

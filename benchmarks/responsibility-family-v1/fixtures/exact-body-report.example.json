@@ -1,0 +1,74 @@
+{
+  "schema": "reviewgraphen.benchmark.exact_body_candidate_report.v1",
+  "snapshot_id": "snapshot:example",
+  "extractor": {
+    "id": "reviewgraphen.benchmark.accepted-rust-exact-body@1",
+    "rust_anchor_syn_version": "2.0.119"
+  },
+  "profile": {
+    "included_path": "crates/*/src/**/*.rs",
+    "included_symbol_kinds": ["function", "method"],
+    "test_exclusion_fact": "artifact.attributes.test_function=true"
+  },
+  "authority": {
+    "classification": "non_authority",
+    "accepted": false,
+    "verified": false,
+    "human_accepted": false,
+    "sign_off": false
+  },
+  "denominator": {
+    "accepted_rust_symbols": 3,
+    "eligible_functions": 2,
+    "excluded_non_function_symbols": 1,
+    "excluded_profile_paths": 0,
+    "excluded_test_functions": 0,
+    "excluded_unknown_test_scope": 0,
+    "candidate_groups": 1,
+    "candidate_members": 2
+  },
+  "candidates": [
+    {
+      "candidate_id": "responsibility-family-candidate-signal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "normalized_body_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "minimum_member_span_lines": 9,
+      "status": "candidate_only",
+      "members": [
+        {
+          "artifact_id": "function:alpha",
+          "path": "crates/a/src/lib.rs",
+          "symbol": "crate::alpha",
+          "start_line": 10,
+          "end_line": 18,
+          "symbol_kind": "function",
+          "signature_shape_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        {
+          "artifact_id": "function:beta",
+          "path": "crates/b/src/lib.rs",
+          "symbol": "crate::beta",
+          "start_line": 20,
+          "end_line": 28,
+          "symbol_kind": "function",
+          "signature_shape_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      ],
+      "unknowns": [
+        "body equality does not establish a common contract",
+        "signature compatibility is not established"
+      ]
+    }
+  ],
+  "information_loss": [
+    "function names and signature differences are not used for grouping",
+    "only exact normalized body hashes are grouped; near clones are omitted",
+    "standalone cfg(test) helpers can have test_function=false and remain included",
+    "symbols without an accepted test-scope fact are excluded",
+    "test functions and paths outside the declared production profile are excluded"
+  ],
+  "unknowns": [
+    "macro-expanded functions are not observed",
+    "responsibility and common change reason require decision-stage evidence",
+    "test-only compilation is not fully represented by the accepted test_function fact"
+  ]
+}

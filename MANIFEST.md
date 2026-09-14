@@ -1,94 +1,48 @@
-# ReviewGraphen Documentation Bundle Manifest
+# ReviewGraphen v0.1.0 Manifest
 
-> Bundle version: Draft v0.1  
-> Created: 2026-08-07  
-> Baseline: HigherGraphen 0.7.1 / `CAPHTECH/higher-graphen@0f1e1cfe`
+> Status: public alpha release candidate
+> Updated: 2026-09-15
 
 ## Entry points
 
-- [`README.md`](README.md) — product overview and central thesis。
-- [`docs/index.md`](docs/index.md) — reading routes and normative order。
-- [`AGENTS.md`](AGENTS.md) — implementation rules for humans and coding agents。
-- [`VALIDATION.md`](VALIDATION.md) — offline validation result and known limitation。
-- [`DEVELOPMENT.md`](DEVELOPMENT.md) — Rust development harness and verification entry points。
+- [`README.md`](README.md): product boundary, supported platforms and install.
+- [`docs/index.md`](docs/index.md): design and contract reading routes.
+- [`docs/23_current_capability_status.md`](docs/23_current_capability_status.md):
+  dated record of implemented and experimental capabilities.
+- [`AGENTS.md`](AGENTS.md): implementation invariants.
+- [`DEVELOPMENT.md`](DEVELOPMENT.md): local verification.
+- [`RELEASE.md`](RELEASE.md): release procedure and supported binary targets.
+- [`SECURITY.md`](SECURITY.md): vulnerability reporting and support policy.
 
-## Design documents
+## Shipped surfaces
 
-The numbered series under `docs/` covers:
+- The `reviewgraphen` CLI with its closed `review`, `schema` and `--version`
+  surface.
+- Versioned schemas, fixtures and reference scenarios.
+- Linux x86-64 and Apple Silicon macOS release archives.
+- [`install.sh`](install.sh), which installs the CLI and the checked-in
+  ReviewGraphen skill for Codex and Claude Code from checksum-verified GitHub
+  Release assets.
+- Experimental benchmark binaries and contracts for structural-sloppiness and
+  responsibility-family research. These remain non-authoritative and do not
+  extend the production CLI.
 
-```text
-00–02  vision, positioning, research foundation
-03–04  conceptual model and HigherGraphen mapping
-05–06  architecture and ProgramSpace ingestion
-07–12  obligations, context/gluing, execution, evidence, coverage, staleness
-13–16  CLI, schema/report, storage, security
-17–21  evaluation, MVP, backlog, commercial boundary, migration
-```
+## Design record
 
-Additional references:
+The numbered documents under `docs/` define the conceptual and operational
+model. The complete ADR set under [`docs/adr/`](docs/adr/) is authoritative for
+accepted decisions; the current series runs through ADR 0051. Program facts,
+Review claims and Evidence remain separate, and benchmark findings are not
+promoted to accepted product state.
 
-- [`docs/glossary.md`](docs/glossary.md)
-- [`docs/source_trace.md`](docs/source_trace.md)
+## Deliberately excluded from the release
 
-## Architecture decisions
+- Build outputs and local `.reviewgraphen*` run directories.
+- Untracked orchestration transcripts, model outputs and scratch repositories
+  under `tmp/`.
+- Local benchmark runs that are not referenced fixtures or frozen public
+  research artifacts.
+- Credentials, provider configuration and machine-local caches.
 
-Eleven accepted-for-v0.1 ADRs live under [`docs/adr/`](docs/adr/):
-
-1. ReviewGraphen is an Intermediate Tool。
-2. Artifact / Review / Evidence Space separation。
-3. ReviewObligations define the coverage universe。
-4. Minimal context projection with declared loss。
-5. LLM output is a reviewable claim。
-6. Standalone repository over HigherGraphen。
-7. Local-first event log and derived index。
-8. Language-neutral core with profile-specific extractors。
-9. Minimal Rust development harness before product crates。
-10. M7 detection benchmark contract: arm-neutral ontology, manifest-bound protocol, and non-authority scoring。
-11. M7 real regression corpus: machine presence evidence, target-only control semantics, and additive version boundary。
-
-## Contracts
-
-[`schemas/`](schemas/) contains:
-
-- ProgramSpace input schema and example。
-- ReviewObligation universe schema and example。
-- Review report schema and example。
-- Local configuration example。
-- M7 pilot and real-regression benchmark contracts (research artifacts, never accepted review state)。
-- Isolated Codex/Claude process reviewer record and exact-byte replay contract (non-authority)。
-- Schema validation notes。
-
-## Reference scenario
-
-[`examples/double-submit-payment/`](examples/double-submit-payment/) contains:
-
-- accepted ProgramSpace fixture;
-- risk-first review plan;
-- full review report;
-- a small intentionally vulnerable Rust fixture;
-- explanation of Node / Relation / Path / Invariant / Gluing behavior。
-
-## Agent integration
-
-[`skills/reviewgraphen/SKILL.md`](skills/reviewgraphen/SKILL.md) defines when and how an agent should use ReviewGraphen, including safety and epistemic boundaries. It is the single agent-facing skill: it carries both the review methodology and the narrow implemented CLI surface, and it states which subcommands do not exist so that a pipeline stage is never mistaken for a command.
-
-## Validation
-
-[`scripts/validate_bundle.py`](scripts/validate_bundle.py) checks:
-
-- JSON and TOML parsing;
-- Draft 2020-12 schema validity and examples;
-- Markdown relative links and code fences;
-- fixture cross-references and state invariants;
-- ProgramSpace / obligation / report consistency;
-- optional Rust fixture execution when `cargo` is available。
-
-Run:
-
-```bash
-python scripts/validate_bundle.py
-```
-
-## Artifact status
-
-This bundle is an implementation-ready design baseline, not an implemented ReviewGraphen release. Commands, package names and schemas are proposed contracts until code and compatibility tests establish them.
+The git tree for the release tag, not the developer worktree, is the release
+manifest. See [`VALIDATION.md`](VALIDATION.md) for the checks applied to it.

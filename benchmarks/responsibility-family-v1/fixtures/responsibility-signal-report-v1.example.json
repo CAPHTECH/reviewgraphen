@@ -1,0 +1,95 @@
+{
+  "schema": "reviewgraphen.benchmark.responsibility_signal_candidate_report.v1",
+  "snapshot_id": "snapshot:example",
+  "extractor": {
+    "id": "reviewgraphen.benchmark.rust-responsibility-signal-pairs@1",
+    "rust_anchor_syn_version": "2.0.119"
+  },
+  "profile": {
+    "included_path": "crates/*/src/**/*.rs | rust/*/src/**/*.rs",
+    "included_symbol_kinds": ["function", "method"],
+    "test_exclusion_fact": "artifact.attributes.test_scope=test@reviewgraphen.ingest.rust-test-scope@1"
+  },
+  "authority": {
+    "classification": "non_authority",
+    "accepted": false,
+    "verified": false,
+    "human_accepted": false,
+    "sign_off": false
+  },
+  "selection": {
+    "signal_fact_extractor": "reviewgraphen.ingest.rust-responsibility-signals@1",
+    "minimum_callable_or_signature_terms": 1,
+    "minimum_operation_terms": 2,
+    "minimum_operation_jaccard_ppm": 600000,
+    "max_selective_term_frequency": 32,
+    "frequency_denominator": "eligible_functions"
+  },
+  "denominator": {
+    "accepted_rust_symbols": 3,
+    "eligible_functions": 2,
+    "excluded_non_function_symbols": 1,
+    "excluded_profile_paths": 0,
+    "excluded_test_functions": 0,
+    "excluded_unknown_test_scope": 0,
+    "excluded_missing_shape_fact": 0,
+    "excluded_unknown_signal_fact": 0,
+    "excluded_same_shape_pairs": 0,
+    "evaluated_distinct_shape_pairs": 1,
+    "candidate_pairs": 1,
+    "candidate_members": 2
+  },
+  "ignored_high_frequency_terms": {
+    "callable": [],
+    "signature": [],
+    "operation": []
+  },
+  "candidates": [
+    {
+      "candidate_id": "responsibility-family-candidate-signal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rank": 1,
+      "status": "candidate_only",
+      "matched_callable": ["load"],
+      "matched_signature": ["PathBuf"],
+      "matched_operation": ["parse", "read"],
+      "operation_jaccard_ppm": 666667,
+      "members": [
+        {
+          "artifact_id": "function:alpha",
+          "path": "crates/a/src/lib.rs",
+          "symbol": "crate::load_alpha",
+          "start_line": 10,
+          "end_line": 24,
+          "symbol_kind": "function",
+          "signature_shape_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "normalized_body_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "responsibility_shape_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        {
+          "artifact_id": "method:beta",
+          "path": "rust/b/src/lib.rs",
+          "symbol": "crate::Loader::load_beta",
+          "start_line": 30,
+          "end_line": 49,
+          "symbol_kind": "method",
+          "signature_shape_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "normalized_body_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "responsibility_shape_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "unknowns": [
+        "shared syntax signals do not establish a common contract",
+        "a common change reason requires decision-stage evidence"
+      ]
+    }
+  ],
+  "information_loss": [
+    "literal values and comments do not contribute signals",
+    "type aliases, macro expansion and dynamic dispatch are unresolved",
+    "pairs with the same responsibility-shape hash are excluded"
+  ],
+  "unknowns": [
+    "candidate membership is not responsibility-family acceptance",
+    "maintenance improvement requires separate before-and-after verification"
+  ]
+}

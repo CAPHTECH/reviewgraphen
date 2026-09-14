@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reviewgraphen.local/benchmarks/responsibility-family-v1/responsibility-search-report-v1.schema.json",
+  "title": "ReviewGraphen planned responsibility search report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "search_id", "snapshot_id", "contract", "program_space", "rule", "signal_extractor", "selection", "contract_clause_handling", "authority", "denominator", "query_signals", "candidates", "information_loss", "unknowns"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.benchmark.responsibility_search_report.v1"},
+    "search_id": {"type": "string", "pattern": "^responsibility-search:sha256:[0-9a-f]{64}$"},
+    "snapshot_id": {"type": "string", "pattern": "^snapshot:"},
+    "contract": {"$ref": "#/$defs/contract_binding"},
+    "program_space": {"$ref": "#/$defs/program_space_binding"},
+    "rule": {"const": "reviewgraphen.benchmark.planned-responsibility-search@1"},
+    "signal_extractor": {"const": "reviewgraphen.ingest.rust-responsibility-signals@1"},
+    "selection": {"$ref": "#/$defs/selection"},
+    "contract_clause_handling": {"$ref": "#/$defs/contract_clause_handling"},
+    "authority": {"$ref": "#/$defs/non_authority"},
+    "denominator": {"$ref": "#/$defs/denominator"},
+    "query_signals": {"$ref": "#/$defs/query_signals"},
+    "candidates": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/candidate"}
+    },
+    "information_loss": {"$ref": "#/$defs/text_array"},
+    "unknowns": {"$ref": "#/$defs/text_array"}
+  },
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0},
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "program_content_hash": {"type": "string", "pattern": "^(sha256|blake3|git):[0-9a-f]{8,}$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "text_array": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/text"}
+    },
+    "term_array": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/text"}
+    },
+    "signals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["callable", "signature", "operation"],
+      "properties": {
+        "callable": {"$ref": "#/$defs/term_array"},
+        "signature": {"$ref": "#/$defs/term_array"},
+        "operation": {"$ref": "#/$defs/term_array"}
+      }
+    },
+    "contract_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_id", "canonical_hash", "clause_count"],
+      "properties": {
+        "contract_id": {"type": "string", "pattern": "^planned-responsibility-contract:"},
+        "canonical_hash": {"$ref": "#/$defs/hash"},
+        "clause_count": {"$ref": "#/$defs/count"}
+      }
+    },
+    "program_space_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_id", "profile_version", "rule_set_hash", "extractor_set_hash", "policy_version"],
+      "properties": {
+        "profile_id": {"type": "string", "minLength": 1},
+        "profile_version": {"type": "string", "minLength": 1},
+        "rule_set_hash": {"$ref": "#/$defs/program_content_hash"},
+        "extractor_set_hash": {"$ref": "#/$defs/program_content_hash"},
+        "policy_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frequency_denominator", "max_selective_term_frequency", "minimum_callable_or_signature_matches", "minimum_selective_operation_matches", "minimum_query_operation_coverage_ppm", "candidate_selection"],
+      "properties": {
+        "frequency_denominator": {"const": "eligible_functions"},
+        "max_selective_term_frequency": {"type": "integer", "minimum": 32},
+        "minimum_callable_or_signature_matches": {"const": 1},
+        "minimum_selective_operation_matches": {"const": 2},
+        "minimum_query_operation_coverage_ppm": {"const": 600000},
+        "candidate_selection": {"const": "all_eligible_matching_candidates"}
+      }
+    },
+    "contract_clause_handling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["semantic_content_retained_by", "semantic_content_evaluated"],
+      "properties": {
+        "semantic_content_retained_by": {"const": "contract_hash_only"},
+        "semantic_content_evaluated": {"const": false}
+      }
+    },
+    "non_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "accepted", "verified", "human_accepted", "sign_off"],
+      "properties": {
+        "classification": {"const": "non_authority"},
+        "accepted": {"const": false},
+        "verified": {"const": false},
+        "human_accepted": {"const": false},
+        "sign_off": {"const": false}
+      }
+    },
+    "denominator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accepted_rust_symbols", "eligible_functions", "excluded_non_function_symbols", "excluded_profile_paths", "excluded_test_functions", "excluded_unknown_test_scope", "excluded_unknown_signal_fact", "evaluated_functions", "candidate_count", "candidate_clause_obligations"],
+      "properties": {
+        "accepted_rust_symbols": {"$ref": "#/$defs/count"},
+        "eligible_functions": {"$ref": "#/$defs/count"},
+        "excluded_non_function_symbols": {"$ref": "#/$defs/count"},
+        "excluded_profile_paths": {"$ref": "#/$defs/count"},
+        "excluded_test_functions": {"$ref": "#/$defs/count"},
+        "excluded_unknown_test_scope": {"$ref": "#/$defs/count"},
+        "excluded_unknown_signal_fact": {"$ref": "#/$defs/count"},
+        "evaluated_functions": {"$ref": "#/$defs/count"},
+        "candidate_count": {"$ref": "#/$defs/count"},
+        "candidate_clause_obligations": {"$ref": "#/$defs/count"}
+      }
+    },
+    "query_signals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selective", "absent", "high_frequency"],
+      "properties": {
+        "selective": {"$ref": "#/$defs/signals"},
+        "absent": {"$ref": "#/$defs/signals"},
+        "high_frequency": {"$ref": "#/$defs/signals"}
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "rank", "artifact_id", "path", "symbol", "source_hash", "member_hash", "matched_signals", "unmatched_signals", "coverage", "unverified_clause_ids", "unknowns"],
+      "properties": {
+        "candidate_id": {"type": "string", "pattern": "^responsibility-search-candidate:sha256:[0-9a-f]{64}$"},
+        "rank": {"type": "integer", "minimum": 1},
+        "artifact_id": {"type": "string", "pattern": "^(function|method):"},
+        "path": {"type": "string", "pattern": "^(crates|rust)/[^/]+/src/.+\\.rs$"},
+        "symbol": {"$ref": "#/$defs/text"},
+        "source_hash": {"$ref": "#/$defs/hash"},
+        "member_hash": {"$ref": "#/$defs/hash"},
+        "matched_signals": {"$ref": "#/$defs/signals"},
+        "unmatched_signals": {"$ref": "#/$defs/signals"},
+        "coverage": {"$ref": "#/$defs/candidate_coverage"},
+        "unverified_clause_ids": {"$ref": "#/$defs/term_array"},
+        "unknowns": {"$ref": "#/$defs/text_array"}
+      }
+    },
+    "candidate_coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selective_callable_or_signature_matches", "selective_operation_matches", "query_operation_terms", "query_operation_coverage_ppm"],
+      "properties": {
+        "selective_callable_or_signature_matches": {"type": "integer", "minimum": 1},
+        "selective_operation_matches": {"type": "integer", "minimum": 2},
+        "query_operation_terms": {"type": "integer", "minimum": 2, "maximum": 64},
+        "query_operation_coverage_ppm": {"type": "integer", "minimum": 600000, "maximum": 1000000}
+      }
+    }
+  }
+}

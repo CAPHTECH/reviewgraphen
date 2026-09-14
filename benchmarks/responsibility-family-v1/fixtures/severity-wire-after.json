@@ -1,0 +1,38 @@
+{
+  "schema": "reviewgraphen.benchmark.responsibility_family_state.v1",
+  "family_id": "responsibility-family:severity-wire-text",
+  "snapshot_id": "snapshot:working-tree-20260914",
+  "decision_basis_id": "decision:adr-0044",
+  "common_contract": {
+    "id": "severity-wire-text@1",
+    "hash": "sha256:509fe9382d2fe060d1a18d5fa5cb46e61cfedacbcf1ba079f9be31624f0b8575"
+  },
+  "extractor": {
+    "id": "source-window-sha256",
+    "version": "1"
+  },
+  "members": [
+    {
+      "member_id": "responsibility-member:core-severity-wire-text",
+      "path": "crates/reviewgraphen-core/src/program.rs",
+      "symbol": "Severity::as_str",
+      "anchor": "sha256:97b305af289bf7b9ec5aad34f843f4e5a15abc92ab370129acf9f26fd28a1cbe",
+      "purpose_constraints": [
+        "bounded-json-writer-remains-allocation-bounded",
+        "preserve-index-v5-projection-json",
+        "preserve-planner-canonical-json",
+        "serialization-remains-allocation-free"
+      ],
+      "source_ids": [
+        "artifact:severity-wire-core-planning",
+        "artifact:severity-wire-shared-helper",
+        "artifact:severity-wire-store-index-v5"
+      ]
+    }
+  ],
+  "unknowns": [
+    "downstream users of the public Severity type are not enumerated",
+    "no performance benchmark was run before candidate registration",
+    "serde rename behavior is a related contract but not a candidate member"
+  ]
+}

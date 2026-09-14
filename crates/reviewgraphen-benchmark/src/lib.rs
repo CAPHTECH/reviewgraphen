@@ -2,6 +2,8 @@
 
 pub mod prepare;
 pub mod real;
+pub mod responsibility_family;
+pub mod structural_sloppiness;
 pub mod target_context;
 
 use reviewgraphen_core::{ContentHash, canonical_json};
@@ -40,6 +42,33 @@ pub enum BenchmarkError {
         "paired aggregate has incomplete or duplicate arms for {unit_id} replicate {replicate}"
     )]
     InvalidPair { unit_id: String, replicate: u32 },
+}
+
+#[cfg(test)]
+mod shared_path_contract_tests {
+    use super::safe_relative_path;
+
+    #[test]
+    fn benchmark_path_obeys_shared_snapshot_relative_contract() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/snapshot-relative-path-contract.v1.json"
+        )))
+        .expect("shared path contract fixture");
+        assert_eq!(
+            fixture["schema"],
+            "reviewgraphen.snapshot_relative_path_contract_cases.v1"
+        );
+        for case in fixture["common_cases"].as_array().expect("common cases") {
+            let path = case["path"].as_str().expect("case path");
+            let valid = case["valid"].as_bool().expect("case validity");
+            assert_eq!(
+                safe_relative_path(path),
+                valid,
+                "shared path contract case {path:?}"
+            );
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, BenchmarkError>;
