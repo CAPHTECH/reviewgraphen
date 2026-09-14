@@ -29,7 +29,9 @@ jobs:
   fast:
     name: Fast validation
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # A cold runner spends about seven minutes installing pinned nextest and
+    # the complete suite currently needs about five more minutes after build.
+    timeout-minutes: 25
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -90,9 +92,26 @@ jobs:
       - name: Test release installer portability
         run: sh scripts/test-install.sh
 
+  dependency-policy:
+    name: Dependency policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal
+
+      - name: Install cargo-deny
+        run: cargo +1.95.0 install cargo-deny --locked --version 0.18.7
+
+      - name: Enforce dependency policy
+        run: ./scripts/ci.sh deny
+
   scheduled:
     name: Scheduled coverage and dependency policy
-    needs: fast
+    needs: [fast, dependency-policy]
     if: >-
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && inputs.run_heavy)

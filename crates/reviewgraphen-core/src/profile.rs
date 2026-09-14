@@ -1,4 +1,4 @@
-//! The fixed, deterministic `rust.production.v1` review profile.
+//! Fixed, deterministic Rust production review profiles.
 //!
 //! This module owns the profile's path grammar, matcher precedence, canonical
 //! DTO, and D-rule exclusion identity.  It deliberately does not infer a
@@ -12,11 +12,16 @@ use thiserror::Error;
 
 /// The sole profile identifier admitted by the D `@1` rule.
 pub const RUST_PRODUCTION_PROFILE_ID: &str = "rust.production.v1";
+/// Production profile excluding conventional benchmark trees.
+pub const RUST_PRODUCTION_V2_PROFILE_ID: &str = "rust.production.v2";
 /// The sole profile schema identifier admitted by the D `@1` rule.
 pub const REVIEW_PROFILE_SCHEMA: &str = "reviewgraphen.review_profile.v1";
 /// The fixed profile content hash.
 pub const RUST_PRODUCTION_PROFILE_HASH: &str =
     "sha256:4b6cca93794ab03b1576e17d2e395ec43f731d316685247a89363ae2e840dd96";
+/// Fixed v2 profile content hash.
+pub const RUST_PRODUCTION_V2_PROFILE_HASH: &str =
+    "sha256:6f4ec559f8963f0abcc2a78718224fa0c1bd7c25c02302eb8066a7dd3915239d";
 /// The D rule that is bound into a profile exclusion record.
 pub const CHANGED_PUBLIC_CALLEE_RULE: &str = "relation.changed_public_callee@1";
 /// The Node rule admitted only by the production-v4 mixed rule set.
@@ -29,6 +34,8 @@ pub const D_OBLIGATION_WEIGHT: &str = "4.0";
 pub const NODE_OBLIGATION_WEIGHT: &str = "3.0";
 
 const CANONICAL_PROFILE_JSON: &str = r#"{"category_precedence":["vendor","generated","test","example","docs"],"exclusion_matchers":[{"category":"vendor","id":"path.vendor_component@1","operator":"component_equals_any","values":["third_party","vendor","vendored"]},{"category":"generated","id":"path.generated_component@1","operator":"component_equals_any","values":["generated","target"]},{"category":"generated","id":"path.generated_suffix@1","operator":"basename_suffix_any","values":[".generated.rs"]},{"category":"test","id":"path.test_component@1","operator":"component_equals_any","values":["benches","tests"]},{"category":"test","id":"path.test_basename@1","operator":"basename_equals_any","values":["test.rs","tests.rs"]},{"category":"test","id":"path.test_suffix@1","operator":"basename_suffix_any","values":["_test.rs","_tests.rs"]},{"category":"example","id":"path.example_component@1","operator":"component_equals_any","values":["example","examples"]},{"category":"docs","id":"path.docs_component@1","operator":"component_equals_any","values":["doc","docs"]}],"id":"rust.production.v1","path_normalization":{"absolute":"reject","backslash":"reject","case_fold":false,"dot":"reject","dot_dot":"reject","empty_component":"reject","encoding":"utf-8","nul":"reject","separator":"/","unicode_normalization":"none"},"reason_ids":{"docs":"profile.exclude.docs@1","example":"profile.exclude.example@1","generated":"profile.exclude.generated@1","test":"profile.exclude.test@1","vendor":"profile.exclude.vendor@1"},"rust_source":{"basename_suffix":".rs","case_sensitive":true},"schema":"reviewgraphen.review_profile.v1"}"#;
+
+const CANONICAL_PROFILE_V2_JSON: &str = r#"{"category_precedence":["vendor","generated","test","example","docs"],"exclusion_matchers":[{"category":"vendor","id":"path.vendor_component@1","operator":"component_equals_any","values":["third_party","vendor","vendored"]},{"category":"generated","id":"path.generated_component@1","operator":"component_equals_any","values":["generated","target"]},{"category":"generated","id":"path.generated_suffix@1","operator":"basename_suffix_any","values":[".generated.rs"]},{"category":"test","id":"path.test_component@2","operator":"component_equals_any","values":["benches","benchmarks","tests"]},{"category":"test","id":"path.test_basename@1","operator":"basename_equals_any","values":["test.rs","tests.rs"]},{"category":"test","id":"path.test_suffix@1","operator":"basename_suffix_any","values":["_test.rs","_tests.rs"]},{"category":"example","id":"path.example_component@1","operator":"component_equals_any","values":["example","examples"]},{"category":"docs","id":"path.docs_component@1","operator":"component_equals_any","values":["doc","docs"]}],"id":"rust.production.v2","path_normalization":{"absolute":"reject","backslash":"reject","case_fold":false,"dot":"reject","dot_dot":"reject","empty_component":"reject","encoding":"utf-8","nul":"reject","separator":"/","unicode_normalization":"none"},"reason_ids":{"docs":"profile.exclude.docs@1","example":"profile.exclude.example@1","generated":"profile.exclude.generated@1","test":"profile.exclude.test@1","vendor":"profile.exclude.vendor@1"},"rust_source":{"basename_suffix":".rs","case_sensitive":true},"schema":"reviewgraphen.review_profile.v1"}"#;
 
 const MATCHERS: &[Matcher] = &[
     Matcher::new(
@@ -79,6 +86,22 @@ const MATCHERS: &[Matcher] = &[
         Operator::ComponentEqualsAny,
         &["doc", "docs"],
     ),
+];
+
+const MATCHERS_V2: &[Matcher] = &[
+    MATCHERS[0],
+    MATCHERS[1],
+    MATCHERS[2],
+    Matcher::new(
+        Category::Test,
+        "path.test_component@2",
+        Operator::ComponentEqualsAny,
+        &["benches", "benchmarks", "tests"],
+    ),
+    MATCHERS[4],
+    MATCHERS[5],
+    MATCHERS[6],
+    MATCHERS[7],
 ];
 
 /// A closed profile category, used only for syntactic path classification.
@@ -184,7 +207,7 @@ pub enum InvalidPathReason {
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ProfileError {
     /// The supplied profile DTO is not the one frozen by this contract.
-    #[error("review profile DTO is not the exact rust.production.v1 canonical value")]
+    #[error("review profile DTO is not an exact supported rust.production canonical value")]
     InvalidCanonicalProfile,
     /// A repository-relative Git path could not be classified.
     #[error("invalid {endpoint} profile path: {reason:?}")]
@@ -212,16 +235,50 @@ pub enum ProfileError {
 pub type ProfileResult<T> = std::result::Result<T, ProfileError>;
 
 /// The fixed review profile.  Construction never reads the filesystem.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ReviewProfile;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReviewProfile {
+    revision: ProfileRevision,
+}
 
-/// Alias for the only currently admitted review-profile implementation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProfileRevision {
+    V1,
+    V2,
+}
+
+impl Default for ReviewProfile {
+    fn default() -> Self {
+        rust_production_v1()
+    }
+}
+
+/// Compatibility alias for the fixed Rust production profile implementation.
 pub type RustProductionProfile = ReviewProfile;
 
 /// Returns the one admitted profile for `relation.changed_public_callee@1`.
 #[must_use]
 pub const fn rust_production_v1() -> ReviewProfile {
-    ReviewProfile
+    ReviewProfile {
+        revision: ProfileRevision::V1,
+    }
+}
+
+/// Returns production v2, which additionally excludes `benchmarks` trees.
+#[must_use]
+pub const fn rust_production_v2() -> ReviewProfile {
+    ReviewProfile {
+        revision: ProfileRevision::V2,
+    }
+}
+
+/// Resolves a supported profile ID without inferring policy from the tree.
+#[must_use]
+pub fn rust_production_profile(id: &str) -> Option<ReviewProfile> {
+    match id {
+        RUST_PRODUCTION_PROFILE_ID => Some(rust_production_v1()),
+        RUST_PRODUCTION_V2_PROFILE_ID => Some(rust_production_v2()),
+        _ => None,
+    }
 }
 
 impl ReviewProfile {
@@ -231,19 +288,29 @@ impl ReviewProfile {
             serde_json::from_slice(bytes).map_err(|_| ProfileError::InvalidCanonicalProfile)?;
         let recanonicalized =
             canonical_json(&value).map_err(|_| ProfileError::InvalidCanonicalProfile)?;
-        if recanonicalized != bytes || bytes != CANONICAL_PROFILE_JSON.as_bytes() {
+        if recanonicalized != bytes {
             return Err(ProfileError::InvalidCanonicalProfile);
         }
-        if ContentHash::sha256(bytes).as_str() != RUST_PRODUCTION_PROFILE_HASH {
+        let profile = if bytes == CANONICAL_PROFILE_JSON.as_bytes() {
+            rust_production_v1()
+        } else if bytes == CANONICAL_PROFILE_V2_JSON.as_bytes() {
+            rust_production_v2()
+        } else {
+            return Err(ProfileError::InvalidCanonicalProfile);
+        };
+        if ContentHash::sha256(bytes).as_str() != profile.expected_hash() {
             return Err(ProfileError::InvalidCanonicalProfile);
         }
-        Ok(Self)
+        Ok(profile)
     }
 
     /// Returns the profile identifier bound into baseline packets and exclusions.
     #[must_use]
     pub const fn id(self) -> &'static str {
-        RUST_PRODUCTION_PROFILE_ID
+        match self.revision {
+            ProfileRevision::V1 => RUST_PRODUCTION_PROFILE_ID,
+            ProfileRevision::V2 => RUST_PRODUCTION_V2_PROFILE_ID,
+        }
     }
 
     /// Returns the profile schema identifier.
@@ -255,7 +322,10 @@ impl ReviewProfile {
     /// Returns the exact fixed JCS canonical UTF-8 bytes, without a newline.
     #[must_use]
     pub const fn canonical_bytes(self) -> &'static [u8] {
-        CANONICAL_PROFILE_JSON.as_bytes()
+        match self.revision {
+            ProfileRevision::V1 => CANONICAL_PROFILE_JSON.as_bytes(),
+            ProfileRevision::V2 => CANONICAL_PROFILE_V2_JSON.as_bytes(),
+        }
     }
 
     /// Returns the SHA-256 hash of [`Self::canonical_bytes`].
@@ -267,7 +337,21 @@ impl ReviewProfile {
     /// Classifies one validated path according to the fixed matcher precedence.
     pub fn classify_path(self, path: &str) -> ProfileResult<PathClassification> {
         validate_path(path, "path")?;
-        Ok(classify_valid_path(path))
+        Ok(classify_valid_path(path, self.matchers()))
+    }
+
+    const fn expected_hash(self) -> &'static str {
+        match self.revision {
+            ProfileRevision::V1 => RUST_PRODUCTION_PROFILE_HASH,
+            ProfileRevision::V2 => RUST_PRODUCTION_V2_PROFILE_HASH,
+        }
+    }
+
+    const fn matchers(self) -> &'static [Matcher] {
+        match self.revision {
+            ProfileRevision::V1 => MATCHERS,
+            ProfileRevision::V2 => MATCHERS_V2,
+        }
     }
 
     /// Classifies raw Git-path bytes, rejecting non-UTF-8 input before matching.
@@ -297,7 +381,8 @@ impl ReviewProfile {
             Category::Example,
             Category::Docs,
         ] {
-            for matcher in MATCHERS
+            for matcher in self
+                .matchers()
                 .iter()
                 .copied()
                 .filter(|matcher| matcher.category == category)
@@ -500,11 +585,14 @@ impl ProfileExclusionRecord {
 }
 
 fn validate_profile_exclusion_bindings(bindings: &ProfileExclusionBindings) -> ProfileResult<()> {
-    if bindings.snapshot_id.kind() != "snapshot"
-        || bindings.profile_id != RUST_PRODUCTION_PROFILE_ID
-        || bindings.profile_hash.as_str() != RUST_PRODUCTION_PROFILE_HASH
-        || bindings.source_ids.is_empty()
-    {
+    let profile = rust_production_profile(&bindings.profile_id)
+        .filter(|profile| bindings.profile_hash.as_str() == profile.expected_hash());
+    let Some(profile) = profile else {
+        return Err(ProfileError::InvalidExclusion(
+            "fixed profile exclusion bindings are not exact".to_owned(),
+        ));
+    };
+    if bindings.snapshot_id.kind() != "snapshot" || bindings.source_ids.is_empty() {
         return Err(ProfileError::InvalidExclusion(
             "fixed profile exclusion bindings are not exact".to_owned(),
         ));
@@ -522,7 +610,8 @@ fn validate_profile_exclusion_bindings(bindings: &ProfileExclusionBindings) -> P
         .candidate_key
         .starts_with(&format!("{}|{prefix}", bindings.rule))
         || bindings.excluded_weight != weight
-        || !MATCHERS
+        || !profile
+            .matchers()
             .iter()
             .any(|matcher| matcher.id == bindings.matcher_id)
     {
@@ -530,7 +619,8 @@ fn validate_profile_exclusion_bindings(bindings: &ProfileExclusionBindings) -> P
             "profile exclusion candidate or matcher is not exact".to_owned(),
         ));
     }
-    let matcher = MATCHERS
+    let matcher = profile
+        .matchers()
         .iter()
         .find(|matcher| matcher.id == bindings.matcher_id)
         .expect("matcher was checked above");
@@ -619,7 +709,7 @@ fn validate_path(path: &str, endpoint: &'static str) -> ProfileResult<()> {
     })
 }
 
-fn classify_valid_path(path: &str) -> PathClassification {
+fn classify_valid_path(path: &str, matchers: &[Matcher]) -> PathClassification {
     let mut matches = Vec::new();
     for category in [
         Category::Vendor,
@@ -628,7 +718,7 @@ fn classify_valid_path(path: &str) -> PathClassification {
         Category::Example,
         Category::Docs,
     ] {
-        for matcher in MATCHERS
+        for matcher in matchers
             .iter()
             .copied()
             .filter(|matcher| matcher.category == category)
@@ -651,7 +741,7 @@ fn classify_valid_path(path: &str) -> PathClassification {
             .rsplit('/')
             .next()
             .is_some_and(|basename| basename.ends_with(".rs"))
-            && !MATCHERS
+            && !matchers
                 .iter()
                 .filter(|matcher| matcher.category == Category::Test)
                 .any(|matcher| matcher.matches(path)),
@@ -884,13 +974,18 @@ fn validate_bindings(bindings: &DExclusionBindings) -> ProfileResult<()> {
             "snapshot_id must use snapshot namespace".to_owned(),
         ));
     }
+    let profile = rust_production_profile(&bindings.profile_id)
+        .filter(|profile| bindings.profile_hash.as_str() == profile.expected_hash());
+    let Some(profile) = profile else {
+        return Err(ProfileError::InvalidExclusion(
+            "fixed D bindings are not exact".to_owned(),
+        ));
+    };
     if bindings.candidate_key.is_empty()
         || bindings.rule != CHANGED_PUBLIC_CALLEE_RULE
         || !bindings
             .candidate_key
             .starts_with(&format!("{CHANGED_PUBLIC_CALLEE_RULE}|relation:"))
-        || bindings.profile_id != RUST_PRODUCTION_PROFILE_ID
-        || bindings.profile_hash.as_str() != RUST_PRODUCTION_PROFILE_HASH
         || bindings.excluded_weight != D_EXCLUDED_WEIGHT
         || bindings.source_ids.is_empty()
     {
@@ -898,7 +993,8 @@ fn validate_bindings(bindings: &DExclusionBindings) -> ProfileResult<()> {
             "fixed D bindings are not exact".to_owned(),
         ));
     }
-    let matcher = MATCHERS
+    let matcher = profile
+        .matchers()
         .iter()
         .find(|matcher| matcher.id == bindings.matcher_id);
     let Some(matcher) = matcher else {

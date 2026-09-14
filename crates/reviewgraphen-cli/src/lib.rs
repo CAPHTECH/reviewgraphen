@@ -15,7 +15,7 @@ use reviewgraphen_runtime::generic::{
     GENERIC_REVIEW_REQUEST_V4_SCHEMA, GenericReviewRequest, GenericReviewRequestV2,
     GenericReviewRequestV3, GenericReviewRequestV4, admit_fresh_generic_review_artifact_root_v2,
     run_generic_review, run_generic_review_v2_with_observer, run_generic_review_v3_with_observer,
-    run_generic_review_v4,
+    run_generic_review_v4_with_observer,
 };
 #[cfg(unix)]
 use rustix::fs::{self, FileType, Mode, OFlags};
@@ -411,7 +411,7 @@ fn generic_review_v4(
         Ok(request) => request,
         Err(_) => return CommandOutcome::failure(3, "invalid generic review v4 request"),
     };
-    let run = match run_generic_review_v4(&request) {
+    let run = match run_generic_review_v4_with_observer(&request, observer) {
         Ok(run) => run,
         Err(error) => return CommandOutcome::failure(20, error.to_string()),
     };

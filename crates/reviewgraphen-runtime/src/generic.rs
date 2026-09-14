@@ -2880,15 +2880,32 @@ pub fn run_generic_review_v3_with_observer_and_basis_probe(
 pub fn run_generic_review_v4(
     request: &GenericReviewRequestV4,
 ) -> GenericReviewResult<ValidatedGenericReviewRunV4> {
+    let mut observer = NoopGenericReviewStageObserver;
+    run_generic_review_v4_with_observer(request, &mut observer)
+}
+
+/// Executes production v4 while reporting the same six operational stages as
+/// the v2/v3 routes. Stage events are non-canonical diagnostics only.
+pub fn run_generic_review_v4_with_observer(
+    request: &GenericReviewRequestV4,
+    stage_observer: &mut dyn GenericReviewStageObserver,
+) -> GenericReviewResult<ValidatedGenericReviewRunV4> {
     request.validate_v4()?;
     let request_id = request.id_v4()?;
-    let ingested = ingest_with_sources_v2(
-        &request.ingest_request_v4(),
-        request.ingest.max_total_source_bytes,
-    )?;
+    let ingested = observed_runtime_stage(stage_observer, GenericReviewStage::Ingest, || {
+        Ok(ingest_with_sources_v2(
+            &request.ingest_request_v4(),
+            request.ingest.max_total_source_bytes,
+        )?)
+    })?;
     let program = &ingested.legacy.program_space;
-    let d_bundle = MvpRulePack::synthesize_changed_public_callee(program)?;
-    let mixed_bundle = MvpRulePack::synthesize_rust_production_v2(program)?;
+    let (d_bundle, mixed_bundle) =
+        observed_runtime_stage(stage_observer, GenericReviewStage::Synthesize, || {
+            Ok((
+                MvpRulePack::synthesize_changed_public_callee(program)?,
+                MvpRulePack::synthesize_rust_production_v2(program)?,
+            ))
+        })?;
     let ids = mixed_bundle
         .obligations()
         .iter()
@@ -2983,6 +3000,7 @@ pub fn run_generic_review_v4(
         .map(|obligation| (obligation.id().clone(), obligation))
         .collect::<BTreeMap<_, _>>();
     let mut contexts = Vec::new();
+    let context_stage = ActiveRuntimeStage::begin(stage_observer, GenericReviewStage::Context);
     for obligation in mixed_bundle
         .obligations()
         .iter()
@@ -3070,6 +3088,9 @@ pub fn run_generic_review_v4(
             return Err(GenericReviewError::Request("v4 mixed rule registry"));
         }
     }
+    context_stage.complete();
+    let observer_stage = ActiveRuntimeStage::begin(stage_observer, GenericReviewStage::Observer);
+    observer_stage.complete();
     let verifier = v2_verifier(
         request.verifier_descriptor_id.as_deref(),
         &request_id,
@@ -3360,12 +3381,19 @@ impl GenericReviewRequestV4 {
             || self.repository_identity.is_empty()
             || self.base_revision.is_empty()
             || self.target_revision.is_empty()
-            || self.ingest.profile_id != "rust.production.v1"
-            || self.ingest.profile_version != "1"
+            || !matches!(
+                (
+                    self.ingest.profile_id.as_str(),
+                    self.ingest.profile_version.as_str()
+                ),
+                ("rust.production.v1", "1") | ("rust.production.v2", "2")
+            )
             || self.ingest.rule_set_hash.as_str() != RUST_PRODUCTION_V4_RULE_SET_HASH
             || self.ingest.max_files == 0
             || self.ingest.max_file_bytes == 0
+            || self.ingest.max_file_bytes > 16 * 1024 * 1024
             || self.ingest.max_total_source_bytes == 0
+            || self.ingest.max_total_source_bytes > 16 * 1024 * 1024 * 1024
             || self
                 .verifier_descriptor_id
                 .as_deref()

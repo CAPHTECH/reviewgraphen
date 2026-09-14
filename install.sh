@@ -97,18 +97,37 @@ IFS=$old_ifs
 command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v tar >/dev/null 2>&1 || die "tar is required"
 
+valid_semver_core() {
+    candidate=$1
+    case "$candidate" in
+        ''|*[!0-9.]*|.*|*.|*..*) return 1 ;;
+    esac
+    old_semver_ifs=$IFS
+    IFS=.
+    set -- $candidate
+    IFS=$old_semver_ifs
+    [ "$#" -eq 3 ] || return 1
+    for component in "$@"; do
+        case "$component" in
+            0|[1-9]|[1-9][0-9]*) ;;
+            *) return 1 ;;
+        esac
+    done
+}
+
 case "$VERSION" in
     latest)
         RELEASE_URL="$REPOSITORY_URL/releases/latest/download"
         ;;
-    v[0-9]*.[0-9]*.[0-9]*)
+    v*)
+        valid_semver_core "${VERSION#v}" || die "invalid version: $VERSION"
         RELEASE_URL="$REPOSITORY_URL/releases/download/$VERSION"
         VERSION=${VERSION#v}
         ;;
-    [0-9]*.[0-9]*.[0-9]*)
+    *)
+        valid_semver_core "$VERSION" || die "invalid version: $VERSION"
         RELEASE_URL="$REPOSITORY_URL/releases/download/v$VERSION"
         ;;
-    *) die "invalid version: $VERSION" ;;
 esac
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/reviewgraphen-install.XXXXXX")
@@ -178,10 +197,7 @@ if [ "$VERSION" = latest ]; then
         --proto '=https,file' --tlsv1.2 \
         "$REPOSITORY_URL/releases/latest/download/reviewgraphen-version")
     VERSION=${tag#v}
-    case "$VERSION" in
-        [0-9]*.[0-9]*.[0-9]*) ;;
-        *) die "release returned an invalid version: $VERSION" ;;
-    esac
+    valid_semver_core "$VERSION" || die "release returned an invalid version: $VERSION"
 fi
 
 if want_target cli; then

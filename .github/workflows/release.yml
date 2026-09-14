@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,6 +21,18 @@ jobs:
     steps:
       - name: Check out tagged source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Require the current, CI-green main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          success="$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --status completed \
+            --json conclusion --jq 'any(.[]; .conclusion == "success")')"
+          test "$success" = true
 
       - name: Match tag to workspace version
         id: version

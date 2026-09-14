@@ -73,6 +73,27 @@ HOME="$work/latest-home" REVIEWGRAPHEN_RELEASE_BASE_URL="file://$work" \
 test -x "$work/latest-home/.local/bin/reviewgraphen"
 test "$(cat "$work/latest-home/.claude/skills/reviewgraphen/.reviewgraphen-version")" = "$version"
 
+for invalid in 1x.2y.3z 1.2 1.2.3.4 v1..3 01.2.3; do
+    invalid_log="$work/invalid-$(printf '%s' "$invalid" | tr -c 'A-Za-z0-9' '_').log"
+    if HOME="$work/invalid-home" REVIEWGRAPHEN_RELEASE_BASE_URL="file://$work/absent" \
+        sh "$repo_root/install.sh" --version "$invalid" --targets cli >"$invalid_log" 2>&1; then
+        printf 'invalid version unexpectedly accepted: %s\n' "$invalid" >&2
+        exit 1
+    fi
+    grep -Fq "invalid version: $invalid" "$invalid_log"
+done
+test ! -e "$work/invalid-home/.local/bin/reviewgraphen"
+
+printf '%s\n' 'v1x.2y.3z' > "$latest/reviewgraphen-version"
+if HOME="$work/invalid-latest-home" REVIEWGRAPHEN_RELEASE_BASE_URL="file://$work" \
+    sh "$repo_root/install.sh" --targets cli >"$work/invalid-latest.log" 2>&1; then
+    printf 'invalid latest version unexpectedly accepted\n' >&2
+    exit 1
+fi
+grep -Fq 'release returned an invalid version: 1x.2y.3z' "$work/invalid-latest.log"
+test ! -e "$work/invalid-latest-home/.local/bin/reviewgraphen"
+printf 'v%s\n' "$version" > "$latest/reviewgraphen-version"
+
 printf '%064d  %s\n' 0 "reviewgraphen-skill-v$version.tar.gz" \
     > "$release/reviewgraphen-skill-v$version.tar.gz.sha256"
 if HOME="$work/other-home" REVIEWGRAPHEN_RELEASE_BASE_URL="file://$work" \

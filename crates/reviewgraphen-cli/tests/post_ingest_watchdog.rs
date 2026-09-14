@@ -59,8 +59,97 @@ fn request(schema: &str, base: &str, target: &str) -> Vec<u8> {
     });
     if schema.ends_with("v3") {
         value["context_policy_id"] = json!("context.subject_windows@3");
+    } else if schema.ends_with("v4") {
+        value["context_policies"] = json!({
+            "relation.changed_public_callee@1": {
+                "property_id": "rust.callee_contract_review@1",
+                "target_kind": "relation",
+                "policy_id": "context.subject_windows@3",
+                "policy_hash": "sha256:932bfa18c5d286c63196366d6d2dc1aaf402f50baa1f1ab5f075b1007be55dd8"
+            },
+            "node.public_function_contract@1": {
+                "property_id": "rust.public_function_contract_review@1",
+                "target_kind": "node",
+                "policy_id": "context.subject_windows@4",
+                "policy_hash": "sha256:9f15006986a73853ff3be7b9a158e8c79f69b9a8099c9d0a1991d8c7da170aed"
+            }
+        });
     }
     reviewgraphen_core::canonical_json(&value).expect("canonical request")
+}
+
+#[test]
+fn v4_diagnostics_cover_all_stages_without_changing_artifacts() {
+    let (_temporary, repository, base, target) = repository();
+    fs::write(
+        repository.join("request.v4.json"),
+        request("reviewgraphen.generic_review_request.v4", &base, &target),
+    )
+    .expect("request");
+    let plain = Command::new(env!("CARGO_BIN_EXE_reviewgraphen"))
+        .args([
+            "review",
+            "--request",
+            "request.v4.json",
+            "--artifacts",
+            "plain-v4",
+        ])
+        .current_dir(&repository)
+        .output()
+        .expect("plain v4 run");
+    assert_eq!(
+        plain.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let diagnosed = Command::new(env!("CARGO_BIN_EXE_reviewgraphen"))
+        .args([
+            "review",
+            "--request",
+            "request.v4.json",
+            "--artifacts",
+            "diagnosed-v4",
+            "--diagnostics",
+            "diagnostics-v4.json",
+        ])
+        .current_dir(&repository)
+        .output()
+        .expect("diagnosed v4 run");
+    assert_eq!(
+        diagnosed.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&diagnosed.stderr)
+    );
+    assert_eq!(diagnosed.stdout, plain.stdout);
+    assert_eq!(
+        tree_bytes(&repository.join("plain-v4")),
+        tree_bytes(&repository.join("diagnosed-v4"))
+    );
+    let diagnostic: serde_json::Value = serde_json::from_slice(
+        &fs::read(repository.join("diagnostics-v4.json")).expect("diagnostic bytes"),
+    )
+    .expect("diagnostic JSON");
+    assert_eq!(
+        diagnostic["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| (
+                row["stage"].as_str().unwrap(),
+                row["status"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("ingest", "completed"),
+            ("synthesize", "completed"),
+            ("context", "completed"),
+            ("observer", "completed"),
+            ("report", "completed"),
+            ("artifact_write", "completed"),
+        ]
+    );
 }
 
 fn tree_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {

@@ -5,7 +5,9 @@
 
 ## Context
 
-`rust.production.v1` currently materializes only the D relation obligation.
+`rust.production.v1` originally materialized only the D relation obligation.
+ADR 0052 adds the compatible, explicitly selected `rust.production.v2`
+profile for v4 without changing v1 bytes.
 That compatibility path is persisted, replayed, and consumed by benchmark and
 generic-runtime v1-v3 surfaces.  A public free function can instead be
 enumerated from accepted `ast` and `containment` facts, independently of diff

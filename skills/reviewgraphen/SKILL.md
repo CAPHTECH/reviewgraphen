@@ -126,7 +126,9 @@ package version and exit 0; there are no per-subcommand help pages. The
 separate benchmark binaries below do not extend this main surface.
 
 `review` accepts the closed generic-review request v2, v3, or v4 contracts. The
-implemented slice is narrow. Under `rust.production.v1` there are two
+implemented slice is narrow. V2 and v3 use `rust.production.v1`; v4 accepts
+that immutable profile or `rust.production.v2`, whose versioned test matcher
+also excludes `benchmarks` path components. Under those production profiles there are two
 rules: `relation.changed_public_callee@1` over an accepted direct `calls`
 relation (`rust.callee_contract_review@1`), and `node.public_function_contract@1`
 over an accepted public free function with a module `contains` witness
@@ -169,15 +171,15 @@ artifacts/records/<execution>.provider-free-reviewer-packet.v1.json
 diagnostics.json
 ```
 
-A v4 run writes the same layout with the v4/v3 run and report names:
+A v4 run writes only its audit and human-report projection. Unlike v3, the
+current v4 route does not materialize Mode A reviewer packets or deterministic
+observer records:
 
 ```text
 artifacts/artifact-manifest.v1.json
 artifacts/audit.run.v4.json
 artifacts/human-report.manifest.v3.json
 artifacts/human-report.md
-artifacts/records/<execution>.deterministic-observer-output.v1.json
-artifacts/records/<execution>.provider-free-reviewer-packet.v1.json
 ```
 
 `examples/public-function-node-quickstart/request.v4.json` is the checked-in v4
@@ -185,7 +187,9 @@ request fixture; its README states the invocation. The artifact directory must
 be a fresh relative path inside the admitted repository -- an absolute path is
 rejected as path traversal.
 
-The reviewer packet is the Mode A input. The audit
+For v3, the reviewer packet is the Mode A input. V4 contexts remain embedded
+in the non-authority audit until a separate packet contract is implemented; do
+not claim that a v4 `records/` tree exists. The audit
 (`reviewgraphen.generic_review_run.v3`) is non-authority: its claims,
 observations, coverage, and limitations never become accepted facts, Evidence,
 Verification, or human acceptance. Validate it with

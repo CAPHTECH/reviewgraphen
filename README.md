@@ -133,6 +133,11 @@ durable Storeと、bubblewrapによる外部LLM隔離は未対応です。対応
 弱いpath-based処理へfallbackしません。macOS CLIはGitHub Actionsの
 `macos-15` Apple Silicon runnerで継続検査します。
 
+製品v4 reviewでは、互換な`rust.production.v1`に加えて、通常の
+`benchmarks/` treeをtest分母として明示除外する`rust.production.v2`を選べます。
+v1のprofile bytesとstable IDは変更しません。現行v4はcontextをauditへ保持しますが、
+v3と異なりprovider-free reviewer packetを生成しません。
+
 ## インストール
 
 ### Release installer

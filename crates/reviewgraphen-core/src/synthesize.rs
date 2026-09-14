@@ -4,7 +4,7 @@ use crate::planning::{
 use crate::profile::{
     CHANGED_PUBLIC_CALLEE_RULE, CandidateClassification, D_OBLIGATION_WEIGHT, DExclusionCandidate,
     NODE_OBLIGATION_WEIGHT, PUBLIC_FUNCTION_NODE_RULE, ProfileExclusionCandidate,
-    RUST_PRODUCTION_PROFILE_ID, rust_production_v1,
+    RUST_PRODUCTION_PROFILE_ID, RUST_PRODUCTION_V2_PROFILE_ID, rust_production_profile,
 };
 use crate::program::{attribute_bool, attribute_string};
 use crate::review::ObligationParts;
@@ -938,7 +938,10 @@ impl MvpRulePack {
 
     /// Synthesizes the supported M1 slice with stable IDs and stable ordering.
     pub fn synthesize(program: &ProgramSpace) -> Result<ObligationBundle> {
-        if program.profile_id() == RUST_PRODUCTION_PROFILE_ID {
+        if matches!(
+            program.profile_id(),
+            RUST_PRODUCTION_PROFILE_ID | RUST_PRODUCTION_V2_PROFILE_ID
+        ) {
             return Self::synthesize_changed_public_callee(program);
         }
         if program.profile_key() != "code-review@1"
@@ -1316,13 +1319,11 @@ impl MvpRulePack {
     /// canonical bytes.  The D rule has its own production profile and its
     /// own capability contract.
     pub fn synthesize_changed_public_callee(program: &ProgramSpace) -> Result<ObligationBundle> {
-        if program.profile_id() != RUST_PRODUCTION_PROFILE_ID {
+        let Some(profile) = rust_production_profile(program.profile_id()) else {
             return Err(DomainError::Validation(format!(
-                "{CHANGED_PUBLIC_CALLEE_RULE} requires profile `{RUST_PRODUCTION_PROFILE_ID}`"
+                "{CHANGED_PUBLIC_CALLEE_RULE} requires a supported rust.production profile"
             )));
-        }
-
-        let profile = rust_production_v1();
+        };
         let split_capabilities = SplitCapabilitySpec::d_rule()?;
         let mut obligations = Vec::new();
         let mut exclusions = Vec::new();
@@ -1610,11 +1611,11 @@ impl MvpRulePack {
     /// intentionally separate from [`Self::synthesize`] and every v1-v3
     /// runtime caller, so legacy production bytes remain D-only.
     pub fn synthesize_rust_production_v2(program: &ProgramSpace) -> Result<ObligationBundleV3> {
-        if program.profile_id() != RUST_PRODUCTION_PROFILE_ID {
+        let Some(profile) = rust_production_profile(program.profile_id()) else {
             return Err(DomainError::Validation(format!(
-                "{PUBLIC_FUNCTION_NODE_RULE} requires profile `{RUST_PRODUCTION_PROFILE_ID}`"
+                "{PUBLIC_FUNCTION_NODE_RULE} requires a supported rust.production profile"
             )));
-        }
+        };
 
         let d_bundle = Self::synthesize_changed_public_callee(program)?;
         let d_coverage = d_bundle
@@ -1623,7 +1624,6 @@ impl MvpRulePack {
             .clone()
             .expect("D-only production synthesis always constructs D coverage");
         let node_capabilities = SplitCapabilitySpec::node_rule()?;
-        let profile = rust_production_v1();
         let mut exclusions = d_bundle.universe.exclusions.clone();
         let mut obligations = d_bundle.obligations.clone();
         let mut node_ids = BTreeSet::new();
@@ -2020,7 +2020,9 @@ fn validate_changed_public_callee_exclusion(
             "D universe exclusion candidate must retain changed containment witnesses".to_owned(),
         ));
     }
-    let profile = rust_production_v1();
+    let profile = rust_production_profile(program.profile_id()).ok_or_else(|| {
+        DomainError::Validation("D universe exclusion uses unsupported profile".to_owned())
+    })?;
     let CandidateClassification::Excluded(profile_match) = profile
         .classify_candidate(
             callee

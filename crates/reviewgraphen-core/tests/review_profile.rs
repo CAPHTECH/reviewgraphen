@@ -4,6 +4,7 @@ use reviewgraphen_core::profile::{
     DExclusionRecord, FrozenStage0ClusterSet, InvalidPathReason, ProfileError,
     ProfileExclusionCandidate, Stage0ApplicableObligation, Stage0Cluster, Stage0DeferralReason,
     Stage0DeferredObligation, deferred_fraction_gate, evaluate_stage0_gates, rust_production_v1,
+    rust_production_v2,
 };
 use reviewgraphen_core::{ContentHash, StableId};
 use std::collections::BTreeSet;
@@ -18,6 +19,25 @@ const D_EXCLUSION_CANONICAL_HASH_GOLDEN: &str =
 
 fn id(value: &str) -> StableId {
     StableId::parse(value).unwrap()
+}
+
+#[test]
+fn production_v2_excludes_benchmark_trees_without_changing_v1() {
+    let path = "benchmarks/trial/src/lib.rs";
+    assert!(
+        rust_production_v1()
+            .classify_path(path)
+            .unwrap()
+            .is_production_rust_source()
+    );
+    let v2 = rust_production_v2().classify_path(path).unwrap();
+    assert!(!v2.is_production_rust_source());
+    assert_eq!(v2.matched().unwrap().category(), Category::Test);
+    assert_eq!(rust_production_v2().id(), "rust.production.v2");
+    assert_eq!(
+        rust_production_v2().hash().as_str(),
+        "sha256:6f4ec559f8963f0abcc2a78718224fa0c1bd7c25c02302eb8066a7dd3915239d"
+    );
 }
 
 fn excluded_match() -> reviewgraphen_core::profile::ProfileMatch {
