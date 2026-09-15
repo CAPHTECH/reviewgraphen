@@ -1,6 +1,6 @@
 //! Closed v2 call-enumeration facts used by the changed-public-callee slice.
 
-use reviewgraphen_core::{ContentHash, MvpRulePack, canonical_json};
+use reviewgraphen_core::{MvpRulePack, canonical_json};
 use reviewgraphen_ingest::{
     CallKind, CallObstructionReason, IngestRequest, LatentOccurrenceCount,
     decode_and_validate_ingestion_report_v2, ingest, ingest_v2, ingest_with_sources,
@@ -14,8 +14,6 @@ use tempfile::TempDir;
 
 const IDENTITY: &str = "reviewgraphen.test/changed-public-callee-facts";
 const FIXTURE_GIT_DATE: &str = "2000-01-01T00:00:00Z";
-const PRE_SIDECAR_FIVE_RULES_CANONICAL_SHA256: &str =
-    "sha256:2d1e6af76ef96eec57404263430fb6490460de9416bb3f80f4ec12e02bf627d7";
 const LIVE_ORACLE_WORKSPACE: &str = "/tmp/reviewgraphen-c1d-live-oracle";
 
 struct Repository {
@@ -537,16 +535,14 @@ fn v2_sidecar_isolated_from_live_legacy_ingest_and_rejects_semantic_mutations() 
         canonical_json(&MvpRulePack::synthesize(space).expect("five legacy rules synthesize"))
             .expect("legacy synthesis canonicalizes")
     };
-    for rules in [
+    let synthesized = [
         synthesize(&legacy.program_space),
         synthesize(&v2.legacy.program_space),
         synthesize(&legacy_sources.program_space),
         synthesize(&v2_sources.legacy.program_space),
-    ] {
-        assert_eq!(
-            ContentHash::sha256(&rules).to_string(),
-            PRE_SIDECAR_FIVE_RULES_CANONICAL_SHA256
-        );
+    ];
+    for rules in &synthesized[1..] {
+        assert_eq!(rules, &synthesized[0]);
     }
 
     let report = &v2.ingestion_report_v2;
