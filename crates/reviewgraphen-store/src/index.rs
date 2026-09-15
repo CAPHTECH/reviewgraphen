@@ -7707,6 +7707,7 @@ mod tests {
             .args([
                 "metadata",
                 "--offline",
+                "--locked",
                 "--format-version",
                 "1",
                 "--manifest-path",
@@ -7714,7 +7715,11 @@ mod tests {
             ])
             .output()
             .unwrap();
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         let packages = metadata["packages"].as_array().unwrap();
         let store = packages

@@ -27,6 +27,11 @@ fn git(root: &Path, arguments: &[&str]) {
     let status = Command::new("git")
         .args(arguments)
         .current_dir(root)
+        .env("HOME", root)
+        .env("XDG_CONFIG_HOME", root.join(".xdg-config"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_ATTR_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "ReviewGraphen Test")
         .env("GIT_AUTHOR_EMAIL", "reviewgraphen@example.invalid")
         .env("GIT_COMMITTER_NAME", "ReviewGraphen Test")
@@ -101,7 +106,7 @@ fn checked_in_real_subject_fixtures_match_literal_upstream_hashes() {
         let workspace = tempdir().expect("fixture workspace");
         let repository = workspace.path().join("repository");
         fs::create_dir(&repository).expect("fixture repository");
-        git(&repository, &["init", "-q"]);
+        git(&repository, &["init", "-q", "--object-format=sha1"]);
         let target_path = pair["target_path"].as_str().expect("target path");
         let repository_path = repository.join(target_path);
         if let Some(parent) = repository_path.parent() {
@@ -320,7 +325,7 @@ fn checked_in_real_profile_exclusion_fixture_reaches_a_valid_empty_target_denomi
     let workspace = tempdir().expect("profile exclusion fixture workspace");
     let repository = workspace.path().join("repository");
     fs::create_dir(&repository).expect("profile exclusion fixture repository");
-    git(&repository, &["init", "-q"]);
+    git(&repository, &["init", "-q", "--object-format=sha1"]);
     let target_path = pair["target_path"].as_str().expect("target path");
     let repository_path = repository.join(target_path);
     fs::create_dir_all(repository_path.parent().expect("target parent"))
@@ -398,7 +403,7 @@ fn changed_public_callee_repository() -> tempfile::TempDir {
     let workspace = tempdir().expect("workspace");
     let repository = workspace.path().join("repository");
     fs::create_dir(&repository).expect("repository");
-    git(&repository, &["init", "-q"]);
+    git(&repository, &["init", "-q", "--object-format=sha1"]);
     fs::write(
         repository.join("lib.rs"),
         "pub fn caller() -> u64 { callee() }\npub fn callee() -> u64 { 1 }\n",
@@ -420,7 +425,7 @@ fn support_loss_repository() -> tempfile::TempDir {
     let workspace = tempdir().expect("workspace");
     let repository = workspace.path().join("repository");
     fs::create_dir(&repository).expect("repository");
-    git(&repository, &["init", "-q"]);
+    git(&repository, &["init", "-q", "--object-format=sha1"]);
     let callers = (0..12)
         .map(|index| {
             format!(

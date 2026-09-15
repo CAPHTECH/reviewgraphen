@@ -43,6 +43,11 @@ impl Repository {
 fn command<const N: usize>(root: &Path, arguments: [&str; N]) {
     let status = Command::new("git")
         .current_dir(root)
+        .env("HOME", root)
+        .env("XDG_CONFIG_HOME", root.join(".xdg-config"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_ATTR_NOSYSTEM", "1")
         .env("GIT_AUTHOR_DATE", FIXTURE_GIT_DATE)
         .env("GIT_COMMITTER_DATE", FIXTURE_GIT_DATE)
         .args(arguments)
@@ -54,6 +59,11 @@ fn command<const N: usize>(root: &Path, arguments: [&str; N]) {
 fn output<const N: usize>(root: &Path, arguments: [&str; N]) -> String {
     let output = Command::new("git")
         .current_dir(root)
+        .env("HOME", root)
+        .env("XDG_CONFIG_HOME", root.join(".xdg-config"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_ATTR_NOSYSTEM", "1")
         .env("GIT_AUTHOR_DATE", FIXTURE_GIT_DATE)
         .env("GIT_COMMITTER_DATE", FIXTURE_GIT_DATE)
         .args(arguments)
@@ -102,7 +112,7 @@ fn repository_at(workspace_root: PathBuf, workspace: Option<TempDir>, source: &s
     let root = workspace_root.join("fixture");
     fs::create_dir_all(&workspace_root).expect("workspace directory");
     fs::create_dir(&root).expect("repository directory");
-    command(&root, ["init", "--quiet"]);
+    command(&root, ["init", "--quiet", "--object-format=sha1"]);
     command(
         &root,
         ["config", "user.email", "reviewgraphen@example.test"],
