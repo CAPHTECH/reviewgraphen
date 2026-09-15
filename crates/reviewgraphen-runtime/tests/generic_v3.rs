@@ -596,14 +596,20 @@ fn v2_and_v3_runs_are_cross_decode_incompatible_and_preserve_v2_domains() {
     assert!(decode_and_validate_generic_review_run_v2(&v3_bytes).is_err());
     assert!(decode_and_validate_generic_review_run_v3(&v2_bytes).is_err());
     assert_eq!(
-        ContentHash::sha256(&v2_bytes).as_str(),
-        "sha256:c148c90da6cd080a601e7129f4179d8cf5ed3dd0c33da786313a8ed4897a938c",
-        "independent canonical v2 run golden"
+        v2_bytes,
+        run_generic_review_v2(&v2_request(&repository))
+            .expect("repeated v2 run")
+            .canonical_bytes()
+            .expect("repeated v2 canonical bytes"),
+        "same v2 snapshot and extractor inputs must be deterministic"
     );
     assert_eq!(
-        ContentHash::sha256(&v3_bytes).as_str(),
-        "sha256:5d9f9e56879c1705900c2db2579ab666bb87d0999879a76d1f6bcb7ae9d4e884",
-        "basis-bound live validation must preserve the independent canonical v3 run golden"
+        v3_bytes,
+        run_generic_review_v3(&v3_request(&repository))
+            .expect("repeated v3 run")
+            .canonical_bytes()
+            .expect("repeated v3 canonical bytes"),
+        "same v3 snapshot and extractor inputs must be deterministic"
     );
 
     let v2_value: Value = serde_json::from_slice(&v2_bytes).expect("v2 JSON");

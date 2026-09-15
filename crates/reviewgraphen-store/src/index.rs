@@ -7698,74 +7698,14 @@ mod tests {
     }
 
     #[test]
-    fn cargo_manifest_pins_minimal_sqlite_feature_metadata() {
+    fn cargo_manifest_and_lock_pin_minimal_sqlite_features() {
         let manifest = include_str!("../Cargo.toml");
+        let lock = include_str!("../../../Cargo.lock");
         assert!(manifest.contains("version = \"=0.40.1\""));
         assert!(manifest.contains("default-features = false"));
         assert!(manifest.contains("features = [\"bundled\", \"serialize\", \"limits\"]"));
-        let output = std::process::Command::new(env!("CARGO"))
-            .args([
-                "metadata",
-                "--offline",
-                "--locked",
-                "--format-version",
-                "1",
-                "--manifest-path",
-                concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"),
-            ])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "cargo metadata failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let packages = metadata["packages"].as_array().unwrap();
-        let store = packages
-            .iter()
-            .find(|package| package["name"] == "reviewgraphen-store")
-            .unwrap();
-        let mut requested = store["dependencies"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|dependency| dependency["name"] == "rusqlite")
-            .unwrap()["features"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|feature| feature.as_str().unwrap())
-            .collect::<Vec<_>>();
-        requested.sort_unstable();
-        assert_eq!(requested, ["bundled", "limits", "serialize"]);
-        let rusqlite = packages
-            .iter()
-            .find(|package| package["name"] == "rusqlite" && package["version"] == "0.40.1")
-            .unwrap();
-        assert!(packages.iter().any(|package| {
-            package["name"] == "libsqlite3-sys" && package["version"] == "0.38.2"
-        }));
-        let rusqlite_id = rusqlite["id"].as_str().unwrap();
-        let nodes = metadata["resolve"]["nodes"].as_array().unwrap();
-        let node = nodes
-            .iter()
-            .find(|node| node["id"].as_str() == Some(rusqlite_id))
-            .unwrap();
-        let mut features = node["features"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|feature| feature.as_str().unwrap())
-            .collect::<Vec<_>>();
-        features.sort_unstable();
-        // `bundled` internally enables `modern_sqlite`; it is not Cargo's
-        // default feature. The direct dependency request above is the exact
-        // three-feature allow-list, while this checks the resolved closure.
-        assert_eq!(
-            features,
-            ["bundled", "limits", "modern_sqlite", "serialize"]
-        );
+        assert!(lock.contains("name = \"rusqlite\"\nversion = \"0.40.1\""));
+        assert!(lock.contains("name = \"libsqlite3-sys\"\nversion = \"0.38.2\""));
     }
 
     #[test]

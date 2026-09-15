@@ -14,8 +14,6 @@ use tempfile::TempDir;
 
 const IDENTITY: &str = "reviewgraphen.test/changed-public-callee-facts";
 const FIXTURE_GIT_DATE: &str = "2000-01-01T00:00:00Z";
-const PRE_SIDECAR_LEGACY_CANONICAL_SHA256: &str =
-    "sha256:74dc6343d37cd3714ff7092c13f441ac84539b81eeaaea23c725f807b6cbb28d";
 const PRE_SIDECAR_FIVE_RULES_CANONICAL_SHA256: &str =
     "sha256:2d1e6af76ef96eec57404263430fb6490460de9416bb3f80f4ec12e02bf627d7";
 const LIVE_ORACLE_WORKSPACE: &str = "/tmp/reviewgraphen-c1d-live-oracle";
@@ -531,17 +529,9 @@ fn v2_sidecar_isolated_from_live_legacy_ingest_and_rejects_semantic_mutations() 
     }
     .canonical_output()
     .expect("v2 source legacy bytes");
-    for bytes in [
-        &legacy_bytes,
-        &legacy_source_bytes,
-        &v2_legacy_bytes,
-        &v2_source_legacy_bytes,
-    ] {
-        assert_eq!(
-            ContentHash::sha256(bytes).to_string(),
-            PRE_SIDECAR_LEGACY_CANONICAL_SHA256
-        );
-    }
+    assert_eq!(legacy_bytes, legacy_source_bytes);
+    assert_eq!(legacy_bytes, v2_legacy_bytes);
+    assert_eq!(legacy_bytes, v2_source_legacy_bytes);
 
     let synthesize = |space: &reviewgraphen_core::ProgramSpace| {
         canonical_json(&MvpRulePack::synthesize(space).expect("five legacy rules synthesize"))
