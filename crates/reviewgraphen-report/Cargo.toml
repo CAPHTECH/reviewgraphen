@@ -11,18 +11,18 @@ publish = false
 workspace = true
 
 [dependencies]
-reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.1.0" }
-reviewgraphen-runtime = { path = "../reviewgraphen-runtime", version = "0.1.0" }
+reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.2.0" }
+reviewgraphen-runtime = { path = "../reviewgraphen-runtime", version = "0.2.0" }
 jsonschema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-reviewgraphen-store = { path = "../reviewgraphen-store", version = "0.1.0" }
+reviewgraphen-store = { path = "../reviewgraphen-store", version = "0.2.0" }
 
 [dev-dependencies]
-reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer", version = "0.1.0" }
-reviewgraphen-store = { path = "../reviewgraphen-store", version = "0.1.0", features = ["test-support"] }
+reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer", version = "0.2.0" }
+reviewgraphen-store = { path = "../reviewgraphen-store", version = "0.2.0", features = ["test-support"] }
 serde_json.workspace = true
 tempfile.workspace = true

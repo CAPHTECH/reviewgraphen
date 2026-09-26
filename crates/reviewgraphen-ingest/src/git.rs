@@ -3,6 +3,7 @@ use crate::{
     IngestionObstructionKind, IssueDraft, LocationDraft, ObstructionSeverity, RelationDraft,
 };
 use reviewgraphen_core::{ContentHash, StableId};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -40,6 +41,51 @@ const SUBPROCESS_MAX_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 /// `PATH` is kept only so the child `git` process itself (and anything it
 /// execs internally) can be resolved and run.
 const GIT_INHERITED_ENV_VARS: &[&str] = &["PATH"];
+
+/// Environment variables every allow-listed `git` subprocess gets set to a
+/// fixed value, on top of the `env_clear()` + `GIT_INHERITED_ENV_VARS`
+/// allowlist (see `git_command`). The single source of truth for both the
+/// real invocation and `git_command_policy_fingerprint`'s `environment`:
+/// - `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`: host/user Git config can never
+///   change accepted facts; only the snapshot's own repository config
+///   applies, and even that is overridden per command where it matters.
+/// - `GIT_NO_LAZY_FETCH`: in a partial (promisor) clone a missing object
+///   must fail closed locally instead of launching the promisor remote's
+///   transport to fetch it -- a review never touches the network or
+///   mutates the object store (matching the TypeScript/Kotlin routes).
+/// - `LC_ALL`: stable, non-ambient diagnostic output.
+const GIT_POLICY_ENV: &[(&str, &str)] = &[
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_CONFIG_SYSTEM", "/dev/null"),
+    ("GIT_NO_LAZY_FETCH", "1"),
+    ("LC_ALL", "C"),
+];
+
+/// Global arguments `git_command` prepends to every allow-listed `git`
+/// invocation, in order; the single source of truth for both the real argv
+/// and `git_command_policy_fingerprint`'s `global_args`.
+/// - `--no-replace-objects`: a replacement ref (`refs/replace/<object>`, see
+///   `git-replace(1)`) transparently substitutes a different object wherever
+///   the original is read -- including every `rev-parse`/`ls-tree`/`show`/
+///   `diff` call this module makes. Two clones of the exact same real
+///   history can disagree only in which replacement refs they happen to
+///   carry, silently producing different resolved commits/trees/blobs/diffs
+///   from the same requested revision. Disabling replacement outright makes
+///   every read resolve the literal requested object.
+/// - `-c core.attributesFile=/dev/null`: `GIT_CONFIG_GLOBAL` only stops Git
+///   from reading a *config* file that might point `core.attributesFile`
+///   elsewhere; Git separately consults a default per-user attributes file
+///   (`$XDG_CONFIG_HOME/git/attributes` or `$HOME/.config/git/attributes`)
+///   unconditionally. Pointing it at `/dev/null` closes that gap; the
+///   repository's own tracked `.gitattributes` (real snapshot content, not
+///   ambient environment) is unaffected.
+const GIT_GLOBAL_ARGS: &[&str] = &[
+    "--no-pager",
+    "--no-optional-locks",
+    "--no-replace-objects",
+    "-c",
+    "core.attributesFile=/dev/null",
+];
 
 /// Diff algorithm bound into the one Git invocation that generates a
 /// textual patch (`ChangedLines`; `--name-status` needs none). Overrides any
@@ -79,15 +125,65 @@ const GIT_RENAME_LIMIT: u32 = 20_000;
 /// (`--no-color` on every `git diff`, so a repo-local `color.ui=always`/
 /// `color.diff=always` can no longer inject ANSI escapes into a hunk
 /// header -- `changed_lines`'s `@@ ` prefix match would otherwise silently
-/// stop matching and empty out the fact).
-const GIT_COMMAND_POLICY_VERSION: &str = "3";
+/// stop matching and empty out the fact). `4`: the fingerprint now names the
+/// whole policy rather than a summary of it -- `environment` (the cleared
+/// environment, the inherited allowlist and every fixed variable, now
+/// including `GIT_NO_LAZY_FETCH=1` so a partial clone's missing object fails
+/// closed instead of launching the promisor transport), `global_args`, and
+/// the full argv template of every command shape (`command_argv`) -- so a
+/// change to any argv element visibly changes `adapter_set_hash`.
+const GIT_COMMAND_POLICY_VERSION: &str = "4";
 
 /// The deterministic Git command policy's fixed values, bound into
 /// `adapter_set_hash` (see `crate::SnapshotIdentities::new`) alongside the
 /// real `git`/`cargo`/`syn`/`proc-macro2` tool versions: a future change to
 /// any of these constants must visibly change the fingerprint, exactly like
 /// a different tool version does.
+///
+/// `environment`, `global_args` and `command_argv` are derived from the very
+/// constants and argv builder (`GIT_POLICY_ENV`, `GIT_GLOBAL_ARGS`,
+/// `git_command_args`) every real invocation uses, never restated as a
+/// separate literal, so the fingerprint cannot drift from what actually runs.
+/// Placeholders `<revision>`, `<base>`, `<target>` and `<path>` stand for the
+/// per-call operands.
 pub(crate) fn git_command_policy_fingerprint() -> Value {
+    let set = GIT_POLICY_ENV
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), Value::String((*value).to_owned())))
+        .collect::<serde_json::Map<_, _>>();
+    let shapes = [
+        ("version", GitCommand::Version),
+        ("root", GitCommand::Root),
+        ("resolve_commit", GitCommand::ResolveCommit("<revision>")),
+        ("tree_hash", GitCommand::TreeHash("<revision>")),
+        ("list_tree", GitCommand::ListTree("<revision>")),
+        (
+            "show_file",
+            GitCommand::ShowFile {
+                revision: "<revision>",
+                path: "<path>",
+            },
+        ),
+        (
+            "changes",
+            GitCommand::Changes {
+                base: "<base>",
+                target: "<target>",
+            },
+        ),
+        (
+            "changed_lines",
+            GitCommand::ChangedLines {
+                base: "<base>",
+                target: "<target>",
+                path: "<path>",
+            },
+        ),
+    ];
+    let command_argv = shapes
+        .into_iter()
+        .map(|(name, command)| (name.to_owned(), json!(git_command_args(command))))
+        .collect::<serde_json::Map<_, _>>();
     json!({
         "version": GIT_COMMAND_POLICY_VERSION,
         "diff_algorithm": GIT_DIFF_ALGORITHM,
@@ -96,6 +192,13 @@ pub(crate) fn git_command_policy_fingerprint() -> Value {
         "force_text_diff": true,
         "no_replace_objects": true,
         "no_color": true,
+        "environment": {
+            "cleared": true,
+            "inherited": GIT_INHERITED_ENV_VARS,
+            "set": set,
+        },
+        "global_args": GIT_GLOBAL_ARGS,
+        "command_argv": command_argv,
     })
 }
 
@@ -303,6 +406,23 @@ impl SnapshotFile {
     }
 }
 
+/// Classification from the target Git tree, independent of the diff base.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub(crate) enum GitExcludedEntryKind {
+    #[serde(rename = "git_symlink@2")]
+    Symlink,
+    #[serde(rename = "git_gitlink@2")]
+    Gitlink,
+    #[serde(rename = "git_other_unsupported@2")]
+    OtherUnsupported,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GitExcludedEntry {
+    pub(crate) path: String,
+    pub(crate) kind: GitExcludedEntryKind,
+}
+
 /// Fully bounded local Git snapshot consumed by all M2 adapters.
 pub(crate) struct GitSnapshot {
     pub(crate) repository_root: String,
@@ -314,6 +434,7 @@ pub(crate) struct GitSnapshot {
     pub(crate) tree_hash: ContentHash,
     pub(crate) config: crate::IngestConfig,
     pub(crate) files: Vec<SnapshotFile>,
+    pub(crate) excluded_entries: Vec<GitExcludedEntry>,
     pub(crate) changes: Vec<ChangeEntry>,
     pub(crate) issues: Vec<IssueDraft>,
     pub(crate) adapter_reports: Vec<AdapterReport>,
@@ -450,6 +571,7 @@ pub(crate) fn load_snapshot(
         .collect::<BTreeMap<_, _>>();
 
     let mut issues = Vec::new();
+    let mut excluded_entries = Vec::new();
     let mut regular_paths = Vec::new();
     let mut blob_sizes = BTreeMap::<String, u64>::new();
     let mut excluded: u64 = 0;
@@ -464,6 +586,10 @@ pub(crate) fn load_snapshot(
             }
             ("120000", "blob") => {
                 excluded += 1;
+                excluded_entries.push(GitExcludedEntry {
+                    path: entry.path.clone(),
+                    kind: GitExcludedEntryKind::Symlink,
+                });
                 let changed_entry = change_by_target_path.get(&entry.path).copied();
                 changed_structure_excluded |= changed_entry.is_some();
                 issues.push(excluded_entry_issue(
@@ -477,6 +603,10 @@ pub(crate) fn load_snapshot(
             }
             (_, "commit") => {
                 excluded += 1;
+                excluded_entries.push(GitExcludedEntry {
+                    path: entry.path.clone(),
+                    kind: GitExcludedEntryKind::Gitlink,
+                });
                 let changed_entry = change_by_target_path.get(&entry.path).copied();
                 changed_structure_excluded |= changed_entry.is_some();
                 issues.push(excluded_entry_issue(
@@ -490,6 +620,10 @@ pub(crate) fn load_snapshot(
             }
             _ => {
                 excluded += 1;
+                excluded_entries.push(GitExcludedEntry {
+                    path: entry.path.clone(),
+                    kind: GitExcludedEntryKind::OtherUnsupported,
+                });
                 let changed_entry = change_by_target_path.get(&entry.path).copied();
                 changed_structure_excluded |= changed_entry.is_some();
                 issues.push(excluded_entry_issue(
@@ -678,6 +812,7 @@ pub(crate) fn load_snapshot(
         tree_hash,
         config: request.config.clone(),
         files,
+        excluded_entries,
         changes,
         issues,
         adapter_reports: vec![AdapterReport {
@@ -977,6 +1112,7 @@ pub(crate) fn extract_cargo_metadata(
                         )]),
                         source_path: Some(manifest_path.clone()),
                         extraction_method: "reviewgraphen.ingest.cargo_metadata.v1",
+                        resolved_direct_call_occurrence: None,
                     });
                 }
                 DependencyResolution::Internal(target_key) => {
@@ -990,6 +1126,7 @@ pub(crate) fn extract_cargo_metadata(
                         )]),
                         source_path: Some(manifest_path.clone()),
                         extraction_method: "reviewgraphen.ingest.cargo_metadata.v1",
+                        resolved_direct_call_occurrence: None,
                     });
                 }
                 DependencyResolution::Unresolved => {
@@ -1157,6 +1294,34 @@ struct TreeEntry {
     /// `git show` fetch of its full content.
     size: Option<u64>,
     path: String,
+}
+
+/// Typed Git-tree lookup for language adapters. It records entry kinds rather
+/// than consulting the host filesystem for relative import candidates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitTreeEntryKind {
+    Regular,
+    Symlink,
+    Submodule,
+    Other,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GitTreeTable {
+    entries: BTreeMap<String, GitTreeEntryKind>,
+}
+
+impl GitTreeTable {
+    #[must_use]
+    pub fn new(entries: impl IntoIterator<Item = (String, GitTreeEntryKind)>) -> Self {
+        Self {
+            entries: entries.into_iter().collect(),
+        }
+    }
+    #[must_use]
+    pub fn get(&self, path: &str) -> Option<GitTreeEntryKind> {
+        self.entries.get(path).copied()
+    }
 }
 
 fn parse_tree(output: &[u8]) -> Result<Vec<TreeEntry>, IngestError> {
@@ -1375,6 +1540,7 @@ fn resolve_commit(root: &Path, candidate: &str) -> Result<String, IngestError> {
 }
 
 enum GitCommand<'a> {
+    Version,
     Root,
     ResolveCommit(&'a str),
     TreeHash(&'a str),
@@ -1411,34 +1577,11 @@ fn git_command(root: &Path) -> Command {
             command.env(var, value);
         }
     }
-    command
-        .current_dir(root)
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("LC_ALL", "C")
-        .arg("--no-pager")
-        .arg("--no-optional-locks")
-        // A replacement ref (`refs/replace/<object>`, see `git-replace(1)`)
-        // transparently substitutes a different object wherever the
-        // original is read -- including every `rev-parse`/`ls-tree`/
-        // `show`/`diff` call this module makes. Two clones of the exact
-        // same real history can disagree only in which replacement refs
-        // they happen to carry, silently producing different resolved
-        // commits/trees/blobs/diffs from the same requested revision.
-        // Disabling replacement outright makes every read resolve the
-        // literal requested object, regardless of what replacement refs
-        // either clone happens to carry.
-        .arg("--no-replace-objects")
-        // `GIT_CONFIG_GLOBAL` above only stops Git from reading a *config*
-        // file that might point `core.attributesFile` elsewhere; Git
-        // separately consults a default per-user attributes file
-        // (`$XDG_CONFIG_HOME/git/attributes` or
-        // `$HOME/.config/git/attributes`) unconditionally, not only when a
-        // config file sets it. Pointing it at `/dev/null` closes that gap;
-        // the repository's own tracked `.gitattributes` (real snapshot
-        // content, not ambient environment) is unaffected.
-        .arg("-c")
-        .arg("core.attributesFile=/dev/null");
+    command.current_dir(root);
+    for (name, value) in GIT_POLICY_ENV {
+        command.env(name, value);
+    }
+    command.args(GIT_GLOBAL_ARGS);
     command
 }
 
@@ -1488,7 +1631,20 @@ fn show_file_calls() -> usize {
 /// spawning a real subprocess.
 fn build_git_command(root: &Path, command: GitCommand<'_>) -> Command {
     let mut child = git_command(root);
+    child.args(git_command_args(command));
+    child
+}
+
+/// The command-specific argv (after `GIT_GLOBAL_ARGS`) for one
+/// `GitCommand`. The single source of truth for both the real invocation
+/// (`build_git_command`) and `git_command_policy_fingerprint`'s
+/// `command_argv` templates.
+fn git_command_args(command: GitCommand<'_>) -> Vec<String> {
+    let mut child = Argv::default();
     match command {
+        GitCommand::Version => {
+            child.arg("version");
+        }
         GitCommand::Root => {
             child.args(["rev-parse", "--show-toplevel"]);
         }
@@ -1564,10 +1720,41 @@ fn build_git_command(root: &Path, command: GitCommand<'_>) -> Command {
             // on that classification.
             child.arg("--text");
             child.arg(format!("--diff-algorithm={GIT_DIFF_ALGORITHM}"));
+            // Hunk *shape* (not just header decoration) is also steered by
+            // repo-local `.git/config` (never tracked history, and reachable
+            // through `include.path`/`includeIf.*.path` too): a nonzero
+            // `diff.interHunkContext` merges nearby hunks so the lines
+            // between them become "changed", and `diff.indentHeuristic=false`
+            // slides an ambiguous hunk by a line. Both are pinned here to
+            // Git's own defaults, so the `+start,count` ranges parsed by
+            // `changed_lines` never depend on that config. Rename/copy
+            // detection is disabled explicitly as well: with a single-path
+            // pathspec it can never pair anything, so this only makes the
+            // policy explicit instead of leaving `diff.renames` in play.
+            child.args([
+                "--inter-hunk-context=0",
+                "--indent-heuristic",
+                "--no-renames",
+            ]);
             child.args(["--unified=0", base, target, "--", path]);
         }
     }
-    child
+    child.0
+}
+
+/// Minimal argv accumulator mirroring `Command::arg`/`Command::args`, so
+/// `git_command_args` reads exactly like the `Command` it feeds.
+#[derive(Default)]
+struct Argv(Vec<String>);
+
+impl Argv {
+    fn arg(&mut self, arg: impl Into<String>) {
+        self.0.push(arg.into());
+    }
+
+    fn args<const N: usize>(&mut self, args: [&str; N]) {
+        self.0.extend(args.map(str::to_owned));
+    }
 }
 
 /// Environment variables set -- and, thanks to `Command::env_clear()`,
@@ -1627,8 +1814,7 @@ fn run_cargo_metadata(
 /// Git call -- never a hardcoded or guessed string, and never silently
 /// absorbed into a placeholder on failure.
 fn git_version(root: &Path) -> Result<String, IngestError> {
-    let mut child = git_command(root);
-    child.arg("version");
+    let child = build_git_command(root, GitCommand::Version);
     command_version("git --version", child)
 }
 
@@ -2401,6 +2587,7 @@ mod git_command_policy_tests {
         let mut system_config = None;
         let mut global_config = None;
         let mut locale = None;
+        let mut no_lazy_fetch = None;
         let mut unexpected = Vec::new();
         for (name, value) in command.get_envs() {
             match name.to_str().unwrap_or_default() {
@@ -2408,6 +2595,7 @@ mod git_command_policy_tests {
                 "GIT_CONFIG_SYSTEM" => system_config = value,
                 "GIT_CONFIG_GLOBAL" => global_config = value,
                 "LC_ALL" => locale = value,
+                "GIT_NO_LAZY_FETCH" => no_lazy_fetch = value,
                 other => unexpected.push(other.to_owned()),
             }
         }
@@ -2425,6 +2613,11 @@ mod git_command_policy_tests {
             locale,
             Some(std::ffi::OsStr::new("C")),
             "locale must be pinned for stable, non-ambient diagnostic output"
+        );
+        assert_eq!(
+            no_lazy_fetch,
+            Some(std::ffi::OsStr::new("1")),
+            "a partial clone's missing object must never trigger a promisor fetch"
         );
         assert!(
             unexpected.is_empty(),
@@ -2504,6 +2697,9 @@ mod git_command_policy_tests {
                 "--no-color",
                 "--text",
                 "--diff-algorithm=myers",
+                "--inter-hunk-context=0",
+                "--indent-heuristic",
+                "--no-renames",
                 "--unified=0",
                 "base-rev",
                 "target-rev",
@@ -2795,6 +2991,7 @@ mod cargo_version_precondition_tests {
                 .expect("valid test tree hash"),
             config: crate::IngestConfig::default(),
             files,
+            excluded_entries: Vec::new(),
             changes: Vec::new(),
             issues: Vec::new(),
             adapter_reports: Vec::new(),
@@ -3253,5 +3450,145 @@ exit 0
             ),
             "cargo metadata must keep --offline and its other fixed flags: {metadata_invocation}"
         );
+    }
+}
+
+/// Read-only Git access for the source review v6 route
+/// (`crate::source_graph`). Every invocation goes through the same hygienic
+/// `git_command` policy (cleared environment, disabled host/user config,
+/// `GIT_NO_LAZY_FETCH=1`, `--no-replace-objects`) and the same output and
+/// time bounds as every other allow-listed Git read in this module; only the
+/// small fixed set of read-only subcommands below is reachable.
+pub(crate) mod source_review_v6 {
+    use super::{
+        IngestError, SUBPROCESS_MAX_OUTPUT_BYTES, SUBPROCESS_TIMEOUT, checked_output, git_command,
+        run_with_bounds,
+    };
+    use std::path::Path;
+
+    fn run(root: &Path, args: &[&str]) -> Result<Vec<u8>, IngestError> {
+        let mut command = git_command(root);
+        command.args(args);
+        checked_output(
+            "git",
+            run_with_bounds(
+                "git",
+                command,
+                SUBPROCESS_TIMEOUT,
+                SUBPROCESS_MAX_OUTPUT_BYTES,
+            ),
+        )
+    }
+
+    /// `git rev-parse --show-toplevel`.
+    pub(crate) fn toplevel(root: &Path) -> Result<Vec<u8>, IngestError> {
+        run(root, &["rev-parse", "--show-toplevel"])
+    }
+
+    /// Resolves `revision` to a full commit object id, or fails closed.
+    pub(crate) fn resolve_commit(root: &Path, revision: &str) -> Result<String, IngestError> {
+        if revision.starts_with('-') || revision.is_empty() {
+            return Err(IngestError::InvalidRequest(
+                "revision must be a non-empty revision name".to_owned(),
+            ));
+        }
+        let spec = format!("{revision}^{{commit}}");
+        let out = run(
+            root,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &spec,
+            ],
+        )?;
+        let oid = String::from_utf8_lossy(&out).trim().to_owned();
+        if oid.is_empty() || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(IngestError::AdapterOutput(
+                "rev-parse did not return an object id".to_owned(),
+            ));
+        }
+        Ok(oid)
+    }
+
+    /// `git ls-tree -r -l -z --full-tree <commit>`: NUL-separated records of
+    /// `<mode> <type> <oid> <size>\t<path>`.
+    pub(crate) fn list_tree(root: &Path, commit: &str) -> Result<Vec<u8>, IngestError> {
+        run(root, &["ls-tree", "-r", "-l", "-z", "--full-tree", commit])
+    }
+
+    /// `git cat-file blob <oid>` for a blob id taken from `list_tree`.
+    pub(crate) fn blob(root: &Path, oid: &str) -> Result<Vec<u8>, IngestError> {
+        if !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(IngestError::InvalidRequest("blob id is not hex".to_owned()));
+        }
+        run(root, &["cat-file", "blob", oid])
+    }
+
+    fn diff_args<'a>(
+        head: &[&'a str],
+        base: &'a str,
+        target: &'a str,
+        pathspecs: &[&'a str],
+    ) -> Vec<&'a str> {
+        let mut args: Vec<&str> = vec!["-c", "core.quotePath=false", "diff"];
+        args.extend_from_slice(head);
+        args.extend_from_slice(&[
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            base,
+            target,
+            "--",
+        ]);
+        args.extend_from_slice(pathspecs);
+        args
+    }
+
+    /// Zero-context textual patch between two commits with a pinned diff
+    /// policy (fixed algorithm, forced text, no renames, no external diff,
+    /// no textconv, no color), restricted to `pathspecs`, so hunk
+    /// boundaries depend only on the two snapshots.
+    pub(crate) fn diff_u0(
+        root: &Path,
+        base: &str,
+        target: &str,
+        pathspecs: &[&str],
+    ) -> Result<Vec<u8>, IngestError> {
+        run(
+            root,
+            &diff_args(
+                &[
+                    "--text",
+                    "--diff-algorithm=myers",
+                    // Pin what repository config could otherwise change:
+                    // merged nearby hunks and the indent slider.
+                    "--inter-hunk-context=0",
+                    "--indent-heuristic",
+                    "-U0",
+                    "--src-prefix=a/",
+                    "--dst-prefix=b/",
+                ],
+                base,
+                target,
+                pathspecs,
+            ),
+        )
+    }
+
+    /// `diff --name-status -z`: the authoritative, unquoted list of changed
+    /// paths, used to check that every patch header was parsed.
+    pub(crate) fn diff_name_status(
+        root: &Path,
+        base: &str,
+        target: &str,
+        pathspecs: &[&str],
+    ) -> Result<Vec<u8>, IngestError> {
+        run(
+            root,
+            &diff_args(&["--name-status", "-z"], base, target, pathspecs),
+        )
     }
 }

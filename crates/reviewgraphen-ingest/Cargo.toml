@@ -16,13 +16,17 @@ toml.workspace = true
 [dependencies]
 proc-macro2.workspace = true
 quote.workspace = true
-reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.1.0" }
+reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.2.0" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 syn.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+tree-sitter = "=0.25.10"
+tree-sitter-typescript = "=0.23.2"
+tree-sitter-kotlin-ng = "=1.1.0"
 
 [dev-dependencies]
 jsonschema.workspace = true

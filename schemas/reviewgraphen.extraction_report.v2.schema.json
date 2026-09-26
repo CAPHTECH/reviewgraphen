@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewGraphen source-review extraction report v2 envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "registry_binding", "snapshot_binding", "file_records", "inventory_complete", "file_partitions", "syntax_records", "syntax_partitions", "capability_records"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.extraction_report.v2"},
+    "registry_binding": {"$ref": "#/$defs/registry_binding"},
+    "snapshot_binding": {"$ref": "#/$defs/snapshot_binding"},
+    "file_records": {"type": "array", "items": {"$ref": "#/$defs/file_record"}},
+    "inventory_complete": {"type": "boolean"},
+    "file_partitions": {"type": "object"},
+    "syntax_records": {"type": "array", "items": {"$ref": "#/$defs/syntax_record"}},
+    "syntax_partitions": {"type": "object"},
+    "capability_records": {"type": "array", "items": {"type": "object"}}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "registry_binding": {"type": "object", "additionalProperties": false, "required": ["registry_id", "registry_hash", "arm_id", "arm_hash", "tuple_hash"], "properties": {"registry_id": {"type": "string"}, "registry_hash": {"$ref": "#/$defs/hash"}, "arm_id": {"type": "string"}, "arm_hash": {"$ref": "#/$defs/hash"}, "tuple_hash": {"$ref": "#/$defs/hash"}}},
+    "snapshot_binding": {"type": "object", "additionalProperties": false, "required": ["repository_identity", "base_revision", "target_revision", "registry_hash", "tuple_hash", "profile_hash", "extractor_set_hash", "rule_set_hash"], "properties": {"repository_identity": {"type": "string"}, "base_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "target_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "registry_hash": {"$ref": "#/$defs/hash"}, "tuple_hash": {"$ref": "#/$defs/hash"}, "profile_hash": {"$ref": "#/$defs/hash"}, "extractor_set_hash": {"$ref": "#/$defs/hash"}, "rule_set_hash": {"$ref": "#/$defs/hash"}}},
+    "file_record": {"type": "object", "additionalProperties": false, "required": ["key", "path", "language", "outcome", "bytes_read", "reason_ids"], "properties": {"key": {"type": "string"}, "path": {"type": "string"}, "language": {"anyOf": [{"type": "string"}, {"type": "null"}]}, "outcome": {"enum": ["non_target_extension", "profile_excluded", "parsed", "parse_failed", "unread_bound", "unsupported_entry"]}, "bytes_read": {"type": "boolean"}, "reason_ids": {"type": "array", "items": {"type": "string"}}, "source_hash": {"anyOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]}}},
+    "syntax_record": {"type": "object", "additionalProperties": false, "required": ["key", "record_role", "kind_id", "file_key", "range", "outcome", "reasons", "primary_reason", "refs", "payload"], "properties": {"key": {"type": "string"}, "record_role": {"enum": ["callable", "call", "binding", "surface", "scope"]}, "kind_id": {"type": "string"}, "file_key": {"type": "string"}, "range": {"type": "object"}, "outcome": {"type": "string"}, "reasons": {"type": "array", "items": {"type": "string"}}, "primary_reason": {"anyOf": [{"type": "string"}, {"type": "null"}]}, "refs": {"type": "object", "additionalProperties": false, "required": ["visibility_witness_refs", "change_witness_refs", "support_refs"], "properties": {"visibility_witness_refs": {"type": "array"}, "change_witness_refs": {"type": "array"}, "support_refs": {"type": "array"}}}, "payload": {"type": "object", "additionalProperties": false, "required": ["descriptor_id", "descriptor_hash", "data"], "properties": {"descriptor_id": {"type": "string"}, "descriptor_hash": {"$ref": "#/$defs/hash"}, "data": {"type": "object"}}}}}
+  }
+}

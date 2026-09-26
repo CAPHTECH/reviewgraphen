@@ -2956,7 +2956,7 @@ fn finding_polarity_sources_and_per_obligation_grounding_are_enforced() {
 }
 
 #[test]
-fn capability_missing_without_concrete_targets_retains_a_conservative_unknown_denominator() {
+fn capability_missing_without_concrete_targets_excludes_an_ineligible_origin_from_denominator() {
     let mut input: Value = serde_json::from_slice(FIXTURE).unwrap();
     input["extraction"]["capabilities"]
         .as_object_mut()
@@ -2995,26 +2995,15 @@ fn capability_missing_without_concrete_targets_retains_a_conservative_unknown_de
         });
     let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&input).unwrap()).unwrap();
     let bundle = MvpRulePack::synthesize(&program).unwrap();
-    let fallback = bundle
-        .obligations()
-        .iter()
-        .find(|obligation| {
+    assert!(
+        !bundle.obligations().iter().any(|obligation| {
             obligation.version().rule() == "capability_gap.origin_rule@1"
                 && obligation
                     .applicability_reasons()
                     .contains("origin_rule:relation.concurrent_reentry@1")
-        })
-        .expect("missing factual relation has a conservative candidate");
-    assert_eq!(fallback.target_kind(), "subgraph");
-    assert_eq!(fallback.applicability_status(), "unknown");
-    assert!(
-        fallback
-            .applicability_reasons()
-            .contains("capability_undeclared:direct_calls"),
-        "direct_calls was removed from the declarations, not declared `missing`"
+        }),
+        "without the factual `handled_by` relation, the concurrent-reentry origin is ineligible"
     );
-    assert!(fallback.source_ids().contains(program.repository_id()));
-    assert!(fallback.source_ids().contains(program.snapshot_id()));
     assert!(bundle.universe().raw_denominator() > 0);
 }
 
@@ -3214,12 +3203,10 @@ fn explicit_policy_exclusions_retain_exact_floating_weight() {
     let program = ProgramSpace::from_json_slice(&serde_json::to_vec(&input).unwrap()).unwrap();
     let bundle = MvpRulePack::synthesize(&program).unwrap();
     // Excluding the node candidate drops it from 5 to 4 concrete
-    // obligations, but capability-gap generation is unconditional of
-    // exclusion: the base fixture's 4 origin-rule gaps (node/reentry/path/
-    // invariant, all `partial` on concurrency_model) remain in the
-    // denominator regardless of whether node's own concrete candidate was
-    // excluded.
-    assert_eq!(bundle.universe().raw_denominator(), 8);
+    // obligations and makes the node origin ineligible. The three remaining
+    // source-eligible origin-rule gaps (reentry/path/invariant, all
+    // `partial` on concurrency_model) remain in the denominator.
+    assert_eq!(bundle.universe().raw_denominator(), 7);
     assert_ne!(bundle.universe().id(), original.universe().id());
     assert_eq!(bundle.universe().exclusions().len(), 1);
     assert_eq!(bundle.universe().excluded_weight(), 3.0);

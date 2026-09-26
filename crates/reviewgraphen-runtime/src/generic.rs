@@ -31,7 +31,7 @@ use std::{
     fs,
     io::ErrorKind,
     path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 use thiserror::Error;
 
@@ -127,6 +127,8 @@ pub enum GenericReviewError {
     ArtifactRootAlreadyExists,
     #[error("generic review artifact root rejected: {0}")]
     ArtifactRootRejected(&'static str),
+    #[error("generic review run v4 violates its schema: {0}")]
+    RunV4SchemaInvalid(String),
 }
 
 pub type GenericReviewResult<T> = Result<T, GenericReviewError>;
@@ -1873,8 +1875,19 @@ pub struct ValidatedGenericReviewRunV4 {
     canonical_value: Value,
 }
 impl ValidatedGenericReviewRunV4 {
-    fn new(canonical_value: Value) -> Self {
-        Self { canonical_value }
+    /// The only constructor: the value must satisfy
+    /// `reviewgraphen.generic_review_run.v4.schema.json` (the same schema and
+    /// `jsonschema` validator the human report applies), so the type's name
+    /// is earned at every construction site.
+    fn new(canonical_value: Value) -> GenericReviewResult<Self> {
+        // Both construction sites (`run_generic_review_v4`,
+        // `decode_generic_review_run_v4_with_basis`) pass through here, so
+        // the test-only hook sees each value exactly once, just before it is
+        // validated. Absent from non-test builds.
+        #[cfg(test)]
+        let canonical_value = g7_r1_seam::apply_run_v4_value_hook(canonical_value);
+        validate_generic_review_run_v4_schema(&canonical_value)?;
+        Ok(Self { canonical_value })
     }
     pub fn canonical_bytes(&self) -> GenericReviewResult<Vec<u8>> {
         Ok(canonical_json(&self.canonical_value)?)
@@ -3137,7 +3150,36 @@ pub fn run_generic_review_v4_with_observer(
         authority,
         provider_free_record_artifacts: Vec::new(),
     };
-    Ok(ValidatedGenericReviewRunV4::new(serde_json::to_value(run)?))
+    ValidatedGenericReviewRunV4::new(serde_json::to_value(run)?)
+}
+
+fn generic_review_run_v4_schema_validator() -> GenericReviewResult<&'static jsonschema::Validator> {
+    static VALIDATOR: OnceLock<Option<jsonschema::Validator>> = OnceLock::new();
+    VALIDATOR
+        .get_or_init(|| {
+            let schema: Value = serde_json::from_str(include_str!(
+                "../../../schemas/reviewgraphen.generic_review_run.v4.schema.json"
+            ))
+            .ok()?;
+            jsonschema::validator_for(&schema).ok()
+        })
+        .as_ref()
+        .ok_or(GenericReviewError::Request("v4 run schema compile"))
+}
+
+fn validate_generic_review_run_v4_schema(value: &Value) -> GenericReviewResult<()> {
+    match generic_review_run_v4_schema_validator()?
+        .iter_errors(value)
+        .next()
+    {
+        None => Ok(()),
+        Some(error) => Err(GenericReviewError::RunV4SchemaInvalid(format!(
+            "instance {} violates schema {}: {}",
+            error.instance_path,
+            error.schema_path,
+            error.masked()
+        ))),
+    }
 }
 
 fn v4_obligation_contract(obligations: &[Obligation]) -> Vec<GenericObligationV2> {
@@ -3992,6 +4034,22 @@ fn validate_provider_free_path(path: &str) -> GenericReviewResult<()> {
 /// this function sees and retains the resulting physical path only for local
 /// admission, never in a canonical DTO or ID.
 pub fn admit_fresh_generic_review_artifact_root_v2(root: &Path) -> GenericReviewResult<()> {
+    check_fresh_generic_review_artifact_root_v2(root)?;
+    match fs::create_dir(root) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            Err(GenericReviewError::ArtifactRootAlreadyExists)
+        }
+        Err(error) => Err(GenericReviewError::Io(error)),
+    }
+}
+
+/// The pathname checks of [`admit_fresh_generic_review_artifact_root_v2`]
+/// without the creation: no traversal, an absent root, no symlinked ancestor
+/// and a directory parent. A caller that creates the root itself (for example
+/// descriptor-relative, holding the parent open) runs these first so the
+/// refusal rules and their reasons stay identical.
+pub fn check_fresh_generic_review_artifact_root_v2(root: &Path) -> GenericReviewResult<()> {
     let Some(root_text) = root.to_str() else {
         return Err(GenericReviewError::ArtifactRootRejected("non-UTF-8 path"));
     };
@@ -4022,13 +4080,7 @@ pub fn admit_fresh_generic_review_artifact_root_v2(root: &Path) -> GenericReview
             ));
         }
     }
-    match fs::create_dir(root) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-            Err(GenericReviewError::ArtifactRootAlreadyExists)
-        }
-        Err(error) => Err(GenericReviewError::Io(error)),
-    }
+    Ok(())
 }
 
 fn load_v2_replay_records(
@@ -5441,7 +5493,7 @@ pub fn decode_generic_review_run_v4_with_basis(
             _ => return Err(GenericReviewError::Request("v4 context family")),
         }
     }
-    Ok(ValidatedGenericReviewRunV4::new(wire.canonical_value))
+    ValidatedGenericReviewRunV4::new(wire.canonical_value)
 }
 
 #[cfg(test)]
@@ -5698,5 +5750,50 @@ mod tests {
             records: VecDeque::from([record]),
         };
         assert!(driver.finish().is_err());
+    }
+}
+
+#[cfg(test)]
+#[path = "generic_g7_r1_acceptance.rs"]
+mod g7_r1_acceptance;
+
+#[cfg(test)]
+#[path = "generic_g7_r1_sup1_acceptance.rs"]
+mod g7_r1_sup1_acceptance;
+
+/// G7-R1 SUPPLEMENT-1 test seam: a thread-local hook applied to every run-v4
+/// value just before `ValidatedGenericReviewRunV4::new` validates it. Identity
+/// when unset; the returned guard unsets it on drop.
+#[cfg(test)]
+pub(crate) mod g7_r1_seam {
+    use serde_json::Value;
+    use std::cell::RefCell;
+
+    type RunV4ValueHook = Box<dyn FnMut(&mut Value)>;
+
+    thread_local! {
+        static RUN_V4_VALUE_HOOK: RefCell<Option<RunV4ValueHook>> = RefCell::new(None);
+    }
+
+    pub(crate) struct RunV4ValueHookGuard;
+
+    impl Drop for RunV4ValueHookGuard {
+        fn drop(&mut self) {
+            RUN_V4_VALUE_HOOK.with(|hook| hook.borrow_mut().take());
+        }
+    }
+
+    pub(crate) fn install_run_v4_value_hook(hook: RunV4ValueHook) -> impl Drop {
+        RUN_V4_VALUE_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+        RunV4ValueHookGuard
+    }
+
+    pub(super) fn apply_run_v4_value_hook(mut value: Value) -> Value {
+        RUN_V4_VALUE_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().as_mut() {
+                hook(&mut value);
+            }
+        });
+        value
     }
 }

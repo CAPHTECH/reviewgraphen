@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewGraphen generic review artifact manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "request_sha256", "request_id", "run_id", "snapshot_id", "universe_id", "artifacts"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.generic_review_artifact_manifest.v1"},
+    "request_sha256": {"$ref": "#/$defs/hash"},
+    "request_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "snapshot_id": {"type": "string", "minLength": 1},
+    "universe_id": {"type": "string", "minLength": 1},
+    "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "artifact": {"type": "object", "additionalProperties": false, "required": ["path", "role", "byte_length", "sha256"], "properties": {"path": {"type": "string", "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"}, "role": {"enum": ["extraction", "ingestion", "audit", "human_report_manifest", "human_report_markdown", "reviewer_packet", "deterministic_observer_output"]}, "byte_length": {"$ref": "#/$defs/u64"}, "sha256": {"$ref": "#/$defs/hash"}}}
+  }
+}

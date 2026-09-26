@@ -298,12 +298,70 @@ version strings:
   resolution is a different span/location-computation implementation, not
   merely an unrelated transitive dependency.
 - `git_command_policy`: the fixed values of the deterministic Git command
-  policy described below (`version`, `diff_algorithm`,
-  `rename_similarity_percent`, `rename_limit`, `force_text_diff`,
-  `no_replace_objects`, `no_color`). Not a tool *version*, but exactly as
+  policy described below. Not a tool *version*, but exactly as
   load-bearing: every allow-listed `git` call is forced through this one
   fixed policy, so a future change to its shape must visibly change the
-  fingerprint too, not be silently absorbed.
+  fingerprint too, not be silently absorbed. Policy `version` `4` names the
+  whole policy, not a summary of it: the seven v3 fields (`version`,
+  `diff_algorithm`, `rename_similarity_percent`, `rename_limit`,
+  `force_text_diff`, `no_replace_objects`, `no_color`), plus `environment`
+  (the cleared environment, the inherited allowlist, and every fixed
+  variable), `global_args` (prepended to every invocation, in order), and
+  `command_argv` (the full argv template of each of the eight command
+  shapes, with `<revision>`, `<base>`, `<target>` and `<path>` standing for
+  the per-call operands). `environment`, `global_args` and `command_argv`
+  are derived in code from the same constants and argv builder every real
+  invocation uses, so a change to any argv element or environment variable
+  changes `adapter_set_hash`. The exact v4 value is:
+
+  ```json
+  {
+    "version": "4",
+    "diff_algorithm": "myers",
+    "rename_similarity_percent": 50,
+    "rename_limit": 20000,
+    "force_text_diff": true,
+    "no_replace_objects": true,
+    "no_color": true,
+    "environment": {
+      "cleared": true,
+      "inherited": ["PATH"],
+      "set": {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_NO_LAZY_FETCH": "1",
+        "LC_ALL": "C"
+      }
+    },
+    "global_args": [
+      "--no-pager", "--no-optional-locks", "--no-replace-objects",
+      "-c", "core.attributesFile=/dev/null"
+    ],
+    "command_argv": {
+      "version": ["version"],
+      "root": ["rev-parse", "--show-toplevel"],
+      "resolve_commit": ["rev-parse", "--verify", "--quiet", "--end-of-options", "<revision>^{commit}"],
+      "tree_hash": ["rev-parse", "--verify", "--quiet", "<revision>^{tree}"],
+      "list_tree": ["ls-tree", "-r", "-l", "-z", "--full-tree", "<revision>", "--"],
+      "show_file": ["show", "--no-ext-diff", "--no-textconv", "--format=", "<revision>:<path>"],
+      "changes": [
+        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--text", "--name-status", "-z",
+        "--find-renames=50%", "--find-copies=50%", "-l20000", "<base>", "<target>", "--"
+      ],
+      "changed_lines": [
+        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--text", "--diff-algorithm=myers",
+        "--inter-hunk-context=0", "--indent-heuristic", "--no-renames", "--unified=0",
+        "<base>", "<target>", "--", "<path>"
+      ]
+    }
+  }
+  ```
+
+  Version history: `2` added `force_text_diff` and `no_replace_objects`;
+  `3` added `no_color`; `4` added `environment` (including the new
+  `GIT_NO_LAZY_FETCH=1`), `global_args` and `command_argv`. The bump to `4`
+  changes `adapter_set_hash`, and therefore every Rust-route identity
+  derived from it, for an unchanged snapshot tuple.
 - `cargo_resolver_policy`: the fixed values of the deterministic Cargo tool
   admission policy described below (`version`, `automatic_path_resolution`,
   `rustup_invocation`, `admission`). Bound the same way, and for the same
@@ -511,6 +569,13 @@ because that configuration was previously inherited rather than fixed:
   `GIT_EXTERNAL_DIFF`, credential helpers, and anything else in the calling
   process's environment -- can never reach the child. `LC_ALL=C` is set
   explicitly for stable, non-localized diagnostic text.
+- **A partial clone never fetches lazily.** `GIT_NO_LAZY_FETCH=1` is set
+  on every invocation. In a partial (promisor) clone, an object missing
+  from the local object store makes the invocation fail closed instead of
+  launching the promisor remote's transport to fetch it: a review never
+  touches the network and never mutates the object store, and the run ends
+  in a typed refusal rather than a result. The TypeScript and source review v6
+  routes set the same variable.
 - **System and global Git config are disabled outright**, via
   `GIT_CONFIG_SYSTEM=/dev/null` and `GIT_CONFIG_GLOBAL=/dev/null`: neither
   `/etc/gitconfig` nor `$HOME/.gitconfig`/`$XDG_CONFIG_HOME/git/config` is

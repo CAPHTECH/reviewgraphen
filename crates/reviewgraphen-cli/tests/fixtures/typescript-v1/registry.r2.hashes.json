@@ -1,0 +1,16 @@
+{
+  "arm_hash": "sha256:92623e9272fe929694ea063a51350740fada0879ee7ba1368af53608447cee11",
+  "extractor_set_hash": "sha256:f5722ef19c0a2a4a5b6ff583f95aa8fdc9d0cf4f3cbc0c5631c041770842b39f",
+  "payload_descriptor_hashes": {
+    "reviewgraphen.typescript_syntax.binding@1": "sha256:ac8d07a27d5351e32437e08a954264dae40cb6524de53b19d8ff5e567eaa521a",
+    "reviewgraphen.typescript_syntax.call@1": "sha256:eb345435976d027f209bbb939fb53882ba427e34822beb7e682cad27dc084f02",
+    "reviewgraphen.typescript_syntax.callable@1": "sha256:0acaf03b4114710a3b198ef325b1aa7f990cd822e0450e11190254510df6dea3",
+    "reviewgraphen.typescript_syntax.scope@1": "sha256:0bcc9f464f32a3e87e8359f559c443de828245e85ebefaf23bb4d0d0fdb7d9c0",
+    "reviewgraphen.typescript_syntax.surface@1": "sha256:9fa9644bf083a703a41ce90998f8ec83b9950730fdaeed4ec400c3a8437b7d4a"
+  },
+  "profile_hash": "sha256:fed3e2d7e9588188e835c8ba560f9547d0634bd7288945eaf3aefeda93b52c79",
+  "projection_hash": "sha256:050af11e56aa335d2277f486eead9478dbb9ea9368e8a8eaad1cd73479c40b0f",
+  "registry_hash": "sha256:4e4aa59c25c1c43257eb946de2aa0a99ad0ac193ad21b72a64f2163a1ec99a51",
+  "rule_set_hash": "sha256:bcce4c84557970e6bc52a519b873ddd3c3eed33d518f49418da101f8c496c1d8",
+  "tuple_hash": "sha256:30b5b7ed971d9bad50164563cef086488781f36870e0c12863aa023bcf186a55"
+}

@@ -1,0 +1,43 @@
+{
+  "version": "4",
+  "diff_algorithm": "myers",
+  "rename_similarity_percent": 50,
+  "rename_limit": 20000,
+  "force_text_diff": true,
+  "no_replace_objects": true,
+  "no_color": true,
+  "environment": {
+    "cleared": true,
+    "inherited": ["PATH"],
+    "set": {
+      "GIT_CONFIG_GLOBAL": "/dev/null",
+      "GIT_CONFIG_SYSTEM": "/dev/null",
+      "GIT_NO_LAZY_FETCH": "1",
+      "LC_ALL": "C"
+    }
+  },
+  "global_args": [
+    "--no-pager",
+    "--no-optional-locks",
+    "--no-replace-objects",
+    "-c",
+    "core.attributesFile=/dev/null"
+  ],
+  "command_argv": {
+    "version": ["version"],
+    "root": ["rev-parse", "--show-toplevel"],
+    "resolve_commit": ["rev-parse", "--verify", "--quiet", "--end-of-options", "<revision>^{commit}"],
+    "tree_hash": ["rev-parse", "--verify", "--quiet", "<revision>^{tree}"],
+    "list_tree": ["ls-tree", "-r", "-l", "-z", "--full-tree", "<revision>", "--"],
+    "show_file": ["show", "--no-ext-diff", "--no-textconv", "--format=", "<revision>:<path>"],
+    "changes": [
+      "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--text", "--name-status", "-z",
+      "--find-renames=50%", "--find-copies=50%", "-l20000", "<base>", "<target>", "--"
+    ],
+    "changed_lines": [
+      "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--text", "--diff-algorithm=myers",
+      "--inter-hunk-context=0", "--indent-heuristic", "--no-renames", "--unified=0",
+      "<base>", "<target>", "--", "<path>"
+    ]
+  }
+}

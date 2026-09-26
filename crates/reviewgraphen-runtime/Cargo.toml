@@ -11,10 +11,10 @@ publish = false
 workspace = true
 
 [dependencies]
-reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.1.0" }
-reviewgraphen-ingest = { path = "../reviewgraphen-ingest", version = "0.1.0" }
-reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer", version = "0.1.0" }
-reviewgraphen-verifier = { path = "../reviewgraphen-verifier", version = "0.1.0" }
+reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.2.0" }
+reviewgraphen-ingest = { path = "../reviewgraphen-ingest", version = "0.2.0" }
+reviewgraphen-reviewer = { path = "../reviewgraphen-reviewer", version = "0.2.0" }
+reviewgraphen-verifier = { path = "../reviewgraphen-verifier", version = "0.2.0" }
 serde.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
@@ -24,7 +24,7 @@ proc-macro2.workspace = true
 syn.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-reviewgraphen-store = { path = "../reviewgraphen-store", version = "0.1.0", features = ["test-support"] }
+reviewgraphen-store = { path = "../reviewgraphen-store", version = "0.2.0", features = ["test-support"] }
 
 [dev-dependencies]
 tempfile.workspace = true

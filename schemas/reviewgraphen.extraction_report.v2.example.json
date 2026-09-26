@@ -1,0 +1,34 @@
+{
+  "capability_records": [],
+  "file_partitions": {},
+  "file_records": [{
+    "bytes_read": true,
+    "key": "file:src/api.ts",
+    "language": "typescript",
+    "outcome": "parsed",
+    "path": "src/api.ts",
+    "reason_ids": [],
+    "source_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }],
+  "inventory_complete": true,
+  "registry_binding": {
+    "arm_hash": "sha256:92623e9272fe929694ea063a51350740fada0879ee7ba1368af53608447cee11",
+    "arm_id": "typescript.production.v1.source@1",
+    "registry_hash": "sha256:4e4aa59c25c1c43257eb946de2aa0a99ad0ac193ad21b72a64f2163a1ec99a51",
+    "registry_id": "reviewgraphen.source_review_registry.r2",
+    "tuple_hash": "sha256:30b5b7ed971d9bad50164563cef086488781f36870e0c12863aa023bcf186a55"
+  },
+  "schema": "reviewgraphen.extraction_report.v2",
+  "snapshot_binding": {
+    "base_revision": "1111111111111111111111111111111111111111",
+    "extractor_set_hash": "sha256:f5722ef19c0a2a4a5b6ff583f95aa8fdc9d0cf4f3cbc0c5631c041770842b39f",
+    "profile_hash": "sha256:fed3e2d7e9588188e835c8ba560f9547d0634bd7288945eaf3aefeda93b52c79",
+    "registry_hash": "sha256:4e4aa59c25c1c43257eb946de2aa0a99ad0ac193ad21b72a64f2163a1ec99a51",
+    "repository_identity": "fixture/typescript@1",
+    "rule_set_hash": "sha256:bcce4c84557970e6bc52a519b873ddd3c3eed33d518f49418da101f8c496c1d8",
+    "target_revision": "2222222222222222222222222222222222222222",
+    "tuple_hash": "sha256:30b5b7ed971d9bad50164563cef086488781f36870e0c12863aa023bcf186a55"
+  },
+  "syntax_partitions": {},
+  "syntax_records": []
+}
